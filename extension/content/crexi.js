@@ -120,27 +120,52 @@
     const salePriceEl = findTextElement('Sale Price', 'Last Sale Price');
     const saleDateEl = findTextElement('Sale Date', 'Last Sale Date');
 
-    // Location — CREXi often shows city/state below address
-    const subHeadingEl =
-      document.querySelector('.property-location') ||
-      document.querySelector('.pdp-location') ||
-      document.querySelector('.listing-subtitle');
+    // Location — CREXi headings typically already encode city/state/zip:
+    //   "109 Harrison Ave & 1601 Spring St, Jeffersonville, IN 47130"
+    // Parse out of the address string FIRST (most reliable). Falling back to
+    // findTextElement('City') was producing junk on this page because the
+    // heuristic was matching broker-card text containing "View phone".
     let city = null;
     let state = null;
-    const subText = subHeadingEl?.textContent?.trim();
-    if (subText) {
-      const parts = subText.split(',').map((s) => s.trim());
-      if (parts.length >= 2) {
-        city = parts[0];
-        state = parts[1].split(/\s+/)[0];
+    const addrMatch = address.match(/,\s*([^,]+),\s*([A-Z]{2})\s+\d{5}/);
+    if (addrMatch) {
+      city = addrMatch[1].trim();
+      state = addrMatch[2];
+    } else {
+      // Legacy fallback: explicit subtitle element on older CREXi layouts.
+      const subHeadingEl =
+        document.querySelector('.property-location') ||
+        document.querySelector('.pdp-location') ||
+        document.querySelector('.listing-subtitle');
+      const subText = subHeadingEl?.textContent?.trim();
+      if (subText && subText.length < 120 && !/view\s+(phone|email)/i.test(subText)) {
+        const parts = subText.split(',').map((s) => s.trim());
+        if (parts.length >= 2) {
+          city = parts[0];
+          state = parts[1].split(/\s+/)[0];
+        }
       }
     }
-    if (!city) city = val(findTextElement('City'));
-    if (!state) state = val(findTextElement('State'));
 
     // Round 76df: capture linked property-records URLs (sale comps / lease
     // data / public record) so the LCC sidebar can offer one-click follow-ups.
     const linkedPages = extractCrexiLinkedPages();
+
+    // Round 76ej: surface what the new extractors actually picked up so the
+    // user can spot missing-field regressions in DevTools without round-
+    // tripping through the sidebar.
+    console.debug('[lcc-crexi] extracted', {
+      lease_expiration: leaseExpiration,
+      remaining_term: remainingTerm,
+      lease_options: leaseOptions,
+      acreage,
+      days_on_market: header.days_on_market,
+      contacts_found: contacts ? contacts.length : 0,
+      marketing_headline: marketing.headline ? '✓' : null,
+      marketing_description_chars: marketing.description ? marketing.description.length : 0,
+      om_available: om.available,
+      crexi_map_size: crexiMap.size,
+    });
 
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
@@ -258,11 +283,15 @@
 
   function extractCrexiAskingPrice() {
     // CREXi shows the asking price in a header banner like
-    // "$6,994,109 | 126 days on market | Updated 8 days ago".
-    // Anchor the regex on the "days on market" text so we don't pick up
-    // tax / NOI / valuation-tool dollar values elsewhere on the page.
+    // "$2,045,000   67 days on market | Updated 28 days ago".
+    // The pipe between the price and "days on market" is inconsistent
+    // (sometimes whitespace, sometimes a vertical bar, sometimes a bullet).
+    // Anchor instead on the "days on market" text within ~80 chars of the
+    // dollar sign to avoid picking up tax / NOI / valuation-tool prices.
     const text = document.body?.innerText || '';
-    const m = text.match(/\$[\d,]+(?:\.\d+)?(?=\s*\|\s*\d+\s+days?\s+on\s+market)/i);
+    const m = text.match(
+      /\$[\d,]+(?:\.\d+)?(?=[\s\|·••\-]{1,12}\d+\s+days?\s+on\s+market)/i
+    );
     if (m) return m[0];
     // Fallback: a price-prominent element near the page top.
     const big = document.querySelector('[data-cy="price"], .property-price, .pdp-price');
@@ -274,13 +303,10 @@
   }
 
   function extractCrexiHeader() {
-    // Matches "$2,045,000 | 67 days on market | Updated 28 days ago".
-    // Returns days_on_market and updated_days_ago (both as strings, or null).
+    // Pulls days_on_market and updated_days_ago from the price-banner area.
+    // The banner separator varies (pipe, bullet, en-dash, just whitespace),
+    // so we use independent regexes on body innerText.
     const text = document.body?.innerText || '';
-    const m = text.match(
-      /\$[\d,]+(?:\.\d+)?\s*\|\s*(\d+)\s+days?\s+on\s+market\s*\|\s*Updated\s+(\d+)\s+days?\s+ago/i
-    );
-    if (m) return { days_on_market: m[1], updated_days_ago: m[2] };
     const dom = text.match(/(\d+)\s+days?\s+on\s+market/i);
     const upd = text.match(/Updated\s+(\d+)\s+days?\s+ago/i);
     return {
@@ -299,10 +325,23 @@
     const all = document.querySelectorAll('h1, h2, h3, h4, h5, h6, div, span, p');
     let labelEl = null;
     for (const el of all) {
-      if (el.children.length > 2) continue;
-      const t = el.textContent?.trim() || '';
+      // Allow up to 4 children so a heading with a tooltip / icon doesn't
+      // disqualify the label.
+      if (el.children.length > 4) continue;
+      const t = (el.textContent || '').trim();
       if (t.length > 60) continue;
       if (/^marketing\s+description$/i.test(t)) { labelEl = el; break; }
+    }
+    if (!labelEl) {
+      // Fallback: try to find a long descriptive paragraph after a known
+      // CREXi heading like "Property Overview" or "Investment Highlights".
+      const headings = document.querySelectorAll('h1, h2, h3, h4');
+      for (const h of headings) {
+        const ht = (h.textContent || '').trim();
+        if (!/^(property\s+overview|investment\s+highlights?|description|overview)$/i.test(ht)) continue;
+        labelEl = h;
+        break;
+      }
     }
     if (!labelEl) return out;
 
@@ -340,16 +379,27 @@
     }
 
     // Description = collected text from siblings AFTER the label until the
-    // next named section (Investment Highlights, Location, etc.).
+    // next named section (Investment Highlights, Location, etc.). When the
+    // label has no useful next siblings (markup wraps each block in its
+    // own div), climb to the label's parent and walk its next siblings.
     const SECTION_BREAK = /^(details|location|gallery|photos?|contacts?|brokers?|map|highlights?|investment\s+highlights?|in\s+the\s+area|demographics?|nearby|similar\s+(properties|listings)|property\s+overview|tax(?:es)?|public\s+records?|comparables?|sale\s+comp|lease\s+data|record)$/i;
-    let cursor = labelEl.nextElementSibling;
-    let collected = '';
-    while (cursor && collected.length < 5000) {
-      const ct = cursor.textContent?.trim() || '';
-      const firstLine = (ct.split('\n')[0] || '').trim();
-      if (firstLine && SECTION_BREAK.test(firstLine)) break;
-      if (ct) collected += (collected ? '\n\n' : '') + ct;
-      cursor = cursor.nextElementSibling;
+    const collect = (start) => {
+      let cursor = start;
+      let collected = '';
+      while (cursor && collected.length < 5000) {
+        const ct = (cursor.textContent || '').trim();
+        const firstLine = (ct.split('\n')[0] || '').trim();
+        if (firstLine && SECTION_BREAK.test(firstLine)) break;
+        if (ct) collected += (collected ? '\n\n' : '') + ct;
+        cursor = cursor.nextElementSibling;
+      }
+      return collected;
+    };
+    let collected = collect(labelEl.nextElementSibling);
+    if (collected.length < 100 && labelEl.parentElement) {
+      // Try one level up — CREXi often wraps each section in its own div.
+      const parentCollected = collect(labelEl.parentElement.nextElementSibling);
+      if (parentCollected.length > collected.length) collected = parentCollected;
     }
     if (collected) out.description = collected.slice(0, 5000);
     return out;
@@ -382,28 +432,33 @@
     // name, license id ("MI 6501461017"), "View phone number" / "View email"
     // buttons, and the firm name/logo. Anchoring on "View phone number"
     // gives one DOM node per card; we then climb to a stable container.
+    //
+    // CREXi wraps each "View phone number" / "View email" label in a button
+    // that ALSO contains an icon SVG. We accept up to 4 children so the icon
+    // doesn't disqualify the marker — what matters is the trimmed text.
     const phoneMarkers = [];
     const emailMarkers = [];
     document.querySelectorAll('a, button, span, div').forEach((el) => {
-      if (el.children.length > 1) return;
-      const t = el.textContent?.trim() || '';
-      if (/^view\s+phone\s+number$/i.test(t)) phoneMarkers.push(el);
-      else if (/^view\s+email$/i.test(t)) emailMarkers.push(el);
+      if (el.children.length > 4) return;
+      const t = (el.textContent || '').trim();
+      if (t.length > 40) return;
+      if (/view\s+phone\s+number/i.test(t)) phoneMarkers.push(el);
+      else if (/view\s+email/i.test(t)) emailMarkers.push(el);
     });
 
     const cards = new Set();
     const seen = new WeakSet();
     const collectCard = (marker) => {
       let node = marker;
-      for (let i = 0; i < 7 && node.parentElement; i += 1) {
+      for (let i = 0; i < 8 && node.parentElement; i += 1) {
         node = node.parentElement;
-        if (seen.has(node)) return;
+        if (seen.has(node)) continue;
         const text = node.innerText || node.textContent || '';
-        // Card heuristic: contains name-like + license-like text and is
+        // Card heuristic: contains name-like + view-action text and is
         // small enough to be a single broker card (not the whole page).
-        if (text.length < 60 || text.length > 600) continue;
+        if (text.length < 30 || text.length > 800) continue;
         if (!/view\s+(phone|email)/i.test(text)) continue;
-        if (!/[A-Z][a-z]+\s+[A-Z][a-z]+/.test(text)) continue;
+        if (!/[A-Z][a-zA-Z'.\-]+\s+[A-Z][a-zA-Z'.\-]+/.test(text)) continue;
         seen.add(node);
         cards.add(node);
         return;
@@ -411,6 +466,20 @@
     };
     phoneMarkers.forEach(collectCard);
     emailMarkers.forEach(collectCard);
+
+    // Final fallback: any card-like container that mentions "Listed by",
+    // "Brokerage", or carries a known broker firm name in its text. Helps
+    // when CREXi A/B-tests the card markup and removes "View phone" labels.
+    if (cards.size === 0) {
+      document.querySelectorAll('div, section, article').forEach((node) => {
+        if (seen.has(node)) return;
+        const text = (node.innerText || node.textContent || '').trim();
+        if (text.length < 30 || text.length > 800) return;
+        if (!/^(listed\s+by|brokerage|listing\s+agent)\b/im.test(text)) return;
+        seen.add(node);
+        cards.add(node);
+      });
+    }
 
     const NAME_BLACKLIST = /^(view\s+(phone|email|om)|listed\s+by|brokerage|real\s+estate)$/i;
     const COMPANY_RE = /(real\s+estate|realty|capital|group|advisors|partners|properties|brokerage|\bllc\b|\binc\.?$|\bco\.?$|cushman|cbre|jll|colliers|marcus|newmark|friedman|kidder|stream|avison|berkadia|matthews)/i;
