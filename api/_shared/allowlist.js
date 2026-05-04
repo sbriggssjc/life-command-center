@@ -46,6 +46,22 @@ export const GOV_READ_TABLES = new Set([
   // Data quality triage views (mirror of dia)
   'v_data_quality_summary',
   'v_data_quality_issues',
+  // Capital Markets — Phase 1 gov views (live-computed from sales_transactions)
+  'cm_gov_market_quarterly',
+  'cm_gov_volume_ttm_q',
+  'cm_gov_count_ttm_q',
+  'cm_gov_cap_ttm_q',
+  'cm_gov_cap_quartile_q',
+  'cm_gov_avg_deal_q',
+  'cm_gov_nm_vs_market_q',
+  'cm_gov_cap_by_term_q',
+  'cm_gov_cap_by_credit_q',
+  'cm_gov_buyer_share_q',
+  'cm_gov_top_buyers',
+  'cm_gov_top_sellers',
+  'cm_nm_broker_patterns',
+  'cm_view_registry',
+  'cm_period_anchor',
 ]);
 
 // Government Supabase — allowed tables for write (POST/PATCH)
