@@ -719,27 +719,48 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   // paths converge. inbox_items.id == staged_intake_items.intake_id by
   // pipeline contract (intake-om-pipeline.js:392), so we can patch by
   // intakeId directly.
-  if (matchResult?.status === 'matched' && matchResult?.property_id && matchResult?.domain && resolvedWorkspaceId) {
+  if (matchResult?.status === 'matched' && matchResult?.property_id && matchResult?.domain) {
     try {
-      const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
-      const linkResult = await ensureEntityLink({
-        workspaceId: resolvedWorkspaceId,
-        userId:      resolvedActorId,
-        sourceSystem,
-        sourceType:  'property',
-        externalId:  String(matchResult.property_id),
-        domain:      matchResult.domain,
-        seedFields: {
-          address: mergedSnapshot?.address || null,
-          city:    mergedSnapshot?.city    || null,
-          state:   mergedSnapshot?.state   || null,
-        },
-      });
-      if (linkResult?.ok && linkResult.entityId) {
+      // Round 76ej.e (2026-05-04): when match.domain==='lcc' the matcher
+      // matched directly against the LCC entities table, so
+      // matchResult.property_id IS the LCC entity_id — skip
+      // ensureEntityLink entirely. Calling it with sourceSystem='dia_db'
+      // and externalId=<LCC UUID> created a phantom new entity in the
+      // 76ej.d test (fadad993... instead of c5b0d0d5...). Mirror the
+      // promoter's logic at intake-promoter.js:1754.
+      let entityId = null;
+      let inboxDomain = matchResult.domain;
+      if (matchResult.domain === 'lcc') {
+        entityId = String(matchResult.property_id);
+        // Don't write 'lcc' as the domain — it's the matcher namespace,
+        // not a useful filter. Leave domain unchanged so any prior
+        // value sticks; the LCC entity already carries the real domain
+        // in entities.domain.
+        inboxDomain = null;
+      } else if (resolvedWorkspaceId) {
+        const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
+        const linkResult = await ensureEntityLink({
+          workspaceId: resolvedWorkspaceId,
+          userId:      resolvedActorId,
+          sourceSystem,
+          sourceType:  'property',
+          externalId:  String(matchResult.property_id),
+          domain:      matchResult.domain,
+          seedFields: {
+            address: mergedSnapshot?.address || null,
+            city:    mergedSnapshot?.city    || null,
+            state:   mergedSnapshot?.state   || null,
+          },
+        });
+        if (linkResult?.ok && linkResult.entityId) entityId = linkResult.entityId;
+      }
+      if (entityId) {
+        const patchBody = { entity_id: entityId };
+        if (inboxDomain) patchBody.domain = inboxDomain;
         await opsQuery(
           'PATCH',
           `inbox_items?id=eq.${encodeURIComponent(intakeId)}&entity_id=is.null`,
-          { entity_id: linkResult.entityId, domain: matchResult.domain }
+          patchBody
         );
       }
     } catch (err) {

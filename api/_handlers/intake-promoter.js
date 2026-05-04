@@ -1038,6 +1038,47 @@ async function promoteDiaLeaseFromOm(propertyId, snapshot) {
     }
   }
 
+  // Round 76ej.e (2026-05-04): degradation guard. CREXi captures often
+  // arrive with lease_expiration but NO commencement and partial tenant
+  // info. The 76ej.d test inserted a third active lease on property
+  // 35636 with NULL lease_start, NULL data_source, "2" renewal_options
+  // — degrading the data set. If commencement is missing, find the
+  // existing active lease for this property with the same expiration
+  // and PATCH that one instead. If none exists, skip the insert
+  // entirely rather than create a third partial row.
+  if (!commencement && expiration) {
+    const existingByExp = await domainQuery(
+      'dialysis',
+      'GET',
+      `leases?property_id=eq.${Number(propertyId)}` +
+      `&lease_expiration=eq.${encodeURIComponent(expiration)}` +
+      `&is_active=eq.true&select=lease_id,lease_start&order=updated_at.desc.nullslast&limit=1`
+    );
+    if (existingByExp.ok && Array.isArray(existingByExp.data) && existingByExp.data.length) {
+      const existingId = existingByExp.data[0].lease_id;
+      // Only patch fields we have non-null values for; never overwrite
+      // an existing lease_start with NULL.
+      const safePatch = { ...insertPayload };
+      delete safePatch.lease_start;
+      const patchRes = await domainQuery(
+        'dialysis',
+        'PATCH',
+        `leases?lease_id=eq.${encodeURIComponent(existingId)}`,
+        safePatch,
+        { Prefer: 'return=representation' }
+      );
+      return patchRes.ok
+        ? { ok: true, lease_id: existingId, action: 'patched_existing_by_expiration' }
+        : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+    }
+    // No existing match — refuse to create a degraded row.
+    return {
+      ok: true,
+      skipped: 'incomplete_lease_no_existing_match',
+      reason:  'snapshot has lease_expiration but no lease_start; no existing active lease to enrich',
+    };
+  }
+
   // Insert fresh.
   const insertRes = await domainQuery(
     'dialysis',
@@ -2167,75 +2208,6 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       );
     }
 
-    // 5. Persist the synthetic OM text (Round 76ej.d, 2026-05-04).
-    // CREXi listings stage as text/plain artifacts (the OM PDF lives
-    // behind an NDA modal so we can't fetch it; the sidebar synthesizes
-    // a labelled summary from the structured CREXi extraction). The
-    // text body lives in staged_intake_artifacts.inline_data — promote
-    // it into dia.property_documents so the property card has a
-    // browsable record of what the AI saw, and so the cron storage
-    // hygiene job has something to clean up if the listing later goes
-    // off-market. Only fires for dialysis (gov has a different
-    // documents table) and only when the artifact is text/plain.
-    if (
-      match.domain === 'dialysis' &&
-      match.property_id &&
-      artifact &&
-      typeof artifact.mime_type === 'string' &&
-      artifact.mime_type.toLowerCase().startsWith('text/')
-    ) {
-      try {
-        const artFull = await opsQuery(
-          'GET',
-          `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
-          `&select=inline_data,file_name,mime_type&order=created_at.asc&limit=1`
-        );
-        const artRow = artFull.ok && Array.isArray(artFull.data) && artFull.data.length
-          ? artFull.data[0]
-          : null;
-        // inline_data is base64-encoded UTF-8 bytes (per intake-extractor's
-        // text/* handling). Decode to text — capped at 80K to match the
-        // extractor's text/plain ceiling.
-        let rawText = null;
-        if (artRow?.inline_data) {
-          try {
-            const decoded = Buffer.from(artRow.inline_data, 'base64').toString('utf8');
-            rawText = decoded.length > 80_000 ? decoded.slice(0, 80_000) : decoded;
-          } catch (decodeErr) {
-            // Fall back to storing the raw base64 so the doc card still
-            // links somewhere useful even if decoding fails.
-            rawText = null;
-          }
-        }
-        const docPayload = {
-          property_id:      Number(match.property_id),
-          file_name:        artRow?.file_name || artifact.file_name || `intake-${intakeId}.txt`,
-          raw_text:         rawText,
-          document_type:    docType || 'om',
-          source_url:       snapshot.source_url || snapshot.listing_url || null,
-          ingestion_status: 'extracted',
-          extracted_data:   {
-            intake_id:        intakeId,
-            doctype_inferred: inferredFromSeed || inferredFromSnapshot || false,
-            address:          snapshot.address || null,
-            tenant_name:      snapshot.tenant_name || null,
-            asking_price:     snapshot.asking_price ?? null,
-            cap_rate:         snapshot.cap_rate ?? null,
-            lease_expiration: snapshot.lease_expiration || null,
-          },
-        };
-        await domainQuery(
-          'dialysis',
-          'POST',
-          'property_documents',
-          docPayload,
-          { Prefer: 'return=minimal' }
-        );
-      } catch (err) {
-        console.warn('[intake-promoter] property_documents persist failed (non-fatal):', err?.message);
-      }
-    }
-
     // 4. Lease fields (dialysis only — gov has a different lease lifecycle)
     if (match.domain === 'dialysis' && diaLeaseResult?.ok && diaLeaseResult.lease_id) {
       await recordOmFieldsProvenance(
@@ -2263,6 +2235,73 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     // Provenance recording is non-fatal — keep the response shape stable
     // even if the merge function isn't deployed or LCC Opps is degraded.
     console.warn('[intake-promoter] field provenance recording failed (non-fatal):', err?.message);
+  }
+
+  // Persist the synthetic OM text into dia.property_documents
+  // (Round 76ej.e, 2026-05-04 — moved out of the field-provenance try
+  // block where a contacts-side error was skipping it). CREXi listings
+  // stage as text/plain artifacts (the OM PDF lives behind an NDA
+  // modal so we can't fetch it; the sidebar synthesizes a labelled
+  // summary from the structured CREXi extraction). The text body lives
+  // in staged_intake_artifacts.inline_data — promote it into
+  // dia.property_documents so the property card has a browsable record
+  // of what the AI saw. Only fires for dialysis (gov has a different
+  // documents table) and only when the artifact is text/plain.
+  if (
+    match.domain === 'dialysis' &&
+    match.property_id &&
+    artifact &&
+    typeof artifact.mime_type === 'string' &&
+    artifact.mime_type.toLowerCase().startsWith('text/')
+  ) {
+    try {
+      const artFull = await opsQuery(
+        'GET',
+        `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
+        `&select=inline_data,file_name,mime_type&order=created_at.asc&limit=1`
+      );
+      const artRow = artFull.ok && Array.isArray(artFull.data) && artFull.data.length
+        ? artFull.data[0]
+        : null;
+      // inline_data is base64-encoded UTF-8 bytes (per intake-extractor's
+      // text/* handling). Decode to text — capped at 80K to match the
+      // extractor's text/plain ceiling.
+      let rawText = null;
+      if (artRow?.inline_data) {
+        try {
+          const decoded = Buffer.from(artRow.inline_data, 'base64').toString('utf8');
+          rawText = decoded.length > 80_000 ? decoded.slice(0, 80_000) : decoded;
+        } catch (decodeErr) {
+          rawText = null;
+        }
+      }
+      const docPayload = {
+        property_id:      Number(match.property_id),
+        file_name:        artRow?.file_name || artifact.file_name || `intake-${intakeId}.txt`,
+        raw_text:         rawText,
+        document_type:    docType || 'om',
+        source_url:       snapshot.source_url || snapshot.listing_url || null,
+        ingestion_status: 'extracted',
+        extracted_data:   {
+          intake_id:        intakeId,
+          doctype_inferred: inferredFromSeed || inferredFromSnapshot || false,
+          address:          snapshot.address || null,
+          tenant_name:      snapshot.tenant_name || null,
+          asking_price:     snapshot.asking_price ?? null,
+          cap_rate:         snapshot.cap_rate ?? null,
+          lease_expiration: snapshot.lease_expiration || null,
+        },
+      };
+      await domainQuery(
+        'dialysis',
+        'POST',
+        'property_documents',
+        docPayload,
+        { Prefer: 'return=minimal' }
+      );
+    } catch (err) {
+      console.warn('[intake-promoter] property_documents persist failed (non-fatal):', err?.message);
+    }
   }
 
   // Pipeline lead — runs after the listing is written so we can stamp the
