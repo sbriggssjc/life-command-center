@@ -746,10 +746,18 @@ async function loadPropertyTab(opts) {
   // every signal we have — the server tries them in order of precision so
   // tiny address-spelling drift ("Drive" vs "Dr") no longer hides a saved
   // entity from the sidebar.
+  // Round 76ej.i (2026-05-04): also pass canonical_url (no query string)
+  // and crexi_listing_id so the server can recognise listings whose
+  // tracking params drifted between the original save and re-visits.
   const lookupQuery = new URLSearchParams({ action: 'lookup_asset' });
   if (prefetchEntityId) lookupQuery.set('entity_id', prefetchEntityId);
   if (source.source_url || source.page_url) {
     lookupQuery.set('source_url', source.source_url || source.page_url);
+  }
+  if (source.canonical_url) lookupQuery.set('canonical_url', source.canonical_url);
+  if (source.crexi_listing_id) {
+    lookupQuery.set('domain_listing_id', source.crexi_listing_id);
+    lookupQuery.set('listing_source',    'crexi');
   }
   if (source.parcel_number) lookupQuery.set('parcel_number', source.parcel_number);
   if (source.domain_property_id && source.domain) {
