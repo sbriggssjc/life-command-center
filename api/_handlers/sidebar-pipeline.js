@@ -5979,6 +5979,26 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
   // are OM/CoStar UI labels and lease-type values being misread as
   // tenant names (audit deactivated 69 rows with these).
   const COSTAR_EXTRA_JUNK_RE = /^(triple\s+net|double\s+net|absolute\s+net|anchor|anchors|anchored|asking|starting|withheld|analytics|store\s+type|store\s+layout|cam|cam\s+(charges|recovery)|public\s+transportation|commuter\s+rail|highway\s+access|about\s+the\s+(architect|developer|owner)|united\s+states|investment\s+grade|credit\s+rating|net\s+(operating\s+income|leasable\s+area)|gross\s+leasable\s+area|nra|gla|noi|rba|year\s+(built|renovated)|building\s+(class|size|type)|lot\s+size)\s*$/i;
+  // Round 76ej.l (2026-05-04): more CoStar UI labels and detail-page
+  // column headers caught landing as tenant rows on the 250 Pettit Ave
+  // Sale Comp ingestion. Junk values seen in dia.leases for property
+  // 35836: 'Medical', 'M Ford Mcneil' (Architect-section person), 'Since
+  // Jun 23, 2009' (CoStar 'On Market Since' date), 'Unkwn' / 'Unknown'
+  // (CoStar placeholder), and bare CoStar lease-history column headers
+  // ('Lease Activity', 'Sign Date', 'Leased', 'Use', 'Services',
+  // 'Rent Type', 'Rent Schedule'). Anchored ^...$ so legitimate names
+  // containing these words still pass.
+  const COSTAR_LABEL_JUNK_RE = /^(lease\s+activity|sign\s+date|leased|use|services|rent\s+type|rent\s+schedule|rent\s+steps|rent\s+(adjust(ment)?s?|escalation\s+type)|use\s+type|space\s+(use|type|category)|space\s+id|building\s+id|tenant\s+id|tenant\s+type|status|expense\s+type|expenses?|source|listing\s+(id|type|status)|lease\s+(type|status)|on\s+market\s+(since|date)|on\s+market|days?\s+on\s+market|move[-\s]?in\s+ready|brand|brand\/tenant|tenant\/brand|condition|class|grade|industry)\s*$/i;
+  // Bare property-use / asset-type categories — landed as 'Medical' /
+  // 'Office' / 'Retail' on Pettit Ave. NOT a substring match — those
+  // would false-positive on real medical-tenant names. Anchored.
+  const COSTAR_USE_CATEGORY_RE = /^(medical|office|retail|industrial|warehouse|flex|mixed[-\s]?use|residential|hospitality|specialty|land|other)\s*$/i;
+  // 'Unkwn' / 'Unknown' / 'N/A' / 'TBD' / '--' / dashes — CoStar
+  // placeholder values for unknown-yet fields.
+  const COSTAR_PLACEHOLDER_RE = /^(unkwn|unknown|n\/?a|tbd|none|null|-+|—+|\.{2,})\s*$/i;
+  // Date strings landing as tenants — 'Since Jun 23, 2009',
+  // 'Mar 26, 2026', 'Q2 2026', 'Jan 2024 - Dec 2028' etc.
+  const COSTAR_DATE_RE = /^(since\s+)?((?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2},?\s+\d{4}|q[1-4]\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{4}\s*-\s*\d{4})\s*$/i;
   function isJunkTenant(name) {
     if (!name || name.trim().length < 3) return true;
     const n = name.trim();
@@ -5989,6 +6009,12 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     if (NAICS_SECTOR_RE.test(n)) return true;
     if (COSTAR_PANEL_RE.test(n)) return true;
     if (COSTAR_EXTRA_JUNK_RE.test(n)) return true;
+    // Round 76ej.l: additional CoStar Sale Comp / Lease detail-page
+    // labels and CoStar placeholder values + date-string residue.
+    if (COSTAR_LABEL_JUNK_RE.test(n)) return true;
+    if (COSTAR_USE_CATEGORY_RE.test(n)) return true;
+    if (COSTAR_PLACEHOLDER_RE.test(n)) return true;
+    if (COSTAR_DATE_RE.test(n)) return true;
     // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
     if (/^[a-z\s]+,\s*[a-z]{2}(\s+\d{5}(-\d{4})?)?$/i.test(n)) return true;
     return false;
