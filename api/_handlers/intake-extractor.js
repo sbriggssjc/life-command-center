@@ -696,6 +696,19 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   const resolvedWorkspaceId = ctx.workspaceId || null;
   const resolvedActorId     = ctx.actorId     || null;
 
+  // Round 76ej.f (2026-05-04): backfill source/listing URL onto the
+  // snapshot from seed_data when the extraction step didn't capture
+  // it. The Chrome sidebar always sends the live page URL via
+  // seed_data.source_url, but AI extraction snapshots usually don't
+  // surface URLs (they're not "in" the document). The promoter writes
+  // listing_url/source_url onto available_listings from the snapshot,
+  // so without this merge the column stays NULL. Don't overwrite a
+  // real extracted URL.
+  if (mergedSnapshot && ctx.seedData && !mergedSnapshot.source_url && !mergedSnapshot.listing_url) {
+    const seedUrl = ctx.seedData.source_url || ctx.seedData.listing_url || null;
+    if (seedUrl) mergedSnapshot.source_url = seedUrl;
+  }
+
   // Run property matcher
   let matchResult = null;
   let matchError  = null;
