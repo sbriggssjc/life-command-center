@@ -1474,7 +1474,60 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
     }
 
-    return tenants;
+    // Round 76ej.m (2026-05-04): final-pass junk filter. Defense in depth
+    // for tenants that slipped past parseTenantSection's section-break
+    // logic — Pettit Ave Sale Comp Summary tab continued to surface
+    // "About the Architect" / "M Ford Mcneil" / "Brooklyn, NY 11233" /
+    // "Since Jun 23, 2009" / "Medical" / "Unkwn" as tenant rows. Apply
+    // every junk pattern we know about against tenant.name and drop
+    // hits silently. Pure defensive code — never logs successes.
+    const FINAL_JUNK_RE = new RegExp(
+      '^(' + [
+        // CoStar UI labels and column headers
+        'lease\\s+activity', 'sign\\s+date', 'leased', 'use', 'services',
+        'rent\\s+(type|schedule|steps|adjust(?:ment)?s?|escalation\\s+type)',
+        'use\\s+type', 'space\\s+(use|type|category|id)',
+        'building\\s+id', 'tenant\\s+(id|type)',
+        'expense\\s+(type|structure)', 'expenses?',
+        'listing\\s+(id|type|status)',
+        'on\\s+market(?:\\s+(?:since|date))?',
+        'days?\\s+on\\s+market',
+        'brand', 'brand/tenant', 'tenant/brand',
+        'condition', 'class', 'grade',
+        'about\\s+the\\s+(architect|developer|owner|seller|buyer|building|tenant|property|broker|firm)',
+        'true\\s+(seller|buyer)', 'recorded\\s+(seller|buyer)',
+        'listing\\s+broker', 'listing\\s+contacts?', 'costar\\s+comp\\s+contact',
+        // Bare use categories (anchored, won't false-positive on real names)
+        'medical', 'office', 'retail', 'industrial', 'warehouse',
+        'flex', 'mixed[-\\s]?use', 'residential', 'hospitality',
+        'specialty', 'land', 'other',
+        // Placeholders
+        'unkwn', 'unknown', 'n/?a', 'tbd', 'none', 'null',
+        '-+', '—+', '\\.{2,}',
+        // Date strings
+        '(since\\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\\s+\\d{1,2},?\\s+\\d{4}',
+        'q[1-4]\\s+\\d{4}',
+        '\\d{1,2}/\\d{1,2}/\\d{2,4}',
+        '\\d{4}-\\d{1,2}-\\d{1,2}',
+        '\\d{4}\\s*[-–]\\s*\\d{4}',
+        // City, ST ZIP residue
+        '[a-z\\s]+,\\s*[a-z]{2}(\\s+\\d{5}(-\\d{4})?)?',
+        // Generic country names
+        'united\\s+states', 'usa', 'us',
+      ].join('|') + ')\\s*$',
+      'i'
+    );
+    const cleaned = tenants.filter((t) => {
+      if (!t || !t.name) return false;
+      const n = String(t.name).trim();
+      if (n.length < 3) return false;
+      if (FINAL_JUNK_RE.test(n)) {
+        console.debug('[costar.js] Dropped junk tenant:', n);
+        return false;
+      }
+      return true;
+    });
+    return cleaned;
   }
 
   function parseTenantSection(lines, startIdx, tenants) {
