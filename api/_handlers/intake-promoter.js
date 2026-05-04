@@ -204,6 +204,9 @@ function normalizeDocType(dt) {
 function snapshotLooksLikeListing(snapshot) {
   if (!snapshot) return false;
   const hasPrice  = Number(snapshot.asking_price) > 0;
+  const hasCap    = Number(snapshot.cap_rate) > 0
+                 || (typeof snapshot.cap_rate === 'string' && /\d/.test(snapshot.cap_rate));
+  const hasNoi    = Number(snapshot.noi) > 0;
   const hasTenant = !!(snapshot.tenant_name || snapshot.primary_tenant);
   const supportingFields = [
     snapshot.cap_rate,
@@ -212,7 +215,16 @@ function snapshotLooksLikeListing(snapshot) {
     snapshot.lease_expiration,
     snapshot.noi,
   ].filter(v => v != null && v !== '').length;
-  return hasPrice && hasTenant && supportingFields >= 1;
+  // Original heuristic (Bug Z, 2026-04-27): asking_price + tenant + ≥1
+  // supporting field. Round 76ej.d (2026-05-04) extension: also accept
+  // (cap_rate OR noi) + tenant + lease_expiration. CREXi listing
+  // captures often arrive with asking_price scrubbed (broker requires
+  // an NDA before showing the price) but always carry a stated cap
+  // rate, NOI, tenant, and lease expiration — that combination is
+  // unambiguously an active listing and should promote.
+  if (hasPrice && hasTenant && supportingFields >= 1) return true;
+  if ((hasCap || hasNoi) && hasTenant && snapshot.lease_expiration) return true;
+  return false;
 }
 
 // ============================================================================
@@ -1788,6 +1800,22 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   const rawDocType = snapshot?.document_type || null;
   let   docType    = normalizeDocType(rawDocType);
 
+  // Round 76ej.d (2026-05-04): the caller (sidebar Stage Listing flow)
+  // can declare doctype upfront via context.seedData.doctype. Honor it
+  // when the AI didn't classify the artifact (CREXi synthetic text
+  // bullet lists rarely look like an OM cover page to the AI). The
+  // doctype must still pass normalization + the LISTING_DOCUMENT_TYPES
+  // guard, so a malicious / unrecognised seed_data value can't sneak
+  // a non-listing doc through.
+  let inferredFromSeed = false;
+  if (!LISTING_DOCUMENT_TYPES.has(docType)) {
+    const seedDoc = normalizeDocType(context?.seedData?.doctype || null);
+    if (LISTING_DOCUMENT_TYPES.has(seedDoc)) {
+      docType = seedDoc;
+      inferredFromSeed = true;
+    }
+  }
+
   // Fallback: when the extractor returned null/unknown but the snapshot
   // looks like a listing (asking price + tenant + cap rate / SF / term),
   // promote anyway and tag the doctype as 'om' inferred. This recovers
@@ -2137,6 +2165,75 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
         { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: match.property_id },
         propValues
       );
+    }
+
+    // 5. Persist the synthetic OM text (Round 76ej.d, 2026-05-04).
+    // CREXi listings stage as text/plain artifacts (the OM PDF lives
+    // behind an NDA modal so we can't fetch it; the sidebar synthesizes
+    // a labelled summary from the structured CREXi extraction). The
+    // text body lives in staged_intake_artifacts.inline_data — promote
+    // it into dia.property_documents so the property card has a
+    // browsable record of what the AI saw, and so the cron storage
+    // hygiene job has something to clean up if the listing later goes
+    // off-market. Only fires for dialysis (gov has a different
+    // documents table) and only when the artifact is text/plain.
+    if (
+      match.domain === 'dialysis' &&
+      match.property_id &&
+      artifact &&
+      typeof artifact.mime_type === 'string' &&
+      artifact.mime_type.toLowerCase().startsWith('text/')
+    ) {
+      try {
+        const artFull = await opsQuery(
+          'GET',
+          `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
+          `&select=inline_data,file_name,mime_type&order=created_at.asc&limit=1`
+        );
+        const artRow = artFull.ok && Array.isArray(artFull.data) && artFull.data.length
+          ? artFull.data[0]
+          : null;
+        // inline_data is base64-encoded UTF-8 bytes (per intake-extractor's
+        // text/* handling). Decode to text — capped at 80K to match the
+        // extractor's text/plain ceiling.
+        let rawText = null;
+        if (artRow?.inline_data) {
+          try {
+            const decoded = Buffer.from(artRow.inline_data, 'base64').toString('utf8');
+            rawText = decoded.length > 80_000 ? decoded.slice(0, 80_000) : decoded;
+          } catch (decodeErr) {
+            // Fall back to storing the raw base64 so the doc card still
+            // links somewhere useful even if decoding fails.
+            rawText = null;
+          }
+        }
+        const docPayload = {
+          property_id:      Number(match.property_id),
+          file_name:        artRow?.file_name || artifact.file_name || `intake-${intakeId}.txt`,
+          raw_text:         rawText,
+          document_type:    docType || 'om',
+          source_url:       snapshot.source_url || snapshot.listing_url || null,
+          ingestion_status: 'extracted',
+          extracted_data:   {
+            intake_id:        intakeId,
+            doctype_inferred: inferredFromSeed || inferredFromSnapshot || false,
+            address:          snapshot.address || null,
+            tenant_name:      snapshot.tenant_name || null,
+            asking_price:     snapshot.asking_price ?? null,
+            cap_rate:         snapshot.cap_rate ?? null,
+            lease_expiration: snapshot.lease_expiration || null,
+          },
+        };
+        await domainQuery(
+          'dialysis',
+          'POST',
+          'property_documents',
+          docPayload,
+          { Prefer: 'return=minimal' }
+        );
+      } catch (err) {
+        console.warn('[intake-promoter] property_documents persist failed (non-fatal):', err?.message);
+      }
     }
 
     // 4. Lease fields (dialysis only — gov has a different lease lifecycle)

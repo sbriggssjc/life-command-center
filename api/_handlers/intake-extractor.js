@@ -20,6 +20,7 @@ import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
+import { ensureEntityLink } from '../_shared/entity-link.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { createRequire } from 'module';
 
@@ -496,9 +497,19 @@ export async function processIntakeExtraction(intakeId, context = {}) {
       const cachedSnapshot = existingEx.data[0].extraction_snapshot;
       if (cachedSnapshot && typeof cachedSnapshot === 'object') {
         console.log(`[intake-extractor] Reusing existing extraction for intake_id=${intakeId} (skipping AI)`);
+        // Pull seed_data off the staged_intake_items row so the cached
+        // path also forwards the hint into the promoter.
+        let cachedSeed = null;
+        try {
+          const r = await opsQuery('GET',
+            `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}&select=raw_payload&limit=1`
+          );
+          if (r.ok && r.data?.length) cachedSeed = r.data[0].raw_payload?.seed_data || null;
+        } catch (_) { /* non-fatal */ }
         return await runDownstreamPipeline(intakeId, cachedSnapshot, {
           workspaceId: resolvedWorkspaceId,
           actorId:     resolvedActorId,
+          seedData:    cachedSeed,
         });
       }
     }
@@ -668,6 +679,7 @@ export async function processIntakeExtraction(intakeId, context = {}) {
     artifactCount:     documentArtifacts.length,
     extractionCount:   extractions.length,
     diagnostics:       perArtifactDiagnostics,
+    seedData:          currentPayload?.seed_data || null,
   });
   return downstream;
 }
@@ -697,6 +709,44 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
     }
   }
 
+  // Round 76ej.d (2026-05-04): patch the inbox_items row with the matched
+  // entity_id + domain so the LCC inbox UI links the OM card straight to
+  // the property card. The bridge from matchResult.property_id → LCC
+  // entities.id lives in intake-om-pipeline.js:ensureEntityLink, but the
+  // inbox patch was only happening when stageOmIntake won the race
+  // timeout. On the async path (most common when extraction is slow),
+  // the inbox row stayed entity_id=NULL forever. Re-do it here so both
+  // paths converge. inbox_items.id == staged_intake_items.intake_id by
+  // pipeline contract (intake-om-pipeline.js:392), so we can patch by
+  // intakeId directly.
+  if (matchResult?.status === 'matched' && matchResult?.property_id && matchResult?.domain && resolvedWorkspaceId) {
+    try {
+      const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
+      const linkResult = await ensureEntityLink({
+        workspaceId: resolvedWorkspaceId,
+        userId:      resolvedActorId,
+        sourceSystem,
+        sourceType:  'property',
+        externalId:  String(matchResult.property_id),
+        domain:      matchResult.domain,
+        seedFields: {
+          address: mergedSnapshot?.address || null,
+          city:    mergedSnapshot?.city    || null,
+          state:   mergedSnapshot?.state   || null,
+        },
+      });
+      if (linkResult?.ok && linkResult.entityId) {
+        await opsQuery(
+          'PATCH',
+          `inbox_items?id=eq.${encodeURIComponent(intakeId)}&entity_id=is.null`,
+          { entity_id: linkResult.entityId, domain: matchResult.domain }
+        );
+      }
+    } catch (err) {
+      console.warn('[intake-extractor] inbox_items entity link patch failed (non-fatal):', err?.message);
+    }
+  }
+
   // Promote confident OM matches into the matched domain's available_listings table
   let promotionResult = null;
   if (mergedSnapshot && matchResult) {
@@ -705,7 +755,14 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
         intakeId,
         mergedSnapshot,
         matchResult,
-        { workspaceId: resolvedWorkspaceId, actorId: resolvedActorId }
+        {
+          workspaceId: resolvedWorkspaceId,
+          actorId:     resolvedActorId,
+          // Forward seed_data so the promoter can honor caller-supplied
+          // hints (e.g. doctype='om' from the sidebar Stage Listing flow)
+          // when the AI classification step under-classified.
+          seedData: ctx.seedData || null,
+        }
       );
       console.log('[intake-promoter]', intakeId, JSON.stringify(promotionResult));
     } catch (err) {
