@@ -1388,7 +1388,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // but the comparison panel in the sidebar UI shows the unfiltered
   // ctx.tenants[] so the user saw "Withheld" listed as a proposed tenant
   // change. Filter at extraction so junk never reaches the UI.
-  const COSTAR_UI_REJECT = /^(name|source:.*|costar.*research|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed|withheld|for\s+lease\s+at\s+sale|smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|office\s+avail(?:able)?|retail\s+avail(?:able)?|industrial\s+avail(?:able)?|flex\s+avail(?:able)?|warehouse\s+avail(?:able)?|medical\s+avail(?:able)?|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied)$/i;
+  const COSTAR_UI_REJECT = /^(name|source:.*|costar.*research|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term|activity|status)|rent\/?sf|rent\s+(type|schedule|steps|adjust(?:ment)?s?|escalation\s+type)|my\s+data|shared\s+data|direct|office|retail|industrial|medical|warehouse|flex|mixed[-\s]?use|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed|withheld|for\s+lease\s+at\s+sale|smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|office\s+avail(?:able)?|retail\s+avail(?:able)?|industrial\s+avail(?:able)?|flex\s+avail(?:able)?|warehouse\s+avail(?:able)?|medical\s+avail(?:able)?|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied|sign\s+date|leased|use|services|use\s+type|space\s+(use|type|category|id)|building\s+id|tenant\s+(id|type)|expense\s+(type|structure)|expenses?|listing\s+(id|type|status)|on\s+market(?:\s+(?:since|date))?|days?\s+on\s+market|move[-\s]?in\s+ready|brand|brand\/tenant|tenant\/brand|condition|class|grade|unkwn|unknown|n\/?a|tbd|since\s+\w+\s+\d{1,2},?\s+\d{4})$/i;
   // OM-style table-of-contents section headers that CoStar sometimes renders
   // adjacent to the Tenants list. Without this, repeating the issue from
   // 2026-04-25 (Bug M) at the extension layer: "Loan", "Financials",
@@ -1495,7 +1495,15 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // tenant\s+highlights, conditions, sale\s+contacts, and other
       // header variants seen on the 1507 Hillview Dr / Hillsboro capture
       // where Sale Highlights bullet text was being captured as tenants.
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|sale\s+contacts|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|location\s+highlights|tenant\s+highlights|sale\s+highlights|sale\s+notes|conditions|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
+      // Round 76ej.l: added 'architect|developer' to about-the-* list and
+      // 'true\s+(seller|buyer)' / 'recorded\s+(seller|buyer)' / 'listing\s+broker'
+      // / 'costar\s+comp\s+contact' for Sale Comp Contacts page section
+      // headers (Pettit Ave capture). Also added 'lease\s+activity' which
+      // is the column-header bar atop the lease history table on the
+      // Lease tab — without this, parseTenantSection bled past the
+      // tenant block into 'Sign Date' / 'Use' / 'Services' / 'Rent Type'
+      // column headers and captured them as tenant rows.
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|sale\s+contacts|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property|architect|developer|broker|firm)|amenities|airport|drive(\s+time|\s+to)?|costar|costar\s+comp\s+contact|investment\s+highlights|property\s+highlights|property\s+summary|location\s+highlights|tenant\s+highlights|sale\s+highlights|sale\s+notes|conditions|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available|lease\s+activity|true\s+(seller|buyer)|recorded\s+(seller|buyer)|listing\s+broker|listing\s+contacts?)/i.test(line)) break;
 
       // Skip CoStar UI elements + OM section headers + compound metadata strings + NAICS sectors
       if (COSTAR_UI_REJECT.test(line)) continue;
@@ -1505,6 +1513,9 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
       // Skip lines that are just dates (month/year) — these are column values, not names
       if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(line)) continue;
+      // Round 76ej.l: also skip "Since Jun 23, 2009" / "Mar 26, 2026" /
+      // "Q2 2026" / "1/15/2024" / ISO-date / "2020-2025" residue.
+      if (/^(since\s+)?((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)(?:uary|ruary|ch|il|y|e|y|ust|tember|ober|ember)?\s+\d{1,2},?\s+\d{4}|q[1-4]\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{4}\s*[-–]\s*\d{4})\s*$/i.test(line)) continue;
 
       // Skip summary-bar values seen under a bare "Tenants" header on
       // Industrial Sale Comp pages (Tenancy:, Owner Occupied, Est. Rent).

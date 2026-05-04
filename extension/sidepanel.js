@@ -2291,6 +2291,14 @@ async function wireStageListingButton(ctx) {
           asking_price: ctx.asking_price || null,
           cap_rate: ctx.cap_rate || null,
           lease_expiration: ctx.lease_expiration || null,
+          // Round 76ej.l: marketing-description-mined lease facts so the
+          // OM promoter sees them as seed_data hints. The structured
+          // CREXi panel doesn't carry these — only the prose does.
+          expense_structure: ctx.expense_structure || null,
+          rent_escalations: ctx.rent_escalations || null,
+          renewal_options: ctx.renewal_options || null,
+          remaining_term: ctx.remaining_term || null,
+          lease_facts_from_description: ctx.lease_facts_from_description || null,
         },
       });
 
@@ -2387,6 +2395,12 @@ async function wireStageListingButton(ctx) {
             asking_price: ctx.asking_price || null,
             cap_rate: ctx.cap_rate || null,
             lease_expiration: ctx.lease_expiration || null,
+            // Round 76ej.l: marketing-description-mined lease facts.
+            expense_structure: ctx.expense_structure || null,
+            rent_escalations: ctx.rent_escalations || null,
+            renewal_options: ctx.renewal_options || null,
+            remaining_term: ctx.remaining_term || null,
+            lease_facts_from_description: ctx.lease_facts_from_description || null,
           },
         });
 
