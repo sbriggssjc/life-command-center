@@ -134,10 +134,57 @@ const TAB_NAMES = {
 };
 
 // ============================================================================
+// Master Paste-Ready layout (gov vertical)
+//
+// Mirrors the column order of "All Charts" tab in Copy Government Master
+// Document.xlsx. Marketing pastes this entire range into the master's All
+// Charts tab at row 5; the master's existing chart objects auto-update via
+// their pre-wired range references.
+//
+// Source columns from the gov master "All Charts" tab (row 2 headers):
+//   B=Quarter | C=Date | D=Transactions(ttm) | E=Avg Deal Size |
+//   F=Monthly Vol | G=Trans.Vol | H=Trans.Vol(ttm) | I=YoY Change |
+//   J=Upper Quartile Cap | K=Lower Quartile Cap | L=Avg Cap(ttm) |
+//   M=NM Avg Cap(ttm) | N=Non-NM Avg Cap | O=10+ Year Cap |
+//   P=6-10 Year Cap | Q=<5 Year Cap | R=Outside Firm |
+//   S=Private Vol | T=Public/REIT | U=Cross-Border | V=Institutional |
+//   W=Federal Cap | X=State Cap | Y=Municipal Cap
+//
+// We pull these from cm_gov_market_quarterly directly (since it's the
+// master view that has every column we need).
+// ============================================================================
+const GOV_MASTER_PASTE_LAYOUT = [
+  { key: 'fiscal_quarter',      header: 'Quarter',                width: 10 },
+  { key: 'period_end',          header: 'Date',                   format: 'date_short',          width: 12 },
+  { key: 'transaction_count',   header: 'Transactions (Quarterly)', format: 'integer_count',     width: 18 },
+  { key: 'avg_deal_size',       header: 'Average Deal Size',      format: 'currency_dollars',    width: 18 },
+  { key: 'quarterly_volume',    header: 'Monthly Volume',         format: 'currency_dollars',    width: 18 },
+  { key: 'quarterly_volume',    header: 'Transaction Volume',     format: 'currency_dollars',    width: 18 },
+  { key: 'ttm_volume',          header: 'Trans. Vol. (ttm)',      format: 'currency_dollars',    width: 18 },
+  { key: 'yoy_change_pct',      header: 'YoY Change (%)',         format: 'percent_one_decimal', width: 14 },
+  { key: 'upper_quartile_cap',  header: 'Upper Quartile Cap',     format: 'percent_basis_points', width: 18 },
+  { key: 'lower_quartile_cap',  header: 'Lower Quartile Cap',     format: 'percent_basis_points', width: 18 },
+  { key: 'avg_cap_rate',        header: 'Average Cap Rate (ttm)', format: 'percent_basis_points', width: 18 },
+  { key: 'nm_avg_cap',          header: 'NM Average Cap (ttm)',   format: 'percent_basis_points', width: 18 },
+  { key: 'non_nm_avg_cap',      header: 'Non-NM Average Cap',     format: 'percent_basis_points', width: 18 },
+  { key: 'cap_10plus_year',     header: '10+ Year Cap (ttm)',     format: 'percent_basis_points', width: 18 },
+  { key: 'cap_6to10_year',      header: '6 to 10 Year Cap (ttm)', format: 'percent_basis_points', width: 20 },
+  { key: 'cap_less5_year',      header: 'Less than 5 Year Cap',   format: 'percent_basis_points', width: 20 },
+  { key: 'cap_outside_firm',    header: 'Outside Firm Term',      format: 'percent_basis_points', width: 18 },
+  { key: 'private_volume',      header: 'Private Volume (ttm)',   format: 'currency_dollars',    width: 20 },
+  { key: 'reit_volume',         header: 'Public Listed/REIT',     format: 'currency_dollars',    width: 20 },
+  { key: 'cross_border_volume', header: 'Cross-Border Volume',    format: 'currency_dollars',    width: 20 },
+  { key: 'institutional_volume',header: 'Institutional Volume',   format: 'currency_dollars',    width: 20 },
+  { key: 'federal_cap',         header: 'Federal Cap',            format: 'percent_basis_points', width: 14 },
+  { key: 'state_cap',           header: 'State Cap',              format: 'percent_basis_points', width: 14 },
+  { key: 'municipal_cap',       header: 'Municipal Cap',          format: 'percent_basis_points', width: 16 },
+];
+
+// ============================================================================
 // Workbook builder
 // ============================================================================
 
-export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand }) {
+export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
   const fonts   = (brand?.fonts)   ? brand.fonts   : DEFAULT_BRAND.fonts;
 
@@ -194,13 +241,21 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   cover.getCell('B12').alignment = { wrapText: true, vertical: 'top' };
   cover.getRow(12).height = 30;
 
-  cover.getCell('B14').value = 'Marketing Workflow';
+  cover.getCell('B14').value = 'Marketing Workflow — Quarterly Refresh in 30 seconds';
   cover.getCell('B14').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
 
-  cover.getCell('B15').value = 'V1: data tabs ready for paste-link or external reference into the existing master template. V2 (coming soon) embeds brand-styled charts directly. To regenerate this workbook with the latest data, click Export Workbook in the LCC Capital Markets tab.';
+  cover.getCell('B15').value =
+    '1. Open the "MasterPasteReady" tab in this workbook.\n' +
+    '2. Click cell A2, then Ctrl+Shift+End to select the entire data range.\n' +
+    '3. Ctrl+C to copy.\n' +
+    '4. Open your master Excel file (Copy Government Master Document.xlsx).\n' +
+    '5. Go to the "All Charts" tab, click cell B3, then Ctrl+V to paste.\n' +
+    '6. All 18 charts on the master\'s All Charts tab + 10 charts on SSA Charts auto-update.\n' +
+    '7. Save the master and send to marketing.\n\n' +
+    'Re-run this export from LCC any time to regenerate. The Data_* tabs in this workbook are also useful for sanity-checking individual chart data before pasting.';
   cover.getCell('B15').font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
   cover.getCell('B15').alignment = { wrapText: true, vertical: 'top' };
-  cover.getRow(15).height = 50;
+  cover.getRow(15).height = 130;
 
   // ----------------------------------------------------------------
   // Index sheet
@@ -341,6 +396,85 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     sheet.headerFooter = {
       oddHeader: `&L&"${fonts.title_family}"&12&K003DA5${chart.name}&R&"${fonts.body_family}"&10Northmarq Capital Markets`,
       oddFooter: `&L&"${fonts.body_family}"&9Generated by LCC &D&R&"${fonts.body_family}"&9Page &P of &N`,
+    };
+  }
+
+  // ----------------------------------------------------------------
+  // MasterPasteReady — matches the column order of master "All Charts"
+  // ----------------------------------------------------------------
+  if (vertical === 'gov' && Array.isArray(masterRows) && masterRows.length > 0) {
+    const ms = wb.addWorksheet('MasterPasteReady', {
+      views: [{ showGridLines: false, state: 'frozen', ySplit: 2 }],
+      tabColor: { argb: 'FF' + hex(palette.nm_navy) },
+    });
+
+    // Title block
+    ms.getCell('A1').value = `Government Master "All Charts" — Paste-Ready (subspecialty: ${subspecialty})`;
+    ms.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+    ms.mergeCells('A1:F1');
+    ms.getRow(1).height = 22;
+
+    // Header row at row 2 (matches master "All Charts" row 2 header layout)
+    const msHeader = ms.getRow(2);
+    GOV_MASTER_PASTE_LAYOUT.forEach((c, i) => {
+      const cell = msHeader.getCell(i + 1);
+      cell.value = c.header;
+      cell.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex(palette.nm_navy) } };
+      cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+      cell.border = { bottom: { style: 'medium', color: { argb: 'FF' + hex(palette.nm_navy) } } };
+    });
+    msHeader.height = 32;
+
+    // Column widths + number formats
+    GOV_MASTER_PASTE_LAYOUT.forEach((c, i) => {
+      const col = ms.getColumn(i + 1);
+      col.width = c.width || 14;
+      if (c.format && FMT[c.format]) col.numFmt = FMT[c.format];
+    });
+
+    // Data rows starting at row 3 (so when marketing copies A3:Xend and pastes
+    // at master's All Charts!B3, the columns align with the master's B onward
+    // — the master uses B for Quarter through Y for Municipal Cap)
+    let r = 3;
+    for (const row of masterRows) {
+      const dataRow = ms.getRow(r);
+      GOV_MASTER_PASTE_LAYOUT.forEach((c, i) => {
+        let v = row[c.key];
+        if (c.format === 'date_short' && typeof v === 'string') {
+          const d = new Date(v);
+          if (!isNaN(d.getTime())) v = d;
+        }
+        const cell = dataRow.getCell(i + 1);
+        cell.value = v == null ? null : v;
+        cell.font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
+        if (c.format && FMT[c.format]) cell.numFmt = FMT[c.format];
+      });
+      if (r % 2 === 1) {
+        GOV_MASTER_PASTE_LAYOUT.forEach((_, i) => {
+          dataRow.getCell(i + 1).fill = {
+            type: 'pattern', pattern: 'solid',
+            fgColor: { argb: 'FF' + hex(palette.nm_pale) },
+          };
+        });
+      }
+      r++;
+    }
+
+    // Helpful instruction block above the data
+    ms.getCell('A1').note = {
+      texts: [
+        { text: 'PASTE INTO GOV MASTER:\n', font: { bold: true, size: 11 } },
+        { text: '1. Click A3 (first data row)\n2. Ctrl+Shift+End to select all data\n3. Ctrl+C\n4. Open Copy Government Master Document.xlsx\n5. All Charts tab → click B3\n6. Paste Special → Values\n\nColumn order matches master B-Y exactly.', font: { size: 10 } },
+      ],
+    };
+
+    ms.pageSetup = {
+      orientation: 'landscape',
+      paperSize: 9,
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
     };
   }
 

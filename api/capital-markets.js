@@ -402,13 +402,22 @@ async function exportWorkbook(req, res) {
     brand[category][key || category] = row.token_value;
   }
 
-  // 3. Build the workbook
+  // 3. For gov, also fetch the wide master view (powers MasterPasteReady tab)
+  let masterRows = null;
+  if (vertical === 'gov' && domain) {
+    const masterPath = `cm_gov_market_quarterly?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+    const masterResult = await domainQuery(domain, 'GET', masterPath);
+    masterRows = masterResult.ok !== false ? (masterResult.data || []) : [];
+  }
+
+  // 4. Build the workbook
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
     asOf: as_of || null,
     charts,
     brand,
+    masterRows,
   });
 
   const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
