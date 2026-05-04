@@ -2175,10 +2175,16 @@ function buildSyntheticListingText(ctx) {
   push('Brand/Tenant', ctx.brand_tenant);
   push('Tenant Credit', ctx.tenant_credit);
   push('Lease Type', ctx.lease_type);
-  push('Lease Term', ctx.lease_term);
-  push('Remaining Term', ctx.remaining_term);
-  push('Lease Expiration', ctx.lease_expiration);
-  push('Lease Options', ctx.renewal_options);
+  push('Original Lease Term (years)', ctx.lease_term);
+  push('Remaining Lease Term (years)', ctx.remaining_term);
+  push('Lease Expiration Date', ctx.lease_expiration);
+  // Round 76ej.e: spell renewal options out twice so the AI doesn't grab
+  // just the leading digit. Live test 76ej.d had renewal_options="2"
+  // land in dia.leases instead of "(2) 5 year options".
+  if (ctx.renewal_options) {
+    lines.push(`Renewal Options: ${ctx.renewal_options}`);
+    lines.push(`Renewal Options Description: ${ctx.renewal_options}`);
+  }
   push('Investment Type', ctx.investment_type);
   push('APN', ctx.apn);
   push('Days on Market', ctx.days_on_market);
