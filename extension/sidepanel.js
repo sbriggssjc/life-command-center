@@ -910,6 +910,11 @@ async function loadPropertyTab(opts) {
 
   body.innerHTML = html;
 
+  // Wire the "Stage Listing to LCC" button if it was rendered.
+  if (ctx && (ctx.marketing_headline || ctx.marketing_description || ctx.om_available || ctx.om_url)) {
+    wireStageListingButton(ctx);
+  }
+
   // Document button handlers
   body.querySelectorAll('.doc-open-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -2118,7 +2123,153 @@ function renderMarketingSection(ctx) {
       html += `<div class="context-field"><span class="context-label">OM</span><span class="context-value">Available on listing page</span></div>`;
     }
   }
+  // CREXi gates "View OM" behind an NDA modal, so the actual PDF URL is
+  // never exposed to the DOM. Synthesize a text/plain artifact from the
+  // structured fields + marketing description and route it through the
+  // unified OM intake pipeline (which accepts text/* and skips pdf-parse).
+  if (ctx.address && (ctx.marketing_description || ctx.asking_price || ctx.tenant_name)) {
+    html += '<div class="lcc-om-stage" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">';
+    html += '<button class="btn btn-sm btn-success lcc-stage-listing-btn" title="Send the listing summary + marketing description to LCC intake for AI extraction">Stage Listing to LCC</button>';
+    html += '<button class="btn btn-sm btn-secondary lcc-copy-listing-btn" title="Copy the synthesized listing summary to clipboard">Copy Summary</button>';
+    html += '<span class="lcc-stage-status" style="font-size:10px;color:var(--text-secondary);"></span>';
+    html += '</div>';
+  }
   return html;
+}
+
+// Compose a plain-text "synthetic OM" from CREXi context. The OM extractor
+// is forgiving — it just needs labelled fields it can pattern-match.
+function buildSyntheticListingText(ctx) {
+  const lines = [];
+  const push = (label, val) => {
+    if (val == null || val === '' || val === false) return;
+    lines.push(`${label}: ${val}`);
+  };
+  lines.push(`Source: ${ctx.page_url || 'sidebar capture'}`);
+  push('Address', ctx.address);
+  push('City', ctx.city);
+  push('State', ctx.state);
+  lines.push('');
+  if (ctx.marketing_headline) {
+    lines.push(ctx.marketing_headline);
+    lines.push('');
+  }
+  push('Asking Price', ctx.asking_price);
+  push('Cap Rate', ctx.cap_rate);
+  push('NOI', ctx.noi);
+  push('Price per SF', ctx.price_per_sf);
+  push('Property Type', ctx.property_type);
+  push('Sub Type', ctx.sub_type);
+  push('Building Class', ctx.building_class);
+  push('Square Footage', ctx.square_footage);
+  push('Year Built', ctx.year_built);
+  push('Lot Size', ctx.lot_size);
+  push('Acreage', ctx.acreage);
+  push('Stories', ctx.stories);
+  push('Units', ctx.units);
+  push('Parking', ctx.parking);
+  push('Zoning', ctx.zoning);
+  push('Occupancy', ctx.occupancy);
+  push('Tenancy', ctx.tenancy);
+  push('Tenant', ctx.tenant_name);
+  push('Brand/Tenant', ctx.brand_tenant);
+  push('Tenant Credit', ctx.tenant_credit);
+  push('Lease Type', ctx.lease_type);
+  push('Lease Term', ctx.lease_term);
+  push('Remaining Term', ctx.remaining_term);
+  push('Lease Expiration', ctx.lease_expiration);
+  push('Lease Options', ctx.renewal_options);
+  push('Investment Type', ctx.investment_type);
+  push('APN', ctx.apn);
+  push('Days on Market', ctx.days_on_market);
+  if (ctx.marketing_description) {
+    lines.push('');
+    lines.push('Marketing Description:');
+    lines.push(ctx.marketing_description);
+  }
+  if (Array.isArray(ctx.contacts) && ctx.contacts.length) {
+    lines.push('');
+    lines.push('Listing Brokers:');
+    for (const c of ctx.contacts) {
+      const parts = [c.name, c.company, c.license, c.phones?.[0], c.email].filter(Boolean);
+      if (parts.length) lines.push(`- ${parts.join(' · ')}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function wireStageListingButton(ctx) {
+  const btn = $('.lcc-stage-listing-btn');
+  const copyBtn = $('.lcc-copy-listing-btn');
+  const status = $('.lcc-stage-status');
+  if (!btn) return;
+
+  const text = buildSyntheticListingText(ctx);
+
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = 'Copied ✓';
+        setTimeout(() => { copyBtn.textContent = 'Copy Summary'; }, 2000);
+      } catch (err) {
+        copyBtn.textContent = 'Copy failed';
+      }
+    });
+  }
+
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Staging…';
+    if (status) status.textContent = 'Posting to LCC intake…';
+
+    let hostname = null;
+    try { hostname = new URL(ctx.page_url || location.href).hostname; } catch {}
+
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'STAGE_TEXT_TO_LCC',
+        text,
+        fileName: `crexi-${(ctx.address || 'listing').replace(/[^A-Za-z0-9]+/g, '-').slice(0, 60)}.txt`,
+        sourceUrl: ctx.page_url || null,
+        hostname,
+        intent: `CREXi listing capture — ${ctx.address || 'unknown address'}`,
+        seedData: {
+          address: ctx.address || null,
+          city: ctx.city || null,
+          state: ctx.state || null,
+          tenant_name: ctx.tenant_name || null,
+          asking_price: ctx.asking_price || null,
+          cap_rate: ctx.cap_rate || null,
+        },
+      });
+
+      if (resp?.ok && resp?.body?.ok) {
+        const b = resp.body;
+        btn.textContent = `✓ Staged (${b.extraction_status || 'received'})`;
+        btn.style.background = 'var(--green)';
+        btn.style.color = '#fff';
+        if (status) status.textContent = `Intake id: ${b.intake_id || '?'}`;
+      } else {
+        const errCode = resp?.body?.error || resp?.error || 'unknown';
+        const errDetail = resp?.body?.detail || resp?.body?.message || '';
+        btn.textContent = 'Failed';
+        btn.style.background = 'var(--red, #dc2626)';
+        btn.style.color = '#fff';
+        btn.disabled = false;
+        if (status) {
+          status.style.color = 'var(--red, #dc2626)';
+          status.textContent = `${errCode}${errDetail ? ' — ' + String(errDetail).slice(0, 120) : ''}`;
+        }
+        console.error('[Stage Listing] failed', resp);
+      }
+    } catch (err) {
+      btn.textContent = 'Error';
+      btn.disabled = false;
+      if (status) status.textContent = `Error: ${err.message || err}`;
+    }
+  });
 }
 
 // ── Related LCC data (leases, ownership, tasks) ────────────────────────────

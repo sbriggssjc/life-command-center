@@ -921,4 +921,94 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     })();
     return true; // async response
   }
+
+  if (msg.type === 'STAGE_TEXT_TO_LCC') {
+    // Synthesize a text/plain artifact (no PDF available) and POST it to
+    // /api/intake/stage-om. Used for CREXi listings where "View OM" is
+    // gated behind an NDA modal and the actual PDF URL is never exposed
+    // to the DOM. The OM intake pipeline accepts text/* mime types and
+    // skips pdf-parse, feeding the decoded text straight to AI extraction.
+    (async () => {
+      try {
+        const text = String(msg.text || '');
+        if (!text || text.length < 50) {
+          respond({ ok: false, error: 'empty_text', body: { error: 'empty_text', detail: 'Synthesized listing text was empty.' } });
+          return;
+        }
+
+        const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
+        const host = String(rawHost).replace(/\/+$/, '');
+        const apiHeaders = {
+          'X-LCC-Key': syncConfig.LCC_API_KEY || '',
+          ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
+        };
+
+        // base64 encode the text body
+        const bytes = new TextEncoder().encode(text);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        const base64 = btoa(binary);
+
+        const fileName = (msg.fileName && msg.fileName.trim())
+          || `crexi-listing-${Date.now()}.txt`;
+        const intent   = msg.intent
+          || `Staged synthetic listing from ${msg.hostname || 'browser'}`;
+        const seedTags = ['sidebar_intake', 'synthetic_text', msg.hostname || 'browser']
+          .filter(Boolean);
+
+        const stageUrl = `${host}/api/intake/stage-om`;
+        const postRes = await fetch(stageUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            intake_source:  'copilot',
+            intake_channel: 'sidebar',
+            intent,
+            artifacts: {
+              primary_document: {
+                bytes_base64: base64,
+                file_name:    fileName,
+                mime_type:    'text/plain',
+              },
+            },
+            seed_data: {
+              tags: seedTags,
+              source_url: msg.sourceUrl || null,
+              ...(msg.seedData || {}),
+            },
+          }),
+        });
+        const rawBody = await postRes.text();
+        let payload = null;
+        let parseErr = null;
+        try { payload = JSON.parse(rawBody); } catch (e) { parseErr = e.message; }
+
+        respond({
+          ok:          postRes.ok && (payload?.ok !== false) && !parseErr,
+          status:      postRes.status,
+          statusText:  postRes.statusText,
+          contentType: postRes.headers.get('content-type'),
+          body: payload || {
+            error:  parseErr ? 'non_json_response' : 'stage_failed',
+            detail: parseErr
+              ? `Server returned ${postRes.status}. First 200b: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+              : rawBody.slice(0, 200),
+          },
+          sizeBytes: bytes.length,
+          fileName,
+        });
+      } catch (err) {
+        respond({
+          ok:    false,
+          error: err.message,
+          body:  { error: 'stage_text_threw', detail: err.message },
+        });
+      }
+    })();
+    return true; // async response
+  }
 });
