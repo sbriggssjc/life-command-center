@@ -416,22 +416,53 @@ async function promoteListing(domain, intakeId, snapshot, match) {
       : { ok: false, status: patchRes.status, detail: patchRes.data, stage: 'patch_after_23505' };
   }
 
-  // Dialysis has no unique source-ref column. Check-then-insert: find any
-  // existing lcc-intake-sourced row for this property and update it in
-  // place; otherwise insert a fresh row.
-  const existing = await domainQuery(
+  // Dialysis has no unique source-ref column. Pre-Round-76eg this branch
+  // looked up prior rows with `notes ILIKE '%LCC OM intake%'`, which only
+  // dedups against rows previously written by THIS code path — sidebar
+  // verify-auto-create / scraper / manual rows were invisible and a
+  // parallel duplicate would land. Round 76eg widens the dedup to "any
+  // active listing for this property" so all ingestion paths converge on
+  // a single canonical row, matching the new partial unique index.
+  const activeExisting = await domainQuery(
     'dialysis',
     'GET',
     `available_listings?property_id=eq.${Number(match.property_id)}` +
-    `&notes=like.*LCC OM intake*&select=listing_id&limit=1`
+    `&is_active=eq.true&select=listing_id&order=listing_date.desc.nullslast&limit=1`
   );
-  if (existing.ok && Array.isArray(existing.data) && existing.data.length) {
-    const existingId = existing.data[0].listing_id;
+  let existingId = null;
+  if (activeExisting.ok && Array.isArray(activeExisting.data) && activeExisting.data.length) {
+    existingId = activeExisting.data[0].listing_id;
+  } else {
+    // Fall back to the most recent inactive non-sold row — typically a
+    // Stale or Withdrawn listing that this OM is reviving.
+    const dormantExisting = await domainQuery(
+      'dialysis',
+      'GET',
+      `available_listings?property_id=eq.${Number(match.property_id)}` +
+      `&is_active=eq.false&status=not.in.(Sold,sold,Closed,closed)` +
+      `&select=listing_id,sold_date,sale_transaction_id` +
+      `&order=listing_date.desc.nullslast&limit=1`
+    );
+    const dormant = dormantExisting.ok && Array.isArray(dormantExisting.data)
+      ? dormantExisting.data[0]
+      : null;
+    if (dormant && !dormant.sold_date && !dormant.sale_transaction_id) {
+      existingId = dormant.listing_id;
+    }
+  }
+  if (existingId != null) {
+    // PATCH only non-null fields so a fresh OM enriches existing curated
+    // data without clobbering it. The DB trigger fn_listing_close_if_sold
+    // will re-Sold the row if a recent sale event already exists, so we
+    // don't need to second-guess that here.
+    const patchRow = Object.fromEntries(
+      Object.entries(row).filter(([, v]) => v != null)
+    );
     const patchRes = await domainQuery(
       'dialysis',
       'PATCH',
       `available_listings?listing_id=eq.${existingId}`,
-      row,
+      patchRow,
       { Prefer: 'return=representation' }
     );
     return patchRes.ok
