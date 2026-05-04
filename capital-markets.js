@@ -38,6 +38,9 @@
     'buyer_class_pct_by_year',     // Phase 2b — deliverable p.20
     'dom_and_pct_of_ask',          // Phase 2b — deliverable p.22
     'bid_ask_spread',              // Phase 2b — deliverable p.23
+    'fed_funds_vs_treasury',       // Phase 2c — deliverable p.11 (macro context)
+    'cost_of_capital',             // Phase 2c — deliverable p.17
+    'net_lease_spread',            // Phase 2c — deliverable p.11/p.17
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -333,6 +336,48 @@
           pointRadius: 0,
           borderWidth: 2,
         }];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_basis_points') });
+      }
+
+      // ===== Phase 2c additions (FRED-sourced macro context) ========================
+      case 'fed_funds_vs_treasury': {
+        datasets = [
+          { label: 'Fed Funds Rate',  data: chart.rows.map(r => r.fed_funds_rate),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: '10Y Treasury',    data: chart.rows.map(r => r.treasury_10y_yield),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+        ];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_one_decimal') });
+      }
+      case 'cost_of_capital': {
+        datasets = [
+          { label: 'Fed Funds',       data: chart.rows.map(r => r.fed_funds_rate),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [4,3] },
+          { label: '10Y Treasury',    data: chart.rows.map(r => r.treasury_10y_yield),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          { label: '30Y Mortgage',    data: chart.rows.map(r => r.mortgage_30y_rate),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        ];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_one_decimal') });
+      }
+      case 'net_lease_spread': {
+        // Filled-area spread: market cap minus 10Y Treasury (in bps)
+        datasets = [
+          { label: 'Market Spread',   data: chart.rows.map(r => r.market_spread),
+            borderColor: palette[0], backgroundColor: palette[3],
+            fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 },
+          { label: 'NM Spread',       data: chart.rows.map(r => r.nm_spread),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.25, pointRadius: 2, borderWidth: 2 },
+        ];
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('percent_basis_points') });
       }

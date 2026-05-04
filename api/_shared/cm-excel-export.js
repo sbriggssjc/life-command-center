@@ -150,6 +150,28 @@ const CHART_COLUMNS = {
     { key: 'avg_bid_ask_spread', header: 'Bid-Ask Spread (bps)', format: 'percent_basis_points', width: 19 },
     { key: 'pct_price_change',   header: '% Price Changes',     format: 'percent_one_decimal', width: 16 },
   ],
+
+  // Phase 2c additions (FRED macro)
+  fed_funds_vs_treasury: [
+    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'fed_funds_rate',     header: 'Fed Funds Rate',      format: 'percent_one_decimal', width: 15 },
+    { key: 'treasury_10y_yield', header: '10Y Treasury',        format: 'percent_one_decimal', width: 14 },
+  ],
+  cost_of_capital: [
+    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'fed_funds_rate',     header: 'Fed Funds Rate',      format: 'percent_one_decimal', width: 15 },
+    { key: 'treasury_10y_yield', header: '10Y Treasury',        format: 'percent_one_decimal', width: 14 },
+    { key: 'mortgage_30y_rate',  header: '30Y Mortgage',        format: 'percent_one_decimal', width: 14 },
+  ],
+  net_lease_spread: [
+    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },
+    { key: 'treasury_10y_yield', header: '10Y Treasury',        format: 'percent_one_decimal', width: 14 },
+    { key: 'avg_cap_rate',       header: 'Market Avg Cap',      format: 'percent_basis_points', width: 16 },
+    { key: 'nm_avg_cap',         header: 'NM Avg Cap',          format: 'percent_basis_points', width: 14 },
+    { key: 'market_spread',      header: 'Market Spread (bps)', format: 'percent_basis_points', width: 19 },
+    { key: 'nm_spread',          header: 'NM Spread (bps)',     format: 'percent_basis_points', width: 17 },
+  ],
 };
 
 // Tab name per chart (kept short — Excel limits to 31 chars)
@@ -167,6 +189,10 @@ const TAB_NAMES = {
   buyer_class_pct_by_year:      'Data_Buyer_Pool',
   dom_and_pct_of_ask:           'Data_DOM_Ask',
   bid_ask_spread:               'Data_Bid_Ask',
+  // Phase 2c additions
+  fed_funds_vs_treasury:        'Data_FF_vs_10Y',
+  cost_of_capital:              'Data_Cost_Capital',
+  net_lease_spread:             'Data_NL_Spread',
 };
 
 // ============================================================================
