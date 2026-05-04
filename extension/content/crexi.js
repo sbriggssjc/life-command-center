@@ -182,7 +182,53 @@
 
     // Broker
     const brokerEl = findTextElement('Listing Agent', 'Broker', 'Listed By', 'Contact');
-    const brokerCoEl = findTextElement('Brokerage', 'Listing Company', 'Company');
+    const brokerCoElRaw = findTextElement('Brokerage', 'Listing Company', 'Company');
+
+    // Round 76ej.n (2026-05-04): reject license-format strings from
+    // becoming the brokerage/firm name. The Tampa Berlin Group capture
+    // (intake 31802a9d) showed broker_company="License BK3317434"
+    // because findTextElement('Brokerage', ...) returned the line
+    // adjacent to the CREXi 'Brokerage' label, which is the agent's
+    // license id rather than the firm name. License formats:
+    //   "License BK3317434"   (verbose)
+    //   "BK3317434"           (license id alone)
+    //   "FL BK3317434" / "MI 6501461017" (state-code prefix)
+    //   "License #BK3317434"  (with hash)
+    const isLicenseLikeString = (s) => {
+      if (!s || typeof s !== 'string') return false;
+      const t = s.trim();
+      if (t.length < 3) return false;
+      // Verbose forms: "License BK3317434" / "Lic. #BK..."
+      if (/^license[\s#:]/i.test(t)) return true;
+      if (/^lic[.\s#:]/i.test(t))    return true;
+      // Bare license id, with optional 2-letter state prefix:
+      //   "BK3317434" — 0-3 letters then 4+ digits
+      //   "FL BK3317434" — state, space, license body
+      //   "MI 6501461017" — state, space, no letters, 10 digits
+      if (/^(?:[A-Z]{2}\s+)?[A-Z]{0,3}\d{4,}\s*$/.test(t)) return true;
+      // Bare digit run
+      if (/^\d{4,}\s*$/.test(t)) return true;
+      return false;
+    };
+    const cleanCompany = (raw) => {
+      if (!raw) return null;
+      const t = String(raw).trim();
+      if (isLicenseLikeString(t)) return null;
+      return t;
+    };
+    // Try the "Listed by <Firm>" text near the property image footer
+    // first — that's where CREXi consistently shows the brokerage name
+    // (separate from the broker card which only carries the license).
+    const listedByText = (() => {
+      const text = document.body?.innerText || '';
+      const m = text.match(/listed\s+by[:\s]+([A-Z][^\n,]{2,80}?)(?=\s*(?:\n|·|•|\||$))/i);
+      if (!m) return null;
+      const raw = m[1].trim().replace(/[,;]+$/, '').trim();
+      return isLicenseLikeString(raw) ? null : raw;
+    })();
+
+    const brokerCoEl = brokerCoElRaw;
+    const brokerCoFallback = cleanCompany(val(brokerCoElRaw)) || listedByText;
 
     // Sale
     const salePriceEl = findTextElement('Sale Price', 'Last Sale Price');
@@ -315,10 +361,10 @@
         apn: apn,
         acreage: acreage,
         broker_name: primaryContact?.name || val(brokerEl),
-        broker_company: primaryContact?.company || val(brokerCoEl),
+        broker_company: cleanCompany(primaryContact?.company) || brokerCoFallback,
         // Sidebar expects these listing_* fields (see buildMetadata).
         listing_broker: primaryContact?.name || null,
-        listing_firm: primaryContact?.company || null,
+        listing_firm: cleanCompany(primaryContact?.company) || brokerCoFallback,
         listing_phone: primaryContact?.phones?.[0] || null,
         listing_email: primaryContact?.email || null,
         contacts: contacts || [],
