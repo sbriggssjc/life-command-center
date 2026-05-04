@@ -2236,12 +2236,18 @@ async function wireStageListingButton(ctx) {
         hostname,
         intent: `CREXi listing capture — ${ctx.address || 'unknown address'}`,
         seedData: {
+          // Tell the promoter explicitly that this is OM-grade data so the
+          // not_a_listing_doc guard doesn't reject the synthetic snapshot
+          // when the AI returns no document_type (which is common for
+          // bullet-list text that doesn't pattern-match an OM cover page).
+          doctype: 'om',
           address: ctx.address || null,
           city: ctx.city || null,
           state: ctx.state || null,
           tenant_name: ctx.tenant_name || null,
           asking_price: ctx.asking_price || null,
           cap_rate: ctx.cap_rate || null,
+          lease_expiration: ctx.lease_expiration || null,
         },
       });
 

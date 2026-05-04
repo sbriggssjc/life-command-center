@@ -91,7 +91,23 @@
     const leaseExpiration = get('Lease Expiration', 'Lease Exp', 'Expiration');
     const leaseOptions = get('Lease Options', 'Renewal Options', 'Options');
     const tenancy = get('Tenancy');
-    const tenantBrand = get('Brand/Tenant', 'Tenant', 'Primary Tenant');
+    const tenantBrandRaw = get('Brand/Tenant', 'Tenant', 'Primary Tenant');
+    // Round 76ej.d: CREXi shows the brand label ("DaVita"), but every
+    // other intake source (CSV import, OM extraction) uses the legal
+    // entity name ("DaVita Kidney Care") which collides on conflict
+    // resolution. Map the most common single-word brands forward to
+    // their canonical legal name so writes don't bounce. Keep the
+    // map small and only for unambiguous brand-only tenants.
+    const TENANT_BRAND_ALIASES = {
+      'davita':              'DaVita Kidney Care',
+      'fresenius':           'Fresenius Medical Care',
+      'us renal':            'U.S. Renal Care',
+      'us renal care':       'U.S. Renal Care',
+      'satellite healthcare':'Satellite Healthcare',
+    };
+    const tenantBrand = tenantBrandRaw && TENANT_BRAND_ALIASES[tenantBrandRaw.toLowerCase().trim()]
+      ? TENANT_BRAND_ALIASES[tenantBrandRaw.toLowerCase().trim()]
+      : tenantBrandRaw;
 
     // Investment
     const investmentType = get('Investment Type');
@@ -283,22 +299,28 @@
 
   function extractCrexiAskingPrice() {
     // CREXi shows the asking price in a header banner like
-    // "$2,045,000   67 days on market | Updated 28 days ago".
-    // The pipe between the price and "days on market" is inconsistent
-    // (sometimes whitespace, sometimes a vertical bar, sometimes a bullet).
-    // Anchor instead on the "days on market" text within ~80 chars of the
-    // dollar sign to avoid picking up tax / NOI / valuation-tool prices.
+    // "$2,045,000   67 days on market   Updated 28 days ago".
+    // Round 76ej.b: separator was loosened, but we still missed prices
+    // where the page renders no separator at all (just whitespace) or
+    // where "days on market" wraps to the next line. Round 76ej.d:
+    // anchor on either "days on market" OR "Cap Rate" within ~120
+    // characters of a $-prefixed number. Whichever hits first wins.
     const text = document.body?.innerText || '';
     const m = text.match(
-      /\$[\d,]+(?:\.\d+)?(?=[\s\|·••\-]{1,12}\d+\s+days?\s+on\s+market)/i
+      /\$\s?([\d,]{4,}(?:\.\d+)?)(?=[^$\n]{0,160}?(?:days?\s+on\s+market|cap\s+rate))/i
     );
-    if (m) return m[0];
+    if (m) return '$' + m[1];
     // Fallback: a price-prominent element near the page top.
     const big = document.querySelector('[data-cy="price"], .property-price, .pdp-price');
     if (big) {
       const t = big.textContent?.trim();
       if (t && /^\$[\d,]+/.test(t)) return t;
     }
+    // Last resort: scan body for any standalone $X,XXX,XXX-style price
+    // appearing in the first 4 KB of innerText (banner area).
+    const head = text.slice(0, 4096);
+    const any = head.match(/\$\s?([\d,]{4,}(?:\.\d+)?)/);
+    if (any && any[1].replace(/,/g, '').length >= 5) return '$' + any[1];
     return null;
   }
 
@@ -514,16 +536,34 @@
         if (COMPANY_RE.test(l)) { company = l; break; }
       }
 
-      const phoneMatch = text.match(/(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/);
+      // Phone: CREXi gates the actual phone behind a "View phone number"
+      // click, so the only digit string visible in the card text is usually
+      // the agent's license id ("MI 6501461017"). Reject any 10-digit run
+      // that's adjacent to a 2-letter state code (license format) or that
+      // matches the digits we already extracted as `license`. Require the
+      // formatted shape with at least one separator — bare 10-digit runs
+      // are almost always license numbers on CREXi.
+      let phoneRaw = null;
+      const phoneScan = text.match(
+        /(?:^|[^A-Z\d])(\(?(\d{3})\)?[\s.\-]\d{3}[\s.\-]\d{4})(?!\d)/
+      );
+      if (phoneScan) phoneRaw = phoneScan[1].trim();
+      if (phoneRaw && license) {
+        const licDigits = (license.match(/\d+/g) || []).join('');
+        const phoneDigits = phoneRaw.replace(/\D/g, '');
+        if (licDigits && phoneDigits && licDigits.includes(phoneDigits)) {
+          phoneRaw = null;
+        }
+      }
       const emailMatch = text.match(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/);
 
-      if (!name && !phoneMatch && !emailMatch) continue;
+      if (!name && !phoneRaw && !emailMatch) continue;
       contacts.push({
         role: 'listing_broker',
         name: name || null,
         company: company || null,
         license: license || null,
-        phones: phoneMatch ? [phoneMatch[0].trim()] : [],
+        phones: phoneRaw ? [phoneRaw] : [],
         email: emailMatch ? emailMatch[0] : null,
       });
     }
