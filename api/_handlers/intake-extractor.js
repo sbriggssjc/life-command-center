@@ -914,6 +914,19 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
             match_domain:        matchResult?.domain || null,
             promotion_ok:        promotionResult?.ok ?? null,
             promotion_listing_id: promotionResult?.listing?.listing_id || null,
+            // Round 76ej.h (2026-05-04): preserve the promoter's `skipped`
+            // reason + any thrown error so SQL audits can see WHY a
+            // promotion that should have succeeded reported ok:false. Earlier
+            // intakes had `promotion_ok=false` with no visible cause; this
+            // pulls the diagnostic forward into the recorded snapshot.
+            promotion_skipped:    promotionResult?.skipped || null,
+            promotion_error:      promotionResult?.error   || promotionResult?.listing?.error || null,
+            promotion_listing_action:
+              promotionResult?.listing?.merged_into_existing ? 'merged_into_existing' :
+              promotionResult?.listing?.updated              ? 'updated_existing' :
+              promotionResult?.listing?.inserted             ? 'inserted_new' :
+              promotionResult?.listing?.skipped              ? 'skipped:' + promotionResult.listing.skipped :
+              null,
             runtime_config:      runtimeConfig,
             // Persist per-artifact diagnostics (incl. ai_chain, ai_fell_back,
             // ai_final_provider, ai_final_model) so SQL audits can see when

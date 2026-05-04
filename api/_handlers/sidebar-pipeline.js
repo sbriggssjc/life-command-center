@@ -2036,6 +2036,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     // Round 76ej.d 2026-05-04: CREXi captures get their own tag too
     // (priority registry seeded by the sibling migration). Falls back to
     // costar_sidebar for any unrecognised source.
+    // Round 76ej.h 2026-05-04: trace marker + diagnostic logging — earlier
+    // run on a CREXi capture (entity 76ej-c5b0d0d5) tagged provenance as
+    // costar_sidebar despite metadata.source='crexi'. Logging the resolved
+    // sourceTag lets us confirm in Vercel function logs whether the
+    // deployed build includes this branch.
     const sidebarSource = (metadata?.source || metadata?._source || '').toLowerCase();
     let sourceTag = 'costar_sidebar';
     if (sidebarSource === 'rca')   sourceTag = 'rca_sidebar';
@@ -2044,6 +2049,14 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
       sourceTag === 'rca_sidebar'   ? 'rca'   :
       sourceTag === 'crexi_sidebar' ? 'crexi' :
                                       'costar';
+    console.log('[sidebar-pipeline] Round 76ej.h sourceTag derive', {
+      sidebar_source_raw: metadata?.source ?? null,
+      sidebar_source_alt: metadata?._source ?? null,
+      sidebar_source_lower: sidebarSource,
+      resolved_source_tag: sourceTag,
+      run_id_prefix: runIdPrefix,
+      entity_id: entity?.id || null,
+    });
     const provCtx = {
       targetDatabase: targetDb,
       sidebarRunId:   entity?.id ? `${runIdPrefix}:${entity.id}` : null,
