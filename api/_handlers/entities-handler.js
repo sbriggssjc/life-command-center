@@ -503,15 +503,96 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         }
         let listings = Array.isArray(listingsRes.data) ? listingsRes.data : [];
 
-        // Round 76du: auto-create the listing on a sidebar verification when
-        // the property has no active listings on file. The audit on
-        // 5 Route 45 / Mannington NJ found that some sidebar captures miss
-        // creating the available_listings row even when the source page is
-        // an active for-sale listing. Rather than make the user click a
-        // separate "create listing" button, treat a sidebar 'still_available'
-        // verification with an asking_price as the implicit creation signal.
+        // Round 76eg: before deciding to auto-create, look at *any* listing
+        // for this property (including inactive/Sold/Stale ones) so we can
+        // (a) refuse to create when a recent sale event has been recorded,
+        // and (b) prefer reactivating an existing row over inserting a
+        // duplicate. Prior versions only checked is_active=true and would
+        // happily insert parallel rows whenever the existing one was Sold.
         let autoCreated = null;
+        let reactivated = null;
         if (listings.length === 0
+            && method === 'sidebar_capture'
+            && check_result === 'still_available'
+            && asking_price != null && Number(asking_price) > 0) {
+
+          // Refuse to auto-create when the property has a recorded sale
+          // within the last 12 months — the user is most likely looking
+          // at a stale broker page, not a genuine re-listing. The DB's
+          // fn_listing_close_if_sold trigger would immediately flip any
+          // row we inserted back to Sold anyway.
+          const saleProbeFilter = domain === 'dialysis'
+            ? `property_id=eq.${encodeURIComponent(String(property_id))}`
+            : `property_id=eq.${Number(property_id)}`;
+          const recentSaleRes = await domainQuery(domain, 'GET',
+            `property_sale_events?${saleProbeFilter}&sale_date=gte.${
+              new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+            }&select=sale_event_id,sale_date,price&order=sale_date.desc&limit=1`);
+          if (recentSaleRes.ok && Array.isArray(recentSaleRes.data) && recentSaleRes.data.length) {
+            return res.status(409).json({
+              error: 'recent_sale_recorded',
+              property_id,
+              sale_date: recentSaleRes.data[0].sale_date,
+              hint: 'A sale was recorded for this property within the last 12 months. Confirm this is a genuine re-listing before creating a fresh available_listings row.',
+            });
+          }
+
+          // Try reactivating the most-recent inactive listing for this
+          // property before inserting. This collapses the
+          // sidebar-verify → fresh-row pattern into a single canonical row.
+          const reviveFilter = domain === 'dialysis'
+            ? `property_id=eq.${Number(property_id)}&is_active=eq.false`
+            : `property_id=eq.${Number(property_id)}&listing_status=neq.active`;
+          const reviveRes = await domainQuery(domain, 'GET',
+            `available_listings?${reviveFilter}&select=*&order=listing_date.desc.nullslast&limit=1`);
+          if (reviveRes.ok && Array.isArray(reviveRes.data) && reviveRes.data.length) {
+            const prior = reviveRes.data[0];
+            // Don't revive Sold rows — those carry sold_date/sold_price
+            // and represent a real terminal state. Only revive Stale /
+            // Withdrawn / Off Market.
+            const status = String(prior.status || prior.listing_status || '').toLowerCase();
+            const hasSale = prior.sold_date || prior.sold_price || prior.sale_transaction_id;
+            if (!hasSale && !['sold', 'closed', 'closed but obligated'].includes(status)) {
+              const patchRow = domain === 'dialysis'
+                ? {
+                    is_active: true,
+                    status: 'Active',
+                    last_price: Number(asking_price),
+                    current_cap_rate: cap_rate != null ? Number(cap_rate) : prior.current_cap_rate,
+                    listing_url: source_url || prior.listing_url,
+                    last_seen: new Date().toISOString().slice(0, 10),
+                    last_verified_at: new Date().toISOString(),
+                    off_market_date: null,
+                    off_market_reason: null,
+                    notes: (prior.notes ? prior.notes + '\n' : '') +
+                      `[entities-handler reactivated ${new Date().toISOString().slice(0, 10)}] sidebar verify-still-available`,
+                  }
+                : {
+                    listing_status: 'active',
+                    asking_price: Number(asking_price),
+                    asking_cap_rate: cap_rate != null ? Number(cap_rate) : prior.asking_cap_rate,
+                    source_url: source_url || prior.source_url,
+                    last_seen_at: new Date().toISOString(),
+                    last_verified_at: new Date().toISOString(),
+                  };
+              const patchRes = await domainQuery(domain, 'PATCH',
+                `available_listings?listing_id=eq.${encodeURIComponent(prior.listing_id)}`,
+                patchRow,
+                { Prefer: 'return=representation' });
+              if (patchRes.ok) {
+                const revived = Array.isArray(patchRes.data) ? patchRes.data[0] : patchRes.data;
+                if (revived?.listing_id) {
+                  reactivated = revived;
+                  listings = [{ listing_id: revived.listing_id }];
+                  console.log(`[record_listing_verification] reactivated listing_id=${revived.listing_id} for ${domain} property_id=${property_id}`);
+                }
+              }
+            }
+          }
+        }
+
+        if (listings.length === 0
+            && reactivated == null
             && method === 'sidebar_capture'
             && check_result === 'still_available'
             && asking_price != null && Number(asking_price) > 0) {

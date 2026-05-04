@@ -5753,7 +5753,14 @@ async function _udRenderSalesAsync(bodyEl) {
               limit: 100
             }).catch(() => [])
       ]);
-      listings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
+      const rawListings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
+      // Round 76eg: drop rows the consolidation function has retired so
+      // they don't pad the timeline counts or render as phantom listings.
+      listings = rawListings.filter((l) => {
+        if (l.exclude_from_market_metrics === true) return false;
+        const status = String(l.status || '').toLowerCase();
+        return status !== 'superseded';
+      });
       const rawTxns = Array.isArray(txnRes) ? txnRes : (txnRes?.data || []);
       // Normalize both sources to a common shape so renderers don't care
       // which table the row came from.
@@ -5810,6 +5817,13 @@ function _udTabSales() {
   const events = allEvents.filter((e) => {
     // Hide excluded/duplicate sales entirely
     if (e.sale && e.sale.exclude_from_market_metrics === true) return false;
+    // Round 76eg: same treatment for listings collapsed by the
+    // consolidation function. They're kept in the DB for forensics but
+    // would otherwise inflate the timeline with phantom rows.
+    if (e.listing && (
+      e.listing.exclude_from_market_metrics === true ||
+      String(e.listing.status || '').toLowerCase() === 'superseded'
+    )) return false;
     if (filter === 'listings') return !!e.listing;
     if (filter === 'sales') return !!e.sale;
     return true;
