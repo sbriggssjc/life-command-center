@@ -5427,6 +5427,15 @@ function renderGovTab() {
     case 'research':
       html = renderGovResearch();
       break;
+    case 'capital-markets':
+      // Renders directly to DOM (async); see capital-markets.js
+      if (typeof renderGovCapitalMarkets === 'function') {
+        renderGovCapitalMarkets();
+      } else {
+        const elCm = document.getElementById('bizPageInner');
+        if (elCm) elCm.innerHTML = '<div style="padding:24px;color:#666">capital-markets.js not loaded</div>';
+      }
+      return;
   }
 
   // Use smoothDOMUpdate for research tab to prevent flickering on record selection

@@ -1147,6 +1147,10 @@ function renderGovTab(){
     case 'loans':h=renderGovLoans();break;
     case 'players':h=renderGovPlayers();break;
     case 'research':h=renderGovResearch();break;
+    case 'capital-markets':
+      if (typeof renderGovCapitalMarkets === 'function') { renderGovCapitalMarkets(); return; }
+      h='<div style="color:var(--text2)">Loading capital-markets.js...</div>';
+      break;
   }
   el.innerHTML=h;
 }
