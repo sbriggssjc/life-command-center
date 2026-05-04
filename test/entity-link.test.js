@@ -41,6 +41,15 @@ describe('entity-link helper', () => {
     assert.equal(stripListingStatusPrefix('1164 Route 130 North'), '1164 Route 130 North');
     assert.equal(stripListingStatusPrefix(null), null);
     assert.equal(stripListingStatusPrefix(''), '');
+    // Round 76ei: CoStar Sale Comp / Lease Comp page headings
+    assert.equal(
+      stripListingStatusPrefix('Condo Sold: 326 Del Prado Blvd, 1st Floor - 101'),
+      '326 Del Prado Blvd, 1st Floor - 101'
+    );
+    assert.equal(stripListingStatusPrefix('Office Sold: 1234 Foo St'), '1234 Foo St');
+    assert.equal(stripListingStatusPrefix('Medical Office Sold - 555 Health Way'), '555 Health Way');
+    assert.equal(stripListingStatusPrefix('Industrial Leased | 99 Warehouse Dr'), '99 Warehouse Dr');
+    assert.equal(stripListingStatusPrefix('Retail For Sale: 12 Market Pl'), '12 Market Pl');
   });
 
   it('normalizeAddress collapses prefixed and bare forms to the same key', () => {
