@@ -689,9 +689,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // pipe-segment splitter below handles the simple form, but this strip
   // also catches "For Sale - 1164 …" / "Reduced: 1164 …" delimiter
   // variants and stacked prefixes like "For Sale | New Listing | 1164 …".
+  //
+  // Round 76ei: also strip CoStar Sale Comp / Lease Comp page headings
+  // that use a "<property type> <disposition>:" form — e.g.
+  //   "Condo Sold: 326 Del Prado Blvd, 1st Floor - 101"
+  //   "Office Sold: 1234 Foo St"
+  //   "Medical Office Sold: ..."  /  "Industrial Leased: ..."
+  // These headings dominate /detail/sale-comps/.../Comp/<id>/ pages and
+  // without the strip, parseAddress returns null (no segment starts with
+  // a digit), the sidebar shows the empty "Browse a property…" state,
+  // and the user can't capture the comp.
   function stripListingStatusPrefix(s) {
     if (!s) return s;
-    const PREFIX_RE = /^\s*(for\s+sale|for\s+lease|for\s+rent|sale|sold|lease|rent|new\s+listing|reduced|price\s+reduced|just\s+listed|coming\s+soon|under\s+contract|off\s+market|new\s+price)\s*[|\-–—:]\s*/i;
+    const PROP_TYPE = '(?:condo|office|industrial|retail|land|hotel|multifamily|multi-family|specialty|flex|medical(?:\\s+office)?|health\\s*care|sports?(?:\\s*&\\s*\\w+)?|self\\s*storage|mobile\\s*home(?:\\s+park)?|mixed\\s*use|apartments?|warehouse|shopping\\s+center|strip\\s+center)';
+    const DISPOSITION = '(?:for\\s+sale|for\\s+lease|for\\s+rent|sale|sold|lease|leased|rent|rented|new\\s+listing|reduced|price\\s+reduced|just\\s+listed|coming\\s+soon|under\\s+contract|off\\s+market|new\\s+price)';
+    const PREFIX_RE = new RegExp(`^\\s*(?:${PROP_TYPE}\\s+)?${DISPOSITION}\\s*[|\\-–—:]\\s*`, 'i');
     let out = String(s);
     for (let i = 0; i < 3; i++) {
       const next = out.replace(PREFIX_RE, '');
@@ -717,12 +729,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // post-combine validation step on a 2026-04 CoStar capture in McKinney TX.
     const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
     for (const seg of segments) {
+      // Round 76ei: also strip the listing-status prefix off each
+      // segment, not just the raw input. CoStar comp tab document.title
+      // is "Sale Comps | Condo Sold: 326 Del Prado Blvd, 1st Floor - 101"
+      // — the leading-strip can't reach the "Condo Sold:" because "Sale"
+      // isn't followed by a delimiter, so the prefix survives into the
+      // post-split segment and blocks the digit-prefix guard.
+      const cleaned = stripListingStatusPrefix(seg).trim();
       // Reject pagination patterns like "1 of 2,000 Records"
-      if (/^\d+\s+of\s+[\d,]+/i.test(seg)) continue;
+      if (/^\d+\s+of\s+[\d,]+/i.test(cleaned)) continue;
       // Must start with a number (or number range like 215-225) AND
       // contain a street-type word
-      if (/^\d+(?:-\d+)?\s/.test(seg) && STREET_RE.test(seg)) {
-        return seg;
+      if (/^\d+(?:-\d+)?\s/.test(cleaned) && STREET_RE.test(cleaned)) {
+        return cleaned;
       }
     }
     return null;

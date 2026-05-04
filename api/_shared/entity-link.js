@@ -27,7 +27,16 @@ export function normalizeCanonicalName(name) {
  */
 export function stripListingStatusPrefix(addr) {
   if (!addr) return addr;
-  const PREFIX_RE = /^\s*(for\s+sale|for\s+lease|for\s+rent|sale|sold|lease|rent|new\s+listing|reduced|price\s+reduced|just\s+listed|coming\s+soon|under\s+contract|off\s+market|new\s+price)\s*[|\-–—:]\s*/i;
+  // Round 76ei: also recognize "<property type> <disposition>:" headings
+  // used on CoStar Sale Comp / Lease Comp pages (e.g. "Condo Sold: 326
+  // Del Prado Blvd, 1st Floor - 101", "Office Sold: 1234 Foo St"). When
+  // the sidebar captures a comp-detail page, the H1 / document.title
+  // carries this prefix; without stripping it, parseAddress in the
+  // content script returns null and the sidebar shows the empty state
+  // instead of recognizing the property.
+  const PROP_TYPE = '(?:condo|office|industrial|retail|land|hotel|multifamily|multi-family|specialty|flex|medical(?:\\s+office)?|health\\s*care|sports?(?:\\s*&\\s*\\w+)?|self\\s*storage|mobile\\s*home(?:\\s+park)?|mixed\\s*use|apartments?|warehouse|shopping\\s+center|strip\\s+center)';
+  const DISPOSITION = '(?:for\\s+sale|for\\s+lease|for\\s+rent|sale|sold|lease|leased|rent|rented|new\\s+listing|reduced|price\\s+reduced|just\\s+listed|coming\\s+soon|under\\s+contract|off\\s+market|new\\s+price)';
+  const PREFIX_RE = new RegExp(`^\\s*(?:${PROP_TYPE}\\s+)?${DISPOSITION}\\s*[|\\-–—:]\\s*`, 'i');
   let out = String(addr);
   // Loop in case multiple prefixes stack ("For Sale | New Listing | 1164 Route...")
   for (let i = 0; i < 3; i++) {
