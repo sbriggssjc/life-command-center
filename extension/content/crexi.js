@@ -593,13 +593,12 @@
       });
     }
 
-    // Round 76ej.i (2026-05-04): added view map/photos/street view and a
-    // few more CREXi UI button labels — live test on the 109 Harrison
-    // closed listing showed "View Map" landing as a fourth listing
-    // broker because the name regex matches any two-capitalised-words
-    // string. Anchored ^...$ so we don't false-positive legitimate
-    // names that contain these words.
-    const NAME_BLACKLIST = /^(view\s+(phone|email|om|map|photos?|virtual\s+tour|street\s+view)|listed\s+by|brokerage|real\s+estate|street\s+view|virtual\s+tour|request\s+(info|tour)|contact\s+broker|save|share|print|listing\s+contacts?|no\s+longer\s+for\s+sale|off\s+market|closed)$/i;
+    // Round 76ej.j (2026-05-04): added Submit LOI / Make Offer /
+    // Submit Offer / Schedule Tour — Tampa listing test (intake
+    // 6eb9f765, 2205 W Kennedy) showed "Submit LOI" landing as a
+    // second listing broker. Anchored ^...$ so legitimate names that
+    // contain these words (rare) aren't false-positived.
+    const NAME_BLACKLIST = /^(view\s+(phone|email|om|map|photos?|virtual\s+tour|street\s+view)|listed\s+by|brokerage|real\s+estate|street\s+view|virtual\s+tour|request\s+(info|tour)|contact\s+broker|save|share|print|listing\s+contacts?|no\s+longer\s+for\s+sale|off\s+market|closed|submit\s+(loi|offer)|make\s+offer|schedule\s+(a\s+)?tour|add\s+(to\s+)?favorites?|sign\s+(in|up)|see\s+more|read\s+more|view\s+(more|all|details))$/i;
     const COMPANY_RE = /(real\s+estate|realty|capital|group|advisors|partners|properties|brokerage|\bllc\b|\binc\.?$|\bco\.?$|cushman|cbre|jll|colliers|marcus|newmark|friedman|kidder|stream|avison|berkadia|matthews)/i;
 
     const contacts = [];

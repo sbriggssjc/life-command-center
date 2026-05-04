@@ -1887,25 +1887,64 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
         const addrLike = String(ent.name || ent.metadata?.address || '').trim();
         const stateGuess = ent.metadata?.state || snapshot?.state || null;
         if (addrLike) {
-          const addrEsc = encodeURIComponent(`*${addrLike.split(',')[0]}*`);
+          // Round 76ej.j (2026-05-04): try the address AND its
+          // street-suffix-aliased variants (Boulevard↔Blvd, Drive↔Dr,
+          // Avenue↔Ave, Highway↔Hwy, etc.) so a stored "2205 W Kennedy
+          // Blvd" matches an entity carrying "2205 W Kennedy Boulevard".
+          // Earlier Tampa test (intake 6eb9f765) bounced with
+          // domain_not_supported because the entity address used
+          // "Boulevard" but the dia property used "Blvd".
+          const STREET_ALIASES = [
+            [/\b(drive)\b/gi,    'Dr'],
+            [/\b(dr\.?)\b/gi,    'Drive'],
+            [/\b(street)\b/gi,   'St'],
+            [/\b(st\.?)\b/gi,    'Street'],
+            [/\b(avenue)\b/gi,   'Ave'],
+            [/\b(ave\.?)\b/gi,   'Avenue'],
+            [/\b(boulevard)\b/gi,'Blvd'],
+            [/\b(blvd\.?)\b/gi,  'Boulevard'],
+            [/\b(road)\b/gi,     'Rd'],
+            [/\b(rd\.?)\b/gi,    'Road'],
+            [/\b(highway)\b/gi,  'Hwy'],
+            [/\b(hwy\.?)\b/gi,   'Highway'],
+            [/\b(parkway)\b/gi,  'Pkwy'],
+            [/\b(pkwy\.?)\b/gi,  'Parkway'],
+          ];
+          const baseAddr = addrLike.split(',')[0].trim();
+          const variants = new Set([baseAddr]);
+          for (const [re, alt] of STREET_ALIASES) {
+            if (re.test(baseAddr)) variants.add(baseAddr.replace(re, alt));
+          }
           const dq = domain === 'dialysis' ? 'dialysis' : 'government';
-          let lookupPath = `properties?address=ilike.${addrEsc}&select=property_id,address,city,state&limit=5`;
-          if (stateGuess) lookupPath += `&state=eq.${encodeURIComponent(stateGuess)}`;
-          try {
-            const domLookup = await domainQuery(dq, 'GET', lookupPath);
-            if (domLookup.ok && Array.isArray(domLookup.data) && domLookup.data.length) {
-              const normalized = addrLike.toLowerCase().replace(/[.,]/g, '').trim();
-              const hit = domLookup.data.find(p =>
-                String(p.address || '').toLowerCase().replace(/[.,]/g, '').includes(normalized)
-                || normalized.includes(String(p.address || '').toLowerCase().replace(/[.,]/g, ''))
-              ) || domLookup.data[0];
-              if (hit?.property_id) {
-                domainProp = hit.property_id;
-                console.log(`[intake-promoter] LCC-bridge resolved via address lookup: entity=${match.property_id} → ${dq} property_id=${hit.property_id}`);
+          // Try each variant in turn — stop at the first hit.
+          let domLookupHit = null;
+          for (const variant of variants) {
+            const addrEsc = encodeURIComponent(`*${variant}*`);
+            let lookupPath = `properties?address=ilike.${addrEsc}&select=property_id,address,city,state&limit=5`;
+            if (stateGuess) lookupPath += `&state=eq.${encodeURIComponent(stateGuess)}`;
+            try {
+              const domLookup = await domainQuery(dq, 'GET', lookupPath);
+              if (domLookup.ok && Array.isArray(domLookup.data) && domLookup.data.length) {
+                const normalized = variant.toLowerCase().replace(/[.,]/g, '').trim();
+                const hit = domLookup.data.find(p =>
+                  String(p.address || '').toLowerCase().replace(/[.,]/g, '').includes(normalized)
+                  || normalized.includes(String(p.address || '').toLowerCase().replace(/[.,]/g, ''))
+                ) || domLookup.data[0];
+                if (hit?.property_id) {
+                  domLookupHit = { hit, variant };
+                  break;
+                }
               }
+            } catch (err) {
+              console.warn('[intake-promoter] address-fallback variant lookup failed:', variant, err?.message);
             }
-          } catch (err) {
-            console.warn('[intake-promoter] address-fallback lookup failed:', err?.message);
+          }
+          if (domLookupHit) {
+            const { hit, variant } = domLookupHit;
+            if (hit?.property_id) {
+              domainProp = hit.property_id;
+              console.log(`[intake-promoter] LCC-bridge resolved via address lookup: entity=${match.property_id} → ${dq} property_id=${hit.property_id} (variant=${variant})`);
+            }
           }
         }
       }
