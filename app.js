@@ -223,14 +223,16 @@ const GOV_TAB_GROUPS = {
   overview: ['overview', 'search'],
   pipeline: ['pipeline', 'sales', 'prospects'],
   research: ['research', 'ownership'],
-  reference: ['leases', 'loans', 'players']
+  reference: ['leases', 'loans', 'players'],
+  'capital-markets': ['capital-markets']
 };
 
 const DIA_TAB_GROUPS = {
   overview: ['overview', 'search', 'changes', 'npi'],
   pipeline: ['activity', 'sales', 'prospects'],
   research: ['research'],
-  reference: ['leases', 'loans', 'players']
+  reference: ['leases', 'loans', 'players'],
+  'capital-markets': ['capital-markets']
 };
 
 // SOS URLs for all 50 states
