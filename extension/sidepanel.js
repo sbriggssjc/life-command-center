@@ -632,6 +632,11 @@ const PROPERTY_FIELDS = [
   ['lease_expiration', 'Lease Expiration', 'lease_expiration'],
   ['renewal_options', 'Lease Options', 'renewal_options'],
   ['lease_type', 'Lease Type', 'lease_type'],
+  // Round 76ej.k: structured-panel fields above; these next two are
+  // typically only mined from the marketing description prose by
+  // crexi.js extractCrexiLeaseFromDescription().
+  ['expense_structure', 'Expense Structure', 'expense_structure'],
+  ['rent_escalations', 'Rent Escalations', 'rent_escalations'],
   ['tenant_name', 'Tenant', 'tenant_name'],
   ['owner_name', 'Owner', 'owner_name'],
   ['broker_name', 'Broker', 'broker_name'],
@@ -2050,6 +2055,11 @@ function buildMetadata(ctx, domain) {
     renewal_options: ctx.renewal_options || null,
     guarantor: ctx.guarantor || null,
     rent_escalations: ctx.rent_escalations || null,
+    // Round 76ej.k: provenance breadcrumb. When a lease field came from
+    // the marketing description prose (vs CREXi's structured Details
+    // panel), the backend can downgrade its trust level via the
+    // `crexi_sidebar_description` priority rules.
+    lease_facts_from_description: ctx.lease_facts_from_description || null,
     sf_leased: ctx.sf_leased || null,
     // Market data
     subject_vacancy: ctx.subject_vacancy || null,
@@ -2200,6 +2210,11 @@ function buildSyntheticListingText(ctx) {
   push('Original Lease Term (years)', ctx.lease_term);
   push('Remaining Lease Term (years)', ctx.remaining_term);
   push('Lease Expiration Date', ctx.lease_expiration);
+  // Round 76ej.k: surface marketing-description-mined lease facts
+  // alongside the structured ones so the AI extractor + the LCC sidebar
+  // both see them. Falsy/null skipped by `push`.
+  push('Expense Structure', ctx.expense_structure);
+  push('Rent Escalations', ctx.rent_escalations);
   // Round 76ej.e: spell renewal options out twice so the AI doesn't grab
   // just the leading digit. Live test 76ej.d had renewal_options="2"
   // land in dia.leases instead of "(2) 5 year options".
