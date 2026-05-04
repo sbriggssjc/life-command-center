@@ -19,7 +19,7 @@
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
-import { normalizeAddress } from '../_shared/entity-link.js';
+import { normalizeAddress, stripListingStatusPrefix } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
@@ -891,6 +891,13 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     // ("Street" vs "St", "Road" vs "Rd"), which lets CoStar create a duplicate
     // every time it spells a street type differently from the CMS record.
     const pickedFields = pickEntityFields(entity_type, fields);
+    // Strip CoStar/LoopNet listing-status prefixes ("For Sale | ", "For Lease | ", …)
+    // off the address before dedup or storage. Without this the prefixed string
+    // becomes the dedup key and creates a duplicate asset entity for every
+    // re-capture of an active listing.
+    if (entity_type === 'asset' && pickedFields.address) {
+      pickedFields.address = stripListingStatusPrefix(pickedFields.address).trim();
+    }
     if (entity_type === 'asset' && pickedFields.address && pickedFields.city) {
       const normAddr = normalizeAddress(pickedFields.address);
       const rawAddr  = pickedFields.address.trim();

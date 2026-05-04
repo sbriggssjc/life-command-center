@@ -12,6 +12,33 @@ export function normalizeCanonicalName(name) {
 }
 
 /**
+ * Strip a CoStar/LoopNet listing-status prefix off a street address.
+ * CoStar's For Sale tab heading and LoopNet's listing tile read
+ * "For Sale | 1164 Route 130 North" — the extension's parseAddress
+ * splits on `\s+|\s+`, but the address-element fallbacks
+ * (LoopNet [data-testid="listing-address"], CoStar h1 textContent on
+ * pages where parseAddress's number-prefix guard rejects the segmented
+ * form) leak the prefix through. When that prefixed string lands in
+ * `properties.address` it creates a duplicate row keyed on the bogus
+ * "For Sale | 1164 Route 130 North" instead of merging into the
+ * canonical "1164 Route 130 North" row. This helper is applied at
+ * every write seam (entity insert, property upsert) and before
+ * normalization, so the bad prefix never leaves the API layer.
+ */
+export function stripListingStatusPrefix(addr) {
+  if (!addr) return addr;
+  const PREFIX_RE = /^\s*(for\s+sale|for\s+lease|for\s+rent|sale|sold|lease|rent|new\s+listing|reduced|price\s+reduced|just\s+listed|coming\s+soon|under\s+contract|off\s+market|new\s+price)\s*[|\-–—:]\s*/i;
+  let out = String(addr);
+  // Loop in case multiple prefixes stack ("For Sale | New Listing | 1164 Route...")
+  for (let i = 0; i < 3; i++) {
+    const next = out.replace(PREFIX_RE, '');
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/**
  * Normalize a street address for duplicate detection.
  * Collapses common street-type abbreviation variants ("Street"/"St",
  * "Road"/"Rd", etc.) and lowercases so CoStar records using different
@@ -24,7 +51,7 @@ export function normalizeAddress(addr) {
   // street portion "37139 Us-26 Hwy". Truncating at the first comma gives
   // the matcher a fair chance on the street address alone. Street addresses
   // almost never contain commas, so this is safe in practice.
-  const beforeComma = String(addr).split(',')[0];
+  const beforeComma = stripListingStatusPrefix(String(addr)).split(',')[0];
   return beforeComma.trim()
     .replace(/\bStreet\b/gi, 'St')
     .replace(/\bAvenue\b/gi, 'Ave')
