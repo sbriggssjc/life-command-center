@@ -251,10 +251,17 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     ? omEst.om_created_estimate
     : new Date().toISOString().slice(0, 10);
 
+  // Round 76ej.f (2026-05-04): capture the source listing URL on the
+  // available_listings row so the LCC UI has a clickable "View Listing"
+  // link and the url_status verification path has a target. gov uses
+  // source_url (vs dia's listing_url + url).
+  const sourceUrl = snapshot.listing_url || snapshot.source_url || null;
+
   return {
     property_id:        Number(match.property_id),
     listing_source:     'lcc_intake_om',
     source_listing_ref: intakeId,
+    source_url:         sourceUrl,
     address:            snapshot.address || null,
     city:               snapshot.city || null,
     state:              state || null,
@@ -315,6 +322,13 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     }
   }
 
+  // Round 76ej.f (2026-05-04): capture the source listing URL on the
+  // available_listings row so the LCC UI has a clickable "View Listing"
+  // link and any future scraper has a target. Prefer the explicit
+  // listing_url from extraction (rare), fall back to the source_url
+  // the sidebar always sends (the live CREXi/CoStar/LoopNet page).
+  const listingUrl = snapshot.listing_url || snapshot.source_url || null;
+
   return {
     property_id:        Number(match.property_id),
     listing_broker:     snapshot.listing_broker || null,
@@ -329,6 +343,8 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     last_seen:          new Date().toISOString().slice(0, 10),
     is_active:          true,
     seller_name:        snapshot.seller_name || null,
+    listing_url:        listingUrl,
+    url:                listingUrl,
     notes:              `Staged from LCC OM intake ${intakeId}`,
     intake_artifact_path: artifact?.storage_path || null,
     intake_artifact_type: snapshot.document_type || null,

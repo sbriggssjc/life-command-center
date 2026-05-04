@@ -1011,4 +1011,93 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     })();
     return true; // async response
   }
+
+  if (msg.type === 'STAGE_PDF_BYTES_TO_LCC') {
+    // Round 76ej.f (2026-05-04): inline-base64 PDF stage path. Used by
+    // the sidebar's "Upload OM PDF" file input — when the user
+    // downloads the OM from a gated source (CREXi NDA modal,
+    // Marcus & Millichap deal room, etc.) and drops the file into the
+    // sidebar, we already have the bytes locally. Skip the URL fetch
+    // (Path C / A / B in STAGE_PDF_TO_LCC) and POST straight to
+    // /api/intake/stage-om as inline_data. Subject to Vercel's
+    // ~4.5 MB body cap; OMs above that should use Path C upload via
+    // the document-card flow on supported sites.
+    (async () => {
+      try {
+        const base64 = String(msg.base64 || '');
+        if (!base64 || base64.length < 100) {
+          respond({ ok: false, error: 'empty_pdf', body: { error: 'empty_pdf', detail: 'Uploaded PDF was empty.' } });
+          return;
+        }
+
+        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
+        const host = String(rawHost).replace(/\/+$/, '');
+        const apiHeaders = {
+          'X-LCC-Key': syncConfig.LCC_API_KEY || '',
+          ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
+        };
+
+        const fileName = (msg.fileName && msg.fileName.trim())
+          || `om-${Date.now()}.pdf`;
+        const mimeType = msg.mimeType || 'application/pdf';
+        const intent   = msg.intent
+          || `Uploaded OM PDF from ${msg.hostname || 'browser'}`;
+        const seedTags = ['sidebar_intake', 'manual_upload', msg.hostname || 'browser']
+          .filter(Boolean);
+
+        const stageUrl = `${host}/api/intake/stage-om`;
+        const postRes = await fetch(stageUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            intake_source:  'copilot',
+            intake_channel: 'sidebar',
+            intent,
+            artifacts: {
+              primary_document: {
+                bytes_base64: base64,
+                file_name:    fileName,
+                mime_type:    mimeType,
+              },
+            },
+            seed_data: {
+              tags: seedTags,
+              // Tell the promoter explicitly that this is OM-grade so
+              // the not_a_listing_doc guard doesn't reject it when the
+              // AI under-classifies the document_type field.
+              doctype: 'om',
+              source_url: msg.sourceUrl || null,
+              ...(msg.seedData || {}),
+            },
+          }),
+        });
+        const rawBody = await postRes.text();
+        let payload = null;
+        let parseErr = null;
+        try { payload = JSON.parse(rawBody); } catch (e) { parseErr = e.message; }
+
+        respond({
+          ok:          postRes.ok && (payload?.ok !== false) && !parseErr,
+          status:      postRes.status,
+          statusText:  postRes.statusText,
+          contentType: postRes.headers.get('content-type'),
+          body: payload || {
+            error:  parseErr ? 'non_json_response' : 'stage_failed',
+            detail: parseErr
+              ? `Server returned ${postRes.status}. First 200b: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+              : rawBody.slice(0, 200),
+          },
+          fileName,
+        });
+      } catch (err) {
+        respond({
+          ok: false,
+          error: err.message,
+          body: { error: 'stage_pdf_bytes_threw', detail: err.message },
+        });
+      }
+    })();
+    return true; // async response
+  }
 });

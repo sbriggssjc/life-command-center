@@ -2133,6 +2133,20 @@ function renderMarketingSection(ctx) {
     html += '<button class="btn btn-sm btn-secondary lcc-copy-listing-btn" title="Copy the synthesized listing summary to clipboard">Copy Summary</button>';
     html += '<span class="lcc-stage-status" style="font-size:10px;color:var(--text-secondary);"></span>';
     html += '</div>';
+
+    // Round 76ej.f (2026-05-04): manual OM PDF upload. After the user
+    // clicks "View OM" on the listing page and gets through the NDA,
+    // they can drop or pick the downloaded PDF here and we route it
+    // through the same /api/intake/stage-om pipeline as the synthetic
+    // text — but as a real application/pdf artifact so pdf-parse runs
+    // and the AI extractor sees the full OM content. Works for any
+    // gated listing source (CREXi, Marcus & Millichap, JLL, etc.).
+    html += '<div class="lcc-om-upload" style="margin-top:6px;border:1px dashed var(--border, #c8d0dc);border-radius:6px;padding:8px;font-size:11px;color:var(--text-secondary);">';
+    html += '<div style="margin-bottom:4px;font-weight:600;color:var(--text-primary);">Upload OM PDF</div>';
+    html += '<div style="margin-bottom:6px;line-height:1.4;">After downloading the OM from the listing page, drop the file here or browse to send the full PDF for AI extraction.</div>';
+    html += '<input type="file" class="lcc-upload-om-input" accept="application/pdf,.pdf" style="font-size:11px;" />';
+    html += '<span class="lcc-upload-om-status" style="margin-left:6px;font-size:10px;"></span>';
+    html += '</div>';
   }
   return html;
 }
@@ -2282,6 +2296,99 @@ async function wireStageListingButton(ctx) {
       if (status) status.textContent = `Error: ${err.message || err}`;
     }
   });
+
+  // Round 76ej.f (2026-05-04): manual OM PDF upload handler.
+  const fileInput = $('.lcc-upload-om-input');
+  const uploadStatus = $('.lcc-upload-om-status');
+  if (fileInput) {
+    fileInput.addEventListener('change', async (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+
+      // 4 MB hard limit — Vercel inline POST cap is ~4.5 MB after the
+      // base64 wrapper (33% size inflation). Larger OMs need Path C
+      // upload (storage_path), which the document-card flow on
+      // CoStar uses; for the manual sidebar drop we keep things simple.
+      const MAX_BYTES = 4 * 1024 * 1024;
+      if (file.size > MAX_BYTES) {
+        if (uploadStatus) {
+          uploadStatus.style.color = 'var(--red, #dc2626)';
+          uploadStatus.textContent = `Too large (${(file.size / 1024 / 1024).toFixed(1)} MB > 4 MB cap). Email the OM to the LCC inbox or split it.`;
+        }
+        return;
+      }
+      if (!/pdf$/i.test(file.name) && file.type !== 'application/pdf') {
+        if (uploadStatus) {
+          uploadStatus.style.color = 'var(--red, #dc2626)';
+          uploadStatus.textContent = 'Only PDF files are accepted here.';
+        }
+        return;
+      }
+
+      if (uploadStatus) {
+        uploadStatus.style.color = 'var(--text-secondary)';
+        uploadStatus.textContent = `Reading ${(file.size / 1024).toFixed(0)} KB…`;
+      }
+      fileInput.disabled = true;
+
+      try {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        const base64 = btoa(binary);
+
+        let hostname = null;
+        try { hostname = new URL(ctx.page_url || location.href).hostname; } catch {}
+
+        if (uploadStatus) uploadStatus.textContent = 'Uploading to LCC intake…';
+        const resp = await chrome.runtime.sendMessage({
+          type: 'STAGE_PDF_BYTES_TO_LCC',
+          base64,
+          fileName: file.name,
+          mimeType: file.type || 'application/pdf',
+          sourceUrl: ctx.page_url || null,
+          hostname,
+          intent: `Manual OM upload — ${ctx.address || 'unknown address'}`,
+          seedData: {
+            address: ctx.address || null,
+            city: ctx.city || null,
+            state: ctx.state || null,
+            tenant_name: ctx.tenant_name || null,
+            asking_price: ctx.asking_price || null,
+            cap_rate: ctx.cap_rate || null,
+            lease_expiration: ctx.lease_expiration || null,
+          },
+        });
+
+        if (resp?.ok && resp?.body?.ok) {
+          const b = resp.body;
+          if (uploadStatus) {
+            uploadStatus.style.color = 'var(--green)';
+            uploadStatus.textContent = `✓ Staged ${b.intake_id || ''} (${b.extraction_status || 'received'})`;
+          }
+        } else {
+          const errCode = resp?.body?.error || resp?.error || 'unknown';
+          const errDetail = resp?.body?.detail || resp?.body?.message || '';
+          if (uploadStatus) {
+            uploadStatus.style.color = 'var(--red, #dc2626)';
+            uploadStatus.textContent = `${errCode}${errDetail ? ' — ' + String(errDetail).slice(0, 120) : ''}`;
+          }
+          console.error('[Upload OM] failed', resp);
+          fileInput.disabled = false;
+        }
+      } catch (err) {
+        if (uploadStatus) {
+          uploadStatus.style.color = 'var(--red, #dc2626)';
+          uploadStatus.textContent = `Upload error: ${err.message || err}`;
+        }
+        fileInput.disabled = false;
+      }
+    });
+  }
 }
 
 // ── Related LCC data (leases, ownership, tasks) ────────────────────────────
