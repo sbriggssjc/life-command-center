@@ -2033,9 +2033,17 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     // Round 76af 2026-04-28: derive provenance source tag from sidebar source.
     // RCA captures (metadata.source='rca' from extension/content/rca.js) carry
     // their own trust profile and should appear as 'rca_sidebar' in provenance.
+    // Round 76ej.d 2026-05-04: CREXi captures get their own tag too
+    // (priority registry seeded by the sibling migration). Falls back to
+    // costar_sidebar for any unrecognised source.
     const sidebarSource = (metadata?.source || metadata?._source || '').toLowerCase();
-    const sourceTag = sidebarSource === 'rca' ? 'rca_sidebar' : 'costar_sidebar';
-    const runIdPrefix = sourceTag === 'rca_sidebar' ? 'rca' : 'costar';
+    let sourceTag = 'costar_sidebar';
+    if (sidebarSource === 'rca')   sourceTag = 'rca_sidebar';
+    if (sidebarSource === 'crexi') sourceTag = 'crexi_sidebar';
+    const runIdPrefix =
+      sourceTag === 'rca_sidebar'   ? 'rca'   :
+      sourceTag === 'crexi_sidebar' ? 'crexi' :
+                                      'costar';
     const provCtx = {
       targetDatabase: targetDb,
       sidebarRunId:   entity?.id ? `${runIdPrefix}:${entity.id}` : null,

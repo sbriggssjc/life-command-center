@@ -505,6 +505,25 @@ export async function stageOmIntake(input, auth, workspaceId) {
     }
   }
 
+  // Round 76ej.d (2026-05-04): patch the inbox_items row with the matched
+  // entity_id + domain so the LCC inbox UI can navigate from "OM: …" rows
+  // straight to the property card. Without this the row sits at
+  // status='new', entity_id=NULL forever even when match_confidence is 0.95.
+  // Conservative: only update when the inbox row currently has no entity_id.
+  if (matchedEntityId && inboxItemId) {
+    try {
+      const patchBody = { entity_id: matchedEntityId };
+      if (matchResult?.domain) patchBody.domain = matchResult.domain;
+      await opsQuery(
+        'PATCH',
+        `inbox_items?id=eq.${pgFilterVal(inboxItemId)}&entity_id=is.null`,
+        patchBody
+      );
+    } catch (err) {
+      console.warn('[intake-om-pipeline] inbox_items entity_id patch failed (non-fatal):', err?.message);
+    }
+  }
+
   // ---- 9. Log activity_event for entity-scoped memory
   try {
     await logCopilotInteraction({
