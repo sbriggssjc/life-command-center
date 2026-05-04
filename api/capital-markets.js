@@ -30,6 +30,7 @@
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-export.js';
 
 // vertical_id (in cm_chart_catalog) → domain-db key (in domain-db.js)
 const VERTICAL_TO_DOMAIN = {
@@ -72,7 +73,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       // Phase 2
       case 'narrative':        return res.status(501).json(PHASE_2_PENDING(action));
-      case 'export':           return res.status(501).json(PHASE_2_PENDING(action));
+      case 'export':           return exportWorkbook(req, res);
 
       default:
         return res.status(400).json({
@@ -327,6 +328,97 @@ async function fetchQuarterly(req, res) {
     charts,
     summary,
   });
+}
+
+// ============================================================================
+// Phase 2a V1 — Excel export
+// ============================================================================
+
+/**
+ * GET /api/capital-markets?action=export&vertical=gov&subspecialty=all&as_of=2025-09-30&format=xlsx
+ *   → streams a brand-styled .xlsx workbook with data tabs for every Phase 1
+ *     chart applicable to the vertical. V1 ships data tabs only; V2 will
+ *     integrate a stripped master template with pre-built brand-styled
+ *     chart objects pre-bound to these data ranges.
+ */
+async function exportWorkbook(req, res) {
+  const { vertical, subspecialty = 'all', as_of, format = 'xlsx' } = req.query;
+  if (!vertical) return res.status(400).json({ error: 'vertical required' });
+  if (format !== 'xlsx') {
+    return res.status(400).json({
+      error: 'unsupported_format',
+      format,
+      supported: ['xlsx'],
+      hint: 'PDF and PNG export land in V2.',
+    });
+  }
+
+  // 1. Fetch chart catalog + data via the same dispatch logic the dashboard uses
+  const phaseFilter = '&phase=lte.1';
+  const cat = await opsQuery(
+    'GET',
+    `cm_chart_catalog?select=*&applies_to_verticals=cs.{${vertical}}${phaseFilter}&order=phase,chart_template_id`
+  );
+  const templates = cat.data || [];
+
+  const domain = VERTICAL_TO_DOMAIN[vertical];
+  const chartFetches = templates.map(async (tmpl) => {
+    const view_name = tmpl.view_name_template.replace('{vertical}', vertical);
+    const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+    try {
+      const result = domain
+        ? await domainQuery(domain, 'GET', path)
+        : await opsQuery('GET', path);
+      return {
+        chart_template_id: tmpl.chart_template_id,
+        name: tmpl.name,
+        chart_type: tmpl.chart_type,
+        data_shape: tmpl.data_shape,
+        metric_focus: tmpl.metric_focus,
+        view_name,
+        rows: result.ok !== false ? (result.data || []) : [],
+      };
+    } catch (e) {
+      return {
+        chart_template_id: tmpl.chart_template_id,
+        name: tmpl.name,
+        chart_type: tmpl.chart_type,
+        view_name,
+        rows: [],
+      };
+    }
+  });
+  const charts = await Promise.all(chartFetches);
+
+  // 2. Fetch brand tokens
+  const brandResult = await opsQuery(
+    'GET',
+    `cm_brand_tokens?select=token_key,token_value,category`
+  );
+  const brand = { palette: {}, fonts: {} };
+  for (const row of brandResult.data || []) {
+    const [category, key] = row.token_key.split('.', 2);
+    if (!brand[category]) brand[category] = {};
+    brand[category][key || category] = row.token_value;
+  }
+
+  // 3. Build the workbook
+  const wb = buildCapitalMarketsWorkbook({
+    vertical,
+    subspecialty,
+    asOf: as_of || null,
+    charts,
+    brand,
+  });
+
+  const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
+
+  // 4. Stream as download
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return res.status(200).send(Buffer.from(buffer));
 }
 
 // ============================================================================

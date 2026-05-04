@@ -296,12 +296,17 @@
             <div style="font-family:'Calibri Light',sans-serif;font-size:18pt;font-weight:600;color:${navy}">Capital Markets — ${vertical === 'gov' ? 'Government-Leased' : vertical === 'dialysis' ? 'Dialysis' : vertical}</div>
             <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">Live-computed from sales_transactions. Each chart card links to underlying SQL view.</div>
           </div>
-          <div>
-            <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Subspecialty:</label>
-            <select id="cm-subspecialty-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
-              <option value="all">All Government-Leased</option>
-              ${subRows}
-            </select>
+          <div style="display:flex;gap:12px;align-items:center">
+            <div>
+              <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Subspecialty:</label>
+              <select id="cm-subspecialty-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
+                <option value="all">All Government-Leased</option>
+                ${subRows}
+              </select>
+            </div>
+            <button id="cm-export-workbook-btn" style="padding:8px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download brand-styled .xlsx with all chart data — V1 ships data tabs only; V2 will embed pre-built charts bound to these tabs">
+              ⬇ Export Workbook
+            </button>
           </div>
         </div>
         <div id="cm-status" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-bottom:8px"></div>
@@ -391,6 +396,57 @@
         }
       });
     });
+
+    // Bind workbook export button — downloads a brand-styled .xlsx
+    const exportBtn = document.getElementById('cm-export-workbook-btn');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', async () => {
+        const orig = exportBtn.textContent;
+        exportBtn.disabled = true;
+        exportBtn.textContent = '⏳ Generating…';
+        try {
+          // Find the latest period to use as as_of (lets the workbook pin to a quarter)
+          const charts = await loadQuarterly('gov', cmState.currentSubspecialty);
+          const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
+          const asOf = latestVol?.period_end || '';
+
+          const url = `/api/capital-markets?action=export&vertical=gov&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx`;
+          const r = await fetch(url, {
+            credentials: 'include',
+            headers: { 'x-lcc-workspace': window.LCC?.workspaceId || '' },
+          });
+          if (!r.ok) {
+            const errText = await r.text().catch(() => '');
+            throw new Error(`HTTP ${r.status}: ${errText.slice(0, 200)}`);
+          }
+
+          // Pull filename from Content-Disposition or fall back to a default
+          const cd = r.headers.get('Content-Disposition') || '';
+          const match = cd.match(/filename="([^"]+)"/);
+          const filename = match ? match[1] : `NM-CapMarkets-Gov-${asOf || 'latest'}.xlsx`;
+
+          const blob = await r.blob();
+          const downloadUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = downloadUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(downloadUrl);
+
+          exportBtn.textContent = '✓ Downloaded';
+          setTimeout(() => { exportBtn.textContent = orig; }, 2000);
+        } catch (e) {
+          console.error('Export workbook error:', e);
+          exportBtn.textContent = '✗ Failed';
+          alert(`Export failed: ${e.message}`);
+          setTimeout(() => { exportBtn.textContent = orig; }, 2500);
+        } finally {
+          exportBtn.disabled = false;
+        }
+      });
+    }
 
     // Initial chart render
     await renderCharts('gov', cmState.currentSubspecialty);
