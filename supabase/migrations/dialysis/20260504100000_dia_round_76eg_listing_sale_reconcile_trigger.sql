@@ -18,15 +18,16 @@
 -- because no trigger ever closed it.
 --
 -- This migration adds the inverse trigger:
---   AFTER INSERT OR UPDATE OF (listing_date, is_active, status) on
+--   BEFORE INSERT OR UPDATE OF (listing_date, is_active, status) on
 --   available_listings — if the property has any property_sale_events row
 --   (or a sales_transactions row) within the last 12 months whose
---   sale_date >= NEW.listing_date - 30 days, mark NEW Sold immediately.
+--   sale_date >= NEW.listing_date - 90 days, mark NEW Sold immediately.
 --
--- The 30-day backstop on listing_date matches the lifecycle backfill
--- behavior in Round 76da: ingested listings often have listing_date set
--- to the scrape date, not the original on-market date. Anything within a
--- month of the recorded sale is the same listing.
+-- The 90-day backstop matches fn_sale_event_mark_listings_sold so both
+-- directions of the symmetry agree on what counts as "the same listing
+-- as the recorded sale" vs. a genuine re-listing. Round 76da's lifecycle
+-- backfill set listing_date to the scrape date on many rows, so a tighter
+-- window would let those slip through.
 --
 -- The 12-month forward window keeps legitimate re-listings (sale closed,
 -- property goes back on market 18+ months later) functioning normally.
@@ -39,9 +40,13 @@ DECLARE
     v_sale_price NUMERIC;
     v_sale_txn   BIGINT;
 BEGIN
-    -- Only reconcile rows that look active and aren't already Sold
+    -- Skip rows already in a terminal state. 'Superseded' MUST be in this
+    -- list — otherwise when dia_consolidate_property_listings() flips
+    -- losers to Superseded, this trigger would flip them right back to
+    -- Sold, colliding with the keeper's enriched (status, listing_date,
+    -- sold_date) tuple.
     IF COALESCE(NEW.is_active, TRUE) IS NOT TRUE
-       AND LOWER(COALESCE(NEW.status, '')) IN ('sold', 'closed', 'closed but obligated')
+       AND LOWER(COALESCE(NEW.status, '')) IN ('sold', 'closed', 'closed but obligated', 'superseded', 'stale', 'withdrawn', 'expired')
     THEN
         RETURN NEW;
     END IF;
@@ -54,11 +59,11 @@ BEGIN
            pse.sales_transaction_id
       INTO v_sale_date, v_sale_price, v_sale_txn
       FROM public.property_sale_events pse
-     WHERE pse.property_id = NEW.property_id::text
+     WHERE pse.property_id = NEW.property_id
        AND pse.sale_date IS NOT NULL
        AND pse.sale_date <= CURRENT_DATE
        AND (NEW.listing_date IS NULL
-            OR pse.sale_date >= NEW.listing_date - INTERVAL '30 days')
+            OR pse.sale_date >= NEW.listing_date - INTERVAL '90 days')
        AND pse.sale_date >= CURRENT_DATE - INTERVAL '12 months'
      ORDER BY pse.sale_date DESC, pse.sale_event_id DESC
      LIMIT 1;
@@ -73,7 +78,7 @@ BEGIN
            AND st.sale_date <= CURRENT_DATE
            AND COALESCE(st.exclude_from_market_metrics, FALSE) = FALSE
            AND (NEW.listing_date IS NULL
-                OR st.sale_date >= NEW.listing_date - INTERVAL '30 days')
+                OR st.sale_date >= NEW.listing_date - INTERVAL '90 days')
            AND st.sale_date >= CURRENT_DATE - INTERVAL '12 months'
          ORDER BY st.sale_date DESC, st.sale_id DESC
          LIMIT 1;
@@ -86,7 +91,7 @@ BEGIN
         NEW.sold_price          := COALESCE(NEW.sold_price,      v_sale_price);
         NEW.off_market_date     := COALESCE(NEW.off_market_date, v_sale_date);
         NEW.off_market_reason   := COALESCE(NEW.off_market_reason, 'sold');
-        NEW.sale_transaction_id := COALESCE(NEW.sale_transaction_id, v_sale_txn);
+        NEW.sale_transaction_id := COALESCE(NEW.sale_transaction_id, v_sale_txn::integer);
         NEW.notes               := COALESCE(NULLIF(NEW.notes, '') || E'\n', '') ||
                                    '[fn_listing_close_if_sold ' || CURRENT_DATE ||
                                    '] auto-closed: matched sale on ' || v_sale_date;
@@ -118,11 +123,11 @@ BEGIN
           LEFT JOIN LATERAL (
               SELECT sale_date, price, sales_transaction_id, sale_event_id
                 FROM public.property_sale_events p
-               WHERE p.property_id = al.property_id::text
+               WHERE p.property_id = al.property_id
                  AND p.sale_date IS NOT NULL
                  AND p.sale_date <= CURRENT_DATE
                  AND (al.listing_date IS NULL
-                      OR p.sale_date >= al.listing_date - INTERVAL '30 days')
+                      OR p.sale_date >= al.listing_date - INTERVAL '90 days')
                  AND p.sale_date >= CURRENT_DATE - INTERVAL '12 months'
                ORDER BY p.sale_date DESC, p.sale_event_id DESC
                LIMIT 1
@@ -135,13 +140,13 @@ BEGIN
                  AND s.sale_date <= CURRENT_DATE
                  AND COALESCE(s.exclude_from_market_metrics, FALSE) = FALSE
                  AND (al.listing_date IS NULL
-                      OR s.sale_date >= al.listing_date - INTERVAL '30 days')
+                      OR s.sale_date >= al.listing_date - INTERVAL '90 days')
                  AND s.sale_date >= CURRENT_DATE - INTERVAL '12 months'
                ORDER BY s.sale_date DESC, s.sale_id DESC
                LIMIT 1
           ) st ON pse.sale_date IS NULL
          WHERE COALESCE(al.is_active, TRUE) IS TRUE
-           AND LOWER(COALESCE(al.status, '')) NOT IN ('sold','closed','closed but obligated')
+           AND LOWER(COALESCE(al.status, '')) NOT IN ('sold','closed','closed but obligated','superseded','stale','withdrawn','expired')
            AND COALESCE(pse.sale_date, st.sale_date) IS NOT NULL
     )
     UPDATE public.available_listings al
@@ -151,7 +156,7 @@ BEGIN
            sold_price          = COALESCE(al.sold_price,      c.sale_price),
            off_market_date     = COALESCE(al.off_market_date, c.sale_date),
            off_market_reason   = COALESCE(al.off_market_reason, 'sold'),
-           sale_transaction_id = COALESCE(al.sale_transaction_id, c.sale_txn),
+           sale_transaction_id = COALESCE(al.sale_transaction_id, c.sale_txn::integer),
            notes               = COALESCE(NULLIF(al.notes, '') || E'\n', '') ||
                                  '[Round 76eg backfill ' || CURRENT_DATE ||
                                  '] auto-closed: matched sale on ' || c.sale_date

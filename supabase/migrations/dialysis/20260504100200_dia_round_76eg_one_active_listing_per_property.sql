@@ -17,6 +17,16 @@
 -- which the consolidation function does not).
 -- ============================================================================
 
+-- Drop the legacy index first. It keys on (property_id, status,
+-- listing_date, sold_date) and was meant to enforce dedup, but in
+-- practice it permits multiple Active rows per property whenever
+-- listing_date differs even by one day, AND it actively blocks
+-- consolidation by raising 23505 when two rows would converge to the
+-- same Sold key. The new partial unique index below replaces it for the
+-- only invariant that actually holds: at most one active row per
+-- property.
+DROP INDEX IF EXISTS public.available_listings_property_status_dates_uniq;
+
 -- Pre-cleanup: collapse any property with >1 active listing. Keep the row
 -- with the earliest listing_date + most-complete data; supersede the rest.
 DO $$
@@ -53,7 +63,6 @@ BEGIN
     UPDATE public.available_listings al
        SET is_active                   = FALSE,
            status                      = 'Superseded',
-           exclude_from_market_metrics = TRUE,
            notes                       = COALESCE(NULLIF(notes,'') || E'\n','') ||
                                          '[Round 76eg one-active-pre-cleanup ' || CURRENT_DATE ||
                                          '] superseded: another active row exists for property_id=' ||

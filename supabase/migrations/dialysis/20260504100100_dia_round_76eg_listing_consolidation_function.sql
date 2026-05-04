@@ -33,40 +33,42 @@ WITH rows_with_sale AS (
            al.listing_date,
            al.off_market_date,
            al.sold_date,
-           al.sold_price,
-           al.is_active,
-           al.status,
-           al.sale_transaction_id,
-           al.notes,
-           al.created_at,
-           al.last_seen,
-           al.last_verified_at,
-           al.intake_artifact_path,
-           al.listing_broker,
-           al.listing_url,
-           al.url,
-           al.last_price,
-           al.initial_price,
-           al.current_cap_rate,
-           al.initial_cap_rate,
            -- Resolve each listing to its best candidate sale_date for grouping
            COALESCE(
                al.sold_date,
                al.off_market_date,
                (SELECT pse.sale_date
                   FROM public.property_sale_events pse
-                 WHERE pse.property_id = al.property_id::text
+                 WHERE pse.property_id = al.property_id
                    AND pse.sale_date IS NOT NULL
                    AND pse.sale_date <= CURRENT_DATE
                    AND (al.listing_date IS NULL
-                        OR pse.sale_date >= al.listing_date - INTERVAL '30 days')
+                        OR pse.sale_date >= al.listing_date - INTERVAL '90 days')
                  ORDER BY ABS(EXTRACT(EPOCH FROM (
                           COALESCE(al.off_market_date, pse.sale_date)::timestamp
                           - pse.sale_date::timestamp
                       )))
-                 LIMIT 1)
+                 LIMIT 1),
+               -- Fallback: ~80 properties have a recent sales_transactions
+               -- row that was never mirrored into property_sale_events. The
+               -- canonical migration only ran a one-time backfill, so any
+               -- sale recorded after 2026-04-14 via the legacy table is
+               -- invisible here. Drop to st when pse misses.
+               (SELECT st.sale_date
+                  FROM public.sales_transactions st
+                 WHERE st.property_id = al.property_id
+                   AND st.sale_date IS NOT NULL
+                   AND st.sale_date <= CURRENT_DATE
+                   AND COALESCE(st.exclude_from_market_metrics, FALSE) = FALSE
+                   AND (al.listing_date IS NULL
+                        OR st.sale_date >= al.listing_date - INTERVAL '90 days')
+                 ORDER BY st.sale_date DESC LIMIT 1)
            ) AS resolved_sale_date
       FROM public.available_listings al
+     -- Already-superseded rows are out of scope. Without this filter they
+     -- never disappear from the candidate view and the cron loop spins on
+     -- the same groups forever.
+     WHERE LOWER(COALESCE(al.status, '')) <> 'superseded'
 )
 SELECT property_id,
        resolved_sale_date,
@@ -115,14 +117,25 @@ BEGIN
                        al.sold_date,
                        al.off_market_date,
                        (SELECT sale_date FROM public.property_sale_events pse
-                         WHERE pse.property_id = al.property_id::text
+                         WHERE pse.property_id = al.property_id
                            AND pse.sale_date IS NOT NULL
                            AND (al.listing_date IS NULL
-                                OR pse.sale_date >= al.listing_date - INTERVAL '30 days')
-                         ORDER BY pse.sale_date DESC LIMIT 1)
+                                OR pse.sale_date >= al.listing_date - INTERVAL '90 days')
+                         ORDER BY pse.sale_date DESC LIMIT 1),
+                       (SELECT sale_date FROM public.sales_transactions st
+                         WHERE st.property_id = al.property_id
+                           AND st.sale_date IS NOT NULL
+                           AND COALESCE(st.exclude_from_market_metrics, FALSE) = FALSE
+                           AND (al.listing_date IS NULL
+                                OR st.sale_date >= al.listing_date - INTERVAL '90 days')
+                         ORDER BY st.sale_date DESC LIMIT 1)
                    ) AS rsd,
-                   -- completeness score (higher = keeper)
-                   ((al.sale_transaction_id IS NOT NULL)::int * 8 +
+                   -- completeness score (higher = keeper). Sold-state
+                   -- fields dominate so we never demote the row that
+                   -- already carries the canonical sold_date / sold_price.
+                   ((al.sold_date IS NOT NULL)::int * 16 +
+                    (al.sold_price IS NOT NULL)::int * 16 +
+                    (al.sale_transaction_id IS NOT NULL)::int * 8 +
                     (al.intake_artifact_path IS NOT NULL)::int * 4 +
                     (al.listing_broker IS NOT NULL)::int * 2 +
                     (al.listing_url IS NOT NULL OR al.url IS NOT NULL)::int * 2 +
@@ -135,11 +148,15 @@ BEGIN
         SELECT rsd AS sale_date,
                (ARRAY_AGG(listing_id ORDER BY score DESC, listing_date ASC, listing_id ASC))[1] AS keeper_id,
                ARRAY_AGG(listing_id ORDER BY score DESC, listing_date ASC, listing_id ASC) AS all_ids,
-               MIN(listing_date) FILTER (WHERE listing_date IS NOT NULL)    AS earliest_date,
-               MAX(initial_price) FILTER (WHERE initial_price IS NOT NULL)  AS best_initial,
-               MAX(last_price)    FILTER (WHERE last_price IS NOT NULL)     AS best_last,
+               MIN(listing_date) FILTER (WHERE listing_date IS NOT NULL)            AS earliest_date,
+               MAX(initial_price) FILTER (WHERE initial_price IS NOT NULL)          AS best_initial,
+               MAX(last_price)    FILTER (WHERE last_price IS NOT NULL)             AS best_last,
                MAX(intake_artifact_path) FILTER (WHERE intake_artifact_path IS NOT NULL) AS best_artifact,
-               MAX(listing_broker) FILTER (WHERE listing_broker IS NOT NULL) AS best_broker
+               MAX(listing_broker) FILTER (WHERE listing_broker IS NOT NULL)        AS best_broker,
+               MAX(sold_date)     FILTER (WHERE sold_date IS NOT NULL)              AS best_sold_date,
+               MAX(sold_price)    FILTER (WHERE sold_price IS NOT NULL)             AS best_sold_price,
+               MAX(sale_transaction_id) FILTER (WHERE sale_transaction_id IS NOT NULL) AS best_sale_txn,
+               MAX(off_market_date) FILTER (WHERE off_market_date IS NOT NULL)      AS best_off_market_date
           FROM rws
          WHERE rsd IS NOT NULL
          GROUP BY rsd
@@ -147,41 +164,51 @@ BEGIN
     LOOP
         v_keeper_id := v_group.keeper_id;
 
-        -- Enrich keeper with best-of-group fields
-        UPDATE public.available_listings
-           SET listing_date         = COALESCE(v_group.earliest_date, listing_date),
-               initial_price        = COALESCE(initial_price,        v_group.best_initial),
-               last_price           = COALESCE(last_price,           v_group.best_last),
-               intake_artifact_path = COALESCE(intake_artifact_path, v_group.best_artifact),
-               listing_broker       = COALESCE(listing_broker,       v_group.best_broker),
-               notes                = COALESCE(NULLIF(notes,'') || E'\n','') ||
-                                      '[Round 76eg consolidate ' || CURRENT_DATE ||
-                                      '] keeper of ' || array_length(v_group.all_ids, 1) ||
-                                      ' rows resolving to sale ' || v_group.sale_date
-         WHERE listing_id = v_keeper_id;
-        v_kept := v_kept + 1;
-
-        -- Rewire any FKs pointing at losers (sale_brokers, etc. — best effort)
-        IF EXISTS (SELECT 1 FROM information_schema.tables
-                    WHERE table_schema='public' AND table_name='sale_brokers') THEN
-            -- listing-side broker links would reference listing_id but that
-            -- table is sale-side, no rewire needed here.
-            NULL;
-        END IF;
-
-        -- Supersede the losers — preserve them for audit
+        -- 1) Supersede losers FIRST so the keeper UPDATE doesn't collide on
+        --    the legacy (property_id, status, listing_date, sold_date)
+        --    unique index (when present) against rows still in 'Sold'
+        --    state. is_active=FALSE + status='Superseded' is enough to
+        --    hide them from the dashboard; available_listings has no
+        --    exclude_from_market_metrics column (that lives only on
+        --    sales_transactions).
         UPDATE public.available_listings
            SET status                       = 'Superseded',
                is_active                    = FALSE,
-               exclude_from_market_metrics  = TRUE,
                notes                        = COALESCE(NULLIF(notes,'') || E'\n','') ||
                                               '[Round 76eg consolidate ' || CURRENT_DATE ||
                                               '] superseded by listing_id=' || v_keeper_id ||
                                               ' (same sale ' || v_group.sale_date || ')'
          WHERE listing_id = ANY(v_group.all_ids)
            AND listing_id <> v_keeper_id;
-
         GET DIAGNOSTICS v_supersed = ROW_COUNT;
+
+        -- 2) Enrich keeper with best-of-group fields, including
+        --    sold_date / sold_price / sale_transaction_id from any of
+        --    the loser rows. If any row in the group carried sold info,
+        --    the keeper transitions to status='Sold' as well.
+        UPDATE public.available_listings
+           SET listing_date         = COALESCE(v_group.earliest_date, listing_date),
+               initial_price        = COALESCE(initial_price,        v_group.best_initial),
+               last_price           = COALESCE(last_price,           v_group.best_last),
+               intake_artifact_path = COALESCE(intake_artifact_path, v_group.best_artifact),
+               listing_broker       = COALESCE(listing_broker,       v_group.best_broker),
+               sold_date            = COALESCE(sold_date,            v_group.best_sold_date),
+               sold_price           = COALESCE(sold_price,           v_group.best_sold_price),
+               sale_transaction_id  = COALESCE(sale_transaction_id,  v_group.best_sale_txn),
+               off_market_date      = COALESCE(off_market_date,      v_group.best_off_market_date),
+               status               = CASE WHEN v_group.best_sold_date IS NOT NULL OR v_group.best_sale_txn IS NOT NULL
+                                           THEN 'Sold' ELSE status END,
+               is_active            = CASE WHEN v_group.best_sold_date IS NOT NULL OR v_group.best_sale_txn IS NOT NULL
+                                           THEN FALSE ELSE is_active END,
+               off_market_reason    = CASE WHEN (v_group.best_sold_date IS NOT NULL OR v_group.best_sale_txn IS NOT NULL)
+                                                AND off_market_reason IS NULL
+                                           THEN 'sold' ELSE off_market_reason END,
+               notes                = COALESCE(NULLIF(notes,'') || E'\n','') ||
+                                      '[Round 76eg consolidate ' || CURRENT_DATE ||
+                                      '] keeper of ' || array_length(v_group.all_ids, 1) ||
+                                      ' rows resolving to sale ' || v_group.sale_date
+         WHERE listing_id = v_keeper_id;
+        v_kept := v_kept + 1;
     END LOOP;
 
     RETURN jsonb_build_object(
