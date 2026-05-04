@@ -61,7 +61,10 @@
       || val(findTextElement(...keywords));
 
     // Financial
-    const askingPrice = get('Asking Price', 'Price', 'List Price') || extractCrexiAskingPrice();
+    let askingPrice = get('Asking Price', 'Price', 'List Price') || extractCrexiAskingPrice();
+    // Round 76ej.e: hard-reject degenerate values like "$" with no digits
+    // so they don't propagate into seed_data and confuse the AI extractor.
+    if (askingPrice && !/\d/.test(askingPrice)) askingPrice = null;
     const capRate = get('Cap Rate');
     const noi = get('NOI', 'Net Operating Income');
     const psf = get('Price per SqFt', 'Price/SF', 'Price / SF', 'Price Per SF', '$/SF');
@@ -298,29 +301,53 @@
   }
 
   function extractCrexiAskingPrice() {
-    // CREXi shows the asking price in a header banner like
-    // "$2,045,000   67 days on market   Updated 28 days ago".
-    // Round 76ej.b: separator was loosened, but we still missed prices
-    // where the page renders no separator at all (just whitespace) or
-    // where "days on market" wraps to the next line. Round 76ej.d:
-    // anchor on either "days on market" OR "Cap Rate" within ~120
-    // characters of a $-prefixed number. Whichever hits first wins.
+    // Round 76ej.e (2026-05-04): the body-innerText regex kept missing
+    // the price banner on real CREXi pages — sending '$' with no digits
+    // through to the synthesized text and confusing the AI extractor.
+    // Switch to a DOM-first strategy: scan small banner-area elements
+    // for one whose trimmed text is exactly a price string. Return null
+    // (not '$') when no number follows so the synthetic text and seed
+    // data omit the field entirely.
+    const PRICE_RE  = /^\$\s?[\d,]+(?:\.\d+)?$/;
+    const PRICE_TXT = /\$\s?[\d,]+(?:\.\d+)?/;
+
+    // 1. Try a known-stable selector first (CREXi has used data-cy='price'
+    //    for years; .property-price / .pdp-price are older fallbacks).
+    const direct = document.querySelector(
+      '[data-cy="price"], [data-cy="askingPrice"], .property-price, .pdp-price'
+    );
+    if (direct) {
+      const t = direct.textContent?.trim() || '';
+      const m = t.match(PRICE_TXT);
+      if (m && /\d/.test(m[0])) return m[0].replace(/\s+/g, '');
+    }
+
+    // 2. Walk small near-the-top elements (h1-h4, span, div, p) and
+    //    return the first whose trimmed text is exactly a price.
+    //    Stop after 200 candidates — the banner is always near the top.
+    const cands = document.querySelectorAll('h1, h2, h3, h4, span, div, p');
+    let scanned = 0;
+    for (const el of cands) {
+      if (scanned++ > 200) break;
+      const t = el.textContent?.trim() || '';
+      if (t.length < 4 || t.length > 24) continue;
+      if (!PRICE_RE.test(t)) continue;
+      // Exclude the "$" with no digits case and tiny dollar values
+      // (e.g. "$3" cents-of-something widgets).
+      const digits = t.replace(/\D/g, '');
+      if (digits.length < 4) continue;
+      return t.replace(/\s+/g, '');
+    }
+
+    // 3. Last resort: anchor on "days on market" / "Cap Rate" within
+    //    160 chars of a $ in body innerText. Require ≥4 digits so
+    //    bare "$" won't slip through.
     const text = document.body?.innerText || '';
     const m = text.match(
       /\$\s?([\d,]{4,}(?:\.\d+)?)(?=[^$\n]{0,160}?(?:days?\s+on\s+market|cap\s+rate))/i
     );
-    if (m) return '$' + m[1];
-    // Fallback: a price-prominent element near the page top.
-    const big = document.querySelector('[data-cy="price"], .property-price, .pdp-price');
-    if (big) {
-      const t = big.textContent?.trim();
-      if (t && /^\$[\d,]+/.test(t)) return t;
-    }
-    // Last resort: scan body for any standalone $X,XXX,XXX-style price
-    // appearing in the first 4 KB of innerText (banner area).
-    const head = text.slice(0, 4096);
-    const any = head.match(/\$\s?([\d,]{4,}(?:\.\d+)?)/);
-    if (any && any[1].replace(/,/g, '').length >= 5) return '$' + any[1];
+    if (m && m[1].replace(/,/g, '').length >= 4) return '$' + m[1];
+
     return null;
   }
 

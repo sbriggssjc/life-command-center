@@ -84,6 +84,9 @@ export const GOV_WRITE_TABLES = new Set([
   'rpc/upsert_lead',
   'rpc/save_research_outcome',
   'rpc/resolve_contact',
+  // Capital Markets — Phase 1
+  'cm_nm_broker_patterns',
+  'rpc/cm_gov_refresh_nm_attribution',
 ]);
 
 // Dialysis Supabase — allowed tables and views for read (GET)

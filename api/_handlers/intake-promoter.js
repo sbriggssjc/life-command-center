@@ -251,10 +251,17 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     ? omEst.om_created_estimate
     : new Date().toISOString().slice(0, 10);
 
+  // Round 76ej.f (2026-05-04): capture the source listing URL on the
+  // available_listings row so the LCC UI has a clickable "View Listing"
+  // link and the url_status verification path has a target. gov uses
+  // source_url (vs dia's listing_url + url).
+  const sourceUrl = snapshot.listing_url || snapshot.source_url || null;
+
   return {
     property_id:        Number(match.property_id),
     listing_source:     'lcc_intake_om',
     source_listing_ref: intakeId,
+    source_url:         sourceUrl,
     address:            snapshot.address || null,
     city:               snapshot.city || null,
     state:              state || null,
@@ -315,6 +322,13 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     }
   }
 
+  // Round 76ej.f (2026-05-04): capture the source listing URL on the
+  // available_listings row so the LCC UI has a clickable "View Listing"
+  // link and any future scraper has a target. Prefer the explicit
+  // listing_url from extraction (rare), fall back to the source_url
+  // the sidebar always sends (the live CREXi/CoStar/LoopNet page).
+  const listingUrl = snapshot.listing_url || snapshot.source_url || null;
+
   return {
     property_id:        Number(match.property_id),
     listing_broker:     snapshot.listing_broker || null,
@@ -329,6 +343,8 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     last_seen:          new Date().toISOString().slice(0, 10),
     is_active:          true,
     seller_name:        snapshot.seller_name || null,
+    listing_url:        listingUrl,
+    url:                listingUrl,
     notes:              `Staged from LCC OM intake ${intakeId}`,
     intake_artifact_path: artifact?.storage_path || null,
     intake_artifact_type: snapshot.document_type || null,
@@ -1036,6 +1052,47 @@ async function promoteDiaLeaseFromOm(propertyId, snapshot) {
         ? { ok: true, lease_id: existingId, action: 'patched_existing' }
         : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
     }
+  }
+
+  // Round 76ej.e (2026-05-04): degradation guard. CREXi captures often
+  // arrive with lease_expiration but NO commencement and partial tenant
+  // info. The 76ej.d test inserted a third active lease on property
+  // 35636 with NULL lease_start, NULL data_source, "2" renewal_options
+  // — degrading the data set. If commencement is missing, find the
+  // existing active lease for this property with the same expiration
+  // and PATCH that one instead. If none exists, skip the insert
+  // entirely rather than create a third partial row.
+  if (!commencement && expiration) {
+    const existingByExp = await domainQuery(
+      'dialysis',
+      'GET',
+      `leases?property_id=eq.${Number(propertyId)}` +
+      `&lease_expiration=eq.${encodeURIComponent(expiration)}` +
+      `&is_active=eq.true&select=lease_id,lease_start&order=updated_at.desc.nullslast&limit=1`
+    );
+    if (existingByExp.ok && Array.isArray(existingByExp.data) && existingByExp.data.length) {
+      const existingId = existingByExp.data[0].lease_id;
+      // Only patch fields we have non-null values for; never overwrite
+      // an existing lease_start with NULL.
+      const safePatch = { ...insertPayload };
+      delete safePatch.lease_start;
+      const patchRes = await domainQuery(
+        'dialysis',
+        'PATCH',
+        `leases?lease_id=eq.${encodeURIComponent(existingId)}`,
+        safePatch,
+        { Prefer: 'return=representation' }
+      );
+      return patchRes.ok
+        ? { ok: true, lease_id: existingId, action: 'patched_existing_by_expiration' }
+        : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+    }
+    // No existing match — refuse to create a degraded row.
+    return {
+      ok: true,
+      skipped: 'incomplete_lease_no_existing_match',
+      reason:  'snapshot has lease_expiration but no lease_start; no existing active lease to enrich',
+    };
   }
 
   // Insert fresh.
@@ -1793,75 +1850,16 @@ async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, ma
 // ============================================================================
 
 export async function promoteIntakeToDomainListing(intakeId, snapshot, match, context = {}) {
-  // Guard: must be a listing-grade document (OM, flyer, or marketing brochure)
-  // Normalize first — extractor may emit 'offering_memorandum',
-  // 'offering memorandum', 'OFFERRING MEMORANDUM' (typo), etc. instead of
-  // canonical 'om' (Bug Z, 2026-04-27).
-  const rawDocType = snapshot?.document_type || null;
-  let   docType    = normalizeDocType(rawDocType);
+  // Round 76ej.h (2026-05-04): re-ordered so artifact persistence
+  // happens BEFORE the doctype guard. Previous order let an unknown
+  // doctype short-circuit the whole function and skip the
+  // dia.property_documents write. We now (1) resolve the effective
+  // match (lcc → dia/gov bridge), (2) persist the artifact, then
+  // (3) check doctype + confidence + run domain promotions.
 
-  // Round 76ej.d (2026-05-04): the caller (sidebar Stage Listing flow)
-  // can declare doctype upfront via context.seedData.doctype. Honor it
-  // when the AI didn't classify the artifact (CREXi synthetic text
-  // bullet lists rarely look like an OM cover page to the AI). The
-  // doctype must still pass normalization + the LISTING_DOCUMENT_TYPES
-  // guard, so a malicious / unrecognised seed_data value can't sneak
-  // a non-listing doc through.
-  let inferredFromSeed = false;
-  if (!LISTING_DOCUMENT_TYPES.has(docType)) {
-    const seedDoc = normalizeDocType(context?.seedData?.doctype || null);
-    if (LISTING_DOCUMENT_TYPES.has(seedDoc)) {
-      docType = seedDoc;
-      inferredFromSeed = true;
-    }
-  }
-
-  // Fallback: when the extractor returned null/unknown but the snapshot
-  // looks like a listing (asking price + tenant + cap rate / SF / term),
-  // promote anyway and tag the doctype as 'om' inferred. This recovers
-  // intakes whose AI classification step under-classified.
-  let inferredFromSnapshot = false;
-  if (!LISTING_DOCUMENT_TYPES.has(docType) && snapshotLooksLikeListing(snapshot)) {
-    docType = 'om';
-    inferredFromSnapshot = true;
-  }
-
-  if (!LISTING_DOCUMENT_TYPES.has(docType)) {
-    return {
-      ok: false,
-      skipped: 'not_a_listing_doc',
-      document_type: rawDocType,
-      normalized_document_type: docType,
-    };
-  }
-
-  // Guard: must be a matched record with enough confidence
-  if (!match || match.status !== 'matched') {
-    return { ok: false, skipped: 'unmatched' };
-  }
-  if (typeof match.confidence !== 'number' || match.confidence < MIN_CONFIDENCE_FOR_AUTO_PROMOTE) {
-    return {
-      ok: false,
-      skipped: 'confidence_below_threshold',
-      confidence: match.confidence,
-      threshold: MIN_CONFIDENCE_FOR_AUTO_PROMOTE,
-    };
-  }
-
-  // ---- Normalize match: if this is an LCC-native match but the entity
-  //      represents a gov/dia property, hydrate back to that domain so
-  //      downstream promotions still update the correct records. Without
-  //      this, the second-and-later ingestions for the same property get
-  //      matched to the LCC entity and then skipped entirely.
-  //
-  //      Two lookup paths, in order of preference:
-  //        1. entity.metadata.domain_property_id (if a prior promoter run
-  //           wrote it there)
-  //        2. external_identities row where entity_id matches and
-  //           source_system is 'gov_db'/'dia_db' (authoritative back-ref
-  //           set by ensureEntityLink regardless of metadata)
+  // ---- 1. Resolve effectiveMatch up front ------------------------------
   let effectiveMatch = match;
-  if (match.domain === 'lcc' && match.property_id) {
+  if (match?.domain === 'lcc' && match?.property_id) {
     const entityLookup = await opsQuery('GET',
       `entities?id=eq.${encodeURIComponent(match.property_id)}&select=id,domain,metadata&limit=1`
     );
@@ -1870,8 +1868,6 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       let domainProp = ent.metadata?.domain_property_id || null;
       let domain = ent.domain;
 
-      // Fallback 1: look up the external_identity for this entity if
-      // metadata doesn't carry the domain property_id.
       if (!domainProp) {
         const idLookup = await opsQuery('GET',
           `external_identities?entity_id=eq.${encodeURIComponent(match.property_id)}` +
@@ -1887,13 +1883,6 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
         }
       }
 
-      // Fallback 2 (2026-04-24 — Bug A fix): the Chrome sidebar writes
-      // `source_system='costar'` on the external_identities row (not
-      // `gov_db`/`dia_db`), so Fallback 1 misses every CoStar-scraped
-      // entity. If we still don't have a domainProp but the entity
-      // itself carries a domain + address (`entity.name` is typically
-      // the street address for asset entities), look up the actual
-      // domain property by normalized address.
       if (!domainProp && (domain === 'dialysis' || domain === 'government')) {
         const addrLike = String(ent.name || ent.metadata?.address || '').trim();
         const stateGuess = ent.metadata?.state || snapshot?.state || null;
@@ -1905,7 +1894,6 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
           try {
             const domLookup = await domainQuery(dq, 'GET', lookupPath);
             if (domLookup.ok && Array.isArray(domLookup.data) && domLookup.data.length) {
-              // Best match: prefer exact address equality (case-insensitive)
               const normalized = addrLike.toLowerCase().replace(/[.,]/g, '').trim();
               const hit = domLookup.data.find(p =>
                 String(p.address || '').toLowerCase().replace(/[.,]/g, '').includes(normalized)
@@ -1928,28 +1916,150 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
           domain,
           property_id:  Number.isFinite(Number(domainProp)) ? Number(domainProp) : domainProp,
           reason:       `${match.reason}_via_lcc_bridge`,
-          lcc_entity_id: match.property_id,  // preserve the LCC entity UUID
+          lcc_entity_id: match.property_id,
         };
       }
     }
   }
 
-  // Guard: supported domains only (now applied against effectiveMatch)
+  // ---- 2. Look up the staged artifact (used by both persistence + listing row)
+  let artifact = null;
+  try {
+    const artLookup = await opsQuery('GET',
+      `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
+      `&select=storage_path,file_name,mime_type&order=created_at.asc&limit=1`
+    );
+    if (artLookup.ok && Array.isArray(artLookup.data) && artLookup.data.length) {
+      artifact = artLookup.data[0];
+    }
+  } catch { /* artifact link is nice-to-have */ }
+
+  // ---- 3. Persist text/* artifact bytes into dia.property_documents
+  // BEFORE the doctype guard so the artifact lands even when the AI
+  // misclassified the document and the listing path bails. PDFs are
+  // already linked via available_listings.intake_artifact_path; this
+  // fills the same slot for synthetic-text intakes.
+  let propertyDocResult = null;
+  if (
+    effectiveMatch.domain === 'dialysis' &&
+    effectiveMatch.property_id &&
+    artifact &&
+    typeof artifact.mime_type === 'string' &&
+    artifact.mime_type.toLowerCase().startsWith('text/')
+  ) {
+    try {
+      const artFull = await opsQuery(
+        'GET',
+        `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
+        `&select=inline_data,file_name,mime_type&order=created_at.asc&limit=1`
+      );
+      const artRow = artFull.ok && Array.isArray(artFull.data) && artFull.data.length
+        ? artFull.data[0]
+        : null;
+      let rawText = null;
+      if (artRow?.inline_data) {
+        try {
+          const decoded = Buffer.from(artRow.inline_data, 'base64').toString('utf8');
+          rawText = decoded.length > 80_000 ? decoded.slice(0, 80_000) : decoded;
+        } catch (decodeErr) {
+          rawText = null;
+        }
+      }
+      const docPayload = {
+        property_id:      Number(effectiveMatch.property_id),
+        file_name:        artRow?.file_name || artifact.file_name || `intake-${intakeId}.txt`,
+        raw_text:         rawText,
+        document_type:    'om',
+        source_url:       snapshot?.source_url || snapshot?.listing_url || null,
+        ingestion_status: 'extracted',
+        extracted_data:   {
+          intake_id:        intakeId,
+          address:          snapshot?.address || null,
+          tenant_name:      snapshot?.tenant_name || null,
+          asking_price:     snapshot?.asking_price ?? null,
+          cap_rate:         snapshot?.cap_rate ?? null,
+          lease_expiration: snapshot?.lease_expiration || null,
+        },
+      };
+      const docRes = await domainQuery(
+        'dialysis',
+        'POST',
+        'property_documents',
+        docPayload,
+        { Prefer: 'return=representation' }
+      );
+      if (docRes.ok) {
+        const inserted = Array.isArray(docRes.data) ? docRes.data[0] : docRes.data;
+        propertyDocResult = { ok: true, document_id: inserted?.document_id || null };
+      } else {
+        propertyDocResult = { ok: false, status: docRes.status, detail: docRes.data };
+        console.warn('[intake-promoter] property_documents insert failed:', docRes.status, docRes.data);
+      }
+    } catch (err) {
+      propertyDocResult = { ok: false, error: err?.message };
+      console.warn('[intake-promoter] property_documents persist threw (non-fatal):', err?.message);
+    }
+  }
+
+  // ---- 4. Doctype guards (after artifact persistence) ------------------
+  const rawDocType = snapshot?.document_type || null;
+  let   docType    = normalizeDocType(rawDocType);
+
+  let inferredFromSeed = false;
+  if (!LISTING_DOCUMENT_TYPES.has(docType)) {
+    const seedDoc = normalizeDocType(context?.seedData?.doctype || null);
+    if (LISTING_DOCUMENT_TYPES.has(seedDoc)) {
+      docType = seedDoc;
+      inferredFromSeed = true;
+    }
+  }
+
+  let inferredFromSnapshot = false;
+  if (!LISTING_DOCUMENT_TYPES.has(docType) && snapshotLooksLikeListing(snapshot)) {
+    docType = 'om';
+    inferredFromSnapshot = true;
+  }
+
+  if (!LISTING_DOCUMENT_TYPES.has(docType)) {
+    return {
+      ok: false,
+      skipped: 'not_a_listing_doc',
+      document_type: rawDocType,
+      normalized_document_type: docType,
+      property_document: propertyDocResult,
+    };
+  }
+
+  // Guard: must be a matched record with enough confidence
+  if (!match || match.status !== 'matched') {
+    return { ok: false, skipped: 'unmatched', property_document: propertyDocResult };
+  }
+  if (typeof match.confidence !== 'number' || match.confidence < MIN_CONFIDENCE_FOR_AUTO_PROMOTE) {
+    return {
+      ok: false,
+      skipped: 'confidence_below_threshold',
+      confidence: match.confidence,
+      threshold: MIN_CONFIDENCE_FOR_AUTO_PROMOTE,
+      property_document: propertyDocResult,
+    };
+  }
+
+  // effectiveMatch was already resolved at the top of the function so the
+  // artifact persistence step could use the resolved property_id. Now apply
+  // the domain/property_id guards before running the listing/contact/lease
+  // promotions (which assume a real dia/gov property_id).
   if (effectiveMatch.domain !== 'government' && effectiveMatch.domain !== 'dialysis') {
     return {
       ok: false,
       skipped: 'domain_not_supported',
       domain: effectiveMatch.domain,
       original_match_domain: match.domain,
+      property_document: propertyDocResult,
     };
   }
-
-  // Guard: we need a property_id
   if (effectiveMatch.property_id == null) {
-    return { ok: false, skipped: 'no_property_id' };
+    return { ok: false, skipped: 'no_property_id', property_document: propertyDocResult };
   }
-
-  // Use effectiveMatch from here on so the rest of the code is unchanged.
   match = effectiveMatch;
 
   // Run the first four domain-DB promotions in parallel; the prospect lead
@@ -2167,75 +2277,6 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       );
     }
 
-    // 5. Persist the synthetic OM text (Round 76ej.d, 2026-05-04).
-    // CREXi listings stage as text/plain artifacts (the OM PDF lives
-    // behind an NDA modal so we can't fetch it; the sidebar synthesizes
-    // a labelled summary from the structured CREXi extraction). The
-    // text body lives in staged_intake_artifacts.inline_data — promote
-    // it into dia.property_documents so the property card has a
-    // browsable record of what the AI saw, and so the cron storage
-    // hygiene job has something to clean up if the listing later goes
-    // off-market. Only fires for dialysis (gov has a different
-    // documents table) and only when the artifact is text/plain.
-    if (
-      match.domain === 'dialysis' &&
-      match.property_id &&
-      artifact &&
-      typeof artifact.mime_type === 'string' &&
-      artifact.mime_type.toLowerCase().startsWith('text/')
-    ) {
-      try {
-        const artFull = await opsQuery(
-          'GET',
-          `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
-          `&select=inline_data,file_name,mime_type&order=created_at.asc&limit=1`
-        );
-        const artRow = artFull.ok && Array.isArray(artFull.data) && artFull.data.length
-          ? artFull.data[0]
-          : null;
-        // inline_data is base64-encoded UTF-8 bytes (per intake-extractor's
-        // text/* handling). Decode to text — capped at 80K to match the
-        // extractor's text/plain ceiling.
-        let rawText = null;
-        if (artRow?.inline_data) {
-          try {
-            const decoded = Buffer.from(artRow.inline_data, 'base64').toString('utf8');
-            rawText = decoded.length > 80_000 ? decoded.slice(0, 80_000) : decoded;
-          } catch (decodeErr) {
-            // Fall back to storing the raw base64 so the doc card still
-            // links somewhere useful even if decoding fails.
-            rawText = null;
-          }
-        }
-        const docPayload = {
-          property_id:      Number(match.property_id),
-          file_name:        artRow?.file_name || artifact.file_name || `intake-${intakeId}.txt`,
-          raw_text:         rawText,
-          document_type:    docType || 'om',
-          source_url:       snapshot.source_url || snapshot.listing_url || null,
-          ingestion_status: 'extracted',
-          extracted_data:   {
-            intake_id:        intakeId,
-            doctype_inferred: inferredFromSeed || inferredFromSnapshot || false,
-            address:          snapshot.address || null,
-            tenant_name:      snapshot.tenant_name || null,
-            asking_price:     snapshot.asking_price ?? null,
-            cap_rate:         snapshot.cap_rate ?? null,
-            lease_expiration: snapshot.lease_expiration || null,
-          },
-        };
-        await domainQuery(
-          'dialysis',
-          'POST',
-          'property_documents',
-          docPayload,
-          { Prefer: 'return=minimal' }
-        );
-      } catch (err) {
-        console.warn('[intake-promoter] property_documents persist failed (non-fatal):', err?.message);
-      }
-    }
-
     // 4. Lease fields (dialysis only — gov has a different lease lifecycle)
     if (match.domain === 'dialysis' && diaLeaseResult?.ok && diaLeaseResult.lease_id) {
       await recordOmFieldsProvenance(
@@ -2264,6 +2305,10 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     // even if the merge function isn't deployed or LCC Opps is degraded.
     console.warn('[intake-promoter] field provenance recording failed (non-fatal):', err?.message);
   }
+
+  // (Round 76ej.h moved property_documents persistence to the top of this
+  // function so it fires before any doctype/match guards. propertyDocResult
+  // is included on every return path for downstream visibility.)
 
   // Pipeline lead — runs after the listing is written so we can stamp the
   // lead row with source_listing_id. Ensures OM-promoted deals show up on
@@ -2326,7 +2371,15 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   }
 
   const result = {
-    ok:                    listingResult.ok,
+    // Round 76ej.h: result.ok is true if EITHER the listing write OR the
+    // dia lease write succeeded. Pre-76ej.h we only checked listingResult,
+    // which made promotion_ok=false even when the lease and contact
+    // writes had landed cleanly. The aggregate flag is the single signal
+    // downstream consumers use, so it should reflect "did anything
+    // useful happen on the dia/gov side?"
+    ok:                    !!(listingResult?.ok || diaLeaseResult?.ok || contactResult?.ok),
+    listing_ok:            listingResult?.ok ?? null,
+    dia_lease_ok:          diaLeaseResult?.ok ?? null,
     domain:                match.domain,
     match:                 { property_id: match.property_id, reason: match.reason, lcc_entity_id: match.lcc_entity_id || null },
     snapshot:              { address: snapshot?.address, city: snapshot?.city, state: snapshot?.state,
@@ -2337,6 +2390,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     property_financials:   financialsResult,
     lease_expenses:        leaseExpensesResult,
     dia_lease:             diaLeaseResult,
+    property_document:     propertyDocResult,
     pipeline_lead:         pipelineLeadResult,
     lcc_entity:            lccEntityResult,
     unified_contact:       unifiedContactResult,

@@ -480,28 +480,41 @@ export async function stageOmIntake(input, auth, workspaceId) {
   // memory can key on a stable LCC entity_id rather than the dia/gov
   // property_id (which doesn't exist in the LCC entities table).
   let matchedEntityId = snapshot?.matched_entity_id ?? null;
+  let matchedDomain   = null;
   const matchResult = extractionResult?.match_result;
   if (!matchedEntityId && matchResult?.property_id && matchResult?.domain) {
-    try {
-      const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
-      const linkResult = await ensureEntityLink({
-        workspaceId: wsId,
-        userId: user.id,
-        sourceSystem,
-        sourceType: 'property',
-        externalId: String(matchResult.property_id),
-        domain: matchResult.domain,
-        seedFields: {
-          address: snapshot?.address || null,
-          city:    snapshot?.city || null,
-          state:   snapshot?.state || null,
-        },
-      });
-      if (linkResult?.ok && linkResult.entityId) {
-        matchedEntityId = linkResult.entityId;
+    // Round 76ej.e (2026-05-04): when matchResult.domain==='lcc' the
+    // matcher hit the LCC entities table directly, so property_id is
+    // already the LCC entity_id — skip ensureEntityLink. The 76ej.d
+    // version called ensureEntityLink with sourceSystem='dia_db' and
+    // an LCC UUID as external_id, which created a phantom new entity.
+    if (matchResult.domain === 'lcc') {
+      matchedEntityId = String(matchResult.property_id);
+      // domain stays null so we don't overwrite inbox_items.domain with
+      // the matcher namespace 'lcc'; entities.domain already carries it.
+    } else {
+      try {
+        const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
+        const linkResult = await ensureEntityLink({
+          workspaceId: wsId,
+          userId: user.id,
+          sourceSystem,
+          sourceType: 'property',
+          externalId: String(matchResult.property_id),
+          domain: matchResult.domain,
+          seedFields: {
+            address: snapshot?.address || null,
+            city:    snapshot?.city || null,
+            state:   snapshot?.state || null,
+          },
+        });
+        if (linkResult?.ok && linkResult.entityId) {
+          matchedEntityId = linkResult.entityId;
+          matchedDomain   = matchResult.domain;
+        }
+      } catch (err) {
+        console.warn('[intake-om-pipeline] entity_id bridge failed (non-fatal):', err?.message);
       }
-    } catch (err) {
-      console.warn('[intake-om-pipeline] entity_id bridge failed (non-fatal):', err?.message);
     }
   }
 
@@ -513,7 +526,7 @@ export async function stageOmIntake(input, auth, workspaceId) {
   if (matchedEntityId && inboxItemId) {
     try {
       const patchBody = { entity_id: matchedEntityId };
-      if (matchResult?.domain) patchBody.domain = matchResult.domain;
+      if (matchedDomain) patchBody.domain = matchedDomain;
       await opsQuery(
         'PATCH',
         `inbox_items?id=eq.${pgFilterVal(inboxItemId)}&entity_id=is.null`,

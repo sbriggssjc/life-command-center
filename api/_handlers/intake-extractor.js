@@ -696,6 +696,19 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   const resolvedWorkspaceId = ctx.workspaceId || null;
   const resolvedActorId     = ctx.actorId     || null;
 
+  // Round 76ej.f (2026-05-04): backfill source/listing URL onto the
+  // snapshot from seed_data when the extraction step didn't capture
+  // it. The Chrome sidebar always sends the live page URL via
+  // seed_data.source_url, but AI extraction snapshots usually don't
+  // surface URLs (they're not "in" the document). The promoter writes
+  // listing_url/source_url onto available_listings from the snapshot,
+  // so without this merge the column stays NULL. Don't overwrite a
+  // real extracted URL.
+  if (mergedSnapshot && ctx.seedData && !mergedSnapshot.source_url && !mergedSnapshot.listing_url) {
+    const seedUrl = ctx.seedData.source_url || ctx.seedData.listing_url || null;
+    if (seedUrl) mergedSnapshot.source_url = seedUrl;
+  }
+
   // Run property matcher
   let matchResult = null;
   let matchError  = null;
@@ -719,27 +732,48 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   // paths converge. inbox_items.id == staged_intake_items.intake_id by
   // pipeline contract (intake-om-pipeline.js:392), so we can patch by
   // intakeId directly.
-  if (matchResult?.status === 'matched' && matchResult?.property_id && matchResult?.domain && resolvedWorkspaceId) {
+  if (matchResult?.status === 'matched' && matchResult?.property_id && matchResult?.domain) {
     try {
-      const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
-      const linkResult = await ensureEntityLink({
-        workspaceId: resolvedWorkspaceId,
-        userId:      resolvedActorId,
-        sourceSystem,
-        sourceType:  'property',
-        externalId:  String(matchResult.property_id),
-        domain:      matchResult.domain,
-        seedFields: {
-          address: mergedSnapshot?.address || null,
-          city:    mergedSnapshot?.city    || null,
-          state:   mergedSnapshot?.state   || null,
-        },
-      });
-      if (linkResult?.ok && linkResult.entityId) {
+      // Round 76ej.e (2026-05-04): when match.domain==='lcc' the matcher
+      // matched directly against the LCC entities table, so
+      // matchResult.property_id IS the LCC entity_id — skip
+      // ensureEntityLink entirely. Calling it with sourceSystem='dia_db'
+      // and externalId=<LCC UUID> created a phantom new entity in the
+      // 76ej.d test (fadad993... instead of c5b0d0d5...). Mirror the
+      // promoter's logic at intake-promoter.js:1754.
+      let entityId = null;
+      let inboxDomain = matchResult.domain;
+      if (matchResult.domain === 'lcc') {
+        entityId = String(matchResult.property_id);
+        // Don't write 'lcc' as the domain — it's the matcher namespace,
+        // not a useful filter. Leave domain unchanged so any prior
+        // value sticks; the LCC entity already carries the real domain
+        // in entities.domain.
+        inboxDomain = null;
+      } else if (resolvedWorkspaceId) {
+        const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
+        const linkResult = await ensureEntityLink({
+          workspaceId: resolvedWorkspaceId,
+          userId:      resolvedActorId,
+          sourceSystem,
+          sourceType:  'property',
+          externalId:  String(matchResult.property_id),
+          domain:      matchResult.domain,
+          seedFields: {
+            address: mergedSnapshot?.address || null,
+            city:    mergedSnapshot?.city    || null,
+            state:   mergedSnapshot?.state   || null,
+          },
+        });
+        if (linkResult?.ok && linkResult.entityId) entityId = linkResult.entityId;
+      }
+      if (entityId) {
+        const patchBody = { entity_id: entityId };
+        if (inboxDomain) patchBody.domain = inboxDomain;
         await opsQuery(
           'PATCH',
           `inbox_items?id=eq.${encodeURIComponent(intakeId)}&entity_id=is.null`,
-          { entity_id: linkResult.entityId, domain: matchResult.domain }
+          patchBody
         );
       }
     } catch (err) {
@@ -880,6 +914,19 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
             match_domain:        matchResult?.domain || null,
             promotion_ok:        promotionResult?.ok ?? null,
             promotion_listing_id: promotionResult?.listing?.listing_id || null,
+            // Round 76ej.h (2026-05-04): preserve the promoter's `skipped`
+            // reason + any thrown error so SQL audits can see WHY a
+            // promotion that should have succeeded reported ok:false. Earlier
+            // intakes had `promotion_ok=false` with no visible cause; this
+            // pulls the diagnostic forward into the recorded snapshot.
+            promotion_skipped:    promotionResult?.skipped || null,
+            promotion_error:      promotionResult?.error   || promotionResult?.listing?.error || null,
+            promotion_listing_action:
+              promotionResult?.listing?.merged_into_existing ? 'merged_into_existing' :
+              promotionResult?.listing?.updated              ? 'updated_existing' :
+              promotionResult?.listing?.inserted             ? 'inserted_new' :
+              promotionResult?.listing?.skipped              ? 'skipped:' + promotionResult.listing.skipped :
+              null,
             runtime_config:      runtimeConfig,
             // Persist per-artifact diagnostics (incl. ai_chain, ai_fell_back,
             // ai_final_provider, ai_final_model) so SQL audits can see when
