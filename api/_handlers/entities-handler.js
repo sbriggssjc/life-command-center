@@ -314,6 +314,40 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         }
       }
 
+      // 2b) canonical_url — same site path without query/tracking params.
+      //     Round 76ej.i (2026-05-04): added because CREXi eblast URLs
+      //     carry recommId / utm_term / templateId tokens that drift
+      //     between visits, breaking the exact-eq source_url match. The
+      //     extension now strips them and sends the canonical
+      //     /properties/<id>/<slug> URL alongside the full source_url.
+      if (req.query.canonical_url) {
+        const cu = sanitize(req.query.canonical_url);
+        if (cu && cu.length >= 8) {
+          const hit = await tryQuery(
+            `metadata->>source_url=ilike.${encodeURIComponent(cu)}*`
+          );
+          if (hit) return res.status(200).json({ entity: hit, matched_via: 'canonical_url' });
+        }
+      }
+
+      // 2c) domain_listing_id + listing_source — site-native listing id
+      //     (e.g. CREXi /properties/<id>/, LoopNet listing id).
+      //     Stable across listing-status changes and URL rewrites.
+      if (req.query.domain_listing_id && req.query.listing_source) {
+        const lid = sanitize(req.query.domain_listing_id);
+        const ls  = sanitize(req.query.listing_source);
+        if (lid && ls) {
+          // Try a wildcard match against any source_url that contains
+          // /<source>.com/properties/<id>/. Cheap O(n) scan but the
+          // workspace_id filter keeps it bounded.
+          const pat = `*${ls}.com/properties/${lid}*`;
+          const hit = await tryQuery(
+            `metadata->>source_url=ilike.${encodeURIComponent(pat)}`
+          );
+          if (hit) return res.status(200).json({ entity: hit, matched_via: 'domain_listing_id' });
+        }
+      }
+
       // 3) parcel_number — survives address re-spellings and re-listings
       if (req.query.parcel_number) {
         const parcel = sanitize(req.query.parcel_number);
@@ -375,6 +409,26 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       for (const [re, alt] of STREET_ALIASES) {
         if (re.test(address)) {
           addressVariants.add(address.replace(re, alt));
+        }
+      }
+      // Round 76ej.i (2026-05-04): the extension passes the full address
+      // string ("109 Harrison Ave & 1601 Spring St, Jeffersonville, IN
+      // 47130") but stored entities typically hold just the street
+      // portion ("109 Harrison Ave & 1601 Spring St") with city/state
+      // in their own columns. Strip the trailing ", City, ST ZIP" so
+      // the exact-ilike pass also tries the bare street form. Adds the
+      // street-only variant to the set; address-alias normalization
+      // re-runs on it.
+      const STRIP_SUFFIX = /,\s*[^,]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\s*$/i;
+      if (STRIP_SUFFIX.test(address)) {
+        const streetOnly = address.replace(STRIP_SUFFIX, '').trim();
+        if (streetOnly && streetOnly.length >= 3) {
+          addressVariants.add(streetOnly);
+          for (const [re, alt] of STREET_ALIASES) {
+            if (re.test(streetOnly)) {
+              addressVariants.add(streetOnly.replace(re, alt));
+            }
+          }
         }
       }
       // Try each variant exact-equal first (cheap), then fall through to a

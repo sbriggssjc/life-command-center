@@ -55,10 +55,51 @@
 
     const val = (el) => el?.textContent?.trim() || null;
 
+    // Round 76ej.i (2026-05-04): detect closed/withdrawn listings.
+    // CREXi strips the structured Details panel when a listing flips to
+    // "No Longer For Sale" / "Sold" / "Closed" — only the marketing
+    // description and broker cards remain. The Tailwind label/value map
+    // ends up empty, and the legacy findTextElement() heuristic happily
+    // grabs section headings ("Valuation Metrics", "About This Property
+    // Description Highlights") and marketing prose as if they were
+    // field values. Detect the closed badge up front so we can degrade
+    // extraction gracefully (no garbage values) and tag the snapshot
+    // with the right listing_status.
+    const bodyText = document.body?.innerText || '';
+    const CLOSED_BADGES = /(no\s+longer\s+for\s+sale|off\s+market|withdrawn|sold|closed|deal\s+closed)/i;
+    let listingStatus = 'active';
+    // Look at small badge-like elements first to avoid false positives
+    // from the marketing description (which may legitimately use words
+    // like "sold" in body copy).
+    document.querySelectorAll('span, div, em, strong, [class*="badge"], [class*="status"], [class*="banner"]').forEach((el) => {
+      if (listingStatus !== 'active') return;
+      if (el.children.length > 1) return;
+      const t = (el.textContent || '').trim();
+      if (t.length < 3 || t.length > 40) return;
+      if (!CLOSED_BADGES.test(t)) return;
+      if (/^no\s+longer\s+for\s+sale$/i.test(t)) listingStatus = 'no_longer_for_sale';
+      else if (/^off\s+market$/i.test(t))         listingStatus = 'off_market';
+      else if (/^withdrawn$/i.test(t))            listingStatus = 'withdrawn';
+      else if (/^sold$/i.test(t))                 listingStatus = 'sold';
+      else if (/^closed$/i.test(t))               listingStatus = 'closed';
+    });
+    const isClosedListing = listingStatus !== 'active';
+
     // ── Strategy 0 (Round 76df): build CREXi flex-row label→value map ────
     const crexiMap = buildCrexiDataMap();
-    const get = (...keywords) => lookupCrexiField(crexiMap, ...keywords)
-      || val(findTextElement(...keywords));
+    // Round 76ej.i: only fall through to the heuristic findTextElement()
+    // when the structured map has SOME entries (i.e. the page rendered
+    // its Details panel at all). On a closed-listing page the map is
+    // empty, and findTextElement() will happily grab marketing-prose
+    // text as field values. Setting `allowHeuristicFallback=false`
+    // returns null cleanly when the data isn't present.
+    const allowHeuristicFallback = crexiMap.size > 3;
+    const get = (...keywords) => {
+      const mapped = lookupCrexiField(crexiMap, ...keywords);
+      if (mapped) return mapped;
+      if (!allowHeuristicFallback) return null;
+      return val(findTextElement(...keywords));
+    };
 
     // Financial
     let askingPrice = get('Asking Price', 'Price', 'List Price') || extractCrexiAskingPrice();
@@ -186,6 +227,21 @@
       crexi_map_size: crexiMap.size,
     });
 
+    // Round 76ej.i: extract canonical CREXi listing id from the URL path.
+    // /properties/<id>/<slug> is stable even when query/tracking params
+    // drift, so this gives the lookup_asset call a fingerprint that
+    // doesn't break when CREXi rewrites the eblast URL.
+    let crexiListingId = null;
+    let crexiCanonicalUrl = null;
+    try {
+      const u = new URL(url);
+      const m = u.pathname.match(/\/properties\/(\d+)\b/);
+      if (m) {
+        crexiListingId    = m[1];
+        crexiCanonicalUrl = `${u.origin}${u.pathname}`;
+      }
+    } catch (_) { /* non-fatal */ }
+
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
       data: {
@@ -194,6 +250,13 @@
         _version: 2,
         address,
         page_url: url,
+        // Canonical / stable identifiers — used by lookup_asset to
+        // recognise this listing even when the address normalization
+        // or tracking query params don't match exactly.
+        crexi_listing_id: crexiListingId,
+        canonical_url:    crexiCanonicalUrl,
+        listing_status:   listingStatus,
+        is_closed_listing: isClosedListing,
         asking_price: askingPrice,
         cap_rate: capRate,
         noi: noi,
@@ -530,7 +593,13 @@
       });
     }
 
-    const NAME_BLACKLIST = /^(view\s+(phone|email|om)|listed\s+by|brokerage|real\s+estate)$/i;
+    // Round 76ej.i (2026-05-04): added view map/photos/street view and a
+    // few more CREXi UI button labels — live test on the 109 Harrison
+    // closed listing showed "View Map" landing as a fourth listing
+    // broker because the name regex matches any two-capitalised-words
+    // string. Anchored ^...$ so we don't false-positive legitimate
+    // names that contain these words.
+    const NAME_BLACKLIST = /^(view\s+(phone|email|om|map|photos?|virtual\s+tour|street\s+view)|listed\s+by|brokerage|real\s+estate|street\s+view|virtual\s+tour|request\s+(info|tour)|contact\s+broker|save|share|print|listing\s+contacts?|no\s+longer\s+for\s+sale|off\s+market|closed)$/i;
     const COMPANY_RE = /(real\s+estate|realty|capital|group|advisors|partners|properties|brokerage|\bllc\b|\binc\.?$|\bco\.?$|cushman|cbre|jll|colliers|marcus|newmark|friedman|kidder|stream|avison|berkadia|matthews)/i;
 
     const contacts = [];
