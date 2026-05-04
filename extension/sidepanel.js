@@ -628,12 +628,18 @@ const PROPERTY_FIELDS = [
   ['zoning', 'Zoning', 'zoning'],
   ['occupancy', 'Occupancy', 'occupancy'],
   ['lease_term', 'Lease Term', 'lease_term'],
+  ['remaining_term', 'Remaining Term', 'remaining_term'],
+  ['lease_expiration', 'Lease Expiration', 'lease_expiration'],
+  ['renewal_options', 'Lease Options', 'renewal_options'],
+  ['lease_type', 'Lease Type', 'lease_type'],
   ['tenant_name', 'Tenant', 'tenant_name'],
   ['owner_name', 'Owner', 'owner_name'],
   ['broker_name', 'Broker', 'broker_name'],
   ['broker_company', 'Brokerage', 'broker_company'],
   ['sale_price', 'Last Sale Price', 'sale_price'],
   ['sale_date', 'Last Sale Date', 'sale_date'],
+  ['acreage', 'Acreage', 'acreage'],
+  ['days_on_market', 'Days on Market', 'days_on_market'],
 ];
 
 // Extra fields from county assessor / recorder sites
@@ -862,6 +868,11 @@ async function loadPropertyTab(opts) {
   const contacts = ctx?.contacts || [];
   if (contacts.length) {
     html += renderContacts(contacts);
+  }
+
+  // ── SECTION 4a: Marketing description / OM link from source ──────
+  if (ctx && (ctx.marketing_headline || ctx.marketing_description || ctx.om_available || ctx.om_url)) {
+    html += renderMarketingSection(ctx);
   }
 
   // ── SECTION 4: Sales history from source ──────────────────────────
@@ -2017,6 +2028,7 @@ function buildMetadata(ctx, domain) {
     est_rent: ctx.est_rent || null,
     lease_type: ctx.lease_type || null,
     lease_term: ctx.lease_term || null,
+    remaining_term: ctx.remaining_term || null,
     lease_expiration: ctx.lease_expiration || null,
     lease_commencement: ctx.lease_commencement || null,
     rent_per_sf: ctx.rent_per_sf || null,
@@ -2049,6 +2061,13 @@ function buildMetadata(ctx, domain) {
     listing_firm: ctx.listing_firm || null,
     listing_email: ctx.listing_email || null,
     listing_phone: ctx.listing_phone || null,
+    // CREXi listing pages: marketing copy + OM availability
+    marketing_headline: ctx.marketing_headline || null,
+    marketing_description: ctx.marketing_description || null,
+    om_url: ctx.om_url || null,
+    om_available: ctx.om_available || null,
+    acreage: ctx.acreage || null,
+    updated_days_ago: ctx.updated_days_ago || null,
     // PDF / OM ingestion tracking
     pdf_count: (ctx.pdf_extracted_texts || []).length || 0,
     pdf_extracted_texts: ctx.pdf_extracted_texts || [],
@@ -2074,6 +2093,29 @@ function renderAssessorFields(ctx) {
         <span class="context-label">${escapeHtml(label)}</span>
         <span class="context-value">${escapeHtml(val)}</span>
       </div>`;
+    }
+  }
+  return html;
+}
+
+// ── Marketing description / OM (CREXi listing pages) ───────────────────────
+
+function renderMarketingSection(ctx) {
+  let html = '<div class="section-label">Listing Marketing</div>';
+  if (ctx.marketing_headline) {
+    html += `<div style="font-weight:700;font-size:12px;color:var(--text-primary);margin-bottom:6px;">${escapeHtml(ctx.marketing_headline)}</div>`;
+  }
+  if (ctx.marketing_description) {
+    const desc = ctx.marketing_description;
+    const truncated = desc.length > 600 ? desc.slice(0, 600) + '…' : desc;
+    html += `<div style="font-size:11px;color:var(--text-secondary);white-space:pre-wrap;line-height:1.4;margin-bottom:8px;">${escapeHtml(truncated)}</div>`;
+  }
+  if (ctx.om_available || ctx.om_url) {
+    const href = ctx.om_url || ctx.page_url;
+    if (href) {
+      html += `<div class="context-field"><span class="context-label">OM</span><span class="context-value"><a href="${escapeHtml(href)}" target="_blank" rel="noopener">View Offering Memorandum</a></span></div>`;
+    } else {
+      html += `<div class="context-field"><span class="context-label">OM</span><span class="context-value">Available on listing page</span></div>`;
     }
   }
   return html;
