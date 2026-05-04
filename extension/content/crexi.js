@@ -165,6 +165,14 @@
     // Marketing description / headline (free-text body the broker writes)
     const marketing = extractCrexiMarketing();
 
+    // Round 76ej.k (2026-05-04): mine the prose for lease facts CREXi's
+    // structured Details panel doesn't carry (expense_structure,
+    // remaining_term_years, lease_expiration_text, renewal_options_text,
+    // rent_escalations_pct). Used as a fallback only — never overwrites
+    // a structured value below. Tagged at lower trust in the priority
+    // registry so OM extraction always wins when both are present.
+    const descLease = extractCrexiLeaseFromDescription(marketing.description);
+
     // OM (Offering Memorandum) availability + link
     const om = extractCrexiOm();
 
@@ -223,6 +231,7 @@
       contacts_found: contacts ? contacts.length : 0,
       marketing_headline: marketing.headline ? '✓' : null,
       marketing_description_chars: marketing.description ? marketing.description.length : 0,
+      desc_lease_extracted: descLease,
       om_available: om.available,
       crexi_map_size: crexiMap.size,
     });
@@ -276,9 +285,28 @@
         occupancy: occupancy,
         lease_type: leaseType,
         lease_term: leaseTerm,
-        remaining_term: remainingTerm,
-        lease_expiration: leaseExpiration,
-        renewal_options: leaseOptions,
+        // Round 76ej.k: marketing-description fallbacks. Structured
+        // Details-panel value wins — only use the prose-mined value
+        // when the structured field is empty. Never overwrites.
+        remaining_term: remainingTerm
+          || (descLease.remaining_term_years != null ? String(descLease.remaining_term_years) : null),
+        lease_expiration: leaseExpiration || descLease.lease_expiration_text || null,
+        renewal_options: leaseOptions || descLease.renewal_options_text || null,
+        expense_structure: descLease.expense_structure || null,
+        rent_escalations: descLease.rent_escalations_pct != null
+          ? String(descLease.rent_escalations_pct) + '%'
+          : null,
+        // Provenance hint: which fields came from prose vs the
+        // structured panel. Backend can decide whether to write or
+        // skip based on this. Stays separate from the value fields
+        // so a future consumer can compute a confidence score.
+        lease_facts_from_description: {
+          expense_structure:    descLease.expense_structure,
+          remaining_term_years: descLease.remaining_term_years,
+          lease_expiration:     descLease.lease_expiration_text,
+          renewal_options:      descLease.renewal_options_text,
+          rent_escalations_pct: descLease.rent_escalations_pct,
+        },
         tenancy: tenancy,
         tenant_name: tenantBrand,
         brand_tenant: tenantBrand,
@@ -537,6 +565,98 @@
       return { available: true, url: href || window.location.href };
     }
     return { available: false, url: null };
+  }
+
+  // Round 76ej.k (2026-05-04): light text-pattern extractor for facts
+  // that brokers describe in prose but CREXi's structured Details panel
+  // doesn't surface — expense_structure (Triple-Net), remaining_term,
+  // lease_expiration year/month, renewal_options, and rent escalation
+  // percentage. Conservative: emits null when patterns don't match
+  // cleanly. Used as a fallback only — never overwrites a structured
+  // value. Tagged in provenance as `crexi_sidebar_description` at lower
+  // trust than the structured Details panel.
+  function extractCrexiLeaseFromDescription(desc) {
+    const out = {
+      expense_structure:    null,
+      remaining_term_years: null,
+      lease_expiration_text:null,
+      renewal_options_text: null,
+      rent_escalations_pct: null,
+    };
+    if (!desc || typeof desc !== 'string' || desc.length < 50) return out;
+    // Cap how much we scan — marketing descriptions are normally ≤5K
+    // chars, but if a section accidentally bled into our description we
+    // don't want to regex against the whole page.
+    const text = desc.length > 8000 ? desc.slice(0, 8000) : desc;
+
+    // Expense structure: "Triple-Net (NNN)" / "Double-Net (NN)" /
+    // "Absolute Net" / bare "NNN" / "Modified Gross". Order matters —
+    // longer, more specific phrases first so "NNN" doesn't shadow
+    // "Triple-Net (NNN)".
+    const expensePats = [
+      [/\babsolute\s*(?:triple\s*)?net\b/i, 'Absolute NNN'],
+      [/\btriple[-\s]?net\s*\(?\s*nnn\s*\)?\b/i, 'NNN'],
+      [/\bdouble[-\s]?net\s*\(?\s*nn\s*\)?\b/i, 'NN'],
+      [/\bmodified\s+gross\b/i, 'Modified Gross'],
+      [/\b(?:full\s+service\s+)?gross\s+lease\b/i, 'Gross'],
+      [/\bnnn\b/i, 'NNN'],
+      [/\bnn\b/i, 'NN'],
+    ];
+    for (const [re, canonical] of expensePats) {
+      if (re.test(text)) { out.expense_structure = canonical; break; }
+    }
+
+    // Remaining term: "9.5 years remaining" / "13+ years of remaining
+    // lease term" / "approximately 5 years left on the lease".
+    const remTerm = text.match(
+      /(\d+(?:\.\d+)?)\s*\+?\s*years?\s+(?:of\s+)?(?:remaining|left)\s+(?:on\s+the\s+)?(?:lease(?:\s+term)?)?/i
+    );
+    if (remTerm) {
+      const n = parseFloat(remTerm[1]);
+      if (Number.isFinite(n) && n > 0 && n < 50) out.remaining_term_years = n;
+    }
+
+    // Lease expiration: "extending the firm term through October 2035" /
+    // "expires in 2035" / "lease expires October 2035" / "through 2035".
+    // Anchor on lease/expir/term/through to avoid grabbing arbitrary
+    // years from the description ("built in 2014", etc.).
+    const expDate = text.match(
+      /(?:lease\s+(?:expir|end|term)|expir(?:ing|es|ation)?|firm\s+term|through(?:\s+October|\s+\w+)?)\s*[a-z\s,]{0,30}?\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:19|20)\d{2}|(?:19|20)\d{2})\b/i
+    );
+    if (expDate) {
+      const parsed = String(expDate[1]).trim();
+      // Sanity-check: year should be in [current_year - 1, current_year + 50]
+      const yearMatch = parsed.match(/(19|20)\d{2}/);
+      if (yearMatch) {
+        const y = parseInt(yearMatch[0], 10);
+        const nowY = new Date().getFullYear();
+        if (y >= nowY - 1 && y <= nowY + 50) out.lease_expiration_text = parsed;
+      }
+    }
+
+    // Renewal options: "one five-year renewal option" / "(2) 5-year
+    // renewal options" / "two 5-year options". Return the matched
+    // phrase verbatim so downstream parsers see broker phrasing.
+    const renewalPhrase = text.match(
+      /(?:\(?\b(\d+|one|two|three|four|five)\b\)?\s+)?\b(\d+|five|ten|seven|three)\b[-\s]?year\s+(?:renewal\s+)?options?/i
+    );
+    if (renewalPhrase) {
+      const phrase = renewalPhrase[0].trim().replace(/\s+/g, ' ');
+      if (phrase.length < 80) out.renewal_options_text = phrase;
+    }
+
+    // Rent escalations: "10% increase" / "2% annual bumps" / "rent
+    // escalations of 10%". Reject percentages over 50% (probably not
+    // a rent bump — could be cap rate or occupancy).
+    const escalation = text.match(
+      /(\d+(?:\.\d+)?)\s*%\s*(?:annual\s+)?(?:rent\s+)?(?:increase|bump|escalation|step[-\s]?up)/i
+    );
+    if (escalation) {
+      const n = parseFloat(escalation[1]);
+      if (Number.isFinite(n) && n > 0 && n <= 50) out.rent_escalations_pct = n;
+    }
+
+    return out;
   }
 
   function extractCrexiContacts() {
