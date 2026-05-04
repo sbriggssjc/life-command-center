@@ -627,6 +627,16 @@ function renderDiaTab() {
     case 'activity':
       inner.innerHTML = renderDiaActivity();
       break;
+    case 'capital-markets':
+      // Renders directly to DOM (async); see capital-markets.js
+      if (typeof renderDiaCapitalMarkets === 'function') {
+        const result = renderDiaCapitalMarkets();
+        // Phase 2 placeholder returns a string; Phase 1+ returns void after rendering directly
+        if (typeof result === 'string') inner.innerHTML = result;
+      } else {
+        inner.innerHTML = '<div style="padding:24px;color:#666">capital-markets.js not loaded</div>';
+      }
+      return;
     default:
       inner.innerHTML = '<p style="color: var(--text2);">Unknown tab</p>';
   }

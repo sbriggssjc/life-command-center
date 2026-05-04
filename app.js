@@ -1185,6 +1185,14 @@ function renderDiaTab(){
     case 'players':h=renderDiaPlayers();break;
     case 'research':h=renderDiaResearch();break;
     case 'activity':renderBizContent();return;
+    case 'capital-markets':
+      if (typeof renderDiaCapitalMarkets === 'function') {
+        const r = renderDiaCapitalMarkets();
+        h = (typeof r === 'string') ? r : '';
+      } else {
+        h='<div style="color:var(--text2)">Loading capital-markets.js...</div>';
+      }
+      break;
   }
   el.innerHTML=h;
 }
