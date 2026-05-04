@@ -119,6 +119,37 @@ const CHART_COLUMNS = {
     { key: 'state_cap',        header: 'State Cap',           format: 'percent_basis_points', width: 14 },
     { key: 'municipal_cap',    header: 'Municipal Cap',       format: 'percent_basis_points', width: 16 },
   ],
+
+  // Phase 2b additions
+  yoy_volume_change: [
+    { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
+    { key: 'yoy_change_pct',   header: 'YoY Change (%)',      format: 'percent_one_decimal', width: 14 },
+  ],
+  buyer_class_pct_by_year: [
+    { key: 'year',                  header: 'Year',                width: 10 },
+    { key: 'subspecialty',          header: 'Subspecialty',        width: 14 },
+    { key: 'private_volume',        header: 'Private Volume',      format: 'currency_dollars',     width: 18 },
+    { key: 'reit_volume',           header: 'Public REIT Volume',  format: 'currency_dollars',     width: 19 },
+    { key: 'cross_border_volume',   header: 'Cross-Border Volume', format: 'currency_dollars',     width: 20 },
+    { key: 'institutional_volume',  header: 'Institutional Volume',format: 'currency_dollars',     width: 21 },
+    { key: 'private_pct',           header: 'Private %',           format: 'percent_zero_decimal', width: 12 },
+    { key: 'reit_pct',              header: 'Public REIT %',       format: 'percent_zero_decimal', width: 14 },
+    { key: 'cross_border_pct',      header: 'Cross-Border %',      format: 'percent_zero_decimal', width: 15 },
+    { key: 'institutional_pct',     header: 'Institutional %',     format: 'percent_zero_decimal', width: 16 },
+  ],
+  dom_and_pct_of_ask: [
+    { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
+    { key: 'avg_dom',          header: 'Avg DOM (days)',      format: 'integer_count',       width: 14 },
+    { key: 'pct_of_ask',       header: '% of Ask Price',      format: 'percent_one_decimal', width: 16 },
+  ],
+  bid_ask_spread: [
+    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },
+    { key: 'avg_bid_ask_spread', header: 'Bid-Ask Spread (bps)', format: 'percent_basis_points', width: 19 },
+    { key: 'pct_price_change',   header: '% Price Changes',     format: 'percent_one_decimal', width: 16 },
+  ],
 };
 
 // Tab name per chart (kept short — Excel limits to 31 chars)
@@ -131,6 +162,11 @@ const TAB_NAMES = {
   nm_vs_market_cap:             'Data_NM_vs_Market',
   cap_rate_by_lease_term:       'Data_Cap_by_Term',
   cap_rate_by_credit:           'Data_Cap_by_Credit',
+  // Phase 2b additions
+  yoy_volume_change:            'Data_YoY_Change',
+  buyer_class_pct_by_year:      'Data_Buyer_Pool',
+  dom_and_pct_of_ask:           'Data_DOM_Ask',
+  bid_ask_spread:               'Data_Bid_Ask',
 };
 
 // ============================================================================

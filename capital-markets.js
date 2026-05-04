@@ -22,16 +22,22 @@
   };
   window.__cmState = cmState;     // expose for debugging
 
-  // Phase 1 chart templates we render (in display order)
+  // Chart templates we render (in display order). After Phase 2b parity work,
+  // this includes the 4 new dashboard parity charts that match the gov 2024-Q2
+  // deliverable PDF.
   const PHASE_1_TEMPLATES = [
     'volume_ttm_by_quarter',
+    'yoy_volume_change',           // Phase 2b — deliverable p.14
     'cap_rate_ttm_by_quarter',
     'nm_vs_market_cap',
     'transaction_count_ttm',
-    'cap_rate_top_bottom_quartile',
     'avg_deal_size',
+    'cap_rate_top_bottom_quartile',
     'cap_rate_by_lease_term',
     'cap_rate_by_credit',
+    'buyer_class_pct_by_year',     // Phase 2b — deliverable p.20
+    'dom_and_pct_of_ask',          // Phase 2b — deliverable p.22
+    'bid_ask_spread',              // Phase 2b — deliverable p.23
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -261,6 +267,76 @@
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('percent_basis_points') });
       }
+
+      // ===== Phase 2b additions =====================================================
+      case 'yoy_volume_change': {
+        // Bar chart with positive/negative coloring
+        const data = chart.rows.map(r => r.yoy_change_pct);
+        const bgColors = data.map(v => v == null ? palette[4] : (v >= 0 ? palette[0] : '#C0504D'));
+        datasets = [{
+          label: 'YoY Change (TTM Volume)',
+          data,
+          backgroundColor: bgColors,
+          borderRadius: 2,
+        }];
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets },
+          options: commonChartOptions('percent_one_decimal') });
+      }
+      case 'buyer_class_pct_by_year': {
+        // Stacked bar by year (% of volume)
+        const yearLabels = chart.rows.map(r => String(r.year));
+        datasets = [
+          { label: 'Private',           data: chart.rows.map(r => r.private_pct),
+            backgroundColor: palette[0], stack: 'pool' },
+          { label: 'Public REITs',      data: chart.rows.map(r => r.reit_pct),
+            backgroundColor: palette[2], stack: 'pool' },
+          { label: 'Cross-Border',      data: chart.rows.map(r => r.cross_border_pct),
+            backgroundColor: palette[1], stack: 'pool' },
+          { label: 'Institutional',     data: chart.rows.map(r => r.institutional_pct),
+            backgroundColor: palette[3], stack: 'pool' },
+        ];
+        const opts = commonChartOptions('percent_zero_decimal');
+        opts.scales.x.stacked = true;
+        opts.scales.y.stacked = true;
+        opts.scales.y.max = 1.0;
+        return new Chart(canvas, { type: 'bar', data: { labels: yearLabels, datasets }, options: opts });
+      }
+      case 'dom_and_pct_of_ask': {
+        // Combo: DOM as bars (left axis), % of ask as line (right axis)
+        const dom = chart.rows.map(r => r.avg_dom);
+        const pctAsk = chart.rows.map(r => r.pct_of_ask);
+        datasets = [
+          { type: 'bar',  label: 'Avg Days on Market', data: dom,
+            backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+          { type: 'line', label: '% of Ask Price', data: pctAsk,
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 2, borderWidth: 2.5, yAxisID: 'y1' },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: { color: brandColor('nm_axis', '#6A748C'),
+                   font: { family: 'Calibri, sans-serif', size: 9 },
+                   callback: tickFormatterFor('percent_one_decimal') },
+          grid: { display: false },
+        };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+      case 'bid_ask_spread': {
+        datasets = [{
+          label: 'Bid-Ask Spread (bps)',
+          data: chart.rows.map(r => r.avg_bid_ask_spread),
+          borderColor: palette[0],
+          backgroundColor: palette[3],
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+          borderWidth: 2,
+        }];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_basis_points') });
+      }
+
       default:
         return null;
     }
