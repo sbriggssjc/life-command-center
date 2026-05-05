@@ -19,6 +19,11 @@ pg_cron job.
   ```
   supabase functions deploy availability-checker --project-ref xengecqvemvfknjvbvrq
   ```
+  `supabase/config.toml` pins `verify_jwt = false` for this function, so
+  the gateway accepts our `LCC_API_KEY` Bearer header instead of demanding
+  a Supabase-issued JWT. If you ever see `UNAUTHORIZED_NO_AUTH_HEADER`
+  from the function it means the deploy ignored config.toml — re-deploy
+  with `--no-verify-jwt` explicitly and confirm the file is present.
 - Required env vars on the function:
   - `DIA_SUPABASE_URL`, `DIA_SUPABASE_KEY`
   - `GOV_SUPABASE_URL`, `GOV_SUPABASE_KEY`
@@ -28,6 +33,57 @@ pg_cron job.
   - `supabase/migrations/20260505100000_lcc_availability_checker_cron.sql`
     — registers `availability_scraper` in `field_source_priority` and
     schedules the pg_cron job.
+
+## Operator notes (gotchas surfaced by the first live run, issue #560)
+
+- **Sample pool may be smaller than the picker queries assume.** The
+  active-listings query is gated on `last_seen > now() - interval '30 days'`
+  and the sold-listings query on `off_market_reason = 'sold'`; neither
+  field is guaranteed to be populated. The first run found only 4 active
+  rows and 0 sold rows in `dia.available_listings`. If the picker returns
+  fewer than 10 candidates, supplement from public archived broker pages
+  (see "Sourcing extra `gone` URLs" below) rather than running with a
+  smaller sample at the same 8/10 bar.
+- **`product.costar.com` URLs are paywalled CoStar Suite app links, not
+  public listing pages.** They will 401 / redirect-to-login for
+  unauthenticated fetches. The function's `shouldSkipHost()` filter only
+  drops known tracking hosts, not these — but the parsers can't usefully
+  classify them either way. Filter them out at sample-selection time
+  (`AND al.listing_url NOT ILIKE 'https://product.costar.com/%'`) and file
+  a follow-up to canonicalize CoStar URLs to the public
+  `costar.com/property/...` form upstream in the sidebar pipeline.
+- **`expected: "active"` on a CREXi-bot-blocked page will fail.** CREXi
+  serves HTTP 403 with a challenge body to repeat callers from the same
+  IP; the function correctly labels these `unreachable`, but the runbook's
+  `active` tolerance set doesn't accept that. Two workarounds:
+  - Re-run the script after the fetch IP cools off (CREXi's block is
+    rate-window'd, not permanent), OR
+  - Relabel the affected URLs as `expected: "gone"` (which accepts
+    `unreachable`). Note that this is a deliberate truth-relaxation; the
+    listing IS active, the parser just can't see it. The Round 76ej.h
+    bot-block self-alert is the production-side response to this same
+    signal.
+
+### Sourcing extra `gone` URLs
+
+When the dia picker returns fewer sold-truth candidates than needed, the
+fallback is to hand-curate URLs from public archived broker pages.
+Process:
+
+1. Pull recently-sold dialysis properties from `sales_transactions`
+   joined to `properties` (most recent 18 months, with addresses).
+2. For each property, search CREXi/LoopNet for the address; archived
+   "Sold" pages typically remain at their original `crexi.com/properties/<id>/...`
+   or `loopnet.com/Listing/<address>/<id>/` URL.
+3. Add the URL to `scripts/availability-checker-samples.json` with
+   `"expected": "gone"`. The `gone` label accepts `off_market`,
+   `off_market_sold_hint`, OR `unreachable` — covering both the
+   ideal-case "Sold" banner match AND the common 404 / redirect-to-search
+   that many archived pages produce.
+4. Do NOT back-fill the URL into `dia.available_listings.listing_url`
+   from the sample-curation step. If the URL turns out to be live and
+   relevant, let the sidebar pipeline ingest it through its normal path
+   so the field_provenance audit trail stays correct.
 
 ## Pick the sample (dialysis)
 
