@@ -162,6 +162,15 @@
     // Header banner: "$X | N days on market | Updated M days ago"
     const header = extractCrexiHeader();
 
+    // Listing subtitle (CREXi shows the building/listing name between the
+    // price banner and the action buttons — e.g. "GSA EPA Laboratory" or
+    // "Athens VA Clinic, 9249 US-29, Athens, GA 30601"). Domain
+    // classification depends on tenant-flavored text, and CREXi's
+    // structured Details panel rarely names the tenant for govt-leased
+    // properties — the subtitle is often the only place that "GSA" /
+    // "VA" / "EPA" appears as a structured field.
+    const buildingName = extractCrexiBuildingName(address);
+
     // Marketing description / headline (free-text body the broker writes)
     const marketing = extractCrexiMarketing();
 
@@ -372,6 +381,7 @@
         sale_date: val(saleDateEl),
         days_on_market: header.days_on_market,
         updated_days_ago: header.updated_days_ago,
+        building_name: buildingName,
         marketing_headline: marketing.headline,
         marketing_description: marketing.description,
         om_available: om.available,
@@ -421,14 +431,27 @@
       const v = map.get(kw.toLowerCase());
       if (v) return v;
     }
-    // Pass 2: prefix / contains match for legacy or renamed labels.
+    // Pass 2/3: fuzzy prefix and substring matching is restricted to
+    // multi-word keywords. Single-word keywords (e.g. 'Price', 'Tenant',
+    // 'NOI') would otherwise poach values from compound labels —
+    // 'price' matched 'price per sqft' and returned $/SF as the asking
+    // price; 'tenant' matched 'tenant credit' and returned 'Credit
+    // Rated' as the tenant name. Multi-word keywords are specific
+    // enough that the same false-positive class doesn't apply.
     for (const kw of keywords) {
+      if (!kw.includes(' ')) continue;
       const kwLower = kw.toLowerCase();
       for (const [label, value] of map) {
-        if (label === kwLower || label.startsWith(kwLower)) return value;
+        if (label === kwLower) return value;
+        if (label.length > kwLower.length &&
+            label.startsWith(kwLower) &&
+            /[\s/]/.test(label.charAt(kwLower.length))) {
+          return value;
+        }
       }
     }
     for (const kw of keywords) {
+      if (!kw.includes(' ')) continue;
       const kwLower = kw.toLowerCase();
       for (const [label, value] of map) {
         if (label.includes(kwLower)) return value;
@@ -499,6 +522,41 @@
       days_on_market: dom ? dom[1] : null,
       updated_days_ago: upd ? upd[1] : null,
     };
+  }
+
+  function extractCrexiBuildingName(address) {
+    // CREXi places a small subtitle line between the price banner and the
+    // Request Info button. For govt-leased properties this is where the
+    // tenant identity actually appears as structured copy — "GSA EPA
+    // Laboratory", "Athens VA Clinic, 9249 US-29, Athens, GA 30601",
+    // etc. Without this, the domain classifier sees only generic labels
+    // ("Office", "Medical Office") and falls back to no_domain.
+    const text = document.body?.innerText || '';
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const PRICE_BANNER = /\$\d[\d,]*\s*\|\s*\d+\s*days?\s+on\s+market/i;
+    const SKIP_LINE = /^(opportunity\s+zone|request\s+info|view\s+om|details|share|save|print|notes|lcc\s+context|street\s+view|view\s+map|\d+\s+photos?)$/i;
+    const STOP_LINE = /^(details|marketing\s+description|investment\s+highlights?|location|property\s+overview|in\s+the\s+area)$/i;
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (!PRICE_BANNER.test(lines[i])) continue;
+      for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+        const candidate = lines[j];
+        if (!candidate) continue;
+        if (STOP_LINE.test(candidate)) return null;
+        if (SKIP_LINE.test(candidate)) continue;
+        if (/^\$[\d,]+(?:\.\d+)?$/.test(candidate)) continue;
+        if (candidate.length < 4 || candidate.length > 200) continue;
+        // CREXi often renders "<Building Name>, <full address>". Strip the
+        // address and return the building name on its own.
+        if (address && candidate.includes(address)) {
+          const name = candidate.replace(address, '').replace(/[,\s]+$/, '').replace(/^[,\s]+/, '').trim();
+          if (name.length >= 3 && name.length <= 120) return name;
+          continue;
+        }
+        return candidate;
+      }
+      break;
+    }
+    return null;
   }
 
   function extractCrexiMarketing() {

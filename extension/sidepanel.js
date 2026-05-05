@@ -2028,7 +2028,12 @@ function buildMetadata(ctx, domain) {
     ownership_type: ctx.ownership_type || null,
     location_type: ctx.location_type || null,
     building_name: ctx.building_name || null,
-    property_subtype: ctx.property_subtype || null,
+    // CREXi sends `sub_type` (e.g. "Government", "Medical Office"); the
+    // domain classifier reads `property_subtype`. Without this fallback
+    // an EPA / VA / SSA listing whose only government signal is its
+    // CREXi sub_type drops to no_domain because the property_subtype
+    // slot is empty.
+    property_subtype: ctx.property_subtype || ctx.sub_type || null,
     days_on_market: ctx.days_on_market || null,
     comp_status: ctx.comp_status || null,
     price_status: ctx.price_status || null,
