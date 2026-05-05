@@ -24,13 +24,16 @@
 //        → call cm_gov_refresh_nm_attribution() RPC after pattern edits
 //
 // GET  /api/capital-markets?action=export&vertical=&format=xlsx|pdf|png   [Phase 2]
-// POST /api/capital-markets?action=rca_import                              [Phase 2]
+// POST /api/capital-markets?action=rca_import
+//        body: { filename, file_b64, product_type?, notes? }
+//        → parses RCA TrendTracker .xls export, upserts cm_rca_quarterly
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-export.js';
+import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 
 // vertical_id (in cm_chart_catalog) → domain-db key (in domain-db.js)
 const VERTICAL_TO_DOMAIN = {
@@ -90,7 +93,7 @@ export default withErrorHandler(async function handler(req, res) {
     switch (action) {
       case 'add_broker_pattern':     return addBrokerPattern(req, res);
       case 'refresh_nm_attribution': return refreshNmAttribution(req, res);
-      case 'rca_import':             return res.status(501).json(PHASE_2_PENDING(action));
+      case 'rca_import':             return rcaImport(req, res, user);
       case 'save_narrative':         return res.status(501).json(PHASE_2_PENDING(action));
       case 'publish':                return res.status(501).json(PHASE_2_PENDING(action));
 
@@ -489,5 +492,154 @@ async function refreshNmAttribution(req, res) {
     vertical,
     rpc: rpcName,
     result: result.data,
+  });
+}
+
+// ============================================================================
+// Phase 2f — RCA TrendTracker import (national_st vertical)
+// ============================================================================
+
+/**
+ * POST /api/capital-markets?action=rca_import
+ *
+ * Body shape (JSON):
+ *   {
+ *     filename:     'RCA_TrendTracker_Office.xls',
+ *     product_type: 'office'|'medical'|'industrial'|'retail' (optional — parser
+ *                   auto-detects from header text, but supplying it lets the
+ *                   parser refuse a mismatched file from the wrong subfolder),
+ *     file_b64:     '<base64-encoded .xls bytes>',
+ *     notes:        'optional free-text note for cm_rca_imports.notes'
+ *   }
+ *
+ * Flow:
+ *   1. Decode base64 → Buffer
+ *   2. Parse via rca-parser.js (header-driven, tolerates the 4 product
+ *      shape variants we documented in 2026-05-05 recon)
+ *   3. Insert lineage row into cm_rca_imports (returns import_id)
+ *   4. UPSERT all parsed rows into cm_rca_quarterly with source_export_id
+ *      = import_id (PK is product_type+period_end, so re-uploading a
+ *      newer export naturally refreshes prior quarters)
+ *   5. Patch cm_rca_imports.rows_loaded with the count
+ *   6. Return summary: import_id, product_type, rows_loaded, period range,
+ *      report_run_date, warnings.
+ */
+async function rcaImport(req, res, user) {
+  const body = req.body || {};
+  const { filename, file_b64, notes } = body;
+
+  if (!filename || typeof filename !== 'string') {
+    return res.status(400).json({ error: 'filename required (string)' });
+  }
+  if (!file_b64 || typeof file_b64 !== 'string') {
+    return res.status(400).json({ error: 'file_b64 required (base64 string)' });
+  }
+
+  // Optional product hint — parser will validate against header
+  let expectedProductType = null;
+  if (body.product_type) {
+    try {
+      expectedProductType = normalizeProductType(body.product_type);
+    } catch (e) {
+      return res.status(400).json({ error: e.message, valid: VALID_PRODUCT_TYPES });
+    }
+  }
+
+  // Decode base64 → Buffer (Vercel Hobby body limit is 4.5MB; RCA files are ~50KB)
+  let buffer;
+  try {
+    buffer = Buffer.from(file_b64, 'base64');
+    if (buffer.length === 0) throw new Error('empty buffer after base64 decode');
+    if (buffer.length > 5 * 1024 * 1024) {
+      throw new Error(`file too large: ${buffer.length} bytes (max 5MB)`);
+    }
+  } catch (e) {
+    return res.status(400).json({ error: 'file_b64_decode_failed', detail: e.message });
+  }
+
+  // Parse
+  let parsed;
+  try {
+    parsed = parseRcaExport(buffer, { expectedProductType });
+  } catch (e) {
+    return res.status(400).json({ error: 'rca_parse_failed', detail: e.message });
+  }
+
+  const { product_type, rows: parsedRows, report_run_date, header_signature, warnings } = parsed;
+
+  // 1. Lineage row
+  const uploadedBy = user?.email || user?.user_id || 'unknown';
+  const lineageNotes = [
+    notes,
+    `header_signature=${header_signature}`,
+    report_run_date ? `report_run=${report_run_date}` : null,
+    warnings.length ? `warnings=${warnings.join('|')}` : null,
+  ].filter(Boolean).join(' | ');
+
+  const importIns = await opsQuery('POST', 'cm_rca_imports', {
+    product_type,
+    filename,
+    rows_loaded: 0, // patched after upsert
+    uploaded_by: uploadedBy,
+    notes: lineageNotes || null,
+  });
+  if (!importIns.ok) {
+    return res.status(importIns.status || 500).json({
+      error: 'cm_rca_imports_insert_failed', detail: importIns.data,
+    });
+  }
+  const importId = importIns.data?.[0]?.import_id;
+  if (!importId) {
+    return res.status(500).json({ error: 'no_import_id_returned', detail: importIns.data });
+  }
+
+  // 2. UPSERT rows (PK: product_type + period_end). PostgREST handles
+  //    on-conflict via Prefer:resolution=merge-duplicates header.
+  const rowsToUpsert = parsedRows.map((r) => ({
+    ...r,
+    source_export_id: importId,
+  }));
+
+  const upsert = await opsQuery(
+    'POST',
+    'cm_rca_quarterly',
+    rowsToUpsert,
+    {
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=representation',
+      },
+    }
+  );
+  if (!upsert.ok) {
+    return res.status(upsert.status || 500).json({
+      error: 'cm_rca_quarterly_upsert_failed',
+      detail: upsert.data,
+      import_id: importId,
+    });
+  }
+
+  // 3. Patch the lineage row with row count
+  const rowsLoaded = Array.isArray(upsert.data) ? upsert.data.length : rowsToUpsert.length;
+  await opsQuery(
+    'PATCH',
+    `cm_rca_imports?import_id=eq.${importId}`,
+    { rows_loaded: rowsLoaded }
+  );
+
+  // 4. Compute period range for the response
+  const periods = parsedRows.map((r) => r.period_end).sort();
+
+  return res.status(201).json({
+    import_id: importId,
+    product_type,
+    filename,
+    rows_loaded: rowsLoaded,
+    period_range: {
+      first: periods[0] || null,
+      last: periods[periods.length - 1] || null,
+    },
+    report_run_date,
+    header_signature,
+    warnings,
   });
 }

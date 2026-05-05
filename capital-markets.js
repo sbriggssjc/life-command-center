@@ -631,6 +631,43 @@
     }
   }
 
+  // ---- RCA upload card (national_st only) -----------------------------------
+  function renderRcaUploadCard() {
+    const navy = brandColor('nm_navy', '#003DA5');
+    const sky  = brandColor('nm_sky',  '#62B5E5');
+    const pale = brandColor('nm_pale', '#E0E8F4');
+    return `
+      <div id="cm-rca-upload-card" style="background:#fff;border:1px solid #E7E6E6;border-radius:8px;padding:16px;margin:0 0 16px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+          <div>
+            <div style="font-family:'Calibri Light',sans-serif;font-size:14pt;font-weight:600;color:${brandColor('nm_text','#191919')}">RCA TrendTracker Import</div>
+            <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">Upload one product at a time, or select all four .xls files at once. Auto-detects product from header text.</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="border:1px dashed #C7CEDB;border-radius:6px;padding:12px;background:${pale}">
+            <div style="font-size:10pt;font-weight:600;color:${navy};margin-bottom:8px">Single file</div>
+            <input type="file" id="cm-rca-single-file" accept=".xls,.xlsx" style="font-size:9pt;margin-bottom:8px;width:100%">
+            <select id="cm-rca-single-product" style="padding:5px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif;font-size:9pt;width:100%;margin-bottom:8px">
+              <option value="">(auto-detect from header)</option>
+              <option value="office">Office</option>
+              <option value="medical">Medical</option>
+              <option value="industrial">Industrial</option>
+              <option value="retail">Retail</option>
+            </select>
+            <button id="cm-rca-single-upload" style="padding:6px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:9pt;font-weight:600;cursor:pointer;width:100%">Upload</button>
+          </div>
+          <div style="border:1px dashed #C7CEDB;border-radius:6px;padding:12px;background:${pale}">
+            <div style="font-size:10pt;font-weight:600;color:${navy};margin-bottom:8px">Multi-file (one click)</div>
+            <input type="file" id="cm-rca-multi-files" accept=".xls,.xlsx" multiple style="font-size:9pt;margin-bottom:8px;width:100%">
+            <div style="font-size:8pt;color:${brandColor('nm_text_muted','#666')};margin-bottom:8px">Pick all four product files (Ctrl/Cmd-click). Product type is auto-detected per file.</div>
+            <button id="cm-rca-multi-upload" style="padding:6px 14px;background:${sky};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:9pt;font-weight:600;cursor:pointer;width:100%">Upload All</button>
+          </div>
+        </div>
+        <div id="cm-rca-status" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-top:10px;min-height:18px"></div>
+      </div>`;
+  }
+
   // ---- HTML skeleton ---------------------------------------------------------
   function renderSkeleton(vertical) {
     const navy = brandColor('nm_navy', '#003DA5');
@@ -660,18 +697,31 @@
         </div>`;
     }).join('');
 
+    const headingLabel = vertical === 'gov' ? 'Government-Leased'
+                       : vertical === 'dialysis' ? 'Dialysis'
+                       : vertical === 'national_st' ? 'National Single-Tenant'
+                       : vertical;
+    const sourceCopy = vertical === 'national_st'
+      ? 'TTM aggregates sourced from RCA TrendTracker quarterly exports. Buyer/seller/NM-attribution charts show "No data" until transaction-level data is folded in.'
+      : 'Live-computed from sales_transactions. Each chart card links to underlying SQL view.';
     return `
       <div class="cm-dashboard" style="padding:16px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;border-left:4px solid ${navy};padding-left:12px">
           <div>
-            <div style="font-family:'Calibri Light',sans-serif;font-size:18pt;font-weight:600;color:${navy}">Capital Markets — ${vertical === 'gov' ? 'Government-Leased' : vertical === 'dialysis' ? 'Dialysis' : vertical}</div>
-            <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">Live-computed from sales_transactions. Each chart card links to underlying SQL view.</div>
+            <div style="font-family:'Calibri Light',sans-serif;font-size:18pt;font-weight:600;color:${navy}">Capital Markets — ${headingLabel}</div>
+            <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">${sourceCopy}</div>
           </div>
           <div style="display:flex;gap:12px;align-items:center">
             <div>
               <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Subspecialty:</label>
               <select id="cm-subspecialty-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
-                <option value="all">${vertical === 'gov' ? 'All Government-Leased' : vertical === 'dialysis' ? 'All Dialysis' : 'All ' + vertical}</option>
+                <option value="all">${vertical === 'gov' ? 'All Government-Leased' : vertical === 'dialysis' ? 'All Dialysis' : vertical === 'national_st' ? 'All Products (cross-product)' : 'All ' + vertical}</option>
+                ${vertical === 'national_st' ? `
+                  <option value="office">Office</option>
+                  <option value="medical">Medical</option>
+                  <option value="industrial">Industrial</option>
+                  <option value="retail">Retail</option>
+                ` : ''}
                 ${subRows}
               </select>
             </div>
@@ -681,11 +731,116 @@
           </div>
         </div>
         <div id="cm-status" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-bottom:8px"></div>
+        ${vertical === 'national_st' ? renderRcaUploadCard() : ''}
         <div class="cm-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>
         <div style="margin-top:16px;padding:10px;background:${brandColor('nm_pale','#E0E8F4')};border-radius:4px;font-size:9pt;color:${brandColor('nm_text','#191919')}">
-          <strong>Source:</strong> public.sales_transactions on the gov Supabase, filtered to closed sales (sold_price > 0). Northmarq attribution via cm_nm_broker_patterns. Cap rates are quarterly means; volumes and counts are TTM (4-quarter rolling).
+          ${vertical === 'national_st'
+            ? '<strong>Source:</strong> public.cm_rca_quarterly. Includes property or portfolio sales $2.5 million or greater (RCA TrendTracker convention). Cross-product cap rate is volume-weighted; quartile metrics are simple averages across products that report them.'
+            : '<strong>Source:</strong> public.sales_transactions on the gov Supabase, filtered to closed sales (sold_price > 0). Northmarq attribution via cm_nm_broker_patterns. Cap rates are quarterly means; volumes and counts are TTM (4-quarter rolling).'}
         </div>
       </div>`;
+  }
+
+  // ---- RCA upload binding ----------------------------------------------------
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+      reader.onload = () => {
+        const result = reader.result || '';
+        // result is a data URL like 'data:...;base64,XXXX' — strip prefix
+        const idx = String(result).indexOf('base64,');
+        resolve(idx >= 0 ? String(result).slice(idx + 'base64,'.length) : '');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function postRcaImport(file, productType) {
+    const file_b64 = await readFileAsBase64(file);
+    const body = { filename: file.name, file_b64 };
+    if (productType) body.product_type = productType;
+    const r = await fetch('/api/capital-markets?action=rca_import', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-lcc-workspace': window.LCC?.workspaceId || '',
+      },
+      body: JSON.stringify(body),
+    });
+    let data = null;
+    try { data = await r.json(); } catch { /* ignore */ }
+    if (!r.ok) {
+      const msg = data?.detail || data?.error || `HTTP ${r.status}`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  function bindRcaUpload(vertical) {
+    if (vertical !== 'national_st') return;
+    const status = document.getElementById('cm-rca-status');
+    const setStatus = (msg, color) => {
+      if (status) { status.textContent = msg; status.style.color = color || ''; }
+    };
+
+    const singleBtn = document.getElementById('cm-rca-single-upload');
+    if (singleBtn) {
+      singleBtn.addEventListener('click', async () => {
+        const fileInput = document.getElementById('cm-rca-single-file');
+        const productSel = document.getElementById('cm-rca-single-product');
+        const file = fileInput?.files?.[0];
+        if (!file) { setStatus('Pick a .xls file first.', '#c00'); return; }
+        const productType = productSel?.value || '';
+        singleBtn.disabled = true;
+        const orig = singleBtn.textContent;
+        singleBtn.textContent = 'Uploading…';
+        setStatus(`Parsing ${file.name}…`);
+        try {
+          const result = await postRcaImport(file, productType);
+          setStatus(
+            `✓ ${result.product_type}: ${result.rows_loaded} rows ` +
+            `(${result.period_range?.first} → ${result.period_range?.last}). ` +
+            `Re-rendering charts…`,
+            '#0a7d2c'
+          );
+          await renderCharts(vertical, cmState.currentSubspecialty);
+        } catch (e) {
+          setStatus(`✗ Upload failed: ${e.message}`, '#c00');
+        } finally {
+          singleBtn.disabled = false;
+          singleBtn.textContent = orig;
+        }
+      });
+    }
+
+    const multiBtn = document.getElementById('cm-rca-multi-upload');
+    if (multiBtn) {
+      multiBtn.addEventListener('click', async () => {
+        const fileInput = document.getElementById('cm-rca-multi-files');
+        const files = Array.from(fileInput?.files || []);
+        if (files.length === 0) { setStatus('Select 1-4 .xls files first.', '#c00'); return; }
+        multiBtn.disabled = true;
+        const orig = multiBtn.textContent;
+        const summaries = [];
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          multiBtn.textContent = `Uploading ${i + 1}/${files.length}…`;
+          setStatus(`Parsing ${f.name} (${i + 1}/${files.length})…`);
+          try {
+            const result = await postRcaImport(f, '');  // auto-detect
+            summaries.push(`${result.product_type}: ${result.rows_loaded} rows`);
+          } catch (e) {
+            summaries.push(`${f.name} FAILED: ${e.message}`);
+          }
+        }
+        setStatus(`Done. ${summaries.join(' · ')}`, summaries.some(s => s.includes('FAILED')) ? '#c00' : '#0a7d2c');
+        multiBtn.disabled = false;
+        multiBtn.textContent = orig;
+        await renderCharts(vertical, cmState.currentSubspecialty);
+      });
+    }
   }
 
   // ---- DataTable renderer (chart_type='DataTable') ---------------------------
@@ -794,6 +949,9 @@
       });
     }
 
+    // Bind RCA upload card (national_st only)
+    bindRcaUpload(vertical);
+
     // Bind copy-data buttons
     document.querySelectorAll('.cm-export-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -875,7 +1033,13 @@
     return renderCapitalMarketsForVertical('dialysis');
   }
 
+  // Public entry — called by the national_st tab router (Phase 2f: RCA-driven)
+  async function renderNatlStCapitalMarkets() {
+    return renderCapitalMarketsForVertical('national_st');
+  }
+
   // Expose to gov.js / app.js routers
   window.renderGovCapitalMarkets = renderGovCapitalMarkets;
   window.renderDiaCapitalMarkets = renderDiaCapitalMarkets;
+  window.renderNatlStCapitalMarkets = renderNatlStCapitalMarkets;
 })();
