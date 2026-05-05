@@ -1917,7 +1917,7 @@ function wirePropertyActions(ctx, lccEntity) {
 
       // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(liveCtx);
-      const metadata = { ...(lccEntity.metadata || {}), ...buildMetadata(liveCtx, domain) };
+      const metadata = mergeMetadataPreservingArrays(lccEntity.metadata, buildMetadata(liveCtx, domain));
       // Clear pipeline gate so re-ingestion triggers a fresh pipeline run
       delete metadata._pipeline_processed_at;
       delete metadata._pipeline_status;
@@ -2134,11 +2134,46 @@ function extractSourceFields(ctx) {
   return fields;
 }
 
+// Round 76ej.v (2026-05-05): merge fresh-capture metadata into the
+// stored entity.metadata while PRESERVING existing array fields when
+// the fresh side has an empty / missing array. Plain `{ ...a, ...b }`
+// spread replaces wholesale, which clobbered Athens VA's tenants[]
+// backfill the moment the user clicked Update LCC with CREXi Data —
+// the live ctx had no prose-extracted tenants (older content script),
+// buildMetadata returned tenants:[], and the spread overwrote the
+// good stored value with the empty array.
+//
+// Rules:
+//   - Scalars: fresh wins (existing behaviour).
+//   - Arrays in the preservation list: keep existing if fresh is
+//     null / empty array; otherwise fresh wins.
+//   - Other arrays not in the list: fresh wins (default spread).
+function mergeMetadataPreservingArrays(existing, fresh) {
+  const merged = { ...(existing || {}), ...(fresh || {}) };
+  const PRESERVE_IF_FRESH_EMPTY = ['tenants', 'contacts', 'sales_history', 'documents', 'document_links', 'pdf_extracted_texts'];
+  for (const key of PRESERVE_IF_FRESH_EMPTY) {
+    const existingVal = existing && existing[key];
+    const freshVal    = fresh    && fresh[key];
+    const freshIsEmpty = freshVal == null
+      || (Array.isArray(freshVal) && freshVal.length === 0);
+    const existingHasData = Array.isArray(existingVal) && existingVal.length > 0;
+    if (freshIsEmpty && existingHasData) {
+      merged[key] = existingVal;
+    }
+  }
+  return merged;
+}
+
 function buildMetadata(ctx, domain) {
   // Capture ALL extracted data for the cleaning/propagation pipeline.
   // Keys match database column names where possible.
   // Belt-and-suspenders filter: strip CoStar section headings that slip past extractFields()
-  const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
+  // Round 76ej.v (2026-05-05): added credit-rating phrases that the
+  // Plano (7940 Preston Rd / U.S. District Courthouse) capture stamped
+  // as tenant_name = "Credit Rated, Corporate Guarantee" — those are
+  // CREXi tenant-credit field values, not tenant names. Anchored ^...$
+  // so legitimate names containing these tokens still pass.
+  const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner|credit\s+rated|corporate\s+guarantee|investment\s+grade|credit\s+rated,?\s+corporate\s+guarantee|aa\+?|aaa|baa\+?|bbb\+?|s&p\s+aa\+?)$/i;
   // Round 76ej.n: prose-fragment patterns left over by the pre-fix CREXi
   // findTextElement heuristic. Mirrors renderLccFields's isValidLccValue
   // tenant filter so the next "Update LCC with CREXi Data" PATCH writes
