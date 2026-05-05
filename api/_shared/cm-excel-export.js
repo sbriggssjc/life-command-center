@@ -231,6 +231,8 @@ const TAB_NAMES = {
   cash_leveraged_returns:       'Data_Returns_Idx',
   seller_sentiment:             'Data_Sentiment',
   sources_of_capital:           'Data_Sources',
+  // Phase 2c.3 — headline index
+  valuation_index:              'Data_Val_Index',
 };
 
 // ============================================================================
