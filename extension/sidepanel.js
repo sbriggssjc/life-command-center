@@ -1770,7 +1770,14 @@ function renderLccFields(entity, data, ctx) {
     lease_expiration: ['lease_expiration', 'lease_exp'],
     lease_term:     ['lease_term'],
     remaining_term: ['remaining_term'],
-    acreage:        ['acreage', 'land_acres', 'lot_size'],
+    // Acreage and lot_size are NOT interchangeable — Acreage is in
+    // acres (e.g. "3.452"), Lot Size is typically in SqFt (e.g.
+    // "146,797"). Falling back from acreage to lot_size made the
+    // Athens VA Clinic listing display Acreage = 146,797 because the
+    // page only had a "Lot Size (SqFt)" row. Show Acreage only when
+    // a real acreage value is present.
+    acreage:        ['acreage', 'land_acres'],
+    lot_size:       ['lot_size', 'land_sf'],
     stories:        ['stories'],
     parking:        ['parking', 'parking_spaces', 'parking_ratio'],
   };
@@ -1819,6 +1826,15 @@ function renderLccFields(entity, data, ctx) {
         /\b(systems?|amenities|features?|upgrades?|improvements?)\b.*\band\b/i,
         /\band\b.*\b(systems?|amenities|features?|hvac|construction|upgrades?)\b/i,
         /^(valuation\s+metrics|investment\s+highlights?|property\s+overview|sale\s+highlights?|key\s+highlights?|executive\s+summary)$/i,
+        // Date-shaped values landing in tenant_name. The EPA Houston
+        // listing stored "Lease Commencement 07/01/2025" as tenant
+        // because the pre-fix heuristic returned the row adjacent to
+        // the "Lease" label. Reject CoStar's typical date stamps and
+        // any "<Field Label> <date>" composite.
+        /\b(lease\s+commencement|lease\s+expiration|lease\s+date|lease\s+term|since|effective)\b/i,
+        /\d{1,2}\/\d{1,2}\/\d{2,4}/,
+        /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i,
+        /\b\d{4}-\d{1,2}-\d{1,2}\b/,
       ];
       for (const re of PROSE_PATTERNS) if (re.test(s)) return false;
       return true;
@@ -1833,7 +1849,7 @@ function renderLccFields(entity, data, ctx) {
     ['cap_rate', 'Cap Rate'], ['noi', 'NOI'], ['asking_price', 'Asking Price'],
     ['lease_expiration', 'Lease Expiration'], ['lease_term', 'Lease Term'],
     ['remaining_term', 'Remaining Term'], ['acreage', 'Acreage'],
-    ['stories', 'Stories'], ['parking', 'Parking'],
+    ['lot_size', 'Lot Size'], ['stories', 'Stories'], ['parking', 'Parking'],
   ];
   for (const [key, label] of fields) {
     const val = readEntityField(key);
@@ -2132,6 +2148,13 @@ function buildMetadata(ctx, domain) {
     /\b(quality|new|recent|modern)\s+construction\b/i,
     /\b(systems?|amenities|features?|upgrades?|improvements?)\b.*\band\b/i,
     /\band\b.*\b(systems?|amenities|features?|hvac|construction|upgrades?)\b/i,
+    // Date-shaped values misclassified as tenant_name (EPA Houston
+    // stored "Lease Commencement 07/01/2025" before the heuristic-
+    // fallback fix). Mirror the read-side filter.
+    /\b(lease\s+commencement|lease\s+expiration|lease\s+date|lease\s+term|since|effective)\b/i,
+    /\d{1,2}\/\d{1,2}\/\d{2,4}/,
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i,
+    /\b\d{4}-\d{1,2}-\d{1,2}\b/,
   ];
   const isProseTenant = (s) => {
     if (!s || typeof s !== 'string') return false;
