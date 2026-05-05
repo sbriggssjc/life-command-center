@@ -294,7 +294,11 @@
     // Round 76ej: surface what the new extractors actually picked up so the
     // user can spot missing-field regressions in DevTools without round-
     // tripping through the sidebar.
-    console.debug('[lcc-crexi] extracted', {
+    // Round 76ej.o (2026-05-05): use console.log (Info) rather than
+    // console.debug (Verbose) so this line shows up under Chrome's
+    // default DevTools console filter without the user having to
+    // enable the Verbose level.
+    console.log('[lcc-crexi] extracted', {
       lease_expiration: leaseExpiration,
       remaining_term: remainingTerm,
       lease_options: leaseOptions,
