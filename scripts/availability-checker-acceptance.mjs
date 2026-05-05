@@ -68,6 +68,13 @@ if (!Array.isArray(samples) || samples.length === 0) {
 // downgrades sold-flavored markers to off_market_sold_hint (worker never
 // writes status='sold' on its own — that's the sales_transactions watcher's
 // job), and a 404 on a known-removed listing is still a correct verdict.
+//
+// Note: `outcome === 'skipped'` (host on the function's SKIP_HOSTS list)
+// is intentionally not present in any acceptable set — it means the URL
+// never reached a parser, so the sample picks the wrong host. Operators
+// should remove the URL or pick a non-tracking equivalent. The script
+// surfaces it as FAIL with `outcome=skipped`, which is more useful than
+// the previous `outcome=error` (which obscured the cause).
 const ACCEPTABLE = {
   active: new Set(['still_available']),
   sold:   new Set(['off_market', 'off_market_sold_hint']),

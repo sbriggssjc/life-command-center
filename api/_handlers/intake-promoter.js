@@ -37,6 +37,7 @@ import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_sh
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
+import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -255,7 +256,12 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
   // available_listings row so the LCC UI has a clickable "View Listing"
   // link and the url_status verification path has a target. gov uses
   // source_url (vs dia's listing_url + url).
-  const sourceUrl = snapshot.listing_url || snapshot.source_url || null;
+  // Round 76ej.h follow-up (issue #560): drop paywalled CoStar Suite
+  // app URLs — same reasoning as the dia path below.
+  const sourceUrl = sanitizeListingUrl(
+    snapshot.listing_url || snapshot.source_url || null,
+    'intake-promoter:gov.available_listings',
+  );
 
   return {
     property_id:        Number(match.property_id),
@@ -327,7 +333,14 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
   // link and any future scraper has a target. Prefer the explicit
   // listing_url from extraction (rare), fall back to the source_url
   // the sidebar always sends (the live CREXi/CoStar/LoopNet page).
-  const listingUrl = snapshot.listing_url || snapshot.source_url || null;
+  // Round 76ej.h follow-up (issue #560): drop paywalled CoStar Suite
+  // app URLs (product.costar.com) — the availability-checker can't
+  // classify them and the LCC UI's "View Listing" button just lands
+  // on a CoStar login wall.
+  const listingUrl = sanitizeListingUrl(
+    snapshot.listing_url || snapshot.source_url || null,
+    'intake-promoter:dia.available_listings',
+  );
 
   return {
     property_id:        Number(match.property_id),

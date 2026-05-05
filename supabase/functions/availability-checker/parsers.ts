@@ -29,7 +29,12 @@ export type ParseOutcome =
   | "off_market_sold_hint"
   | "still_available"
   | "unreachable"
-  | "manual_review_needed";
+  | "manual_review_needed"
+  // Emitted only by index.ts handleDebugCheckUrl when shouldSkipHost short-
+  // circuits before the fetch (URL shorteners, mail-tracking redirectors,
+  // etc.). Parsers never produce this — including it here just lets the
+  // ParseResult type cover the synthetic envelope returned to the script.
+  | "skipped";
 
 export interface ParseResult {
   outcome: ParseOutcome;
