@@ -852,7 +852,7 @@ async function loadPropertyTab(opts) {
   if (matched) {
     html += '<div class="lcc-section">';
     html += '<div class="lcc-section-header">In LCC Database</div>';
-    html += renderLccFields(lccEntity, responseData);
+    html += renderLccFields(lccEntity, responseData, ctx);
     html += renderRelatedLccData(responseData, lccEntity);
     html += '</div>';
   }
@@ -1739,7 +1739,7 @@ function renderIngestDiff(ctx, lccEntity) {
   return html;
 }
 
-function renderLccFields(entity, data) {
+function renderLccFields(entity, data, ctx) {
   let html = '';
   // Round 76ej.m (2026-05-05): the panel was showing only Address /
   // City / State / Asset Type because it read solely from top-level
@@ -1855,7 +1855,17 @@ function renderLccFields(entity, data) {
   // didn't render.
   const hasTenantRow = readEntityField('tenant_name')
     && isValidLccValue('tenant_name', readEntityField('tenant_name'));
-  const tenantsArr = entity?.metadata?.tenants;
+  // Round 76ej.p (2026-05-05): for Mast One the live page extracted
+  // five tenants but only two ("Rein", "Edward Jones") survived as
+  // entity.metadata.tenants — the LCC matcher consumed the rest into
+  // separate sub-entity records and the truncated array no longer
+  // represents the page. Prefer the live ctx.tenants the content
+  // script just emitted, falling back to the stored array only when
+  // ctx isn't present (e.g. selectedEntity navigation paths).
+  const ctxTenants = Array.isArray(ctx && ctx.tenants) ? ctx.tenants : null;
+  const tenantsArr = (ctxTenants && ctxTenants.length)
+    ? ctxTenants
+    : (entity?.metadata?.tenants || null);
   if (!hasTenantRow && Array.isArray(tenantsArr) && tenantsArr.length > 0) {
     const names = tenantsArr
       .map((t) => (t && typeof t === 'object' ? t.name : t))
