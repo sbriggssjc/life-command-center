@@ -767,7 +767,21 @@ async function handleDebugCheckUrl(req: Request): Promise<Response> {
   }
   if (!target) return errorResponse(req, "url required in JSON body", 400);
   if (shouldSkipHost(target)) {
-    return jsonResponse(req, { skipped: true, reason: "tracking host" });
+    // Wrap the skip in the same envelope as a real parse so the acceptance
+    // script (and any other caller) can categorize the result by
+    // `parsed.outcome` rather than having to special-case a separate
+    // `{ skipped: true }` shape.
+    return jsonResponse(req, {
+      requested: target,
+      final_url: target,
+      http_status: 0,
+      parsed: {
+        outcome: "skipped",
+        http_status: 0,
+        parser: "skip",
+        notes: "host on SKIP_HOSTS list (tracking / shortener / known-paywall)",
+      } as ParseResult,
+    });
   }
   const fetched = await fetchListingPage(target);
   const parsed = fetched.ok
