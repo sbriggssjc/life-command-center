@@ -197,6 +197,84 @@ const CHART_COLUMNS = {
     { key: 'valuation_index',    header: 'Valuation Index ($/SF)',format: 'currency_per_sf',    width: 22 },
     { key: 'n_sales',            header: 'N Sales (Q)',          format: 'integer_count',       width: 12 },
   ],
+
+  // ===== Phase 2c.4: Section 2 Leasing Trends ==================================
+  leased_inventory_by_state: [
+    { key: 'rank_by_rsf', header: 'Rank', format: 'integer_count', width: 6 },
+    { key: 'state', header: 'State', width: 10 },
+    { key: 'lease_count', header: 'Lease Count', format: 'integer_count', width: 14 },
+    { key: 'total_rsf', header: 'Total RSF', format: 'integer_count', width: 16 },
+    { key: 'total_annual_rent', header: 'Total Annual Rent', format: 'currency_dollars', width: 22 },
+    { key: 'avg_rent_psf', header: 'Avg Rent / SF', format: 'currency_per_sf', width: 16 },
+  ],
+  leasing_summary: [
+    { key: 'period_label', header: 'Period', width: 18 },
+    { key: 'new_lease_count', header: '# New Leases', format: 'integer_count', width: 14 },
+    { key: 'monthly_avg_count', header: 'Monthly Avg Count', format: 'integer_count', width: 18 },
+    { key: 'total_lsf', header: 'Total LSF', format: 'integer_count', width: 16 },
+    { key: 'monthly_avg_lsf', header: 'Monthly Avg LSF', format: 'integer_count', width: 18 },
+    { key: 'avg_lease_size', header: 'Avg Lease Size', format: 'integer_count', width: 16 },
+    { key: 'total_rent', header: 'Total Rent', format: 'currency_dollars', width: 18 },
+    { key: 'monthly_avg_rent', header: 'Monthly Avg Rent', format: 'currency_dollars', width: 19 },
+    { key: 'avg_annual_rent', header: 'Avg Annual Rent', format: 'currency_dollars', width: 18 },
+    { key: 'avg_rent_per_sf', header: 'Avg Rent PSF', format: 'currency_per_sf', width: 16 },
+  ],
+  lease_structures: [
+    { key: 'period_label', header: 'Period', width: 18 },
+    { key: 'term_bucket', header: 'Term Bucket', width: 14 },
+    { key: 'bucket_count', header: 'Count', format: 'integer_count', width: 12 },
+    { key: 'pct_of_total', header: '% of Total', format: 'percent_one_decimal', width: 14 },
+  ],
+  lease_renewal_rate: [
+    { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
+    { key: 'first_generation_commencements', header: 'First Gen Commencements', format: 'integer_count', width: 24 },
+    { key: 'renewed_leases', header: 'Renewed', format: 'integer_count', width: 12 },
+    { key: 'succeeding_superseding_leases', header: 'Succeeding/Superseding', format: 'integer_count', width: 24 },
+    { key: 'expired_leases', header: 'Expired', format: 'integer_count', width: 12 },
+    { key: 'terminated_leases', header: 'Terminated', format: 'integer_count', width: 14 },
+  ],
+  lease_termination_rate: [
+    { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
+    { key: 'total_leases_active', header: 'Total Active Leases', format: 'integer_count', width: 20 },
+    { key: 'terminated_ttm', header: 'Terminated (TTM)', format: 'integer_count', width: 18 },
+  ],
+  rent_by_year_built: [
+    { key: 'year', header: 'Year Built', format: 'integer_count', width: 11 },
+    { key: 'avg_rpsf', header: 'Avg RPSF', format: 'currency_per_sf', width: 14 },
+    { key: 'median_rpsf', header: 'Median RPSF', format: 'currency_per_sf', width: 14 },
+    { key: 'upper_quartile_rpsf', header: 'Upper Quartile', format: 'currency_per_sf', width: 16 },
+    { key: 'lower_quartile_rpsf', header: 'Lower Quartile', format: 'currency_per_sf', width: 16 },
+    { key: 'n_leases', header: 'N Leases', format: 'integer_count', width: 12 },
+  ],
+  case_for_renewal: [
+    { key: 'year', header: 'Year', format: 'integer_count', width: 8 },
+    { key: 'commencement_count', header: 'Lease Commencements', format: 'integer_count', width: 22 },
+    { key: 'avg_rent_per_sf', header: 'Avg Rent / SF', format: 'currency_per_sf', width: 16 },
+    { key: 'total_lsf', header: 'Total LSF', format: 'integer_count', width: 16 },
+  ],
+  renewal_rent_growth: [
+    { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
+    { key: 'avg_renewal_rent_psf', header: 'Quarterly Avg Renewal/SF', format: 'currency_per_sf', width: 22 },
+    { key: 'ttm_avg_renewal_rent_psf', header: 'TTM Avg Renewal/SF', format: 'currency_per_sf', width: 20 },
+    { key: 'upper_quartile_rpsf', header: 'Upper Quartile', format: 'currency_per_sf', width: 16 },
+    { key: 'lower_quartile_rpsf', header: 'Lower Quartile', format: 'currency_per_sf', width: 16 },
+    { key: 'cagr_5yr', header: '5-Year CAGR', format: 'percent_one_decimal', width: 14 },
+    { key: 'renewal_count', header: 'Renewal Count', format: 'integer_count', width: 16 },
+  ],
+  cpi_vs_renewal_cagr: [
+    { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
+    { key: 'cpi_change', header: 'CPI YoY Change', format: 'percent_one_decimal', width: 17 },
+    { key: 'gsa_renewal_cagr', header: 'GSA Renewal 5yr CAGR', format: 'percent_one_decimal', width: 22 },
+  ],
+  rent_heat_map: [
+    { key: 'rank_by_rpsf', header: 'Rank', format: 'integer_count', width: 6 },
+    { key: 'state', header: 'State', width: 10 },
+    { key: 'avg_rpsf', header: 'Avg Rent / SF', format: 'currency_per_sf', width: 16 },
+    { key: 'median_rpsf', header: 'Median', format: 'currency_per_sf', width: 14 },
+    { key: 'upper_quartile_rpsf', header: 'Upper Quartile', format: 'currency_per_sf', width: 16 },
+    { key: 'lower_quartile_rpsf', header: 'Lower Quartile', format: 'currency_per_sf', width: 16 },
+    { key: 'n_leases', header: 'N Leases', format: 'integer_count', width: 12 },
+  ],
   net_lease_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },
@@ -233,6 +311,17 @@ const TAB_NAMES = {
   sources_of_capital:           'Data_Sources',
   // Phase 2c.3 — headline index
   valuation_index:              'Data_Val_Index',
+  // Phase 2c.4 — Section 2 Leasing Trends
+  leased_inventory_by_state:    'Data_Inventory_State',
+  leasing_summary:              'Data_Leasing_Summary',
+  lease_structures:             'Data_Lease_Terms',
+  lease_renewal_rate:           'Data_Renewal_Rate',
+  lease_termination_rate:       'Data_Term_Rate',
+  rent_by_year_built:           'Data_Rent_Year_Built',
+  case_for_renewal:             'Data_Case_Renewal',
+  renewal_rent_growth:          'Data_Renewal_Growth',
+  cpi_vs_renewal_cagr:          'Data_CPI_CAGR',
+  rent_heat_map:                'Data_Rent_Heat_Map',
 };
 
 // ============================================================================
