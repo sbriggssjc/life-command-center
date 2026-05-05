@@ -26,6 +26,7 @@
   // this includes the 4 new dashboard parity charts that match the gov 2024-Q2
   // deliverable PDF.
   const PHASE_1_TEMPLATES = [
+    'valuation_index',             // Phase 2c.3 — deliverable p.10 (headline index)
     'volume_ttm_by_quarter',
     'yoy_volume_change',           // Phase 2b — deliverable p.14
     'cap_rate_ttm_by_quarter',
