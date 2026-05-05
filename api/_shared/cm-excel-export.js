@@ -159,9 +159,34 @@ const CHART_COLUMNS = {
   ],
   cost_of_capital: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
-    { key: 'fed_funds_rate',     header: 'Fed Funds Rate',      format: 'percent_one_decimal', width: 15 },
     { key: 'treasury_10y_yield', header: '10Y Treasury',        format: 'percent_one_decimal', width: 14 },
-    { key: 'mortgage_30y_rate',  header: '30Y Mortgage',        format: 'percent_one_decimal', width: 14 },
+    { key: 'avg_cap_rate',       header: 'Avg Cap Rate (TTM)',  format: 'percent_basis_points', width: 18 },
+    { key: 'cap_10plus_year',    header: '10+ Year Cap',        format: 'percent_basis_points', width: 14 },
+    { key: 'low_loan_constant',  header: 'Low Loan Constant',   format: 'percent_basis_points', width: 18 },
+    { key: 'high_loan_constant', header: 'High Loan Constant',  format: 'percent_basis_points', width: 19 },
+  ],
+  cash_leveraged_returns: [
+    { key: 'period_end',           header: 'Quarter End',           format: 'date_short',          width: 13 },
+    { key: 'cash_return',          header: 'Cash Return Index',     format: 'percent_basis_points', width: 18 },
+    { key: 'leveraged_return_mid', header: 'Leveraged Return (mid)',format: 'percent_basis_points', width: 22 },
+    { key: 'leveraged_return_high',header: 'Leveraged High (180bps)',format: 'percent_basis_points', width: 22 },
+    { key: 'leveraged_return_low', header: 'Leveraged Low (220bps)',format: 'percent_basis_points', width: 22 },
+  ],
+  seller_sentiment: [
+    { key: 'period_end',                  header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'n_all',                       header: 'N (all)',             format: 'integer_count',       width: 10 },
+    { key: 'pct_price_change_all',        header: 'Price Chg % (all)',   format: 'percent_one_decimal', width: 18 },
+    { key: 'n_long_term',                 header: 'N (8+ yr)',           format: 'integer_count',       width: 10 },
+    { key: 'pct_price_change_long_term',  header: 'Price Chg % (8+ yr)', format: 'percent_one_decimal', width: 20 },
+    { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 19 },
+    { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (8+ yr)',format: 'percent_basis_points', width: 21 },
+  ],
+  sources_of_capital: [
+    { key: 'rank_15y',          header: 'Rank',                width: 6 },
+    { key: 'buyer_state',       header: 'Buyer State',         width: 14 },
+    { key: 'total_volume_15y',  header: 'Total Volume 15-yr',  format: 'currency_dollars',     width: 22 },
+    { key: 'pct_of_total_15y',  header: '% of Total',          format: 'percent_one_decimal', width: 12 },
+    { key: 'deal_count_15y',    header: 'Deal Count',          format: 'integer_count',       width: 12 },
   ],
   net_lease_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -193,6 +218,10 @@ const TAB_NAMES = {
   fed_funds_vs_treasury:        'Data_FF_vs_10Y',
   cost_of_capital:              'Data_Cost_Capital',
   net_lease_spread:             'Data_NL_Spread',
+  // Phase 2c.2 additions
+  cash_leveraged_returns:       'Data_Returns_Idx',
+  seller_sentiment:             'Data_Sentiment',
+  sources_of_capital:           'Data_Sources',
 };
 
 // ============================================================================

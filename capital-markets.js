@@ -39,8 +39,11 @@
     'dom_and_pct_of_ask',          // Phase 2b — deliverable p.22
     'bid_ask_spread',              // Phase 2b — deliverable p.23
     'fed_funds_vs_treasury',       // Phase 2c — deliverable p.11 (macro context)
-    'cost_of_capital',             // Phase 2c — deliverable p.17
-    'net_lease_spread',            // Phase 2c — deliverable p.11/p.17
+    'cost_of_capital',             // Phase 2c — deliverable p.15 (now with loan-constants band)
+    'cash_leveraged_returns',      // Phase 2c.2 — deliverable p.16
+    'net_lease_spread',            // Phase 2c — deliverable p.11
+    'seller_sentiment',            // Phase 2c.2 — deliverable p.22
+    'sources_of_capital',          // Phase 2c.2 — deliverable p.19 (table form for V1)
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -354,19 +357,88 @@
           options: commonChartOptions('percent_one_decimal') });
       }
       case 'cost_of_capital': {
+        // Per deliverable p.15: Treasury + Avg Cap + 10+yr Cap + Loan Constants band
+        // (low at 10Y+180bps, high at 10Y+220bps, both 30-yr amortization)
         datasets = [
-          { label: 'Fed Funds',       data: chart.rows.map(r => r.fed_funds_rate),
-            borderColor: palette[4], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [4,3] },
           { label: '10Y Treasury',    data: chart.rows.map(r => r.treasury_10y_yield),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          { label: 'Avg Cap Rate (TTM)', data: chart.rows.map(r => r.avg_cap_rate),
+            borderColor: palette[3], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: '10+ Year Cap',    data: chart.rows.map(r => r.cap_10plus_year),
             borderColor: palette[0], backgroundColor: 'transparent',
             tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-          { label: '30Y Mortgage',    data: chart.rows.map(r => r.mortgage_30y_rate),
-            borderColor: palette[1], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: 'Low Loan Constant (10Y+180bps)', data: chart.rows.map(r => r.low_loan_constant),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3,3] },
+          { label: 'High Loan Constant (10Y+220bps)', data: chart.rows.map(r => r.high_loan_constant),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3,3] },
         ];
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('percent_one_decimal') });
+      }
+      case 'cash_leveraged_returns': {
+        // Deliverable p.16: Cash Return Index (cap rate, dark blue) + Leveraged Return Index
+        // (band between low/high LC variants, light blue line for mid)
+        datasets = [
+          { label: 'Cash Return Index',         data: chart.rows.map(r => r.cash_return),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          { label: 'Leveraged Return (mid)',    data: chart.rows.map(r => r.leveraged_return_mid),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: 'Leveraged High (10Y+180)',  data: chart.rows.map(r => r.leveraged_return_high),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 0.75, borderDash: [4,3] },
+          { label: 'Leveraged Low (10Y+220)',   data: chart.rows.map(r => r.leveraged_return_low),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 0.75, borderDash: [4,3] },
+        ];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_one_decimal') });
+      }
+      case 'seller_sentiment': {
+        // Deliverable p.22: dual bar chart with cap rate lines on right axis
+        const opts = commonChartOptions('percent_one_decimal');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: { color: brandColor('nm_axis', '#6A748C'),
+                   font: { family: 'Calibri, sans-serif', size: 9 },
+                   callback: tickFormatterFor('percent_basis_points') },
+          grid: { display: false },
+        };
+        datasets = [
+          { type: 'bar',  label: 'Price Change %',          data: chart.rows.map(r => r.pct_price_change_all),
+            backgroundColor: palette[0], borderRadius: 1, yAxisID: 'y' },
+          { type: 'bar',  label: '8+ Yr Term Price Change %', data: chart.rows.map(r => r.pct_price_change_long_term),
+            backgroundColor: palette[1], borderRadius: 1, yAxisID: 'y' },
+          { type: 'line', label: 'Last Asking Cap (all)',   data: chart.rows.map(r => r.last_ask_cap_all),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+          { type: 'line', label: 'Last Asking Cap (8+ yr)', data: chart.rows.map(r => r.last_ask_cap_long_term),
+            borderColor: palette[2], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+        ];
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+      case 'sources_of_capital': {
+        // Deliverable p.19: top buyer states. Rendered as a horizontal bar chart for V1
+        // (the deliverable shows it as a US choropleth; map can be rebuilt in InDesign
+        // from this same data).
+        const top10 = (chart.rows || []).slice(0, 10);
+        const stateLabels = top10.map(r => r.buyer_state);
+        datasets = [{
+          label: 'Total Acquisition Volume (15-yr, $M)',
+          data: top10.map(r => r.total_volume_15y / 1e6),
+          backgroundColor: palette[0],
+          borderRadius: 2,
+        }];
+        const opts = commonChartOptions('integer_count');
+        opts.indexAxis = 'y';
+        opts.scales.x.ticks.callback = (v) => '$' + (v / 1000).toFixed(1) + 'B';
+        return new Chart(canvas, { type: 'bar', data: { labels: stateLabels, datasets }, options: opts });
       }
       case 'net_lease_spread': {
         // Filled-area spread: market cap minus 10Y Treasury (in bps)
