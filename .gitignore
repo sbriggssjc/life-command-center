@@ -10,3 +10,8 @@ __pycache__/
 .tmp_flow_audit/
 
 .env*.local
+
+# availability-checker acceptance test — local-only, may contain
+# sensitive broker URLs and results. See docs/availability_checker_acceptance.md.
+scripts/availability-checker-samples.json
+scripts/availability-checker-samples.results.json
