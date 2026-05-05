@@ -304,6 +304,10 @@
       marketing_headline: marketing.headline ? '✓' : null,
       marketing_description_chars: marketing.description ? marketing.description.length : 0,
       desc_lease_extracted: descLease,
+      desc_tenants_extracted: descTenants && descTenants.length
+        ? descTenants.map((t) => t.name)
+        : null,
+      building_name: buildingName,
       om_available: om.available,
       crexi_map_size: crexiMap.size,
     });
