@@ -306,6 +306,28 @@ const GOV_TENANT_PATTERNS = [
   /\busps\b/,  /\bpostal service\b/,
   /\barmy corps\b/,  /\bcoast guard\b/,  /\bcustoms\b/,  /\bcbp\b/,  /\btsa\b/,
   /\bprobation\b/,
+  // Round 76ej.r (2026-05-05): expanded keyword set after the Mast One
+  // capture (1040 University Boulevard) classified as no_domain. Its
+  // tenant prose mentioned "Supreme Court of Virginia" and "Food and
+  // Drug Administration" but the prior pattern list missed both. The
+  // additions below cover federal agency acronyms / full names CREXi
+  // and CoStar pages routinely surface, plus state and federal courts.
+  /\bepa\b/,  /\benvironmental protection agency\b/,
+  /\bfda\b/,  /\bfood and drug\b/,
+  /\bdoj\b/,  /\bdepartment of justice\b/,
+  /\bdod\b/,  /\bdepartment of defense\b/,
+  /\bnoaa\b/, /\bnational oceanic\b/,
+  /\bfaa\b/,  /\bfederal aviation\b/,
+  /\bnps\b/,  /\bnational park service\b/,
+  /\boffice of\b/,            // "Office of Personnel Mgmt", "Office of the Comptroller"
+  /\bsupreme court\b/,        // "Supreme Court of Virginia", "Supreme Court of <state>"
+  /\bdistrict court\b/,       // "U.S. District Court", "District Court of Maryland"
+  /\bsuperior court\b/,       // "Superior Court of the District of Columbia"
+  /\bcourt of\b/,             // catches "Supreme Court of X", "Court of Appeals", etc.
+  /\bcourthouse\b/,
+  /\battorney general\b/,
+  /\bnational guard\b/,
+  /\bmilitary\b/,
 ];
 
 const DIALYSIS_TENANT_PATTERNS = [
@@ -579,7 +601,7 @@ function cleanTenantValue(raw) {
 
 const MEDICAL_TENANT_PRIORITY = /fresenius|davita|dialysis|fmc|dci\b|kidney|renal|nephrology|satellite|healthcare|medical|clinic|health\s+care/i;
 
-const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government/i;
+const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government|\bepa\b|environmental protection|\bfda\b|food and drug|\bdoj\b|department of justice|\bdod\b|department of defense|\bnoaa\b|national oceanic|\bfaa\b|federal aviation|\bnps\b|national park service|office of|supreme court|district court|superior court|court of|courthouse|attorney general|national guard|\bmilitary\b/i;
 
 // Round 76eq (2026-04-29): defensive parser for stringified-array tenant
 // values. The OM extractor's AI sometimes returns tenant_name as a JSON-
@@ -1990,7 +2012,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   if (domain === 'dialysis') {
     results.records.leases = await upsertDomainLeases(domain, propertyId, metadata, provCollect);
   } else if (domain === 'government') {
-    results.records.leases = await upsertGovernmentLeases(propertyId, metadata);
+    results.records.leases = await upsertGovernmentLeases(propertyId, metadata, provCollect);
   }
 
   // Step 5e2: Upsert named contacts (brokers, true owner contacts → CRM)
@@ -5927,7 +5949,7 @@ async function promotePropertyAnchorRent(domain, propertyId, candidate) {
  *
  * Returns the number of leases written (inserted or updated).
  */
-async function upsertGovernmentLeases(propertyId, metadata) {
+async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
   // Round 76ej.q (2026-05-05): write one lease record per tenant for
   // multi-tenant gov-leased buildings. Pre-fix this function only
   // wrote a single row from tenants[0], silently dropping the rest —
@@ -6010,23 +6032,53 @@ async function upsertGovernmentLeases(propertyId, metadata) {
     };
 
     if (existing.ok && existing.data?.length) {
+      const leaseId = existing.data[0].lease_id;
       await domainPatch('government',
-        `leases?lease_id=eq.${existing.data[0].lease_id}`,
+        `leases?lease_id=eq.${leaseId}`,
         payload,
         'upsertGovernmentLeases:refresh'
       );
       console.log(`[upsertGovernmentLeases] refreshed costar_sidebar lease ` +
-        `lease_id=${existing.data[0].lease_id} property=${propertyId} ` +
+        `lease_id=${leaseId} property=${propertyId} ` +
         `tenant_agency=${JSON.stringify(tenantAgency)}`);
+      // Round 76ej.r (2026-05-05): record per-tenant gov.leases write to
+      // field_provenance so the data-quality dashboard sees multi-tenant
+      // coverage. Mirrors the dialysis upsertDomainLeases instrumentation.
+      pushProvenance(provCollect, 'gov.leases', leaseId, {
+        tenant_agency: tenantAgency,
+        tenant_agency_full: tenantAgency,
+        government_type: govType,
+        commencement_date: commence,
+        expiration_date: expire,
+        annual_rent: annualRent,
+        rent_psf: rentPsf,
+        expense_structure: expense,
+        renewal_options: renewal,
+      });
       writes++;
       continue;
     }
 
     const r = await domainQuery('government', 'POST', 'leases', payload);
     if (r.ok) {
+      const created = Array.isArray(r.data) ? r.data[0] : r.data;
+      const newLeaseId = created?.lease_id || null;
       console.log(`[upsertGovernmentLeases] inserted costar_sidebar lease ` +
         `property=${propertyId} tenant_agency=${JSON.stringify(tenantAgency)} ` +
         `lease_number=${leaseNumber || 'null'}`);
+      if (newLeaseId) {
+        pushProvenance(provCollect, 'gov.leases', newLeaseId, {
+          tenant_agency: tenantAgency,
+          tenant_agency_full: tenantAgency,
+          government_type: govType,
+          commencement_date: commence,
+          expiration_date: expire,
+          annual_rent: annualRent,
+          rent_psf: rentPsf,
+          expense_structure: expense,
+          renewal_options: renewal,
+        });
+      }
       writes++;
       continue;
     }
