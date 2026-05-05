@@ -45,6 +45,17 @@
     'net_lease_spread',            // Phase 2c — deliverable p.11
     'seller_sentiment',            // Phase 2c.2 — deliverable p.22
     'sources_of_capital',          // Phase 2c.2 — deliverable p.19 (table form for V1)
+    // ===== Section 2: Leasing Trends (Phase 2c.4) =====
+    'leased_inventory_by_state',   // p.26 state map; ranked table
+    'leasing_summary',             // p.27 CQ/TTM/5yr summary table
+    'lease_structures',            // p.27 most common term buckets
+    'lease_renewal_rate',          // p.28 5-series quarterly bars
+    'lease_termination_rate',      // p.29 firm/non-firm + termination %
+    'rent_by_year_built',          // p.30 quartile range by year_built
+    'case_for_renewal',            // p.31 commencements + avg rent line
+    'renewal_rent_growth',         // p.32a renewal rent + CAGR
+    'cpi_vs_renewal_cagr',         // p.32b CPI vs CAGR
+    'rent_heat_map',               // p.33 state map; ranked table
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -472,6 +483,149 @@
           options: commonChartOptions('percent_basis_points') });
       }
 
+      // ===== Phase 2c.4: Section 2 Leasing Trends ===================================
+      case 'lease_renewal_rate': {
+        datasets = [
+          { type: 'bar', label: 'New Leases',           data: chart.rows.map(r => r.first_generation_commencements),
+            backgroundColor: palette[3], borderRadius: 1 },
+          { type: 'bar', label: 'Renewed',              data: chart.rows.map(r => r.renewed_leases),
+            backgroundColor: palette[1], borderRadius: 1 },
+          { type: 'bar', label: 'Succeeding/Superseding', data: chart.rows.map(r => r.succeeding_superseding_leases),
+            backgroundColor: palette[2], borderRadius: 1 },
+          { type: 'bar', label: 'Expired',              data: chart.rows.map(r => r.expired_leases),
+            backgroundColor: palette[4], borderRadius: 1 },
+          { type: 'bar', label: 'Terminated',           data: chart.rows.map(r => r.terminated_leases),
+            backgroundColor: palette[0], borderRadius: 1 },
+        ];
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets },
+          options: commonChartOptions('integer_count') });
+      }
+      case 'lease_termination_rate': {
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: { color: brandColor('nm_axis', '#6A748C'),
+                   font: { family: 'Calibri, sans-serif', size: 9 },
+                   callback: tickFormatterFor('percent_one_decimal') },
+          grid: { display: false },
+          max: 0.15,
+        };
+        datasets = [
+          { type: 'bar', label: 'Active Leases', data: chart.rows.map(r => r.total_leases_active),
+            backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+          { type: 'line', label: 'Termination Rate', data: chart.rows.map(r => r.terminated_ttm / Math.max(1, r.total_leases_active)),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+        ];
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+      case 'rent_by_year_built': {
+        const yearLabels = chart.rows.map(r => String(r.year));
+        datasets = [
+          { type: 'line', label: 'Average RPSF',  data: chart.rows.map(r => r.avg_rpsf),
+            borderColor: palette[0], backgroundColor: palette[0],
+            showLine: false, pointRadius: 4 },
+          { type: 'line', label: 'Median RPSF',   data: chart.rows.map(r => r.median_rpsf),
+            borderColor: palette[1], backgroundColor: palette[1],
+            showLine: false, pointRadius: 4 },
+          { type: 'line', label: 'Upper Quartile', data: chart.rows.map(r => r.upper_quartile_rpsf),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.2, pointRadius: 0, borderWidth: 1, borderDash: [4,3] },
+          { type: 'line', label: 'Lower Quartile', data: chart.rows.map(r => r.lower_quartile_rpsf),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.2, pointRadius: 0, borderWidth: 1, borderDash: [4,3] },
+        ];
+        return new Chart(canvas, { type: 'line', data: { labels: yearLabels, datasets },
+          options: commonChartOptions('currency_per_sf') });
+      }
+      case 'case_for_renewal': {
+        const yearLabels = chart.rows.map(r => String(r.year));
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: { color: brandColor('nm_axis', '#6A748C'),
+                   font: { family: 'Calibri, sans-serif', size: 9 },
+                   callback: (v) => '$' + Number(v).toFixed(0) },
+          grid: { display: false },
+        };
+        datasets = [
+          { type: 'bar',  label: 'Lease Commencements', data: chart.rows.map(r => r.commencement_count),
+            backgroundColor: palette[0], borderRadius: 1, yAxisID: 'y' },
+          { type: 'line', label: 'Avg Rent PSF',        data: chart.rows.map(r => r.avg_rent_per_sf),
+            borderColor: palette[2], backgroundColor: 'transparent',
+            tension: 0.25, pointRadius: 2, borderWidth: 2, yAxisID: 'y1' },
+        ];
+        return new Chart(canvas, { type: 'bar', data: { labels: yearLabels, datasets }, options: opts });
+      }
+      case 'renewal_rent_growth': {
+        const opts = commonChartOptions('currency_per_sf');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: { color: brandColor('nm_axis', '#6A748C'),
+                   font: { family: 'Calibri, sans-serif', size: 9 },
+                   callback: tickFormatterFor('percent_one_decimal') },
+          grid: { display: false },
+        };
+        datasets = [
+          { type: 'bar',  label: 'TTM Avg Renewal Rent/SF', data: chart.rows.map(r => r.ttm_avg_renewal_rent_psf),
+            backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+          { type: 'line', label: 'Upper Quartile', data: chart.rows.map(r => r.upper_quartile_rpsf),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [4,3], yAxisID: 'y' },
+          { type: 'line', label: 'Lower Quartile', data: chart.rows.map(r => r.lower_quartile_rpsf),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [4,3], yAxisID: 'y' },
+          { type: 'line', label: '5-Year CAGR', data: chart.rows.map(r => r.cagr_5yr),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 2, borderWidth: 2, yAxisID: 'y1' },
+        ];
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+      case 'cpi_vs_renewal_cagr': {
+        datasets = [
+          { label: 'CPI YoY Change',     data: chart.rows.map(r => r.cpi_change),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: 'GSA Renewal CAGR',   data: chart.rows.map(r => r.gsa_renewal_cagr),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+        ];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_one_decimal') });
+      }
+      case 'leased_inventory_by_state': {
+        const top10 = (chart.rows || []).slice(0, 10);
+        const stateLabels = top10.map(r => r.state);
+        datasets = [{
+          label: 'Total Leased SF',
+          data: top10.map(r => r.total_rsf / 1e6),
+          backgroundColor: palette[0],
+          borderRadius: 2,
+        }];
+        const opts = commonChartOptions('integer_count');
+        opts.indexAxis = 'y';
+        opts.scales.x.ticks.callback = (v) => Number(v).toFixed(1) + 'M SF';
+        return new Chart(canvas, { type: 'bar', data: { labels: stateLabels, datasets }, options: opts });
+      }
+      case 'rent_heat_map': {
+        const top10 = (chart.rows || []).slice(0, 10);
+        const stateLabels = top10.map(r => r.state);
+        datasets = [{
+          label: 'Avg Rent / SF',
+          data: top10.map(r => r.avg_rpsf),
+          backgroundColor: palette[1],
+          borderRadius: 2,
+        }];
+        const opts = commonChartOptions('currency_per_sf');
+        opts.indexAxis = 'y';
+        opts.scales.x.ticks.callback = (v) => '$' + Number(v).toFixed(0);
+        return new Chart(canvas, { type: 'bar', data: { labels: stateLabels, datasets }, options: opts });
+      }
+      // DataTable types — rendered by renderDataTable() instead
+      case 'leasing_summary':
+      case 'lease_structures':
+        return null;
+
       default:
         return null;
     }
@@ -487,8 +641,14 @@
       const meta = (cmState.catalog || []).find(t => t.chart_template_id === id);
       if (!meta) return '';
       if (!meta.applies_to_verticals?.includes(vertical)) return '';
+      // DataTable charts get a scrollable HTML table (no canvas); span 2 columns
+      const isDataTable = meta.chart_type === 'DataTable';
+      const cardSpan = isDataTable ? 'grid-column: span 2;' : '';
+      const bodyContainer = isDataTable
+        ? `<div class="cm-table-container" data-template="${id}" style="max-height:340px;overflow:auto;border:1px solid #E7E6E6;border-radius:4px"></div>`
+        : `<div style="position:relative;height:300px"><canvas data-template="${id}"></canvas></div>`;
       return `
-        <div class="cm-card" id="cm-card-${id}" style="background:#fff;border:1px solid #E7E6E6;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+        <div class="cm-card" id="cm-card-${id}" style="background:#fff;border:1px solid #E7E6E6;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,0.04);${cardSpan}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
             <div>
               <div style="font-family:'Calibri Light',sans-serif;font-size:14pt;font-weight:600;color:${brandColor('nm_text','#191919')}">${meta.name}</div>
@@ -496,7 +656,7 @@
             </div>
             <button class="btn btn-ghost cm-export-btn" data-template="${id}" style="font-size:9pt">Copy data</button>
           </div>
-          <div style="position:relative;height:300px"><canvas data-template="${id}"></canvas></div>
+          ${bodyContainer}
         </div>`;
     }).join('');
 
@@ -528,20 +688,59 @@
       </div>`;
   }
 
+  // ---- DataTable renderer (chart_type='DataTable') ---------------------------
+  function renderDataTable(container, chart) {
+    if (!container || !chart.rows || chart.rows.length === 0) {
+      container.innerHTML = '<div style="padding:24px;text-align:center;color:#666;font-size:9pt">No data available</div>';
+      return;
+    }
+    const navy = brandColor('nm_navy', '#003DA5');
+    const pale = brandColor('nm_pale', '#E0E8F4');
+    const cols = Object.keys(chart.rows[0]);
+    const fmt = (key, v) => {
+      if (v == null) return '';
+      if (typeof v === 'number') {
+        if (key.includes('pct') || key.endsWith('_rate')) return (v * 100).toFixed(1) + '%';
+        if (key.includes('rsf') || key.includes('lsf')) return Number(v).toLocaleString();
+        if (key.includes('rent') || key.includes('price') || key.includes('volume')) {
+          if (Math.abs(v) >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+          if (Math.abs(v) >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+          if (Math.abs(v) >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+          return '$' + Number(v).toFixed(2);
+        }
+        if (key.includes('rpsf') || key.includes('per_sf')) return '$' + Number(v).toFixed(2);
+        return Number(v).toLocaleString();
+      }
+      return String(v);
+    };
+    const headers = cols.map(c => `<th style="position:sticky;top:0;background:${navy};color:#fff;font-family:'Calibri Light',sans-serif;font-weight:600;text-align:left;padding:8px 10px;font-size:9pt;border-bottom:2px solid ${navy}">${c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</th>`).join('');
+    const rows = chart.rows.map((row, i) => {
+      const tds = cols.map(c => `<td style="padding:6px 10px;font-family:Calibri,sans-serif;font-size:10pt;border-bottom:1px solid #f0f0f0">${fmt(c, row[c])}</td>`).join('');
+      const bg = i % 2 === 1 ? pale : '#fff';
+      return `<tr style="background:${bg}">${tds}</tr>`;
+    }).join('');
+    container.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
   // ---- Render orchestration --------------------------------------------------
   async function renderCharts(vertical, subspecialty) {
     const status = document.getElementById('cm-status');
     if (status) status.textContent = 'Loading data…';
     try {
       const charts = await loadQuarterly(vertical, subspecialty);
-      // Destroy old chart instances first
       cmState.chartInstances.forEach((c, id) => destroyChart(id));
-      // Build fresh
       let total = 0, ok = 0;
       for (const tplId of PHASE_1_TEMPLATES) {
         const chart = charts.find(c => c.chart_template_id === tplId);
         if (!chart || !chart.ok) continue;
         total++;
+        if (chart.chart_type === 'DataTable') {
+          const container = document.querySelector(`.cm-table-container[data-template="${tplId}"]`);
+          if (!container) continue;
+          renderDataTable(container, chart);
+          ok++;
+          continue;
+        }
         const canvas = document.querySelector(`canvas[data-template="${tplId}"]`);
         if (!canvas) continue;
         const inst = buildChart(canvas, chart);
