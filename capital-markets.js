@@ -45,6 +45,17 @@
     'net_lease_spread',            // Phase 2c — deliverable p.11
     'seller_sentiment',            // Phase 2c.2 — deliverable p.22
     'sources_of_capital',          // Phase 2c.2 — deliverable p.19 (table form for V1)
+    // ===== Section 2: Leasing Trends (Phase 2c.4) =====
+    'leased_inventory_by_state',
+    'leasing_summary',
+    'lease_structures',
+    'lease_renewal_rate',
+    'lease_termination_rate',
+    'rent_by_year_built',
+    'case_for_renewal',
+    'renewal_rent_growth',
+    'cpi_vs_renewal_cagr',
+    'rent_heat_map',
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
