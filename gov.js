@@ -5052,7 +5052,52 @@ window.loadGovSaleLinkContext = async function(pendingId) {
       candidatesQuery = 'city~' + ctx.rawCity;
     }
 
-    govResolverCache[pendingId] = { loading: false, error: null, sale, candidates, candidatesQuery };
+    // 3) GSA inventory hits — these are the gold standard for sale-link
+    //    resolution. Even if the matcher pipeline missed it, the lease
+    //    number is the natural key and gsa_leases has the canonical
+    //    address/agency/sf. If a GSA row already has property_id set,
+    //    that's a one-click link. If not, it's a one-click create.
+    let gsaHits = [];
+    let gsaQuery = '';
+    if (lease) {
+      const r = await govQuery('gsa_leases',
+        'gsa_lease_id,lease_number,address,city,state,zip_code,field_office_name,annual_rent,lease_rsf,lease_effective,lease_expiration,lessor_name,property_id,match_status,snapshot_date', {
+          filter: 'lease_number=eq.' + encodeURIComponent(lease),
+          order: 'snapshot_date.desc.nullslast',
+          limit: 5, count: false
+        });
+      gsaHits = r.data || [];
+      gsaQuery = 'lease_number=' + lease;
+    }
+    if (gsaHits.length === 0 && (city || state)) {
+      const parts = [];
+      if (city)  parts.push('city=ilike.' + encodeURIComponent(city.trim() + '%'));
+      if (state) parts.push('state=eq.'   + encodeURIComponent(state.trim().toUpperCase()));
+      const r = await govQuery('gsa_leases',
+        'gsa_lease_id,lease_number,address,city,state,zip_code,field_office_name,annual_rent,lease_rsf,lease_effective,lease_expiration,lessor_name,property_id,match_status,snapshot_date', {
+          filter: parts.join('&'),
+          order: 'city.asc,address.asc',
+          limit: 25, count: false
+        });
+      gsaHits = r.data || [];
+      gsaQuery = parts.join(' AND ');
+    }
+    // Dedup gsaHits by lease_number — gsa_leases has one row per
+    // (lease_number, snapshot_date), and we want the latest snapshot.
+    if (gsaHits.length > 1) {
+      const seen = new Set();
+      gsaHits = gsaHits.filter(h => {
+        const k = h.lease_number || h.gsa_lease_id;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+    }
+
+    govResolverCache[pendingId] = {
+      loading: false, error: null,
+      sale, candidates, candidatesQuery,
+      gsaHits, gsaQuery
+    };
   } catch (err) {
     console.error('loadGovSaleLinkContext:', err);
     govResolverCache[pendingId] = { loading: false, error: err.message || 'Failed to load context' };
@@ -5079,6 +5124,47 @@ window.govResolverLink = async function(pendingId, propertyId) {
     renderGovTab();
   } catch (err) {
     showToast('Link failed: ' + err.message, 'error');
+  }
+};
+
+window.govResolverUseGsa = async function(pendingId, gsaLeaseId) {
+  const cache = govResolverCache[pendingId];
+  const hit = (cache && cache.gsaHits || []).find(g => g.gsa_lease_id === gsaLeaseId);
+  if (!hit) return;
+
+  // If the GSA row is already linked to a property in our inventory, this is a
+  // straight Mode A link — just call gov_resolve_sale_link with that property_id.
+  if (hit.property_id) {
+    return window.govResolverLink(pendingId, hit.property_id);
+  }
+
+  // Otherwise, prefill the create form with GSA inventory data and call Mode C.
+  if (!(await lccConfirm('Create a new property from GSA inventory:\n\n' + (hit.address || '') + ', ' + (hit.city || '') + ', ' + (hit.state || '') + '\nLease # ' + (hit.lease_number || '') + '\n\nThis will insert into properties and link the sale atomically.', 'Create from GSA'))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    const overrides = {
+      address:      hit.address || '',
+      city:         hit.city || '',
+      state:        hit.state || '',
+      lease_number: hit.lease_number || '',
+      data_source:  'gsa_leases'
+    };
+    const res = await govRpc('gov_create_property_from_pending', {
+      p_pending_id: pendingId,
+      p_overrides: overrides,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver:gsa'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    govPendingUpdatesIdx = 0;
+    const action = (res && res.was_created === false) ? 'reused existing property' : 'property created from GSA';
+    showToast('Sale linked — ' + action + (res && res.property_id ? ' (#' + res.property_id + ')' : ''), 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('GSA-link failed: ' + err.message, 'error');
   }
 };
 
@@ -5185,12 +5271,48 @@ function renderGovSaleLinkResolver(selected) {
   }
   html += '</div>';
 
-  // Candidates
+  // GSA Inventory hits (highest-priority — gold standard for sale-link resolution)
+  const gsaHits = cache.gsaHits || [];
+  if (gsaHits.length > 0) {
+    html += '<div class="pu-resolver-section pu-resolver-gsa">';
+    html += '<div class="pu-resolver-section-title">';
+    html += '<span class="pu-gsa-badge">GSA INVENTORY</span> ';
+    html += 'Lease found in public inventory <span class="pu-resolver-muted">(' + gsaHits.length + (cache.gsaQuery ? ' · ' + esc(cache.gsaQuery) : '') + ')</span>';
+    html += '</div>';
+    html += '<div class="pu-cand-list">';
+    gsaHits.forEach(g => {
+      const linked = !!g.property_id;
+      const action = linked ? 'Link to property #' + g.property_id : 'Create & link';
+      const fmtMoney = (n) => n == null ? '' : '$' + Number(n).toLocaleString();
+      html += `<div class="pu-cand pu-cand-gsa">
+        <div class="pu-cand-main">
+          <div class="pu-cand-addr">${esc(g.address || '(no address)')}</div>
+          <div class="pu-cand-meta">
+            <span>${esc([g.city, g.state, g.zip_code].filter(Boolean).join(', '))}</span>
+            ${g.lease_number ? '· <code>' + esc(g.lease_number) + '</code>' : ''}
+            ${g.field_office_name ? '· ' + esc(g.field_office_name) : ''}
+            ${g.lease_rsf ? '· ' + Number(g.lease_rsf).toLocaleString() + ' RSF' : ''}
+            ${g.annual_rent ? '· ' + esc(fmtMoney(g.annual_rent)) + '/yr' : ''}
+            ${g.lease_expiration ? '· exp ' + esc(g.lease_expiration) : ''}
+          </div>
+          ${linked ? '<div class="pu-cand-meta pu-resolver-warn">✓ Already linked to property #' + esc(g.property_id) + '</div>' : ''}
+        </div>
+        <button class="pu-cand-link pu-cand-gsa-btn" onclick="window.govResolverUseGsa(decodeURIComponent('${encodeURIComponent(id)}'), decodeURIComponent('${encodeURIComponent(g.gsa_lease_id)}'))">${esc(action)} →</button>
+      </div>`;
+    });
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Candidates from properties table
   const candidates = cache.candidates || [];
   html += '<div class="pu-resolver-section">';
   html += '<div class="pu-resolver-section-title">Candidate Properties <span class="pu-resolver-muted">(' + candidates.length + (cache.candidatesQuery ? ' · ' + esc(cache.candidatesQuery) : '') + ')</span></div>';
   if (candidates.length === 0) {
-    html += '<div class="pu-resolver-empty">No candidates found in inventory. Use "Create new property" below.</div>';
+    html += '<div class="pu-resolver-empty">' + (gsaHits.length > 0
+      ? 'No additional candidates in the properties table. Use the GSA Inventory match above, or create a new property.'
+      : 'No candidates found in inventory. Use "Create new property" below.'
+    ) + '</div>';
   } else {
     html += '<div class="pu-cand-list">';
     candidates.forEach(p => {

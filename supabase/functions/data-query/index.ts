@@ -29,6 +29,7 @@ const GOV_READ_TABLES = new Set([
   "sales_comps", "research_queue_outcomes", "pending_updates",
   "ingestion_tracker", "ingestion_log",
   "unified_contacts", "contact_change_log", "contact_merge_queue",
+  "gsa_leases", "frpp_records",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
