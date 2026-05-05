@@ -26,8 +26,8 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 - Bridge + Workflows consolidated into operations.js
 - Intake functions consolidated into intake.js
 - admin.js: workspaces, members, flags, connectors, diagnostics (config/diag/treasury), edge proxies (data-query, daily-briefing)
-- Supabase Edge Functions: data-query (gov/dia PostgREST proxy), daily-briefing (snapshot orchestration) on LCC Opps project
-- pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2), `lcc-auto-scrape-listings` (every 6h — sweeps overdue active listings, auto-marks Sold via sales_transactions match, Round 76cx Phase 4b)
+- Supabase Edge Functions: data-query (gov/dia PostgREST proxy), daily-briefing (snapshot orchestration), `availability-checker` (periodic listing URL probe — Round 76ej.g) on LCC Opps project
+- pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2), `lcc-auto-scrape-listings` (every 6h on the hour — sweeps overdue active listings, auto-marks Sold via sales_transactions match, Round 76cx Phase 4b), `lcc-availability-checker` (every 6h at :30 — Edge Function probes listing URLs and writes off_market/withdrawn via lcc_record_listing_check, Round 76ej.g)
 - `lcc_cron_post()` helper reads API key from Supabase Vault, POSTs via pg_net to Vercel or Edge endpoints
 - All rewrites defined in vercel.json — order matters (specific before catch-all)
 
@@ -115,6 +115,62 @@ Dialysis DB has two new artifacts for self-cleaning:
   SELECT * FROM v_data_quality_summary;
   SELECT * FROM v_data_quality_issues WHERE issue_kind='multi_active_lease' ORDER BY severity DESC;
   ```
+
+## Listing availability checker (Round 76ej.g, 2026-05-05)
+
+Two crons now share the listing-verification queue. They cover different
+evidence channels and are wired so they don't double-write:
+
+- **`lcc-auto-scrape-listings`** (every 6h on the hour, `api/admin.js
+  handleAutoScrapeListings`) — owns the **sold path**. Walks overdue
+  active listings and looks for a matching `sales_transactions` row in
+  the property's ±3-year window. When it finds one, calls
+  `lcc_record_listing_check(check_result='sold')`. When it doesn't, calls
+  `inferred_active` — narrow timer advance, no URL probe.
+
+- **`lcc-availability-checker`** (every 6h at :30, Supabase Edge Function
+  `supabase/functions/availability-checker/index.ts`) — owns the **URL
+  probe path**. Pulls 25 overdue listings per tick, fetches each
+  `listing_url` (or gov `source_url` / `tracked_urls[0]`) with a
+  browser-shaped User-Agent at concurrency=3 with 2-3s jitter, and runs
+  per-site parsers (CREXi / CoStar / LoopNet) over the response body.
+  Markers it looks for: "no longer available", "off market", "withdrawn",
+  "removed from the market", "under contract", JSON-LD
+  `availability=SoldOut`, plus per-site redirect-to-search fingerprints.
+  - Writes `lcc_record_listing_check(check_result='off_market',
+    off_market_reason='withdrawn')` for clean off-market hits.
+  - **Never writes `check_result='sold'`** — even when the page banner
+    reads "Sold". Sold-flavored pages are recorded as `off_market` with
+    `off_market_reason='unverified_assumed_off'` so the
+    sales_transactions watcher (or a human) can promote them later.
+  - 4xx/5xx/bot-block responses → `check_result='unreachable'`. The
+    helper increments `consecutive_check_failures` instead of changing
+    status. Once the count crosses **3**, the worker promotes that pass
+    to `off_market` / `unverified_assumed_off`.
+  - Writes a `field_provenance` row tagged `source='availability_scraper'`
+    via `public.lcc_merge_field` for every `url_status` change.
+    `field_source_priority` priority is **65** (aggregator-quality, below
+    sidebar_capture=40 and sales_transactions=45, parallel to
+    costar_sidebar). Migration:
+    `supabase/migrations/20260505100000_lcc_availability_checker_cron.sql`.
+
+`pg_cron` schedule:
+```
+SELECT cron.schedule(
+  'lcc-availability-checker',
+  '30 */6 * * *',
+  $$SELECT public.lcc_cron_post('/availability-checker',
+      '{"domain":"both","limit":25}'::jsonb, 'edge')$$
+);
+```
+
+Debug endpoint (POST, no DB writes):
+```
+POST {EDGE_BASE}/availability-checker?action=check_url
+{"url":"https://www.crexi.com/properties/12345/sample-listing"}
+```
+
+Returns the parser verdict, final URL, http status, and matched marker.
 
 ## Junk-value filters (sidebar parser defense)
 
