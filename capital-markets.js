@@ -511,7 +511,7 @@
             <div>
               <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Subspecialty:</label>
               <select id="cm-subspecialty-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
-                <option value="all">All Government-Leased</option>
+                <option value="all">${vertical === 'gov' ? 'All Government-Leased' : vertical === 'dialysis' ? 'All Dialysis' : 'All ' + vertical}</option>
                 ${subRows}
               </select>
             </div>
@@ -561,22 +561,29 @@
     }
   }
 
-  // Public entry — called by the gov tab router
-  async function renderGovCapitalMarkets() {
+  // ============================================================================
+  // Public entry: renderCapitalMarketsForVertical
+  // Generic implementation used by both gov and dialysis tabs. The catalog's
+  // applies_to_verticals filter (server-side) decides which chart cards show.
+  // ============================================================================
+  async function renderCapitalMarketsForVertical(vertical) {
     const el = document.getElementById('bizPageInner');
     if (!el) return '';
     el.innerHTML = '<div style="padding:24px;color:#666">Loading Capital Markets…</div>';
 
     try {
-      // Load reference data in parallel (cached after first call)
-      await Promise.all([loadBrand(), loadCatalog(), loadSubspecialties('gov')]);
+      await Promise.all([loadBrand(), loadCatalog(), loadSubspecialties(vertical)]);
     } catch (e) {
       el.innerHTML = `<div style="padding:24px;color:#c00">Failed to load Capital Markets reference data: ${e.message}</div>`;
       return '';
     }
 
-    cmState.currentVertical = 'gov';
-    el.innerHTML = renderSkeleton('gov');
+    // Reset subspecialty when switching vertical (gov_ssa not valid for dialysis, etc.)
+    if (cmState.currentVertical !== vertical) {
+      cmState.currentSubspecialty = 'all';
+    }
+    cmState.currentVertical = vertical;
+    el.innerHTML = renderSkeleton(vertical);
 
     // Bind subspecialty selector
     const sel = document.getElementById('cm-subspecialty-select');
@@ -584,7 +591,7 @@
       sel.value = cmState.currentSubspecialty;
       sel.addEventListener('change', (ev) => {
         cmState.currentSubspecialty = ev.target.value;
-        renderCharts('gov', cmState.currentSubspecialty);
+        renderCharts(vertical, cmState.currentSubspecialty);
       });
     }
 
@@ -592,7 +599,7 @@
     document.querySelectorAll('.cm-export-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const tpl = btn.dataset.template;
-        const charts = await loadQuarterly('gov', cmState.currentSubspecialty);
+        const charts = await loadQuarterly(vertical, cmState.currentSubspecialty);
         const chart = charts.find(c => c.chart_template_id === tpl);
         if (!chart) return;
         const tsv = chart.rows.length === 0 ? '' :
@@ -608,7 +615,7 @@
       });
     });
 
-    // Bind workbook export button — downloads a brand-styled .xlsx
+    // Bind workbook export
     const exportBtn = document.getElementById('cm-export-workbook-btn');
     if (exportBtn) {
       exportBtn.addEventListener('click', async () => {
@@ -616,12 +623,11 @@
         exportBtn.disabled = true;
         exportBtn.textContent = '⏳ Generating…';
         try {
-          // Find the latest period to use as as_of (lets the workbook pin to a quarter)
-          const charts = await loadQuarterly('gov', cmState.currentSubspecialty);
+          const charts = await loadQuarterly(vertical, cmState.currentSubspecialty);
           const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
           const asOf = latestVol?.period_end || '';
 
-          const url = `/api/capital-markets?action=export&vertical=gov&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx`;
+          const url = `/api/capital-markets?action=export&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx`;
           const r = await fetch(url, {
             credentials: 'include',
             headers: { 'x-lcc-workspace': window.LCC?.workspaceId || '' },
@@ -630,12 +636,10 @@
             const errText = await r.text().catch(() => '');
             throw new Error(`HTTP ${r.status}: ${errText.slice(0, 200)}`);
           }
-
-          // Pull filename from Content-Disposition or fall back to a default
           const cd = r.headers.get('Content-Disposition') || '';
           const match = cd.match(/filename="([^"]+)"/);
-          const filename = match ? match[1] : `NM-CapMarkets-Gov-${asOf || 'latest'}.xlsx`;
-
+          const verticalLbl = vertical === 'gov' ? 'Gov' : vertical === 'dialysis' ? 'Dialysis' : vertical;
+          const filename = match ? match[1] : `NM-CapMarkets-${verticalLbl}-${asOf || 'latest'}.xlsx`;
           const blob = await r.blob();
           const downloadUrl = URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -645,7 +649,6 @@
           a.click();
           a.remove();
           URL.revokeObjectURL(downloadUrl);
-
           exportBtn.textContent = '✓ Downloaded';
           setTimeout(() => { exportBtn.textContent = orig; }, 2000);
         } catch (e) {
@@ -659,14 +662,18 @@
       });
     }
 
-    // Initial chart render
-    await renderCharts('gov', cmState.currentSubspecialty);
-    return '';  // we render directly to DOM; gov tab router expects this
+    await renderCharts(vertical, cmState.currentSubspecialty);
+    return '';
   }
 
-  // Mirror for dialysis (Phase 2 — placeholder for now)
-  function renderDiaCapitalMarkets() {
-    return '<div style="padding:24px;color:#666">Capital Markets for Dialysis lands in Phase 2 (after dialysis cm_dia_*_q views are built).</div>';
+  // Public entry — called by the gov tab router
+  async function renderGovCapitalMarkets() {
+    return renderCapitalMarketsForVertical('gov');
+  }
+
+  // Public entry — called by the dia tab router (Phase 2d: live, ~10 charts)
+  async function renderDiaCapitalMarkets() {
+    return renderCapitalMarketsForVertical('dialysis');
   }
 
   // Expose to gov.js / app.js routers
