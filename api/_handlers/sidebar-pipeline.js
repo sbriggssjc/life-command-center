@@ -328,6 +328,21 @@ const GOV_TENANT_PATTERNS = [
   /\battorney general\b/,
   /\bnational guard\b/,
   /\bmilitary\b/,
+  // Round 76ej.u (2026-05-05): credit-tag and high-level-government
+  // phrasings that show up in CREXi investment-highlights bullets
+  // even when the structured Details panel doesn't surface a tenant.
+  // Manteo (201 Etheridge / GSA FBI Outer Banks) fell to no_domain
+  // because its truncated marketing description was just
+  // "United States Government (S&P: AA+) | Option To Extend | …" —
+  // none of the prior keywords matched.
+  /\bunited states government\b/,
+  /\bu\.s\.\s+government\b/,
+  /\bus government\b/,
+  /\bforest service\b/,           // United States Forest Service (Butte)
+  /\bnational forest\b/,
+  /\bdivision of\b/,              // "Montana Division of Criminal Investigation"
+  /\bfish,?\s+wildlife/,          // state Fish/Wildlife/Parks agencies
+  /\bcriminal investigation\b/,
 ];
 
 const DIALYSIS_TENANT_PATTERNS = [
@@ -601,7 +616,7 @@ function cleanTenantValue(raw) {
 
 const MEDICAL_TENANT_PRIORITY = /fresenius|davita|dialysis|fmc|dci\b|kidney|renal|nephrology|satellite|healthcare|medical|clinic|health\s+care/i;
 
-const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government|\bepa\b|environmental protection|\bfda\b|food and drug|\bdoj\b|department of justice|\bdod\b|department of defense|\bnoaa\b|national oceanic|\bfaa\b|federal aviation|\bnps\b|national park service|office of|supreme court|district court|superior court|court of|courthouse|attorney general|national guard|\bmilitary\b/i;
+const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government|\bepa\b|environmental protection|\bfda\b|food and drug|\bdoj\b|department of justice|\bdod\b|department of defense|\bnoaa\b|national oceanic|\bfaa\b|federal aviation|\bnps\b|national park service|office of|supreme court|district court|superior court|court of|courthouse|attorney general|national guard|\bmilitary\b|united states government|u\.s\.\s+government|us government|forest service|national forest|division of|criminal investigation|fish,?\s+wildlife/i;
 
 // Round 76eq (2026-04-29): defensive parser for stringified-array tenant
 // values. The OM extractor's AI sometimes returns tenant_name as a JSON-
