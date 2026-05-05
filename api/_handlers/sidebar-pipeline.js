@@ -2615,6 +2615,13 @@ async function upsertDomainProperty(domain, entity, metadata) {
       // would otherwise overwrite the property's current GSA lease rent.
       gross_rent:        isHistoricalCompCapture ? null : parseCurrency(metadata.annual_rent),
       gross_rent_psf:    isHistoricalCompCapture ? null : parseCurrency(metadata.rent_per_sf),
+      // gov.properties.noi exists (see migration
+      // 20260423220000_gov_v_available_listings_enrichment.sql line 39)
+      // and is what v_available_listings exposes to the UI. Without
+      // this write, every CREXi capture of a govt-leased listing
+      // discarded the NOI value the page advertised — the field
+      // landed in entity metadata but never reached the gov DB.
+      noi:               isHistoricalCompCapture ? null : parseCurrency(metadata.noi),
       lease_commencement: isHistoricalCompCapture ? null : parseDate(metadata.lease_commencement)?.split('T')[0] || null,
       lease_expiration:   isHistoricalCompCapture ? null : parseDate(metadata.lease_expiration)?.split('T')[0] || null,
       renewal_options:    isHistoricalCompCapture ? null : metadata.renewal_options || null,
