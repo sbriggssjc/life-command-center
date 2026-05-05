@@ -188,6 +188,15 @@ const CHART_COLUMNS = {
     { key: 'pct_of_total_15y',  header: '% of Total',          format: 'percent_one_decimal', width: 12 },
     { key: 'deal_count_15y',    header: 'Deal Count',          format: 'integer_count',       width: 12 },
   ],
+  valuation_index: [
+    { key: 'period_end',         header: 'Quarter End',          format: 'date_short',          width: 13 },
+    { key: 'avg_rent_psf',       header: 'Avg Rent PSF (TTM)',   format: 'currency_per_sf',     width: 18 },
+    { key: 'avg_expenses_psf',   header: 'Expenses PSF (TTM)',   format: 'currency_per_sf',     width: 19 },
+    { key: 'avg_noi_psf',        header: 'NOI PSF (TTM)',        format: 'currency_per_sf',     width: 17 },
+    { key: 'avg_cap_rate',       header: 'Avg Cap Rate (TTM)',   format: 'percent_basis_points', width: 18 },
+    { key: 'valuation_index',    header: 'Valuation Index ($/SF)',format: 'currency_per_sf',    width: 22 },
+    { key: 'n_sales',            header: 'N Sales (Q)',          format: 'integer_count',       width: 12 },
+  ],
   net_lease_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },

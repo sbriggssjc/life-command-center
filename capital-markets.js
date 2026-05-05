@@ -26,6 +26,7 @@
   // this includes the 4 new dashboard parity charts that match the gov 2024-Q2
   // deliverable PDF.
   const PHASE_1_TEMPLATES = [
+    'valuation_index',             // Phase 2c.3 — deliverable p.10 (headline index)
     'volume_ttm_by_quarter',
     'yoy_volume_change',           // Phase 2b — deliverable p.14
     'cap_rate_ttm_by_quarter',
@@ -181,6 +182,23 @@
     let datasets = [];
 
     switch (chart.chart_template_id) {
+      case 'valuation_index': {
+        // Deliverable p.10: TTM NOI PSF / TTM Cap Rate = $ per SF
+        datasets = [{
+          label: 'Valuation Index ($/SF)',
+          data: chart.rows.map(r => r.valuation_index),
+          borderColor: palette[0],
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2.5,
+        }];
+        const opts = commonChartOptions('currency_per_sf');
+        opts.scales.y.ticks.callback = (v) => '$' + Number(v).toFixed(0);
+        opts.plugins.tooltip.callbacks.label = (ctx) =>
+          `${ctx.dataset.label}: $${Number(ctx.parsed.y).toFixed(2)}/SF`;
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
+      }
       case 'volume_ttm_by_quarter': {
         datasets = [{
           label: 'TTM Volume',
