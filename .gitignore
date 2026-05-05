@@ -15,3 +15,8 @@ __pycache__/
 # sensitive broker URLs and results. See docs/availability_checker_acceptance.md.
 scripts/availability-checker-samples.json
 scripts/availability-checker-samples.results.json
+
+# Supabase CLI local state. Created by `supabase link` /
+# `supabase functions deploy`; encodes the operator's machine state
+# (linked project ref, CLI version cache) and shouldn't be in git.
+supabase/.temp/
