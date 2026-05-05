@@ -737,6 +737,13 @@ function classifyDomain(metadata, entityFields) {
     metadata.tenants_raw,
     metadata.tenancy_block,
     metadata.investment_highlights,
+    // CREXi govt-leased listings often surface the tenant only in the
+    // marketing prose (headline + description). Without these the
+    // classifier sees only generic labels like "Office, Special
+    // Purpose" and drops to no_domain even when the page text is
+    // saturated with "GSA", "Federal", "VA Clinic" etc.
+    metadata.marketing_headline,
+    metadata.marketing_description,
   ];
 
   // Include tenant names from tenants[] array (filtered through dropTenantJunk
@@ -874,6 +881,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
     metadata.property_type, metadata.property_subtype, metadata.occupancy_details,
     metadata.sale_notes_raw, metadata.tenants_raw, metadata.tenancy_block,
     metadata.investment_highlights,
+    metadata.marketing_headline, metadata.marketing_description,
   ];
   if (Array.isArray(metadata.tenants)) for (const t of metadata.tenants) { if (t.name) textParts.push(t.name); }
   if (Array.isArray(metadata.contacts)) for (const c of metadata.contacts) { if (c.name) textParts.push(c.name); }
