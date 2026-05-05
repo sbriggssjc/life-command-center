@@ -1741,13 +1741,59 @@ function renderIngestDiff(ctx, lccEntity) {
 
 function renderLccFields(entity, data) {
   let html = '';
+  // Round 76ej.m (2026-05-05): the panel was showing only Address /
+  // City / State / Asset Type because it read solely from top-level
+  // entity columns. Almost every CRE field lives in entity.metadata
+  // (year_built, square_footage, tenant_name, NOI, cap_rate,
+  // occupancy, etc.) — captured from CREXi/CoStar and persisted on
+  // every save — but the UI was hiding it. The data flow itself
+  // works; the panel just wasn't reading it.
+  //
+  // Fall back to entity.metadata when the top-level column is empty,
+  // and honor the same column-name aliases used by readLcc() in
+  // renderCompareTable so domain-DB column names (rba, building_size)
+  // and metadata field names (square_footage) both light up the
+  // "Square Footage" row.
+  const FIELD_ALIASES = {
+    address:        ['address'],
+    city:           ['city'],
+    state:          ['state'],
+    asset_type:     ['asset_type', 'property_type', 'property_subtype', 'sub_type'],
+    building_class: ['building_class', 'class'],
+    year_built:     ['year_built'],
+    square_footage: ['square_footage', 'building_size', 'rba', 'sf'],
+    occupancy:      ['occupancy', 'occupancy_percent', 'gov_occupancy_pct'],
+    cap_rate:       ['cap_rate', 'asking_cap_rate', 'current_cap_rate'],
+    noi:            ['noi', 'net_operating_income'],
+    asking_price:   ['asking_price', 'list_price'],
+    tenant_name:    ['tenant_name', 'tenant', 'primary_tenant', 'agency', 'agency_full_name'],
+    lease_expiration: ['lease_expiration', 'lease_exp'],
+    lease_term:     ['lease_term'],
+    remaining_term: ['remaining_term'],
+    acreage:        ['acreage', 'land_acres', 'lot_size'],
+    stories:        ['stories'],
+    parking:        ['parking', 'parking_spaces', 'parking_ratio'],
+  };
+  function readEntityField(canonicalKey) {
+    const candidates = FIELD_ALIASES[canonicalKey] || [canonicalKey];
+    for (const k of candidates) {
+      const v = entity[k] ?? entity?.metadata?.[k];
+      if (v != null && v !== '') return v;
+    }
+    return null;
+  }
   const fields = [
     ['address', 'Address'], ['city', 'City'], ['state', 'State'],
     ['asset_type', 'Asset Type'], ['building_class', 'Building Class'],
     ['year_built', 'Year Built'], ['square_footage', 'Square Footage'],
+    ['occupancy', 'Occupancy'], ['tenant_name', 'Tenant'],
+    ['cap_rate', 'Cap Rate'], ['noi', 'NOI'], ['asking_price', 'Asking Price'],
+    ['lease_expiration', 'Lease Expiration'], ['lease_term', 'Lease Term'],
+    ['remaining_term', 'Remaining Term'], ['acreage', 'Acreage'],
+    ['stories', 'Stories'], ['parking', 'Parking'],
   ];
   for (const [key, label] of fields) {
-    const val = entity[key];
+    const val = readEntityField(key);
     if (val) {
       const valStr = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
       html += `<div class="context-field">
