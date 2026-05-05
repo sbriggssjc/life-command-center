@@ -1782,6 +1782,49 @@ function renderLccFields(entity, data) {
     }
     return null;
   }
+  // Round 76ej.n (2026-05-05): defensive filter against pre-fix junk
+  // already persisted in entity.metadata. The earlier crexi.js
+  // findTextElement() heuristic stamped values like "Quality
+  // Construction and new HVAC systems" as tenant_name and "Valuation
+  // Metrics" as cap_rate on captures that ran before the heuristic
+  // was disabled; those values are still in LCC for historically
+  // captured properties even after the parser fix landed. Hide
+  // values that fail a simple per-field sanity check rather than
+  // surface stored garbage.
+  function isValidLccValue(canonicalKey, val) {
+    if (val == null || val === '') return false;
+    const s = String(val).trim();
+    if (!s) return false;
+    if (canonicalKey === 'cap_rate' || canonicalKey === 'noi'
+        || canonicalKey === 'asking_price' || canonicalKey === 'occupancy'
+        || canonicalKey === 'square_footage' || canonicalKey === 'year_built'
+        || canonicalKey === 'acreage' || canonicalKey === 'stories'
+        || canonicalKey === 'lease_term' || canonicalKey === 'remaining_term') {
+      // Numeric-flavored fields must contain at least one digit. "Valuation
+      // Metrics" / "Investment Highlights" / "Property Overview" all fail.
+      return /\d/.test(s);
+    }
+    if (canonicalKey === 'tenant_name') {
+      // Real tenant names are short and noun-phrase shaped. The heuristic
+      // pollution patterns we've seen are descriptive sentence fragments
+      // ("Quality Construction and new HVAC systems"). Reject:
+      //   - long strings (>60 chars)
+      //   - strings containing lowercase "and" with property-descriptor
+      //     keywords (hvac/construction/systems/amenities/features/...)
+      //   - strings that match obvious section labels
+      if (s.length > 60) return false;
+      const PROSE_PATTERNS = [
+        /\bhvac\b/i,
+        /\b(quality|new|recent|modern)\s+construction\b/i,
+        /\b(systems?|amenities|features?|upgrades?|improvements?)\b.*\band\b/i,
+        /\band\b.*\b(systems?|amenities|features?|hvac|construction|upgrades?)\b/i,
+        /^(valuation\s+metrics|investment\s+highlights?|property\s+overview|sale\s+highlights?|key\s+highlights?|executive\s+summary)$/i,
+      ];
+      for (const re of PROSE_PATTERNS) if (re.test(s)) return false;
+      return true;
+    }
+    return true;
+  }
   const fields = [
     ['address', 'Address'], ['city', 'City'], ['state', 'State'],
     ['asset_type', 'Asset Type'], ['building_class', 'Building Class'],
@@ -1794,7 +1837,7 @@ function renderLccFields(entity, data) {
   ];
   for (const [key, label] of fields) {
     const val = readEntityField(key);
-    if (val) {
+    if (val && isValidLccValue(key, val)) {
       const valStr = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
       html += `<div class="context-field">
         <span class="context-label">${escapeHtml(label)}</span>
@@ -2044,6 +2087,29 @@ function buildMetadata(ctx, domain) {
   // Keys match database column names where possible.
   // Belt-and-suspenders filter: strip CoStar section headings that slip past extractFields()
   const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
+  // Round 76ej.n: prose-fragment patterns left over by the pre-fix CREXi
+  // findTextElement heuristic. Mirrors renderLccFields's isValidLccValue
+  // tenant filter so the next "Update LCC with CREXi Data" PATCH writes
+  // tenant_name=null over the stored junk and clears it from LCC.
+  const TENANT_PROSE_RE = [
+    /\bhvac\b/i,
+    /\b(quality|new|recent|modern)\s+construction\b/i,
+    /\b(systems?|amenities|features?|upgrades?|improvements?)\b.*\band\b/i,
+    /\band\b.*\b(systems?|amenities|features?|hvac|construction|upgrades?)\b/i,
+  ];
+  const isProseTenant = (s) => {
+    if (!s || typeof s !== 'string') return false;
+    if (s.length > 60) return true;
+    return TENANT_PROSE_RE.some((re) => re.test(s));
+  };
+  // Numeric-flavored fields must contain a digit. Catches "Valuation
+  // Metrics" / "Investment Highlights" stored under cap_rate by the
+  // pre-fix heuristic. Pass-through when the stored value is already
+  // numeric or null.
+  const sanitizeNumericField = (v) => {
+    if (v == null || v === '') return null;
+    return /\d/.test(String(v)) ? v : null;
+  };
   const m = {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
@@ -2051,10 +2117,10 @@ function buildMetadata(ctx, domain) {
     costar_comp_id: ctx.costar_comp_id || null,
     extracted_at: new Date().toISOString(),
     // Financials
-    asking_price: ctx.asking_price || null,
-    cap_rate: ctx.cap_rate || null,
-    noi: ctx.noi || null,
-    price_per_sf: ctx.price_per_sf || null,
+    asking_price: sanitizeNumericField(ctx.asking_price),
+    cap_rate: sanitizeNumericField(ctx.cap_rate),
+    noi: sanitizeNumericField(ctx.noi),
+    price_per_sf: sanitizeNumericField(ctx.price_per_sf),
     sale_price: ctx.sale_price || null,
     sale_date: ctx.sale_date || null,
     // Building
@@ -2090,8 +2156,8 @@ function buildMetadata(ctx, domain) {
     land_value: ctx.land_value || null,
     improvement_value: ctx.improvement_value || null,
     // Tenant / Lease
-    tenant_name:       (ctx.tenant_name && !INVALID_TENANT.test(ctx.tenant_name)) ? ctx.tenant_name : null,
-    primary_tenant:    (ctx.primary_tenant && !INVALID_TENANT.test(ctx.primary_tenant)) ? ctx.primary_tenant : null,
+    tenant_name:       (ctx.tenant_name && !INVALID_TENANT.test(ctx.tenant_name) && !isProseTenant(ctx.tenant_name)) ? ctx.tenant_name : null,
+    primary_tenant:    (ctx.primary_tenant && !INVALID_TENANT.test(ctx.primary_tenant) && !isProseTenant(ctx.primary_tenant)) ? ctx.primary_tenant : null,
     tenancy_type: ctx.tenancy_type || null,
     owner_occupied: ctx.owner_occupied || null,
     est_rent: ctx.est_rent || null,
