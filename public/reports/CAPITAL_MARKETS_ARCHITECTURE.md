@@ -228,9 +228,13 @@ so subsequent attaches are zero-render.
 
 **Phase 1 fix:** Don't try to repair the spreadsheet. The "Estimated NPV" column is a derived metric that should live in SQL: `cm_gov_npv_q(period_end, lease_id, npv_dollars)` computed from `cm_macro_rates_q.treasury_10y_yield` × the gov lease cashflow stream. Once that view exists, the workbook BN column becomes a pull from SQL and both issues vanish (correct format + no #VALUE! cascade because SQL returns NULL on missing inputs instead of erroring).
 
-### 11.2 Off-brand workbooks
+### 11.2 Off-brand workbooks — **RESOLVED (2026-05-05)**
 
-`Dialysis Comp Work MASTER.xlsx` and `ST Market.xlsx` use the default Office 2016+ palette (`#5B9BD5`, `#ED7D31`, etc.) instead of the Northmarq palette (`#003DA5`, `#62B5E5`, etc.). Phase 1 Excel exports must use `cm_brand_tokens.json` so all three deliverables look like the gov-master reference.
+~~`Dialysis Comp Work MASTER.xlsx` and `ST Market.xlsx` use the default Office 2016+ palette (`#5B9BD5`, `#ED7D31`, etc.) instead of the Northmarq palette (`#003DA5`, `#62B5E5`, etc.). Phase 1 Excel exports must use `cm_brand_tokens.json` so all three deliverables look like the gov-master reference.~~
+
+**Status:** Audit on 2026-05-05 (`scripts/audit_workbook_brand_palette.py`) found **zero Office-default hits** across all three workbooks — chart series, axes, plot areas, and 67,690 sampled cells. Either the workbooks were retemplated before this issue was logged, or the original observation was based on a visual impression rather than an audit. The deprecated-palette reference remains in `cm_brand_tokens.json` for historical context. Re-run the audit script after any large marketing-team workbook refresh.
+
+**LCC export module (`api/_shared/cm-excel-export.js`):** continues to apply brand tokens to every data tab it generates (header fills via `nm_navy`, zebra stripes via `nm_pale`, Calibri Light titles, etc.). No code change needed.
 
 ### 11.3 Dashboard cleanup
 

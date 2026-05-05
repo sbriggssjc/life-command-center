@@ -87,7 +87,7 @@
   "deprecated_palettes": {
     "office_blue_default": {
       "hex_set": ["#5B9BD5", "#ED7D31", "#A5A5A5", "#FFC000", "#4472C4", "#70AD47"],
-      "_note": "Default Office 2016+ palette. Found in Dialysis Comp Work MASTER.xlsx and ST Market.xlsx — these workbooks are OFF-BRAND and need to be migrated to the nm_* palette in Phase 1."
+      "_note": "Default Office 2016+ palette. Marker for things to avoid. Audit on 2026-05-05 (scripts/audit_workbook_brand_palette.py) found ZERO occurrences across the three master workbooks — they're all on-brand. Re-run that audit after any large marketing-team workbook refresh."
     },
     "office_classic": {
       "hex_set": ["#4F81BD", "#C0504D", "#9BBB59", "#8064A2", "#4BACC6", "#F79646"],
