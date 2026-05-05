@@ -4750,7 +4750,13 @@ function govPendingSourceSummary(ctx) {
 
 window.bulkApproveGovPending = async function() {
   const view = window._govPendingCurrentView || [];
-  const eligible = view.filter(r => Number(r.confidence || 0) >= 0.8);
+  // Sale-link items are NEVER bulk-approvable — approve is a no-op until a
+  // property_id is picked. Exclude them.
+  const eligible = view.filter(r => {
+    if (Number(r.confidence || 0) < 0.8) return false;
+    const tax = govPendingTaxonomy(r.reason);
+    return tax.category !== 'sale_link';
+  });
   if (eligible.length === 0) {
     showToast('No items in this view meet the high-confidence (≥80%) bar', 'info');
     return;
@@ -4796,6 +4802,13 @@ function ensureGovPendingKeybinds() {
       govPendingUpdatesIdx = Math.max(0, govPendingUpdatesIdx - 1);
       e.preventDefault(); renderGovTab();
     } else if (k === 'a' && sel) {
+      // Sale-link items have no proposed value — Approve is a no-op for them.
+      // Force the user to pick a candidate or create a property.
+      const tax = govPendingTaxonomy(sel.reason);
+      if (tax.category === 'sale_link') {
+        showToast('Use Link → on a candidate, or expand "Create new property"', 'info');
+        return;
+      }
       e.preventDefault();
       window.resolveGovPendingUpdate(sel.id, 'approved');
     } else if (k === 'r' && sel) {
@@ -4918,6 +4931,318 @@ window.resolveGovPendingUpdate = async function(id, resolution) {
     }
   }
 };
+
+// ── Sale-Link Resolver ──────────────────────────────────────────────────────
+// Drives the Mode A (pick from candidates) / Mode C (create new property)
+// flow for sale_property_link_* pending updates. Backed by the gov-side RPCs
+// `gov_resolve_sale_link` and `gov_create_property_from_pending` (defined in
+// government-lease/sql/20260429_gov_rpc_sale_link_resolver.sql).
+//
+// Cache shape (keyed by pending_id):
+//   { loading, error, sale, candidates, candidatesQuery }
+const govResolverCache = {};
+const govResolverShowCreate = {};   // pending_id → bool (form expanded?)
+const govResolverNewProp   = {};    // pending_id → form draft
+
+async function govRpc(rpcName, args) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', 'rpc/' + rpcName);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const resp = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(args || {}),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const text = await resp.text();
+    let data; try { data = JSON.parse(text); } catch (_) { data = text; }
+    if (!resp.ok) {
+      const detail = (data && data.error) || (typeof data === 'string' ? data : ('HTTP ' + resp.status));
+      throw new Error(detail);
+    }
+    return Array.isArray(data) ? data[0] : data;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('RPC ' + rpcName + ' timed out');
+    throw err;
+  }
+}
+
+function govResolverContextOf(item) {
+  const ctx = (item && item.source_context) || {};
+  return {
+    address:      ctx.address || ctx.property_address || ctx.street_address || '',
+    city:         ctx.city || ctx.property_city || '',
+    state:        ctx.state || ctx.property_state || '',
+    leaseNumber:  ctx.lease_number || ctx.gsa_lease_number || '',
+    agency:       ctx.agency || '',
+    governmentType: ctx.government_type || ctx.gov_type || '',
+    buyer:        ctx.buyer || ctx.buyer_name || '',
+    seller:       ctx.seller || ctx.seller_name || '',
+    rawCity:      ctx.address || ''   // sometimes "PORT CHARLOTTE" lands in address only
+  };
+}
+
+window.loadGovSaleLinkContext = async function(pendingId) {
+  const item = (govPendingUpdates || []).find(u => u.id === pendingId);
+  if (!item) return;
+  const cache = govResolverCache[pendingId] || {};
+  if (cache.loading) return;
+  govResolverCache[pendingId] = { ...cache, loading: true, error: null };
+  renderGovTab();
+
+  try {
+    const ctx = govResolverContextOf(item);
+    // 1) Fetch the sale row by record_id (sale_id)
+    let sale = null;
+    if (item.record_id) {
+      const saleRes = await govQuery('sales_transactions',
+        'sale_id,sale_date,sold_price,sold_cap_rate,buyer,seller,address,city,state,lease_number,property_id', {
+          filter: 'sale_id=eq.' + item.record_id,
+          limit: 1, count: false
+        });
+      sale = (saleRes.data && saleRes.data[0]) || null;
+    }
+
+    // 2) Build candidate query from any signal we have:
+    //    a) lease_number exact
+    //    b) city (+ state) ilike
+    //    c) fall back to the sale's own city/state
+    const filters = [];
+    const lease = ctx.leaseNumber || (sale && sale.lease_number);
+    const city  = ctx.city  || (sale && sale.city);
+    const state = ctx.state || (sale && sale.state);
+
+    let candidates = [];
+    let candidatesQuery = '';
+    if (lease) {
+      const r = await govQuery('properties',
+        'property_id,address,city,state,lease_number,agency,government_type,sf_leased,lease_expiration', {
+          filter: 'lease_number=eq.' + encodeURIComponent(lease),
+          limit: 25, count: false
+        });
+      candidates = r.data || [];
+      candidatesQuery = 'lease_number=' + lease;
+    }
+    if (candidates.length === 0 && (city || state)) {
+      const parts = [];
+      if (city)  parts.push('city=ilike.' + encodeURIComponent(city.trim() + '%'));
+      if (state) parts.push('state=eq.'   + encodeURIComponent(state.trim().toUpperCase()));
+      const r = await govQuery('properties',
+        'property_id,address,city,state,lease_number,agency,government_type,sf_leased,lease_expiration', {
+          filter: parts.join('&'),
+          order: 'city.asc,address.asc',
+          limit: 25, count: false
+        });
+      candidates = r.data || [];
+      candidatesQuery = parts.join(' AND ');
+    }
+    if (candidates.length === 0 && ctx.rawCity) {
+      // Last resort: address field sometimes has a city-only value
+      const r = await govQuery('properties',
+        'property_id,address,city,state,lease_number,agency,government_type,sf_leased,lease_expiration', {
+          filter: 'city=ilike.' + encodeURIComponent(ctx.rawCity.trim() + '%'),
+          order: 'city.asc,address.asc',
+          limit: 25, count: false
+        });
+      candidates = r.data || [];
+      candidatesQuery = 'city~' + ctx.rawCity;
+    }
+
+    govResolverCache[pendingId] = { loading: false, error: null, sale, candidates, candidatesQuery };
+  } catch (err) {
+    console.error('loadGovSaleLinkContext:', err);
+    govResolverCache[pendingId] = { loading: false, error: err.message || 'Failed to load context' };
+  }
+  renderGovTab();
+};
+
+window.govResolverLink = async function(pendingId, propertyId) {
+  if (!(await lccConfirm('Link this sale to property #' + propertyId + '? sales_transactions.property_id will be updated and the pending row approved.', 'Link'))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    await govRpc('gov_resolve_sale_link', {
+      p_pending_id: pendingId,
+      p_property_id: Number(propertyId),
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    govPendingUpdatesIdx = 0;
+    showToast('Sale linked to property #' + propertyId, 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('Link failed: ' + err.message, 'error');
+  }
+};
+
+window.govResolverToggleCreate = function(pendingId) {
+  govResolverShowCreate[pendingId] = !govResolverShowCreate[pendingId];
+  if (govResolverShowCreate[pendingId] && !govResolverNewProp[pendingId]) {
+    const item = (govPendingUpdates || []).find(u => u.id === pendingId);
+    const ctx = govResolverContextOf(item);
+    const sale = (govResolverCache[pendingId] && govResolverCache[pendingId].sale) || {};
+    govResolverNewProp[pendingId] = {
+      address:        ctx.address || sale.address || '',
+      city:           ctx.city    || sale.city    || '',
+      state:          ctx.state   || sale.state   || '',
+      lease_number:   ctx.leaseNumber || sale.lease_number || '',
+      agency:         ctx.agency  || '',
+      government_type:ctx.governmentType || ''
+    };
+  }
+  renderGovTab();
+};
+
+window.govResolverNewPropChange = function(pendingId, field, value) {
+  govResolverNewProp[pendingId] = govResolverNewProp[pendingId] || {};
+  govResolverNewProp[pendingId][field] = value;
+};
+
+window.govResolverCreate = async function(pendingId) {
+  const draft = govResolverNewProp[pendingId] || {};
+  if (!draft.address || !draft.city || !draft.state) {
+    showToast('Address, city, and state are required to create a property', 'warning');
+    return;
+  }
+  if (!(await lccConfirm('Create a new property at "' + draft.address + ', ' + draft.city + ', ' + draft.state + '" and link this sale to it?', 'Create & link'))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    const res = await govRpc('gov_create_property_from_pending', {
+      p_pending_id: pendingId,
+      p_overrides: draft,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    govPendingUpdatesIdx = 0;
+    const action = (res && res.was_created === false) ? 'reused existing property' : 'property created';
+    showToast('Sale linked — ' + action + (res && res.property_id ? ' (#' + res.property_id + ')' : ''), 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('Create failed: ' + err.message, 'error');
+  }
+};
+
+function renderGovSaleLinkResolver(selected) {
+  const id = selected.id;
+  const cache = govResolverCache[id];
+  let html = '<div class="pu-resolver">';
+
+  // Header
+  html += '<div class="pu-resolver-head">';
+  html += '<div class="pu-resolver-title">Sale-Link Resolver</div>';
+  html += '<button class="pu-resolver-refresh" onclick="window.loadGovSaleLinkContext(decodeURIComponent(\'' + encodeURIComponent(id) + '\'))" title="Reload context">↻</button>';
+  html += '</div>';
+
+  // Auto-load on first render
+  if (!cache) {
+    setTimeout(() => window.loadGovSaleLinkContext(id), 0);
+    html += '<div class="pu-resolver-loading"><div class="spinner"></div> Loading sale + candidates…</div>';
+    html += '</div>';
+    return html;
+  }
+  if (cache.loading) {
+    html += '<div class="pu-resolver-loading"><div class="spinner"></div> Loading sale + candidates…</div>';
+    html += '</div>';
+    return html;
+  }
+  if (cache.error) {
+    html += '<div class="pu-resolver-error">Couldn\'t load context: ' + esc(cache.error) + '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Sale record summary
+  const sale = cache.sale;
+  html += '<div class="pu-resolver-section">';
+  html += '<div class="pu-resolver-section-title">Sale Record</div>';
+  if (sale) {
+    const fmtMoney = (n) => n == null ? '—' : '$' + Number(n).toLocaleString();
+    const fmtCap = (n) => n == null ? '' : (Number(n) * 100).toFixed(2) + '%';
+    html += '<dl class="pu-resolver-dl">';
+    html += '<dt>Sale date</dt><dd>' + esc(sale.sale_date || '—') + '</dd>';
+    html += '<dt>Sold price</dt><dd>' + esc(fmtMoney(sale.sold_price)) + (sale.sold_cap_rate ? ' <span class="pu-resolver-muted">@ ' + esc(fmtCap(sale.sold_cap_rate)) + ' cap</span>' : '') + '</dd>';
+    html += '<dt>Address</dt><dd>' + esc([sale.address, sale.city, sale.state].filter(Boolean).join(', ') || '—') + '</dd>';
+    if (sale.lease_number) html += '<dt>Lease #</dt><dd><code>' + esc(sale.lease_number) + '</code></dd>';
+    html += '<dt>Buyer</dt><dd>' + esc(sale.buyer || '—') + '</dd>';
+    html += '<dt>Seller</dt><dd>' + esc(sale.seller || '—') + '</dd>';
+    if (sale.property_id) {
+      html += '<dt>Currently linked to</dt><dd class="pu-resolver-warn">⚠ property #' + esc(sale.property_id) + ' (already linked — approve will overwrite)</dd>';
+    }
+    html += '</dl>';
+  } else {
+    html += '<div class="pu-resolver-muted">Sale row not found (record_id=' + esc(selected.record_id || '') + ')</div>';
+  }
+  html += '</div>';
+
+  // Candidates
+  const candidates = cache.candidates || [];
+  html += '<div class="pu-resolver-section">';
+  html += '<div class="pu-resolver-section-title">Candidate Properties <span class="pu-resolver-muted">(' + candidates.length + (cache.candidatesQuery ? ' · ' + esc(cache.candidatesQuery) : '') + ')</span></div>';
+  if (candidates.length === 0) {
+    html += '<div class="pu-resolver-empty">No candidates found in inventory. Use "Create new property" below.</div>';
+  } else {
+    html += '<div class="pu-cand-list">';
+    candidates.forEach(p => {
+      const exp = p.lease_expiration ? ' · exp ' + esc(p.lease_expiration) : '';
+      html += `<div class="pu-cand">
+        <div class="pu-cand-main">
+          <div class="pu-cand-addr">${esc(p.address || '(no address)')}</div>
+          <div class="pu-cand-meta">
+            <span>${esc([p.city, p.state].filter(Boolean).join(', '))}</span>
+            ${p.lease_number ? '· <code>' + esc(p.lease_number) + '</code>' : ''}
+            ${p.agency ? '· ' + esc(p.agency) : ''}
+            ${exp}
+          </div>
+        </div>
+        <button class="pu-cand-link" onclick="window.govResolverLink(decodeURIComponent('${encodeURIComponent(id)}'), ${p.property_id})">Link →</button>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Create new property
+  const showCreate = !!govResolverShowCreate[id];
+  html += '<div class="pu-resolver-section">';
+  html += '<div class="pu-resolver-section-title">';
+  html += '<button class="pu-resolver-toggle" onclick="window.govResolverToggleCreate(decodeURIComponent(\'' + encodeURIComponent(id) + '\'))">' + (showCreate ? '▾' : '▸') + ' Create new property from this sale</button>';
+  html += '</div>';
+  if (showCreate) {
+    const draft = govResolverNewProp[id] || {};
+    const f = (name, label, req) => {
+      const v = draft[name] || '';
+      return `<label class="pu-newprop-field">
+        <span>${esc(label)}${req ? ' <span class="pu-resolver-warn">*</span>' : ''}</span>
+        <input type="text" value="${esc(v)}" oninput="window.govResolverNewPropChange(decodeURIComponent('${encodeURIComponent(id)}'), '${name}', this.value)" />
+      </label>`;
+    };
+    html += '<div class="pu-newprop-form">';
+    html += f('address', 'Address', true);
+    html += f('city',    'City',    true);
+    html += f('state',   'State',   true);
+    html += f('lease_number',    'Lease #', false);
+    html += f('agency',          'Agency', false);
+    html += f('government_type', 'Gov type', false);
+    html += '</div>';
+    html += '<div class="pu-newprop-help">If a property with the same lease # already exists, it will be reused (no duplicate).</div>';
+    html += `<button class="btn-action primary" onclick="window.govResolverCreate(decodeURIComponent('${encodeURIComponent(id)}'))">Create & link sale</button>`;
+  }
+  html += '</div>';
+
+  html += '</div>'; // pu-resolver
+  return html;
+}
 
 function renderGovPendingUpdates() {
   if (!govPendingUpdates && !govPendingUpdatesLoading) {
@@ -5114,20 +5439,29 @@ function renderGovPendingUpdates() {
     <div class="pu-guidance-body">${esc(tax.guidance)}</div>
   </div>`;
 
-  // Diff
-  html += '<div class="pu-diff">';
-  html += `<div class="pu-diff-cell pu-diff-old">
-    <div class="pu-diff-label">Current</div>
-    <div class="pu-diff-value">${esc(oldVal)}</div>
-  </div>`;
-  html += `<div class="pu-diff-arrow">→</div>`;
-  html += `<div class="pu-diff-cell pu-diff-new">
-    <div class="pu-diff-label">Proposed</div>
-    <div class="pu-diff-value">${esc(newVal)}</div>
-  </div>`;
-  html += '</div>';
+  // For sale_property_link_* we don't have a meaningful old/new diff —
+  // the system is asking the human to PICK a property_id. Render the
+  // resolver (sale record + candidates + create-new-property) instead.
+  const isSaleLink = tax.category === 'sale_link';
 
-  // Source context summary (parsed) + collapsible raw
+  if (!isSaleLink) {
+    // Standard value-change diff
+    html += '<div class="pu-diff">';
+    html += `<div class="pu-diff-cell pu-diff-old">
+      <div class="pu-diff-label">Current</div>
+      <div class="pu-diff-value">${esc(oldVal)}</div>
+    </div>`;
+    html += `<div class="pu-diff-arrow">→</div>`;
+    html += `<div class="pu-diff-cell pu-diff-new">
+      <div class="pu-diff-label">Proposed</div>
+      <div class="pu-diff-value">${esc(newVal)}</div>
+    </div>`;
+    html += '</div>';
+  } else {
+    html += renderGovSaleLinkResolver(selected);
+  }
+
+  // Source context summary (parsed) + collapsible raw — useful for both modes
   if (summary.length > 0 || Object.keys(sourceCtx).length > 0) {
     html += '<div class="context-block">';
     html += '<div class="context-label">Source Context</div>';
@@ -5148,7 +5482,9 @@ function renderGovPendingUpdates() {
   html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 2, placeholder: 'Optional — why you approved/rejected'});
 
   html += '<div class="action-row pu-action-row">';
-  html += `<button class="btn-action primary" title="Approve (A)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve <span class="pu-kbd">A</span></button>`;
+  if (!isSaleLink) {
+    html += `<button class="btn-action primary" title="Approve (A)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve <span class="pu-kbd">A</span></button>`;
+  }
   html += `<button class="btn-action danger" title="Reject (R)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject <span class="pu-kbd">R</span></button>`;
   html += `<button class="btn-action" title="Skip to next (S)" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % (window._govPendingCurrentView||[]).length; renderGovTab();">→ Skip <span class="pu-kbd">S</span></button>`;
   html += `<button class="btn-action" style="margin-left:auto;background:#fb923c1a;color:#fb923c;border-color:#fb923c55" title="Mark as expired" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;

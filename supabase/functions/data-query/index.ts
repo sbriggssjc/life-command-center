@@ -36,7 +36,11 @@ const GOV_WRITE_TABLES = new Set([
   "recorded_owners", "true_owners", "sales_transactions", "property_sale_events", "loans",
   "research_queue_outcomes",
   "unified_contacts", "contact_change_log", "contact_merge_queue",
+  "pending_updates",
   "rpc/upsert_lead", "rpc/save_research_outcome", "rpc/resolve_contact",
+  // Sale-link resolver (Mode A/B/C). Backed by SQL in
+  // government-lease/sql/20260429_gov_rpc_sale_link_resolver.sql.
+  "rpc/gov_resolve_sale_link", "rpc/gov_create_property_from_pending",
 ]);
 
 const DIA_READ_TABLES = new Set([
