@@ -1184,7 +1184,9 @@ let govPendingUpdates = null;
 let govPendingUpdatesLoading = false;
 let govPendingUpdatesIdx = 0;
 let govPendingAutoResolved = null;
-let govPendingFilter = 'all'; // reason filter
+let govPendingFilter = 'all'; // category filter (taxonomy.category id)
+let govPendingSubtypeFilter = 'all'; // optional reason filter within a category
+let govPendingKeysBound = false;
 let govFinOverrideRec = null;
 let govPipelineRuns = null;
 let govPipelineLoading = false;
@@ -4564,11 +4566,247 @@ window.setGovResearchSection = function(section) {
   renderGovTab();
 };
 
-window.setGovPendingFilter = function(reason) {
-  govPendingFilter = reason;
+window.setGovPendingFilter = function(category) {
+  govPendingFilter = category;
+  govPendingSubtypeFilter = 'all';
   govPendingUpdatesIdx = 0;
   renderGovTab();
 };
+
+window.setGovPendingSubtype = function(reason) {
+  govPendingSubtypeFilter = reason;
+  govPendingUpdatesIdx = 0;
+  renderGovTab();
+};
+
+// ── Reason taxonomy ──────────────────────────────────────────────────────────
+// Friendly labels and decision guidance for each pending-update reason. Anything
+// not in this map falls through `govPendingFriendlyReason()` for a sensible
+// default (snake_case → Title Case) so new reason codes don't break the UI.
+const GOV_PENDING_REASON_TAXONOMY = {
+  ownership_discrepancy: {
+    label: 'Ownership Discrepancy',
+    category: 'ownership',
+    guidance: 'The recorded owner on file disagrees with a newer source. Approve when the proposed value is from a more authoritative record (deed/county); reject if the existing value was manually curated.'
+  },
+  low_confidence_match: {
+    label: 'Low-Confidence Match',
+    category: 'confidence',
+    guidance: 'The matcher linked two records but is not certain. Verify the names/addresses align and approve, or reject to keep them separate.'
+  },
+  intake_attachment_review: {
+    label: 'Attachment Review',
+    category: 'intake',
+    guidance: 'An intake email had an attachment that needs human triage (was it an OM, a tax bill, junk?). Approve to accept the system\'s classification; reject to discard.'
+  },
+  intake_unmatched_property: {
+    label: 'Unmatched Intake Property',
+    category: 'intake',
+    guidance: 'An intake landed but we couldn\'t auto-link it to a property in inventory. Approve only after confirming the property exists or should be created.'
+  },
+  unmatched_property: {
+    label: 'Unmatched Property',
+    category: 'intake',
+    guidance: 'A record references a property we can\'t find in our inventory. Approve to create it; reject if it\'s a duplicate or out-of-scope.'
+  },
+  unmatched_contact: {
+    label: 'Unmatched Contact',
+    category: 'intake',
+    guidance: 'A new contact appeared that doesn\'t match anyone in our directory. Approve to create the contact record; reject if it\'s a duplicate.'
+  },
+  // sale_property_link_* — all variants describe linking a sales_transaction to
+  // a property when the public inventory doesn't cleanly cover it.
+  sale_property_link_ambiguous_city_match: {
+    label: 'Sale → Property: Ambiguous City',
+    category: 'sale_link',
+    guidance: 'A sale matches multiple properties in the same city. Pick the right one, or reject if none of them is correct.'
+  },
+  sale_property_link_frpp_city_inventory_gap: {
+    label: 'Sale → Property: FRPP Gap',
+    category: 'sale_link',
+    guidance: 'FRPP shows the city has government inventory but the specific address is missing. Approve to create the link to the closest match, or reject to wait for better data.'
+  },
+  sale_property_link_frpp_city_presence_multi_facility: {
+    label: 'Sale → Property: Multi-Facility City',
+    category: 'sale_link',
+    guidance: 'FRPP shows multiple government facilities in this city. Confirm which one this sale belongs to before approving.'
+  },
+  sale_property_link_frpp_city_presence_single_facility: {
+    label: 'Sale → Property: Single-Facility City',
+    category: 'sale_link',
+    guidance: 'FRPP shows exactly one government facility in this city — high-confidence link. Verify the address matches and approve.'
+  },
+  sale_property_link_gsa_address_bridge_candidate: {
+    label: 'Sale → Property: GSA Bridge Candidate',
+    category: 'sale_link',
+    guidance: 'A GSA lease address looks like the bridge between this sale and a property. Approve if the address normalisation looks right.'
+  },
+  sale_property_link_multi_property_street_conflict: {
+    label: 'Sale → Property: Street Conflict',
+    category: 'sale_link',
+    guidance: 'Multiple properties share this street — pick the correct property number, or reject if none match.'
+  },
+  sale_property_link_named_site_or_partial_address: {
+    label: 'Sale → Property: Named Site',
+    category: 'sale_link',
+    guidance: 'The sale references a named site (e.g. "Oklahoma City VA Clinic") rather than a clean street address. Match by name + city, or reject if ambiguous.'
+  },
+  sale_property_link_no_public_inventory: {
+    label: 'Sale → Property: No Public Inventory',
+    category: 'sale_link',
+    guidance: 'Public inventory doesn\'t cover this address. Approve to record the sale against a derived property record, or reject if the deal isn\'t government-leased.'
+  },
+  sale_property_link_no_public_inventory_portfolio: {
+    label: 'Sale → Property: Portfolio (No Inventory)',
+    category: 'sale_link',
+    guidance: 'A portfolio sale where none of the addresses are in public inventory. Confirm this isn\'t a non-gov portfolio before approving.'
+  },
+  sale_property_link_no_public_inventory_route: {
+    label: 'Sale → Property: Route Only',
+    category: 'sale_link',
+    guidance: 'Only a rural route / PO-box style address is available. Approve only if you can confirm the property and tenant.'
+  },
+  sale_property_link_portfolio_address_gap: {
+    label: 'Sale → Property: Portfolio Address Gap',
+    category: 'sale_link',
+    guidance: 'A multi-property sale where some addresses match inventory and some don\'t. Approve the link for the matched address; the remaining gaps will surface as their own updates.'
+  },
+  sale_property_link_unknown_lease_number: {
+    label: 'Sale → Property: Unknown Lease #',
+    category: 'sale_link',
+    guidance: 'The sale references a lease number we don\'t have on file. Approve to record the sale anyway; reject if the lease number looks invalid.'
+  },
+  sale_property_link_unrepresented_street_no_public_inventory: {
+    label: 'Sale → Property: Unknown Street (No Inventory)',
+    category: 'sale_link',
+    guidance: 'A street we\'ve never seen, with no public inventory backing. Approve only if you can independently verify the property.'
+  },
+  sale_property_link_unrepresented_street_public_inventory: {
+    label: 'Sale → Property: Unknown Street (Has Inventory)',
+    category: 'sale_link',
+    guidance: 'A street we\'ve never seen, but the city has government inventory. Verify against FRPP/GSA and approve the link.'
+  }
+};
+
+const GOV_PENDING_CATEGORIES = [
+  { id: 'sale_link',  label: 'Property Linking', icon: '🔗', desc: 'Linking sales transactions to properties' },
+  { id: 'ownership',  label: 'Ownership',        icon: '🏛',  desc: 'Owner-of-record disagreements' },
+  { id: 'confidence', label: 'Match Confidence', icon: '⚖',  desc: 'Low-confidence record matches awaiting confirmation' },
+  { id: 'intake',     label: 'Intake Review',    icon: '📥', desc: 'Inbound emails / unmatched properties / contacts' },
+  { id: 'other',      label: 'Other',            icon: '•',  desc: 'Uncategorised reason codes' }
+];
+
+function govPendingTaxonomy(reason) {
+  if (reason && GOV_PENDING_REASON_TAXONOMY[reason]) return GOV_PENDING_REASON_TAXONOMY[reason];
+  // Fallback: best-effort label, "other" category.
+  const r = String(reason || 'other');
+  const label = r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return { label, category: 'other', guidance: 'No guidance defined for this reason yet — review the source context and use your judgment.' };
+}
+
+function govPendingRelativeAge(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!t) return '';
+  const sec = Math.max(1, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return sec + 's ago';
+  const min = Math.round(sec / 60); if (min < 60) return min + 'm ago';
+  const hr  = Math.round(min / 60); if (hr < 24)  return hr  + 'h ago';
+  const day = Math.round(hr / 24);  if (day < 30) return day + 'd ago';
+  const mo  = Math.round(day / 30); return mo + 'mo ago';
+}
+
+function govPendingConfidenceMeta(c) {
+  const conf = Number(c) || 0;
+  if (conf >= 0.8) return { color: '#22c55e', label: 'High',   pct: Math.round(conf * 100) };
+  if (conf >= 0.5) return { color: '#f59e0b', label: 'Medium', pct: Math.round(conf * 100) };
+  return                   { color: '#ef4444', label: 'Low',    pct: Math.round(conf * 100) };
+}
+
+function govPendingSourceSummary(ctx) {
+  if (!ctx || typeof ctx !== 'object') return [];
+  const pick = (keys) => {
+    for (const k of keys) {
+      if (ctx[k] != null && ctx[k] !== '') return { key: k, value: ctx[k] };
+    }
+    return null;
+  };
+  const out = [];
+  const entries = [
+    ['Subject',        ['subject']],
+    ['Address',        ['address', 'property_address', 'street_address']],
+    ['Tenant',         ['tenant', 'tenant_name', 'occupant']],
+    ['Asking / Price', ['asking_price', 'sale_price', 'price']],
+    ['Lease #',        ['lease_number', 'gsa_lease_number']],
+    ['Summary',        ['summary', 'description']],
+    ['Source',         ['source', 'data_source', 'origin']]
+  ];
+  for (const [label, keys] of entries) {
+    const hit = pick(keys);
+    if (hit) out.push({ label, value: hit.value });
+  }
+  return out;
+}
+
+window.bulkApproveGovPending = async function() {
+  const view = window._govPendingCurrentView || [];
+  const eligible = view.filter(r => Number(r.confidence || 0) >= 0.8);
+  if (eligible.length === 0) {
+    showToast('No items in this view meet the high-confidence (≥80%) bar', 'info');
+    return;
+  }
+  const ok = await lccConfirm('Bulk-approve ' + eligible.length + ' high-confidence update' + (eligible.length === 1 ? '' : 's') + ' in this view? Items below 80% confidence will be skipped.', 'Approve all');
+  if (!ok) return;
+  const approved = new Set();
+  let failed = 0;
+  for (const item of eligible) {
+    try {
+      await govPatch('pending_updates', 'id=eq.' + item.id, {
+        status: 'approved',
+        resolved_by: 'dashboard_bulk',
+        resolved_at: new Date().toISOString()
+      });
+      approved.add(item.id);
+    } catch (_) { failed++; }
+  }
+  govPendingUpdates = govPendingUpdates.filter(r => !approved.has(r.id));
+  govPendingUpdatesIdx = 0;
+  showToast('Bulk approved ' + approved.size + (failed ? ' (' + failed + ' failed)' : ''), failed ? 'warning' : 'success');
+  renderGovTab();
+};
+
+function ensureGovPendingKeybinds() {
+  if (govPendingKeysBound) return;
+  govPendingKeysBound = true;
+  document.addEventListener('keydown', (e) => {
+    // Only handle when on the Pending Updates view and not typing in a field.
+    if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
+    if (typeof researchMode !== 'undefined' && researchMode !== 'pending_updates') return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const view = window._govPendingCurrentView || [];
+    if (view.length === 0) return;
+    const sel = view[govPendingUpdatesIdx] || view[0];
+    const k = e.key.toLowerCase();
+    if (k === 'j' || e.key === 'ArrowDown') {
+      govPendingUpdatesIdx = Math.min(view.length - 1, govPendingUpdatesIdx + 1);
+      e.preventDefault(); renderGovTab();
+    } else if (k === 'k' || e.key === 'ArrowUp') {
+      govPendingUpdatesIdx = Math.max(0, govPendingUpdatesIdx - 1);
+      e.preventDefault(); renderGovTab();
+    } else if (k === 'a' && sel) {
+      e.preventDefault();
+      window.resolveGovPendingUpdate(sel.id, 'approved');
+    } else if (k === 'r' && sel) {
+      e.preventDefault();
+      window.resolveGovPendingUpdate(sel.id, 'rejected');
+    } else if (k === 's') {
+      govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % view.length;
+      e.preventDefault(); renderGovTab();
+    }
+  });
+}
 
 let govPendingUpdatesRefreshedAt = null;
 window.loadGovPendingUpdates = async function() {
@@ -4687,18 +4925,23 @@ function renderGovPendingUpdates() {
     return '<div class="gov-loading"><div class="spinner"></div> Loading pending updates...</div>';
   }
 
-  let html = '<div class="pipeline-ops-panel">';
+  ensureGovPendingKeybinds();
 
-  // Summary header
+  let html = '<div class="pipeline-ops-panel pu-panel">';
+
+  // ── Header ────────────────────────────────────────────────────────────────
   const totalPending = govPendingUpdates?.length || 0;
   html += `<div class="pipeline-header">
     <div class="header-title">Pending Updates</div>
-    <div class="header-subtitle">${totalPending} updates awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}</div>
+    <div class="header-subtitle">
+      ${totalPending} update${totalPending === 1 ? '' : 's'} awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}
+      <span class="pu-kbd-hint" title="Keyboard shortcuts">
+        <kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>A</kbd> approve · <kbd>R</kbd> reject · <kbd>S</kbd> skip
+      </span>
+    </div>
   </div>`;
 
-  // Auto-resolve trends — small inline strip showing what the system has
-  // cleared automatically. Reads govPendingAutoResolved (loaded alongside
-  // pending updates).
+  // Auto-resolved trends strip
   if (typeof govPendingAutoResolved !== 'undefined' && govPendingAutoResolved && govPendingAutoResolved.length > 0) {
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
     const recent = govPendingAutoResolved.filter(o => (o.resolved_at || '') >= sevenDaysAgo);
@@ -4710,10 +4953,10 @@ function renderGovPendingUpdates() {
     const total7d = recent.length;
     if (total7d > 0) {
       const breakdown = Object.keys(bySolver).sort((a,b) => bySolver[b]-bySolver[a])
-        .map(k => bySolver[k] + ' ' + k).join(' &middot; ');
-      html += '<div style="margin-bottom:12px;padding:8px 12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.25);border-radius:6px;font-size:12px;color:var(--text2);">';
-      html += '<span style="font-size:11px;color:#22c55e;font-weight:600;letter-spacing:0.5px;">AUTO-RESOLVED (7d)</span>';
-      html += ' &middot; ' + total7d + ' items cleared without manual review &middot; ' + breakdown;
+        .map(k => bySolver[k] + ' ' + k).join(' · ');
+      html += '<div class="pu-auto-strip">';
+      html += '<span class="pu-auto-label">AUTO-RESOLVED (7d)</span>';
+      html += ' · ' + total7d + ' items cleared without manual review · ' + breakdown;
       html += '</div>';
     }
   }
@@ -4724,112 +4967,196 @@ function renderGovPendingUpdates() {
     return html;
   }
 
-  // Reason breakdown
-  const reasonGroups = {};
-  govPendingUpdates.forEach(update => {
-    const reason = update.reason || 'other';
-    if (!reasonGroups[reason]) reasonGroups[reason] = [];
-    reasonGroups[reason].push(update);
+  // ── Bucket items by category & by reason ──────────────────────────────────
+  const byCategory = {};       // category id → items[]
+  const reasonGroups = {};     // reason → items[]
+  GOV_PENDING_CATEGORIES.forEach(c => { byCategory[c.id] = []; });
+  govPendingUpdates.forEach(u => {
+    const tax = govPendingTaxonomy(u.reason);
+    (byCategory[tax.category] = byCategory[tax.category] || []).push(u);
+    const r = u.reason || 'other';
+    (reasonGroups[r] = reasonGroups[r] || []).push(u);
   });
 
-  const reasons = Object.keys(reasonGroups).sort();
-
-  // Filter bar
-  html += '<div class="filter-bar" style="margin-bottom: 12px;">';
-  html += `<button class="filter-btn ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">All (${totalPending})</button>`;
-  reasons.forEach(reason => {
-    const count = reasonGroups[reason].length;
-    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter(decodeURIComponent('${encodeURIComponent(reason)}'))">${esc(reason)} (${count})</button>`;
-  });
-  html += '</div>';
-
-  // Get filtered items
-  let filteredItems = govPendingFilter === 'all' ? govPendingUpdates : reasonGroups[govPendingFilter] || [];
-
-  // Two-column layout: list on left, detail on right
-  html += '<div style="display: grid; grid-template-columns: 300px 1fr; gap: 16px;">';
-
-  // LEFT COLUMN: Scrollable list
-  html += '<div style="border-right: 1px solid var(--border); padding-right: 12px; max-height: 600px; overflow-y: auto;">';
-  filteredItems.forEach((item, idx) => {
-    const isActive = idx === govPendingUpdatesIdx;
-    const reasonBadge = item.reason || 'other';
-    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? 'rgba(108,140,255,0.1)' : 'var(--s1)'};">
-      <div style="font-weight: 600; font-size: 13px; color: var(--text);">${esc(item.field_name)}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${esc(item.table_name)}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; padding: 2px 6px; border-radius: 3px;">${esc(reasonBadge)}</span></div>
-    </div>`;
+  // ── Category chips ────────────────────────────────────────────────────────
+  html += '<div class="pu-cat-bar">';
+  html += `<button class="pu-cat ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">
+    <span class="pu-cat-icon">▣</span><span class="pu-cat-label">All</span><span class="pu-cat-count">${totalPending}</span>
+  </button>`;
+  GOV_PENDING_CATEGORIES.forEach(cat => {
+    const count = byCategory[cat.id]?.length || 0;
+    if (count === 0) return;
+    const active = govPendingFilter === cat.id;
+    html += `<button class="pu-cat ${active ? 'active' : ''}" title="${esc(cat.desc)}" onclick="window.setGovPendingFilter('${cat.id}')">
+      <span class="pu-cat-icon">${cat.icon}</span><span class="pu-cat-label">${esc(cat.label)}</span><span class="pu-cat-count">${count}</span>
+    </button>`;
   });
   html += '</div>';
 
-  // RIGHT COLUMN: Detail card
-  if (filteredItems.length > 0) {
-    const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
-    const oldVal = selected.old_value !== null ? String(selected.old_value) : '(empty)';
-    const newVal = selected.new_value !== null ? String(selected.new_value) : '(empty)';
-    const sourceCtx = selected.source_context || {};
+  // ── Selected category items ───────────────────────────────────────────────
+  let categoryItems;
+  if (govPendingFilter === 'all') {
+    categoryItems = govPendingUpdates.slice();
+  } else {
+    categoryItems = (byCategory[govPendingFilter] || []).slice();
+  }
 
-    // Confidence color coding
-    const conf = selected.confidence || 0;
-    let confColor = '#ef4444';
-    let confLabel = 'Low';
-    if (conf > 0.8) {
-      confColor = '#22c55e';
-      confLabel = 'High';
-    } else if (conf > 0.5) {
-      confColor = '#f59e0b';
-      confLabel = 'Medium';
-    }
+  // ── Subtype dropdown (only when this category has >1 reason) ─────────────
+  const subtypeCounts = {};
+  categoryItems.forEach(u => {
+    const r = u.reason || 'other';
+    subtypeCounts[r] = (subtypeCounts[r] || 0) + 1;
+  });
+  const subtypes = Object.keys(subtypeCounts).sort((a, b) => subtypeCounts[b] - subtypeCounts[a]);
 
-    html += '<div>';
-    html += '<div class="task-header">';
-    html += `<div>${esc(selected.field_name)} Update</div>`;
-    html += `<span class="task-badge needs-input">${esc(selected.reason || 'pending')}</span>`;
-    html += '</div>';
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Table</div>';
-    html += `<div class="context-value"><code>${esc(selected.table_name)}</code></div>`;
-    html += '</div>';
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Current Value</div>';
-    html += `<div style="background: var(--s2); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto; color: var(--text);">${esc(oldVal)}</div>`;
-    html += '</div>';
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Proposed Value</div>';
-    html += `<div style="background: var(--s3); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
-    html += '</div>';
-
-    if (sourceCtx && Object.keys(sourceCtx).length > 0) {
-      html += '<div class="context-block">';
-      html += '<div class="context-label">Source Context</div>';
-      html += `<div style="font-size: 12px; color: var(--text3);"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
-      html += '</div>';
-    }
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Confidence Score</div>';
-    html += `<div style="display: flex; align-items: center; gap: 8px;">
-      <div style="width: 24px; height: 24px; border-radius: 50%; background: ${confColor}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${Math.round(conf * 100)}%</div>
-      <span style="font-size: 12px; color: var(--text3);">${confLabel} confidence</span>
-    </div>`;
-    html += '</div>';
-
-    html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
-
-    html += '<div class="action-row">';
-    html += `<button class="btn-action primary" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve</button>`;
-    html += `<button class="btn-action danger" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject</button>`;
-    html += `<button class="btn-action" style="background: #fb923c;" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
-    html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
-    html += '</div>';
+  if (subtypes.length > 1) {
+    html += '<div class="pu-subtype-row">';
+    html += '<label class="pu-subtype-label">Subtype</label>';
+    html += `<select class="pu-subtype-select" onchange="window.setGovPendingSubtype(this.value)">`;
+    html += `<option value="all" ${govPendingSubtypeFilter === 'all' ? 'selected' : ''}>All subtypes (${categoryItems.length})</option>`;
+    subtypes.forEach(r => {
+      const tax = govPendingTaxonomy(r);
+      const sel = govPendingSubtypeFilter === r ? 'selected' : '';
+      html += `<option value="${esc(r)}" ${sel}>${esc(tax.label)} — ${subtypeCounts[r]}</option>`;
+    });
+    html += '</select>';
     html += '</div>';
   }
 
+  // Apply subtype filter
+  let filteredItems = govPendingSubtypeFilter === 'all'
+    ? categoryItems
+    : categoryItems.filter(u => (u.reason || 'other') === govPendingSubtypeFilter);
+
+  // Sort: priority_score desc, then confidence desc, then created_at desc
+  filteredItems.sort((a, b) => {
+    const pa = Number(a.priority_score) || 0;
+    const pb = Number(b.priority_score) || 0;
+    if (pa !== pb) return pb - pa;
+    const ca = Number(a.confidence) || 0;
+    const cb = Number(b.confidence) || 0;
+    if (ca !== cb) return cb - ca;
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  });
+  // Expose to keybinds + bulk action
+  window._govPendingCurrentView = filteredItems;
+
+  // Clamp idx
+  if (govPendingUpdatesIdx >= filteredItems.length) govPendingUpdatesIdx = 0;
+
+  // ── Bulk action bar ───────────────────────────────────────────────────────
+  const highConfCount = filteredItems.filter(r => Number(r.confidence || 0) >= 0.8).length;
+  html += '<div class="pu-bulk-bar">';
+  html += `<span class="pu-bulk-summary">Showing <strong>${filteredItems.length}</strong> · <span style="color:#22c55e">${highConfCount}</span> at ≥80% confidence</span>`;
+  if (highConfCount > 0) {
+    html += `<button class="pu-bulk-btn" onclick="window.bulkApproveGovPending()" title="Approve every item in the current view at ≥80% confidence">
+      ✓ Bulk approve high-confidence (${highConfCount})
+    </button>`;
+  }
   html += '</div>';
+
+  if (filteredItems.length === 0) {
+    html += '<div class="empty-state" style="padding:32px"><div class="empty-icon">✓</div><div class="empty-title">Nothing in this view</div><div class="empty-desc">Pick a different category or clear the subtype filter.</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  // ── Two-column layout ─────────────────────────────────────────────────────
+  html += '<div class="pu-grid">';
+
+  // LEFT: list
+  html += '<div class="pu-list">';
+  filteredItems.forEach((item, idx) => {
+    const isActive = idx === govPendingUpdatesIdx;
+    const tax = govPendingTaxonomy(item.reason);
+    const conf = govPendingConfidenceMeta(item.confidence);
+    const age = govPendingRelativeAge(item.created_at);
+    html += `<div class="pu-list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();">
+      <div class="pu-list-row1">
+        <span class="pu-list-title">${esc(tax.label)}</span>
+        <span class="pu-conf-pill" style="background:${conf.color}1a;color:${conf.color};border-color:${conf.color}55">${conf.pct}%</span>
+      </div>
+      <div class="pu-list-row2">
+        <code>${esc(item.table_name)}</code>·<span>${esc(item.field_name || '')}</span>
+      </div>
+      <div class="pu-list-row3">
+        ${age ? '<span class="pu-list-age">' + esc(age) + '</span>' : ''}
+      </div>
+    </div>`;
+  });
   html += '</div>';
+
+  // RIGHT: detail
+  const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
+  const oldVal = selected.old_value !== null && selected.old_value !== undefined ? String(selected.old_value) : '(empty)';
+  const newVal = selected.new_value !== null && selected.new_value !== undefined ? String(selected.new_value) : '(empty)';
+  const sourceCtx = selected.source_context || {};
+  const tax = govPendingTaxonomy(selected.reason);
+  const conf = govPendingConfidenceMeta(selected.confidence);
+  const summary = govPendingSourceSummary(sourceCtx);
+  const age = govPendingRelativeAge(selected.created_at);
+
+  html += '<div class="pu-detail">';
+
+  // Detail header
+  html += '<div class="pu-detail-head">';
+  html += `<div class="pu-detail-title">${esc(tax.label)}</div>`;
+  html += `<div class="pu-detail-meta">
+    <span class="pu-conf-pill" style="background:${conf.color}1a;color:${conf.color};border-color:${conf.color}55">${conf.pct}% ${conf.label}</span>
+    ${age ? '<span class="pu-detail-age">' + esc(age) + '</span>' : ''}
+    <code class="pu-detail-table">${esc(selected.table_name)}.${esc(selected.field_name || '')}</code>
+  </div>`;
+  html += '</div>';
+
+  // Guidance banner
+  html += `<div class="pu-guidance">
+    <div class="pu-guidance-label">What you're approving</div>
+    <div class="pu-guidance-body">${esc(tax.guidance)}</div>
+  </div>`;
+
+  // Diff
+  html += '<div class="pu-diff">';
+  html += `<div class="pu-diff-cell pu-diff-old">
+    <div class="pu-diff-label">Current</div>
+    <div class="pu-diff-value">${esc(oldVal)}</div>
+  </div>`;
+  html += `<div class="pu-diff-arrow">→</div>`;
+  html += `<div class="pu-diff-cell pu-diff-new">
+    <div class="pu-diff-label">Proposed</div>
+    <div class="pu-diff-value">${esc(newVal)}</div>
+  </div>`;
+  html += '</div>';
+
+  // Source context summary (parsed) + collapsible raw
+  if (summary.length > 0 || Object.keys(sourceCtx).length > 0) {
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Source Context</div>';
+    if (summary.length > 0) {
+      html += '<dl class="pu-ctx-summary">';
+      summary.forEach(row => {
+        const v = typeof row.value === 'object' ? JSON.stringify(row.value) : String(row.value);
+        html += `<dt>${esc(row.label)}</dt><dd>${esc(v)}</dd>`;
+      });
+      html += '</dl>';
+    }
+    if (Object.keys(sourceCtx).length > 0) {
+      html += `<details class="pu-ctx-raw"><summary>Raw JSON</summary><pre>${esc(JSON.stringify(sourceCtx, null, 2))}</pre></details>`;
+    }
+    html += '</div>';
+  }
+
+  html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 2, placeholder: 'Optional — why you approved/rejected'});
+
+  html += '<div class="action-row pu-action-row">';
+  html += `<button class="btn-action primary" title="Approve (A)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve <span class="pu-kbd">A</span></button>`;
+  html += `<button class="btn-action danger" title="Reject (R)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject <span class="pu-kbd">R</span></button>`;
+  html += `<button class="btn-action" title="Skip to next (S)" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % (window._govPendingCurrentView||[]).length; renderGovTab();">→ Skip <span class="pu-kbd">S</span></button>`;
+  html += `<button class="btn-action" style="margin-left:auto;background:#fb923c1a;color:#fb923c;border-color:#fb923c55" title="Mark as expired" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
+  html += '</div>';
+
+  html += '</div>'; // pu-detail
+  html += '</div>'; // pu-grid
+  html += '</div>'; // pu-panel
 
   return html;
 }
