@@ -1845,6 +1845,32 @@ function renderLccFields(entity, data) {
       </div>`;
     }
   }
+
+  // Round 76ej.o (2026-05-05): for multi-tenant buildings whose CREXi
+  // Details panel has no Tenant label, the parser mines the tenant
+  // list out of the marketing-description prose ("Tenants Include
+  // Bon Secours, FDA, Supreme Court of Virginia, Rein, and Edward
+  // Jones") and stores it on metadata.tenants[]. Surface that as a
+  // separate Tenants row whenever the single-tenant Tenant row above
+  // didn't render.
+  const hasTenantRow = readEntityField('tenant_name')
+    && isValidLccValue('tenant_name', readEntityField('tenant_name'));
+  const tenantsArr = entity?.metadata?.tenants;
+  if (!hasTenantRow && Array.isArray(tenantsArr) && tenantsArr.length > 0) {
+    const names = tenantsArr
+      .map((t) => (t && typeof t === 'object' ? t.name : t))
+      .filter((n) => typeof n === 'string' && n.trim().length >= 3 && n.trim().length <= 60)
+      .map((n) => n.trim());
+    if (names.length) {
+      const dedup = Array.from(new Set(names.map((n) => n.toLowerCase())))
+        .map((lc) => names.find((n) => n.toLowerCase() === lc));
+      const display = dedup.join(', ');
+      html += `<div class="context-field">
+        <span class="context-label">Tenants</span>
+        <span class="context-value">${escapeHtml(display)}</span>
+      </div>`;
+    }
+  }
   return html;
 }
 

@@ -190,6 +190,15 @@
     // registry so OM extraction always wins when both are present.
     const descLease = extractCrexiLeaseFromDescription(marketing.description);
 
+    // Round 76ej.o (2026-05-05): on multi-tenant CREXi listings the
+    // structured panel has no Tenant label — the only place tenant
+    // identity surfaces is in the marketing-description prose
+    // ("Tenants Include Bon Secours, Food and Drug Administration,
+    // Supreme Court of Virginia, Rein, and Edward Jones."). Mine that
+    // pattern so the LCC sidebar can show a Tenants row instead of
+    // displaying nothing for the entire multi-tenant building.
+    const descTenants = extractCrexiTenantsFromDescription(marketing.description);
+
     // OM (Offering Memorandum) availability + link
     const om = extractCrexiOm();
 
@@ -385,6 +394,12 @@
         listing_phone: primaryContact?.phones?.[0] || null,
         listing_email: primaryContact?.email || null,
         contacts: contacts || [],
+        // Round 76ej.o: tenants array mined from the marketing
+        // description prose for multi-tenant buildings whose
+        // structured Details panel doesn't surface individual
+        // tenants. classifyDomain already reads metadata.tenants,
+        // and renderLccFields renders a Tenants row from this list.
+        tenants: descTenants && descTenants.length ? descTenants : null,
         sale_price: val(salePriceEl),
         sale_date: val(saleDateEl),
         days_on_market: header.days_on_market,
@@ -768,6 +783,53 @@
       if (Number.isFinite(n) && n > 0 && n <= 50) out.rent_escalations_pct = n;
     }
 
+    return out;
+  }
+
+  function extractCrexiTenantsFromDescription(desc) {
+    // Pull a tenants list out of broker prose. Anchored on
+    // "Tenants Include …" / "Tenants include …" / "tenants include"
+    // followed by a comma-separated list, optionally with " and "
+    // before the last item. Returns an array of {name} objects so
+    // it slots into the same shape CoStar's content script uses.
+    if (!desc || typeof desc !== 'string' || desc.length < 30) return [];
+    const text = desc.length > 8000 ? desc.slice(0, 8000) : desc;
+    const m = text.match(/\btenants?\s+include[:\s]+([^.]{10,400}?)(?=\.\s|\.$|$)/i);
+    if (!m) return [];
+    // Split on commas first so multi-word names that contain " and "
+    // ("Food and Drug Administration", "Bath and Body Works") aren't
+    // shredded. Strip a leading "and " from each item (Oxford-comma
+    // case "X, Y, and Z" → ["X", "Y", "and Z"]). Then, if multiple
+    // parts and the last one still contains " and ", treat that as
+    // a non-Oxford join "X, Y and Z" and split the last item.
+    let initialParts = m[1].trim().split(',')
+      .map((s) => s.trim().replace(/^and\s+/i, '').trim());
+    if (initialParts.length >= 2) {
+      const lastIdx = initialParts.length - 1;
+      const split = initialParts[lastIdx].match(/^(.+?)\s+and\s+(.+)$/i);
+      if (split) {
+        const head = split[1].trim();
+        const tail = split[2].trim();
+        if (head && tail) {
+          initialParts[lastIdx] = head;
+          initialParts.push(tail);
+        }
+      }
+    }
+    const SKIP_FRAGMENT = /^(other|various|misc(?:ellaneous)?|local|national|regional|tenants?|including|with|several|multiple|some)$/i;
+    const parts = initialParts
+      .filter((s) => s.length >= 3 && s.length <= 60)
+      .filter((s) => !SKIP_FRAGMENT.test(s));
+    if (parts.length < 2 || parts.length > 10) return [];
+    // Dedupe (case-insensitive) while preserving original casing.
+    const seen = new Set();
+    const out = [];
+    for (const name of parts) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ name, source: 'crexi_marketing_description' });
+    }
     return out;
   }
 
