@@ -86,6 +86,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'npi-registry-sync':    return handleNpiRegistrySyncProxy(req, res);
     case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
+    case 'availability-promotion-sweep': return handleAvailabilityPromotionSweep(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
@@ -554,6 +555,209 @@ async function handleAutoScrapeListings(req, res) {
     .reduce((acc, s) => acc + (s.errors?.length || 0), 0);
   const httpStatus =
     (totalErrs > 0 && result.auto_marked_sold + result.auto_verified_available === 0) ? 502 :
+    (totalErrs > 0) ? 207 : 200;
+  return res.status(httpStatus).json(result);
+}
+
+// ============================================================================
+// AVAILABILITY-PROMOTION-SWEEP (Round 76ej.h, 2026-05-05)
+// ============================================================================
+//
+// Promotion path for listings the availability-checker (Round 76ej.g)
+// stamped 'unverified_assumed_off'. The Edge Function never writes
+// check_result='sold' on its own — even when a page banner reads "Sold"
+// — because that path needs deed-level evidence the cron worker doesn't
+// have. Without a follow-up, those listings would sit indefinitely with
+// off_market_reason='unverified_assumed_off' even after the actual sale
+// recorded in sales_transactions.
+//
+// This sweep closes the loop. Every 6h (offset from auto-scrape) it:
+//   1. Pulls active dia + gov listings with
+//      off_market_reason='unverified_assumed_off' and a recent
+//      off_market_date (default last 90d).
+//   2. For each, queries sales_transactions for a sale within the
+//      property's ±3-year window (same logic + closest-sale picker as
+//      handleAutoScrapeListings).
+//   3. On a match, calls lcc_record_listing_check(check_result='sold')
+//      which upgrades off_market_reason from 'unverified_assumed_off'
+//      to 'sold' and writes a 'sold' row to listing_status_history.
+//
+// Routing:
+//   GET  /api/admin?_route=availability-promotion-sweep        — dry-run
+//   POST /api/admin?_route=availability-promotion-sweep        — apply
+//
+// Query params:
+//   ?domain=dia|gov|both    (default both)
+//   ?limit=50               (cap listings per call)
+//   ?max_age_days=90        (only sweep listings off-market within N days)
+//
+// Cron: pg_cron job 'lcc-availability-promotion-sweep' every 6h at :45,
+// 15min after lcc-availability-checker so it's looking at fresh evidence
+// from the same cycle.
+async function handleAvailabilityPromotionSweep(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia', 'gov', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia, gov, or both' });
+  }
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)));
+  const maxAgeDays = Math.min(180, Math.max(7, parseInt(req.query.max_age_days || '90', 10)));
+  const dryRun = req.method === 'GET';
+
+  const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: 0,
+    promoted_to_sold: 0,
+    no_sale_evidence: 0,
+    by_domain: {},
+  };
+
+  const offMarketCutoff = new Date(Date.now() - maxAgeDays * 86400000)
+    .toISOString().slice(0, 10);
+
+  for (const target of targets) {
+    const dom = target === 'dia' ? 'dialysis' : 'government';
+    const summary = {
+      scanned: 0,
+      promoted: 0,
+      no_evidence: 0,
+      errors: [],
+    };
+
+    // gov has the exclude_from_listing_metrics flag for soft-deleted /
+    // test rows; mirror handleAutoScrapeListings' filter.
+    const excludeFilter = dom === 'government'
+      ? `&exclude_from_listing_metrics=not.is.true`
+      : '';
+
+    // Pull off-market listings the scraper stamped as unverified.
+    // We don't filter on is_active/listing_status — the off_market_reason
+    // filter implicitly captures rows that aren't active anymore.
+    const select = 'listing_id,property_id,listing_date,off_market_date,off_market_reason';
+    const path =
+      `available_listings?off_market_reason=eq.unverified_assumed_off` +
+      `&off_market_date=gte.${encodeURIComponent(offMarketCutoff)}` +
+      excludeFilter +
+      `&select=${select}` +
+      `&order=off_market_date.desc&limit=${limit}`;
+
+    const listingsRes = await domainQuery(dom, 'GET', path);
+    if (!listingsRes.ok) {
+      summary.errors.push({ stage: 'list', status: listingsRes.status, detail: listingsRes.data });
+      result.by_domain[dom] = summary;
+      continue;
+    }
+    const listings = Array.isArray(listingsRes.data) ? listingsRes.data : [];
+    summary.scanned = listings.length;
+    result.scanned += listings.length;
+
+    if (listings.length === 0) {
+      result.by_domain[dom] = summary;
+      continue;
+    }
+
+    for (const l of listings) {
+      try {
+        if (!l.property_id || !l.listing_date) {
+          summary.no_evidence += 1;
+          result.no_sale_evidence += 1;
+          continue;
+        }
+        const listingMs = Date.parse(l.listing_date);
+        if (!Number.isFinite(listingMs)) {
+          summary.no_evidence += 1;
+          result.no_sale_evidence += 1;
+          continue;
+        }
+
+        // Same ±3-year window + closest-sale picker as handleAutoScrapeListings.
+        const windowDays = 3 * 365 + 1;
+        const lower = new Date(listingMs - windowDays * 86400000).toISOString().slice(0, 10);
+        const upper = new Date(listingMs + windowDays * 86400000).toISOString().slice(0, 10);
+        const salePath =
+          `sales_transactions?property_id=eq.${Number(l.property_id)}` +
+          `&sale_date=gte.${encodeURIComponent(lower)}` +
+          `&sale_date=lte.${encodeURIComponent(upper)}` +
+          `&select=sale_id,sale_date,sold_price&order=sale_date.asc&limit=10`;
+        const saleRes = await domainQuery(dom, 'GET', salePath);
+        if (!saleRes.ok) {
+          summary.errors.push({
+            stage: 'sale_lookup', listing_id: l.listing_id,
+            status: saleRes.status, detail: saleRes.data,
+          });
+          continue;
+        }
+        const sales = Array.isArray(saleRes.data) ? saleRes.data : [];
+        if (sales.length === 0) {
+          summary.no_evidence += 1;
+          result.no_sale_evidence += 1;
+          continue;
+        }
+
+        // Pick closest by date, tiebreak prefer sale on-or-after listing_date.
+        let best = null;
+        let bestDist = Infinity;
+        let bestSign = 1;
+        for (const sale of sales) {
+          const saleMs = Date.parse(sale.sale_date);
+          if (!Number.isFinite(saleMs)) continue;
+          const dist = Math.abs(saleMs - listingMs);
+          const sign = saleMs >= listingMs ? -1 : 1;
+          if (dist < bestDist || (dist === bestDist && sign < bestSign)) {
+            best = sale;
+            bestDist = dist;
+            bestSign = sign;
+          }
+        }
+        if (!best) {
+          summary.no_evidence += 1;
+          result.no_sale_evidence += 1;
+          continue;
+        }
+
+        if (dryRun) {
+          summary.promoted += 1;
+          result.promoted_to_sold += 1;
+          continue;
+        }
+
+        const rpcRes = await domainQuery(dom, 'POST', 'rpc/lcc_record_listing_check', {
+          p_listing_id: l.listing_id,
+          p_method: 'auto_scrape',
+          p_check_result: 'sold',
+          p_off_market_reason: 'sold',
+          p_effective_at: best.sale_date,
+          p_notes: `availability-promotion-sweep: matched sales_transactions sale_id=${best.sale_id} on ${best.sale_date} (was unverified_assumed_off)`,
+          p_verified_by: user.id || null,
+        });
+        if (!rpcRes.ok) {
+          summary.errors.push({
+            stage: 'rpc', listing_id: l.listing_id,
+            status: rpcRes.status, detail: rpcRes.data,
+          });
+          continue;
+        }
+        summary.promoted += 1;
+        result.promoted_to_sold += 1;
+      } catch (err) {
+        summary.errors.push({ stage: 'process', listing_id: l.listing_id, message: err?.message });
+      }
+    }
+
+    result.by_domain[dom] = summary;
+  }
+
+  const totalErrs = Object.values(result.by_domain)
+    .reduce((acc, s) => acc + (s.errors?.length || 0), 0);
+  const httpStatus =
+    (totalErrs > 0 && result.promoted_to_sold === 0) ? 502 :
     (totalErrs > 0) ? 207 : 200;
   return res.status(httpStatus).json(result);
 }
