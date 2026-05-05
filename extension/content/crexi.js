@@ -53,6 +53,25 @@
     if (!address || address === lastDetectedAddress) return;
     lastDetectedAddress = address;
 
+    // Round 76ej.v (2026-05-05): portfolio-listing detection. CREXi
+    // surfaces multi-property portfolios under headings like
+    //   "2 Locations", "5 Locations", "Portfolio Sale (3 Properties)"
+    // which are NOT real addresses. The Spencer, IA SSA + USDA
+    // portfolio (LCC entity 6ddabd14) demonstrated the failure mode:
+    // a single LCC entity got created with address="2 Locations",
+    // city/state null, tenant="Social Security Administration, USDA"
+    // (comma-jammed string), and aggregate cap-rate from the deck.
+    // Each property in the portfolio should be its own LCC entity,
+    // captured individually. Detect the shape and tag the capture
+    // so the sidebar can route it through a portfolio-aware UX path
+    // instead of the standard property-detail flow.
+    const PORTFOLIO_HEADING = /^(\d+\s+(locations|properties|properties\s+portfolio|building\s+portfolio)|portfolio\s+(sale|of|listing)\b|.*\s+portfolio$)/i;
+    const isPortfolioHeading = PORTFOLIO_HEADING.test(address)
+      // Or: heading is a non-address string with no digits + comma
+      // (typical real address form). Real addresses contain a number
+      // and either a city or state code somewhere.
+      || (!/\d/.test(address) && !/,\s*[A-Z]{2}\s+\d{5}/.test(address));
+
     const val = (el) => el?.textContent?.trim() || null;
 
     // Round 76ej.i (2026-05-04): detect closed/withdrawn listings.
@@ -346,6 +365,10 @@
         canonical_url:    crexiCanonicalUrl,
         listing_status:   listingStatus,
         is_closed_listing: isClosedListing,
+        // Round 76ej.v: tag portfolio listings so the sidebar can
+        // surface a "this looks like a portfolio — capture each
+        // property individually" notice instead of writing junk.
+        is_portfolio_listing: isPortfolioHeading,
         asking_price: askingPrice,
         cap_rate: capRate,
         noi: noi,
