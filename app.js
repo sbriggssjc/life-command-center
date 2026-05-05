@@ -1304,6 +1304,19 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
         loadDiaData();
       }
     }
+  } else if (currentBizTab === 'national_st') {
+    // National Single-Tenant goes straight to Capital Markets (the only view).
+    // Domain tab groups / inner tabs hidden — there are no other sub-views yet.
+    if (typeof renderNatlStCapitalMarkets === 'function') {
+      const r = renderNatlStCapitalMarkets();
+      if (typeof r === 'string') {
+        const el = document.getElementById('bizPageInner');
+        if (el) el.innerHTML = r;
+      }
+    } else {
+      const el = document.getElementById('bizPageInner');
+      if (el) el.innerHTML = '<div style="color:var(--text2)">Loading capital-markets.js...</div>';
+    }
   } else if (currentBizTab === 'other') {
     // All Other tab — show domain prospects if loaded, else trigger load first
     if (_mktOpportunitiesLoaded) {
