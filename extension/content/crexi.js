@@ -795,22 +795,64 @@
   }
 
   function extractCrexiTenantsFromDescription(desc) {
-    // Pull a tenants list out of broker prose. Anchored on
-    // "Tenants Include …" / "Tenants include …" / "tenants include"
-    // followed by a comma-separated list, optionally with " and "
-    // before the last item. Returns an array of {name} objects so
-    // it slots into the same shape CoStar's content script uses.
+    // Pull a tenants list out of broker prose. Tries multiple anchor
+    // phrases — list-shaped first ("Tenants Include …", "leased to …
+    // agencies: …"), then single-tenant patterns ("leased to <X>",
+    // "lease with <X>", "anchored by <X>", "occupied by <X>"). Returns
+    // an array of {name} objects so it slots into the same shape
+    // CoStar's content script uses.
+    //
+    // Round 76ej.u (2026-05-05): list-only matching missed three real
+    // shapes seen in production captures:
+    //   - "leased to three established agencies: A, B, and C" (Butte)
+    //   - "lease with GSA (General Services Administration)" (Oshkosh)
+    //   - "anchored by the U.S. General Services Administration (GSA),
+    //      which has occupied …" (Tucson Northwest Corporate Centre)
     if (!desc || typeof desc !== 'string' || desc.length < 30) return [];
     const text = desc.length > 8000 ? desc.slice(0, 8000) : desc;
-    const m = text.match(/\btenants?\s+include[:\s]+([^.]{10,400}?)(?=\.\s|\.$|$)/i);
-    if (!m) return [];
-    // Split on commas first so multi-word names that contain " and "
-    // ("Food and Drug Administration", "Bath and Body Works") aren't
-    // shredded. Strip a leading "and " from each item (Oxford-comma
-    // case "X, Y, and Z" → ["X", "Y", "and Z"]). Then, if multiple
-    // parts and the last one still contains " and ", treat that as
-    // a non-Oxford join "X, Y and Z" and split the last item.
-    let initialParts = m[1].trim().split(',')
+
+    // ── List-shaped patterns ────────────────────────────────────────
+    let listRaw = null;
+    let m = text.match(/\btenants?\s+include[:\s]+([^.]{10,400}?)(?=\.\s|\.$|$)/i);
+    if (m) listRaw = m[1];
+    if (!listRaw) {
+      m = text.match(/\bleased\s+to\s+(?:[a-z]+\s+){0,3}?(?:agencies|tenants)\s*:\s*([^.]{10,400}?)(?=\.\s|\.$|$)/i);
+      if (m) listRaw = m[1];
+    }
+    if (listRaw) return parseTenantList(listRaw);
+
+    // ── Single-tenant patterns ─────────────────────────────────────
+    // Each tries to capture one anchor-tenant noun phrase. Order
+    // matters — most specific first. The trailing terminator pattern
+    // stops the capture at sentence boundaries, parentheticals, or
+    // transitional words ("since", "for", "which", etc.) so we don't
+    // swallow the rest of the sentence.
+    const NAME = '((?:U\\.?S\\.?\\s+)?(?:United\\s+States\\s+|Federal\\s+|National\\s+)?[A-Z][A-Za-z&.\\-\' ]{2,80}?)';
+    const TERM = '(?:\\s*\\(|\\s+(?:since|for|with|under|by|has|on|in|which|whose|that|to)\\s|\\s*[.,;:]|$)';
+    const SINGLE_PATTERNS = [
+      new RegExp(`\\bleased\\s+to\\s+(?:a\\s+|an\\s+|the\\s+)?${NAME}${TERM}`, 'i'),
+      new RegExp(`\\blease\\s+(?:with|to)\\s+(?:a\\s+|an\\s+|the\\s+)?${NAME}${TERM}`, 'i'),
+      new RegExp(`\\banchored\\s+by\\s+(?:a\\s+|an\\s+|the\\s+)?${NAME}${TERM}`, 'i'),
+      new RegExp(`\\boccupied\\s+by\\s+(?:a\\s+|an\\s+|the\\s+)?${NAME}${TERM}`, 'i'),
+    ];
+    const SKIP_NAME = /^(the\s+|a\s+)?(building|property|tenants?|asset|investment|space|premises|owner|seller|buyer|federal\s+lease|federal\s+government|government\s+tenants?|established\s+agencies?)\s*$/i;
+    for (const re of SINGLE_PATTERNS) {
+      const sm = text.match(re);
+      if (!sm) continue;
+      let name = sm[1].trim().replace(/^(?:the\s+|a\s+|an\s+)/i, '').trim();
+      // Strip a "(SHORTHAND)" parenthetical if present —
+      // "U.S. General Services Administration (GSA)" → "U.S. General
+      // Services Administration".
+      name = name.replace(/\s*\([^)]+\)\s*$/, '').trim();
+      if (name.length < 3 || name.length > 80) continue;
+      if (SKIP_NAME.test(name)) continue;
+      return [{ name, source: 'crexi_marketing_description' }];
+    }
+    return [];
+  }
+
+  function parseTenantList(rawList) {
+    let initialParts = rawList.trim().split(',')
       .map((s) => s.trim().replace(/^and\s+/i, '').trim());
     if (initialParts.length >= 2) {
       const lastIdx = initialParts.length - 1;
@@ -824,12 +866,17 @@
         }
       }
     }
-    const SKIP_FRAGMENT = /^(other|various|misc(?:ellaneous)?|local|national|regional|tenants?|including|with|several|multiple|some)$/i;
+    // Strip "(SHORTHAND)" parenthetical at the end of each item
+    // ("United States Forest Service (GSA)" → "United States Forest Service").
+    initialParts = initialParts.map((s) => s.replace(/\s*\([^)]+\)\s*$/, '').trim());
+    // Strip leading articles.
+    initialParts = initialParts.map((s) => s.replace(/^(?:the|a|an)\s+/i, '').trim());
+
+    const SKIP_FRAGMENT = /^(other|various|misc(?:ellaneous)?|local|national|regional|tenants?|including|with|several|multiple|some|established\s+agencies?)$/i;
     const parts = initialParts
-      .filter((s) => s.length >= 3 && s.length <= 60)
+      .filter((s) => s.length >= 3 && s.length <= 80)
       .filter((s) => !SKIP_FRAGMENT.test(s));
-    if (parts.length < 2 || parts.length > 10) return [];
-    // Dedupe (case-insensitive) while preserving original casing.
+    if (parts.length < 1 || parts.length > 10) return [];
     const seen = new Set();
     const out = [];
     for (const name of parts) {
