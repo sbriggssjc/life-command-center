@@ -1722,3 +1722,20 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
   font-size: 11px; color: var(--text3); margin: 4px 0 8px;
   font-style: italic;
 }
+
+/* GSA inventory panel — promoted to top of the resolver */
+.pu-resolver-gsa {
+  background: rgba(34,197,94,0.05);
+  border-left: 3px solid #22c55e;
+}
+.pu-gsa-badge {
+  display: inline-block;
+  background: #22c55e; color: #0a0f0a;
+  font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+  padding: 2px 6px; border-radius: 3px;
+  margin-right: 4px;
+}
+.pu-cand-gsa { border-color: rgba(34,197,94,0.35); }
+.pu-cand-gsa:hover { border-color: #22c55e; }
+.pu-cand-gsa-btn { background: #22c55e; color: #0a0f0a; }
+.pu-cand-gsa-btn:hover { opacity: 0.9; }
