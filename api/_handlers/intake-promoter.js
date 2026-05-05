@@ -1973,14 +1973,21 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     }
   } catch { /* artifact link is nice-to-have */ }
 
-  // ---- 3. Persist text/* artifact bytes into dia.property_documents
+  // ---- 3. Persist text/* artifact bytes into <domain>.property_documents
   // BEFORE the doctype guard so the artifact lands even when the AI
   // misclassified the document and the listing path bails. PDFs are
   // already linked via available_listings.intake_artifact_path; this
   // fills the same slot for synthetic-text intakes.
+  //
+  // Round 76ej.h originally targeted dialysis only. Government-property
+  // follow-up (2026-05-05) extends the same persistence path to gov:
+  // gov.property_documents has the columns sidebar-pipeline.js already
+  // writes (property_id, file_name, document_type, source_url,
+  // ingestion_status). raw_text + extracted_data are dia-specific
+  // columns, so we only attach them when the domain is dialysis.
   let propertyDocResult = null;
   if (
-    effectiveMatch.domain === 'dialysis' &&
+    (effectiveMatch.domain === 'dialysis' || effectiveMatch.domain === 'government') &&
     effectiveMatch.property_id &&
     artifact &&
     typeof artifact.mime_type === 'string' &&
@@ -2007,21 +2014,23 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       const docPayload = {
         property_id:      Number(effectiveMatch.property_id),
         file_name:        artRow?.file_name || artifact.file_name || `intake-${intakeId}.txt`,
-        raw_text:         rawText,
         document_type:    'om',
         source_url:       snapshot?.source_url || snapshot?.listing_url || null,
         ingestion_status: 'extracted',
-        extracted_data:   {
+      };
+      if (effectiveMatch.domain === 'dialysis') {
+        docPayload.raw_text = rawText;
+        docPayload.extracted_data = {
           intake_id:        intakeId,
           address:          snapshot?.address || null,
           tenant_name:      snapshot?.tenant_name || null,
           asking_price:     snapshot?.asking_price ?? null,
           cap_rate:         snapshot?.cap_rate ?? null,
           lease_expiration: snapshot?.lease_expiration || null,
-        },
-      };
+        };
+      }
       const docRes = await domainQuery(
-        'dialysis',
+        effectiveMatch.domain,
         'POST',
         'property_documents',
         docPayload,
@@ -2029,13 +2038,13 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       );
       if (docRes.ok) {
         const inserted = Array.isArray(docRes.data) ? docRes.data[0] : docRes.data;
-        propertyDocResult = { ok: true, document_id: inserted?.document_id || null };
+        propertyDocResult = { ok: true, document_id: inserted?.document_id || null, domain: effectiveMatch.domain };
       } else {
-        propertyDocResult = { ok: false, status: docRes.status, detail: docRes.data };
-        console.warn('[intake-promoter] property_documents insert failed:', docRes.status, docRes.data);
+        propertyDocResult = { ok: false, status: docRes.status, detail: docRes.data, domain: effectiveMatch.domain };
+        console.warn('[intake-promoter] property_documents insert failed:', effectiveMatch.domain, docRes.status, docRes.data);
       }
     } catch (err) {
-      propertyDocResult = { ok: false, error: err?.message };
+      propertyDocResult = { ok: false, error: err?.message, domain: effectiveMatch.domain };
       console.warn('[intake-promoter] property_documents persist threw (non-fatal):', err?.message);
     }
   }
@@ -2316,7 +2325,30 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       );
     }
 
-    // 4. Lease fields (dialysis only — gov has a different lease lifecycle)
+    // 4. Property document fields — when the text/* artifact persistence
+    //    above succeeded, log file_name/document_type/source_url against
+    //    <domain>.property_documents. field_source_priority covers both
+    //    dia.property_documents and gov.property_documents (Phase 2.2c
+    //    extension migration), so this drives an actionable provenance
+    //    row for either domain. Skipped when no document was inserted
+    //    (PDF intakes link via available_listings.intake_artifact_path
+    //    and don't go through this path).
+    if (
+      propertyDocResult?.ok &&
+      propertyDocResult.document_id &&
+      (match.domain === 'dialysis' || match.domain === 'government')
+    ) {
+      await recordOmFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.property_documents`, recordPk: propertyDocResult.document_id },
+        {
+          file_name:     artifact?.file_name || null,
+          document_type: 'om',
+          source_url:    snapshot?.source_url || snapshot?.listing_url || null,
+        }
+      );
+    }
+
+    // 5. Lease fields (dialysis only — gov has a different lease lifecycle)
     if (match.domain === 'dialysis' && diaLeaseResult?.ok && diaLeaseResult.lease_id) {
       await recordOmFieldsProvenance(
         { targetDatabase: 'dia_db', targetTable: 'dia.leases', recordPk: diaLeaseResult.lease_id,
