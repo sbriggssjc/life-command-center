@@ -27,7 +27,7 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 - Intake functions consolidated into intake.js
 - admin.js: workspaces, members, flags, connectors, diagnostics (config/diag/treasury), edge proxies (data-query, daily-briefing)
 - Supabase Edge Functions: data-query (gov/dia PostgREST proxy), daily-briefing (snapshot orchestration), `availability-checker` (periodic listing URL probe — Round 76ej.g) on LCC Opps project
-- pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2), `lcc-auto-scrape-listings` (every 6h on the hour — sweeps overdue active listings, auto-marks Sold via sales_transactions match, Round 76cx Phase 4b), `lcc-availability-checker` (every 6h at :30 — Edge Function probes listing URLs and writes off_market/withdrawn via lcc_record_listing_check, Round 76ej.g)
+- pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2), `lcc-auto-scrape-listings` (every 6h on the hour — sweeps overdue active listings, auto-marks Sold via sales_transactions match, Round 76cx Phase 4b), `lcc-availability-checker` (every 6h at :30 — Edge Function probes listing URLs and writes off_market/withdrawn via lcc_record_listing_check, Round 76ej.g), `lcc-availability-promotion-sweep` (every 6h at :45 — re-checks the availability-checker's `unverified_assumed_off` listings against sales_transactions and upgrades to Sold on a deed match, Round 76ej.h), `lcc-cron-health-check` (every hour at :15 — surfaces cron failures, pg_net non-2xx responses, and availability-checker bot-block alerts in `lcc_health_alerts`)
 - `lcc_cron_post()` helper reads API key from Supabase Vault, POSTs via pg_net to Vercel or Edge endpoints
 - All rewrites defined in vercel.json — order matters (specific before catch-all)
 
@@ -171,6 +171,63 @@ POST {EDGE_BASE}/availability-checker?action=check_url
 ```
 
 Returns the parser verdict, final URL, http status, and matched marker.
+
+### Bot-block self-alert (Round 76ej.h, 2026-05-05)
+
+After each domain run the Edge Function calls
+`public.lcc_record_availability_botblock(domain, scanned, unreachable,
+share)` on LCC Opps. If the unreachable share is ≥ 30% AND `scanned ≥ 5`,
+the RPC opens an `availability_checker_botblock` row in
+`lcc_health_alerts` (no-op if one is already open for that domain). On a
+subsequent run with the share back below threshold the RPC
+auto-resolves the open alert. The hourly `lcc-cron-health-check` cron
+already surfaces unresolved rows in the daily briefing — no extra wiring
+needed.
+
+Triage queries (run on the affected domain DB):
+```sql
+SELECT * FROM v_availability_checker_health_24h;             -- last 24h
+                                                              -- by check_result
+SELECT listing_id, source_url, http_status, response_summary, verified_at
+FROM   listing_verification_history
+WHERE  method='auto_scrape' AND notes LIKE 'availability-checker%'
+  AND  check_result='unreachable'
+  AND  verified_at > now() - interval '6 hours'
+ORDER  BY verified_at DESC;
+```
+
+Open alert? Inspect on LCC Opps:
+```sql
+SELECT * FROM v_cron_health_summary
+ WHERE alert_kind='availability_checker_botblock';
+```
+
+### Promotion sweep (Round 76ej.h, 2026-05-05)
+
+`api/admin.js handleAvailabilityPromotionSweep`, exposed as
+`?_route=availability-promotion-sweep`, closes the loop on listings the
+availability-checker stamped `unverified_assumed_off`. Sequence each 6h
+tick:
+
+```
+:00  lcc-auto-scrape-listings        (active listings → 'sold' on deed match)
+:30  lcc-availability-checker        (URL probe → 'off_market'/'unverified_assumed_off')
+:45  lcc-availability-promotion-sweep (re-checks unverified set → 'sold' on deed match)
+```
+
+The sweep only looks at listings whose `off_market_date` is within the
+last 90 days (`max_age_days` query param, capped at 180). Older listings
+fall back to manual research — at that point the absence of a deed match
+is a real-world signal, not a sweep oversight.
+
+Acceptance script (live, no DB writes — uses the debug endpoint):
+```bash
+EDGE_BASE=https://<ops-ref>.supabase.co/functions/v1 \
+LCC_API_KEY=... \
+node scripts/availability-checker-acceptance.mjs \
+  --samples scripts/availability-checker-samples.json
+```
+Exits 0 when ≥ 8/10 sample URLs match their `expected` label, 1 otherwise.
 
 ## Junk-value filters (sidebar parser defense)
 

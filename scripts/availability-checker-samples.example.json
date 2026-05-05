@@ -1,0 +1,12 @@
+[
+  { "label": "active-crexi-1",   "url": "https://www.crexi.com/properties/REPLACE-ME", "expected": "active" },
+  { "label": "active-crexi-2",   "url": "https://www.crexi.com/properties/REPLACE-ME", "expected": "active" },
+  { "label": "active-costar-1",  "url": "https://www.costar.com/property/REPLACE-ME",  "expected": "active" },
+  { "label": "active-loopnet-1", "url": "https://www.loopnet.com/Listing/REPLACE-ME",  "expected": "active" },
+  { "label": "active-loopnet-2", "url": "https://www.loopnet.com/Listing/REPLACE-ME",  "expected": "active" },
+  { "label": "sold-crexi-1",     "url": "https://www.crexi.com/properties/REPLACE-ME", "expected": "sold"   },
+  { "label": "sold-crexi-2",     "url": "https://www.crexi.com/properties/REPLACE-ME", "expected": "sold"   },
+  { "label": "sold-costar-1",    "url": "https://www.costar.com/property/REPLACE-ME",  "expected": "sold"   },
+  { "label": "sold-loopnet-1",   "url": "https://www.loopnet.com/Listing/REPLACE-ME",  "expected": "sold"   },
+  { "label": "sold-loopnet-2",   "url": "https://www.loopnet.com/Listing/REPLACE-ME",  "expected": "sold"   }
+]

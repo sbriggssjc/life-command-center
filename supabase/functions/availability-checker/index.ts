@@ -382,6 +382,53 @@ async function pgRpc(
 // the actual url_status mutation. Errors are logged and surfaced in the
 // per-listing diagnostics array.
 
+// Round 76ej.h — once per domain at the end of a run, post the unreachable
+// share to lcc_record_availability_botblock so a sudden bot-block storm
+// surfaces in lcc_health_alerts. The RPC handles dedup and auto-resolve.
+async function recordBotBlockHealth(
+  domain: "dia" | "gov",
+  scanned: number,
+  unreachable: number,
+): Promise<{ ok: boolean; action?: string; error?: string }> {
+  if (!OPS_URL || !OPS_KEY) {
+    return { ok: false, error: "ops project credentials not configured" };
+  }
+  if (scanned <= 0) {
+    return { ok: true, action: "skipped_zero_scanned" };
+  }
+  const share = unreachable / scanned;
+  try {
+    const resp = await fetch(`${OPS_URL}/rest/v1/rpc/lcc_record_availability_botblock`, {
+      method: "POST",
+      headers: {
+        apikey: OPS_KEY,
+        Authorization: `Bearer ${OPS_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        p_domain: domain,
+        p_scanned: scanned,
+        p_unreachable: unreachable,
+        p_unreachable_share: share,
+      }),
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      return { ok: false, error: `lcc_record_availability_botblock http ${resp.status}: ${t.slice(0, 200)}` };
+    }
+    let action: string | undefined;
+    try {
+      const body = await resp.json();
+      action = body?.action || (Array.isArray(body) ? body[0]?.action : undefined);
+    } catch {
+      action = undefined;
+    }
+    return { ok: true, action };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 async function recordProvenance(
   cfg: DomainConfig,
   listingId: number | string,
@@ -807,8 +854,33 @@ Deno.serve(async (req: Request) => {
   let totalDecisions: ListingDecision[] = [];
   for (const cfg of targets) {
     const { summary, decisions } = await runDomain(cfg, limit, dryRun);
+    // Bot-block self-alert (Round 76ej.h). Skip on dry runs — we don't
+    // want a smoke test to open or close real alerts.
+    let bot_block: Record<string, unknown> | undefined;
+    if (!dryRun) {
+      // Count unreachable verdicts including the threshold-promoted
+      // ones, since a promotion still represents a network failure for
+      // the purposes of detecting a bot-block storm.
+      const unreachableTotal =
+        summary.unreachable + summary.unreachable_promoted_to_off_market;
+      const health = await recordBotBlockHealth(
+        cfg.domain,
+        summary.scanned,
+        unreachableTotal,
+      );
+      bot_block = {
+        unreachable: unreachableTotal,
+        unreachable_share: summary.scanned > 0
+          ? unreachableTotal / summary.scanned
+          : 0,
+        ok: health.ok,
+        action: health.action,
+        error: health.error,
+      };
+    }
     (result.by_domain as Record<string, unknown>)[cfg.domain] = {
       ...summary,
+      bot_block,
       decisions: decisions.map((d) => ({
         listing_id: d.listing_id,
         classification: d.classification,
