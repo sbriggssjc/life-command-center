@@ -121,9 +121,45 @@ async function fetchArtifactData(artifact) {
 
   // Path 1: inline base64 data
   if (artifact.inline_data) {
+    const mediaType = inferMediaType(null);
+    // Round 76ej.k (2026-05-05): apply the same defensive base64 unwrap on
+    // the inline path that storage_path already gets. The Bug E base64
+    // PUT regression (PA forwarding raw `contentBytes` instead of
+    // base64ToBinary(contentBytes)) primarily affected storage uploads,
+    // but the inline path receives whatever the caller posted directly —
+    // a misconfigured connector that double-base64-wraps an attachment
+    // would land here too. Skip the unwrap for non-binary mime types
+    // (text/*, message/rfc822) since their inline_data is meant to be
+    // text-as-base64 and "looks like base64" is the correct decoding.
+    const isBinary = /^application\/pdf$/i.test(mediaType)
+                  || /vnd\.openxmlformats-officedocument|msword/i.test(mediaType);
+    if (isBinary) {
+      try {
+        const decodedOnce = Buffer.from(artifact.inline_data, 'base64');
+        const recovery = recoverIfBase64Wrapped(decodedOnce);
+        if (recovery.recovered) {
+          console.warn('[intake-extractor] base64-wrapped inline_data detected and unwrapped:',
+            artifact.id, `kind=${recovery.kind} raw=${decodedOnce.length} decoded=${recovery.buffer.length}`);
+          globalThis.__lastStorageFetchInfo = {
+            ...(globalThis.__lastStorageFetchInfo || {}),
+            base64_unwrapped: true,
+            base64_unwrap_kind: recovery.kind,
+            base64_unwrap_source: 'inline_data',
+          };
+          return {
+            base64: Buffer.from(recovery.buffer).toString('base64'),
+            media_type: mediaType,
+          };
+        }
+      } catch (err) {
+        // Decoding failed — fall through to passing inline_data through as-is;
+        // pdf-parse will surface the underlying parse error.
+        console.warn('[intake-extractor] inline_data unwrap probe failed (passing through):', err?.message);
+      }
+    }
     return {
       base64: artifact.inline_data,
-      media_type: inferMediaType(null),
+      media_type: mediaType,
     };
   }
 
@@ -775,6 +811,20 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
           `inbox_items?id=eq.${encodeURIComponent(intakeId)}&entity_id=is.null`,
           patchBody
         );
+
+        // Round 76ej.k (2026-05-05): also patch any user-facing flagged_email
+        // inbox row that bridged to this intake. The email channel creates
+        // TWO inbox rows (handleOutlookMessage flagged_email + stageOmIntake
+        // email_om); the prior PATCH only touches the email_om row keyed by
+        // intake_id. The flagged_email row links via metadata.bridged_to_intake_id
+        // and is what the user actually sees in the inbox triage UI — without
+        // this second patch its entity_id stays NULL after async match.
+        await opsQuery(
+          'PATCH',
+          `inbox_items?metadata->>bridged_to_intake_id=eq.${encodeURIComponent(intakeId)}` +
+          `&entity_id=is.null&source_type=eq.flagged_email`,
+          patchBody
+        ).catch(err => console.warn('[intake-extractor] flagged_email bridge patch failed:', err?.message));
       }
     } catch (err) {
       console.warn('[intake-extractor] inbox_items entity link patch failed (non-fatal):', err?.message);

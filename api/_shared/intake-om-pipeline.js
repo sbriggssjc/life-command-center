@@ -573,6 +573,12 @@ export async function stageOmIntake(input, auth, workspaceId) {
       extraction_status:    extractionStatus,  // 'processing' | 'review_required' | 'failed'
       classified_domain:    classifiedDomain,
       matched_entity_id:    matchedEntityId,
+      // Round 76ej.k (2026-05-05): expose matched_domain so the email-channel
+      // caller (handleOutlookMessage) can set both entity_id AND domain on the
+      // user-facing flagged_email inbox_items row in one PATCH. Falls back to
+      // matchResult.domain when ensureEntityLink didn't produce one (e.g. the
+      // 'lcc' direct-match case where matchResult.domain stays null).
+      matched_domain:       matchedDomain || (matchResult?.domain && matchResult.domain !== 'lcc' ? matchResult.domain : null),
       entity_match_status:  matchedEntityId ? 'matched' : (snapshot ? 'unmatched' : 'pending'),
       size_bytes:           bytesLen,
       message: buildMessage({

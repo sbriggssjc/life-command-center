@@ -37,10 +37,19 @@ export function stripListingStatusPrefix(addr) {
   const PROP_TYPE = '(?:condo|office|industrial|retail|land|hotel|multifamily|multi-family|specialty|flex|medical(?:\\s+office)?|health\\s*care|sports?(?:\\s*&\\s*\\w+)?|self\\s*storage|mobile\\s*home(?:\\s+park)?|mixed\\s*use|apartments?|warehouse|shopping\\s+center|strip\\s+center)';
   const DISPOSITION = '(?:for\\s+sale|for\\s+lease|for\\s+rent|sale|sold|lease|leased|rent|rented|new\\s+listing|reduced|price\\s+reduced|just\\s+listed|coming\\s+soon|under\\s+contract|off\\s+market|new\\s+price)';
   const PREFIX_RE = new RegExp(`^\\s*(?:${PROP_TYPE}\\s+)?${DISPOSITION}\\s*[|\\-–—:]\\s*`, 'i');
+  // Round 76ej.k (2026-05-05): also strip an email-subject doctype prefix
+  // ("OM:", "OM -", "Flyer:", "Marketing Brochure:" etc.). Power Automate
+  // emails often arrive with subject lines like "OM: 1234 Main St, City, ST"
+  // and AI extraction occasionally lifts the entire subject straight into
+  // the address field; without stripping the prefix the normalized address
+  // becomes "om: 1234 main st" and matchAgainstDomain misses the
+  // canonical "1234 main st" record.
+  const DOCTYPE_PREFIX_RE = /^\s*(?:om|offering(?:\s+memorandum)?|flyer|marketing\s+brochure|broker\s+package|listing|new\s+listing\s+alert)\s*[|\-–—:]\s*/i;
   let out = String(addr);
   // Loop in case multiple prefixes stack ("For Sale | New Listing | 1164 Route...")
   for (let i = 0; i < 3; i++) {
-    const next = out.replace(PREFIX_RE, '');
+    let next = out.replace(PREFIX_RE, '');
+    next = next.replace(DOCTYPE_PREFIX_RE, '');
     if (next === out) break;
     out = next;
   }

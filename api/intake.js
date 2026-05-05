@@ -240,7 +240,7 @@ function pickPrimaryOmAttachment(atts) {
 
   const eligible = atts.filter(isLikelyOm);
   return eligible.find(a => a.storage_path)
-      || eligible.find(a => a.inline_data || a.content)
+      || eligible.find(a => a.inline_data || a.content || a.contentBytes)
       || eligible[0]
       || null;
 }
@@ -357,7 +357,14 @@ async function handleOutlookMessage(req, res) {
         const first = pickPrimaryOmAttachment(atts);
         if (first) {
           primaryDocument = {
-            bytes_base64: first.inline_data || first.content || null,
+            // Round 76ej.k (2026-05-05): also accept `contentBytes` —
+            // Microsoft Graph's standard attachment field name. Most PA
+            // flows remap to `inline_data`/`content` before posting, but
+            // a flow that forwards the raw Graph attachment shape would
+            // otherwise land here with bytes_base64=null and silently fall
+            // through to URL/body fallback even though the OM bytes were
+            // present in contentBytes.
+            bytes_base64: first.inline_data || first.content || first.contentBytes || null,
             storage_path: first.storage_path || null,
             file_name:    first.file_name || first.name || 'attachment.pdf',
             mime_type:    first.file_type || first.contentType || first.mime_type || 'application/pdf',
@@ -449,6 +456,22 @@ async function handleOutlookMessage(req, res) {
               bridged_to_intake_id: stageRes.body.intake_id,
             },
           }).catch(err => console.error('[intake] dedup-replay bridge PATCH failed:', err?.message));
+        }
+
+        // Round 76ej.k (2026-05-05): mirror the fresh-path entity_id patch
+        // on the dedup-replay branch — without this a re-flagged email whose
+        // earlier staging already matched would still land on the inbox UI
+        // with entity_id=NULL, even though the matcher had a real match.
+        const matchedEid = stageRes?.body?.matched_entity_id || null;
+        const matchedDom = stageRes?.body?.matched_domain    || null;
+        if (matchedEid) {
+          const inboxPatch = { entity_id: matchedEid };
+          if (matchedDom) inboxPatch.domain = matchedDom;
+          await opsQuery(
+            'PATCH',
+            `inbox_items?id=eq.${pgFilterVal(existing.id)}&entity_id=is.null`,
+            inboxPatch
+          ).catch(err => console.warn('[intake] dedup-replay flagged_email entity link patch failed:', err?.message));
         }
       }
     }
@@ -623,6 +646,26 @@ async function handleOutlookMessage(req, res) {
           }).catch(() => {});
         } else if (item?.id) {
           stagedIntakeId = item.id;
+        }
+
+        // Round 76ej.k (2026-05-05): when stageOmIntake's race-window match
+        // returned a matched LCC entity, also stamp entity_id (+ domain) on
+        // THIS flagged_email inbox row so the LCC inbox UI can navigate
+        // straight to the property card. Round 76ej.h fixed this for the
+        // sidebar/Copilot inbox rows (those go through the email_om row
+        // staged INSIDE stageOmIntake) but the user-facing flagged_email
+        // row is created up here in handleOutlookMessage and was never
+        // patched. Conservative: only set when entity_id is currently null.
+        const matchedEid = stageRes.body?.matched_entity_id || null;
+        const matchedDom = stageRes.body?.matched_domain    || null;
+        if (item?.id && matchedEid) {
+          const inboxPatch = { entity_id: matchedEid };
+          if (matchedDom) inboxPatch.domain = matchedDom;
+          await opsQuery(
+            'PATCH',
+            `inbox_items?id=eq.${pgFilterVal(item.id)}&entity_id=is.null`,
+            inboxPatch
+          ).catch(err => console.warn('[intake] flagged_email entity link patch failed:', err?.message));
         }
       } else {
         console.error('[intake] stageOmIntake from email failed:', stageRes.status, stageRes.body?.error);
