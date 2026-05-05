@@ -248,11 +248,15 @@ function pushProvenance(provCollect, table, recordPk, fields, confidence) {
   provCollect.push({ table, recordPk: String(recordPk), fields: filtered, confidence });
 }
 
-async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}) {
+async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}, perFieldSource = {}) {
   if (!ctx?.targetTable || !ctx?.recordPk) return;
   // Round 76af 2026-04-28: respect ctx.sourceTag so RCA captures land as
   // source='rca_sidebar' instead of being mis-tagged as costar_sidebar.
-  const sourceTag = ctx.sourceTag || 'costar_sidebar';
+  // Round 76ej.l 2026-05-05: perFieldSource overrides the batch-level
+  // sourceTag for individual fields — used to split CREXi prose-mined
+  // values (crexi_sidebar_description) from structured-panel values
+  // (crexi_sidebar) inside a single capture.
+  const batchSource = ctx.sourceTag || 'costar_sidebar';
   const promises = [];
   for (const [fieldName, value] of Object.entries(fieldValues)) {
     if (value === undefined || value === null) continue;
@@ -263,7 +267,7 @@ async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence
       recordPk:       ctx.recordPk,
       fieldName,
       value,
-      source:         sourceTag,
+      source:         perFieldSource[fieldName] || batchSource,
       sourceRunId:    ctx.sidebarRunId,
       confidence:     perFieldConfidence[fieldName] ?? COSTAR_DEFAULT_CONFIDENCE,
       recordedBy:     ctx.actorId,
@@ -2065,6 +2069,31 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
       sourceTag,
     };
 
+    // Round 76ej.l 2026-05-05: per-field source override for CREXi prose-
+    // mined lease facts. Round 76ej.k attached a `lease_facts_from_
+    // description` breadcrumb to metadata; any field present (non-null)
+    // there came from regex-mining the broker's marketing description
+    // rather than CREXi's structured Details panel, so it gets tagged
+    // as crexi_sidebar_description (priority 75) instead of crexi_sidebar
+    // (priority 70). Map keys are the breadcrumb's labels; values are
+    // the actual DB column names the writer uses.
+    const proseLease = metadata?.lease_facts_from_description;
+    const perFieldSource = {};
+    if (proseLease && typeof proseLease === 'object') {
+      const PROSE_TO_DB_FIELD = {
+        expense_structure:    'expense_structure',
+        remaining_term_years: 'remaining_term',
+        lease_expiration:     'lease_expiration',
+        renewal_options:      'renewal_options',
+        rent_escalations_pct: 'rent_escalations',
+      };
+      for (const [proseKey, dbField] of Object.entries(PROSE_TO_DB_FIELD)) {
+        if (proseLease[proseKey] != null) {
+          perFieldSource[dbField] = 'crexi_sidebar_description';
+        }
+      }
+    }
+
     // 1. Property fields — direct from entity + metadata (what CoStar
     //    actually advertised before the writer applied any cleaning).
     if (propertyId) {
@@ -2129,7 +2158,9 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
           };
       await recordCoStarFieldsProvenance(
         { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: propertyId },
-        propValues
+        propValues,
+        {},
+        perFieldSource
       );
     }
 
@@ -2149,7 +2180,8 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
         await recordCoStarFieldsProvenance(
           { ...provCtx, targetTable: `${tablePrefix}.${entry.table}`, recordPk: entry.recordPk },
           entry.fields,
-          perField
+          perField,
+          perFieldSource
         );
       }
     }
@@ -2207,7 +2239,9 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
 
           await recordCoStarFieldsProvenance(
             { ...provCtx, targetTable: `${tablePrefix}.available_listings`, recordPk: latestListing.listing_id },
-            listingValues
+            listingValues,
+            {},
+            perFieldSource
           );
         }
       } catch (err) {
