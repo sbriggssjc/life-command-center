@@ -691,7 +691,10 @@
               <div style="font-family:'Calibri Light',sans-serif;font-size:14pt;font-weight:600;color:${brandColor('nm_text','#191919')}">${meta.name}</div>
               <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">${meta.metric_focus} · ${meta.chart_type}</div>
             </div>
-            <button class="btn btn-ghost cm-export-btn" data-template="${id}" style="font-size:9pt">Copy data</button>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-ghost cm-stat-btn" data-template="${id}" style="font-size:9pt" title="Copy a one-line headline stat for pasting into Outlook">Copy stat</button>
+              <button class="btn btn-ghost cm-export-btn" data-template="${id}" style="font-size:9pt">Copy data</button>
+            </div>
           </div>
           ${bodyContainer}
         </div>`;
@@ -968,6 +971,31 @@
           setTimeout(() => { btn.textContent = 'Copy data'; }, 1500);
         } catch (e) {
           btn.textContent = 'Copy failed';
+        }
+      });
+    });
+
+    // Bind copy-stat buttons — one-line headline stat for Outlook drafts
+    document.querySelectorAll('.cm-stat-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tpl = btn.dataset.template;
+        const orig = btn.textContent;
+        btn.textContent = '⏳';
+        try {
+          const url = `/api/capital-markets?action=copilot_stat&vertical=${encodeURIComponent(vertical)}&chart_template_id=${encodeURIComponent(tpl)}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}`;
+          const r = await fetchJSON(url);
+          if (!r.ok) {
+            btn.textContent = r.error === 'recipe_not_implemented' ? 'No stat for this chart' : 'No data';
+            setTimeout(() => { btn.textContent = orig; }, 2000);
+            return;
+          }
+          await navigator.clipboard.writeText(r.stat_text);
+          btn.textContent = '✓ Stat copied';
+          setTimeout(() => { btn.textContent = orig; }, 1800);
+        } catch (e) {
+          console.error('cm-stat-btn error:', e);
+          btn.textContent = 'Copy failed';
+          setTimeout(() => { btn.textContent = orig; }, 2000);
         }
       });
     });

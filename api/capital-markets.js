@@ -27,6 +27,13 @@
 // POST /api/capital-markets?action=rca_import
 //        body: { filename, file_b64, product_type?, notes? }
 //        → parses RCA TrendTracker .xls export, upserts cm_rca_quarterly
+// GET  /api/capital-markets?action=copilot_stat
+//        params: vertical, chart_template_id, as_of?, subspecialty?
+//        → one-line headline stat ("Gov-leased TTM weighted cap is 7.47% as of
+//          2024-Q2; up 32 bps YoY.") for pasting into Outlook drafts. See
+//          api/_shared/cm-stat-recipes.js for supported template IDs.
+// GET  /api/capital-markets?action=copilot_stat_catalog
+//        → list of chart_template_ids that have a stat recipe
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
@@ -34,6 +41,7 @@ import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-export.js';
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
+import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
 
 // vertical_id (in cm_chart_catalog) → domain-db key (in domain-db.js)
 const VERTICAL_TO_DOMAIN = {
@@ -78,9 +86,15 @@ export default withErrorHandler(async function handler(req, res) {
       case 'narrative':        return res.status(501).json(PHASE_2_PENDING(action));
       case 'export':           return exportWorkbook(req, res);
 
+      // Phase 3 — Copilot tool surface
+      case 'copilot_stat':     return copilotStat(req, res);
+      case 'copilot_stat_catalog': return res.status(200).json({
+        supported_chart_template_ids: listSupportedStatTemplates(),
+      });
+
       default:
         return res.status(400).json({
-          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, chart, quarterly, export, narrative'
+          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
         });
     }
   }
@@ -641,5 +655,96 @@ async function rcaImport(req, res, user) {
     report_run_date,
     header_signature,
     warnings,
+  });
+}
+
+// ============================================================================
+// Phase 3 — Copilot stat tool
+// ============================================================================
+
+/**
+ * GET /api/capital-markets?action=copilot_stat
+ *   &vertical=gov&chart_template_id=cap_rate_ttm_by_quarter
+ *   &as_of=2024-06-30&subspecialty=all
+ *
+ * Returns:
+ *   {
+ *     ok: true,
+ *     stat_text: "Gov-leased TTM weighted cap is 7.47% as of 2024-Q2; up 32 bps YoY.",
+ *     value: 0.0747,
+ *     value_formatted: "7.47%",
+ *     yoy_delta: 0.0032,
+ *     yoy_delta_formatted: "+32 bps",
+ *     direction: "up",
+ *     period_end: "2024-06-30",
+ *     period_label: "2024-Q2",
+ *     ...
+ *   }
+ *
+ * Composes a one-line headline metric suitable for pasting into an Outlook
+ * draft or a Slack message. Reuses the same data path as fetchChart so
+ * everything stays consistent (era-aware NM attribution, subspecialty filter,
+ * etc.). Recipe definitions live in api/_shared/cm-stat-recipes.js.
+ */
+async function copilotStat(req, res) {
+  const { vertical, chart_template_id, as_of, subspecialty = 'all' } = req.query;
+  if (!vertical)          return res.status(400).json({ error: 'vertical required' });
+  if (!chart_template_id) return res.status(400).json({ error: 'chart_template_id required' });
+
+  const template = await resolveTemplate(chart_template_id);
+  if (!template) {
+    return res.status(404).json({ error: `Unknown chart_template_id: ${chart_template_id}` });
+  }
+  if (!template.applies_to_verticals?.includes(vertical)) {
+    return res.status(400).json({
+      error: `Chart '${chart_template_id}' is not applicable to vertical '${vertical}'`,
+      applies_to: template.applies_to_verticals,
+    });
+  }
+
+  // Same dispatch logic as fetchChart — fetch full timeseries (sorted ASC)
+  const view_name = viewNameFor(template.view_name_template, vertical);
+  const domain = VERTICAL_TO_DOMAIN[vertical];
+  const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+
+  let result;
+  try {
+    result = domain
+      ? await domainQuery(domain, 'GET', path)
+      : await opsQuery('GET', path);
+  } catch (e) {
+    return res.status(500).json({ error: 'view_query_threw', detail: String(e?.message || e) });
+  }
+  if (!result.ok) {
+    return res.status(result.status || 500).json({
+      error: 'view_query_failed', view_name, vertical, detail: result.data,
+    });
+  }
+
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const stat = composeStat({
+    chart_template_id,
+    vertical,
+    subspecialty,
+    rows,
+    as_of: as_of || null,
+  });
+
+  if (!stat.ok) {
+    // 404 for "no data for this slice", 400 for client-side recipe issues
+    const status = stat.error === 'recipe_not_implemented' ? 400 : 404;
+    return res.status(status).json({
+      ...stat,
+      view_name,
+      hint: stat.error === 'recipe_not_implemented'
+        ? 'See action=copilot_stat_catalog for the supported list.'
+        : undefined,
+    });
+  }
+
+  return res.status(200).json({
+    ...stat,
+    view_name,
+    chart_name: template.name,
   });
 }
