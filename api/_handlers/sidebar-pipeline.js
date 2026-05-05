@@ -1016,41 +1016,78 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
 // ── Step 1b: Unpack Tenant → Entity + Lease Relationship ────────────────────
 
 async function unpackTenant(propertyEntityId, metadata, workspaceId, userId, domain) {
-  const tenantName = metadata.tenant_name || metadata.primary_tenant;
-  if (!tenantName) return 0;
+  // Round 76ej.q (2026-05-05): seamless multi-tenant propagation.
+  // Build the working tenant list from BOTH sources so neither
+  // single-tenant captures (metadata.tenant_name) nor multi-tenant
+  // captures (metadata.tenants[] from CREXi prose mining) are dropped.
+  // De-dup by lower-cased name. Pre-existing behaviour for the
+  // single-tenant case is preserved verbatim — this just additionally
+  // walks the array.
+  const tenantInputs = [];
+  const seen = new Set();
+  const pushTenant = (name, extra) => {
+    if (!name || typeof name !== 'string') return;
+    const trimmed = name.trim();
+    if (trimmed.length < 3) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    tenantInputs.push({ name: trimmed, ...(extra || {}) });
+  };
+  pushTenant(metadata.tenant_name);
+  pushTenant(metadata.primary_tenant);
+  if (Array.isArray(metadata.tenants)) {
+    for (const t of metadata.tenants) {
+      if (t && typeof t === 'object') pushTenant(t.name, { sf: t.sf, location: t.location });
+      else if (typeof t === 'string') pushTenant(t);
+    }
+  }
+  if (tenantInputs.length === 0) return 0;
 
   const source = metadata.source || 'costar';
-  const entityType = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|AGENCY|ADMINISTRATION|DEPARTMENT)\b/i.test(tenantName)
-    ? 'organization' : 'organization'; // Tenants are almost always orgs
+  let createdCount = 0;
 
-  const tenantLink = await ensureEntityLink({
-    workspaceId,
-    userId,
-    sourceSystem: source,
-    sourceType: 'company',
-    externalId: normalizeCanonicalName(tenantName),
-    domain,
-    seedFields: { name: tenantName, org_type: 'tenant' },
-  });
+  for (const t of tenantInputs) {
+    const tenantName = t.name;
+    const tenantLink = await ensureEntityLink({
+      workspaceId,
+      userId,
+      sourceSystem: source,
+      sourceType: 'company',
+      externalId: normalizeCanonicalName(tenantName),
+      domain,
+      seedFields: { name: tenantName, org_type: 'tenant' },
+    });
 
-  if (!tenantLink.ok) return 0;
+    if (!tenantLink.ok) continue;
 
-  // Create lease relationship with term details
-  await opsQuery('POST', 'entity_relationships', {
-    workspace_id: workspaceId,
-    from_entity_id: tenantLink.entityId,
-    to_entity_id: propertyEntityId,
-    relationship_type: 'leases',
-    metadata: {
-      role: 'tenant',
-      source: `${source}_sidebar`,
-      lease_term: metadata.lease_term || null,
-      occupancy: metadata.occupancy || null,
-      extracted_at: metadata.extracted_at || new Date().toISOString(),
-    },
-  }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+    // Lease relationship — per-tenant. Carries the lease scalars from
+    // metadata when available (lease_term / occupancy / lease_type),
+    // plus the per-tenant SF / suite when the page surfaced it.
+    await opsQuery('POST', 'entity_relationships', {
+      workspace_id: workspaceId,
+      from_entity_id: tenantLink.entityId,
+      to_entity_id: propertyEntityId,
+      relationship_type: 'leases',
+      metadata: {
+        role: 'tenant',
+        source: `${source}_sidebar`,
+        lease_term: metadata.lease_term || null,
+        lease_type: metadata.lease_type || null,
+        occupancy: metadata.occupancy || null,
+        sf_leased: t.sf || null,
+        suite_or_location: t.location || null,
+        is_primary_tenant: tenantInputs.length > 1
+          ? (t.name === (metadata.tenant_name || metadata.primary_tenant))
+          : true,
+        extracted_at: metadata.extracted_at || new Date().toISOString(),
+      },
+    }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
 
-  return tenantLink.createdEntity ? 1 : 0;
+    if (tenantLink.createdEntity) createdCount++;
+  }
+
+  return createdCount;
 }
 
 // ── Step 2: Unpack Sales History ────────────────────────────────────────────
@@ -5891,72 +5928,112 @@ async function promotePropertyAnchorRent(domain, propertyId, candidate) {
  * Returns the number of leases written (inserted or updated).
  */
 async function upsertGovernmentLeases(propertyId, metadata) {
-  const tenantAgency = (metadata?.tenants?.[0]?.name
-    || metadata?.tenant_name
-    || metadata?.primary_tenant
-    || null);
-  if (!tenantAgency) return 0;
+  // Round 76ej.q (2026-05-05): write one lease record per tenant for
+  // multi-tenant gov-leased buildings. Pre-fix this function only
+  // wrote a single row from tenants[0], silently dropping the rest —
+  // a Mast One-style listing with 5 GSA / Bon Secours / FDA / Supreme
+  // Court of VA / Rein / Edward Jones tenants kept just the first.
+  // Mirror upsertDomainLeases (dialysis) which already does per-tenant
+  // fan-out.
+
+  // Build the tenant list from BOTH sources so single-tenant captures
+  // (where metadata.tenants is empty) still write their one lease.
+  const tenantInputs = [];
+  const seen = new Set();
+  const pushTenant = (name, extra) => {
+    if (!name || typeof name !== 'string') return;
+    const trimmed = name.trim();
+    if (trimmed.length < 3) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    tenantInputs.push({ name: trimmed, ...(extra || {}) });
+  };
+  pushTenant(metadata.tenant_name);
+  pushTenant(metadata.primary_tenant);
+  if (Array.isArray(metadata.tenants)) {
+    for (const t of metadata.tenants) {
+      if (t && typeof t === 'object') pushTenant(t.name, { sf: t.sf });
+      else if (typeof t === 'string') pushTenant(t);
+    }
+  }
+  if (tenantInputs.length === 0) return 0;
 
   const leaseNumber = metadata.lease_number || null;
+  // Lease-level scalars are shared across tenants in a building — we
+  // copy them onto each per-tenant row. When the page surfaces a
+  // per-tenant SF (multi-tenant buildings often have suite areas),
+  // that overrides the metadata-level rent_per_sf computation later.
   const annualRent  = parseCurrency(metadata.annual_rent);
   const rentPsf     = parseCurrency(metadata.rent_per_sf);
   const commence    = parseDate(metadata.lease_commencement)?.split('T')[0] || null;
   const expire      = parseDate(metadata.lease_expiration)?.split('T')[0] || null;
   const govType     = metadata.government_type || null;
+  const expense     = metadata.expense_structure || metadata.lease_type || null;
+  const renewal     = metadata.renewal_options || null;
 
-  // Look up a costar_sidebar-sourced row already tied to this property
-  // (+ lease_number + tenant_agency when available). Intentionally
-  // scoped to data_source='costar_sidebar' so we never overwrite the
-  // excel_master master-lease row — the priority-source rule from the
-  // audit is that costar_sidebar and excel_master coexist, and our
-  // downstream reporting picks costar_sidebar first.
-  let filter = `property_id=eq.${propertyId}&data_source=eq.costar_sidebar`;
-  if (leaseNumber) {
-    filter += `&lease_number=eq.${encodeURIComponent(leaseNumber)}`;
-  }
-  filter += `&tenant_agency=eq.${encodeURIComponent(tenantAgency)}`;
-  const existing = await domainQuery('government', 'GET',
-    `leases?${filter}&select=lease_id&limit=1`
-  );
+  let writes = 0;
+  for (const t of tenantInputs) {
+    const tenantAgency = t.name;
 
-  const payload = {
-    property_id:        propertyId,
-    lease_number:       leaseNumber,
-    tenant_agency:      tenantAgency,
-    tenant_agency_full: tenantAgency,
-    government_type:    govType,
-    commencement_date:  commence,
-    expiration_date:    expire,
-    annual_rent:        annualRent,
-    rent_psf:           rentPsf,
-    expense_structure:  metadata.expense_structure || metadata.lease_type || null,
-    renewal_options:    metadata.renewal_options || null,
-    data_source:        'costar_sidebar',
-    updated_at:         new Date().toISOString(),
-  };
-
-  if (existing.ok && existing.data?.length) {
-    await domainPatch('government',
-      `leases?lease_id=eq.${existing.data[0].lease_id}`,
-      payload,
-      'upsertGovernmentLeases:refresh'
+    // Look up an existing costar_sidebar-sourced row keyed on
+    // (property_id, data_source='costar_sidebar', tenant_agency,
+    //  lease_number-when-present). Intentionally scoped so we never
+    // overwrite the excel_master master-lease row — the priority-source
+    // rule from the audit is that costar_sidebar and excel_master
+    // coexist, and downstream reporting picks costar_sidebar first.
+    let filter = `property_id=eq.${propertyId}&data_source=eq.costar_sidebar`;
+    if (leaseNumber) {
+      filter += `&lease_number=eq.${encodeURIComponent(leaseNumber)}`;
+    }
+    filter += `&tenant_agency=eq.${encodeURIComponent(tenantAgency)}`;
+    const existing = await domainQuery('government', 'GET',
+      `leases?${filter}&select=lease_id&limit=1`
     );
-    console.log(`[upsertGovernmentLeases] refreshed costar_sidebar lease ` +
-      `lease_id=${existing.data[0].lease_id} property=${propertyId} ` +
-      `tenant_agency=${JSON.stringify(tenantAgency)}`);
-    return 1;
-  }
 
-  const r = await domainQuery('government', 'POST', 'leases', payload);
-  if (r.ok) {
-    console.log(`[upsertGovernmentLeases] inserted costar_sidebar lease ` +
-      `property=${propertyId} tenant_agency=${JSON.stringify(tenantAgency)} ` +
-      `lease_number=${leaseNumber || 'null'}`);
-    return 1;
+    const payload = {
+      property_id:        propertyId,
+      lease_number:       leaseNumber,
+      tenant_agency:      tenantAgency,
+      tenant_agency_full: tenantAgency,
+      government_type:    govType,
+      commencement_date:  commence,
+      expiration_date:    expire,
+      // Per-tenant SF when surfaced by the page; falls back to null so
+      // the column doesn't get clobbered by an aggregate value.
+      annual_rent:        annualRent,
+      rent_psf:           rentPsf,
+      expense_structure:  expense,
+      renewal_options:    renewal,
+      data_source:        'costar_sidebar',
+      updated_at:         new Date().toISOString(),
+    };
+
+    if (existing.ok && existing.data?.length) {
+      await domainPatch('government',
+        `leases?lease_id=eq.${existing.data[0].lease_id}`,
+        payload,
+        'upsertGovernmentLeases:refresh'
+      );
+      console.log(`[upsertGovernmentLeases] refreshed costar_sidebar lease ` +
+        `lease_id=${existing.data[0].lease_id} property=${propertyId} ` +
+        `tenant_agency=${JSON.stringify(tenantAgency)}`);
+      writes++;
+      continue;
+    }
+
+    const r = await domainQuery('government', 'POST', 'leases', payload);
+    if (r.ok) {
+      console.log(`[upsertGovernmentLeases] inserted costar_sidebar lease ` +
+        `property=${propertyId} tenant_agency=${JSON.stringify(tenantAgency)} ` +
+        `lease_number=${leaseNumber || 'null'}`);
+      writes++;
+      continue;
+    }
+    console.error('[upsertGovernmentLeases] INSERT failed:',
+      r.status, r.data, 'tenant_agency=', tenantAgency);
   }
-  console.error('[upsertGovernmentLeases] INSERT failed:',
-    r.status, r.data);
-  return 0;
+  return writes;
 }
 
 /**
