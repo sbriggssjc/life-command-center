@@ -87,13 +87,21 @@
 
     // ── Strategy 0 (Round 76df): build CREXi flex-row label→value map ────
     const crexiMap = buildCrexiDataMap();
-    // Round 76ej.i: only fall through to the heuristic findTextElement()
-    // when the structured map has SOME entries (i.e. the page rendered
-    // its Details panel at all). On a closed-listing page the map is
-    // empty, and findTextElement() will happily grab marketing-prose
-    // text as field values. Setting `allowHeuristicFallback=false`
-    // returns null cleanly when the data isn't present.
-    const allowHeuristicFallback = crexiMap.size > 3;
+    // Round 76ej.l (2026-05-05): the heuristic findTextElement() fallback
+    // is structurally unsafe — it scans the whole document for any
+    // element whose text contains a keyword and returns adjacent text.
+    // On the Mast One / 1040 University Boulevard listing it stamped
+    //   tenant_name = "Quality Construction and new HVAC systems"
+    //   cap_rate    = "Valuation Metrics"
+    // because the marketing description contains the word "tenants" and
+    // a sidebar section is titled "Valuation Metrics" with a Cap Rate
+    // child. Earlier fix (76ej.i) only disabled the heuristic when the
+    // structured panel was empty (closed listings); rendered open
+    // listings are just as poisonable when the requested field happens
+    // not to be in the panel. The structured map is now treated as the
+    // sole source of truth for `get()` consumers — fields absent from
+    // it stay null instead of being fabricated from prose.
+    const allowHeuristicFallback = false;
     const get = (...keywords) => {
       const mapped = lookupCrexiField(crexiMap, ...keywords);
       if (mapped) return mapped;
