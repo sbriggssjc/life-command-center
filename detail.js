@@ -170,6 +170,32 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     } catch (e) { console.warn('clinic→property lookup failed', e); }
   }
 
+  // Address-based fallback: if the CMS row had no medicare_clinics back-link
+  // (medicare_clinics.property_id is NULL — common for unlinked clinics), try
+  // to find the property by address+state. Without this, opening a CMS Data
+  // row for an unlinked clinic dead-ended at the fallback panel and the
+  // "Link CMS facility" button errored "Property ID not available" because
+  // _udCache.property was never populated. See diagnosis on
+  // claude/fix-fresenius-record-link-kLjaY.
+  if (!propertyId && db === 'dia' && fallback.address && fallback.state) {
+    try {
+      // ilike for case + minor punctuation differences (CMS = "DRIVE NE",
+      // properties = "Dr Ne"). Bound the search to state to avoid
+      // cross-state collisions on common street names.
+      const addrPattern = String(fallback.address).trim().split(/\s+/).slice(0, 3).join('%');
+      const addrRes = await diaQuery('properties', 'property_id', {
+        filter: `address=ilike.${encodeURIComponent('%' + addrPattern + '%')}&state=eq.${encodeURIComponent(fallback.state)}`,
+        limit: 2
+      });
+      const addrArr = Array.isArray(addrRes) ? addrRes : (addrRes?.data || []);
+      // Only auto-anchor when the address+state is unique. Multiple matches
+      // mean we'd need user disambiguation, which is out of scope here.
+      if (addrArr.length === 1 && addrArr[0].property_id) {
+        propertyId = addrArr[0].property_id;
+      }
+    } catch (e) { console.warn('clinic→property address fallback failed', e); }
+  }
+
   // Build filter — prefer property_id, fall back to lease_number
   const propFilter = propertyId ? `property_id=eq.${propertyId}` : null;
   const leaseFilter = leaseNumber ? `lease_number=eq.${encodeURIComponent(leaseNumber)}` : null;
@@ -774,12 +800,24 @@ function _udRenderMatchFacilityCard() {
   const city   = p.city || fb.city || '';
   const state  = p.state || fb.state || '';
   const zip    = p.zip_code || p.zip || fb.zip || fb.zip_code || '';
+  // Only true when /api/cms-match?action=resolve actually ran (cms.debug
+  // is only populated by the resolver). The card was previously claiming
+  // "Auto-match tried <addr>" even when the panel was opened with no
+  // property_id and the resolver was never called — misleading.
+  const autoMatchRan = !!(cms && cms.debug);
+  const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id || null;
 
   let html = '<div class="detail-empty" style="text-align:left;padding:24px;background:var(--s2);border-radius:12px">';
   html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">';
   html += '<div style="font-size:24px">&#x1F50D;</div>';
   html += '<div><div style="font-weight:700;color:var(--text)">No CMS facility linked to this property</div>';
-  html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">Auto-match tried <strong>' + esc(addr || '—') + '</strong>' + (zip ? ' (' + esc(zip) + ')' : '') + ' — no confident match found.</div>';
+  if (autoMatchRan) {
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">Auto-match tried <strong>' + esc(addr || '—') + '</strong>' + (zip ? ' (' + esc(zip) + ')' : '') + ' — no confident match found.</div>';
+  } else if (!propertyId) {
+    html += '<div style="font-size:12px;color:#f59e0b;margin-top:2px">This panel was opened without a linked property record. Linking from here would not persist — search Pipeline / Properties for this address and open it from there to link a CMS facility.</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">No auto-match run yet for this property. Use the search below to pick a CMS facility manually.</div>';
+  }
   html += '</div></div>';
 
   // Debug context (visible when all candidates fell below the auto-match threshold)
@@ -807,7 +845,11 @@ function _udRenderMatchFacilityCard() {
       html += '</div>';
       html += '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">';
       html += '<span style="font-size:10px;padding:2px 6px;border-radius:8px;background:' + (scorePct >= 70 ? 'rgba(16,185,129,0.18);color:#10b981' : 'rgba(251,191,36,0.18);color:#f59e0b') + ';font-weight:700">' + scorePct + '% match</span>';
-      html += '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'auto:address_zip\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Use this</button>';
+      if (propertyId) {
+        html += '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'auto:address_zip\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Use this</button>';
+      } else {
+        html += '<button disabled title="Open this record from Pipeline / Properties to link" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text3);font-weight:600;cursor:not-allowed">Use this</button>';
+      }
       html += '</div></div>';
     });
     html += '</div>';
@@ -855,15 +897,19 @@ function _udCmsTypeahead(q) {
       const rows = (data && data.candidates) || [];
       if (!resultsEl) return;
       if (rows.length === 0) { resultsEl.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text3)">No facilities found.</div>'; return; }
+      const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id || null;
       resultsEl.innerHTML = rows.map(c => {
         const line2 = [c.address, c.city, c.state, c.zip_code || c.zip].filter(Boolean).map(esc).join(', ');
+        const linkBtn = propertyId
+          ? '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'manual:typeahead\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Link</button>'
+          : '<button disabled title="Open this record from Pipeline / Properties to link" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text3);font-weight:600;cursor:not-allowed">Link</button>';
         return '<div style="display:flex;gap:10px;padding:8px 10px;background:var(--s1);border-radius:6px;border:1px solid var(--border);align-items:center">' +
           '<div style="flex:1;min-width:0">' +
           '<div style="font-weight:600;color:var(--text);font-size:12px">' + esc(c.facility_name || '(unnamed)') + '</div>' +
           '<div style="font-size:11px;color:var(--text2)">' + line2 + '</div>' +
           '<div style="font-size:10px;color:var(--text3);margin-top:1px">CCN ' + esc(c.medicare_id) + (c.chain_organization ? ' · ' + esc(c.chain_organization) : '') + '</div>' +
           '</div>' +
-          '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'manual:typeahead\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Link</button>' +
+          linkBtn +
         '</div>';
       }).join('');
     } catch (err) {
