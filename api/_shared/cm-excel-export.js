@@ -458,6 +458,50 @@ const TAB_NAMES = {
 // We pull these from cm_gov_market_quarterly directly (since it's the
 // master view that has every column we need).
 // ============================================================================
+// ============================================================================
+// Master Paste-Ready layout (dialysis vertical)
+//
+// Mirrors cm_dialysis_market_quarterly_master column order for the dialysis
+// master XLSX's data tabs. Marketing pastes the data into the dialysis
+// master (assets/cm-templates/dialysis-master-template.xlsx) to refresh the
+// 37 chart objects pre-wired to these column slots.
+//
+// Column-order parity with gov's layout where the metric applies. Dialysis-
+// specific tweaks: cross_border_* are emitted as NULL (kept for layout
+// parity); avg_dom / pct_of_ask / avg_bid_ask_spread / pct_price_change are
+// appended at the end (gov master doesn't have those slots — they're
+// pulled from per-metric views in the gov tab).
+// ============================================================================
+const DIA_MASTER_PASTE_LAYOUT = [
+  { key: 'fiscal_quarter',        header: 'Quarter',                  width: 10 },
+  { key: 'period_end',            header: 'Date',                     format: 'date_short',           width: 12 },
+  { key: 'transaction_count',     header: 'Transactions (Quarterly)', format: 'integer_count',        width: 18 },
+  { key: 'avg_deal_size',         header: 'Average Deal Size',        format: 'currency_dollars',     width: 18 },
+  { key: 'quarterly_volume',      header: 'Monthly Volume',           format: 'currency_dollars',     width: 18 },
+  { key: 'quarterly_volume',      header: 'Transaction Volume',       format: 'currency_dollars',     width: 18 },
+  { key: 'ttm_volume',            header: 'Trans. Vol. (ttm)',        format: 'currency_dollars',     width: 18 },
+  { key: 'yoy_change_pct',        header: 'YoY Change (%)',           format: 'percent_one_decimal',  width: 14 },
+  { key: 'upper_quartile_cap',    header: 'Upper Quartile Cap',       format: 'percent_basis_points', width: 18 },
+  { key: 'lower_quartile_cap',    header: 'Lower Quartile Cap',       format: 'percent_basis_points', width: 18 },
+  { key: 'avg_cap_rate',          header: 'Average Cap Rate (ttm)',   format: 'percent_basis_points', width: 18 },
+  { key: 'nm_avg_cap',            header: 'NM Average Cap (ttm)',     format: 'percent_basis_points', width: 18 },
+  { key: 'non_nm_avg_cap',        header: 'Non-NM Average Cap',       format: 'percent_basis_points', width: 18 },
+  { key: 'cap_10plus_year',       header: '10+ Year Cap (ttm)',       format: 'percent_basis_points', width: 18 },
+  { key: 'cap_6to10_year',        header: '6 to 10 Year Cap (ttm)',   format: 'percent_basis_points', width: 20 },
+  { key: 'cap_less5_year',        header: 'Less than 5 Year Cap',     format: 'percent_basis_points', width: 20 },
+  { key: 'cap_outside_firm',      header: 'Outside Firm Term',        format: 'percent_basis_points', width: 18 },
+  { key: 'private_volume',        header: 'Private Volume (ttm)',     format: 'currency_dollars',     width: 20 },
+  { key: 'reit_volume',           header: 'Public Listed/REIT',       format: 'currency_dollars',     width: 20 },
+  { key: 'cross_border_volume',   header: 'Cross-Border Volume',      format: 'currency_dollars',     width: 20 },
+  { key: 'institutional_volume',  header: 'Institutional Volume',     format: 'currency_dollars',     width: 20 },
+  // Trade-execution metrics (dialysis-specific tail; gov master doesn't
+  // have these column slots — gov reads them from per-metric views).
+  { key: 'avg_dom',               header: 'Avg DOM (days)',           format: 'integer_count',        width: 14 },
+  { key: 'pct_of_ask',            header: '% of Ask Price',           format: 'percent_one_decimal',  width: 16 },
+  { key: 'avg_bid_ask_spread',    header: 'Bid-Ask Spread (bps)',     format: 'percent_basis_points', width: 19 },
+  { key: 'pct_price_change',      header: '% Price Changes',          format: 'percent_one_decimal',  width: 18 },
+];
+
 const GOV_MASTER_PASTE_LAYOUT = [
   { key: 'fiscal_quarter',      header: 'Quarter',                width: 10 },
   { key: 'period_end',          header: 'Date',                   format: 'date_short',          width: 12 },
@@ -549,15 +593,24 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   cover.getCell('B14').value = 'Marketing Workflow — Quarterly Refresh in 30 seconds';
   cover.getCell('B14').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
 
-  cover.getCell('B15').value =
-    '1. Open the "MasterPasteReady" tab in this workbook.\n' +
-    '2. Click cell A2, then Ctrl+Shift+End to select the entire data range.\n' +
-    '3. Ctrl+C to copy.\n' +
-    '4. Open your master Excel file (Copy Government Master Document.xlsx).\n' +
-    '5. Go to the "All Charts" tab, click cell B3, then Ctrl+V to paste.\n' +
-    '6. All 18 charts on the master\'s All Charts tab + 10 charts on SSA Charts auto-update.\n' +
-    '7. Save the master and send to marketing.\n\n' +
-    'Re-run this export from LCC any time to regenerate. The Data_* tabs in this workbook are also useful for sanity-checking individual chart data before pasting.';
+  cover.getCell('B15').value = vertical === 'dialysis'
+    ? '1. Open the "MasterPasteReady" tab in this workbook.\n' +
+      '2. Click cell A3, then Ctrl+Shift+End to select the entire data range.\n' +
+      '3. Ctrl+C to copy.\n' +
+      '4. Open your dialysis master Excel file.\n' +
+      '5. Go to your master\'s charts data tab and paste at the first data row.\n' +
+      '6. The 37 chart objects pre-wired to those column slots will auto-refresh.\n' +
+      '7. Save the master and send to marketing.\n\n' +
+      'Column shape matches gov master where the metric applies; dialysis-specific tail (DOM, % of ask, bid-ask, price-change %) is appended at the right.\n\n' +
+      'Re-run this export from LCC any time to regenerate. The Data_* tabs in this workbook are also useful for sanity-checking individual chart data before pasting.'
+    : '1. Open the "MasterPasteReady" tab in this workbook.\n' +
+      '2. Click cell A3, then Ctrl+Shift+End to select the entire data range.\n' +
+      '3. Ctrl+C to copy.\n' +
+      '4. Open your master Excel file (Copy Government Master Document.xlsx).\n' +
+      '5. Go to the "All Charts" tab, click cell B3, then Ctrl+V to paste.\n' +
+      '6. All 18 charts on the master\'s All Charts tab + 10 charts on SSA Charts auto-update.\n' +
+      '7. Save the master and send to marketing.\n\n' +
+      'Re-run this export from LCC any time to regenerate. The Data_* tabs in this workbook are also useful for sanity-checking individual chart data before pasting.';
   cover.getCell('B15').font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
   cover.getCell('B15').alignment = { wrapText: true, vertical: 'top' };
   cover.getRow(15).height = 130;
@@ -729,21 +782,35 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // ----------------------------------------------------------------
   // MasterPasteReady — matches the column order of master "All Charts"
   // ----------------------------------------------------------------
-  if (vertical === 'gov' && Array.isArray(masterRows) && masterRows.length > 0) {
+  // Vertical-aware MasterPasteReady dispatch. Both gov and dialysis use the
+  // same render loop; only the title text + column layout differ.
+  const masterPasteVertical =
+    vertical === 'gov'      ? { layout: GOV_MASTER_PASTE_LAYOUT,
+                                titleText: `Government Master "All Charts" — Paste-Ready (subspecialty: ${subspecialty})`,
+                                noteHeader: 'PASTE INTO GOV MASTER:\n',
+                                noteBody:   '1. Click A3 (first data row)\n2. Ctrl+Shift+End to select all data\n3. Ctrl+C\n4. Open Copy Government Master Document.xlsx\n5. All Charts tab → click B3\n6. Paste Special → Values\n\nColumn order matches master B-Y exactly.' }
+    : vertical === 'dialysis' ? { layout: DIA_MASTER_PASTE_LAYOUT,
+                                  titleText: `Dialysis Master "All Charts" — Paste-Ready (subspecialty: ${subspecialty})`,
+                                  noteHeader: 'PASTE INTO DIALYSIS MASTER:\n',
+                                  noteBody:   '1. Click A3 (first data row)\n2. Ctrl+Shift+End to select all data\n3. Ctrl+C\n4. Open the dialysis master XLSX (assets/cm-templates/dialysis-master-template.xlsx or your local copy)\n5. Charts data tab → click the first data row\n6. Paste Special → Values\n\nColumn parity with gov master where applicable; dialysis-specific tail (DOM, % of ask, bid-ask, price-change %) appended at the right.' }
+    : null;
+
+  if (masterPasteVertical && Array.isArray(masterRows) && masterRows.length > 0) {
+    const { layout: PASTE_LAYOUT, titleText, noteHeader, noteBody } = masterPasteVertical;
     const ms = wb.addWorksheet('MasterPasteReady', {
       views: [{ showGridLines: false, state: 'frozen', ySplit: 2 }],
       tabColor: { argb: 'FF' + hex(palette.nm_navy) },
     });
 
     // Title block
-    ms.getCell('A1').value = `Government Master "All Charts" — Paste-Ready (subspecialty: ${subspecialty})`;
+    ms.getCell('A1').value = titleText;
     ms.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
     ms.mergeCells('A1:F1');
     ms.getRow(1).height = 22;
 
     // Header row at row 2 (matches master "All Charts" row 2 header layout)
     const msHeader = ms.getRow(2);
-    GOV_MASTER_PASTE_LAYOUT.forEach((c, i) => {
+    PASTE_LAYOUT.forEach((c, i) => {
       const cell = msHeader.getCell(i + 1);
       cell.value = c.header;
       cell.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -754,19 +821,19 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     msHeader.height = 32;
 
     // Column widths + number formats
-    GOV_MASTER_PASTE_LAYOUT.forEach((c, i) => {
+    PASTE_LAYOUT.forEach((c, i) => {
       const col = ms.getColumn(i + 1);
       col.width = c.width || 14;
       if (c.format && FMT[c.format]) col.numFmt = FMT[c.format];
     });
 
     // Data rows starting at row 3 (so when marketing copies A3:Xend and pastes
-    // at master's All Charts!B3, the columns align with the master's B onward
-    // — the master uses B for Quarter through Y for Municipal Cap)
+    // at master's All Charts data tab, the columns align with the master's
+    // expected layout)
     let r = 3;
     for (const row of masterRows) {
       const dataRow = ms.getRow(r);
-      GOV_MASTER_PASTE_LAYOUT.forEach((c, i) => {
+      PASTE_LAYOUT.forEach((c, i) => {
         let v = row[c.key];
         if (c.format === 'date_short' && typeof v === 'string') {
           const d = new Date(v);
@@ -778,7 +845,7 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         if (c.format && FMT[c.format]) cell.numFmt = FMT[c.format];
       });
       if (r % 2 === 1) {
-        GOV_MASTER_PASTE_LAYOUT.forEach((_, i) => {
+        PASTE_LAYOUT.forEach((_, i) => {
           dataRow.getCell(i + 1).fill = {
             type: 'pattern', pattern: 'solid',
             fgColor: { argb: 'FF' + hex(palette.nm_pale) },
@@ -791,8 +858,8 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // Helpful instruction block above the data
     ms.getCell('A1').note = {
       texts: [
-        { text: 'PASTE INTO GOV MASTER:\n', font: { bold: true, size: 11 } },
-        { text: '1. Click A3 (first data row)\n2. Ctrl+Shift+End to select all data\n3. Ctrl+C\n4. Open Copy Government Master Document.xlsx\n5. All Charts tab → click B3\n6. Paste Special → Values\n\nColumn order matches master B-Y exactly.', font: { size: 10 } },
+        { text: noteHeader, font: { bold: true, size: 11 } },
+        { text: noteBody, font: { size: 10 } },
       ],
     };
 
