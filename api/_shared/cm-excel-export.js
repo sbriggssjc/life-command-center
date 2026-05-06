@@ -285,6 +285,16 @@ const CHART_COLUMNS = {
     { key: 'market_spread',      header: 'Market Spread (bps)', format: 'percent_basis_points', width: 19 },
     { key: 'nm_spread',          header: 'NM Spread (bps)',     format: 'percent_basis_points', width: 17 },
   ],
+
+  // Parity-1: front-cover combo (Volume area + Cap line + Upper/Lower quartile band)
+  volume_cap_quartile_combo: [
+    { key: 'period_end',     header: 'Quarter End',         format: 'date_short',           width: 13 },
+    { key: 'subspecialty',   header: 'Subspecialty',        width: 14 },
+    { key: 'volume_dollars', header: 'TTM Volume ($)',      format: 'currency_dollars',     width: 18 },
+    { key: 'cap_rate',       header: 'TTM Cap (avg)',       format: 'percent_basis_points', width: 14 },
+    { key: 'upper_quartile', header: 'Upper Quartile Cap',  format: 'percent_basis_points', width: 18 },
+    { key: 'lower_quartile', header: 'Lower Quartile Cap',  format: 'percent_basis_points', width: 18 },
+  ],
 };
 
 // Period-summary template — column headers are computed at render time from
@@ -332,6 +342,8 @@ const TAB_NAMES = {
   // Parity-1 — period summary tables (replaces the manual 7-column tables
   // in the master "All Charts" tab next to each chart)
   volume_cap_summary_table:     'Summary_Vol_Cap',
+  // Parity-1 — front-cover combo (Volume + Cap + Quartile band)
+  volume_cap_quartile_combo:    'Data_Vol_Cap_Combo',
 };
 
 // ============================================================================

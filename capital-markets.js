@@ -58,6 +58,8 @@
     'rent_heat_map',               // p.33 state map; ranked table
     // ===== Parity-1 — period summary tables =====
     'volume_cap_summary_table',    // 4 metrics × 7 cols (current Q + prior Q + YoY + cycle + 5/10/15-yr avg)
+    // ===== Parity-1 — front-cover combo =====
+    'volume_cap_quartile_combo',   // gov p.6/7/8/13, dia p.19, ST workbook — Volume area + Cap line + Quartile band
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -224,6 +226,115 @@
         }];
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('currency_billions') });
+      }
+      case 'volume_cap_quartile_combo': {
+        // Front-cover combo (gov p.6/7/8/13, dia p.19, ST workbook): TTM volume
+        // area on left axis ($) + upper/lower quartile cap band + TTM cap line
+        // on right axis (%). Dataset order matters because the fill reference
+        // is index-based — upper quartile fills DOWN to lower quartile (index +1).
+        const navy   = brandColor('nm_navy', '#003DA5');
+        const sky    = brandColor('nm_sky',  '#62B5E5');
+        const pale   = brandColor('nm_pale', '#E0E8F4');
+        const muted  = brandColor('nm_axis', '#6A748C');
+        const textColor = brandColor('nm_text', '#191919');
+
+        datasets = [
+          {
+            label: 'TTM Volume',
+            data: chart.rows.map(r => r.volume_dollars),
+            borderColor: navy,
+            backgroundColor: pale,
+            fill: 'origin',
+            tension: 0.25,
+            pointRadius: 0,
+            yAxisID: 'y_volume',
+            order: 3,  // draw under cap-rate lines
+          },
+          {
+            label: 'Upper Quartile Cap',
+            data: chart.rows.map(r => r.upper_quartile),
+            borderColor: sky,
+            backgroundColor: 'rgba(98, 181, 229, 0.18)',  // sky @ 18%
+            fill: '+1',  // fill DOWN to next series (lower quartile)
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 1,
+            borderDash: [4, 4],
+            yAxisID: 'y_cap',
+            order: 2,
+            spanGaps: true,
+          },
+          {
+            label: 'Lower Quartile Cap',
+            data: chart.rows.map(r => r.lower_quartile),
+            borderColor: sky,
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 1,
+            borderDash: [4, 4],
+            yAxisID: 'y_cap',
+            order: 2,
+            spanGaps: true,
+          },
+          {
+            label: 'TTM Cap (avg)',
+            data: chart.rows.map(r => r.cap_rate),
+            borderColor: navy,
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: navy,
+            borderWidth: 2,
+            yAxisID: 'y_cap',
+            order: 1,  // draw on top
+            spanGaps: true,
+          },
+        ];
+
+        const opts = commonChartOptions('currency_billions');
+        // Replace the single y-axis with dual axes
+        opts.scales = {
+          x: opts.scales.x,
+          y_volume: {
+            position: 'left',
+            ticks: {
+              color: muted,
+              font: { family: 'Calibri, sans-serif', size: 9 },
+              callback: tickFormatterFor('currency_billions'),
+            },
+            grid: { color: brandColor('nm_bg_alt', '#E7E6E6') },
+            title: {
+              display: true, text: 'TTM Volume ($)',
+              color: muted, font: { family: 'Calibri, sans-serif', size: 9, weight: '600' },
+            },
+          },
+          y_cap: {
+            position: 'right',
+            ticks: {
+              color: muted,
+              font: { family: 'Calibri, sans-serif', size: 9 },
+              callback: tickFormatterFor('percent_basis_points'),
+            },
+            grid: { display: false },
+            title: {
+              display: true, text: 'Cap Rate',
+              color: muted, font: { family: 'Calibri, sans-serif', size: 9, weight: '600' },
+            },
+          },
+        };
+        // Dual-axis tooltip: format per-series
+        opts.plugins.tooltip.callbacks.label = (ctx) => {
+          const v = ctx.parsed.y;
+          if (v == null) return `${ctx.dataset.label}: n/a`;
+          if (ctx.dataset.yAxisID === 'y_volume') {
+            return `${ctx.dataset.label}: ${tickFormatterFor('currency_billions')(v)}`;
+          }
+          return `${ctx.dataset.label}: ${tickFormatterFor('percent_basis_points')(v)}`;
+        };
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
       }
       case 'transaction_count_ttm': {
         datasets = [{

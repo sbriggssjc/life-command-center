@@ -42,7 +42,7 @@ import { domainQuery } from './_shared/domain-db.js';
 import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-export.js';
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
-import { buildVolumeCapSummary } from './_shared/cm-summary-table.js';
+import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic chart_templates — composed from other templates' rows rather than
@@ -60,6 +60,14 @@ const SYNTHETIC_COMPOSERS = {
       capRows:      find('cap_rate_ttm_by_quarter'),
       quartileRows: find('cap_rate_top_bottom_quartile'),
       asOf: asOf || null,
+    });
+  },
+  'volume_cap_quartile_combo': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    return joinVolumeCapQuartile({
+      volumeRows:   find('volume_ttm_by_quarter'),
+      capRows:      find('cap_rate_ttm_by_quarter'),
+      quartileRows: find('cap_rate_top_bottom_quartile'),
     });
   },
 };

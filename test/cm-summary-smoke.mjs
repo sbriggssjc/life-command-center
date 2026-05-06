@@ -1,5 +1,6 @@
-// Live smoke test for buildVolumeCapSummary against gov + national_st rows.
-import { buildVolumeCapSummary } from '../api/_shared/cm-summary-table.js';
+// Live smoke test for buildVolumeCapSummary + joinVolumeCapQuartile against
+// gov + national_st rows.
+import { buildVolumeCapSummary, joinVolumeCapQuartile } from '../api/_shared/cm-summary-table.js';
 
 const URL = process.env.OPS_SUPABASE_URL;
 const KEY = process.env.OPS_SUPABASE_KEY;
@@ -78,5 +79,16 @@ for (const t of targets) {
        fmt(r.avg_5yr), fmt(r.avg_10yr), fmt(r.avg_15yr)
       ].map(s => String(s).padStart(10)).join(' ')
     );
+  }
+
+  // Combo chart join — show last 3 quarters
+  const combo = joinVolumeCapQuartile({ volumeRows: vol, capRows: cap, quartileRows: quart });
+  if (combo.length > 0) {
+    console.log(`  combo chart: ${combo.length} joined quarters (${combo[0].period_end} → ${combo[combo.length-1].period_end})`);
+    for (const r of combo.slice(-3)) {
+      console.log(
+        `    ${r.period_end}  vol=${fmtCurrency(r.volume_dollars).padStart(9)}  cap=${fmtPct(r.cap_rate).padStart(7)}  upper=${fmtPct(r.upper_quartile).padStart(7)}  lower=${fmtPct(r.lower_quartile).padStart(7)}`
+      );
+    }
   }
 }

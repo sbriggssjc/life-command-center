@@ -9,7 +9,8 @@
 
 | Date | Item | Status | PR |
 |---|---|---|---|
-| 2026-05-06 | Tier 1 #1: `volume_cap_summary_table` (4 metrics × 7 cols, replaces the manual snapshot tables marketing builds 9× per gov deck) | ✅ shipped — catalog row added, `api/_shared/cm-summary-table.js` + 14 unit tests, synthetic-template dispatch in `api/capital-markets.js`, `Summary_Vol_Cap` tab in `cm-excel-export.js`, `renderPeriodSummary` card in frontend, live smoke tested against gov + national_st (all + office) | TBA |
+| 2026-05-06 | Tier 1 #1: `volume_cap_summary_table` (4 metrics × 7 cols, replaces the manual snapshot tables marketing builds 9× per gov deck) | ✅ shipped — catalog row added, `api/_shared/cm-summary-table.js` + 14 unit tests, synthetic-template dispatch in `api/capital-markets.js`, `Summary_Vol_Cap` tab in `cm-excel-export.js`, `renderPeriodSummary` card in frontend, live smoke tested against gov + national_st (all + office) | #595 |
+| 2026-05-06 | Tier 1 #2: `volume_cap_quartile_combo` (front-cover combo on gov p.6/7/8/13, dia p.19, ST workbook — Volume area + Cap line + Upper/Lower quartile band on dual-axis) | ✅ shipped — `joinVolumeCapQuartile()` composer + 5 unit tests added to existing module, second `SYNTHETIC_COMPOSERS` entry, mixed Chart.js render with dual y-axes (volume left $, cap right %) and shaded quartile band, `Data_Vol_Cap_Combo` tab in workbook, smoke verified across gov (114q from 1970-Q1) + national_st all/office (96q from 2002-Q1) | TBA |
 
 ---
 
@@ -180,8 +181,8 @@ These don't fit the `chart_template_id` data-shape contract — they're either p
 
 **Tier 1 — ships immediately (zero new SQL, just rendering work)**
 
-1. ✅ **`volume_cap_summary_table`** — *shipped 2026-05-06.* The 7-column table pattern is on p.6, 7, 8, 13, 15, 16, 19, 20, 27 of the gov deck. Marketing builds it manually today. Single highest-impact delta. Pure rendering: aggregates the existing `volume_ttm_by_quarter` + `cap_rate_*_q` data into the summary shape via the synthetic-template dispatch (`__synthetic__:` view-name prefix). Live-verified output: gov 2025-Q4 cap 8.33%, prior 8.61%, 15-yr avg 8.53%.
-2. **Build `volume_cap_quartile_combo`** — the canonical "front cover" chart. Combines three existing data feeds (`volume_ttm_by_quarter` + `cap_rate_ttm_by_quarter` + `cap_rate_top_bottom_quartile`) into one render. New chart_template_id, no new view. **Now the highest-priority remaining item.**
+1. ✅ **`volume_cap_summary_table`** — *shipped 2026-05-06 (PR #595).* The 7-column table pattern is on p.6, 7, 8, 13, 15, 16, 19, 20, 27 of the gov deck. Marketing builds it manually today. Single highest-impact delta. Pure rendering: aggregates the existing `volume_ttm_by_quarter` + `cap_rate_*_q` data into the summary shape via the synthetic-template dispatch (`__synthetic__:` view-name prefix). Live-verified output: gov 2025-Q4 cap 8.33%, prior 8.61%, 15-yr avg 8.53%.
+2. ✅ **`volume_cap_quartile_combo`** — *shipped 2026-05-06.* The canonical "front cover" chart on gov p.6/7/8/13, dialysis p.19, ST workbook. Combines three existing data feeds into one mixed-chart render: volume area on left axis ($), TTM cap line + upper/lower quartile band on right axis (%). Same `__synthetic__:` synthetic-template pattern as #1, no new SQL view.
 
 **Tier 2 — dialysis parity (8 dialysis views + catalog flip)**
 

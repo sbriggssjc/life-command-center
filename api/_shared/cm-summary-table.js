@@ -207,5 +207,58 @@ export function summaryColumnHeaders(asOf) {
   ];
 }
 
+// ============================================================================
+// Volume + Cap + Quartile combo (canonical "front-cover" chart)
+// ============================================================================
+//
+// Joins the three time-series feeds (volume_ttm_q, cap_ttm_q, cap_quartile_q)
+// into a single per-quarter row. Used by the deliverable's front-cover combo
+// chart on gov p.6/7/8/13, dialysis p.19, and the ST workbook Vol/* sheets.
+//
+// Output rows are sorted ASC by period_end. Each row has the same period_end
+// across all 3 source series; rows where the volume row is null are dropped
+// (those are typically pre-2002 padding or future/forecast rows). Cap rate
+// and quartile values can be null individually (e.g. partial quarter, RCA
+// products that don't report bottom quartile).
+//
+// @param {object} args
+// @param {Array}  args.volumeRows   - cm_*_volume_ttm_q rows, sorted ASC
+// @param {Array}  args.capRows      - cm_*_cap_ttm_q rows
+// @param {Array}  args.quartileRows - cm_*_cap_quartile_q rows
+// @returns {Array<object>} Joined rows: { period_end, subspecialty,
+//   volume_dollars, cap_rate, upper_quartile, lower_quartile }
+// ============================================================================
+export function joinVolumeCapQuartile({ volumeRows = [], capRows = [], quartileRows = [] }) {
+  if (!Array.isArray(volumeRows) || volumeRows.length === 0) return [];
+
+  // Index cap and quartile rows by period_end for O(1) lookup
+  const capByPeriod = new Map(
+    (capRows || []).map((r) => [r.period_end, r])
+  );
+  const qByPeriod = new Map(
+    (quartileRows || []).map((r) => [r.period_end, r])
+  );
+
+  const out = [];
+  for (const v of volumeRows) {
+    if (!v?.period_end) continue;
+    const volume_dollars = pickValue(v, FIELD_KEYS.volume);
+    if (volume_dollars == null) continue;  // skip pre-data rows
+
+    const c = capByPeriod.get(v.period_end);
+    const q = qByPeriod.get(v.period_end);
+
+    out.push({
+      period_end:     v.period_end,
+      subspecialty:   v.subspecialty ?? c?.subspecialty ?? q?.subspecialty ?? null,
+      volume_dollars,
+      cap_rate:       c ? pickValue(c, FIELD_KEYS.cap_rate)        : null,
+      upper_quartile: q ? pickValue(q, FIELD_KEYS.upper_quartile)  : null,
+      lower_quartile: q ? pickValue(q, FIELD_KEYS.lower_quartile)  : null,
+    });
+  }
+  return out;
+}
+
 // Internal exports for tests
 export const _internal = { quartersBefore, trailingAvg, rowAt, pickValue, FIELD_KEYS };

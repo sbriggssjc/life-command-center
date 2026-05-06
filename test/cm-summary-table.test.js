@@ -1,7 +1,7 @@
 // Tests for cm-summary-table.js (volume + cap summary table builder).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildVolumeCapSummary, summaryColumnHeaders, _internal } from '../api/_shared/cm-summary-table.js';
+import { buildVolumeCapSummary, summaryColumnHeaders, joinVolumeCapQuartile, _internal } from '../api/_shared/cm-summary-table.js';
 
 const { quartersBefore, trailingAvg, rowAt } = _internal;
 
@@ -198,4 +198,77 @@ test('summaryColumnHeaders: produces YYYY-Qn for each period column', () => {
   assert.equal(headers[4], '5-Yr Avg');
   assert.equal(headers[5], '10-Yr Avg');
   assert.equal(headers[6], '15-Yr Avg');
+});
+
+// ----- joinVolumeCapQuartile -----
+
+test('joinVolumeCapQuartile: joins 3 series on period_end (gov field names)', () => {
+  const volumeRows = [
+    { period_end: '2024-03-31', subspecialty: 'all', volume_dollars: 9.5e9 },
+    { period_end: '2024-06-30', subspecialty: 'all', volume_dollars: 9.8e9 },
+  ];
+  const capRows = [
+    { period_end: '2024-03-31', subspecialty: 'all', ttm_weighted_cap_rate: 0.0740 },
+    { period_end: '2024-06-30', subspecialty: 'all', ttm_weighted_cap_rate: 0.0747 },
+  ];
+  const quartileRows = [
+    { period_end: '2024-03-31', subspecialty: 'all', top_quartile: 0.066, bottom_quartile: 0.082 },
+    { period_end: '2024-06-30', subspecialty: 'all', top_quartile: 0.064, bottom_quartile: 0.080 },
+  ];
+  const joined = joinVolumeCapQuartile({ volumeRows, capRows, quartileRows });
+  assert.equal(joined.length, 2);
+  assert.deepEqual(joined[0], {
+    period_end: '2024-03-31', subspecialty: 'all',
+    volume_dollars: 9.5e9, cap_rate: 0.0740,
+    upper_quartile: 0.066, lower_quartile: 0.082,
+  });
+  assert.deepEqual(joined[1], {
+    period_end: '2024-06-30', subspecialty: 'all',
+    volume_dollars: 9.8e9, cap_rate: 0.0747,
+    upper_quartile: 0.064, lower_quartile: 0.080,
+  });
+});
+
+test('joinVolumeCapQuartile: handles natl_st field names (cap_rate / top_quartile_cap)', () => {
+  const volumeRows = [
+    { period_end: '2025-12-31', subspecialty: 'all', volume_dollars: 126.7e9 },
+  ];
+  const capRows = [
+    { period_end: '2025-12-31', subspecialty: 'all', cap_rate: 0.0688 },
+  ];
+  const quartileRows = [
+    { period_end: '2025-12-31', subspecialty: 'all', top_quartile_cap: 0.0616, bottom_quartile_cap: null },
+  ];
+  const joined = joinVolumeCapQuartile({ volumeRows, capRows, quartileRows });
+  assert.equal(joined.length, 1);
+  assert.equal(joined[0].cap_rate, 0.0688);
+  assert.equal(joined[0].upper_quartile, 0.0616);
+  assert.equal(joined[0].lower_quartile, null);
+});
+
+test('joinVolumeCapQuartile: drops rows with null volume', () => {
+  const volumeRows = [
+    { period_end: '2024-03-31', subspecialty: 'all', volume_dollars: null },
+    { period_end: '2024-06-30', subspecialty: 'all', volume_dollars: 9.8e9 },
+  ];
+  const joined = joinVolumeCapQuartile({ volumeRows, capRows: [], quartileRows: [] });
+  assert.equal(joined.length, 1);
+  assert.equal(joined[0].period_end, '2024-06-30');
+});
+
+test('joinVolumeCapQuartile: missing cap/quartile rows leave nulls (not crashes)', () => {
+  const volumeRows = [
+    { period_end: '2024-06-30', subspecialty: 'all', volume_dollars: 9.8e9 },
+  ];
+  const joined = joinVolumeCapQuartile({ volumeRows, capRows: [], quartileRows: [] });
+  assert.equal(joined.length, 1);
+  assert.equal(joined[0].volume_dollars, 9.8e9);
+  assert.equal(joined[0].cap_rate, null);
+  assert.equal(joined[0].upper_quartile, null);
+  assert.equal(joined[0].lower_quartile, null);
+});
+
+test('joinVolumeCapQuartile: empty input returns empty array', () => {
+  assert.deepEqual(joinVolumeCapQuartile({}), []);
+  assert.deepEqual(joinVolumeCapQuartile({ volumeRows: [] }), []);
 });
