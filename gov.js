@@ -4992,6 +4992,13 @@ window.resolveGovPendingUpdate = async function(id, resolution) {
 const govResolverCache = {};
 const govResolverShowCreate = {};   // pending_id → bool (form expanded?)
 const govResolverNewProp   = {};    // pending_id → form draft
+const govResolverPortfolioSelected = {}; // pending_id → Set<property_id> (portfolio picker)
+const govResolverPortfolioFilter   = {}; // pending_id → search string (portfolio picker)
+
+const GOV_PORTFOLIO_REASONS = new Set([
+  'sale_property_link_portfolio_address_gap',
+  'sale_property_link_portfolio_high_confidence_candidate',
+]);
 
 async function govRpc(rpcName, args) {
   const url = new URL('/api/gov-query', window.location.origin);
@@ -5240,6 +5247,60 @@ window.govResolverNewPropChange = function(pendingId, field, value) {
   govResolverNewProp[pendingId][field] = value;
 };
 
+// Portfolio sale-link resolver (Mode D — one sale, N properties).
+// Backed by gov_resolve_portfolio_sale_link in
+// government-lease/sql/20260506_gov_rpc_portfolio_sale_link.sql.
+window.govResolverTogglePortfolioPick = function(pendingId, propertyId) {
+  if (!govResolverPortfolioSelected[pendingId]) {
+    govResolverPortfolioSelected[pendingId] = new Set();
+  }
+  const set = govResolverPortfolioSelected[pendingId];
+  const pid = Number(propertyId);
+  if (set.has(pid)) set.delete(pid); else set.add(pid);
+  renderGovTab();
+};
+
+window.govResolverPortfolioFilterChange = function(pendingId, value) {
+  govResolverPortfolioFilter[pendingId] = value || '';
+  renderGovTab();
+};
+
+window.govResolverLinkPortfolio = async function(pendingId) {
+  const set = govResolverPortfolioSelected[pendingId] || new Set();
+  const ids = Array.from(set);
+  if (ids.length === 0) {
+    showToast('Pick at least one property to link', 'warning');
+    return;
+  }
+  if (!(await lccConfirm(
+    'Link this sale to ' + ids.length + ' propert' + (ids.length === 1 ? 'y' : 'ies') +
+    ' (#' + ids.join(', #') + ')? sales_transactions.property_id will stay NULL — ' +
+    'the join lives in sales_transactions_properties.',
+    'Link ' + ids.length + ' propert' + (ids.length === 1 ? 'y' : 'ies')
+  ))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    const res = await govRpc('gov_resolve_portfolio_sale_link', {
+      p_pending_id: pendingId,
+      p_property_ids: ids,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver:portfolio'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    delete govResolverPortfolioSelected[pendingId];
+    delete govResolverPortfolioFilter[pendingId];
+    govPendingUpdatesIdx = 0;
+    const linked = (res && res.link_count != null) ? res.link_count : ids.length;
+    showToast('Sale linked to ' + linked + ' propert' + (linked === 1 ? 'y' : 'ies'), 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('Portfolio link failed: ' + err.message, 'error');
+  }
+};
+
 window.govResolverCreate = async function(pendingId) {
   const draft = govResolverNewProp[pendingId] || {};
   if (!draft.address || !draft.city || !draft.state) {
@@ -5355,8 +5416,33 @@ function renderGovSaleLinkResolver(selected) {
 
   // Candidates from properties table
   const candidates = cache.candidates || [];
+  const isPortfolio = GOV_PORTFOLIO_REASONS.has(selected.reason);
+  const selectedSet = govResolverPortfolioSelected[id] || new Set();
+  const filterStr = (govResolverPortfolioFilter[id] || '').toLowerCase().trim();
+  const filteredCandidates = (isPortfolio && filterStr)
+    ? candidates.filter(p => {
+        const blob = [p.address, p.city, p.state, p.lease_number, p.agency].filter(Boolean).join(' ').toLowerCase();
+        return blob.includes(filterStr);
+      })
+    : candidates;
   html += '<div class="pu-resolver-section">';
   html += '<div class="pu-resolver-section-title">Candidate Properties <span class="pu-resolver-muted">(' + candidates.length + (cache.candidatesQuery ? ' · ' + esc(cache.candidatesQuery) : '') + ')</span></div>';
+  if (isPortfolio) {
+    html += '<div class="pu-resolver-portfolio-banner">';
+    html += '<strong>Portfolio sale.</strong> One sales_transactions row covers multiple properties — tick every property included in this deal, then confirm. ';
+    html += 'Single-property "Link →" still works if the address turned out not to be a portfolio after all.';
+    html += '</div>';
+    if (candidates.length > 8) {
+      const filterVal = govResolverPortfolioFilter[id] || '';
+      html += '<div class="pu-resolver-portfolio-filter">';
+      html += '<input type="text" placeholder="Filter by address, city, lease #, agency…" value="' + esc(filterVal) + '" ';
+      html += 'oninput="window.govResolverPortfolioFilterChange(decodeURIComponent(\'' + encodeURIComponent(id) + '\'), this.value)" />';
+      if (filterStr) {
+        html += '<span class="pu-resolver-muted"> ' + filteredCandidates.length + ' / ' + candidates.length + '</span>';
+      }
+      html += '</div>';
+    }
+  }
   if (candidates.length === 0) {
     html += '<div class="pu-resolver-empty">' + (gsaHits.length > 0
       ? 'No additional candidates in the properties table. Use the GSA Inventory match above, or create a new property.'
@@ -5364,9 +5450,14 @@ function renderGovSaleLinkResolver(selected) {
     ) + '</div>';
   } else {
     html += '<div class="pu-cand-list">';
-    candidates.forEach(p => {
+    filteredCandidates.forEach(p => {
       const exp = p.lease_expiration ? ' · exp ' + esc(p.lease_expiration) : '';
-      html += `<div class="pu-cand">
+      const checked = selectedSet.has(Number(p.property_id));
+      const checkbox = isPortfolio
+        ? `<label class="pu-cand-pick" title="Include in portfolio link"><input type="checkbox" ${checked ? 'checked' : ''} onchange="window.govResolverTogglePortfolioPick(decodeURIComponent('${encodeURIComponent(id)}'), ${p.property_id})" /></label>`
+        : '';
+      html += `<div class="pu-cand${checked ? ' pu-cand-picked' : ''}">
+        ${checkbox}
         <div class="pu-cand-main">
           <div class="pu-cand-addr">${esc(p.address || '(no address)')}</div>
           <div class="pu-cand-meta">
@@ -5379,7 +5470,21 @@ function renderGovSaleLinkResolver(selected) {
         <button class="pu-cand-link" onclick="window.govResolverLink(decodeURIComponent('${encodeURIComponent(id)}'), ${p.property_id})">Link →</button>
       </div>`;
     });
+    if (isPortfolio && filteredCandidates.length === 0 && filterStr) {
+      html += '<div class="pu-resolver-empty">No candidates match "' + esc(filterStr) + '"</div>';
+    }
     html += '</div>';
+    if (isPortfolio) {
+      const pickCount = selectedSet.size;
+      const disabled = pickCount === 0 ? ' disabled' : '';
+      html += '<div class="pu-resolver-portfolio-confirm">';
+      html += '<button class="pu-resolver-portfolio-confirm-btn"' + disabled + ' onclick="window.govResolverLinkPortfolio(decodeURIComponent(\'' + encodeURIComponent(id) + '\'))">';
+      html += pickCount === 0
+        ? 'Pick properties to enable portfolio link'
+        : 'Confirm ' + pickCount + '-property portfolio link →';
+      html += '</button>';
+      html += '</div>';
+    }
   }
   html += '</div>';
 

@@ -1739,3 +1739,36 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .pu-cand-gsa:hover { border-color: #22c55e; }
 .pu-cand-gsa-btn { background: #22c55e; color: #0a0f0a; }
 .pu-cand-gsa-btn:hover { opacity: 0.9; }
+
+/* Portfolio sale resolver (Mode D — one sale, N properties) */
+.pu-resolver-portfolio-banner {
+  font-size: 12px; color: var(--text2);
+  background: rgba(99,102,241,0.08);
+  border-left: 3px solid #6366f1;
+  padding: 8px 10px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+.pu-resolver-portfolio-banner strong { color: #818cf8; }
+.pu-resolver-portfolio-filter {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+}
+.pu-resolver-portfolio-filter input {
+  flex: 1;
+  background: var(--s1); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 8px; font-size: 12px;
+}
+.pu-resolver-portfolio-filter input:focus { border-color: #6366f1; outline: none; }
+.pu-cand-pick { display: flex; align-items: center; flex-shrink: 0; cursor: pointer; }
+.pu-cand-pick input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #6366f1; }
+.pu-cand-picked { border-color: #6366f1; background: rgba(99,102,241,0.06); }
+.pu-resolver-portfolio-confirm { margin-top: 10px; }
+.pu-resolver-portfolio-confirm-btn {
+  width: 100%; padding: 10px; border-radius: 6px;
+  background: #6366f1; color: #fff; border: none;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: opacity 0.1s;
+}
+.pu-resolver-portfolio-confirm-btn:hover:not(:disabled) { opacity: 0.85; }
+.pu-resolver-portfolio-confirm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
