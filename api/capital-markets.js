@@ -569,12 +569,19 @@ async function exportWorkbook(req, res) {
     brand[category][key || category] = row.token_value;
   }
 
-  // 3. For gov, also fetch the wide master view (powers MasterPasteReady tab)
+  // 3. For gov + dialysis, also fetch the wide master view (powers
+  //    the MasterPasteReady tab — column-shape parity for the master XLSX
+  //    chart objects).
   let masterRows = null;
-  if (vertical === 'gov' && domain) {
-    const masterPath = `cm_gov_market_quarterly?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
-    const masterResult = await domainQuery(domain, 'GET', masterPath);
-    masterRows = masterResult.ok !== false ? (masterResult.data || []) : [];
+  if (domain) {
+    const masterView = vertical === 'gov'      ? 'cm_gov_market_quarterly'
+                     : vertical === 'dialysis' ? 'cm_dialysis_market_quarterly_master'
+                     : null;
+    if (masterView) {
+      const masterPath = `${masterView}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+      const masterResult = await domainQuery(domain, 'GET', masterPath);
+      masterRows = masterResult.ok !== false ? (masterResult.data || []) : [];
+    }
   }
 
   // 4. Build the workbook
