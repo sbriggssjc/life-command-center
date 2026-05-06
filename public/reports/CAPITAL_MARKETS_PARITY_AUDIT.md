@@ -1,8 +1,8 @@
 # Capital Markets Deliverable ↔ LCC Parity Audit
 
-**Date:** 2026-05-05 (recon) · 2026-05-06 (Tier 1 #1 shipped)
+**Date:** 2026-05-05 (recon) · 2026-05-06 (Tier 1 + Tier 2 macro-pair shipped)
 **Owner:** Scott Briggs
-**Status:** Tier 1 #1 shipped (`volume_cap_summary_table`); rest of punch list pending
+**Status:** Tier 1 fully done · Tier 2 macro-pair shipped (`cash_leveraged_returns`, `cost_of_capital` for dialysis); valuation_index + 5 transaction-level templates remain
 **Method:** Inventoried each chart in the two production PDF deliverables, every chart object in the three master Excel workbooks, and every row in `cm_chart_catalog`. Cross-referenced into the matrix below.
 
 ## Progress log
@@ -10,7 +10,9 @@
 | Date | Item | Status | PR |
 |---|---|---|---|
 | 2026-05-06 | Tier 1 #1: `volume_cap_summary_table` (4 metrics × 7 cols, replaces the manual snapshot tables marketing builds 9× per gov deck) | ✅ shipped — catalog row added, `api/_shared/cm-summary-table.js` + 14 unit tests, synthetic-template dispatch in `api/capital-markets.js`, `Summary_Vol_Cap` tab in `cm-excel-export.js`, `renderPeriodSummary` card in frontend, live smoke tested against gov + national_st (all + office) | #595 |
-| 2026-05-06 | Tier 1 #2: `volume_cap_quartile_combo` (front-cover combo on gov p.6/7/8/13, dia p.19, ST workbook — Volume area + Cap line + Upper/Lower quartile band on dual-axis) | ✅ shipped — `joinVolumeCapQuartile()` composer + 5 unit tests added to existing module, second `SYNTHETIC_COMPOSERS` entry, mixed Chart.js render with dual y-axes (volume left $, cap right %) and shaded quartile band, `Data_Vol_Cap_Combo` tab in workbook, smoke verified across gov (114q from 1970-Q1) + national_st all/office (96q from 2002-Q1) | TBA |
+| 2026-05-06 | Tier 1 #2: `volume_cap_quartile_combo` (front-cover combo on gov p.6/7/8/13, dia p.19, ST workbook — Volume area + Cap line + Upper/Lower quartile band on dual-axis) | ✅ shipped — `joinVolumeCapQuartile()` composer + 5 unit tests added to existing module, second `SYNTHETIC_COMPOSERS` entry, mixed Chart.js render with dual y-axes (volume left $, cap right %) and shaded quartile band, `Data_Vol_Cap_Combo` tab in workbook, smoke verified across gov (114q from 1970-Q1) + national_st all/office (96q from 2002-Q1) | #596 |
+| 2026-05-06 | Tier 2 macro-pair (2 of 8): dialysis-side `cash_leveraged_returns` + `cost_of_capital` views | ✅ shipped — DialysisProject migration `20260506200000_cm_dialysis_macro_infra` adds local `economic_indicators` table, `cm_loan_constant_30yr()` fn, and 4 macro views (`cm_dialysis_macro_rates_q`, `cm_dialysis_loan_constant_q`, `cm_dialysis_returns_indexes_q`, `cm_dialysis_cost_of_capital_q`); 8230 FRED rows synced from gov DB via new `src/ingest_fred_to_dialysis.py` script (2002-2026); LCC catalog flag flip to add `dialysis` to applies_to_verticals for both. Live verified: 2025-Q4 dialysis cap 7.70%, treasury 4.10%, leveraged-mid 8.12% (math: (cap − avg_loan_const × 0.5) / 0.5 ✓) | TBA |
+| 2026-05-06 | Tier 2 macro-trio item 3: `valuation_index` for dialysis | ⏸ deferred — gov view depends on `noi_psf` / `sf_leased` columns that don't exist in `dia_sales_transactions`. Needs a different formula (likely indexed cap rate inverse, per the dialysis PDF p.17) — separate workstream once formula is locked. |
 
 ---
 
@@ -186,9 +188,16 @@ These don't fit the `chart_template_id` data-shape contract — they're either p
 
 **Tier 2 — dialysis parity (8 dialysis views + catalog flip)**
 
-3. **Migrate 8 dialysis views** to match the gov / national_st implementations of: `valuation_index`, `cash_leveraged_returns`, `cap_rate_by_lease_term`, `cost_of_capital`, `dom_and_pct_of_ask`, `bid_ask_spread`, `seller_sentiment`, `market_share_pie_ttm`. Three are macro-rate-based and reuse the natl_st pattern; five need a dialysis transaction-level dimension.
-4. **Flip `applies_to_verticals`** for those 8 templates (small migration on lcc_opps).
+3a. ✅ **Macro-pair shipped 2026-05-06.** `cash_leveraged_returns` + `cost_of_capital` views built on Dialysis_DB (mirroring the gov implementation: local `economic_indicators` + `cm_loan_constant_30yr` fn + 4-view chain), 8230 FRED rows synced via new `src/ingest_fred_to_dialysis.py`, catalog flags flipped. Live data verified.
+
+3b. ⏸ **`valuation_index` deferred** — gov view's NOI/sf inputs don't exist in dialysis sales schema. Separate workstream when the dialysis-specific index formula is locked (likely reads from `cm_dialysis_market_quarterly.avg_cap_rate` indexed against a base period, per the PDF p.17 chart shape).
+
+3c. **Build the 5 transaction-level dialysis views** that have no current implementation: `cap_rate_by_lease_term`, `dom_and_pct_of_ask`, `bid_ask_spread`, `seller_sentiment`, `market_share_pie_ttm`. Each needs a dialysis sales-or-listings dimension that may or may not exist (need to audit `dia_sales_transactions` + `dia_active_listings`-equivalent before scoping each individually).
+
+4. **Flip remaining `applies_to_verticals`** for the 5 transaction-level templates above (small migration on lcc_opps after each view lands).
+
 5. **Build `asking_cap_quartiles_cohort_q`, `asking_cap_by_term_bucket`** — both feed off dialysis active-listings views.
+
 6. **Build `available_inventory_by_tenant`** — dialysis-specific operator concentration view.
 
 **Tier 3 — about-Northmarq section**
