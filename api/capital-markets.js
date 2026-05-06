@@ -43,6 +43,7 @@ import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
 import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
+import { renderChartsToImages, NATIVE_CHARTS_FEATURE_FLAG } from './_shared/cm-chart-image-renderer.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic chart_templates — composed from other templates' rows rather than
@@ -586,7 +587,23 @@ async function exportWorkbook(req, res) {
     }
   }
 
-  // 4. Build the workbook
+  // 4. Optional: render the marquee chart set to PNG via QuickChart so the
+  //    workbook ships with a "Charts" tab that has visible chart images.
+  //    Behind a feature flag (CM_EXPORT_NATIVE_CHARTS=true) since the
+  //    rendering call ships proprietary data to an external service.
+  let chartImages = null;
+  if (NATIVE_CHARTS_FEATURE_FLAG) {
+    try {
+      chartImages = await renderChartsToImages({ charts, brand });
+    } catch (e) {
+      // Don't fail the export if chart rendering throws; just skip the
+      // Charts tab. The data tabs are still useful on their own.
+      console.warn(`[exportWorkbook] chart-image render skipped: ${e?.message || e}`);
+      chartImages = [];
+    }
+  }
+
+  // 5. Build the workbook
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
@@ -594,6 +611,7 @@ async function exportWorkbook(req, res) {
     charts,
     brand,
     masterRows,
+    chartImages,
   });
 
   const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
