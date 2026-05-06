@@ -1,8 +1,8 @@
 # Capital Markets Deliverable ↔ LCC Parity Audit
 
-**Date:** 2026-05-05 (recon) · 2026-05-06 (Tier 1 + Tier 2 macro-pair shipped) · 2026-05-07 (market_share_pie_ttm shipped)
+**Date:** 2026-05-05 (recon) · 2026-05-06 (Tier 1 + Tier 2 macro-pair shipped) · 2026-05-07 (market_share_pie_ttm + 4 transaction-level views shipped)
 **Owner:** Scott Briggs
-**Status:** Tier 1 fully done · Tier 2: 3 of 8 dialysis charts shipped (`cash_leveraged_returns`, `cost_of_capital`, `market_share_pie_ttm`); valuation_index + 4 transaction-level templates remain
+**Status:** Tier 1 fully done · Tier 2: **7 of 8 dialysis charts shipped** (cash_leveraged_returns, cost_of_capital, market_share_pie_ttm, dom_and_pct_of_ask, bid_ask_spread, seller_sentiment, cap_rate_by_lease_term); only `valuation_index` deferred
 **Method:** Inventoried each chart in the two production PDF deliverables, every chart object in the three master Excel workbooks, and every row in `cm_chart_catalog`. Cross-referenced into the matrix below.
 
 ## Progress log
@@ -14,6 +14,7 @@
 | 2026-05-06 | Tier 2 macro-pair (2 of 8): dialysis-side `cash_leveraged_returns` + `cost_of_capital` views | ✅ shipped — DialysisProject migration `20260506200000_cm_dialysis_macro_infra` adds local `economic_indicators` table, `cm_loan_constant_30yr()` fn, and 4 macro views (`cm_dialysis_macro_rates_q`, `cm_dialysis_loan_constant_q`, `cm_dialysis_returns_indexes_q`, `cm_dialysis_cost_of_capital_q`); 8230 FRED rows synced from gov DB via new `src/ingest_fred_to_dialysis.py` script (2002-2026); LCC catalog flag flip to add `dialysis` to applies_to_verticals for both. Live verified: 2025-Q4 dialysis cap 7.70%, treasury 4.10%, leveraged-mid 8.12% (math: (cap − avg_loan_const × 0.5) / 0.5 ✓) | TBA |
 | 2026-05-06 | Tier 2 macro-trio item 3: `valuation_index` for dialysis | ⏸ deferred — gov view depends on `noi_psf` / `sf_leased` columns that don't exist in `dia_sales_transactions`. Needs a different formula (likely indexed cap rate inverse, per the dialysis PDF p.17) — separate workstream once formula is locked. |
 | 2026-05-07 | Tier 2 item 3 of 8: `market_share_pie_ttm` for dialysis | ✅ shipped — DialysisProject migration `20260506220000_cm_dialysis_market_share_pie` builds the view from `sales_transactions` (TTM rolling 12-month, top 10 listing-broker buckets + "Other" rollup, Northmarq consolidated via `is_northmarq` flag, excludes `exclude_from_market_metrics`); LCC catalog flip adds `dialysis` to `applies_to_verticals`. **Surfaces a real data-quality finding** — 60-87% of dialysis sales lack `listing_broker` (structural across 2018-2025), so the "Unknown" bucket dominates the latest TTM pie at 81.5%. Action item: backfill `listing_broker` from CoStar/CREXi captures, and clean a handful of rows where the sidebar-paste artifact "Buyer Contacts..." landed in the broker field. |
+| 2026-05-07 | Tier 2 items 4-7 of 8: `dom_and_pct_of_ask` + `bid_ask_spread` + `seller_sentiment` + `cap_rate_by_lease_term` for dialysis | ✅ shipped — single DialysisProject migration `20260507100000_cm_dialysis_tx_views` adds 4 transaction-level views built from `available_listings` + `sales_transactions ⨝ leases`. `cap_by_term` shows the canonical monotone pattern (10+ tightest at 7.0-7.4%, <5 widest at 8.1-9.0%). `dom_pct_ask` includes outlier filters: DOM in [0, 1095] days excludes negative-DOM retrospective comp entries; pct_of_ask in [0.50, 1.50] excludes portfolio sub-listings (e.g. listings 8788/8832 at 1245% from a $22.75M package sold against $1.83M per-clinic last_price). `seller_sentiment` derives `had_price_change` from `available_listings.initial_price <> last_price` since `listing_price_history` is empty in production today. LCC catalog flip enables all 4 for dialysis. |
 
 ---
 
@@ -195,7 +196,9 @@ These don't fit the `chart_template_id` data-shape contract — they're either p
 
 3c. ✅ **`market_share_pie_ttm` shipped 2026-05-07.** Live-computed view from `sales_transactions.listing_broker`, top 10 + "Other", Northmarq consolidated via `is_northmarq` flag. Surfaces a real DQ issue: 60-87% of dialysis sales lack `listing_broker` text — "Unknown" bucket dominates and a few rows have CoStar sidebar-paste artifacts. **Follow-up data hygiene task** queued to backfill broker from CoStar/CREXi captures.
 
-3d. **Build the 4 remaining transaction-level dialysis views** that have no current implementation: `cap_rate_by_lease_term`, `dom_and_pct_of_ask`, `bid_ask_spread`, `seller_sentiment`. Each needs a dialysis sales or active-listings dimension that may or may not exist (need to audit `dia_sales_transactions` + an `active_listings`-equivalent before scoping individually).
+3d. ✅ **Transaction-level quartet shipped 2026-05-07.** Single DialysisProject migration `20260507100000_cm_dialysis_tx_views` adds `cm_dialysis_dom_pct_ask_q`, `cm_dialysis_bid_ask_spread_q`, `cm_dialysis_seller_sentiment_q`, `cm_dialysis_cap_by_term_q`. Inputs: `available_listings` (1813 sold rows; 754 with full DOM+%-of-ask data after outlier filter) + `sales_transactions ⨝ leases` for firm-term cohorts. `seller_sentiment` derives `had_price_change` from `available_listings.initial_price ≠ last_price` since `listing_price_history` is empty. `dom_pct_ask` filters out negative-DOM rows (retrospective comp entries) and pct_of_ask outliers >1.5x (portfolio sub-listings). `cap_by_term` displays the canonical monotone pattern: 10+ at 7.0-7.4%, <5 at 8.1-9.0%.
+
+**Tier 2 dialysis is now 7 of 8 complete.** Only `valuation_index` (3b) remains, deferred until the dialysis-specific formula is locked.
 
 4. **Flip remaining `applies_to_verticals`** for the 5 transaction-level templates above (small migration on lcc_opps after each view lands).
 
