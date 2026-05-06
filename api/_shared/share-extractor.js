@@ -2,12 +2,25 @@
 // share-extractor.js — Vision/text extraction for /api/intake-share
 // Life Command Center
 //
-// Routes through the existing AI provider stack (invokeChatProvider) so the
-// extraction prompt benefits from the same Claude/OpenAI/edge fallback chain
-// that powers /api/intake-extract. Returns a strict-JSON property/deal record.
+// Calls the OpenAI Responses API directly. We deliberately do NOT route
+// through invokeChatProvider here:
+//   1. The Supabase ai-copilot/chat edge function ignores attachments, so
+//      screenshot-based extraction would silently lose its primary signal.
+//   2. That same edge function pins claude-sonnet-4-20250514 (May 2025
+//      snapshot), which Anthropic has retired — calls return 400 with
+//      "Claude API error" until the function is updated.
+//   3. Structured-JSON extraction prefers a model + endpoint we can drive
+//      deterministically; the chat path injects a copilot system prompt
+//      that biases output away from strict JSON.
+//
+// Env:
+//   OPENAI_API_KEY        — required
+//   AI_API_BASE_URL       — optional override (default https://api.openai.com/v1)
+//   AI_INTAKE_SHARE_MODEL — optional override (default gpt-4o-mini)
 // ============================================================================
 
-import { invokeChatProvider } from './ai.js';
+const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_MODEL           = 'gpt-4o-mini';
 
 const SCHEMA = `{
   "domain": "gov_lease" | "dialysis" | "general",
@@ -100,32 +113,69 @@ function parseJsonResponse(text) {
   }
 }
 
-export async function extractFromShare({ url, text, notes, source, domain_hint, images = [] }) {
-  const prompt = buildPrompt({ url, text, notes, source, domain_hint });
-  const attachments = (images || []).map((img) => ({
-    data_url: img.data_url,
-    mimeType: img.mime_type,
-  }));
+function extractResponseText(data = {}) {
+  if (typeof data.output_text === 'string' && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+  const outputs = Array.isArray(data.output) ? data.output : [];
+  const parts = [];
+  for (const item of outputs) {
+    if (item?.type !== 'message' || !Array.isArray(item.content)) continue;
+    for (const c of item.content) {
+      if (c?.type === 'output_text' && typeof c.text === 'string') parts.push(c.text);
+    }
+  }
+  return parts.join('\n').trim();
+}
 
-  const result = await invokeChatProvider({
-    message: prompt,
-    context: { assistant_feature: 'detail_intake_assistant' },
-    history: [],
-    attachments,
-    user: { id: 'system' },
-    workspaceId: null,
-  });
+async function callOpenAIResponses({ prompt, attachments }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured');
+  }
+  const baseUrl = (process.env.AI_API_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
+  const model   = process.env.AI_INTAKE_SHARE_MODEL || DEFAULT_MODEL;
 
-  if (!result.ok) {
-    const err = result.data?.error || `provider returned ${result.status}`;
-    throw new Error(`extraction failed: ${err}`);
+  const content = [{ type: 'input_text', text: prompt }];
+  for (const att of attachments) {
+    if (att?.data_url) {
+      content.push({ type: 'input_image', image_url: att.data_url, detail: 'auto' });
+    }
   }
 
-  const responseText =
-    result.data?.response ||
-    result.data?.message?.content ||
-    result.data?.output_text ||
-    '';
+  const res = await fetch(`${baseUrl}/responses`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      input: [{ type: 'message', role: 'user', content }],
+      store: false,
+    }),
+  });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = { error: { message: 'Invalid JSON response from OpenAI' } };
+  }
+
+  if (!res.ok) {
+    const detail = data?.error?.message || data?.error || `status ${res.status}`;
+    throw new Error(`OpenAI ${res.status}: ${detail}`);
+  }
+
+  return { text: extractResponseText(data), model: data?.model || model };
+}
+
+export async function extractFromShare({ url, text, notes, source, domain_hint, images = [] }) {
+  const prompt = buildPrompt({ url, text, notes, source, domain_hint });
+  const attachments = (images || []).filter((img) => img?.data_url);
+
+  const { text: responseText } = await callOpenAIResponses({ prompt, attachments });
   const parsed = parseJsonResponse(responseText);
   if (!parsed) {
     throw new Error('extractor returned non-JSON response');
