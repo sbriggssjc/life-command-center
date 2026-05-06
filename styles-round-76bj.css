@@ -107,3 +107,64 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
   white-space: nowrap;
 }
 .issue-dismiss-btn:hover { border-color: var(--red); color: var(--red); }
+
+/* ============================================================
+   Pending Updates UX — Tier 1 (PR #1, 2026-05-06)
+   ============================================================ */
+
+/* (7) record_id chip in the Pending Updates detail header.
+   Sits next to the table.field code chip; clickable to copy. */
+.pu-detail-recid {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 4px;
+  background: var(--s3, #1a1d24);
+  color: var(--text2, #a0a4ad);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  cursor: pointer;
+  user-select: all;
+  border: 1px solid var(--border, #2a2d34);
+  transition: color 120ms, border-color 120ms;
+}
+.pu-detail-recid:hover {
+  color: var(--text, #e6e8ec);
+  border-color: var(--accent, #6b7cff);
+}
+
+/* (8) link_pick placeholder block. Shown in place of the empty
+   (NULL -> NULL) diff for unmatched_property, gsa_property_link_review,
+   intake_unmatched_property, unmatched_contact — until the candidate
+   picker UI lands in PR #2. */
+.pu-link-pick-placeholder {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px dashed var(--border, #2a2d34);
+  border-radius: 8px;
+  background: var(--s2, #14161c);
+}
+.pu-link-pick-placeholder .pu-lpp-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2, #a0a4ad);
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+.pu-link-pick-placeholder .pu-lpp-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text3, #7a7f88);
+}
+.pu-link-pick-placeholder kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  margin: 0 1px;
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: 3px;
+  background: var(--s3, #1a1d24);
+  color: var(--text2, #a0a4ad);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+}
