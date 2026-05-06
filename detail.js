@@ -243,7 +243,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       promises.push(diaQuery('properties',
         'property_id,medicare_id,linked_medicare_facility_id,' +
         'anchor_rent,anchor_rent_date,anchor_rent_source,lease_commencement,' +
-        'lease_bump_pct,lease_bump_interval_mo,building_size',
+        'lease_bump_pct,lease_bump_interval_mo,' +
+        // Site/building fields fed into the client-deliverable Operations
+        // export. v_property_detail exposes year_built/building_type but
+        // not building_size/land_area/lot_sf/year_renovated, so we pull
+        // them straight from the table.
+        'building_size,year_built,year_renovated,land_area,lot_sf,building_type',
         { filter: propFilter, limit: 1 }
       ));
     } else {
@@ -336,6 +341,17 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
           lease_commencement:     propertyCmsRow.lease_commencement     ?? synthProperty.lease_commencement     ?? null,
           lease_bump_pct:         propertyCmsRow.lease_bump_pct         ?? synthProperty.lease_bump_pct         ?? null,
           lease_bump_interval_mo: propertyCmsRow.lease_bump_interval_mo ?? synthProperty.lease_bump_interval_mo ?? null,
+          // Site/building fields used by the client-deliverable export.
+          building_size:          propertyCmsRow.building_size          ?? synthProperty.building_size          ?? null,
+          year_built:             propertyCmsRow.year_built             ?? synthProperty.year_built             ?? null,
+          year_renovated:         propertyCmsRow.year_renovated         ?? synthProperty.year_renovated         ?? null,
+          land_area:              propertyCmsRow.land_area              ?? synthProperty.land_area              ?? null,
+          lot_sf:                 propertyCmsRow.lot_sf                 ?? synthProperty.lot_sf                 ?? null,
+          building_type:          propertyCmsRow.building_type          ?? synthProperty.building_type          ?? null,
+          // CMS link columns — handy when the export wants to surface CCN
+          // even before the cms-match resolver runs.
+          medicare_id:                 propertyCmsRow.medicare_id                 ?? synthProperty.medicare_id                 ?? null,
+          linked_medicare_facility_id: propertyCmsRow.linked_medicare_facility_id ?? synthProperty.linked_medicare_facility_id ?? null,
         })
       : synthProperty;
 
@@ -4300,6 +4316,8 @@ const NMQ_BRAND = {
 function _udExportOperations() {
   const rankings = _udCache.rankings;
   const cmsLink = _udCache.cms || null;
+  const property = _udCache.property || {};
+  const fb = _udCache.fallback || {};
   const ext = _opsExtraCache || {};
   const r = rankings || {};
   const finDetail = ext.financialDetail || {};
@@ -4323,11 +4341,29 @@ function _udExportOperations() {
   const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
   const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
-  const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || '';
+  const ccn = r.medicare_id
+    || (cmsLink && cmsLink.medicare_id)
+    || property.linked_medicare_facility_id
+    || property.medicare_id
+    || '';
   const _esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const facilityName = _esc(r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility');
-  const address = _esc([r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '');
-  const stationsVal = r.number_of_chairs || r.stations || null;
+  const facilityName = _esc(r.facility_name || property.facility_name || property.page_title || (cmsLink && cmsLink.facility_name) || fb.facility_name || 'Dialysis Facility');
+  // Address fields are not on v_property_rankings — pull from the
+  // merged property (v_property_detail + properties supplemental fetch),
+  // then fall back to the search-card record. Without this, the export
+  // subtitle was rendering empty for every clinic.
+  const addrLine = property.address || fb.address || '';
+  const cityVal  = property.city || fb.city || r.city || '';
+  const stateVal = property.state || fb.state || r.state || '';
+  const zipVal   = property.zip_code || property.zip || fb.zip_code || fb.zip || '';
+  const propertyId = property.property_id || _udCache.ids?.property_id || '';
+  const address = _esc([addrLine, cityVal, stateVal, zipVal].filter(Boolean).join(', ') || '');
+  const stationsVal = r.number_of_chairs || property.number_of_chairs || r.stations || null;
+  const buildingSize = property.building_size || null;
+  const yearBuilt    = property.year_built || null;
+  const yearReno     = property.year_renovated || null;
+  const landArea     = property.land_area || property.lot_sf || null;
+  const buildingType = property.building_type || '';
   const trendDir = trends.trend_direction || (r.patient_yoy_pct > 2 ? 'Growth' : r.patient_yoy_pct < -2 ? 'Decline' : 'Stable');
   let leaseExp = 'N/A';
   if (lease.expiration_date) { const d = new Date(lease.expiration_date); leaseExp = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
@@ -4363,6 +4399,17 @@ function _udExportOperations() {
 
   const fmtDollar = v => v ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
   const fmtPct = v => v != null ? Number(v).toFixed(1) + '%' : 'N/A';
+  const fmtSf = v => v ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SF' : 'N/A';
+  // Land area is stored in acres for some properties and SF for others —
+  // <= 50 implies acres, otherwise SF (50 acres = 2.18M SF, well above any
+  // single-clinic site). Conservative heuristic; surface both when possible.
+  const fmtLand = v => {
+    if (v == null) return 'N/A';
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 'N/A';
+    if (n <= 50) return n.toFixed(2) + ' acres';
+    return n.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SF (' + (n / 43560).toFixed(2) + ' acres)';
+  };
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
   const doc = `<!DOCTYPE html>
@@ -4439,6 +4486,22 @@ function _udExportOperations() {
 </div>
 
 <div class="content">
+
+<!-- Property identifiers (so the deliverable carries enough context to
+     stand alone if it's printed and detached from the analysis stack). -->
+<h2>Property Details</h2>
+<table class="data-table">
+  <tr><td>Address</td><td>${_esc(addrLine || 'N/A')}</td></tr>
+  <tr><td>City, State ZIP</td><td>${_esc([cityVal, stateVal].filter(Boolean).join(', ') + (zipVal ? ' ' + zipVal : '')) || 'N/A'}</td></tr>
+  <tr><td>Property ID</td><td>${propertyId ? _esc(String(propertyId)) : 'N/A'}</td></tr>
+  <tr><td>CMS Facility ID (CCN)</td><td>${ccn ? _esc(String(ccn)) : 'N/A'}</td></tr>
+  <tr><td>Operator</td><td>${_esc(r.operator_name || r.chain_organization || (operator && operator.label) || 'N/A')}</td></tr>
+  <tr><td>Dialysis Stations</td><td>${stationsVal ? Number(stationsVal).toLocaleString() : 'N/A'}</td></tr>
+  <tr><td>Building Size</td><td>${fmtSf(buildingSize)}</td></tr>
+  <tr><td>Year Built</td><td>${yearBuilt ? _esc(String(yearBuilt)) + (yearReno ? ' (renovated ' + _esc(String(yearReno)) + ')' : '') : 'N/A'}</td></tr>
+  <tr><td>Land Area</td><td>${fmtLand(landArea)}</td></tr>
+  ${buildingType ? '<tr><td>Building Type</td><td>' + _esc(buildingType) + '</td></tr>' : ''}
+</table>
 
 <!-- KPIs -->
 <div class="kpi-grid">
