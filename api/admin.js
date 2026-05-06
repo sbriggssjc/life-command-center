@@ -1862,15 +1862,23 @@ async function fetchCandidateClinics(env, { zip, state, city }) {
     const stateFilter = `state=eq.${encodeURIComponent(state)}`;
     const cityFilter = city ? `&city=ilike.${encodeURIComponent(city)}` : '';
     tryQueries.push(`medicare_clinics?select=*&${stateFilter}${cityFilter}&limit=200`);
+    // Final wide net: state-only. Reached when a property has no zip AND
+    // its city differs from CMS's spelling (e.g., property "St. Louis" vs
+    // CMS "SAINT LOUIS"). 500-row cap is enough for any single state.
+    if (city) tryQueries.push(`medicare_clinics?select=*&${stateFilter}&limit=500`);
   }
   for (const q of tryQueries) {
     try {
       const r = await diaRest(env, 'GET', q);
-      if (r.ok && Array.isArray(r.data) && r.data.length) return r.data;
+      if (r.ok && Array.isArray(r.data) && r.data.length) {
+        console.log('[cms-match] candidates from', q.split('?')[1].split('&').slice(1, 4).join('&'), '→', r.data.length);
+        return r.data;
+      }
     } catch (e) {
       console.warn('[cms-match] candidate fetch failed for', q, e.message);
     }
   }
+  console.warn('[cms-match] no candidates found — zip:', zip || '(none)', 'state:', state || '(none)', 'city:', city || '(none)');
   return [];
 }
 
