@@ -295,6 +295,57 @@ const CHART_COLUMNS = {
     { key: 'upper_quartile', header: 'Upper Quartile Cap',  format: 'percent_basis_points', width: 18 },
     { key: 'lower_quartile', header: 'Lower Quartile Cap',  format: 'percent_basis_points', width: 18 },
   ],
+
+  // Phase 5 — Inventory Analysis (dia p.29-35)
+  // Note: inventory_snapshot_kpis renders via renderKpiBlockTab (kpi_block
+  // contract: tile_id/tile_label/primary_value/primary_format/sort_order)
+  // so it's NOT in CHART_COLUMNS — same dispatch as value_proposition_results.
+  available_market_size_combo: [
+    { key: 'period_end',          header: 'Quarter End',         format: 'date_short',           width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',        width: 14 },
+    { key: 'count_total',         header: 'Total Market — # Available',  format: 'integer_count',        width: 22 },
+    { key: 'count_core_10plus',   header: '10+ Year Term — # Available', format: 'integer_count',        width: 24 },
+    { key: 'avg_cap_total',       header: 'Total Market — Avg Cap',      format: 'percent_basis_points', width: 22 },
+    { key: 'avg_cap_core_10plus', header: '10+ Year Term — Avg Cap',     format: 'percent_basis_points', width: 24 },
+  ],
+  available_by_term_bucket: [
+    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',           width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },
+    { key: 'term_bucket',        header: 'Term Bucket',         width: 18 },
+    { key: 'n_listings',         header: 'N Listings',          format: 'integer_count',        width: 12 },
+    { key: 'avg_price',          header: 'Avg Price',           format: 'currency_dollars',     width: 16 },
+    { key: 'lower_quartile_cap', header: 'Lower Quartile Cap',  format: 'percent_basis_points', width: 18 },
+    { key: 'median_cap',         header: 'Median Cap',          format: 'percent_basis_points', width: 14 },
+    { key: 'upper_quartile_cap', header: 'Upper Quartile Cap',  format: 'percent_basis_points', width: 18 },
+    { key: 'avg_cap',            header: 'Avg Cap',             format: 'percent_basis_points', width: 12 },
+  ],
+  asking_cap_quartiles_active: [
+    { key: 'period_end',     header: 'Quarter End',                            format: 'date_short',           width: 13 },
+    { key: 'subspecialty',   header: 'Subspecialty',                           width: 14 },
+    { key: 'upper_q_total',  header: 'Total Market — Upper Quartile',          format: 'percent_basis_points', width: 26 },
+    { key: 'lower_q_total',  header: 'Total Market — Lower Quartile',          format: 'percent_basis_points', width: 26 },
+    { key: 'upper_q_core',   header: '10+ Year Term — Upper Quartile',         format: 'percent_basis_points', width: 28 },
+    { key: 'lower_q_core',   header: '10+ Year Term — Lower Quartile',         format: 'percent_basis_points', width: 28 },
+  ],
+  dom_price_change_active: [
+    { key: 'period_end',              header: 'Quarter End',                         format: 'date_short',           width: 13 },
+    { key: 'subspecialty',            header: 'Subspecialty',                        width: 14 },
+    { key: 'avg_dom_total',           header: 'Total Market — Avg DOM',              format: 'integer_count',        width: 22 },
+    { key: 'avg_dom_core',            header: '10+ Year Term — Avg DOM',             format: 'integer_count',        width: 24 },
+    { key: 'pct_price_change_total',  header: 'Total Market — % Price Change',       format: 'percent_zero_decimal', width: 26 },
+    { key: 'pct_price_change_core',   header: '10+ Year Term — % Price Change',      format: 'percent_zero_decimal', width: 28 },
+  ],
+  available_by_tenant: [
+    { key: 'period_end',          header: 'Quarter End',         format: 'date_short',           width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',        width: 14 },
+    { key: 'tenant',              header: 'Tenant',              width: 14 },
+    { key: 'count_active',        header: 'Count Available',     format: 'integer_count',        width: 14 },
+    { key: 'volume_available',    header: 'Volume Available',    format: 'currency_dollars',     width: 18 },
+    { key: 'avg_deal_size',       header: 'Avg Deal Size',       format: 'currency_dollars',     width: 16 },
+    { key: 'avg_firm_term_years', header: 'Avg Term Remaining',  format: 'integer_count',        width: 18 },
+    { key: 'avg_asking_cap',      header: 'Avg Asking Cap',      format: 'percent_basis_points', width: 16 },
+    { key: 'avg_dom',             header: 'Avg DOM',             format: 'integer_count',        width: 12 },
+  ],
 };
 
 // Period-summary template — column headers are computed at render time from
@@ -347,6 +398,13 @@ const TAB_NAMES = {
   // Tier 4 — KPI tile blocks
   value_proposition_results:    'KPI_Value_Prop',
   whatsnew_quarter_kpis:        'KPI_Whats_New',
+  // Phase 5 — Inventory Analysis (dia p.29-35)
+  inventory_snapshot_kpis:      'KPI_Inv_Snapshot',
+  available_market_size_combo:  'Data_Avail_Mkt_Size',
+  available_by_term_bucket:     'Data_Avail_by_Term',
+  asking_cap_quartiles_active:  'Data_Active_Cap_Quart',
+  dom_price_change_active:      'Data_Active_DOM_PC',
+  available_by_tenant:          'Data_Avail_by_Tenant',
 };
 
 // ============================================================================

@@ -63,6 +63,13 @@
     // ===== Tier 4 — KPI tile blocks =====
     'value_proposition_results',   // gov p.38 / dia p.38 — 3-tile NOI + Cap + Price (NM vs Non-NM)
     'whatsnew_quarter_kpis',       // dia p.3 — 3-tile front-of-deck headline KPIs (TTM Vol YoY, Cap, 10Y Treasury)
+    // ===== Phase 5 — Inventory Analysis (dia p.29-35) =====
+    'inventory_snapshot_kpis',     // dia p.29 — 8-tile × 2-cohort KPI snapshot
+    'available_market_size_combo', // dia p.30 top — count bars + avg-cap line, 2 cohorts
+    'available_by_term_bucket',    // dia p.30 bottom — 4-bucket cross-section table
+    'asking_cap_quartiles_active', // dia p.31 top — upper/lower quartile cap, 2 cohorts (4 lines)
+    'dom_price_change_active',     // dia p.31 bottom — DOM bars + price-change% lines, 2 cohorts
+    'available_by_tenant',         // dia p.32 — per-tenant rollup table
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -131,7 +138,7 @@
 
   async function loadCatalog() {
     if (cmState.catalog) return cmState.catalog;
-    const r = await fetchJSON('/api/capital-markets?action=catalog&phase=1');
+    const r = await fetchJSON('/api/capital-markets?action=catalog&phase=5');
     cmState.catalog = r.chart_templates || [];
     return cmState.catalog;
   }
@@ -145,7 +152,7 @@
 
   async function loadQuarterly(vertical, subspecialty) {
     const r = await fetchJSON(
-      `/api/capital-markets?action=quarterly&vertical=${vertical}&subspecialty=${encodeURIComponent(subspecialty)}&phase=1`
+      `/api/capital-markets?action=quarterly&vertical=${vertical}&subspecialty=${encodeURIComponent(subspecialty)}&phase=5`
     );
     return r.charts || [];
   }
@@ -737,9 +744,109 @@
         opts.scales.x.ticks.callback = (v) => '$' + Number(v).toFixed(0);
         return new Chart(canvas, { type: 'bar', data: { labels: stateLabels, datasets }, options: opts });
       }
+      // ----- Inventory Analysis (dia p.29-35) ---------------------------------
+
+      case 'available_market_size_combo': {
+        // p.30 top: count of active listings per quarter (bars, both cohorts)
+        // overlaid with avg asking cap rate (lines, both cohorts) on a right axis.
+        const total_count = chart.rows.map(r => r.count_total);
+        const core_count  = chart.rows.map(r => r.count_core_10plus);
+        const total_cap   = chart.rows.map(r => r.avg_cap_total);
+        const core_cap    = chart.rows.map(r => r.avg_cap_core_10plus);
+        datasets = [
+          { type: 'bar',  label: 'Total Market — # Available',
+            data: total_count, backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+          { type: 'bar',  label: '10+ Year Term — # Available',
+            data: core_count,  backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+          { type: 'line', label: 'Total Market — Avg Asking Cap',
+            data: total_cap, borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+          { type: 'line', label: '10+ Year Term — Avg Asking Cap',
+            data: core_cap,  borderColor: palette[2], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: {
+            color: brandColor('nm_axis', '#6A748C'),
+            font: { family: 'Calibri, sans-serif', size: 9 },
+            callback: tickFormatterFor('percent_basis_points'),
+          },
+          grid: { display: false },
+        };
+        opts.plugins.tooltip.callbacks.label = (ctx) => {
+          const fmt = ctx.dataset.yAxisID === 'y1' ? 'percent_basis_points' : 'integer_count';
+          return `${ctx.dataset.label}: ${tickFormatterFor(fmt)(ctx.parsed.y)}`;
+        };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
+      case 'asking_cap_quartiles_active': {
+        // p.31 top: upper/lower quartile asking cap, 2 cohorts × 2 quartiles = 4 lines
+        datasets = [
+          { type: 'line', label: 'Total Market — Upper Quartile',
+            data: chart.rows.map(r => r.upper_q_total),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { type: 'line', label: 'Total Market — Lower Quartile',
+            data: chart.rows.map(r => r.lower_q_total),
+            borderColor: palette[3], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { type: 'line', label: '10+ Year Term — Upper Quartile',
+            data: chart.rows.map(r => r.upper_q_core),
+            borderColor: palette[2], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          { type: 'line', label: '10+ Year Term — Lower Quartile',
+            data: chart.rows.map(r => r.lower_q_core),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+        ];
+        return new Chart(canvas, { type: 'line', data: { labels, datasets },
+          options: commonChartOptions('percent_basis_points') });
+      }
+
+      case 'dom_price_change_active': {
+        // p.31 bottom: avg DOM (bars, both cohorts) + price-change-frequency
+        // lines (both cohorts). Two y-axes (DOM days vs %).
+        datasets = [
+          { type: 'bar',  label: 'Total Market — DOM',
+            data: chart.rows.map(r => r.avg_dom_total),
+            backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+          { type: 'bar',  label: '10+ Year Term — DOM',
+            data: chart.rows.map(r => r.avg_dom_core),
+            backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+          { type: 'line', label: 'Total Market — Price-Change %',
+            data: chart.rows.map(r => r.pct_price_change_total),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+          { type: 'line', label: '10+ Year Term — Price-Change %',
+            data: chart.rows.map(r => r.pct_price_change_core),
+            borderColor: palette[2], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = {
+          position: 'right',
+          ticks: {
+            color: brandColor('nm_axis', '#6A748C'),
+            font: { family: 'Calibri, sans-serif', size: 9 },
+            callback: tickFormatterFor('percent_zero_decimal'),
+          },
+          grid: { display: false },
+        };
+        opts.plugins.tooltip.callbacks.label = (ctx) => {
+          const fmt = ctx.dataset.yAxisID === 'y1' ? 'percent_zero_decimal' : 'integer_count';
+          return `${ctx.dataset.label}: ${tickFormatterFor(fmt)(ctx.parsed.y)}`;
+        };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
       // DataTable types — rendered by renderDataTable() instead
       case 'leasing_summary':
       case 'lease_structures':
+      case 'available_by_term_bucket':
+      case 'available_by_tenant':
         return null;
 
       default:
