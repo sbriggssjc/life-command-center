@@ -243,6 +243,27 @@ function viewNameFor(template, vertical) {
 }
 
 /**
+ * Pick the canonical time-axis column for a chart template's PostgREST query.
+ *
+ * Quarterly views expose `period_end`, annual views expose `year`. PostgREST
+ * 400s when you order by a column that isn't on the view, which surfaces as
+ * `result.ok === false` and an empty rows[] in the catch block — i.e. an
+ * empty chart on the dashboard. The data_shape token captures the cadence:
+ *
+ *   - data_shape = '...yearly...'   → order by year
+ *   - data_shape = '...quarterly...' (default) → order by period_end
+ *
+ * Synthetic templates (view_name_template starts with '__synthetic__:') skip
+ * this — they compose rows from already-fetched dependencies without hitting
+ * PostgREST themselves.
+ */
+function timeAxisColumnFor(template) {
+  const shape = String(template?.data_shape || '').toLowerCase();
+  if (shape.includes('yearly')) return 'year';
+  return 'period_end';
+}
+
+/**
  * GET /api/capital-markets?action=chart&vertical=gov&chart_template_id=volume_ttm_by_quarter&subspecialty=all&from=&to=
  *   → { rows: [...], meta: { chart_template_id, vertical, view_name, ... } }
  */
@@ -273,7 +294,8 @@ async function fetchChart(req, res) {
     const dom = VERTICAL_TO_DOMAIN[vertical];
     const depCharts = await Promise.all(depTemplates.map(async (tmpl) => {
       const view_name = viewNameFor(tmpl.view_name_template, vertical);
-      const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+      const orderCol = timeAxisColumnFor(tmpl);
+      const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=${orderCol}.asc`;
       const r = dom ? await domainQuery(dom, 'GET', path) : await opsQuery('GET', path);
       return {
         chart_template_id: tmpl.chart_template_id,
@@ -295,12 +317,15 @@ async function fetchChart(req, res) {
   const view_name = viewNameFor(template.view_name_template, vertical);
   const domain = VERTICAL_TO_DOMAIN[vertical];
 
-  // Build PostgREST query
+  // Build PostgREST query. Annual views (data_shape contains 'yearly') expose
+  // a `year` column instead of `period_end` — without this branch, ordering
+  // would 400 and the chart would render empty.
+  const orderCol = timeAxisColumnFor(template);
   const parts = [`select=*`];
   parts.push(`subspecialty=eq.${encodeURIComponent(subspecialty)}`);
-  if (from) parts.push(`period_end=gte.${from}`);
-  if (to)   parts.push(`period_end=lte.${to}`);
-  parts.push(`order=period_end.asc`);
+  if (from) parts.push(`${orderCol}=gte.${from}`);
+  if (to)   parts.push(`${orderCol}=lte.${to}`);
+  parts.push(`order=${orderCol}.asc`);
   const path = `${view_name}?${parts.join('&')}`;
 
   let result;
@@ -362,8 +387,9 @@ async function fetchQuarterly(req, res) {
   const domain = VERTICAL_TO_DOMAIN[vertical];
   const queries = realTemplates.map(async (tmpl) => {
     const view_name = viewNameFor(tmpl.view_name_template, vertical);
+    const orderCol = timeAxisColumnFor(tmpl);
     const parts = [`select=*`, `subspecialty=eq.${encodeURIComponent(subspecialty)}`];
-    parts.push(`order=period_end.asc`);
+    parts.push(`order=${orderCol}.asc`);
     const path = `${view_name}?${parts.join('&')}`;
 
     try {
@@ -485,7 +511,8 @@ async function exportWorkbook(req, res) {
   const domain = VERTICAL_TO_DOMAIN[vertical];
   const chartFetches = realTemplates.map(async (tmpl) => {
     const view_name = tmpl.view_name_template.replace('{vertical}', vertical);
-    const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+    const orderCol = timeAxisColumnFor(tmpl);
+    const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=${orderCol}.asc`;
     try {
       const result = domain
         ? await domainQuery(domain, 'GET', path)
@@ -828,7 +855,8 @@ async function copilotStat(req, res) {
   // Same dispatch logic as fetchChart — fetch full timeseries (sorted ASC)
   const view_name = viewNameFor(template.view_name_template, vertical);
   const domain = VERTICAL_TO_DOMAIN[vertical];
-  const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+  const orderCol = timeAxisColumnFor(template);
+  const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=${orderCol}.asc`;
 
   let result;
   try {
