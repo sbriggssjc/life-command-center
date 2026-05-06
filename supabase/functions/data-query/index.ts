@@ -42,6 +42,9 @@ const GOV_WRITE_TABLES = new Set([
   // Sale-link resolver (Mode A/B/C). Backed by SQL in
   // government-lease/sql/20260429_gov_rpc_sale_link_resolver.sql.
   "rpc/gov_resolve_sale_link", "rpc/gov_create_property_from_pending",
+  // Portfolio sale-link resolver (Mode D — one sale, N properties). Backed by
+  // government-lease/sql/20260506_gov_rpc_portfolio_sale_link.sql.
+  "rpc/gov_resolve_portfolio_sale_link",
 ]);
 
 const DIA_READ_TABLES = new Set([
