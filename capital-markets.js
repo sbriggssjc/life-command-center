@@ -74,6 +74,8 @@
     'dom_and_pct_of_ask_monthly',  // dia p.33 — DOM + % of Ask, monthly TTM
     'bid_ask_spread_monthly',      // dia p.34 — Bid-Ask Spread, monthly TTM
     'seller_sentiment_monthly',    // dia p.35 — Seller Sentiment, monthly TTM
+    // ===== Lease-rent distribution (StockChart-style box) =====
+    'rent_psf_box_quarterly',      // 5-line min/Q1/median/Q3/max box per quarter
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -693,6 +695,35 @@
             tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+      case 'rent_psf_box_quarterly': {
+        // Box-and-whisker per quarter as a 5-line chart: min / Q1 / median / Q3 / max.
+        // Chart.js core has no native box plot; this gives the same 5-number-summary
+        // visualization without pulling in chartjs-chart-boxplot. The shaded band
+        // between Q1 and Q3 is rendered via the "fill" reference on the Q3 dataset
+        // pointing at the Q1 dataset (index +1), creating an IQR shaded band.
+        datasets = [
+          { label: 'Max',            data: chart.rows.map(r => r.rent_max),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            borderWidth: 1, borderDash: [4, 3], tension: 0.2, pointRadius: 0 },
+          { label: 'Upper Quartile', data: chart.rows.map(r => r.rent_upper_quartile),
+            borderColor: palette[1], backgroundColor: palette[3] + '88',
+            fill: '+1', tension: 0.2, pointRadius: 0, borderWidth: 1.5 },
+          { label: 'Lower Quartile', data: chart.rows.map(r => r.rent_lower_quartile),
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.2, pointRadius: 0, borderWidth: 1.5 },
+          { label: 'Median',         data: chart.rows.map(r => r.rent_median),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.2, pointRadius: 0, borderWidth: 2.5 },
+          { label: 'Min',            data: chart.rows.map(r => r.rent_min),
+            borderColor: palette[4], backgroundColor: 'transparent',
+            borderWidth: 1, borderDash: [4, 3], tension: 0.2, pointRadius: 0 },
+        ];
+        const opts = commonChartOptions('currency_per_sf');
+        opts.scales.y.ticks.callback = (v) => '$' + Number(v).toFixed(0);
+        opts.plugins.tooltip.callbacks.label = (ctx) =>
+          `${ctx.dataset.label}: $${Number(ctx.parsed.y).toFixed(2)}/SF`;
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
       }
       case 'rent_by_year_built': {
         const yearLabels = chart.rows.map(r => String(r.year));

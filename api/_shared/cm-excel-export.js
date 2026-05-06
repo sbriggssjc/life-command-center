@@ -373,6 +373,18 @@ const CHART_COLUMNS = {
     { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 18 },
     { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (8+ Yr)',format: 'percent_basis_points', width: 20 },
   ],
+
+  // Lease-rent 5-number summary per quarter (StockChart input)
+  rent_psf_box_quarterly: [
+    { key: 'period_end',          header: 'Quarter End',         format: 'date_short',       width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',        width: 14 },
+    { key: 'n_leases',            header: 'N Leases',            format: 'integer_count',    width: 12 },
+    { key: 'rent_min',            header: 'Min',                 format: 'currency_per_sf',  width: 10 },
+    { key: 'rent_lower_quartile', header: 'Lower Quartile',      format: 'currency_per_sf',  width: 16 },
+    { key: 'rent_median',         header: 'Median',              format: 'currency_per_sf',  width: 12 },
+    { key: 'rent_upper_quartile', header: 'Upper Quartile',      format: 'currency_per_sf',  width: 16 },
+    { key: 'rent_max',            header: 'Max',                 format: 'currency_per_sf',  width: 10 },
+  ],
 };
 
 // Period-summary template — column headers are computed at render time from
@@ -436,6 +448,8 @@ const TAB_NAMES = {
   dom_and_pct_of_ask_monthly:   'Data_DOM_Ask_M',
   bid_ask_spread_monthly:       'Data_Bid_Ask_M',
   seller_sentiment_monthly:     'Data_Sentiment_M',
+  // Lease-rent distribution (StockChart-style 5-number summary per quarter)
+  rent_psf_box_quarterly:       'Data_Rent_PSF_Box',
 };
 
 // ============================================================================
