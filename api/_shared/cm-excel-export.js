@@ -22,6 +22,7 @@
 // ============================================================================
 
 import ExcelJS from 'exceljs';
+import { summaryColumnHeaders } from './cm-summary-table.js';
 
 // Excel number-format codes (matching cm_brand_tokens.axis_formats)
 const FMT = {
@@ -286,6 +287,12 @@ const CHART_COLUMNS = {
   ],
 };
 
+// Period-summary template — column headers are computed at render time from
+// as_of (e.g. "2Q-2024", "1Q-2024"); see summaryColumnHeaders().
+const PERIOD_SUMMARY_TEMPLATES = new Set([
+  'volume_cap_summary_table',
+]);
+
 // Tab name per chart (kept short — Excel limits to 31 chars)
 const TAB_NAMES = {
   volume_ttm_by_quarter:        'Data_Volume_TTM',
@@ -322,6 +329,9 @@ const TAB_NAMES = {
   renewal_rent_growth:          'Data_Renewal_Growth',
   cpi_vs_renewal_cagr:          'Data_CPI_CAGR',
   rent_heat_map:                'Data_Rent_Heat_Map',
+  // Parity-1 — period summary tables (replaces the manual 7-column tables
+  // in the master "All Charts" tab next to each chart)
+  volume_cap_summary_table:     'Summary_Vol_Cap',
 };
 
 // ============================================================================
@@ -504,6 +514,18 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // ----------------------------------------------------------------
   for (const chart of charts) {
     const tabName = TAB_NAMES[chart.chart_template_id];
+
+    // Period-summary tables have a different shape (rows = metrics,
+    // columns = current Q + prior Q + YoY Q + prior cycle + 5/10/15-yr avg).
+    // Render via dedicated helper.
+    if (PERIOD_SUMMARY_TEMPLATES.has(chart.chart_template_id)) {
+      if (!tabName) continue;
+      renderPeriodSummaryTab({
+        wb, tabName, chart, palette, fonts, asOf, subspecialty,
+      });
+      continue;
+    }
+
     const cols    = CHART_COLUMNS[chart.chart_template_id];
     if (!tabName || !cols) continue;
 
@@ -726,6 +748,95 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   brandSheet.getCell(`B${fontsHdrRow + 2}`).font = { name: fonts.body_family, size: 10 };
 
   return wb;
+}
+
+// ============================================================================
+// Period-summary table renderer
+// ============================================================================
+//
+// For chart_templates whose data_shape is 'period_summary_table' (e.g.
+// volume_cap_summary_table). Output mirrors the marketing master's "Industrial
+// Volume & Cap Rate" / "Office Volume & Cap Rate" / "Gov-Leased Volume & Cap"
+// blocks: 4 metric rows × 7 numeric columns + a "Metric" label column.
+//
+// Header text is computed from the as_of period — column B becomes "2Q-2024"
+// when as_of='2024-06-30', etc. Each row uses its own number format because
+// the metrics span currency (Volume) and percent (Cap rates).
+
+function renderPeriodSummaryTab({ wb, tabName, chart, palette, fonts, asOf, subspecialty }) {
+  const sheet = wb.addWorksheet(tabName, { views: [{ showGridLines: false }] });
+  const navy = 'FF' + hex(palette.nm_navy);
+  const pale = 'FF' + hex(palette.nm_pale);
+  const text = 'FF' + hex(palette.nm_text);
+  const muted = 'FF' + hex(palette.nm_text_muted);
+
+  // Title block
+  sheet.getCell('A1').value = chart.name;
+  sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: navy } };
+  sheet.getRow(1).height = 22;
+
+  // Resolve as_of from the first row's as_of field if not supplied
+  const resolvedAsOf = asOf || (chart.rows?.[0]?.as_of) || null;
+
+  sheet.getCell('A2').value = `Quarterly snapshot — subspecialty=${subspecialty}${resolvedAsOf ? ' · as of ' + resolvedAsOf : ''}`;
+  sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
+
+  sheet.getCell('A3').value = 'Mirrors the master "All Charts" 7-column summary tables. Paste cells B4:H8 into the master\'s corresponding summary block to refresh.';
+  sheet.getCell('A3').font = { name: fonts.body_family, size: 9, color: { argb: muted } };
+  sheet.getCell('A3').alignment = { wrapText: true };
+  sheet.getRow(3).height = 26;
+
+  // Header row at row 4
+  const dataKeys = ['current_q', 'prior_q', 'yoy_q', 'prior_cycle_q', 'avg_5yr', 'avg_10yr', 'avg_15yr'];
+  const headers = ['Metric', ...summaryColumnHeaders(resolvedAsOf)];
+
+  const headerRow = sheet.getRow(4);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+    cell.border = { bottom: { style: 'medium', color: { argb: navy } } };
+  });
+  headerRow.height = 22;
+
+  // Column widths
+  sheet.getColumn(1).width = 22; // Metric label
+  for (let i = 2; i <= 8; i++) sheet.getColumn(i).width = 13;
+
+  // Data rows starting at row 5
+  let rowIdx = 5;
+  for (const summaryRow of chart.rows || []) {
+    const r = sheet.getRow(rowIdx);
+    const fmt = FMT[summaryRow.format] || '';
+    // Column 1 = metric label
+    const labelCell = r.getCell(1);
+    labelCell.value = summaryRow.metric;
+    labelCell.font = { name: fonts.body_family, size: 10, bold: true, color: { argb: text } };
+    // Columns 2-8 = numeric values
+    dataKeys.forEach((k, i) => {
+      const cell = r.getCell(i + 2);
+      cell.value = summaryRow[k] == null ? null : Number(summaryRow[k]);
+      cell.font = { name: fonts.body_family, size: 10, color: { argb: text } };
+      if (fmt) cell.numFmt = fmt;
+    });
+    if (rowIdx % 2 === 1) {
+      for (let c = 1; c <= 8; c++) {
+        r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pale } };
+      }
+    }
+    rowIdx++;
+  }
+
+  // Light footer note explaining the column meanings
+  const footRow = rowIdx + 1;
+  sheet.getCell(`A${footRow}`).value =
+    'Columns: as-of quarter; prior quarter; year-ago same quarter; cycle-ago (8 quarters back); trailing-mean over the trailing 5/10/15 years (20/40/60 quarters).';
+  sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 8, italic: true, color: { argb: muted } };
+  sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
+  sheet.mergeCells(`A${footRow}:H${footRow}`);
+  sheet.getRow(footRow).height = 22;
 }
 
 // ============================================================================

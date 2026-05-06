@@ -56,6 +56,8 @@
     'renewal_rent_growth',         // p.32a renewal rent + CAGR
     'cpi_vs_renewal_cagr',         // p.32b CPI vs CAGR
     'rent_heat_map',               // p.33 state map; ranked table
+    // ===== Parity-1 — period summary tables =====
+    'volume_cap_summary_table',    // 4 metrics × 7 cols (current Q + prior Q + YoY + cycle + 5/10/15-yr avg)
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -846,11 +848,84 @@
     }
   }
 
+  // ---- Period-summary renderer (data_shape='period_summary_table') ----------
+  // Renders the 4-row × 7-col snapshot table that mirrors the master Excel's
+  // "Industrial Volume & Cap Rate" / "Office Volume & Cap Rate" / etc. blocks.
+  function renderPeriodSummary(container, chart) {
+    if (!container || !chart.rows || chart.rows.length === 0) {
+      container.innerHTML = '<div style="padding:24px;text-align:center;color:#666;font-size:9pt">No data available</div>';
+      return;
+    }
+    const navy = brandColor('nm_navy', '#003DA5');
+    const pale = brandColor('nm_pale', '#E0E8F4');
+
+    function fmtVal(format, v) {
+      if (v == null) return '';
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '';
+      switch (format) {
+        case 'currency_dollars':
+        case 'currency_billions': {
+          const abs = Math.abs(n);
+          if (abs >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B';
+          if (abs >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+          if (abs >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+          return '$' + n.toFixed(0);
+        }
+        case 'percent_basis_points': return (n * 100).toFixed(2) + '%';
+        case 'percent_one_decimal':  return (n * 100).toFixed(1) + '%';
+        default: return n.toLocaleString();
+      }
+    }
+
+    function quartersBefore(asOf, k) {
+      const m = String(asOf || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (!m) return null;
+      const year = +m[1], q = Math.ceil(+m[2] / 3);
+      const total = year * 4 + (q - 1) - k;
+      const ty = Math.floor(total / 4);
+      const tq = (total % 4) + 1;
+      const month = tq * 3;
+      const day = month === 6 || month === 9 ? 30 : 31;
+      return `${ty}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    }
+    function periodLabel(asOf) {
+      const m = String(asOf || '').match(/^(\d{4})-(\d{2})/);
+      if (!m) return asOf || '';
+      return `${m[1]}-Q${Math.ceil(+m[2] / 3)}`;
+    }
+
+    const asOf = chart.rows[0]?.as_of;
+    const headers = ['Metric',
+      periodLabel(asOf),
+      periodLabel(quartersBefore(asOf, 1)),
+      periodLabel(quartersBefore(asOf, 4)),
+      periodLabel(quartersBefore(asOf, 8)),
+      '5-Yr Avg', '10-Yr Avg', '15-Yr Avg',
+    ];
+    const dataKeys = ['current_q','prior_q','yoy_q','prior_cycle_q','avg_5yr','avg_10yr','avg_15yr'];
+
+    const ths = headers.map(h => `<th style="background:${navy};color:#fff;font-family:'Calibri Light',sans-serif;font-weight:600;text-align:left;padding:8px 10px;font-size:9pt">${h}</th>`).join('');
+    const trs = chart.rows.map((row, i) => {
+      const bg = i % 2 === 1 ? pale : '#fff';
+      const labelTd = `<td style="padding:6px 10px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;border-bottom:1px solid #f0f0f0">${row.metric}</td>`;
+      const valueTds = dataKeys.map(k =>
+        `<td style="padding:6px 10px;font-family:Calibri,sans-serif;font-size:10pt;border-bottom:1px solid #f0f0f0;text-align:right">${fmtVal(row.format, row[k])}</td>`
+      ).join('');
+      return `<tr style="background:${bg}">${labelTd}${valueTds}</tr>`;
+    }).join('');
+    container.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+  }
+
   // ---- DataTable renderer (chart_type='DataTable') ---------------------------
   function renderDataTable(container, chart) {
     if (!container || !chart.rows || chart.rows.length === 0) {
       container.innerHTML = '<div style="padding:24px;text-align:center;color:#666;font-size:9pt">No data available</div>';
       return;
+    }
+    // Period-summary tables have their own renderer (different row shape)
+    if (chart.data_shape === 'period_summary_table') {
+      return renderPeriodSummary(container, chart);
     }
     const navy = brandColor('nm_navy', '#003DA5');
     const pale = brandColor('nm_pale', '#E0E8F4');

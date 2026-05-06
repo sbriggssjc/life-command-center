@@ -42,6 +42,34 @@ import { domainQuery } from './_shared/domain-db.js';
 import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-export.js';
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
+import { buildVolumeCapSummary } from './_shared/cm-summary-table.js';
+
+// ---------------------------------------------------------------------------
+// Synthetic chart_templates — composed from other templates' rows rather than
+// fetched from a single view. view_name_template uses the prefix
+// '__synthetic__:<recipe_id>' to signal to the dispatcher.
+//
+// composer({ vertical, subspecialty, asOf, allCharts }) → row array
+// allCharts is the array of fully-fetched, non-synthetic charts in this batch.
+// ---------------------------------------------------------------------------
+const SYNTHETIC_COMPOSERS = {
+  'volume_cap_summary': ({ asOf, allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    return buildVolumeCapSummary({
+      volumeRows:   find('volume_ttm_by_quarter'),
+      capRows:      find('cap_rate_ttm_by_quarter'),
+      quartileRows: find('cap_rate_top_bottom_quartile'),
+      asOf: asOf || null,
+    });
+  },
+};
+
+function syntheticRecipeFor(template) {
+  const t = template?.view_name_template || '';
+  if (!t.startsWith('__synthetic__:')) return null;
+  const recipeId = t.slice('__synthetic__:'.length);
+  return SYNTHETIC_COMPOSERS[recipeId] || null;
+}
 
 // vertical_id (in cm_chart_catalog) → domain-db key (in domain-db.js)
 const VERTICAL_TO_DOMAIN = {
@@ -211,7 +239,7 @@ function viewNameFor(template, vertical) {
  *   → { rows: [...], meta: { chart_template_id, vertical, view_name, ... } }
  */
 async function fetchChart(req, res) {
-  const { chart_template_id, vertical, subspecialty = 'all', from, to } = req.query;
+  const { chart_template_id, vertical, subspecialty = 'all', from, to, as_of } = req.query;
   if (!chart_template_id) return res.status(400).json({ error: 'chart_template_id required' });
   if (!vertical)          return res.status(400).json({ error: 'vertical required' });
 
@@ -221,6 +249,38 @@ async function fetchChart(req, res) {
     return res.status(400).json({
       error: `Chart '${chart_template_id}' is not applicable to vertical '${vertical}'`,
       applies_to: template.applies_to_verticals
+    });
+  }
+
+  // Synthetic templates compose rows from a bundle of other templates'
+  // time series. Resolve the dependency set + fetch + compose.
+  const composer = syntheticRecipeFor(template);
+  if (composer) {
+    const depIds = ['volume_ttm_by_quarter', 'cap_rate_ttm_by_quarter', 'cap_rate_top_bottom_quartile'];
+    const cat = await opsQuery(
+      'GET',
+      `cm_chart_catalog?select=*&chart_template_id=in.(${depIds.join(',')})`
+    );
+    const depTemplates = cat.data || [];
+    const dom = VERTICAL_TO_DOMAIN[vertical];
+    const depCharts = await Promise.all(depTemplates.map(async (tmpl) => {
+      const view_name = viewNameFor(tmpl.view_name_template, vertical);
+      const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+      const r = dom ? await domainQuery(dom, 'GET', path) : await opsQuery('GET', path);
+      return {
+        chart_template_id: tmpl.chart_template_id,
+        rows: r.ok !== false ? (r.data || []) : [],
+      };
+    }));
+    const rows = composer({ vertical, subspecialty, asOf: as_of, allCharts: depCharts });
+    return res.status(200).json({
+      chart_template_id, vertical, subspecialty,
+      view_name: template.view_name_template,
+      chart_type: template.chart_type,
+      data_shape: template.data_shape,
+      metric_focus: template.metric_focus,
+      y_format_token: template.y_format_token,
+      rows: rows || [],
     });
   }
 
@@ -285,9 +345,14 @@ async function fetchQuarterly(req, res) {
     return res.status(200).json({ vertical, subspecialty, as_of, charts: [] });
   }
 
-  // 2. Fetch each chart's data in parallel
+  // 2a. Split templates into real (fetched from a SQL view) and synthetic
+  //     (composed from other templates' rows after the first wave finishes).
+  const realTemplates      = templates.filter((t) => !syntheticRecipeFor(t));
+  const syntheticTemplates = templates.filter((t) => syntheticRecipeFor(t));
+
+  // 2b. Fetch each real chart's data in parallel
   const domain = VERTICAL_TO_DOMAIN[vertical];
-  const queries = templates.map(async (tmpl) => {
+  const queries = realTemplates.map(async (tmpl) => {
     const view_name = viewNameFor(tmpl.view_name_template, vertical);
     const parts = [`select=*`, `subspecialty=eq.${encodeURIComponent(subspecialty)}`];
     parts.push(`order=period_end.asc`);
@@ -323,7 +388,33 @@ async function fetchQuarterly(req, res) {
     }
   });
 
-  const charts = await Promise.all(queries);
+  const realCharts = await Promise.all(queries);
+
+  // 2c. Compose synthetic charts from the fetched real-chart rows
+  const synthCharts = syntheticTemplates.map((tmpl) => {
+    const composer = syntheticRecipeFor(tmpl);
+    let rows = [];
+    let error = null;
+    try {
+      rows = composer({ vertical, subspecialty, asOf: as_of, allCharts: realCharts }) || [];
+    } catch (e) {
+      error = String(e?.message || e);
+    }
+    return {
+      chart_template_id: tmpl.chart_template_id,
+      name: tmpl.name,
+      chart_type: tmpl.chart_type,
+      data_shape: tmpl.data_shape,
+      metric_focus: tmpl.metric_focus,
+      y_format_token: tmpl.y_format_token,
+      view_name: tmpl.view_name_template,  // synthetic marker
+      ok: !error,
+      rows,
+      error,
+    };
+  });
+
+  const charts = [...realCharts, ...synthCharts];
 
   // 3. If as_of supplied, also fold in the latest-quarter scalar summary
   let summary = null;
@@ -378,8 +469,13 @@ async function exportWorkbook(req, res) {
   );
   const templates = cat.data || [];
 
+  // Split into real (view-backed) vs synthetic (composed) templates so the
+  // synthetic ones can read the freshly-fetched real-chart rows.
+  const realTemplates      = templates.filter((t) => !syntheticRecipeFor(t));
+  const syntheticTemplates = templates.filter((t) => syntheticRecipeFor(t));
+
   const domain = VERTICAL_TO_DOMAIN[vertical];
-  const chartFetches = templates.map(async (tmpl) => {
+  const chartFetches = realTemplates.map(async (tmpl) => {
     const view_name = tmpl.view_name_template.replace('{vertical}', vertical);
     const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
     try {
@@ -405,7 +501,26 @@ async function exportWorkbook(req, res) {
       };
     }
   });
-  const charts = await Promise.all(chartFetches);
+  const realCharts = await Promise.all(chartFetches);
+
+  const synthCharts = syntheticTemplates.map((tmpl) => {
+    const composer = syntheticRecipeFor(tmpl);
+    let rows = [];
+    try {
+      rows = composer({ vertical, subspecialty, asOf: as_of, allCharts: realCharts }) || [];
+    } catch { /* swallow — synthetic comp must not fail the workbook */ }
+    return {
+      chart_template_id: tmpl.chart_template_id,
+      name: tmpl.name,
+      chart_type: tmpl.chart_type,
+      data_shape: tmpl.data_shape,
+      metric_focus: tmpl.metric_focus,
+      view_name: tmpl.view_name_template,
+      rows,
+    };
+  });
+
+  const charts = [...realCharts, ...synthCharts];
 
   // 2. Fetch brand tokens
   const brandResult = await opsQuery(
