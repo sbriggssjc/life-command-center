@@ -344,6 +344,8 @@ const TAB_NAMES = {
   volume_cap_summary_table:     'Summary_Vol_Cap',
   // Parity-1 — front-cover combo (Volume + Cap + Quartile band)
   volume_cap_quartile_combo:    'Data_Vol_Cap_Combo',
+  // Tier 4 — KPI tile blocks
+  value_proposition_results:    'KPI_Value_Prop',
 };
 
 // ============================================================================
@@ -533,6 +535,16 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     if (PERIOD_SUMMARY_TEMPLATES.has(chart.chart_template_id)) {
       if (!tabName) continue;
       renderPeriodSummaryTab({
+        wb, tabName, chart, palette, fonts, asOf, subspecialty,
+      });
+      continue;
+    }
+
+    // KPI tile blocks render as a small 1-row-per-tile table (label, primary,
+    // primary_format, NM split, Non-NM split) for the latest period.
+    if (chart.chart_type === 'kpi_block') {
+      if (!tabName) continue;
+      renderKpiBlockTab({
         wb, tabName, chart, palette, fonts, asOf, subspecialty,
       });
       continue;
@@ -849,6 +861,113 @@ function renderPeriodSummaryTab({ wb, tabName, chart, palette, fonts, asOf, subs
   sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
   sheet.mergeCells(`A${footRow}:H${footRow}`);
   sheet.getRow(footRow).height = 22;
+}
+
+// ============================================================================
+// KPI block tab renderer
+// ============================================================================
+//
+// For chart_type='kpi_block'. View returns one row per (period_end x tile).
+// We pick the latest period_end with at least one populated tile and render
+// it as a compact summary table:
+//
+//   Tile                       Primary      NM         Non-NM
+//   Avg NOI                    $1,930,088   —          —
+//   Avg Cap Rate               9.00%        7.50%      9.26%
+//   Avg Sales Price            $11.46M      $20.0M     $11.23M
+//
+// Per-row number format is taken from each tile's primary_format. Mixed
+// formats across rows are fine — Excel applies them per-cell.
+
+function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecialty }) {
+  const sheet = wb.addWorksheet(tabName, { views: [{ showGridLines: false }] });
+  const navy = 'FF' + hex(palette.nm_navy);
+  const pale = 'FF' + hex(palette.nm_pale);
+  const text = 'FF' + hex(palette.nm_text);
+  const muted = 'FF' + hex(palette.nm_text_muted);
+
+  // Title block
+  sheet.getCell('A1').value = chart.name;
+  sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: navy } };
+  sheet.getRow(1).height = 22;
+
+  // Pick the latest period_end with populated tiles
+  const allRows = chart.rows || [];
+  const periods = [...new Set(allRows.map((r) => r.period_end))].sort().reverse();
+  let resolvedAsOf = asOf;
+  let tiles = [];
+  for (const p of periods) {
+    const candidates = allRows
+      .filter((r) => r.period_end === p && r.primary_value != null)
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    if (candidates.length > 0) {
+      if (!resolvedAsOf) resolvedAsOf = p;
+      tiles = candidates;
+      break;
+    }
+  }
+
+  sheet.getCell('A2').value = `KPI tile block — subspecialty=${subspecialty}${resolvedAsOf ? ' · as of ' + resolvedAsOf : ''}`;
+  sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
+
+  sheet.getCell('A3').value = 'One row per tile. Rolling 12-month TTM. Primary value uses the tile\'s format token; NM / Non-NM splits (when present) use the same format.';
+  sheet.getCell('A3').font = { name: fonts.body_family, size: 9, color: { argb: muted } };
+  sheet.getCell('A3').alignment = { wrapText: true };
+  sheet.getRow(3).height = 26;
+
+  // Header row at row 4
+  const headers = ['Tile', 'Primary', 'NM', 'Non-NM'];
+  const headerRow = sheet.getRow(4);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+    cell.border = { bottom: { style: 'medium', color: { argb: navy } } };
+  });
+  headerRow.height = 22;
+
+  // Column widths
+  sheet.getColumn(1).width = 28;  // Tile label
+  for (let i = 2; i <= 4; i++) sheet.getColumn(i).width = 14;
+
+  // Data rows starting at row 5
+  let rowIdx = 5;
+  for (const t of tiles) {
+    const r = sheet.getRow(rowIdx);
+    const fmt = FMT[t.primary_format] || '';
+
+    const labelCell = r.getCell(1);
+    labelCell.value = t.tile_label;
+    labelCell.font = { name: fonts.body_family, size: 10, bold: true, color: { argb: text } };
+
+    const setNumCell = (col, value) => {
+      const cell = r.getCell(col);
+      cell.value = value == null ? null : Number(value);
+      cell.font = { name: fonts.body_family, size: 10, color: { argb: text } };
+      if (fmt) cell.numFmt = fmt;
+    };
+    setNumCell(2, t.primary_value);
+    setNumCell(3, t.nm_value);
+    setNumCell(4, t.non_nm_value);
+
+    if (rowIdx % 2 === 1) {
+      for (let c = 1; c <= 4; c++) {
+        r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pale } };
+      }
+    }
+    rowIdx++;
+  }
+
+  // Footer note
+  const footRow = rowIdx + 1;
+  sheet.getCell(`A${footRow}`).value =
+    'Used to render the "Value Proposition Results" tile grid in the deliverable. NM / Non-NM splits are only populated when the tile has an NM-attribution comparison (Cap Rate, Sales Price). Avg NOI is single-value (no split).';
+  sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 8, italic: true, color: { argb: muted } };
+  sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
+  sheet.mergeCells(`A${footRow}:D${footRow}`);
+  sheet.getRow(footRow).height = 28;
 }
 
 // ============================================================================

@@ -60,6 +60,8 @@
     'volume_cap_summary_table',    // 4 metrics × 7 cols (current Q + prior Q + YoY + cycle + 5/10/15-yr avg)
     // ===== Parity-1 — front-cover combo =====
     'volume_cap_quartile_combo',   // gov p.6/7/8/13, dia p.19, ST workbook — Volume area + Cap line + Quartile band
+    // ===== Tier 4 — KPI tile blocks =====
+    'value_proposition_results',   // gov p.38 / dia p.38 — 3-tile NOI + Cap + Price (NM vs Non-NM)
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -791,12 +793,15 @@
       const meta = (cmState.catalog || []).find(t => t.chart_template_id === id);
       if (!meta) return '';
       if (!meta.applies_to_verticals?.includes(vertical)) return '';
-      // DataTable charts get a scrollable HTML table (no canvas); span 2 columns
+      // DataTable + kpi_block charts get an HTML container (no canvas); span 2 columns
       const isDataTable = meta.chart_type === 'DataTable';
-      const cardSpan = isDataTable ? 'grid-column: span 2;' : '';
-      const bodyContainer = isDataTable
-        ? `<div class="cm-table-container" data-template="${id}" style="max-height:340px;overflow:auto;border:1px solid #E7E6E6;border-radius:4px"></div>`
-        : `<div style="position:relative;height:300px"><canvas data-template="${id}"></canvas></div>`;
+      const isKpiBlock  = meta.chart_type === 'kpi_block';
+      const cardSpan = (isDataTable || isKpiBlock) ? 'grid-column: span 2;' : '';
+      const bodyContainer = isKpiBlock
+        ? `<div class="cm-kpi-container" data-template="${id}"></div>`
+        : isDataTable
+          ? `<div class="cm-table-container" data-template="${id}" style="max-height:340px;overflow:auto;border:1px solid #E7E6E6;border-radius:4px"></div>`
+          : `<div style="position:relative;height:300px"><canvas data-template="${id}"></canvas></div>`;
       return `
         <div class="cm-card" id="cm-card-${id}" style="background:#fff;border:1px solid #E7E6E6;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,0.04);${cardSpan}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
@@ -1066,6 +1071,106 @@
     container.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  // ---- KPI block renderer (chart_type='kpi_block') ---------------------------
+  // Renders a tile grid for the latest period_end. Each tile shows:
+  //   - tile_label header
+  //   - primary_value (formatted per primary_format)
+  //   - if nm_value + non_nm_value present: split-comparison footer
+  //
+  // The view returns one row per (period_end x tile). We group by period_end
+  // and pick the latest period that has any populated tiles.
+  function renderKpiBlock(container, chart) {
+    const navy = brandColor('nm_navy', '#003DA5');
+    const sky  = brandColor('nm_sky',  '#62B5E5');
+    const pale = brandColor('nm_pale', '#E0E8F4');
+    const muted = brandColor('nm_text_muted', '#666');
+    const text = brandColor('nm_text', '#191919');
+
+    const rows = chart.rows || [];
+    if (rows.length === 0) {
+      container.innerHTML = '<div style="padding:24px;text-align:center;color:#666;font-size:9pt">No data available</div>';
+      return;
+    }
+
+    // Pick latest period_end where at least one tile has primary_value
+    const periods = [...new Set(rows.map(r => r.period_end))].sort().reverse();
+    let asOf = null;
+    let tiles = [];
+    for (const p of periods) {
+      const candidates = rows.filter(r => r.period_end === p && r.primary_value != null);
+      if (candidates.length > 0) {
+        asOf = p;
+        tiles = candidates.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+        break;
+      }
+    }
+    if (tiles.length === 0) {
+      container.innerHTML = '<div style="padding:24px;text-align:center;color:#666;font-size:9pt">No data available</div>';
+      return;
+    }
+
+    function fmtVal(format, v) {
+      if (v == null) return '—';
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '—';
+      switch (format) {
+        case 'currency_billions': {
+          const a = Math.abs(n);
+          if (a >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B';
+          if (a >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+          if (a >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+          return '$' + n.toFixed(0);
+        }
+        case 'currency_millions': {
+          const a = Math.abs(n);
+          if (a >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+          if (a >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+          return '$' + n.toFixed(0);
+        }
+        case 'currency_dollars': {
+          if (Math.abs(n) >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+          return '$' + Math.round(n).toLocaleString('en-US');
+        }
+        case 'percent_basis_points': return (n * 100).toFixed(2) + '%';
+        case 'percent_one_decimal':  return (n * 100).toFixed(1) + '%';
+        default: return n.toLocaleString('en-US');
+      }
+    }
+
+    function quarterLabel(d) {
+      const m = String(d || '').match(/^(\d{4})-(\d{2})/);
+      if (!m) return d;
+      return `${m[1]}-Q${Math.ceil(+m[2] / 3)}`;
+    }
+
+    const tileHtml = tiles.map(t => {
+      const hasSplit = (t.nm_value != null) && (t.non_nm_value != null);
+      const split = hasSplit ? `
+        <div style="display:flex;justify-content:space-around;margin-top:10px;padding-top:8px;border-top:1px solid ${pale}">
+          <div style="text-align:center">
+            <div style="font-size:8pt;color:${muted};text-transform:uppercase;letter-spacing:0.5px;font-family:'Calibri Light',sans-serif">${t.nm_label || 'NM'}</div>
+            <div style="font-size:11pt;color:${navy};font-weight:600;font-family:'Calibri Light',sans-serif">${fmtVal(t.primary_format, t.nm_value)}</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:8pt;color:${muted};text-transform:uppercase;letter-spacing:0.5px;font-family:'Calibri Light',sans-serif">${t.non_nm_label || 'Non-NM'}</div>
+            <div style="font-size:11pt;color:${muted};font-weight:600;font-family:'Calibri Light',sans-serif">${fmtVal(t.primary_format, t.non_nm_value)}</div>
+          </div>
+        </div>` : '';
+      return `
+        <div style="flex:1;min-width:180px;padding:14px 16px;background:#fff;border:1px solid ${pale};border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,0.03)">
+          <div style="font-size:9pt;color:${muted};text-transform:uppercase;letter-spacing:0.6px;font-family:'Calibri Light',sans-serif;margin-bottom:6px">${t.tile_label}</div>
+          <div style="font-size:22pt;line-height:1.05;color:${navy};font-weight:600;font-family:'Calibri Light',sans-serif">${fmtVal(t.primary_format, t.primary_value)}</div>
+          ${split}
+        </div>`;
+    }).join('');
+
+    container.innerHTML = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        ${tileHtml}
+      </div>
+      <div style="font-size:8pt;color:${muted};margin-top:8px;font-style:italic">As of ${quarterLabel(asOf)} · Rolling 12-month TTM</div>`;
+  }
+
   // ---- Render orchestration --------------------------------------------------
   async function renderCharts(vertical, subspecialty) {
     const status = document.getElementById('cm-status');
@@ -1082,6 +1187,13 @@
           const container = document.querySelector(`.cm-table-container[data-template="${tplId}"]`);
           if (!container) continue;
           renderDataTable(container, chart);
+          ok++;
+          continue;
+        }
+        if (chart.chart_type === 'kpi_block') {
+          const container = document.querySelector(`.cm-kpi-container[data-template="${tplId}"]`);
+          if (!container) continue;
+          renderKpiBlock(container, chart);
           ok++;
           continue;
         }
