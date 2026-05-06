@@ -346,6 +346,33 @@ const CHART_COLUMNS = {
     { key: 'avg_asking_cap',      header: 'Avg Asking Cap',      format: 'percent_basis_points', width: 16 },
     { key: 'avg_dom',             header: 'Avg DOM',             format: 'integer_count',        width: 12 },
   ],
+
+  // Phase 6 — Monthly TTM (dia p.33-35)
+  dom_and_pct_of_ask_monthly: [
+    { key: 'period_end',       header: 'Month End',           format: 'date_short',           width: 13 },
+    { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
+    { key: 'n_sales',          header: 'N Sales (TTM)',       format: 'integer_count',        width: 14 },
+    { key: 'avg_dom',          header: 'Avg DOM (days)',      format: 'integer_count',        width: 14 },
+    { key: 'pct_of_ask',       header: '% of Ask Price',      format: 'percent_one_decimal',  width: 16 },
+  ],
+  bid_ask_spread_monthly: [
+    { key: 'period_end',         header: 'Month End',           format: 'date_short',           width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },
+    { key: 'n_with_spread',      header: 'N Sales w/ Spread',   format: 'integer_count',        width: 18 },
+    { key: 'avg_bid_ask_spread', header: 'Bid-Ask Spread (bps)',format: 'percent_basis_points', width: 19 },
+    { key: 'pct_price_change',   header: '% Price Changes',     format: 'percent_one_decimal',  width: 16 },
+    { key: 'avg_last_ask_cap',   header: 'Last Ask Cap',        format: 'percent_basis_points', width: 14 },
+  ],
+  seller_sentiment_monthly: [
+    { key: 'period_end',                  header: 'Month End',           format: 'date_short',           width: 13 },
+    { key: 'subspecialty',                header: 'Subspecialty',        width: 14 },
+    { key: 'n_all',                       header: 'N (all)',             format: 'integer_count',        width: 10 },
+    { key: 'n_long_term',                 header: 'N (8+ Yr)',           format: 'integer_count',        width: 12 },
+    { key: 'pct_price_change_all',        header: 'Price Chg % (all)',   format: 'percent_one_decimal',  width: 18 },
+    { key: 'pct_price_change_long_term',  header: 'Price Chg % (8+ Yr)', format: 'percent_one_decimal',  width: 20 },
+    { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 18 },
+    { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (8+ Yr)',format: 'percent_basis_points', width: 20 },
+  ],
 };
 
 // Period-summary template — column headers are computed at render time from
@@ -405,6 +432,10 @@ const TAB_NAMES = {
   asking_cap_quartiles_active:  'Data_Active_Cap_Quart',
   dom_price_change_active:      'Data_Active_DOM_PC',
   available_by_tenant:          'Data_Avail_by_Tenant',
+  // Phase 6 — Monthly TTM (dia p.33-35; dialysis-only cadence)
+  dom_and_pct_of_ask_monthly:   'Data_DOM_Ask_M',
+  bid_ask_spread_monthly:       'Data_Bid_Ask_M',
+  seller_sentiment_monthly:     'Data_Sentiment_M',
 };
 
 // ============================================================================

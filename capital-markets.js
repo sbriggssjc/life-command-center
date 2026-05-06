@@ -70,6 +70,10 @@
     'asking_cap_quartiles_active', // dia p.31 top — upper/lower quartile cap, 2 cohorts (4 lines)
     'dom_price_change_active',     // dia p.31 bottom — DOM bars + price-change% lines, 2 cohorts
     'available_by_tenant',         // dia p.32 — per-tenant rollup table
+    // ===== Phase 6 — Monthly TTM (dia p.33-35; dialysis-only cadence) =====
+    'dom_and_pct_of_ask_monthly',  // dia p.33 — DOM + % of Ask, monthly TTM
+    'bid_ask_spread_monthly',      // dia p.34 — Bid-Ask Spread, monthly TTM
+    'seller_sentiment_monthly',    // dia p.35 — Seller Sentiment, monthly TTM
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------
@@ -108,6 +112,7 @@
     }
   }
 
+  // Quarter-anchored labels: "Q1 '25". Used for time_series_quarterly_*.
   function periodEndLabel(d) {
     if (!d) return '';
     const dt = new Date(d);
@@ -115,6 +120,21 @@
     const y = dt.getUTCFullYear();
     const q = Math.floor(m / 3) + 1;
     return `Q${q} '${String(y).slice(2)}`;
+  }
+
+  // Month-anchored labels: "Jan '25". Used for time_series_monthly_* templates.
+  const MONTH_ABBREV = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function periodEndLabelMonthly(d) {
+    if (!d) return '';
+    const dt = new Date(d);
+    return `${MONTH_ABBREV[dt.getUTCMonth()]} '${String(dt.getUTCFullYear()).slice(2)}`;
+  }
+
+  // Pick the right label function from a chart's data_shape / cadence.
+  function labelForChart(chart) {
+    const shape = String(chart?.data_shape || '').toLowerCase();
+    if (chart?.cadence === 'monthly' || shape.includes('monthly')) return periodEndLabelMonthly;
+    return periodEndLabel;
   }
 
   // ---- Data fetching ---------------------------------------------------------
@@ -203,7 +223,8 @@
   function buildChart(canvas, chart) {
     if (!canvas || !window.Chart) return;
     const palette = SERIES_COLORS();
-    const labels = (chart.rows || []).map(r => periodEndLabel(r.period_end));
+    const labelFn = labelForChart(chart);
+    const labels = (chart.rows || []).map(r => labelFn(r.period_end));
     let datasets = [];
 
     switch (chart.chart_template_id) {
@@ -459,7 +480,8 @@
         opts.scales.y.max = 1.0;
         return new Chart(canvas, { type: 'bar', data: { labels: yearLabels, datasets }, options: opts });
       }
-      case 'dom_and_pct_of_ask': {
+      case 'dom_and_pct_of_ask':
+      case 'dom_and_pct_of_ask_monthly': {
         // Combo: DOM as bars (left axis), % of ask as line (right axis)
         const dom = chart.rows.map(r => r.avg_dom);
         const pctAsk = chart.rows.map(r => r.pct_of_ask);
@@ -480,7 +502,36 @@
         };
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
-      case 'bid_ask_spread': {
+      case 'bid_ask_spread':
+      case 'bid_ask_spread_monthly': {
+        // Quarterly: spread line only.
+        // Monthly (deliverable p.34): spread bars on left axis + last-ask cap line
+        // on right axis. The monthly view exposes avg_last_ask_cap; if present
+        // the renderer adds the overlay; otherwise falls back to spread-only.
+        const isMonthly = chart.chart_template_id === 'bid_ask_spread_monthly';
+        if (isMonthly) {
+          datasets = [
+            { type: 'bar',  label: 'Bid-Ask Spread (bps)',
+              data: chart.rows.map(r => r.avg_bid_ask_spread),
+              backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+            { type: 'line', label: 'Last Ask Cap',
+              data: chart.rows.map(r => r.avg_last_ask_cap),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y1' },
+          ];
+          const opts = commonChartOptions('percent_basis_points');
+          opts.scales.y1 = {
+            position: 'right',
+            ticks: {
+              color: brandColor('nm_axis', '#6A748C'),
+              font: { family: 'Calibri, sans-serif', size: 9 },
+              callback: tickFormatterFor('percent_basis_points'),
+            },
+            grid: { display: false },
+          };
+          return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+        }
+        // Quarterly fallback (gov, dialysis quarterly cadence)
         datasets = [{
           label: 'Bid-Ask Spread (bps)',
           data: chart.rows.map(r => r.avg_bid_ask_spread),
@@ -551,8 +602,9 @@
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('percent_one_decimal') });
       }
-      case 'seller_sentiment': {
-        // Deliverable p.22: dual bar chart with cap rate lines on right axis
+      case 'seller_sentiment':
+      case 'seller_sentiment_monthly': {
+        // Deliverable p.22 (quarterly) / p.35 (monthly): dual bar chart with cap rate lines on right axis
         const opts = commonChartOptions('percent_one_decimal');
         opts.scales.y1 = {
           position: 'right',
