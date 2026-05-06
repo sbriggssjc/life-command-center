@@ -188,7 +188,13 @@ async function listCatalog(req, res) {
   const { vertical, phase } = req.query;
   const filters = [];
   if (vertical) filters.push(`applies_to_verticals=cs.{${vertical}}`);
-  if (phase)    filters.push(`phase=eq.${parseInt(phase, 10)}`);
+  // phase is a CEILING — return every template whose phase <= the requested
+  // value. Mirrors fetchQuarterly's filter so the catalog and chart-data
+  // endpoints stay in sync. (Earlier this used phase=eq, which silently
+  // dropped every chart card from earlier phases once the frontend bumped
+  // its phase request to 5 — every Phase 1-4 sales chart vanished from
+  // the dashboard until this was discovered.)
+  if (phase)    filters.push(`phase=lte.${parseInt(phase, 10)}`);
   const filterStr = filters.length ? '&' + filters.join('&') : '';
   const result = await opsQuery(
     'GET',
@@ -498,8 +504,14 @@ async function exportWorkbook(req, res) {
     });
   }
 
-  // 1. Fetch chart catalog + data via the same dispatch logic the dashboard uses
-  const phaseFilter = '&phase=lte.1';
+  // 1. Fetch chart catalog + data via the same dispatch logic the dashboard uses.
+  //    The export is the "full data dump" use case — include every template
+  //    applicable to the vertical regardless of phase. (Previously hardcoded
+  //    to phase=lte.1, which silently dropped every Phase 2+ tab from the
+  //    workbook: KPI blocks, inventory analysis, monthly TTM, rent box, etc.)
+  //    Caller can still narrow via ?phase=N to cap at a lower phase if needed.
+  const exportPhase = req.query.phase ? parseInt(req.query.phase, 10) : null;
+  const phaseFilter = exportPhase ? `&phase=lte.${exportPhase}` : '';
   const cat = await opsQuery(
     'GET',
     `cm_chart_catalog?select=*&applies_to_verticals=cs.{${vertical}}${phaseFilter}&order=phase,chart_template_id`
