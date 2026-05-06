@@ -62,6 +62,7 @@
     'volume_cap_quartile_combo',   // gov p.6/7/8/13, dia p.19, ST workbook — Volume area + Cap line + Quartile band
     // ===== Tier 4 — KPI tile blocks =====
     'value_proposition_results',   // gov p.38 / dia p.38 — 3-tile NOI + Cap + Price (NM vs Non-NM)
+    'whatsnew_quarter_kpis',       // dia p.3 — 3-tile front-of-deck headline KPIs (TTM Vol YoY, Cap, 10Y Treasury)
   ];
 
   // ---- Brand-token helpers ---------------------------------------------------

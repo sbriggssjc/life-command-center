@@ -346,6 +346,7 @@ const TAB_NAMES = {
   volume_cap_quartile_combo:    'Data_Vol_Cap_Combo',
   // Tier 4 — KPI tile blocks
   value_proposition_results:    'KPI_Value_Prop',
+  whatsnew_quarter_kpis:        'KPI_Whats_New',
 };
 
 // ============================================================================
