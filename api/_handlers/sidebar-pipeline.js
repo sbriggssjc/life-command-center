@@ -844,6 +844,82 @@ function classifyDomain(metadata, entityFields) {
   return null;
 }
 
+// Round 76ej.x (2026-05-05): return ALL applicable domains for a
+// capture, not just the primary one. Multi-tenant buildings like
+// Centralia Medical Offices (1815 Cooks Hill Rd) have DaVita
+// (dialysis) AND Social Security Administration (government) under
+// the same roof — both domains' tooling needs the property to
+// surface in their respective DBs. classifyDomain still returns the
+// PRIMARY (first match, dialysis-preferred) for backward-compat
+// callers that need a single value (e.g. entity.domain column).
+function classifyAllApplicableDomains(metadata, entityFields) {
+  const all = [];
+  // Reuse the same searchText assembly as classifyDomain.
+  const textParts = [
+    dropTenantJunk(metadata.tenant_name),
+    dropTenantJunk(metadata.primary_tenant),
+    metadata.building_name,
+    entityFields.description,
+    entityFields.name,
+    dropTenantJunk(entityFields.tenant),
+    metadata.asset_type,
+    metadata.property_type,
+    metadata.property_subtype,
+    metadata.occupancy_details,
+    metadata.sale_notes_raw,
+    metadata.tenants_raw,
+    metadata.tenancy_block,
+    metadata.investment_highlights,
+    metadata.marketing_headline,
+    metadata.marketing_description,
+  ];
+  if (Array.isArray(metadata.tenants)) {
+    for (const t of metadata.tenants) {
+      const cleaned = dropTenantJunk(t && t.name);
+      if (cleaned) textParts.push(cleaned);
+    }
+  }
+  if (Array.isArray(metadata.contacts)) {
+    for (const c of metadata.contacts) if (c && c.name) textParts.push(c.name);
+  }
+  if (Array.isArray(metadata.pdf_extracted_texts)) {
+    for (const pdf of metadata.pdf_extracted_texts) {
+      if (pdf && pdf.text) textParts.push(pdf.text.substring(0, 500));
+    }
+  }
+  const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
+
+  // Dialysis first (more specific) — same priority as classifyDomain.
+  if (DIALYSIS_TENANT_PATTERNS.some((rx) => rx.test(searchText))) all.push('dialysis');
+  // Government — either explicit asset_type tag OR keyword match.
+  if (entityFields.asset_type === 'government_leased') {
+    if (!all.includes('government')) all.push('government');
+  } else if (GOV_TENANT_PATTERNS.some((rx) => rx.test(searchText))) {
+    if (!all.includes('government')) all.push('government');
+  }
+  return all;
+}
+
+// Per-domain tenant filter — used when the same metadata.tenants[]
+// is propagated to multiple domain DBs and each domain should only
+// see its own-flavored tenants.
+//   - government domain: include only tenants matching GOV_TENANT_PATTERNS
+//   - dialysis domain:   exclude tenants that match GOV_TENANT_PATTERNS
+//                        UNLESS they ALSO match DIALYSIS_TENANT_PATTERNS
+//                        (a hybrid name like "VA Dialysis Center" stays
+//                        in dia.leases). Non-gov, non-dialysis tenants
+//                        (typical healthcare names like "Assured Home
+//                        Health") stay in dia by default.
+function isTenantForDomain(tenantName, domain) {
+  if (!tenantName || typeof tenantName !== 'string') return false;
+  const name = tenantName.toLowerCase();
+  const isGov = GOV_TENANT_PATTERNS.some((rx) => rx.test(name));
+  const isDia = DIALYSIS_TENANT_PATTERNS.some((rx) => rx.test(name));
+  if (domain === 'government') return isGov;
+  if (domain === 'dialysis') return !(isGov && !isDia);
+  return true;
+}
+
 // ── Round 76cr-Phase 2: forward-routing mismatch detector ──────────────
 // Flag captures where the classifier picks one domain but the PRIMARY
 // tenant slot screams the other. Two real cases motivated this:
@@ -5986,12 +6062,18 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
     seen.add(key);
     tenantInputs.push({ name: trimmed, ...(extra || {}) });
   };
-  pushTenant(metadata.tenant_name);
-  pushTenant(metadata.primary_tenant);
+  // Round 76ej.x (2026-05-05): per-domain tenant filter. On mixed-
+  // tenant buildings (Centralia: DaVita + Assured + SSA) we only want
+  // gov-flavored tenants in gov.leases. Without this, dia tenants
+  // would land in gov.leases too once the orchestrator propagates to
+  // both domains.
+  const govPush = (n, x) => { if (isTenantForDomain(n, 'government')) pushTenant(n, x); };
+  govPush(metadata.tenant_name);
+  govPush(metadata.primary_tenant);
   if (Array.isArray(metadata.tenants)) {
     for (const t of metadata.tenants) {
-      if (t && typeof t === 'object') pushTenant(t.name, { sf: t.sf });
-      else if (typeof t === 'string') pushTenant(t);
+      if (t && typeof t === 'object') govPush(t.name, { sf: t.sf });
+      else if (typeof t === 'string') govPush(t);
     }
   }
   if (tenantInputs.length === 0) return 0;
@@ -6123,7 +6205,15 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
   // Domain guard — only dialysis for now
   if (domain !== 'dialysis') return 0;
 
-  const tenants = metadata.tenants;
+  // Round 76ej.x (2026-05-05): per-domain tenant filter. On mixed-
+  // tenant buildings (Centralia) we want DaVita + Assured Home Health
+  // in dia.leases but NOT Social Security Administration (which is
+  // gov-only). isTenantForDomain('dialysis') drops tenants matching
+  // GOV_TENANT_PATTERNS unless they ALSO match DIALYSIS_TENANT_PATTERNS
+  // (a hybrid like "VA Dialysis Center" stays).
+  const tenants = Array.isArray(metadata.tenants)
+    ? metadata.tenants.filter((t) => t && t.name && isTenantForDomain(t.name, 'dialysis'))
+    : metadata.tenants;
   let leaseRecords = [];
 
   // Determine data_source and source_confidence based on origin
@@ -7401,8 +7491,16 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     console.error('[null-sale-date-audit] unexpected error', err?.message || err)
   );
 
-  // Step 1 — classify domain (needed for entity creation in steps 2-3)
+  // Step 1 — classify domain (needed for entity creation in steps 2-3).
+  // classifyAndUpdateDomain still returns the PRIMARY domain for
+  // entity.domain column / single-domain consumers; classifyAll-
+  // ApplicableDomains returns the full set so multi-domain captures
+  // (Centralia: dialysis + government) propagate to both DBs.
   const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId);
+  const allDomains = classifyAllApplicableDomains(metadata, entity);
+  // Belt-and-suspenders: if the primary classifier picked something
+  // (preserve-existing path), make sure it's in the list too.
+  if (domain && !allDomains.includes(domain)) allDomains.unshift(domain);
 
   // Step 2 — Unpack contacts → entities + relationships
   const contactCount = await unpackContacts(entityId, metadata, workspaceId, userId, domain);
@@ -7413,8 +7511,44 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
   // Step 3 — Unpack sales history → activity events + buyer/seller/lender entities
   const salesCount = await unpackSalesHistory(entityId, metadata, workspaceId, userId, domain);
 
-  // Step 4 — Propagate to domain database (dialysis or government)
-  const propagation = await propagateToDomainDb(entity, metadata, domain);
+  // Step 4 — Propagate to EVERY applicable domain database. Each
+  // domain's writers filter metadata.tenants[] via isTenantForDomain
+  // so dia.leases gets only DaVita+Assured and gov.leases gets only
+  // SSA on the Centralia-style mixed-tenant capture. Single-domain
+  // captures still hit exactly one domain and behave identically to
+  // the prior single-call path.
+  const perDomainResults = {};
+  let firstError = null;
+  let anyPropagated = false;
+  let primaryPropagation = null;
+  if (allDomains.length === 0) {
+    primaryPropagation = await propagateToDomainDb(entity, metadata, null);
+  } else {
+    for (const dom of allDomains) {
+      const r = await propagateToDomainDb(entity, metadata, dom);
+      perDomainResults[dom] = r;
+      if (r.propagated) anyPropagated = true;
+      else if (!firstError) firstError = r;
+      if (dom === domain || (!primaryPropagation && r.propagated)) {
+        primaryPropagation = r;
+      }
+    }
+    if (!primaryPropagation) primaryPropagation = firstError || { propagated: false, reason: 'no_domain' };
+  }
+  const propagation = anyPropagated
+    ? {
+        ...(primaryPropagation || {}),
+        propagated: true,
+        domains: allDomains,
+        per_domain: perDomainResults,
+      }
+    : (primaryPropagation || { propagated: false, reason: 'no_domain', domains: allDomains, per_domain: perDomainResults });
+  // Per-domain property_id map for downstream consumers that need to
+  // join from the LCC entity into multiple domain DBs.
+  const domainPropertyIds = {};
+  for (const [d, r] of Object.entries(perDomainResults)) {
+    if (r && r.property_id != null) domainPropertyIds[d] = String(r.property_id);
+  }
 
   // Step 5 — Write signal for learning loop
   const totalContacts = contactCount + tenantCount;
@@ -7437,11 +7571,16 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
           _pipeline_processed_at: new Date().toISOString(),
           _pipeline_status:       'success',
           // Round 76eo-B: promote the propagated property_id to the top-level
-          // metadata slot, which downstream lookup paths key on. Cast to
-          // string so the value shape matches what other writers (intake
-          // promoter, sidebar) put there.
+          // metadata slot, which downstream lookup paths key on.
           ...(propagation.property_id != null
               ? { domain_property_id: String(propagation.property_id) }
+              : {}),
+          // Round 76ej.x (2026-05-05): full per-domain map for multi-
+          // domain captures. domain_property_id (singular) above stays
+          // pointed at the PRIMARY domain for backward-compat
+          // consumers.
+          ...(Object.keys(domainPropertyIds).length > 0
+              ? { domain_property_ids: domainPropertyIds }
               : {}),
         }
       : {
@@ -7455,16 +7594,12 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       tenant_created: tenantCount,
       sales_recorded: salesCount,
       domain,
+      // Round 76ej.x: full applicable-domain set + per-domain results.
+      domains: allDomains,
+      per_domain: perDomainResults,
+      domain_property_ids: domainPropertyIds,
       domain_propagated: propagation.propagated || false,
       domain_property_id: propagation.property_id || null,
-      // Round 76el (2026-04-29): clarified semantics of the per-run write
-      // counters. These reflect ONLY what THIS pipeline run wrote to the
-      // domain DB. Listings created later by verify-still-available
-      // (Round 76du), the auto-scrape cron (76cx Phase 4b), or subsequent
-      // pipeline runs are NOT reflected here. For "how many listings does
-      // this property currently have" use a fresh DB count via the
-      // domain DB instead — domain_records_current is populated below
-      // when domain_property_id is known.
       domain_records: propagation.records || null,
       domain_records_note: 'writes_this_run_only — see domain_records_current for live DB state',
       domain_records_current: await fetchDomainRecordsCurrent(domain, propagation.property_id).catch(() => null),
