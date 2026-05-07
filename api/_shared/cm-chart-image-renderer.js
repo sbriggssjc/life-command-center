@@ -2,34 +2,20 @@
 // Capital Markets — Chart-image renderer (server-side PNG via QuickChart)
 // Life Command Center
 //
-// ExcelJS doesn't support creating chart objects from scratch; the existing
-// MasterPasteReady workflow gets visible charts via paste-into-master. For
-// users without a master XLSX, this module renders PNG images via QuickChart
-// (https://quickchart.io) and the export pipeline embeds them on a single
-// consolidated "Charts" tab.
+// Renders chart-per-tab PNG images for the workbook export. Each Data_* tab
+// embeds the matching PNG at the top + data table below.
 //
-// Trade-offs documented in the cover sheet when the feature is enabled:
+// Trade-offs:
 //   1. External dependency on quickchart.io (or self-hosted instance)
-//   2. Proprietary data (cap rates, volumes) flows to the rendering service
+//   2. Proprietary data flows to the rendering service for image generation
 //   3. Render latency: ~500ms per chart, parallelized via Promise.all
 //
-// The user can self-host QuickChart via Docker and point at it via the
-// CM_QUICKCHART_URL env var; default is the public service.
+// CM_QUICKCHART_URL env var can point at a self-hosted Docker QuickChart
+// instance for full data sovereignty.
 //
-// Feature flag: process.env.CM_EXPORT_NATIVE_CHARTS = 'true' to enable.
-// Default behaviour is unchanged — workbook ships data tabs only.
-//
-// Marquee chart set
-// ─────────────────
-// First-pass coverage targets the deliverable PDF's 6 most-cited charts:
-//   - Volume TTM by Quarter
-//   - Cap Rate TTM by Quarter
-//   - NM vs Market Cap
-//   - YoY Volume Change
-//   - DOM + % of Ask
-//   - Buyer Class % by Year
-//
-// Follow-up PRs can extend buildChartConfig() to cover additional templates.
+// Visual style targets the master XLSX (Dialysis Comp Work MASTER) chart
+// objects: Northmarq palette (navy primary, sky secondary, pale fill),
+// Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
 const QUICKCHART_URL =
@@ -39,16 +25,24 @@ const RENDER_DEFAULT_WIDTH  = 900;
 const RENDER_DEFAULT_HEIGHT = 480;
 const RENDER_TIMEOUT_MS     = 15_000;
 
-// Brand-aligned series colors (hex strings without the leading '#').
+// Recent-window crop. The deliverable PDF charts typically show Q3 2017
+// onward (or Feb 2018+ for monthly). Filtering to the last N rows keeps
+// the dashboard data ranges tight and avoids the early-2000s sparse
+// data dragging the x-axis. Quarterly: 32 rows ≈ 8 years; monthly: 96 ≈ 8.
+const RECENT_QUARTERS_DEFAULT = 36;   // ~9 years quarterly
+const RECENT_MONTHS_DEFAULT   = 100;  // ~8.3 years monthly
+const RECENT_YEARS_DEFAULT    = 12;   // 12 calendar years (annual templates)
+
+// Brand-aligned series colors (hex strings).
 function paletteSeries(brand) {
   const p = brand?.palette || {};
   return [
-    p.nm_navy     || '#003DA5',
-    p.nm_sky      || '#62B5E5',
-    p.nm_blue_mid || '#265AB2',
-    p.nm_pale     || '#E0E8F4',
-    p.nm_axis     || '#6A748C',
-    p.nm_text     || '#191919',
+    p.nm_navy     || '#003DA5', // [0] primary
+    p.nm_sky      || '#62B5E5', // [1] accent
+    p.nm_blue_mid || '#265AB2', // [2] series 3
+    p.nm_pale     || '#E0E8F4', // [3] fill
+    p.nm_axis     || '#6A748C', // [4] axis / muted
+    p.nm_text     || '#191919', // [5] text
   ];
 }
 
@@ -62,26 +56,70 @@ function periodEndLabel(d) {
   return `Q${q} '${String(y).slice(2)}`;
 }
 
-function commonOpts(yLabelCallback) {
+// Slice rows to the most recent N entries (or pass through if fewer).
+function recentRows(rows, n) {
+  if (!Array.isArray(rows)) return [];
+  if (rows.length <= n) return rows;
+  return rows.slice(rows.length - n);
+}
+
+// ============================================================================
+// Axis-format helpers (Chart.js v3 — uses Intl.NumberFormat)
+// ============================================================================
+//
+// QuickChart's JSON parser doesn't evaluate JS callback strings — anything
+// shaped like `function(v) { ... }` is sent to Chart.js as a literal string,
+// not a function. So we use Chart.js's built-in `format` option (which
+// internally calls Intl.NumberFormat) instead of `callback`.
+
+const AXIS_FORMAT_PERCENT_2DP = {
+  format: { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 },
+};
+const AXIS_FORMAT_PERCENT_1DP = {
+  format: { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 },
+};
+const AXIS_FORMAT_PERCENT_0DP = {
+  format: { style: 'percent', minimumFractionDigits: 0, maximumFractionDigits: 0 },
+};
+const AXIS_FORMAT_CURRENCY_COMPACT = {
+  format: { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 },
+};
+const AXIS_FORMAT_CURRENCY = {
+  format: { style: 'currency', currency: 'USD', maximumFractionDigits: 0 },
+};
+const AXIS_FORMAT_INTEGER = {
+  format: { style: 'decimal', maximumFractionDigits: 0 },
+};
+
+// ============================================================================
+// Common Chart.js v3 options
+// ============================================================================
+
+function commonOpts({ yAxisFormat, xMaxTicks = 12, legendPosition = 'bottom' } = {}) {
   return {
     responsive: false,
     maintainAspectRatio: false,
     plugins: {
       legend: {
-        position: 'bottom',
+        position: legendPosition,
         labels: { color: '#191919', font: { family: 'Calibri', size: 11 } },
       },
     },
     scales: {
       x: {
-        ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
-        grid:  { display: false },
+        ticks: {
+          color: '#6A748C',
+          font: { family: 'Calibri', size: 9 },
+          maxTicksLimit: xMaxTicks,
+          autoSkip: true,
+        },
+        grid: { display: false },
       },
       y: {
         ticks: {
           color: '#6A748C',
           font: { family: 'Calibri', size: 9 },
-          ...(yLabelCallback ? { callback: yLabelCallback } : {}),
+          ...(yAxisFormat || {}),
         },
         grid: { color: '#E7E6E6' },
       },
@@ -89,19 +127,39 @@ function commonOpts(yLabelCallback) {
   };
 }
 
+// Helper: dual-axis combo options (left = primary, right = secondary)
+function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12 } = {}) {
+  const opts = commonOpts({ yAxisFormat: yLeftFormat, xMaxTicks });
+  opts.scales.y1 = {
+    position: 'right',
+    ticks: {
+      color: '#6A748C',
+      font: { family: 'Calibri', size: 9 },
+      ...(yRightFormat || {}),
+    },
+    grid: { display: false },
+  };
+  return opts;
+}
+
 // ============================================================================
 // Per-template Chart.js v3 config builders
 // ============================================================================
-//
-// Each builder returns a JSON-serializable Chart.js config or null if the
-// template isn't supported yet. Mirrors the dashboard's buildChart switch
-// in capital-markets.js — but produces a config object rather than a Chart
-// instance.
 
 function buildChartConfig(chart, brand) {
   if (!chart || !chart.rows || chart.rows.length === 0) return null;
   const palette = paletteSeries(brand);
-  const labels = chart.rows.map(r => periodEndLabel(r.period_end || r.year));
+
+  // Crop to recent window for legibility. Annual templates (year column)
+  // get the year-window; everything else uses quarter or monthly window
+  // depending on data_shape.
+  const isAnnual  = String(chart.data_shape || '').includes('yearly');
+  const isMonthly = String(chart.data_shape || '').includes('monthly');
+  const windowSize = isAnnual  ? RECENT_YEARS_DEFAULT
+                   : isMonthly ? RECENT_MONTHS_DEFAULT
+                   :             RECENT_QUARTERS_DEFAULT;
+  const rows = recentRows(chart.rows, windowSize);
+  const labels = rows.map(r => periodEndLabel(r.period_end || r.year));
 
   switch (chart.chart_template_id) {
     case 'volume_ttm_by_quarter': {
@@ -111,27 +169,16 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'TTM Volume',
-            data: chart.rows.map(r => r.volume_dollars),
+            data: rows.map(r => r.volume_dollars),
             borderColor: palette[0],
             backgroundColor: palette[3],
             fill: true,
             tension: 0.25,
             pointRadius: 0,
+            borderWidth: 2.5,
           }],
         },
-        options: {
-          ...commonOpts(),
-          scales: {
-            ...commonOpts().scales,
-            y: {
-              ...commonOpts().scales.y,
-              ticks: {
-                ...commonOpts().scales.y.ticks,
-                callback: 'function(v) { return "$" + (v/1e9).toFixed(2) + "B"; }',
-              },
-            },
-          },
-        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT }),
       };
     }
 
@@ -142,7 +189,7 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'Avg Cap Rate (TTM, weighted)',
-            data: chart.rows.map(r => r.ttm_weighted_cap_rate),
+            data: rows.map(r => r.ttm_weighted_cap_rate),
             borderColor: palette[0],
             backgroundColor: 'transparent',
             tension: 0.3,
@@ -150,7 +197,7 @@ function buildChartConfig(chart, brand) {
             borderWidth: 2.5,
           }],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
       };
     }
 
@@ -160,15 +207,15 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            { label: 'NM Cap Rate',     data: chart.rows.map(r => r.nm_cap_rate),
+            { label: 'NM Cap Rate',     data: rows.map(r => r.nm_cap_rate),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Market Cap Rate', data: chart.rows.map(r => r.market_cap_rate),
+            { label: 'Market Cap Rate', data: rows.map(r => r.market_cap_rate),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
       };
     }
 
@@ -179,47 +226,14 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'YoY Change %',
-            data: chart.rows.map(r => r.yoy_change_pct),
-            backgroundColor: chart.rows.map(r =>
+            data: rows.map(r => r.yoy_change_pct),
+            backgroundColor: rows.map(r =>
               (r.yoy_change_pct >= 0 ? palette[0] : palette[2])
             ),
             borderRadius: 2,
           }],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(0)+"%"}'),
-      };
-    }
-
-    case 'dom_and_pct_of_ask': {
-      return {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            { type: 'bar',  label: 'Avg Days on Market',
-              data: chart.rows.map(r => r.avg_dom),
-              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
-            { type: 'line', label: '% of Ask Price',
-              data: chart.rows.map(r => r.pct_of_ask),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 2, borderWidth: 2.5, yAxisID: 'y1' },
-          ],
-        },
-        options: {
-          ...commonOpts(),
-          scales: {
-            ...commonOpts().scales,
-            y1: {
-              position: 'right',
-              ticks: {
-                color: '#6A748C',
-                font: { family: 'Calibri', size: 9 },
-                callback: 'function(v){return (v*100).toFixed(1)+"%"}',
-              },
-              grid: { display: false },
-            },
-          },
-        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_0DP }),
       };
     }
 
@@ -230,12 +244,12 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'TTM Transactions',
-            data: chart.rows.map(r => r.ttm_count ?? r.count),
+            data: rows.map(r => r.ttm_count ?? r.count),
             backgroundColor: palette[0],
             borderRadius: 2,
           }],
         },
-        options: commonOpts('function(v){return Math.round(v).toLocaleString()}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
       };
     }
 
@@ -246,12 +260,12 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'Avg Deal Size',
-            data: chart.rows.map(r => r.avg_deal_size),
-            backgroundColor: palette[1],
+            data: rows.map(r => r.avg_deal_size),
+            backgroundColor: palette[0],
             borderRadius: 2,
           }],
         },
-        options: commonOpts('function(v){return "$"+(v/1e6).toFixed(1)+"M"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT }),
       };
     }
 
@@ -261,18 +275,18 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            { label: 'Top Quartile',    data: chart.rows.map(r => r.top_quartile),
+            { label: 'Top Quartile',    data: rows.map(r => r.top_quartile),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: 'Median',          data: chart.rows.map(r => r.median),
+            { label: 'Median',          data: rows.map(r => r.median),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Bottom Quartile', data: chart.rows.map(r => r.bottom_quartile),
-              borderColor: palette[3], backgroundColor: 'transparent',
+            { label: 'Bottom Quartile', data: rows.map(r => r.bottom_quartile),
+              borderColor: palette[2], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
       };
     }
 
@@ -282,21 +296,44 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            { label: '10+ Year',       data: chart.rows.map(r => r.cap_10plus),
+            { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: '6-10 Year',      data: chart.rows.map(r => r.cap_6to10),
+            { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
               borderColor: palette[2], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: '< 5 Year',       data: chart.rows.map(r => r.cap_less5),
+            { label: '< 5 Year',       data: rows.map(r => r.cap_less5),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: 'Outside Firm',   data: chart.rows.map(r => r.cap_outside_firm),
+            { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
               borderColor: palette[4], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
           ],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+      };
+    }
+
+    case 'dom_and_pct_of_ask':
+    case 'dom_and_pct_of_ask_monthly': {
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar',  label: 'Avg Days on Market',
+              data: rows.map(r => r.avg_dom),
+              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+            { type: 'line', label: '% of Ask Price',
+              data: rows.map(r => r.pct_of_ask),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 1, borderWidth: 2.5, yAxisID: 'y1' },
+          ],
+        },
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_INTEGER,
+          yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+        }),
       };
     }
 
@@ -308,7 +345,7 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'Bid-Ask Spread (bps)',
-            data: chart.rows.map(r => r.avg_bid_ask_spread),
+            data: rows.map(r => r.avg_bid_ask_spread),
             borderColor: palette[0],
             backgroundColor: palette[3],
             fill: true,
@@ -317,7 +354,7 @@ function buildChartConfig(chart, brand) {
             borderWidth: 2,
           }],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
       };
     }
 
@@ -329,35 +366,25 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [
             { type: 'bar',  label: 'Price Change %',
-              data: chart.rows.map(r => r.pct_price_change_all),
-              backgroundColor: palette[0], borderRadius: 1, yAxisID: 'y' },
+              data: rows.map(r => r.pct_price_change_all),
+              backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
             { type: 'bar',  label: '8+ Yr Term Price Change %',
-              data: chart.rows.map(r => r.pct_price_change_long_term),
+              data: rows.map(r => r.pct_price_change_long_term),
               backgroundColor: palette[1], borderRadius: 1, yAxisID: 'y' },
             { type: 'line', label: 'Last Asking Cap (all)',
-              data: chart.rows.map(r => r.last_ask_cap_all),
-              borderColor: palette[4], backgroundColor: 'transparent',
+              data: rows.map(r => r.last_ask_cap_all),
+              borderColor: palette[2], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
             { type: 'line', label: 'Last Asking Cap (8+ yr)',
-              data: chart.rows.map(r => r.last_ask_cap_long_term),
-              borderColor: palette[2], backgroundColor: 'transparent',
+              data: rows.map(r => r.last_ask_cap_long_term),
+              borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
           ],
         },
-        options: {
-          ...commonOpts('function(v){return (v*100).toFixed(1)+"%"}'),
-          scales: {
-            ...commonOpts().scales,
-            y1: {
-              position: 'right',
-              ticks: {
-                color: '#6A748C', font: { family: 'Calibri', size: 9 },
-                callback: 'function(v){return (v*100).toFixed(2)+"%"}',
-              },
-              grid: { display: false },
-            },
-          },
-        },
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_PERCENT_1DP,
+          yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+        }),
       };
     }
 
@@ -368,7 +395,7 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [{
             label: 'Valuation Index',
-            data: chart.rows.map(r => r.valuation_index),
+            data: rows.map(r => r.valuation_index),
             borderColor: palette[0],
             backgroundColor: 'transparent',
             tension: 0.3,
@@ -376,7 +403,7 @@ function buildChartConfig(chart, brand) {
             borderWidth: 2.5,
           }],
         },
-        options: commonOpts('function(v){return Number(v).toFixed(0)}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
       };
     }
 
@@ -386,29 +413,24 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            { label: '10Y Treasury',
-              data: chart.rows.map(r => r.treasury_10y_yield),
+            { label: '10Y Treasury',         data: rows.map(r => r.treasury_10y_yield),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Avg Cap Rate (TTM)',
-              data: chart.rows.map(r => r.avg_cap_rate),
+            { label: 'Avg Cap Rate (TTM)',   data: rows.map(r => r.avg_cap_rate),
               borderColor: palette[3], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: '10+ Year Cap',
-              data: chart.rows.map(r => r.cap_10plus_year),
+            { label: '10+ Year Cap',         data: rows.map(r => r.cap_10plus_year),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Low Loan Constant',
-              data: chart.rows.map(r => r.low_loan_constant),
+            { label: 'Low Loan Constant',    data: rows.map(r => r.low_loan_constant),
               borderColor: palette[4], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
-            { label: 'High Loan Constant',
-              data: chart.rows.map(r => r.high_loan_constant),
+            { label: 'High Loan Constant',   data: rows.map(r => r.high_loan_constant),
               borderColor: palette[4], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
           ],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(1)+"%"}'),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
       };
     }
 
@@ -419,86 +441,173 @@ function buildChartConfig(chart, brand) {
           labels,
           datasets: [
             { label: 'Cash Return Index',
-              data: chart.rows.map(r => r.cash_return),
+              data: rows.map(r => r.cash_return),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'Leveraged Return (mid)',
-              data: chart.rows.map(r => r.leveraged_return_mid),
+              data: rows.map(r => r.leveraged_return_mid),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts('function(v){return (v*100).toFixed(1)+"%"}'),
-      };
-    }
-
-    case 'dom_and_pct_of_ask_monthly': {
-      // Same shape as quarterly version, just monthly anchors. Re-use the
-      // quarterly chart's case body.
-      return {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            { type: 'bar',  label: 'Avg Days on Market',
-              data: chart.rows.map(r => r.avg_dom),
-              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
-            { type: 'line', label: '% of Ask Price',
-              data: chart.rows.map(r => r.pct_of_ask),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 1, borderWidth: 2.5, yAxisID: 'y1' },
-          ],
-        },
-        options: {
-          ...commonOpts(),
-          scales: {
-            ...commonOpts().scales,
-            y1: {
-              position: 'right',
-              ticks: {
-                color: '#6A748C', font: { family: 'Calibri', size: 9 },
-                callback: 'function(v){return (v*100).toFixed(1)+"%"}',
-              },
-              grid: { display: false },
-            },
-          },
-        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
       };
     }
 
     case 'buyer_class_pct_by_year': {
-      const yearLabels = chart.rows.map(r => String(r.year));
+      const yearLabels = rows.map(r => String(r.year));
+      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_0DP });
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+      opts.scales.y.max = 1.0;
       return {
         type: 'bar',
         data: {
           labels: yearLabels,
           datasets: [
-            { label: 'Private',       data: chart.rows.map(r => r.private_pct),
+            { label: 'Private',       data: rows.map(r => r.private_pct),
               backgroundColor: palette[0], stack: 'pool' },
-            { label: 'Public REITs',  data: chart.rows.map(r => r.reit_pct),
+            { label: 'Public REITs',  data: rows.map(r => r.reit_pct),
               backgroundColor: palette[2], stack: 'pool' },
-            { label: 'Cross-Border',  data: chart.rows.map(r => r.cross_border_pct),
+            { label: 'Cross-Border',  data: rows.map(r => r.cross_border_pct),
               backgroundColor: palette[1], stack: 'pool' },
-            { label: 'Institutional', data: chart.rows.map(r => r.institutional_pct),
+            { label: 'Institutional', data: rows.map(r => r.institutional_pct),
               backgroundColor: palette[3], stack: 'pool' },
           ],
         },
-        options: {
-          ...commonOpts('function(v){return Math.round(v*100)+"%"}'),
-          scales: {
-            ...commonOpts().scales,
-            x: { ...commonOpts().scales.x, stacked: true },
-            y: {
-              ...commonOpts().scales.y,
-              stacked: true,
-              max: 1.0,
-              ticks: {
-                ...commonOpts().scales.y.ticks,
-                callback: 'function(v){return Math.round(v*100)+"%"}',
-              },
-            },
-          },
+        options: opts,
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Inventory analysis charts (deliverable p.30-31)
+    // ────────────────────────────────────────────────────────────────────
+
+    case 'available_market_size_combo': {
+      // p.30 top: count bars (Total + Core 10+) on left axis, avg cap line
+      // (Total + Core 10+) on right axis. Two cohorts.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar',  label: 'Total Market — # Available',
+              data: rows.map(r => r.count_total),
+              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+            { type: 'bar',  label: '10+ Year Term — # Available',
+              data: rows.map(r => r.count_core_10plus),
+              backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+            { type: 'line', label: 'Total Market — Avg Asking Cap',
+              data: rows.map(r => r.avg_cap_total),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+            { type: 'line', label: '10+ Year Term — Avg Asking Cap',
+              data: rows.map(r => r.avg_cap_core_10plus),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+          ],
         },
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_INTEGER,
+          yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+        }),
+      };
+    }
+
+    case 'asking_cap_quartiles_active': {
+      // p.31 top: 4-line — upper/lower quartile for both Total and Core 10+
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Total Market — Upper Quartile',
+              data: rows.map(r => r.upper_q_total),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Total Market — Lower Quartile',
+              data: rows.map(r => r.lower_q_total),
+              borderColor: palette[3], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: '10+ Year Term — Upper Quartile',
+              data: rows.map(r => r.upper_q_core),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: '10+ Year Term — Lower Quartile',
+              data: rows.map(r => r.lower_q_core),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+      };
+    }
+
+    case 'dom_price_change_active': {
+      // p.31 bottom: DOM bars (Total + Core 10+) + price-change-frequency
+      // lines (Total + Core 10+). Two y-axes (DOM days vs %).
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar',  label: 'Total Market — DOM',
+              data: rows.map(r => r.avg_dom_total),
+              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+            { type: 'bar',  label: '10+ Year Term — DOM',
+              data: rows.map(r => r.avg_dom_core),
+              backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+            { type: 'line', label: 'Total Market — Price-Change %',
+              data: rows.map(r => r.pct_price_change_total),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+            { type: 'line', label: '10+ Year Term — Price-Change %',
+              data: rows.map(r => r.pct_price_change_core),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+          ],
+        },
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_INTEGER,
+          yRightFormat: AXIS_FORMAT_PERCENT_0DP,
+        }),
+      };
+    }
+
+    case 'volume_cap_quartile_combo': {
+      // Front-cover combo: TTM volume area + cap rate line + quartile band.
+      // Synthetic chart that the API composes from volume_ttm_by_quarter
+      // + cap_rate_ttm_by_quarter + cap_rate_top_bottom_quartile.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'line', label: 'TTM Volume',
+              data: rows.map(r => r.volume_dollars),
+              borderColor: palette[0], backgroundColor: palette[3],
+              fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y' },
+            { type: 'line', label: 'Avg Cap Rate (TTM)',
+              data: rows.map(r => r.cap_rate),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+            { type: 'line', label: 'Upper Quartile Cap',
+              data: rows.map(r => r.upper_quartile),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+              borderDash: [3, 3], yAxisID: 'y1' },
+            { type: 'line', label: 'Lower Quartile Cap',
+              data: rows.map(r => r.lower_quartile),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+              borderDash: [3, 3], yAxisID: 'y1' },
+          ],
+        },
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
+          yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+        }),
       };
     }
 
@@ -523,6 +632,11 @@ async function renderToPng(config, { width, height } = {}) {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
+        // Pin Chart.js v4 — required for `ticks.format` Intl.NumberFormat
+        // support. v3 (the default on free tier) doesn't render currency /
+        // percent / compact-notation tick labels via the format option,
+        // and QuickChart's JSON parser doesn't evaluate JS callback strings.
+        version: '4',
         width:  width  || RENDER_DEFAULT_WIDTH,
         height: height || RENDER_DEFAULT_HEIGHT,
         format: 'png',
@@ -546,12 +660,10 @@ async function renderToPng(config, { width, height } = {}) {
 // ============================================================================
 
 /**
- * Render the marquee chart set to PNG buffers. Returns an array of
+ * Render the chart set to PNG buffers. Returns an array of
  * { chart_template_id, name, png } objects, skipping any that fail to render.
  * Promise.all parallelizes; the QuickChart public service handles 30+
  * concurrent requests reliably.
- *
- * Time budget at default settings: ~1-2s for 6 charts on the public service.
  */
 export async function renderChartsToImages({ charts, brand }) {
   const tasks = (charts || []).map(async (chart) => {
@@ -565,7 +677,6 @@ export async function renderChartsToImages({ charts, brand }) {
         png,
       };
     } catch (e) {
-      // Per-chart graceful degradation: log + skip
       console.warn(
         `[cm-chart-image-renderer] ${chart.chart_template_id} failed: ${e?.message || e}`
       );
@@ -576,7 +687,7 @@ export async function renderChartsToImages({ charts, brand }) {
   return results.filter(Boolean);
 }
 
-export const NATIVE_CHARTS_FEATURE_FLAG =
-  process.env.CM_EXPORT_NATIVE_CHARTS === 'true';
-
+// Legacy named export kept for any caller referencing the old flag — always
+// returns true now since chart rendering is unconditional in the export path.
+export const NATIVE_CHARTS_FEATURE_FLAG = true;
 export const QUICKCHART_URL_FOR_DEBUG = QUICKCHART_URL;
