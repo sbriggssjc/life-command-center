@@ -525,14 +525,39 @@ async function exportWorkbook(req, res) {
   const syntheticTemplates = templates.filter((t) => syntheticRecipeFor(t));
 
   const domain = VERTICAL_TO_DOMAIN[vertical];
+
+  // Fetch a chart-source view robustly: many older gov views were built
+  // without a `subspecialty` column and some use `period_label` instead of
+  // `period_end`. Strict filters → PostgREST 400 → empty Data_* tabs in
+  // the workbook (this was the "many empty tabs" gov complaint, 2026-05-07).
+  // Fallback ladder: standard → drop subspecialty → drop order → bare.
+  // Stops as soon as PostgREST returns a 2xx.
+  const fetchView = async (view_name, orderCol) => {
+    const exec = (p) => domain ? domainQuery(domain, 'GET', p) : opsQuery('GET', p);
+    const tries = [
+      `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=${orderCol}.asc`,
+      `${view_name}?select=*&order=${orderCol}.asc`,
+      `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}`,
+      `${view_name}?select=*`,
+    ];
+    let lastResult = null;
+    for (const p of tries) {
+      try {
+        const result = await exec(p);
+        if (result.ok) return result;
+        lastResult = result;
+      } catch (e) {
+        lastResult = { ok: false, status: 0, data: { error: String(e) } };
+      }
+    }
+    return lastResult || { ok: false, status: 0, data: [] };
+  };
+
   const chartFetches = realTemplates.map(async (tmpl) => {
     const view_name = tmpl.view_name_template.replace('{vertical}', vertical);
     const orderCol = timeAxisColumnFor(tmpl);
-    const path = `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=${orderCol}.asc`;
     try {
-      const result = domain
-        ? await domainQuery(domain, 'GET', path)
-        : await opsQuery('GET', path);
+      const result = await fetchView(view_name, orderCol);
       return {
         chart_template_id: tmpl.chart_template_id,
         name: tmpl.name,
