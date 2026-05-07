@@ -600,16 +600,20 @@ async function exportWorkbook(req, res) {
     }
   }
 
-  // 3b. For dialysis: also fetch the MONTHLY master view that feeds the
-  //     binary master XLSX template's Charts sheet. Each row = month-end
-  //     anchor with rolling-12-month TTM rollups. The template loader
-  //     injects these rows into sheet5.xml (rows 3-N, cols B-O) preserving
-  //     the 37 chart objects pre-wired to those ranges. With this rendered,
-  //     the export workbook opens with all charts already visible — the
-  //     "one-click" workflow the user asked for.
+  // 3b. For dialysis + gov: also fetch the MONTHLY master view that feeds
+  //     the chart visuals. Each row = month-end anchor with rolling-12-month
+  //     TTM rollups. master_m anchors are clamped to the last completed
+  //     quarter end (cm_last_completed_quarter_end()) so in-progress
+  //     quarters never appear on chart axes — addresses user feedback
+  //     2026-05-07: "all of these charts display data through the 2Q of
+  //     2026… we want to ensure the newest reported period as already
+  //     passed."
   let masterMonthlyRows = null;
-  if (vertical === 'dialysis' && domain) {
-    const monthlyPath = `cm_dialysis_market_quarterly_master_m?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+  if (domain && (vertical === 'dialysis' || vertical === 'gov')) {
+    const monthlyView = vertical === 'dialysis'
+      ? 'cm_dialysis_market_quarterly_master_m'
+      : 'cm_gov_market_quarterly_master_m';
+    const monthlyPath = `${monthlyView}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
     const monthlyResult = await domainQuery(domain, 'GET', monthlyPath);
     masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
   }
@@ -623,8 +627,10 @@ async function exportWorkbook(req, res) {
   //     master_m equivalent (NM-vs-Market, lease-term cohorts, valuation
   //     index, etc.) keep their quarterly data until master_m extends to
   //     cols P-BM in a follow-up.
-  if (vertical === 'dialysis' && Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0) {
-    const monthlyMappers = {
+  if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0
+      && (vertical === 'dialysis' || vertical === 'gov')) {
+    // Mappers shared between dialysis + gov master_m (column shapes match).
+    const sharedMappers = {
       volume_ttm_by_quarter: (rows) => rows.map(r => ({
         period_end: r.period_end,
         volume_dollars: r.ttm_volume,
@@ -645,11 +651,15 @@ async function exportWorkbook(req, res) {
         period_end: r.period_end,
         yoy_change_pct: r.yoy_change_pct,
       })),
+      cap_rate_yoy_change: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        yoy_change_pct: r.yoy_change_pct,
+      })),
       cap_rate_top_bottom_quartile: (rows) => rows.map(r => ({
         period_end: r.period_end,
         top_quartile: r.upper_quartile_cap_ttm,
         bottom_quartile: r.lower_quartile_cap_ttm,
-        median: null,  // master_m doesn't track median yet — Phase 2 view extension
+        median: null,
       })),
       volume_cap_quartile_combo: (rows) => rows.map(r => ({
         period_end: r.period_end,
@@ -658,7 +668,6 @@ async function exportWorkbook(req, res) {
         upper_quartile: r.upper_quartile_cap_ttm,
         lower_quartile: r.lower_quartile_cap_ttm,
       })),
-      // ─── Phase 2 monthly mappers (companion to master_m extension) ───
       nm_vs_market_cap: (rows) => rows.map(r => ({
         period_end: r.period_end,
         nm_cap_rate: r.nm_avg_cap_ttm,
@@ -682,6 +691,21 @@ async function exportWorkbook(req, res) {
         pct_price_change: r.pct_price_change_bid_ask,
         avg_last_ask_cap: r.avg_last_ask_cap,
       })),
+      buyer_pool_breakdown: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        private_volume: r.private_volume,
+        reit_volume: r.reit_volume,
+        cross_border_volume: r.cross_border_volume,
+        institutional_volume: r.institutional_volume,
+        private_count: r.private_count,
+        reit_count: r.reit_count,
+        cross_border_count: r.cross_border_count,
+        institutional_count: r.institutional_count,
+      })),
+    };
+
+    // Vertical-specific mappers — fields that live on only one master_m.
+    const verticalMappers = vertical === 'dialysis' ? {
       seller_sentiment: (rows) => rows.map(r => ({
         period_end: r.period_end,
         pct_price_change_all: r.pct_price_change_all,
@@ -689,7 +713,28 @@ async function exportWorkbook(req, res) {
         last_ask_cap_all: r.last_ask_cap_all,
         last_ask_cap_long_term: r.last_ask_cap_long_term,
       })),
+    } : {
+      // Gov master_m carries cap-by-government-credit (federal/state/
+      // municipal) but no long-term/short-term lease split for sentiment.
+      // For seller_sentiment we use the single bid-ask-derived series
+      // (gov leases are usually long-term so the dialysis split isn't
+      // meaningful here anyway).
+      seller_sentiment: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        pct_price_change_all: r.pct_price_change_bid_ask,
+        pct_price_change_long_term: r.pct_price_change_bid_ask,
+        last_ask_cap_all: r.avg_last_ask_cap,
+        last_ask_cap_long_term: r.avg_last_ask_cap,
+      })),
+      cap_rate_by_credit: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        federal_cap: r.federal_cap,
+        state_cap: r.state_cap,
+        municipal_cap: r.municipal_cap,
+      })),
     };
+
+    const monthlyMappers = { ...sharedMappers, ...verticalMappers };
     let swapped = 0;
     for (const c of charts) {
       const mapper = monthlyMappers[c.chart_template_id];
@@ -699,7 +744,7 @@ async function exportWorkbook(req, res) {
         swapped++;
       }
     }
-    console.log(`[exportWorkbook] swapped ${swapped} chart_template_ids to monthly master_m data`);
+    console.log(`[exportWorkbook] vertical=${vertical}: swapped ${swapped} chart_template_ids to monthly master_m data`);
   }
 
   // 4b. Render the chart set to PNG images via QuickChart so each Data_* tab
