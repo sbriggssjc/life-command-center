@@ -5102,16 +5102,14 @@ window.govResolveGsaLink = async function(pendingId, decision) {
   const ctx = item.source_context || {};
   const linkedPid = ctx.linked_property_id != null ? String(ctx.linked_property_id) : '';
 
-  let confirmMsg, leasePatch, toastSuccess;
+  let confirmMsg, toastSuccess;
   if (decision === 'approved') {
     confirmMsg = 'Confirm this GSA lease and property #' + (linkedPid || '?') +
       ' describe the same building? gsa_leases.match_status will become human_confirmed and the pending row will resolve as approved.';
-    leasePatch = { match_status: 'human_confirmed' };
     toastSuccess = 'Link confirmed — gsa_leases.match_status = human_confirmed';
   } else if (decision === 'rejected') {
     confirmMsg = 'Reject the link to property #' + (linkedPid || '?') +
       '? gsa_leases.property_id will be cleared and match_status set to human_rejected. The matcher will retry on the next pass.';
-    leasePatch = { match_status: 'human_rejected', property_id: null };
     toastSuccess = 'Link cleared — gsa_leases.match_status = human_rejected';
   } else {
     return;
@@ -5127,14 +5125,15 @@ window.govResolveGsaLink = async function(pendingId, decision) {
       return;
     }
     const notes = document.getElementById('pu-notes')?.value || null;
-    // 1) Patch the gsa_leases row
-    await govPatch('gsa_leases', 'gsa_lease_id=eq.' + encodeURIComponent(item.record_id), leasePatch);
-    // 2) Resolve the pending_updates row
-    await govPatch('pending_updates', 'id=eq.' + item.id, {
-      status: decision,
-      resolved_by: 'dashboard:gsa_link_review',
-      resolved_at: new Date().toISOString(),
-      resolution_notes: notes
+    // Single atomic RPC — the dashboard role doesn't have direct UPDATE
+    // rights on gsa_leases (PATCH returns 403); gov_resolve_gsa_link_review
+    // is security definer and updates gsa_leases + pending_updates inside
+    // one transaction.
+    await govRpc('gov_resolve_gsa_link_review', {
+      p_pending_id: item.id,
+      p_decision: decision,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:gsa_link_review'
     });
     govPendingUpdates = govPendingUpdates.filter(r => r.id !== item.id);
     govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, Math.max(0, govPendingUpdates.length - 1));
@@ -5142,7 +5141,13 @@ window.govResolveGsaLink = async function(pendingId, decision) {
     renderGovTab();
   } catch (err) {
     console.error('govResolveGsaLink failed:', err);
-    showToast('Failed to ' + (decision === 'approved' ? 'confirm' : 'reject') + ' link: ' + err.message, 'error');
+    const verb = decision === 'approved' ? 'confirm' : 'reject';
+    const msg = (err && err.message) || String(err);
+    // Surface the most useful hint when the RPC isn't yet deployed.
+    const friendly = /could not find the function|function .* does not exist|404/i.test(msg)
+      ? 'RPC gov_resolve_gsa_link_review not deployed yet — apply sql/20260507_gov_rpc_gsa_link_review_resolver.sql on the gov DB'
+      : msg;
+    showToast('Failed to ' + verb + ' link: ' + friendly, 'error');
     if (btn) { btn.disabled = false; btn.textContent = origText; }
   }
 };
