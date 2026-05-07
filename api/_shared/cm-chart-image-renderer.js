@@ -95,8 +95,8 @@ const AXIS_FORMAT_INTEGER = {
 // Common Chart.js v3 options
 // ============================================================================
 
-function commonOpts({ yAxisFormat, xMaxTicks = 12, legendPosition = 'bottom' } = {}) {
-  return {
+function commonOpts({ yAxisFormat, yAxisRange, xMaxTicks = 12, legendPosition = 'bottom' } = {}) {
+  const opts = {
     responsive: false,
     maintainAspectRatio: false,
     plugins: {
@@ -125,11 +125,24 @@ function commonOpts({ yAxisFormat, xMaxTicks = 12, legendPosition = 'bottom' } =
       },
     },
   };
+  if (yAxisRange) {
+    if (yAxisRange.min != null) opts.scales.y.min = yAxisRange.min;
+    if (yAxisRange.max != null) opts.scales.y.max = yAxisRange.max;
+  }
+  return opts;
 }
 
-// Helper: dual-axis combo options (left = primary, right = secondary)
-function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12 } = {}) {
+// Helper: dual-axis combo options (left = primary, right = secondary).
+// Optional yLeft/yRightRange = { min, max } pins the axis so the data
+// uses the visible vertical range instead of being compressed to a tiny
+// band when auto-scaling fails (e.g. cap rates 6-7% squashed against an
+// auto axis of 0-8% with empty 0-6% space).
+function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12, yLeftRange, yRightRange } = {}) {
   const opts = commonOpts({ yAxisFormat: yLeftFormat, xMaxTicks });
+  if (yLeftRange) {
+    if (yLeftRange.min != null) opts.scales.y.min = yLeftRange.min;
+    if (yLeftRange.max != null) opts.scales.y.max = yLeftRange.max;
+  }
   opts.scales.y1 = {
     position: 'right',
     ticks: {
@@ -139,8 +152,17 @@ function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12 } = {}) {
     },
     grid: { display: false },
   };
+  if (yRightRange) {
+    if (yRightRange.min != null) opts.scales.y1.min = yRightRange.min;
+    if (yRightRange.max != null) opts.scales.y1.max = yRightRange.max;
+  }
   return opts;
 }
+
+// Standard cap-rate axis range. Dialysis cap rates land in 5-9% range
+// historically; pinning the y-axis here keeps the data legible and
+// matches the master XLSX cap-rate charts.
+const CAP_RATE_RANGE = { min: 0.05, max: 0.10 };
 
 // ============================================================================
 // Per-template Chart.js v3 config builders
@@ -151,10 +173,14 @@ function buildChartConfig(chart, brand) {
   const palette = paletteSeries(brand);
 
   // Crop to recent window for legibility. Annual templates (year column)
-  // get the year-window; everything else uses quarter or monthly window
-  // depending on data_shape.
+  // get the year-window; monthly templates (cadence='monthly' OR data_shape
+  // includes 'monthly') get the monthly window; everything else uses the
+  // quarter window. The cadence hint lets the export endpoint swap
+  // quarterly chart rows for master_m monthly data without re-encoding the
+  // chart_template_id.
   const isAnnual  = String(chart.data_shape || '').includes('yearly');
-  const isMonthly = String(chart.data_shape || '').includes('monthly');
+  const isMonthly = chart.cadence === 'monthly'
+                 || String(chart.data_shape || '').includes('monthly');
   const windowSize = isAnnual  ? RECENT_YEARS_DEFAULT
                    : isMonthly ? RECENT_MONTHS_DEFAULT
                    :             RECENT_QUARTERS_DEFAULT;
@@ -197,7 +223,7 @@ function buildChartConfig(chart, brand) {
             borderWidth: 2.5,
           }],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }
 
@@ -215,7 +241,7 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }
 
@@ -286,7 +312,7 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }
 
@@ -310,7 +336,7 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }
 
@@ -485,7 +511,9 @@ function buildChartConfig(chart, brand) {
 
     case 'available_market_size_combo': {
       // p.30 top: count bars (Total + Core 10+) on left axis, avg cap line
-      // (Total + Core 10+) on right axis. Two cohorts.
+      // (Total + Core 10+) on right axis. Two cohorts. Cap-rate axis pinned
+      // to 5-10% so the data variation is visible (auto-scaling was producing
+      // a 0-8% range with the data squashed against the top edge).
       return {
         type: 'bar',
         data: {
@@ -510,6 +538,7 @@ function buildChartConfig(chart, brand) {
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_INTEGER,
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+          yRightRange:  CAP_RATE_RANGE,
         }),
       };
     }
@@ -539,7 +568,7 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }
 
@@ -607,6 +636,7 @@ function buildChartConfig(chart, brand) {
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+          yRightRange:  CAP_RATE_RANGE,
         }),
       };
     }

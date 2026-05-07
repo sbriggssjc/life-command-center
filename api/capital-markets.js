@@ -614,16 +614,73 @@ async function exportWorkbook(req, res) {
     masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
   }
 
-  // 4. Render the chart set to PNG images via QuickChart so each Data_* tab
-  //    has a chart visual at the top alongside the data table below. This
-  //    is the "chart-per-tab" layout the user asked for: ExcelJS-built
-  //    workbook, brand-styled, marketing exports → opens → sees charts.
+  // 4a. For dialysis charts that map to a master_m column, override the
+  //     per-template QUARTERLY rows with the master_m MONTHLY rows. Per the
+  //     user: "the old Excel was a monthly rolling trailing twelve month
+  //     figure over a quarterly axis." Each x-position becomes a month;
+  //     the chart-image-renderer's recent-window crop + Chart.js axis
+  //     auto-skip renders quarterly-looking labels. Templates without a
+  //     master_m equivalent (NM-vs-Market, lease-term cohorts, valuation
+  //     index, etc.) keep their quarterly data until master_m extends to
+  //     cols P-BM in a follow-up.
+  if (vertical === 'dialysis' && Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0) {
+    const monthlyMappers = {
+      volume_ttm_by_quarter: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        volume_dollars: r.ttm_volume,
+      })),
+      cap_rate_ttm_by_quarter: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        ttm_weighted_cap_rate: r.avg_cap_rate_ttm,
+      })),
+      transaction_count_ttm: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        ttm_count: r.transaction_count_ttm,
+      })),
+      avg_deal_size: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        avg_deal_size: r.avg_deal_size,
+      })),
+      yoy_volume_change: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        yoy_change_pct: r.yoy_change_pct,
+      })),
+      cap_rate_top_bottom_quartile: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        top_quartile: r.upper_quartile_cap_ttm,
+        bottom_quartile: r.lower_quartile_cap_ttm,
+        median: null,  // master_m doesn't track median yet — Phase 2 view extension
+      })),
+      volume_cap_quartile_combo: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        volume_dollars: r.ttm_volume,
+        cap_rate: r.avg_cap_rate_ttm,
+        upper_quartile: r.upper_quartile_cap_ttm,
+        lower_quartile: r.lower_quartile_cap_ttm,
+      })),
+    };
+    let swapped = 0;
+    for (const c of charts) {
+      const mapper = monthlyMappers[c.chart_template_id];
+      if (mapper) {
+        c.rows = mapper(masterMonthlyRows);
+        c.cadence = 'monthly';  // hint for the renderer's window-size logic
+        swapped++;
+      }
+    }
+    console.log(`[exportWorkbook] swapped ${swapped} chart_template_ids to monthly master_m data`);
+  }
+
+  // 4b. Render the chart set to PNG images via QuickChart so each Data_* tab
+  //     has a chart visual at the top alongside the data table below. This
+  //     is the "chart-per-tab" layout the user asked for: ExcelJS-built
+  //     workbook, brand-styled, marketing exports → opens → sees charts.
   //
-  //    External service note: QuickChart receives chart configs (cap rates,
-  //    volumes). Default endpoint is the public service; CM_QUICKCHART_URL
-  //    can point at a self-hosted Docker instance for full data sovereignty.
-  //    Per-chart graceful degradation: a render failure on one chart skips
-  //    just that one chart's image (data tab still ships).
+  //     External service note: QuickChart receives chart configs (cap rates,
+  //     volumes). Default endpoint is the public service; CM_QUICKCHART_URL
+  //     can point at a self-hosted Docker instance for full data sovereignty.
+  //     Per-chart graceful degradation: a render failure on one chart skips
+  //     just that one chart's image (data tab still ships).
   let chartImages = null;
   try {
     chartImages = await renderChartsToImages({ charts, brand });
