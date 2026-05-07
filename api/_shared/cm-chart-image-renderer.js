@@ -785,6 +785,299 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Round GD2 (2026-05-22): chart configs for the gov-only templates
+    // that previously rendered as "no chart" because no case matched
+    // their chart_template_id. User listed 13 such tabs in the
+    // 2026-05-07 gov export feedback. Each config is intentionally
+    // simple — line for time-series, horizontal bar for rankings —
+    // to get charts on the page; style-match-master-Excel work iterates
+    // separately.
+    // ──────────────────────────────────────────────────────────────────
+
+    case 'cap_rate_by_credit': {
+      // 3-line: federal / state / municipal cap rates over time.
+      // Source view: cm_gov_cap_by_credit_q OR master_m (if mapper kicks).
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Federal',   data: rows.map(r => r.federal_cap),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'State',     data: rows.map(r => r.state_cap),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Municipal', data: rows.map(r => r.municipal_cap),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_TIGHT_RANGE }),
+      };
+    }
+
+    case 'cpi_vs_renewal_cagr': {
+      // 2-line: CPI YoY change vs GSA renewal CAGR
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'CPI YoY Change', data: rows.map(r => r.cpi_change),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'GSA Renewal CAGR', data: rows.map(r => r.gsa_renewal_cagr),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+      };
+    }
+
+    case 'fed_funds_vs_treasury': {
+      // 3-line: Fed Funds vs 10Y Treasury vs 30Y Mortgage
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Fed Funds Rate', data: rows.map(r => r.fed_funds_rate),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: '10Y Treasury',   data: rows.map(r => r.treasury_10y_yield),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: '30Y Mortgage',   data: rows.map(r => r.mortgage_30y_rate),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2, borderDash: [4, 4] },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+      };
+    }
+
+    case 'lease_renewal_rate': {
+      // Bar chart: renewed / superseding-succeeding / expired / terminated
+      // counts by quarter.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Renewed',           data: rows.map(r => r.renewed_leases),
+              backgroundColor: palette[0], borderRadius: 1 },
+            { label: 'Succeed/Supersede', data: rows.map(r => r.succeeding_superseding_leases),
+              backgroundColor: palette[1], borderRadius: 1 },
+            { label: 'Expired',           data: rows.map(r => r.expired_leases),
+              backgroundColor: palette[3], borderRadius: 1 },
+            { label: 'Terminated',        data: rows.map(r => r.terminated_leases),
+              backgroundColor: palette[4], borderRadius: 1 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+      };
+    }
+
+    case 'lease_termination_rate': {
+      // Termination rate as % of active leases (TTM)
+      const series = rows.map(r => {
+        const total = Number(r.total_leases_active) || 0;
+        const term  = Number(r.terminated_ttm) || 0;
+        return total > 0 ? term / total : null;
+      });
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Termination Rate (TTM)',
+            data: series,
+            borderColor: palette[0], backgroundColor: palette[3],
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+          }],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+      };
+    }
+
+    case 'lease_structures': {
+      // Horizontal bar: pct_of_total by term_bucket.
+      // User feedback (2026-05-07): "the term buckets should be displayed
+      // like 10, 5 (which would indicate an initial term of 10 years with
+      // the first 5 years firm)" — that formatting is owned by the view
+      // (term_bucket label). For now render whatever label the view ships.
+      return {
+        type: 'bar',
+        data: {
+          labels: rows.map(r => r.term_bucket),
+          datasets: [{
+            label: '% of Total',
+            data: rows.map(r => r.pct_of_total),
+            backgroundColor: palette[0], borderRadius: 2,
+          }],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_0DP, xMaxTicks: 12, legendPosition: 'top' }),
+      };
+    }
+
+    case 'leased_inventory_by_state': {
+      // Top 15 states by lease_count
+      const top = (rows || []).slice(0, 15);
+      return {
+        type: 'bar',
+        data: {
+          labels: top.map(r => r.state),
+          datasets: [{
+            label: 'Lease Count',
+            data: top.map(r => r.lease_count),
+            backgroundColor: palette[0], borderRadius: 2,
+          }],
+        },
+        options: { ...commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER, xMaxTicks: 16 }),
+                   indexAxis: 'y' },
+      };
+    }
+
+    case 'net_lease_spread': {
+      // 3 spread lines: market / NM / non-NM (vs 10Y Treasury)
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Market Spread (Cap - 10Y)', data: rows.map(r => r.market_spread),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'NM Spread',                  data: rows.map(r => r.nm_spread),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2, borderDash: [4, 4] },
+            { label: 'Non-NM Spread',              data: rows.map(r => r.non_nm_spread),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP }),
+      };
+    }
+
+    case 'renewal_rent_growth': {
+      // Avg renewal rent PSF + upper/lower quartile band over time
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Avg Renewal Rent PSF',  data: rows.map(r => r.avg_renewal_rent_psf),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'TTM Avg',               data: rows.map(r => r.ttm_avg_renewal_rent_psf),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Upper Quartile',        data: rows.map(r => r.upper_quartile_rpsf),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
+            { label: 'Lower Quartile',        data: rows.map(r => r.lower_quartile_rpsf),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY }),
+      };
+    }
+
+    case 'rent_by_year_built': {
+      // Bar: median rent PSF by build-year decade with whisker dashes
+      return {
+        type: 'bar',
+        data: {
+          labels: rows.map(r => String(r.year)),
+          datasets: [
+            { type: 'bar',  label: 'Median Rent PSF',
+              data: rows.map(r => r.median_rpsf),
+              backgroundColor: palette[0], borderRadius: 2, order: 2 },
+            { type: 'line', label: 'Upper Quartile',
+              data: rows.map(r => r.upper_quartile_rpsf),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0, pointRadius: 0, borderWidth: 1,
+              borderDash: [4, 4], order: 0 },
+            { type: 'line', label: 'Lower Quartile',
+              data: rows.map(r => r.lower_quartile_rpsf),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0, pointRadius: 0, borderWidth: 1,
+              borderDash: [4, 4], order: 0 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY }),
+      };
+    }
+
+    case 'rent_heat_map': {
+      // Top 15 states by avg rent PSF (horizontal bar; labels=state)
+      const top = (rows || [])
+        .filter(r => r.avg_rpsf != null)
+        .sort((a, b) => Number(b.avg_rpsf) - Number(a.avg_rpsf))
+        .slice(0, 15);
+      return {
+        type: 'bar',
+        data: {
+          labels: top.map(r => r.state),
+          datasets: [{
+            label: 'Avg Rent PSF',
+            data: top.map(r => r.avg_rpsf),
+            backgroundColor: palette[0], borderRadius: 2,
+          }],
+        },
+        options: { ...commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY, xMaxTicks: 16 }),
+                   indexAxis: 'y' },
+      };
+    }
+
+    case 'sources_of_capital': {
+      // Top 15 buyer states by 15y volume
+      const top = (rows || []).slice(0, 15);
+      return {
+        type: 'bar',
+        data: {
+          labels: top.map(r => r.buyer_state || 'Unknown'),
+          datasets: [{
+            label: 'Volume (15y)',
+            data: top.map(r => r.total_volume_15y),
+            backgroundColor: palette[0], borderRadius: 2,
+          }],
+        },
+        options: { ...commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT, xMaxTicks: 16 }),
+                   indexAxis: 'y' },
+      };
+    }
+
+    case 'case_for_renewal': {
+      // Bar: commencement_count by year + line: avg_rent_per_sf
+      return {
+        type: 'bar',
+        data: {
+          labels: rows.map(r => String(r.year)),
+          datasets: [
+            { type: 'bar',  label: 'New Lease Commencements',
+              data: rows.map(r => r.commencement_count),
+              backgroundColor: palette[3], borderRadius: 2,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Rent PSF',
+              data: rows.map(r => r.avg_rent_per_sf),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_INTEGER,
+          yRightFormat: AXIS_FORMAT_CURRENCY,
+        }),
+      };
+    }
+
     default:
       return null;
   }
