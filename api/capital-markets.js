@@ -44,6 +44,7 @@ import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_sh
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
 import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
 import { renderChartsToImages, NATIVE_CHARTS_FEATURE_FLAG } from './_shared/cm-chart-image-renderer.js';
+import { buildDialysisMasterWorkbook } from './_shared/cm-template-loader.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic chart_templates — composed from other templates' rows rather than
@@ -599,6 +600,20 @@ async function exportWorkbook(req, res) {
     }
   }
 
+  // 3b. For dialysis: also fetch the MONTHLY master view that feeds the
+  //     binary master XLSX template's Charts sheet. Each row = month-end
+  //     anchor with rolling-12-month TTM rollups. The template loader
+  //     injects these rows into sheet5.xml (rows 3-N, cols B-O) preserving
+  //     the 37 chart objects pre-wired to those ranges. With this rendered,
+  //     the export workbook opens with all charts already visible — the
+  //     "one-click" workflow the user asked for.
+  let masterMonthlyRows = null;
+  if (vertical === 'dialysis' && domain) {
+    const monthlyPath = `cm_dialysis_market_quarterly_master_m?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+    const monthlyResult = await domainQuery(domain, 'GET', monthlyPath);
+    masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
+  }
+
   // 4. Optional: render the marquee chart set to PNG via QuickChart so the
   //    workbook ships with a "Charts" tab that has visible chart images.
   //    Behind a feature flag (CM_EXPORT_NATIVE_CHARTS=true) since the
@@ -615,7 +630,34 @@ async function exportWorkbook(req, res) {
     }
   }
 
-  // 5. Build the workbook
+  const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+  // 5a. Dialysis: load the binary master template and inject the monthly TTM
+  //     data into its Charts sheet. Returns a workbook where the 37 chart
+  //     objects render live data on open — no paste step. Caller can opt
+  //     out via ?layout=data_tabs to get the legacy ExcelJS workbook (Cover,
+  //     Index, Data_*, MasterPasteReady, Brand) for ad-hoc data sanity-checks.
+  const layout = req.query.layout || 'master_template';
+  if (vertical === 'dialysis' && layout !== 'data_tabs'
+      && Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0) {
+    try {
+      const buf = await buildDialysisMasterWorkbook({
+        masterRows: masterMonthlyRows,
+        subspecialty,
+        asOf: as_of,
+      });
+      return res.status(200).send(buf);
+    } catch (e) {
+      // Fall through to the ExcelJS workbook if the template loader fails —
+      // marketing still gets data tabs + MasterPasteReady, just without the
+      // pre-wired chart objects.
+      console.warn(`[exportWorkbook] dialysis master-template load failed, falling back: ${e?.message || e}`);
+    }
+  }
+
+  // 5b. Default: ExcelJS-rendered workbook with data tabs + MasterPasteReady.
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
@@ -625,12 +667,6 @@ async function exportWorkbook(req, res) {
     masterRows,
     chartImages,
   });
-
-  const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
-
-  // 4. Stream as download
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
   const buffer = await wb.xlsx.writeBuffer();
   return res.status(200).send(Buffer.from(buffer));
