@@ -172,9 +172,18 @@ const CAP_RATE_RANGE = { min: 0.05, max: 0.10 };
 // last-ask cap, Vol-Cap quartile band).
 const CAP_RATE_TIGHT_RANGE = { min: 0.05, max: 0.08 };
 
-// % of Ask Price axis range. Real-world data lives 85-105%; auto-scaled
-// 0-120% wastes most of the vertical range and hides movement.
-const PCT_OF_ASK_RANGE = { min: 0.80, max: 1.10 };
+// Even tighter range for Bid-Ask Last Ask Cap and Avail Mkt Size avg cap —
+// real data lives 5.8-7.5%. User feedback (2026-05-07): "the line is
+// behind and below the other data… want a tighter range… so we can see
+// the up and down movement".
+const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.080 };
+
+// % of Ask Price axis range. User feedback (2026-05-07) on Data_DOM_Ask:
+// "the Y-axis for the % of Ask Price makes it look like one straight line
+// from left to right". Tightened from 0.80–1.10 to 0.90–1.05 (real
+// closed-sale data is 0.93–1.02; this gives breathing room without
+// flattening the line).
+const PCT_OF_ASK_RANGE = { min: 0.90, max: 1.05 };
 
 // ============================================================================
 // Per-template Chart.js v3 config builders
@@ -363,16 +372,20 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { type: 'bar',  label: 'Avg Days on Market',
               data: rows.map(r => r.avg_dom),
-              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+              backgroundColor: palette[3], borderRadius: 2,
+              yAxisID: 'y', order: 2 },
             { type: 'line', label: '% of Ask Price',
               data: rows.map(r => r.pct_of_ask),
               borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 1, borderWidth: 2.5, yAxisID: 'y1' },
+              tension: 0.3, pointRadius: 1, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
           ],
         },
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_INTEGER,
           yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+          // PCT_OF_ASK_RANGE tightened to 0.90-1.05 (was 0.80-1.10)
+          // so the % of Ask line shows real movement.
           yRightRange:  PCT_OF_ASK_RANGE,
         }),
       };
@@ -390,19 +403,29 @@ function buildChartConfig(chart, brand) {
           data: {
             labels,
             datasets: [
+              // Chart.js draws lower `order` LATER (on top). Bar order=2
+              // pushes the bars BEHIND the line so the Last Ask Cap line
+              // is visible across the chart even when the bar ranges
+              // overlap with it. User feedback (2026-05-07): "want the
+              // line to display above the bar chart elements for as
+              // much of the data as possible".
               { type: 'bar',  label: 'Bid-Ask Spread (bps)',
                 data: rows.map(r => r.avg_bid_ask_spread),
-                backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+                backgroundColor: palette[3], borderRadius: 1,
+                yAxisID: 'y', order: 2 },
               { type: 'line', label: 'Last Ask Cap',
                 data: rows.map(r => r.avg_last_ask_cap),
                 borderColor: palette[0], backgroundColor: 'transparent',
-                tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+                tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+                yAxisID: 'y1', order: 0 },
             ],
           },
           options: comboOpts({
             yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
             yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            yRightRange:  CAP_RATE_RANGE,
+            // 5.5-8% — last-ask cap data lives 5.8-7.5%. Tighter than
+            // CAP_RATE_TIGHT_RANGE so the line shows movement.
+            yRightRange:  CAP_RATE_BID_ASK_RANGE,
           }),
         };
       }
@@ -432,27 +455,34 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
+            // order=2 on bars pushes them behind the cap lines.
             { type: 'bar',  label: 'Price Change %',
               data: rows.map(r => r.pct_price_change_all),
-              backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+              backgroundColor: palette[3], borderRadius: 1,
+              yAxisID: 'y', order: 2 },
             { type: 'bar',  label: '8+ Yr Term Price Change %',
               data: rows.map(r => r.pct_price_change_long_term),
-              backgroundColor: palette[1], borderRadius: 1, yAxisID: 'y' },
+              backgroundColor: palette[1], borderRadius: 1,
+              yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Last Asking Cap (all)',
               data: rows.map(r => r.last_ask_cap_all),
               borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              yAxisID: 'y1', order: 0 },
             { type: 'line', label: 'Last Asking Cap (8+ yr)',
               data: rows.map(r => r.last_ask_cap_long_term),
               borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              yAxisID: 'y1', order: 0 },
           ],
         },
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_PERCENT_1DP,
           yLeftRange:   { min: 0, max: 0.30 },  // price-change % up to 30%
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          yRightRange:  CAP_RATE_TIGHT_RANGE,    // 5-8% — cap data lives there
+          // Tighter than CAP_RATE_TIGHT_RANGE per user feedback —
+          // last-ask cap on sentiment lives 5.8-7.5%.
+          yRightRange:  CAP_RATE_BID_ASK_RANGE,
         }),
       };
     }
@@ -473,6 +503,47 @@ function buildChartConfig(chart, brand) {
           }],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+      };
+    }
+
+    case 'rent_psf_box_quarterly':
+    case 'ppsf_box_quarterly': {
+      // User feedback (2026-05-07): "There is no chart in Data_Rent_PSF_Box.
+      // Its also displayed in weird timeline increments." Add an IQR-as-bar
+      // chart: floating bar from lower_quartile→upper_quartile, with the
+      // median rendered as a line on top. min/max are printed as light
+      // dashed lines for whiskers.
+      // Source view: cm_dialysis_rent_box_q (or _ppsf_box_q for gov-PSF):
+      //   period_end, n_leases, rent_min, rent_lower_quartile,
+      //   rent_median, rent_upper_quartile, rent_max
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            // Floating bar: [lower_quartile, upper_quartile] → the box body
+            { type: 'bar',  label: 'IQR (25th-75th %)',
+              data: rows.map(r => [r.rent_lower_quartile ?? r.lower_quartile,
+                                    r.rent_upper_quartile ?? r.upper_quartile]),
+              backgroundColor: palette[3], borderRadius: 1,
+              borderWidth: 0, order: 2 },
+            { type: 'line', label: 'Median',
+              data: rows.map(r => r.rent_median ?? r.median),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0, pointRadius: 0, borderWidth: 2.5, order: 0 },
+            { type: 'line', label: 'Min',
+              data: rows.map(r => r.rent_min ?? r.min),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0, pointRadius: 0, borderWidth: 1,
+              borderDash: [4, 4], order: 1 },
+            { type: 'line', label: 'Max',
+              data: rows.map(r => r.rent_max ?? r.max),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0, pointRadius: 0, borderWidth: 1,
+              borderDash: [4, 4], order: 1 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY }),
       };
     }
 
@@ -562,32 +633,53 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
+            // order=2 pushes bars behind the cap-rate lines. User
+            // feedback (2026-05-07): "appears to have the line data
+            // hidden behind the bar graph data".
             { type: 'bar',  label: 'Total Market — # Available',
               data: rows.map(r => r.count_total),
-              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+              backgroundColor: palette[3], borderRadius: 2,
+              yAxisID: 'y', order: 2 },
             { type: 'bar',  label: '10+ Year Term — # Available',
               data: rows.map(r => r.count_core_10plus),
-              backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+              backgroundColor: palette[1], borderRadius: 2,
+              yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Total Market — Avg Asking Cap',
               data: rows.map(r => r.avg_cap_total),
               borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
             { type: 'line', label: '10+ Year Term — Avg Asking Cap',
               data: rows.map(r => r.avg_cap_core_10plus),
               borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
           ],
         },
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_INTEGER,
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          yRightRange:  CAP_RATE_RANGE,
+          // Tighter than CAP_RATE_RANGE so the cap line shows movement.
+          // Asking caps land 5.5-8% — the BID_ASK range fits.
+          yRightRange:  CAP_RATE_BID_ASK_RANGE,
         }),
       };
     }
 
     case 'asking_cap_quartiles_active': {
       // p.31 top: 4-line — upper/lower quartile for both Total and Core 10+
+      // Color scheme per user feedback (2026-05-07):
+      //   "darker blues are the lower quartiles and lighter blues are the
+      //    upper quartiles but we also need to signify the core vs total
+      //    market with a color similarity"
+      // Implementation:
+      //   - All 4 lines are blue-family (palette-independent literal hex
+      //     so it survives palette overrides on the brand-tokens table).
+      //   - Light blue = upper quartile, dark blue = lower quartile.
+      //   - Total Market = solid; 10+ Year Term (core) = dashed (same hue
+      //     so eye groups them as "the same market subset, different cut").
+      const COLOR_LIGHT_BLUE = '#9DC3E6';  // upper quartile
+      const COLOR_DARK_BLUE  = '#1F4E79';  // lower quartile
       return {
         type: 'line',
         data: {
@@ -595,20 +687,22 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { label: 'Total Market — Upper Quartile',
               data: rows.map(r => r.upper_q_total),
-              borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              borderColor: COLOR_LIGHT_BLUE, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'Total Market — Lower Quartile',
               data: rows.map(r => r.lower_q_total),
-              borderColor: palette[3], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              borderColor: COLOR_DARK_BLUE,  backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: '10+ Year Term — Upper Quartile',
               data: rows.map(r => r.upper_q_core),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+              borderColor: COLOR_LIGHT_BLUE, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              borderDash: [5, 4] },
             { label: '10+ Year Term — Lower Quartile',
               data: rows.map(r => r.lower_q_core),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+              borderColor: COLOR_DARK_BLUE,  backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              borderDash: [5, 4] },
           ],
         },
         // 5-8% range — quartile data lives 5.3-7.7%; tighter axis shows movement
@@ -651,6 +745,10 @@ function buildChartConfig(chart, brand) {
       // Front-cover combo: TTM volume area + cap rate line + quartile band.
       // Synthetic chart that the API composes from volume_ttm_by_quarter
       // + cap_rate_ttm_by_quarter + cap_rate_top_bottom_quartile.
+      // User feedback (2026-05-07): "the line charts displayed behind and
+      // hidden by the area chart for volume". Fix: order=2 on the volume
+      // area pushes it BEHIND the cap-rate lines (Chart.js draws lower
+      // `order` LATER, on top).
       return {
         type: 'bar',
         data: {
@@ -660,21 +758,22 @@ function buildChartConfig(chart, brand) {
               data: rows.map(r => r.volume_dollars),
               borderColor: palette[0], backgroundColor: palette[3],
               fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2.5,
-              yAxisID: 'y' },
+              yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Avg Cap Rate (TTM)',
               data: rows.map(r => r.cap_rate),
               borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
             { type: 'line', label: 'Upper Quartile Cap',
               data: rows.map(r => r.upper_quartile),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1.5,
-              borderDash: [3, 3], yAxisID: 'y1' },
+              borderDash: [3, 3], yAxisID: 'y1', order: 0 },
             { type: 'line', label: 'Lower Quartile Cap',
               data: rows.map(r => r.lower_quartile),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1.5,
-              borderDash: [3, 3], yAxisID: 'y1' },
+              borderDash: [3, 3], yAxisID: 'y1', order: 0 },
           ],
         },
         options: comboOpts({
