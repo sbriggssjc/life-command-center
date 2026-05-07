@@ -358,3 +358,271 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
   .pu-glr-val-gsa::before { content: 'GSA: '; color: var(--text3, #7a7f88); font-size: 10px; }
   .pu-glr-val-linked::before { content: 'Linked: '; color: var(--text3, #7a7f88); font-size: 10px; }
 }
+
+/* ============================================================
+   Ownership Change Research — research-first redesign
+   (Round 76el, 2026-05-07)
+   Priority-sorted queue, side-by-side owner comparison, manual
+   entry collapsed by default since most ingestion runs through
+   the LCC sidebar against CoStar / county pages in another tab.
+   ============================================================ */
+
+.own-research-card .task-badge.comp {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.4);
+}
+.own-priority-sub {
+  font-size: 11px;
+  color: var(--text3, #7a7f88);
+  margin: 2px 0 10px;
+  letter-spacing: 0.02em;
+}
+
+.own-comp-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: rgba(34, 197, 94, 0.07);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.own-comp-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.own-comp-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #0a0c10;
+  font-size: 11px;
+  font-weight: 700;
+}
+.own-comp-banner-label {
+  color: #22c55e;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.own-comp-banner-meta {
+  color: var(--text2, #a0a4ad);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+}
+.own-comp-banner-sub {
+  margin-top: 6px;
+  color: var(--text3, #7a7f88);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.own-facts-row {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text2, #a0a4ad);
+}
+
+.own-sale-block .own-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 4px 0 0;
+}
+.own-sale-block .own-kv dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text3, #7a7f88);
+  align-self: center;
+}
+.own-sale-block .own-kv dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text, #e6e8ec);
+}
+.own-blank {
+  color: var(--text3, #7a7f88);
+  font-style: italic;
+}
+.own-missing {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  font-size: 11px;
+  color: #ef4444;
+}
+
+.own-owners-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0;
+}
+.own-owners-col-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text2, #a0a4ad);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #2a2d34);
+}
+.own-owners-col-sub {
+  font-weight: 400;
+  text-transform: none;
+  color: var(--text3, #7a7f88);
+  margin-left: 4px;
+}
+.own-owners-cell {
+  background: var(--s2, #14161c);
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text, #e6e8ec);
+  min-height: 60px;
+}
+.own-owners-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.own-owners-flow.own-owners-empty {
+  color: var(--text3, #7a7f88);
+  font-style: italic;
+  font-size: 12px;
+}
+.own-owners-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: 3px;
+  background: var(--s3, #1a1d24);
+  color: var(--text3, #7a7f88);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.own-owners-tag-new {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+.own-owners-prior {
+  color: var(--text2, #a0a4ad);
+}
+.own-owners-arrow {
+  color: var(--text3, #7a7f88);
+  text-align: center;
+  margin: -2px 0;
+}
+.own-owners-detail {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text2, #a0a4ad);
+  line-height: 1.5;
+}
+.own-owners-mailing {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  background: var(--s3, #1a1d24);
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+
+.own-sidebar-tip {
+  margin: 12px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #2a2d34);
+  border-radius: 6px;
+  background: rgba(107, 124, 255, 0.04);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text2, #a0a4ad);
+  line-height: 1.5;
+}
+.own-sidebar-tip-icon {
+  font-size: 14px;
+}
+
+.own-manual-details {
+  margin: 12px 0;
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: 6px;
+  background: var(--s2, #14161c);
+}
+.own-manual-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text2, #a0a4ad);
+  user-select: none;
+}
+.own-manual-summary::-webkit-details-marker { display: none; }
+.own-manual-summary::before {
+  content: '▸';
+  display: inline-block;
+  width: 10px;
+  color: var(--text3, #7a7f88);
+  transition: transform 120ms ease;
+}
+.own-manual-details[open] > .own-manual-summary::before {
+  transform: rotate(90deg);
+}
+.own-manual-summary:hover { color: var(--text, #e6e8ec); }
+.own-manual-summary-icon {
+  font-size: 13px;
+}
+.own-manual-summary-label {
+  font-weight: 600;
+  color: var(--text, #e6e8ec);
+}
+.own-manual-summary-hint {
+  color: var(--text3, #7a7f88);
+  font-weight: 400;
+  font-size: 11px;
+}
+.own-manual-details > .form-step,
+.own-manual-details > .completeness-bar,
+.own-manual-details > .step-nav {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.own-manual-action-row {
+  padding: 0 12px 12px;
+}
+
+.own-primary-actions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #2a2d34);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.own-primary-actions .btn-action.danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+.own-primary-actions .btn-action.danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+}
+
+@media (max-width: 700px) {
+  .own-owners-grid {
+    grid-template-columns: 1fr;
+  }
+}
