@@ -365,6 +365,32 @@ function buildChartConfig(chart, brand) {
 
     case 'bid_ask_spread':
     case 'bid_ask_spread_monthly': {
+      // Deliverable p.34: Bid-Ask Spread bars (left axis) + Last Ask line
+      // (right axis, cap-rate range). When avg_last_ask_cap is missing
+      // (older quarterly view) we fall back to spread-only.
+      const hasLastAsk = rows.some(r => r.avg_last_ask_cap != null);
+      if (hasLastAsk) {
+        return {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              { type: 'bar',  label: 'Bid-Ask Spread (bps)',
+                data: rows.map(r => r.avg_bid_ask_spread),
+                backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+              { type: 'line', label: 'Last Ask Cap',
+                data: rows.map(r => r.avg_last_ask_cap),
+                borderColor: palette[0], backgroundColor: 'transparent',
+                tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+            ],
+          },
+          options: comboOpts({
+            yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
+            yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+            yRightRange:  CAP_RATE_RANGE,
+          }),
+        };
+      }
       return {
         type: 'line',
         data: {

@@ -658,6 +658,37 @@ async function exportWorkbook(req, res) {
         upper_quartile: r.upper_quartile_cap_ttm,
         lower_quartile: r.lower_quartile_cap_ttm,
       })),
+      // ─── Phase 2 monthly mappers (companion to master_m extension) ───
+      nm_vs_market_cap: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        nm_cap_rate: r.nm_avg_cap_ttm,
+        market_cap_rate: r.non_nm_avg_cap_ttm,
+      })),
+      cap_rate_by_lease_term: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        cap_10plus: r.cap_10plus_year,
+        cap_6to10: r.cap_6to10_year,
+        cap_less5: r.cap_less5_year,
+        cap_outside_firm: r.cap_outside_firm,
+      })),
+      dom_and_pct_of_ask: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        avg_dom: r.avg_dom,
+        pct_of_ask: r.pct_of_ask,
+      })),
+      bid_ask_spread: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        avg_bid_ask_spread: r.avg_bid_ask_spread,
+        pct_price_change: r.pct_price_change_bid_ask,
+        avg_last_ask_cap: r.avg_last_ask_cap,
+      })),
+      seller_sentiment: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        pct_price_change_all: r.pct_price_change_all,
+        pct_price_change_long_term: r.pct_price_change_long_term,
+        last_ask_cap_all: r.last_ask_cap_all,
+        last_ask_cap_long_term: r.last_ask_cap_long_term,
+      })),
     };
     let swapped = 0;
     for (const c of charts) {
