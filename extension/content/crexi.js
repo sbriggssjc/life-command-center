@@ -856,12 +856,29 @@
     const text = desc.length > 8000 ? desc.slice(0, 8000) : desc;
 
     // ── List-shaped patterns ────────────────────────────────────────
+    // Note: capture groups use [\s\S]{X,Y}? (lazy any-char including
+    // newlines) rather than [^.] so the captured tenant list can
+    // include intra-name periods like "DaVita Inc." or "U.S. General
+    // Services Administration". The lookahead anchors on sentence
+    // end (period+whitespace, period+EOL, or EOL).
     let listRaw = null;
-    let m = text.match(/\btenants?\s+include[:\s]+([^.]{10,400}?)(?=\.\s|\.$|$)/i);
+    let m = text.match(/\btenants?\s+include[:\s]+([\s\S]{10,400}?)(?=\.\s|\.$|$)/i);
     if (m) listRaw = m[1];
     if (!listRaw) {
-      m = text.match(/\bleased\s+to\s+(?:[a-z]+\s+){0,3}?(?:agencies|tenants)\s*:\s*([^.]{10,400}?)(?=\.\s|\.$|$)/i);
+      m = text.match(/\bleased\s+to\s+(?:[a-z]+\s+){0,3}?(?:agencies|tenants)\s*:\s*([\s\S]{10,400}?)(?=\.\s|\.$|$)/i);
       if (m) listRaw = m[1];
+    }
+    // Round 76ej.x (2026-05-05): "anchored by X, descriptor; Y,
+    // descriptor; and Z, descriptor" — semicolon-separated list under
+    // an "anchored by" or "tenant mix is anchored by" anchor. Saw on
+    // Centralia Medical Offices (1815 Cooks Hill Rd) which has DaVita,
+    // Assured Home Health, AND Social Security Administration. Match
+    // only when the captured run contains semicolons — single-tenant
+    // "anchored by" continues to be handled by the SINGLE_PATTERNS
+    // path below.
+    if (!listRaw) {
+      m = text.match(/\b(?:tenant\s+mix\s+is\s+)?anchored\s+by\s+([\s\S]{20,800}?)(?=\.\s|\.$|$)/i);
+      if (m && m[1].includes(';')) listRaw = m[1];
     }
     if (listRaw) return parseTenantList(listRaw);
 
@@ -896,25 +913,49 @@
   }
 
   function parseTenantList(rawList) {
-    let initialParts = rawList.trim().split(',')
-      .map((s) => s.trim().replace(/^and\s+/i, '').trim());
-    if (initialParts.length >= 2) {
-      const lastIdx = initialParts.length - 1;
-      const split = initialParts[lastIdx].match(/^(.+?)\s+and\s+(.+)$/i);
-      if (split) {
-        const head = split[1].trim();
-        const tail = split[2].trim();
-        if (head && tail) {
-          initialParts[lastIdx] = head;
-          initialParts.push(tail);
+    const text = rawList.trim();
+    let initialParts;
+
+    // Round 76ej.x: when the list uses semicolons (more structured
+    // separator commonly used for "anchored by X, descriptor; Y,
+    // descriptor; and Z, descriptor"), split on those first and take
+    // the text before the first comma in each segment as the tenant
+    // name. This preserves names with internal commas / "and" while
+    // still capturing all N tenants.
+    if (text.includes(';')) {
+      initialParts = text.split(';').map((seg) => {
+        const s = seg.trim();
+        const commaIdx = s.indexOf(',');
+        const namePart = commaIdx === -1 ? s : s.slice(0, commaIdx);
+        return namePart
+          .replace(/^(?:and|the|a|an)\s+/i, '')
+          .trim();
+      });
+    } else {
+      initialParts = text.split(',')
+        .map((s) => s.trim().replace(/^and\s+/i, '').trim());
+      if (initialParts.length >= 2) {
+        const lastIdx = initialParts.length - 1;
+        const split = initialParts[lastIdx].match(/^(.+?)\s+and\s+(.+)$/i);
+        if (split) {
+          const head = split[1].trim();
+          const tail = split[2].trim();
+          if (head && tail) {
+            initialParts[lastIdx] = head;
+            initialParts.push(tail);
+          }
         }
       }
     }
+
     // Strip "(SHORTHAND)" parenthetical at the end of each item
     // ("United States Forest Service (GSA)" → "United States Forest Service").
     initialParts = initialParts.map((s) => s.replace(/\s*\([^)]+\)\s*$/, '').trim());
     // Strip leading articles.
     initialParts = initialParts.map((s) => s.replace(/^(?:the|a|an)\s+/i, '').trim());
+    // Strip a trailing period (after "Inc." stays as "Inc"; after a name
+    // like "DaVita Inc." we want "DaVita Inc").
+    initialParts = initialParts.map((s) => s.replace(/\.+\s*$/, '').trim());
 
     const SKIP_FRAGMENT = /^(other|various|misc(?:ellaneous)?|local|national|regional|tenants?|including|with|several|multiple|some|established\s+agencies?)$/i;
     const parts = initialParts
