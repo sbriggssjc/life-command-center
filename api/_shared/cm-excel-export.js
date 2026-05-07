@@ -34,6 +34,9 @@ const FMT = {
   percent_one_decimal:  '0.0%',
   integer_count:        '#,##0',
   date_short:           'mm/dd/yyyy',
+  // User feedback (2026-05-07) on Avail_by_Tenant: "Let's display Avg
+  // Term Remaining in 'x.x Years'."
+  years_one_decimal:    '0.0" Years"',
 };
 
 // Default brand tokens (used as fallback if cm_brand_tokens query failed)
@@ -342,7 +345,7 @@ const CHART_COLUMNS = {
     { key: 'count_active',        header: 'Count Available',     format: 'integer_count',        width: 14 },
     { key: 'volume_available',    header: 'Volume Available',    format: 'currency_dollars',     width: 18 },
     { key: 'avg_deal_size',       header: 'Avg Deal Size',       format: 'currency_dollars',     width: 16 },
-    { key: 'avg_firm_term_years', header: 'Avg Term Remaining',  format: 'integer_count',        width: 18 },
+    { key: 'avg_firm_term_years', header: 'Avg Term Remaining',  format: 'years_one_decimal',    width: 18 },
     { key: 'avg_asking_cap',      header: 'Avg Asking Cap',      format: 'percent_basis_points', width: 16 },
     { key: 'avg_dom',             header: 'Avg DOM',             format: 'integer_count',        width: 12 },
   ],
