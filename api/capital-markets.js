@@ -600,30 +600,37 @@ async function exportWorkbook(req, res) {
     }
   }
 
-  // 3b. For dialysis: also fetch the MONTHLY master view that feeds the
-  //     binary master XLSX template's Charts sheet. Each row = month-end
-  //     anchor with rolling-12-month TTM rollups. The template loader
-  //     injects these rows into sheet5.xml (rows 3-N, cols B-O) preserving
-  //     the 37 chart objects pre-wired to those ranges. With this rendered,
-  //     the export workbook opens with all charts already visible — the
-  //     "one-click" workflow the user asked for.
+  // 3b. For gov + dialysis: fetch the MONTHLY master view that drives the
+  //     "monthly TTM over quarterly-looking axis" chart layout. Each row =
+  //     month-end anchor with rolling-12-month TTM rollups. dialysis uses
+  //     this view both for the binary template loader (?layout=master_template)
+  //     AND for the chart-image-renderer's monthly mapping below. gov only
+  //     uses it for the chart-image-renderer (no binary template wired).
   let masterMonthlyRows = null;
-  if (vertical === 'dialysis' && domain) {
-    const monthlyPath = `cm_dialysis_market_quarterly_master_m?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
-    const monthlyResult = await domainQuery(domain, 'GET', monthlyPath);
-    masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
+  if (domain) {
+    const monthlyView = vertical === 'dialysis' ? 'cm_dialysis_market_quarterly_master_m'
+                      : vertical === 'gov'      ? 'cm_gov_market_quarterly_master_m'
+                      : null;
+    if (monthlyView) {
+      const monthlyPath = `${monthlyView}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+      const monthlyResult = await domainQuery(domain, 'GET', monthlyPath);
+      masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
+    }
   }
 
-  // 4a. For dialysis charts that map to a master_m column, override the
-  //     per-template QUARTERLY rows with the master_m MONTHLY rows. Per the
-  //     user: "the old Excel was a monthly rolling trailing twelve month
-  //     figure over a quarterly axis." Each x-position becomes a month;
-  //     the chart-image-renderer's recent-window crop + Chart.js axis
-  //     auto-skip renders quarterly-looking labels. Templates without a
-  //     master_m equivalent (NM-vs-Market, lease-term cohorts, valuation
-  //     index, etc.) keep their quarterly data until master_m extends to
-  //     cols P-BM in a follow-up.
-  if (vertical === 'dialysis' && Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0) {
+  // 4a. For charts that map to a master_m column, override the per-template
+  //     QUARTERLY rows with the master_m MONTHLY rows. Per the user: "the
+  //     old Excel was a monthly rolling trailing twelve month figure over a
+  //     quarterly axis." Each x-position becomes a month; the chart-image-
+  //     renderer's recent-window crop + Chart.js axis auto-skip renders
+  //     quarterly-looking labels. Templates without a master_m equivalent
+  //     (valuation_index, cost_of_capital, returns) keep their quarterly
+  //     data until master_m extends in a Phase 3 follow-up.
+  //
+  //     Most mappers are vertical-agnostic (column names match by design
+  //     between dialysis and gov master_m views). gov-specific mappers
+  //     (cap_rate_by_credit) are gated on vertical === 'gov'.
+  if ((vertical === 'dialysis' || vertical === 'gov') && Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0) {
     const monthlyMappers = {
       volume_ttm_by_quarter: (rows) => rows.map(r => ({
         period_end: r.period_end,
@@ -657,6 +664,46 @@ async function exportWorkbook(req, res) {
         cap_rate: r.avg_cap_rate_ttm,
         upper_quartile: r.upper_quartile_cap_ttm,
         lower_quartile: r.lower_quartile_cap_ttm,
+      })),
+      // ─── Phase 2 monthly mappers (cross-vertical: dialysis + gov) ───
+      nm_vs_market_cap: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        nm_cap_rate: r.nm_avg_cap_ttm,
+        market_cap_rate: r.non_nm_avg_cap_ttm,
+      })),
+      cap_rate_by_lease_term: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        cap_10plus: r.cap_10plus_year,
+        cap_6to10: r.cap_6to10_year,
+        cap_less5: r.cap_less5_year,
+        cap_outside_firm: r.cap_outside_firm,
+      })),
+      dom_and_pct_of_ask: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        avg_dom: r.avg_dom,
+        pct_of_ask: r.pct_of_ask,
+      })),
+      bid_ask_spread: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        avg_bid_ask_spread: r.avg_bid_ask_spread,
+        pct_price_change: r.pct_price_change_bid_ask,
+        avg_last_ask_cap: r.avg_last_ask_cap,
+      })),
+      seller_sentiment: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        pct_price_change_all: r.pct_price_change_all,
+        pct_price_change_long_term: r.pct_price_change_long_term,
+        last_ask_cap_all: r.last_ask_cap_all,
+        last_ask_cap_long_term: r.last_ask_cap_long_term,
+      })),
+      // ─── Gov-specific monthly mappers ───
+      // gov master_m has federal/state/municipal cap rate columns
+      // (gov-leased property credit-type cohorts).
+      cap_rate_by_credit: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        federal_cap: r.federal_cap,
+        state_cap: r.state_cap,
+        municipal_cap: r.municipal_cap,
       })),
     };
     let swapped = 0;

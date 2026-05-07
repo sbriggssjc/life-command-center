@@ -316,6 +316,30 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'cap_rate_by_credit': {
+      // Gov-only: cap rate by government credit type cohort (federal/state/
+      // municipal). Federal usually dominates; state/municipal are sparse
+      // for the gov-leased dataset.
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Federal',   data: rows.map(r => r.federal_cap),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'State',     data: rows.map(r => r.state_cap),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Municipal', data: rows.map(r => r.municipal_cap),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          ],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
+      };
+    }
+
     case 'cap_rate_by_lease_term': {
       return {
         type: 'line',
@@ -365,6 +389,33 @@ function buildChartConfig(chart, brand) {
 
     case 'bid_ask_spread':
     case 'bid_ask_spread_monthly': {
+      // Deliverable p.34: Bid-Ask Spread bars + Last Ask cap line overlay.
+      // When avg_last_ask_cap is present (master_m monthly mapper), render
+      // dual-axis combo. When absent (raw quarterly view), fall back to
+      // spread-only line.
+      const hasLastAsk = rows.some(r => r.avg_last_ask_cap != null);
+      if (hasLastAsk) {
+        return {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              { type: 'bar', label: 'Bid-Ask Spread (bps)',
+                data: rows.map(r => r.avg_bid_ask_spread),
+                backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
+              { type: 'line', label: 'Last Ask Cap',
+                data: rows.map(r => r.avg_last_ask_cap),
+                borderColor: palette[0], backgroundColor: 'transparent',
+                tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+            ],
+          },
+          options: comboOpts({
+            yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
+            yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+            yRightRange:  CAP_RATE_RANGE,
+          }),
+        };
+      }
       return {
         type: 'line',
         data: {
