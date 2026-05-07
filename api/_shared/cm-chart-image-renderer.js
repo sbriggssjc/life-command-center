@@ -25,17 +25,33 @@ const RENDER_DEFAULT_WIDTH  = 900;
 const RENDER_DEFAULT_HEIGHT = 480;
 const RENDER_TIMEOUT_MS     = 15_000;
 
-// Recent-window crop. User feedback (2026-05-07): "we are starting around
-// 2016. Ideally, I want this data to go back as long as we have data to
-// track for it reliably. Historically that's been 2001-ish for other
-// categories." → bumped windows to capture roughly 2001 onward.
-// Round D4 (2026-05-22) bumped further after extending dialysis master_m
-// generate_series to 2001-01-01 — earlier crop of 288 months was clipping
-// the earliest 14 months of newly-extended data.
-// Quarterly: 104 rows ≈ 26 years; monthly: 312 ≈ 26 years.
-const RECENT_QUARTERS_DEFAULT = 104;  // ~26 years quarterly (back to 2000)
-const RECENT_MONTHS_DEFAULT   = 312;  // ~26 years monthly  (back to 2000)
+// Recent-window crop. User wants charts back to ~2001. Original Round 1
+// bumped to 100/288/24, Round D4 to 104/312/26 after extending dialysis
+// master_m to 2001-01-01.
+//
+// IMPORTANT (2026-05-22): QuickChart's public free tier rejects chart
+// configs with >250 data points (returns HTTP 400 with an error PNG).
+// Empirically tested: N=250 OK, N=252 fails. Post-D4 master_m had 303
+// monthly rows, which silently broke every master_m-mapped chart in the
+// dialysis export — Avg_Deal, Bid_Ask, Cap_Quartile, Cap_Avg, DOM_Ask,
+// NM_vs_Market, Sentiment, Txn_Count, Volume_TTM, YOY_Change,
+// Vol_Cap_Combo all came back missing. User reported it as a "mass
+// chart-missing regression."
+//
+// Fix: cap the monthly window at 240 (= 20 years from 2026 → 2006).
+// Combined with the renderer's `cropForRender()` downsample safety net
+// (below), charts always stay under QuickChart's hard limit.
+//
+// Going further back than 20 years would need either a self-hosted
+// QuickChart instance (CM_QUICKCHART_URL env var) or downsampling to a
+// 2-month cadence.
+const RECENT_QUARTERS_DEFAULT = 104;  // ~26 years quarterly — under 250 limit
+const RECENT_MONTHS_DEFAULT   = 240;  // 20 years monthly  — under 250 limit
 const RECENT_YEARS_DEFAULT    = 26;   // 26 calendar years (annual templates)
+
+// Hard ceiling that the renderer enforces regardless of crop. QuickChart
+// free tier rejects payloads with N > 250 data points per dataset.
+const QUICKCHART_MAX_POINTS = 240;
 
 // Brand-aligned series colors (hex strings).
 function paletteSeries(brand) {
@@ -65,6 +81,26 @@ function recentRows(rows, n) {
   if (!Array.isArray(rows)) return [];
   if (rows.length <= n) return rows;
   return rows.slice(rows.length - n);
+}
+
+// Defense-in-depth against QuickChart's 250-point limit. After the
+// recent-window crop, if the chart still has more rows than QuickChart
+// will accept, downsample by taking every Nth row. This preserves the
+// time range (just at coarser cadence) instead of clipping the older
+// end of the series.
+//
+// Example: 303 monthly rows → step = ceil(303/240) = 2 → keep every 2nd
+// row → 152 rows surviving. The chart still spans 2001 → 2026 but with
+// ~2-month resolution instead of monthly. Better than failing entirely.
+function cropForRender(rows) {
+  if (!Array.isArray(rows) || rows.length <= QUICKCHART_MAX_POINTS) return rows;
+  const step = Math.ceil(rows.length / QUICKCHART_MAX_POINTS);
+  const out = [];
+  for (let i = 0; i < rows.length; i += step) out.push(rows[i]);
+  // Always keep the very last row so the chart's right edge matches the
+  // actual data endpoint regardless of step alignment.
+  if (out[out.length - 1] !== rows[rows.length - 1]) out.push(rows[rows.length - 1]);
+  return out;
 }
 
 // ============================================================================
@@ -206,7 +242,9 @@ function buildChartConfig(chart, brand) {
   const windowSize = isAnnual  ? RECENT_YEARS_DEFAULT
                    : isMonthly ? RECENT_MONTHS_DEFAULT
                    :             RECENT_QUARTERS_DEFAULT;
-  const rows = recentRows(chart.rows, windowSize);
+  // recentRows = clip to recent window; cropForRender = downsample if
+  // we still exceed QuickChart's 250-point hard limit. Belt + suspenders.
+  const rows = cropForRender(recentRows(chart.rows, windowSize));
   const labels = rows.map(r => periodEndLabel(r.period_end || r.year));
 
   switch (chart.chart_template_id) {
@@ -714,6 +752,11 @@ function buildChartConfig(chart, brand) {
     case 'dom_price_change_active': {
       // p.31 bottom: DOM bars (Total + Core 10+) + price-change-frequency
       // lines (Total + Core 10+). Two y-axes (DOM days vs %).
+      // User feedback (2026-05-07): "The Price Change % is the same color
+      // too so its hard to tell a difference." Use Active_Cap_Quart-style
+      // solid/dashed split so the eye groups Total vs Core 10+ by hue
+      // similarity but distinguishes them by line style.
+      const COLOR_DARK_BLUE_DPC  = '#1F4E79';
       return {
         type: 'bar',
         data: {
@@ -721,18 +764,22 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { type: 'bar',  label: 'Total Market — DOM',
               data: rows.map(r => r.avg_dom_total),
-              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+              backgroundColor: palette[3], borderRadius: 2,
+              yAxisID: 'y', order: 2 },
             { type: 'bar',  label: '10+ Year Term — DOM',
               data: rows.map(r => r.avg_dom_core),
-              backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+              backgroundColor: palette[1], borderRadius: 2,
+              yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Total Market — Price-Change %',
               data: rows.map(r => r.pct_price_change_total),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+              borderColor: COLOR_DARK_BLUE_DPC, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
             { type: 'line', label: '10+ Year Term — Price-Change %',
               data: rows.map(r => r.pct_price_change_core),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+              borderColor: COLOR_DARK_BLUE_DPC, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              borderDash: [5, 4], yAxisID: 'y1', order: 0 },
           ],
         },
         options: comboOpts({
