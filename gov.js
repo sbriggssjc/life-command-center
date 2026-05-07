@@ -1120,6 +1120,84 @@ function govOwnershipAnnotate(rec) {
   );
 }
 
+// Two-step UX: preview (dry run) shows bucket counts; confirm runs the
+// apply pass on the gov DB. govRpc strips down to the first row of a
+// rowset, but we need all three buckets, so call /api/gov-query directly.
+async function _govOwnershipSweepCall(dryRun) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', 'rpc/gov_auto_resolve_ownership');
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_dry_run: dryRun })
+  });
+  const text = await resp.text();
+  let data; try { data = JSON.parse(text); } catch (_) { data = text; }
+  if (!resp.ok) {
+    const detail = (data && data.error) || (typeof data === 'string' ? data : ('HTTP ' + resp.status));
+    const err = new Error(detail);
+    err.status = resp.status;
+    throw err;
+  }
+  return Array.isArray(data) ? data : (data ? [data] : []);
+}
+
+window.govOwnershipSweepPreview = async function() {
+  const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
+  try {
+    const buckets = await _govOwnershipSweepCall(true);
+    const total = buckets.reduce((s, b) => s + (Number(b.matched) || 0), 0);
+    if (total === 0) {
+      showToast('Nothing to sweep — no auto-resolvable rows in the queue', 'info');
+      return;
+    }
+    const labels = {
+      empty_shell:  'Empty shells (only true_owner_name)',
+      placeholder:  'Boilerplate prior_owner ("Unknown" / "Previous Owner")',
+      comp_on_file: 'Comp already in sales_transactions (±90d match)'
+    };
+    const lines = buckets
+      .filter(b => Number(b.matched) > 0)
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched)
+      .join('\n');
+    const ok = await lccConfirm(
+      'Auto-resolve ' + total + ' ownership_history row' + (total === 1 ? '' : 's') + '?\n\n' + lines + '\n\n' +
+      'Empty shells → research_status="junk_no_data"\n' +
+      'Placeholder rows → research_status="junk_placeholder"\n' +
+      'Comp-on-file → research_status="comp_on_file"\n\n' +
+      'You can re-run this sweep any time.',
+      'Apply sweep'
+    );
+    if (!ok) return;
+    if (btn) { btn.textContent = 'Applying…'; }
+    const applied = await _govOwnershipSweepCall(false);
+    const appliedTotal = applied.reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    showToast('Swept ' + appliedTotal + ' row' + (appliedTotal === 1 ? '' : 's') + ' — refreshing queue', 'success');
+    // Force a fresh fetch of ownership_history; reload the research
+    // queue once new data lands so the sweep effect is visible.
+    govData.ownership = [];
+    researchQueue = [];
+    researchIdx = 0;
+    if (typeof loadGovData === 'function') {
+      loadGovData().then(() => loadResearchQueue()).then(() => renderGovTab());
+    } else {
+      await loadResearchQueue();
+      renderGovTab();
+    }
+  } catch (err) {
+    console.error('govOwnershipSweepPreview failed:', err);
+    const msg = (err && err.message) || String(err);
+    const friendly = /could not find the function|function .* does not exist|404/i.test(msg)
+      ? 'RPC gov_auto_resolve_ownership not deployed yet — apply sql/20260507_gov_rpc_auto_resolve_ownership.sql'
+      : msg;
+    showToast('Sweep failed: ' + friendly, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig || '🧹 Sweep auto-resolvable (preview)'; }
+  }
+};
+
 async function loadResearchQueue() {
   researchQueue = [];
   researchIdx = 0;
@@ -1388,20 +1466,31 @@ function renderOwnershipResearchCard(rec) {
     html += '</div>';
   }
 
-  // Property facts
+  // Property facts. Fall back from ownership_history.address (often NULL on
+  // bot-generated rows) → gsa_snapshots.address (joined by lease_number) →
+  // FRPP street_address. Make the source explicit so the reviewer trusts it.
+  const _addr  = rec.address  || snapshot.address  || frpp.street_address || '';
+  const _city  = rec.city     || snapshot.city     || frpp.city_name      || '';
+  const _state = rec.state    || snapshot.state    || frpp.state_name      || '';
+  const _addrSrc = rec.address ? '' : (snapshot.address ? ' · from gsa_snapshots' : (frpp.street_address ? ' · from FRPP' : ''));
+  const _isEmptyShell = !_addr && !rec.lease_number && !rec.prior_owner && !rec.new_owner && !rec.transfer_date && !rec.sale_price && !rec.recorded_owner_name;
   const rba = rec.rba || rec.square_feet || frpp.square_feet || snapshot.lease_rsf || null;
   const yearBuilt = rec.year_built || frpp.year_built || null;
   const tenant = rec.tenant_agency || rec.agency_full_name || frpp.using_agency || frpp.using_bureau || '';
   html += '<div class="context-block">';
-  html += '<div class="context-label">Property</div>';
-  html += `<div class="context-value">${esc(rec.address || '—')}</div>`;
-  html += `<div class="context-sub">${esc(rec.city || '')}${rec.city && rec.state ? ', ' : ''}${esc(rec.state || '')}</div>`;
-  // RBA / year built / tenant inline so the reviewer doesn't have to scroll
-  const _facts = [];
-  if (rba)        _facts.push(fmtN(rba) + ' SF');
-  if (yearBuilt)  _facts.push('Built ' + esc(yearBuilt));
-  if (tenant)     _facts.push(esc(tenant));
-  if (_facts.length) html += `<div class="own-facts-row">${_facts.join(' · ')}</div>`;
+  html += '<div class="context-label">Property' + (_addrSrc ? ' <span class="own-addr-src">' + esc(_addrSrc) + '</span>' : '') + '</div>';
+  if (_isEmptyShell) {
+    html += '<div class="context-value own-empty-shell">No research handle on this row</div>';
+    html += '<div class="context-sub">Only true_owner_name is set — no lease #, address, or transfer info to chase. Use <strong>Reject</strong> or the <em>Sweep auto-resolvable</em> button.</div>';
+  } else {
+    html += `<div class="context-value">${esc(_addr || '—')}</div>`;
+    html += `<div class="context-sub">${esc(_city)}${_city && _state ? ', ' : ''}${esc(_state)}</div>`;
+    const _facts = [];
+    if (rba)        _facts.push(fmtN(rba) + ' SF');
+    if (yearBuilt)  _facts.push('Built ' + esc(yearBuilt));
+    if (tenant)     _facts.push(esc(tenant));
+    if (_facts.length) html += `<div class="own-facts-row">${_facts.join(' · ')}</div>`;
+  }
   html += '</div>';
 
   // Lease summary
@@ -6696,6 +6785,18 @@ function renderGovResearch() {
       <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
       <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
     </div>`;
+
+    // Sweep button — only on the ownership queue, only when there are
+    // pending rows. Calls gov_auto_resolve_ownership(p_dry_run=true) for
+    // a count preview, then a confirm + p_dry_run=false on apply.
+    if (researchMode === 'ownership' && pendingCount > 0) {
+      html += `<div class="own-sweep-bar" style="margin-top:8px">
+        <button class="btn-secondary" onclick="window.govOwnershipSweepPreview()" title="Preview rows the system can auto-resolve (empty shells, placeholder priors, comp-on-file)">
+          🧹 Sweep auto-resolvable (preview)
+        </button>
+        <span class="own-sweep-bar-help">Resolves rows with no research handle, bot-generated placeholder priors, and comps already on file.</span>
+      </div>`;
+    }
 
     // Load queue if empty
     if (researchQueue.length === 0) {
