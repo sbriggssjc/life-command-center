@@ -29,12 +29,13 @@ const RENDER_TIMEOUT_MS     = 15_000;
 // 2016. Ideally, I want this data to go back as long as we have data to
 // track for it reliably. Historically that's been 2001-ish for other
 // categories." → bumped windows to capture roughly 2001 onward.
-// Quarterly: 100 rows ≈ 25 years; monthly: 288 ≈ 24 years. The view's
-// underlying data starts at 2008 for master_m and earlier than that for
-// the per-template quarterly views.
-const RECENT_QUARTERS_DEFAULT = 100;  // ~25 years quarterly (back to ~2001)
-const RECENT_MONTHS_DEFAULT   = 288;  // ~24 years monthly (back to ~2002)
-const RECENT_YEARS_DEFAULT    = 24;   // 24 calendar years (annual templates)
+// Round D4 (2026-05-22) bumped further after extending dialysis master_m
+// generate_series to 2001-01-01 — earlier crop of 288 months was clipping
+// the earliest 14 months of newly-extended data.
+// Quarterly: 104 rows ≈ 26 years; monthly: 312 ≈ 26 years.
+const RECENT_QUARTERS_DEFAULT = 104;  // ~26 years quarterly (back to 2000)
+const RECENT_MONTHS_DEFAULT   = 312;  // ~26 years monthly  (back to 2000)
+const RECENT_YEARS_DEFAULT    = 26;   // 26 calendar years (annual templates)
 
 // Brand-aligned series colors (hex strings).
 function paletteSeries(brand) {
