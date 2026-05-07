@@ -4621,7 +4621,7 @@ const GOV_PENDING_REASON_TAXONOMY = {
     label: 'GSA → Property Link Review',
     category: 'link_review',
     kind: 'link_pick',
-    guidance: 'A GSA lease was auto-linked to a property whose street number AND lease number both disagree. Some are correct (city normalisation like Mt vs Mount; range addresses like 160-180 Main; building complexes with multiple lease numbers); others are genuine wrong matches. Confirm the records are the same physical building (approve when the link-pick UI lands), or reject so the matcher can try again.'
+    guidance: 'The auto-matcher linked this GSA lease to a property whose address and/or lease number disagree. Compare the two sides below and decide: same physical building (Confirm) or wrong match (Break).'
   },
   // sale_property_link_* — all variants describe linking a sales_transaction to
   // a property when the public inventory doesn't cleanly cover it.
@@ -4759,13 +4759,18 @@ function govPendingSourceSummary(ctx) {
   };
   const out = [];
   const entries = [
-    ['Subject',        ['subject']],
-    ['Address',        ['address', 'property_address', 'street_address']],
-    ['Tenant',         ['tenant', 'tenant_name', 'occupant']],
-    ['Asking / Price', ['asking_price', 'sale_price', 'price']],
-    ['Lease #',        ['lease_number', 'gsa_lease_number']],
-    ['Summary',        ['summary', 'description']],
-    ['Source',         ['source', 'data_source', 'origin']]
+    ['Subject',         ['subject']],
+    ['Address',         ['address', 'property_address', 'street_address']],
+    ['Tenant',          ['tenant', 'tenant_name', 'occupant']],
+    ['Asking / Price',  ['asking_price', 'sale_price', 'price']],
+    ['Lease #',         ['lease_number', 'gsa_lease_number']],
+    ['Prev. property',  ['previously_linked_property_id']],
+    ['Prev. address',   ['previously_linked_address']],
+    ['Prev. lease #',   ['previously_linked_lease']],
+    ['Unlink reason',   ['unlinked_reason']],
+    ['Provenance',      ['discrepancy_source']],
+    ['Summary',         ['summary', 'description']],
+    ['Source',          ['source', 'data_source', 'origin']]
   ];
   for (const [label, keys] of entries) {
     const hit = pick(keys);
@@ -4773,6 +4778,167 @@ function govPendingSourceSummary(ctx) {
   }
   return out;
 }
+
+// ── GSA Property Link Review ──────────────────────────────────────────────────
+// The auto-matcher linked a gsa_leases row to a properties row whose street
+// number AND lease number both disagree. The pending row carries a pre-baked
+// comparison in source_context (gsa_* / linked_* keys); we render it as a
+// side-by-side table so the reviewer can see what's being compared, and offer
+// two write actions:
+//   Approve link  → gsa_leases.match_status = 'human_confirmed'  (keep property_id)
+//   Reject link   → gsa_leases.match_status = 'human_rejected', property_id = NULL
+// Both also resolve the pending row.
+
+function govGsaLinkReviewFields(ctx) {
+  if (!ctx || typeof ctx !== 'object') return null;
+  const has = ['gsa_address','linked_address','gsa_lease_number','linked_lease_number']
+    .some(k => ctx[k] != null && ctx[k] !== '');
+  if (!has) return null;
+  const norm = (v) => v == null ? '' : String(v).trim();
+  const ci = (a, b) => norm(a).toLowerCase() === norm(b).toLowerCase();
+  const cmp = (a, b) => {
+    const A = norm(a), B = norm(b);
+    if (!A && !B) return 'both-empty';
+    if (A && B && ci(A, B)) return 'match';
+    return 'differ';
+  };
+  return {
+    flagReason:     ctx.flag_reason || '',
+    reviewGuidance: ctx.review_guidance || '',
+    rows: [
+      { label: 'Address', gsa: ctx.gsa_address, linked: ctx.linked_address,
+        state: cmp(ctx.gsa_address, ctx.linked_address) },
+      { label: 'City',    gsa: ctx.gsa_city,    linked: ctx.linked_city,
+        state: cmp(ctx.gsa_city,    ctx.linked_city) },
+      { label: 'State',   gsa: ctx.gsa_state,   linked: ctx.linked_state,
+        state: cmp(ctx.gsa_state,   ctx.linked_state) },
+      { label: 'Lease #', gsa: ctx.gsa_lease_number, linked: ctx.linked_lease_number,
+        state: cmp(ctx.gsa_lease_number, ctx.linked_lease_number), code: true }
+    ],
+    linkedPropertyId: ctx.linked_property_id != null ? String(ctx.linked_property_id) : ''
+  };
+}
+
+function renderGovGsaLinkReview(selected) {
+  const data = govGsaLinkReviewFields(selected.source_context);
+  if (!data) {
+    // Fallback: source_context didn't carry the comparison keys.
+    return `<div class="pu-link-pick-placeholder">
+      <div class="pu-lpp-title">GSA → Property Link Review</div>
+      <div class="pu-lpp-body">
+        This row is missing the gsa_* / linked_* comparison keys in source_context.
+        Inspect the Raw JSON below, then use <kbd>R</kbd> to reject the link or
+        <kbd>S</kbd> to skip.
+      </div>
+    </div>`;
+  }
+  let html = '<div class="pu-glr">';
+
+  // Banner — what the matcher flagged
+  if (data.flagReason) {
+    html += `<div class="pu-glr-banner">
+      <span class="pu-glr-banner-label">Flagged:</span>
+      <code class="pu-glr-banner-flag">${esc(data.flagReason)}</code>
+      ${data.reviewGuidance ? '<details class="pu-glr-why"><summary>Why</summary><div class="pu-glr-why-body">' + esc(data.reviewGuidance) + '</div></details>' : ''}
+    </div>`;
+  }
+
+  // The question
+  html += `<div class="pu-glr-question">Are these the same physical building?</div>`;
+
+  // Two-column comparison
+  html += '<div class="pu-glr-grid">';
+  html += `<div class="pu-glr-col-head pu-glr-col-gsa">GSA inventory <span class="pu-glr-col-sub">(authoritative)</span></div>`;
+  html += `<div class="pu-glr-col-head pu-glr-col-linked">Currently linked property${data.linkedPropertyId ? ' <span class="pu-glr-col-sub">#' + esc(data.linkedPropertyId) + '</span>' : ''}</div>`;
+  data.rows.forEach(row => {
+    const cls = 'pu-glr-row pu-glr-row-' + row.state;
+    const fmt = (v) => {
+      const s = v == null || v === '' ? '—' : String(v);
+      return row.code ? '<code>' + esc(s) + '</code>' : esc(s);
+    };
+    html += `<div class="pu-glr-label ${cls}">${esc(row.label)}</div>`;
+    html += `<div class="pu-glr-val pu-glr-val-gsa ${cls}">${fmt(row.gsa)}</div>`;
+    html += `<div class="pu-glr-val pu-glr-val-linked ${cls}">
+      ${fmt(row.linked)}
+      ${row.state === 'differ' ? '<span class="pu-glr-diff-flag" title="Disagrees with GSA">≠</span>' : ''}
+      ${row.state === 'match'  ? '<span class="pu-glr-same-flag" title="Matches GSA">=</span>' : ''}
+    </div>`;
+  });
+  html += '</div>';
+
+  // Pivot — copy the linked property_id so the reviewer can paste it into the
+  // inventory search and see other leases/sales at that record before deciding.
+  if (data.linkedPropertyId) {
+    const pidEsc = esc(data.linkedPropertyId).replace(/'/g, "\\'");
+    html += `<div class="pu-glr-pivot">
+      <button class="pu-glr-pivot-btn" onclick="navigator.clipboard.writeText('${pidEsc}'); showToast('property_id ${pidEsc} copied — paste into Inventory search', 'success')" title="Copy property_id to paste into Inventory search">
+        Copy property_id #${esc(data.linkedPropertyId)}
+      </button>
+      <span class="pu-glr-pivot-help">paste into Inventory search to see other leases / sales at this record before deciding</span>
+    </div>`;
+  }
+
+  html += '</div>'; // pu-glr
+  return html;
+}
+
+window.govResolveGsaLink = async function(pendingId, decision) {
+  const item = (govPendingUpdates || []).find(u => u.id === pendingId);
+  if (!item) {
+    showToast('Pending row not found in cache — refresh and retry', 'error');
+    return;
+  }
+  if (!item.record_id) {
+    showToast('Missing gsa_lease_id (record_id) on this row — cannot patch', 'error');
+    return;
+  }
+  const ctx = item.source_context || {};
+  const linkedPid = ctx.linked_property_id != null ? String(ctx.linked_property_id) : '';
+
+  let confirmMsg, leasePatch, toastSuccess;
+  if (decision === 'approved') {
+    confirmMsg = 'Confirm this GSA lease and property #' + (linkedPid || '?') +
+      ' describe the same building? gsa_leases.match_status will become human_confirmed and the pending row will resolve as approved.';
+    leasePatch = { match_status: 'human_confirmed' };
+    toastSuccess = 'Link confirmed — gsa_leases.match_status = human_confirmed';
+  } else if (decision === 'rejected') {
+    confirmMsg = 'Reject the link to property #' + (linkedPid || '?') +
+      '? gsa_leases.property_id will be cleared and match_status set to human_rejected. The matcher will retry on the next pass.';
+    leasePatch = { match_status: 'human_rejected', property_id: null };
+    toastSuccess = 'Link cleared — gsa_leases.match_status = human_rejected';
+  } else {
+    return;
+  }
+
+  const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const origText = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = decision === 'approved' ? 'Confirming…' : 'Rejecting…'; }
+
+  try {
+    if (!(await lccConfirm(confirmMsg, decision === 'approved' ? 'Confirm link' : 'Reject link'))) {
+      if (btn) { btn.disabled = false; btn.textContent = origText; }
+      return;
+    }
+    const notes = document.getElementById('pu-notes')?.value || null;
+    // 1) Patch the gsa_leases row
+    await govPatch('gsa_leases', 'gsa_lease_id=eq.' + encodeURIComponent(item.record_id), leasePatch);
+    // 2) Resolve the pending_updates row
+    await govPatch('pending_updates', 'id=eq.' + item.id, {
+      status: decision,
+      resolved_by: 'dashboard:gsa_link_review',
+      resolved_at: new Date().toISOString(),
+      resolution_notes: notes
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== item.id);
+    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, Math.max(0, govPendingUpdates.length - 1));
+    showToast(toastSuccess, 'success');
+    renderGovTab();
+  } catch (err) {
+    console.error('govResolveGsaLink failed:', err);
+    showToast('Failed to ' + (decision === 'approved' ? 'confirm' : 'reject') + ' link: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+};
 
 window.bulkApproveGovPending = async function() {
   const view = window._govPendingCurrentView || [];
@@ -4831,11 +4997,16 @@ function ensureGovPendingKeybinds() {
       govPendingUpdatesIdx = Math.max(0, govPendingUpdatesIdx - 1);
       e.preventDefault(); renderGovTab();
     } else if (k === 'a' && sel) {
-      // Approve only writes through for true field_change rows. sale_link
-      // needs the resolver; link_pick needs the (forthcoming) candidate
-      // picker. Show a hint and bail otherwise so the green-key reflex
-      // doesn't silently no-op or cement a flagged-as-suspect link.
+      // Approve only writes through for true field_change rows and
+      // gsa_property_link_review (where Approve = "confirm the auto-link").
+      // sale_link needs the resolver; other link_pick reasons need the
+      // (forthcoming) candidate picker.
       const tax = govPendingTaxonomy(sel.reason);
+      if (sel.reason === 'gsa_property_link_review') {
+        e.preventDefault();
+        window.govResolveGsaLink(sel.id, 'approved');
+        return;
+      }
       if (tax.kind !== 'field_change') {
         showToast(
           tax.kind === 'sale_link'
@@ -4849,7 +5020,11 @@ function ensureGovPendingKeybinds() {
       window.resolveGovPendingUpdate(sel.id, 'approved');
     } else if (k === 'r' && sel) {
       e.preventDefault();
-      window.resolveGovPendingUpdate(sel.id, 'rejected');
+      if (sel.reason === 'gsa_property_link_review') {
+        window.govResolveGsaLink(sel.id, 'rejected');
+      } else {
+        window.resolveGovPendingUpdate(sel.id, 'rejected');
+      }
     } else if (k === 's') {
       govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % view.length;
       e.preventDefault(); renderGovTab();
@@ -5741,18 +5916,24 @@ function renderGovPendingUpdates() {
   } else if (isSaleLink) {
     html += renderGovSaleLinkResolver(selected);
   } else if (isLinkPick) {
-    // Empty (NULL -> NULL) on link_pick rows means the action isn't a value
-    // write — it's a property selection that the queue UI doesn't yet
-    // support. Show a placeholder so the misleading "(empty) -> (empty)"
-    // diff disappears and the reviewer is steered toward Reject / Skip.
-    html += `<div class="pu-link-pick-placeholder">
-      <div class="pu-lpp-title">${esc(tax.label)}</div>
-      <div class="pu-lpp-body">
-        This row needs a property selection that the link-pick UI doesn\'t render yet.
-        Use <kbd>R</kbd> to reject if it\'s out of scope, or <kbd>S</kbd> to skip.
-        See Source Context below for the relevant fields.
-      </div>
-    </div>`;
+    // gsa_property_link_review carries a pre-baked side-by-side comparison
+    // in source_context (gsa_* / linked_*) — render it inline so the
+    // reviewer sees what's being compared without expanding Raw JSON.
+    if (selected.reason === 'gsa_property_link_review') {
+      html += renderGovGsaLinkReview(selected);
+    } else {
+      // Other link_pick reasons (unmatched_property / unmatched_contact /
+      // intake_unmatched_property) still need their dedicated picker UI;
+      // until then, steer the reviewer to Reject / Skip.
+      html += `<div class="pu-link-pick-placeholder">
+        <div class="pu-lpp-title">${esc(tax.label)}</div>
+        <div class="pu-lpp-body">
+          This row needs a property selection that the link-pick UI doesn\'t render yet.
+          Use <kbd>R</kbd> to reject if it\'s out of scope, or <kbd>S</kbd> to skip.
+          See Source Context below for the relevant fields.
+        </div>
+      </div>`;
+    }
   }
 
   // Source context summary (parsed) + collapsible raw — useful for both modes
@@ -5776,12 +5957,18 @@ function renderGovPendingUpdates() {
   html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 2, placeholder: 'Optional — why you approved/rejected'});
 
   html += '<div class="action-row pu-action-row">';
+  const isGsaLinkReview = isLinkPick && selected.reason === 'gsa_property_link_review';
   if (isFieldChange) {
     html += `<button class="btn-action primary" title="Approve (A)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve <span class="pu-kbd">A</span></button>`;
+  } else if (isGsaLinkReview) {
+    // Two real actions for GSA Link Review: confirm or break the auto-link.
+    html += `<button class="btn-action primary" title="Same building — confirm the link (A)" onclick="_udBtnGuard(this, window.govResolveGsaLink, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Same building — confirm link <span class="pu-kbd">A</span></button>`;
+    html += `<button class="btn-action danger" title="Different buildings — break the link (R)" onclick="_udBtnGuard(this, window.govResolveGsaLink, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">⛓ Different — break link <span class="pu-kbd">R</span></button>`;
+  } else {
+    // sale_link rows have their own Link/Create buttons inside the resolver.
+    // Other link_pick rows still need a generic Reject until their picker lands.
+    html += `<button class="btn-action danger" title="Reject (R)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject <span class="pu-kbd">R</span></button>`;
   }
-  // sale_link rows have their own Link/Create buttons inside the resolver.
-  // link_pick rows get no Approve button until the candidate-picker UI lands.
-  html += `<button class="btn-action danger" title="Reject (R)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject <span class="pu-kbd">R</span></button>`;
   html += `<button class="btn-action" title="Skip to next (S)" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % (window._govPendingCurrentView||[]).length; renderGovTab();">→ Skip <span class="pu-kbd">S</span></button>`;
   html += `<button class="btn-action" style="margin-left:auto;background:#fb923c1a;color:#fb923c;border-color:#fb923c55" title="Mark as expired" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
   html += '</div>';
