@@ -701,7 +701,13 @@ async function exportWorkbook(req, res) {
       cap_rate_by_lease_term: (rows) => rows.map(r => ({
         period_end: r.period_end,
         cap_10plus: r.cap_10plus_year,
-        cap_6to10: r.cap_6to10_year,
+        // Mid-term bucket: dialysis uses cap_6to10_year, gov uses
+        // cap_5to10_year (renamed in Round G4 because gov firm_term
+        // had ~6000 leases in the 5-6yr range that fell through).
+        // Output as both cap_6to10 (legacy renderer key) and cap_5to10
+        // so the renderer can prefer the more accurate one.
+        cap_6to10: r.cap_6to10_year ?? r.cap_5to10_year,
+        cap_5to10: r.cap_5to10_year ?? r.cap_6to10_year,
         cap_less5: r.cap_less5_year,
         cap_outside_firm: r.cap_outside_firm,
       })),
