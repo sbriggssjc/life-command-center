@@ -29,35 +29,46 @@
 
 import JSZip from 'jszip';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-// Resolve template path. In Vercel, process.cwd() is the project root; the
-// assets dir is committed at that root. Fall back to relative-to-this-file
-// for local-dev cases where cwd is wrong.
+const DIALYSIS_TEMPLATE = 'assets/cm-templates/dialysis-master-template.xlsx';
+
+// Resolve template path. Vercel's serverless bundler (NFT) doesn't statically
+// trace runtime fs.readFile() calls, so we declare the asset via vercel.json
+// `functions[*].includeFiles` and probe a few candidate locations at runtime.
+// Logs candidates + their existence so misconfiguration surfaces in Vercel
+// function logs.
 function resolveTemplatePath(relativePath) {
   const candidates = [
     path.join(process.cwd(), relativePath),
     path.join(__dirname, '..', '..', relativePath),
+    path.join(__dirname, '..', '..', '..', relativePath),
+    // Vercel sometimes co-locates includeFiles next to the function:
+    path.join(__dirname, '..', relativePath),
   ];
   for (const c of candidates) {
     try {
-      // synchronously check via the path's existence — async fs.access
-      // would be better but this runs once per export
-      // eslint-disable-next-line no-sync
-      require('fs').accessSync(c);
+      fsSync.accessSync(c, fsSync.constants.R_OK);
+      console.log(`[cm-template-loader] resolved template at: ${c}`);
       return c;
-    } catch {}
+    } catch { /* try next */ }
   }
-  // No fallback worked; return the cwd path so the caller's read fails with
-  // a clear ENOENT pointing at the expected location
+  console.error('[cm-template-loader] template NOT found. Tried:');
+  candidates.forEach(c => {
+    let exists = false;
+    try { fsSync.accessSync(c); exists = true; } catch {}
+    console.error(`  ${exists ? '[OK ]' : '[MISS]'} ${c}`);
+  });
+  console.error(`  cwd=${process.cwd()}`);
+  console.error(`  __dirname=${__dirname}`);
+  // Return first candidate so the caller's readFile throws a clear ENOENT
   return candidates[0];
 }
-
-const DIALYSIS_TEMPLATE = 'assets/cm-templates/dialysis-master-template.xlsx';
 
 // ============================================================================
 // Date conversion: JS Date → Excel serial number

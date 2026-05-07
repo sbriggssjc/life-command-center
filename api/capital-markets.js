@@ -639,22 +639,40 @@ async function exportWorkbook(req, res) {
   //     objects render live data on open — no paste step. Caller can opt
   //     out via ?layout=data_tabs to get the legacy ExcelJS workbook (Cover,
   //     Index, Data_*, MasterPasteReady, Brand) for ad-hoc data sanity-checks.
+  //
+  // Diagnostic header X-CM-Workbook-Path tells the caller which path fired
+  // ('master_template' / 'data_tabs' / 'master_template_failed_fallback' /
+  // 'master_template_no_rows_fallback'). Useful for confirming the loader
+  // actually ran from a deployed environment.
   const layout = req.query.layout || 'master_template';
-  if (vertical === 'dialysis' && layout !== 'data_tabs'
-      && Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0) {
+  const masterEligible = (vertical === 'dialysis' && layout !== 'data_tabs');
+  const masterHasRows = Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0;
+
+  console.log(`[exportWorkbook] vertical=${vertical} layout=${layout} masterEligible=${masterEligible} masterMonthlyRows=${masterMonthlyRows == null ? 'null' : masterMonthlyRows.length}`);
+
+  if (masterEligible && masterHasRows) {
     try {
       const buf = await buildDialysisMasterWorkbook({
         masterRows: masterMonthlyRows,
         subspecialty,
         asOf: as_of,
       });
+      console.log(`[exportWorkbook] master_template path OK: ${buf.length} bytes from ${masterMonthlyRows.length} rows`);
+      res.setHeader('X-CM-Workbook-Path', 'master_template');
       return res.status(200).send(buf);
     } catch (e) {
       // Fall through to the ExcelJS workbook if the template loader fails —
       // marketing still gets data tabs + MasterPasteReady, just without the
-      // pre-wired chart objects.
-      console.warn(`[exportWorkbook] dialysis master-template load failed, falling back: ${e?.message || e}`);
+      // pre-wired chart objects. Log loudly so Vercel logs reveal the cause.
+      console.error(`[exportWorkbook] master-template load FAILED: ${e?.message || e}`);
+      if (e?.stack) console.error(e.stack);
+      res.setHeader('X-CM-Workbook-Path', 'master_template_failed_fallback');
     }
+  } else if (masterEligible && !masterHasRows) {
+    console.warn(`[exportWorkbook] master_template skipped: monthly view returned ${masterMonthlyRows == null ? 'null' : 0} rows (verify cm_dialysis_market_quarterly_master_m exists + grant select)`);
+    res.setHeader('X-CM-Workbook-Path', 'master_template_no_rows_fallback');
+  } else {
+    res.setHeader('X-CM-Workbook-Path', 'data_tabs');
   }
 
   // 5b. Default: ExcelJS-rendered workbook with data tabs + MasterPasteReady.

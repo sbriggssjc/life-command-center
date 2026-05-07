@@ -3,6 +3,11 @@
   "framework": null,
   "buildCommand": "",
   "outputDirectory": "",
+  "functions": {
+    "api/capital-markets.js": {
+      "includeFiles": "assets/cm-templates/**"
+    }
+  },
   "rewrites": [
     { "source": "/api/config", "destination": "/api/admin?_route=config" },
     { "source": "/api/diag", "destination": "/api/admin?_route=diag" },
