@@ -1064,6 +1064,62 @@ function attachAutocomplete() {
 // RESEARCH WORKBENCH
 // ============================================================================
 
+// ──────────────────────────────────────────────────────────────
+// Ownership queue annotation — used by the prioritised research queue
+// loader to surface what's missing and whether the comp is already on
+// file before the reviewer commits to a card.
+// Priority semantics (lower number = higher priority):
+//   1  no sale + no owners                  — urgent, gather everything
+//   2  no sale, partial owners              — sale price still missing
+//   3  sale present, owners missing         — fill in owner fields
+//   4  sale present + at least one owner    — verify only
+//   5  comp already on file in sales_txns   — bottom of queue
+function govOwnershipAnnotate(rec) {
+  if (!rec) return;
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const hasSale = !!(rec.sale_price);
+  const hasRecordedOwner = !!(rec.recorded_owner_name && String(rec.recorded_owner_name).trim());
+  const hasTrueOwner = !!(rec.true_owner_name && String(rec.true_owner_name).trim());
+  const ownerCount = (hasRecordedOwner ? 1 : 0) + (hasTrueOwner ? 1 : 0);
+
+  // Comp-on-file detection: a sales_transactions row with the same
+  // lease_number whose sale_date sits within ±90d of the transfer_date.
+  let compMatch = null;
+  if (rec.lease_number && Array.isArray(govData.salesComps)) {
+    const transferTs = rec.transfer_date ? new Date(rec.transfer_date).getTime() : null;
+    const window = 90 * 86400 * 1000;
+    const ln = norm(rec.lease_number);
+    for (const c of govData.salesComps) {
+      if (norm(c.lease_number) !== ln) continue;
+      if (!transferTs) { compMatch = c; break; }
+      const ct = c.sale_date ? new Date(c.sale_date).getTime() : null;
+      if (ct && Math.abs(ct - transferTs) <= window) { compMatch = c; break; }
+    }
+  }
+
+  const missing = [];
+  if (!hasSale) missing.push('Sale price');
+  if (!rec.transfer_date) missing.push('Transfer date');
+  if (!hasRecordedOwner) missing.push('Recorded owner');
+  if (!hasTrueOwner) missing.push('True owner');
+  if (!rec.cap_rate) missing.push('Cap rate');
+
+  let priority;
+  if (compMatch) priority = 5;
+  else if (hasSale && ownerCount >= 1) priority = 4;
+  else if (hasSale) priority = 3;
+  else if (ownerCount >= 1) priority = 2;
+  else priority = 1;
+
+  rec._compOnFile = !!compMatch;
+  rec._matchedComp = compMatch;
+  rec._missingFields = missing;
+  rec._priority = priority;
+  rec._completeness = Math.round(
+    (((hasSale ? 1 : 0) + (rec.transfer_date ? 1 : 0) + (hasRecordedOwner ? 1 : 0) + (hasTrueOwner ? 1 : 0) + (rec.cap_rate ? 1 : 0)) / 5) * 100
+  );
+}
+
 async function loadResearchQueue() {
   researchQueue = [];
   researchIdx = 0;
@@ -1127,7 +1183,26 @@ async function loadResearchQueue() {
       if (loan) rec._loan = loan;
     }
 
+    // Ownership rows: annotate with priority + comp-on-file so the queue
+    // can be sorted to surface missing sales/owners first and bury items
+    // we already have comps for.
+    if (researchMode === 'ownership') {
+      govOwnershipAnnotate(rec);
+    }
+
     researchQueue.push(rec);
+  }
+
+  // Re-order ownership queue by priority (urgent first, comp-on-file last).
+  // Tiebreaker: most-recent transfer_date first so fresh activity surfaces.
+  if (researchMode === 'ownership') {
+    researchQueue.sort((a, b) => {
+      const pa = a._priority || 9, pb = b._priority || 9;
+      if (pa !== pb) return pa - pb;
+      const ta = a.transfer_date ? new Date(a.transfer_date).getTime() : 0;
+      const tb = b.transfer_date ? new Date(b.transfer_date).getTime() : 0;
+      return tb - ta;
+    });
   }
 
   if (filtered.length > maxToLoad) {
@@ -1263,69 +1338,165 @@ function renderOwnershipResearchCard(rec) {
     window._govFormDraft = {};
   }
 
+  // Make sure annotation flags exist even on records that didn't pass through
+  // the queue loader (defensive — the loader does this for the current view).
+  if (rec._priority == null) govOwnershipAnnotate(rec);
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
-  let html = '<div class="research-card">';
+  let html = '<div class="research-card own-research-card">';
 
   // ────────────────────────────────────────────────────────────
-  // CONTEXT PANEL (LEFT)
+  // CONTEXT PANEL (LEFT) — research-first read view.
+  // The reviewer ingests data via the LCC Chrome sidebar against
+  // CoStar / county pages in another tab, so the manual entry form
+  // is collapsed by default (see <details> on the right).
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
 
-  // Task header
+  // Task header — badge reflects the prioritisation tier
+  const _priorityMeta = (() => {
+    if (rec._compOnFile)  return { cls: 'comp',         label: 'Comp on file', sub: 'Already in sales_transactions' };
+    if (rec._priority === 1) return { cls: 'urgent',    label: 'Urgent',       sub: 'No sale, no owners' };
+    if (rec._priority === 2) return { cls: 'urgent',    label: 'Sale missing', sub: 'Owner data partial' };
+    if (rec._priority === 3) return { cls: 'needs-input', label: 'Owners missing', sub: 'Sale on file, owners blank' };
+    if (rec._priority === 4) return { cls: 'ready',     label: 'Verify',       sub: 'Sale + 1 owner present' };
+    return { cls: 'ready', label: 'Review', sub: '' };
+  })();
   html += '<div class="task-header">';
   html += '<div>Ownership Change Research</div>';
-  let badge = 'ready';
-  if (!rec.sale_price) badge = 'urgent';
-  else if (!rec.recorded_owner_name || !rec.true_owner_name || !rec.rba) badge = 'needs-input';
-  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += `<span class="task-badge ${_priorityMeta.cls}">${esc(_priorityMeta.label)}</span>`;
   html += '</div>';
-
-  html += `<div class="context-block">
-    <div class="context-label">Property</div>
-    <div class="context-value">${esc(rec.address || '')}</div>
-    <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Prior Owner → New Owner</div>
-    <div class="context-value">${esc(rec.prior_owner || '')}</div>
-    <div class="context-sub">→ ${esc(rec.new_owner || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Transfer Date</div>
-    <div class="context-value">${rec.transfer_date ? rec.transfer_date.substring(0, 10) : 'Unknown'}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lease / Annual Rent</div>
-    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
-  </div>`;
-
-  if (snapshot.lease_effective) {
-    html += `<div class="context-block">
-      <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
-      <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
-    </div>`;
+  if (_priorityMeta.sub) {
+    html += `<div class="own-priority-sub">${esc(_priorityMeta.sub)}${rec._completeness != null ? ' · ' + rec._completeness + '% complete' : ''}</div>`;
   }
 
+  // Comp-on-file banner — surfaces the matching sales_transactions row
+  // and lets the reviewer one-click clear the queue entry.
+  if (rec._compOnFile && rec._matchedComp) {
+    const c = rec._matchedComp;
+    const sd = c.sale_date ? String(c.sale_date).substring(0, 10) : '—';
+    html += '<div class="own-comp-banner">';
+    html += '<div class="own-comp-banner-row">';
+    html += '<span class="own-comp-banner-icon">✓</span>';
+    html += '<span class="own-comp-banner-label">Comp already on file</span>';
+    html += `<span class="own-comp-banner-meta">${esc(sd)} · ${c.sold_price ? fmt(c.sold_price) : 'price unknown'}${c.sold_cap_rate ? ' · ' + (Number(c.sold_cap_rate) * 100).toFixed(2) + '%' : ''}</span>`;
+    html += '</div>';
+    html += '<div class="own-comp-banner-sub">This ownership row duplicates a sales_transactions record — clear it with <strong>Already on file</strong> below.</div>';
+    html += '</div>';
+  }
+
+  // Property facts
+  const rba = rec.rba || rec.square_feet || frpp.square_feet || snapshot.lease_rsf || null;
+  const yearBuilt = rec.year_built || frpp.year_built || null;
+  const tenant = rec.tenant_agency || rec.agency_full_name || frpp.using_agency || frpp.using_bureau || '';
+  html += '<div class="context-block">';
+  html += '<div class="context-label">Property</div>';
+  html += `<div class="context-value">${esc(rec.address || '—')}</div>`;
+  html += `<div class="context-sub">${esc(rec.city || '')}${rec.city && rec.state ? ', ' : ''}${esc(rec.state || '')}</div>`;
+  // RBA / year built / tenant inline so the reviewer doesn't have to scroll
+  const _facts = [];
+  if (rba)        _facts.push(fmtN(rba) + ' SF');
+  if (yearBuilt)  _facts.push('Built ' + esc(yearBuilt));
+  if (tenant)     _facts.push(esc(tenant));
+  if (_facts.length) html += `<div class="own-facts-row">${_facts.join(' · ')}</div>`;
+  html += '</div>';
+
+  // Lease summary
+  if (rec.lease_number || rec.annual_rent || snapshot.lease_effective) {
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Lease</div>';
+    if (rec.lease_number) html += `<div class="context-value"><code>${esc(rec.lease_number)}</code>${rec.location_code ? ' <span style="color:var(--text3)">· loc ' + esc(rec.location_code) + '</span>' : ''}</div>`;
+    const _annual = rec.annual_rent || snapshot.annual_rent || null;
+    if (_annual) html += `<div class="context-sub">${fmt(_annual)}/yr${snapshot.lease_rsf ? ' · ' + fmtN(snapshot.lease_rsf) + ' RSF' : ''}</div>`;
+    if (snapshot.lease_effective) {
+      html += `<div class="context-sub">Term: ${snapshot.lease_effective.substring(0, 10)} → ${(snapshot.lease_expiration || '').substring(0, 10)}</div>`;
+    }
+    html += '</div>';
+  }
+
+  // Sale block — explicit "blank" rendering when missing
+  html += '<div class="context-block own-sale-block">';
+  html += '<div class="context-label">Sale</div>';
+  html += '<dl class="own-kv">';
+  html += '<dt>Sale date</dt><dd>' + (rec.transfer_date ? esc(String(rec.transfer_date).substring(0, 10)) : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>Sale price</dt><dd>' + (rec.sale_price ? fmt(rec.sale_price) : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>Cap rate</dt><dd>' + (rec.cap_rate ? (Number(rec.cap_rate) <= 1 ? (Number(rec.cap_rate) * 100).toFixed(2) : Number(rec.cap_rate).toFixed(2)) + '%' : '<span class="own-blank">—</span>') + '</dd>';
+  html += '</dl>';
+  if (rec._missingFields && rec._missingFields.length) {
+    html += `<div class="own-missing">Missing: ${rec._missingFields.map(esc).join(', ')}</div>`;
+  }
+  html += '</div>';
+
+  // Owners side-by-side — Recorded (deed-level) vs True (beneficial)
+  // Each side carries the prior → new pair so the reviewer sees the
+  // transfer in one glance.
+  html += '<div class="own-owners-grid">';
+  html += '<div class="own-owners-col-head">Recorded owner <span class="own-owners-col-sub">(deed)</span></div>';
+  html += '<div class="own-owners-col-head">True owner <span class="own-owners-col-sub">(beneficial / parent)</span></div>';
+
+  // Recorded side
+  html += '<div class="own-owners-cell">';
+  html += '<div class="own-owners-flow">';
+  html += `<div class="own-owners-prior"><span class="own-owners-tag">Prior</span> ${esc(rec.prior_owner || '—')}</div>`;
+  html += `<div class="own-owners-arrow">↓</div>`;
+  html += `<div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">New</span> ${esc(rec.new_owner || rec.recorded_owner_name || '—')}</div>`;
+  html += '</div>';
+  if (rec.recorded_owner_name && rec.recorded_owner_name !== rec.new_owner) {
+    html += `<div class="own-owners-detail">Recorded as: <strong>${esc(rec.recorded_owner_name)}</strong></div>`;
+  }
+  if (rec.state_of_incorporation) {
+    html += `<div class="own-owners-detail">State of inc: ${esc(rec.state_of_incorporation)}</div>`;
+  }
+  if (rec.mailing_address) {
+    html += `<div class="own-owners-detail own-owners-mailing">${esc(rec.mailing_address)}${rec.mailing_address_2 ? '<br>' + esc(rec.mailing_address_2) : ''}</div>`;
+  }
+  html += '</div>';
+
+  // True side
+  html += '<div class="own-owners-cell">';
+  if (rec.true_owner_name) {
+    html += `<div class="own-owners-flow"><div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">Current</span> ${esc(rec.true_owner_name)}</div></div>`;
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— sidebar / county lookup needed —</div>';
+  }
+  if (rec.principal_names) {
+    html += `<div class="own-owners-detail">Principals: ${esc(rec.principal_names)}</div>`;
+  }
+  if (rec.phone_2) {
+    html += `<div class="own-owners-detail">Phone: ${esc(rec.phone_2)}</div>`;
+  }
+  html += '</div>';
+  html += '</div>'; // own-owners-grid
+
+  // Sidebar tip — explicit, since the form is collapsed by default
+  html += '<div class="own-sidebar-tip">';
+  html += '<span class="own-sidebar-tip-icon">📎</span>';
+  html += '<span>Capture from CoStar / county records via the <strong>LCC sidebar</strong> (Chrome) — values land here automatically. Use the manual form below only when no source page is available.</span>';
+  html += '</div>';
+
   if (frpp.street_address) {
-    html += `<div class="context-block">
-      <div class="context-label">FRPP Property Type</div>
+    html += `<div class="context-block" style="opacity:0.75">
+      <div class="context-label">FRPP Reference</div>
       <div class="context-value">${esc(frpp.property_type || '')}</div>
-      <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
+      <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF${frpp.using_agency ? ' · ' + esc(frpp.using_agency) : ''}</div>
     </div>`;
   }
 
   html += '</div>';
 
   // ────────────────────────────────────────────────────────────
-  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // RIGHT PANEL — research-first action surface.
+  // Most ingestion flows through the LCC Chrome sidebar against CoStar /
+  // county pages, so the manual 6-step form is collapsed into a <details>
+  // block by default. The reviewer's primary actions live up top:
+  //   ✓ Approve   — research complete, mark resolved
+  //   ⛓ Reject    — out of scope / bad data
+  //   ↻ SPE Rename — same true owner, different SPE
+  //   N/A         — not applicable
+  //   ✓ Already on file — comp_on_file shortcut (also surfaces when matched)
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
@@ -1334,8 +1505,18 @@ function renderOwnershipResearchCard(rec) {
   const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1, 2, 3].includes(i) })));
   html += renderCompletenessBar(completeness);
 
-  // Step navigation (6 steps — added Prior Sales)
+  // Manual entry is collapsed by default. Open it only when the sidebar
+  // can't reach the source data (e.g. paper-only deeds, manual notes).
   const _priorSales = window._govPriorSales || [];
+  const _formOpen = !!window._govOwnFormOpen;
+  html += '<details class="own-manual-details"' + (_formOpen ? ' open' : '') + ' ontoggle="window._govOwnFormOpen=this.open">';
+  html += '<summary class="own-manual-summary">';
+  html += '<span class="own-manual-summary-icon">✏️</span>';
+  html += '<span class="own-manual-summary-label">Edit fields manually</span>';
+  html += '<span class="own-manual-summary-hint">— sidebar capture preferred; open only when no source page is available</span>';
+  html += '</summary>';
+
+  // Step navigation (6 steps — added Prior Sales)
   const steps = [
     {label: 'Sale Details', complete: !!rec.sale_price},
     {label: 'Entity', complete: !!rec.recorded_owner_name},
@@ -1431,26 +1612,42 @@ function renderOwnershipResearchCard(rec) {
   html += `<button class="btn-action" onclick="govAddPriorSale()" style="margin-bottom:8px">+ Add Prior Sale</button>`;
   html += '</div>';
 
-  html += '</div>';
-
-  // ────────────────────────────────────────────────────────────
-  // ACTION ROW
-  // ────────────────────────────────────────────────────────────
-  html += '<div class="action-row">';
+  // Manual-form internal action row (Back / Next / Save) lives inside the
+  // <details> so it only shows when the reviewer opens the form.
+  html += '<div class="action-row own-manual-action-row">';
   if (govResearchStep > 0) {
     html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
   }
   if (govResearchStep < 5) {
-    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
-  html += `<button class="btn-action${govResearchStep === 5 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
-  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSaveInPlace)">Save manual edits</button>`;
+  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSave)">Save &amp; Next</button>`;
   html += '</div>';
 
+  html += '</details>'; // own-manual-details
+
+  // ────────────────────────────────────────────────────────────
+  // PRIMARY ACTION ROW — research-driven decisions, always visible.
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row own-primary-actions">';
+  if (rec._compOnFile) {
+    html += `<button class="btn-action primary" title="Already in sales_transactions — clear from queue" onclick="_udActionBtnGuard(this, researchMark, 'comp_on_file')">✓ Already on file</button>`;
+  } else {
+    html += `<button class="btn-action primary" title="Research complete — mark resolved" onclick="_udActionBtnGuard(this, researchMark, 'approve')">✓ Approve</button>`;
+  }
+  html += `<button class="btn-action danger" title="Out of scope / bad data" onclick="_udActionBtnGuard(this, researchMark, 'reject')">✗ Reject</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)" title="Skip to next">→ Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')" title="Same true owner, different SPE">↻ SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')" title="Not applicable">N/A</button>`;
+  if (rec._compOnFile) {
+    // Still expose Approve as a secondary path even when comp is on file,
+    // for cases where the reviewer wants to record additional research.
+    html += `<button class="btn-action" style="margin-left:auto" title="Mark research complete" onclick="_udActionBtnGuard(this, researchMark, 'approve')">Approve</button>`;
+  }
   html += '</div>';
+
+  html += '</div>'; // research-form
 
   return html;
 }
@@ -2627,8 +2824,11 @@ async function researchMark(mark) {
   });
 
   let status = 'marked';
-  if (mark === 'spe_rename') status = 'spe_rename';
-  if (mark === 'na') status = 'not_applicable';
+  if (mark === 'spe_rename')   status = 'spe_rename';
+  if (mark === 'na')           status = 'not_applicable';
+  if (mark === 'approve')      status = 'completed';
+  if (mark === 'reject')       status = 'rejected';
+  if (mark === 'comp_on_file') status = 'comp_on_file';
 
   const _reEnableMarks = () => markBtns.forEach(b => {
     b.disabled = false;
@@ -2658,7 +2858,14 @@ async function researchMark(mark) {
     }
   }
 
-  const markLabel = mark === 'spe_rename' ? 'SPE Rename' : mark === 'na' ? 'N/A' : mark;
+  const _markLabels = {
+    spe_rename: 'SPE Rename',
+    na: 'N/A',
+    approve: 'Approved (research complete)',
+    reject: 'Rejected',
+    comp_on_file: '✓ Comp on file'
+  };
+  const markLabel = _markLabels[mark] || mark;
   showToast('Marked as ' + markLabel, 'success');
   researchQueue.splice(researchIdx, 1);
   // Don't increment — splice shifts next item into current index
