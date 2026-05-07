@@ -223,6 +223,249 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'transaction_count_ttm': {
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'TTM Transactions',
+            data: chart.rows.map(r => r.ttm_count ?? r.count),
+            backgroundColor: palette[0],
+            borderRadius: 2,
+          }],
+        },
+        options: commonOpts('function(v){return Math.round(v).toLocaleString()}'),
+      };
+    }
+
+    case 'avg_deal_size': {
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Avg Deal Size',
+            data: chart.rows.map(r => r.avg_deal_size),
+            backgroundColor: palette[1],
+            borderRadius: 2,
+          }],
+        },
+        options: commonOpts('function(v){return "$"+(v/1e6).toFixed(1)+"M"}'),
+      };
+    }
+
+    case 'cap_rate_top_bottom_quartile': {
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Top Quartile',    data: chart.rows.map(r => r.top_quartile),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Median',          data: chart.rows.map(r => r.median),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'Bottom Quartile', data: chart.rows.map(r => r.bottom_quartile),
+              borderColor: palette[3], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          ],
+        },
+        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+      };
+    }
+
+    case 'cap_rate_by_lease_term': {
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: '10+ Year',       data: chart.rows.map(r => r.cap_10plus),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: '6-10 Year',      data: chart.rows.map(r => r.cap_6to10),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: '< 5 Year',       data: chart.rows.map(r => r.cap_less5),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Outside Firm',   data: chart.rows.map(r => r.cap_outside_firm),
+              borderColor: palette[4], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
+          ],
+        },
+        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+      };
+    }
+
+    case 'bid_ask_spread':
+    case 'bid_ask_spread_monthly': {
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Bid-Ask Spread (bps)',
+            data: chart.rows.map(r => r.avg_bid_ask_spread),
+            borderColor: palette[0],
+            backgroundColor: palette[3],
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 2,
+          }],
+        },
+        options: commonOpts('function(v){return (v*100).toFixed(2)+"%"}'),
+      };
+    }
+
+    case 'seller_sentiment':
+    case 'seller_sentiment_monthly': {
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar',  label: 'Price Change %',
+              data: chart.rows.map(r => r.pct_price_change_all),
+              backgroundColor: palette[0], borderRadius: 1, yAxisID: 'y' },
+            { type: 'bar',  label: '8+ Yr Term Price Change %',
+              data: chart.rows.map(r => r.pct_price_change_long_term),
+              backgroundColor: palette[1], borderRadius: 1, yAxisID: 'y' },
+            { type: 'line', label: 'Last Asking Cap (all)',
+              data: chart.rows.map(r => r.last_ask_cap_all),
+              borderColor: palette[4], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+            { type: 'line', label: 'Last Asking Cap (8+ yr)',
+              data: chart.rows.map(r => r.last_ask_cap_long_term),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+          ],
+        },
+        options: {
+          ...commonOpts('function(v){return (v*100).toFixed(1)+"%"}'),
+          scales: {
+            ...commonOpts().scales,
+            y1: {
+              position: 'right',
+              ticks: {
+                color: '#6A748C', font: { family: 'Calibri', size: 9 },
+                callback: 'function(v){return (v*100).toFixed(2)+"%"}',
+              },
+              grid: { display: false },
+            },
+          },
+        },
+      };
+    }
+
+    case 'valuation_index': {
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Valuation Index',
+            data: chart.rows.map(r => r.valuation_index),
+            borderColor: palette[0],
+            backgroundColor: 'transparent',
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 2.5,
+          }],
+        },
+        options: commonOpts('function(v){return Number(v).toFixed(0)}'),
+      };
+    }
+
+    case 'cost_of_capital': {
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: '10Y Treasury',
+              data: chart.rows.map(r => r.treasury_10y_yield),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'Avg Cap Rate (TTM)',
+              data: chart.rows.map(r => r.avg_cap_rate),
+              borderColor: palette[3], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: '10+ Year Cap',
+              data: chart.rows.map(r => r.cap_10plus_year),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'Low Loan Constant',
+              data: chart.rows.map(r => r.low_loan_constant),
+              borderColor: palette[4], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
+            { label: 'High Loan Constant',
+              data: chart.rows.map(r => r.high_loan_constant),
+              borderColor: palette[4], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
+          ],
+        },
+        options: commonOpts('function(v){return (v*100).toFixed(1)+"%"}'),
+      };
+    }
+
+    case 'cash_leveraged_returns': {
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Cash Return Index',
+              data: chart.rows.map(r => r.cash_return),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+            { label: 'Leveraged Return (mid)',
+              data: chart.rows.map(r => r.leveraged_return_mid),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          ],
+        },
+        options: commonOpts('function(v){return (v*100).toFixed(1)+"%"}'),
+      };
+    }
+
+    case 'dom_and_pct_of_ask_monthly': {
+      // Same shape as quarterly version, just monthly anchors. Re-use the
+      // quarterly chart's case body.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar',  label: 'Avg Days on Market',
+              data: chart.rows.map(r => r.avg_dom),
+              backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
+            { type: 'line', label: '% of Ask Price',
+              data: chart.rows.map(r => r.pct_of_ask),
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 1, borderWidth: 2.5, yAxisID: 'y1' },
+          ],
+        },
+        options: {
+          ...commonOpts(),
+          scales: {
+            ...commonOpts().scales,
+            y1: {
+              position: 'right',
+              ticks: {
+                color: '#6A748C', font: { family: 'Calibri', size: 9 },
+                callback: 'function(v){return (v*100).toFixed(1)+"%"}',
+              },
+              grid: { display: false },
+            },
+          },
+        },
+      };
+    }
+
     case 'buyer_class_pct_by_year': {
       const yearLabels = chart.rows.map(r => String(r.year));
       return {

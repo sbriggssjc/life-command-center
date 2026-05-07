@@ -43,7 +43,7 @@ import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
 import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
-import { renderChartsToImages, NATIVE_CHARTS_FEATURE_FLAG } from './_shared/cm-chart-image-renderer.js';
+import { renderChartsToImages } from './_shared/cm-chart-image-renderer.js';
 import { buildDialysisMasterWorkbook } from './_shared/cm-template-loader.js';
 
 // ---------------------------------------------------------------------------
@@ -614,38 +614,39 @@ async function exportWorkbook(req, res) {
     masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
   }
 
-  // 4. Optional: render the marquee chart set to PNG via QuickChart so the
-  //    workbook ships with a "Charts" tab that has visible chart images.
-  //    Behind a feature flag (CM_EXPORT_NATIVE_CHARTS=true) since the
-  //    rendering call ships proprietary data to an external service.
+  // 4. Render the chart set to PNG images via QuickChart so each Data_* tab
+  //    has a chart visual at the top alongside the data table below. This
+  //    is the "chart-per-tab" layout the user asked for: ExcelJS-built
+  //    workbook, brand-styled, marketing exports → opens → sees charts.
+  //
+  //    External service note: QuickChart receives chart configs (cap rates,
+  //    volumes). Default endpoint is the public service; CM_QUICKCHART_URL
+  //    can point at a self-hosted Docker instance for full data sovereignty.
+  //    Per-chart graceful degradation: a render failure on one chart skips
+  //    just that one chart's image (data tab still ships).
   let chartImages = null;
-  if (NATIVE_CHARTS_FEATURE_FLAG) {
-    try {
-      chartImages = await renderChartsToImages({ charts, brand });
-    } catch (e) {
-      // Don't fail the export if chart rendering throws; just skip the
-      // Charts tab. The data tabs are still useful on their own.
-      console.warn(`[exportWorkbook] chart-image render skipped: ${e?.message || e}`);
-      chartImages = [];
-    }
+  try {
+    chartImages = await renderChartsToImages({ charts, brand });
+    console.log(`[exportWorkbook] rendered ${chartImages.length}/${charts.length} chart images`);
+  } catch (e) {
+    console.warn(`[exportWorkbook] chart-image render block skipped: ${e?.message || e}`);
+    chartImages = [];
   }
 
   const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  // 5a. Dialysis: load the binary master template and inject the monthly TTM
-  //     data into its Charts sheet. Returns a workbook where the 37 chart
-  //     objects render live data on open — no paste step. Caller can opt
-  //     out via ?layout=data_tabs to get the legacy ExcelJS workbook (Cover,
-  //     Index, Data_*, MasterPasteReady, Brand) for ad-hoc data sanity-checks.
+  // 5a. Opt-in: dialysis can request the binary master template injection via
+  //     ?layout=master_template. That path ships the user's actual master
+  //     XLSX shell with all 37 chart objects intact. Default is the cleaner
+  //     ExcelJS chart-per-tab layout (per user feedback: "I'm good with the
+  //     font and layout you had in the previous versions with a chart per
+  //     tab… so our marketing team can just export the data on demand.")
   //
-  // Diagnostic header X-CM-Workbook-Path tells the caller which path fired
-  // ('master_template' / 'data_tabs' / 'master_template_failed_fallback' /
-  // 'master_template_no_rows_fallback'). Useful for confirming the loader
-  // actually ran from a deployed environment.
-  const layout = req.query.layout || 'master_template';
-  const masterEligible = (vertical === 'dialysis' && layout !== 'data_tabs');
+  // Diagnostic header X-CM-Workbook-Path tells the caller which path fired.
+  const layout = req.query.layout || 'data_tabs';
+  const masterEligible = (vertical === 'dialysis' && layout === 'master_template');
   const masterHasRows = Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0;
 
   console.log(`[exportWorkbook] vertical=${vertical} layout=${layout} masterEligible=${masterEligible} masterMonthlyRows=${masterMonthlyRows == null ? 'null' : masterMonthlyRows.length}`);

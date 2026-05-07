@@ -551,6 +551,19 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
   const fonts   = (brand?.fonts)   ? brand.fonts   : DEFAULT_BRAND.fonts;
 
+  // Lookup chartImages by chart_template_id for per-tab embedding.
+  // chartImages is the array returned by renderChartsToImages(), where each
+  // entry is { chart_template_id, name, png: Buffer }. When present, each
+  // Data_* tab gets the matching PNG anchored at the top.
+  const chartImagesById = new Map();
+  if (Array.isArray(chartImages)) {
+    for (const ci of chartImages) {
+      if (ci?.chart_template_id && ci?.png) {
+        chartImagesById.set(ci.chart_template_id, ci.png);
+      }
+    }
+  }
+
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Northmarq Capital Markets — LCC';
   wb.lastModifiedBy = 'LCC';
@@ -710,21 +723,54 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     const cols    = CHART_COLUMNS[chart.chart_template_id];
     if (!tabName || !cols) continue;
 
-    const sheet = wb.addWorksheet(tabName, { views: [{ showGridLines: false, state: 'frozen', ySplit: 4 }] });
+    // Per-tab layout when chart image is available:
+    //   Rows 1-22: chart PNG (~440px tall at default row height)
+    //   Row 24:    title block
+    //   Row 25:    subtitle (metric_focus · chart_type · subspecialty)
+    //   Row 26:    meta (N rows · view name)
+    //   Row 27:    header row
+    //   Row 28+:   data rows
+    // When no chart image is available, the tab uses the legacy layout
+    // (title at row 1, header at row 4, data at row 5).
+    const png = chartImagesById.get(chart.chart_template_id);
+    const titleRow  = png ? 24 : 1;
+    const subRow    = titleRow + 1;
+    const metaRow   = titleRow + 2;
+    const headerRow_n = png ? 27 : 4;
+    const dataStart = headerRow_n + 1;
 
-    // Title block
-    sheet.getCell('A1').value = chart.name;
-    sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
-    sheet.getRow(1).height = 22;
+    const sheet = wb.addWorksheet(tabName, {
+      views: [{ showGridLines: false, state: 'frozen', ySplit: headerRow_n }],
+    });
 
-    sheet.getCell('A2').value = `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
-    sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+    // Embed chart image at the top, anchored at A1, sized to span the
+    // first ~22 rows. Image is 900x440 pixels which lands cleanly in a
+    // standard 14-column workbook view.
+    if (png) {
+      try {
+        const imageId = wb.addImage({ buffer: png, extension: 'png' });
+        sheet.addImage(imageId, {
+          tl: { col: 0, row: 0 },           // 0-indexed, anchors at A1
+          ext: { width: 900, height: 440 },
+        });
+      } catch (e) {
+        console.warn(`[cm-excel-export] addImage failed for ${chart.chart_template_id}: ${e?.message || e}`);
+      }
+    }
 
-    sheet.getCell('A3').value = `${(chart.rows || []).length} rows · view=${chart.view_name || ''}`;
-    sheet.getCell('A3').font = { name: fonts.body_family, size: 9, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+    // Title block (placement depends on whether chart image is present)
+    sheet.getCell(`A${titleRow}`).value = chart.name;
+    sheet.getCell(`A${titleRow}`).font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+    sheet.getRow(titleRow).height = 22;
 
-    // Header row at row 4
-    const headerRow = sheet.getRow(4);
+    sheet.getCell(`A${subRow}`).value = `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
+    sheet.getCell(`A${subRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+
+    sheet.getCell(`A${metaRow}`).value = `${(chart.rows || []).length} rows · view=${chart.view_name || ''}`;
+    sheet.getCell(`A${metaRow}`).font = { name: fonts.body_family, size: 9, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+
+    // Header row
+    const headerRow = sheet.getRow(headerRow_n);
     cols.forEach((c, i) => {
       const cell = headerRow.getCell(i + 1);
       cell.value = c.header;
@@ -742,8 +788,8 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       if (c.format && FMT[c.format]) col.numFmt = FMT[c.format];
     });
 
-    // Data rows starting at row 5
-    let dataRowIdx = 5;
+    // Data rows starting just below the header
+    let dataRowIdx = dataStart;
     for (const row of chart.rows || []) {
       const r = sheet.getRow(dataRowIdx);
       cols.forEach((c, i) => {
@@ -772,10 +818,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       dataRowIdx++;
     }
 
-    // Auto-filter on header row
+    // Auto-filter on the header row (location depends on chart-image layout)
     sheet.autoFilter = {
-      from: { row: 4, column: 1 },
-      to:   { row: 4, column: cols.length },
+      from: { row: headerRow_n, column: 1 },
+      to:   { row: headerRow_n, column: cols.length },
     };
 
     // Print setup for marketing handoff
