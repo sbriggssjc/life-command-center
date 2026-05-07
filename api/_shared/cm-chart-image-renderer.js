@@ -25,13 +25,16 @@ const RENDER_DEFAULT_WIDTH  = 900;
 const RENDER_DEFAULT_HEIGHT = 480;
 const RENDER_TIMEOUT_MS     = 15_000;
 
-// Recent-window crop. The deliverable PDF charts typically show Q3 2017
-// onward (or Feb 2018+ for monthly). Filtering to the last N rows keeps
-// the dashboard data ranges tight and avoids the early-2000s sparse
-// data dragging the x-axis. Quarterly: 32 rows ≈ 8 years; monthly: 96 ≈ 8.
-const RECENT_QUARTERS_DEFAULT = 36;   // ~9 years quarterly
-const RECENT_MONTHS_DEFAULT   = 100;  // ~8.3 years monthly
-const RECENT_YEARS_DEFAULT    = 12;   // 12 calendar years (annual templates)
+// Recent-window crop. User feedback (2026-05-07): "we are starting around
+// 2016. Ideally, I want this data to go back as long as we have data to
+// track for it reliably. Historically that's been 2001-ish for other
+// categories." → bumped windows to capture roughly 2001 onward.
+// Quarterly: 100 rows ≈ 25 years; monthly: 288 ≈ 24 years. The view's
+// underlying data starts at 2008 for master_m and earlier than that for
+// the per-template quarterly views.
+const RECENT_QUARTERS_DEFAULT = 100;  // ~25 years quarterly (back to ~2001)
+const RECENT_MONTHS_DEFAULT   = 288;  // ~24 years monthly (back to ~2002)
+const RECENT_YEARS_DEFAULT    = 24;   // 24 calendar years (annual templates)
 
 // Brand-aligned series colors (hex strings).
 function paletteSeries(brand) {
@@ -163,6 +166,15 @@ function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12, yLeftRange, yRig
 // historically; pinning the y-axis here keeps the data legible and
 // matches the master XLSX cap-rate charts.
 const CAP_RATE_RANGE = { min: 0.05, max: 0.10 };
+
+// Tight cap-rate range for charts where the data is concentrated 5.5-7.5%
+// and a 5-10% range wastes vertical space (Active Cap Quartiles, Sentiment
+// last-ask cap, Vol-Cap quartile band).
+const CAP_RATE_TIGHT_RANGE = { min: 0.05, max: 0.08 };
+
+// % of Ask Price axis range. Real-world data lives 85-105%; auto-scaled
+// 0-120% wastes most of the vertical range and hides movement.
+const PCT_OF_ASK_RANGE = { min: 0.80, max: 1.10 };
 
 // ============================================================================
 // Per-template Chart.js v3 config builders
@@ -342,6 +354,8 @@ function buildChartConfig(chart, brand) {
 
     case 'dom_and_pct_of_ask':
     case 'dom_and_pct_of_ask_monthly': {
+      // Right axis (% of Ask) pinned 80-110% so the 96-100% data lives
+      // in the visible range. Auto-scaled 0-120% was hiding movement.
       return {
         type: 'bar',
         data: {
@@ -359,6 +373,7 @@ function buildChartConfig(chart, brand) {
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_INTEGER,
           yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+          yRightRange:  PCT_OF_ASK_RANGE,
         }),
       };
     }
@@ -435,7 +450,9 @@ function buildChartConfig(chart, brand) {
         },
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_PERCENT_1DP,
+          yLeftRange:   { min: 0, max: 0.30 },  // price-change % up to 30%
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+          yRightRange:  CAP_RATE_TIGHT_RANGE,    // 5-8% — cap data lives there
         }),
       };
     }
@@ -594,7 +611,8 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
+        // 5-8% range — quartile data lives 5.3-7.7%; tighter axis shows movement
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_TIGHT_RANGE }),
       };
     }
 
@@ -662,7 +680,7 @@ function buildChartConfig(chart, brand) {
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          yRightRange:  CAP_RATE_RANGE,
+          yRightRange:  { min: 0.05, max: 0.09 },  // 5-9% — quartile band fits
         }),
       };
     }
