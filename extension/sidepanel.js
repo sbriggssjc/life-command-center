@@ -2204,6 +2204,29 @@ function buildMetadata(ctx, domain) {
     if (v == null || v === '') return null;
     return /\d/.test(String(v)) ? v : null;
   };
+  // Round 76ej.w (2026-05-05): a real CRE asking price for any
+  // building with measurable SF is in the hundreds of thousands or
+  // millions. Sub-$5k values are always price-per-SF leaks ($8,286 /
+  // $1,102.05 / $1,345.69 / $419 etc) or household-income figures
+  // ($159,941 from a marketing description). Sub-$50k is also
+  // suspicious for any property over a few thousand SF — but we keep
+  // the threshold low to avoid rejecting legitimate sub-$1M deals.
+  // Also reject when asking_price exactly equals NOI (saw "221058" /
+  // "221057.66" in the audit — same numeric stamped in both slots).
+  const sanitizeAskingPrice = (v, ctxNoi) => {
+    if (v == null || v === '') return null;
+    if (!/\d/.test(String(v))) return null;
+    const numeric = Number(String(v).replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(numeric) || numeric < 25000) return null;
+    if (ctxNoi) {
+      const noiNumeric = Number(String(ctxNoi).replace(/[^0-9.]/g, ''));
+      if (Number.isFinite(noiNumeric) && noiNumeric > 0
+          && Math.abs(numeric - noiNumeric) / Math.max(numeric, noiNumeric) < 0.01) {
+        return null;
+      }
+    }
+    return v;
+  };
   const m = {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
@@ -2211,7 +2234,7 @@ function buildMetadata(ctx, domain) {
     costar_comp_id: ctx.costar_comp_id || null,
     extracted_at: new Date().toISOString(),
     // Financials
-    asking_price: sanitizeNumericField(ctx.asking_price),
+    asking_price: sanitizeAskingPrice(ctx.asking_price, ctx.noi),
     cap_rate: sanitizeNumericField(ctx.cap_rate),
     noi: sanitizeNumericField(ctx.noi),
     price_per_sf: sanitizeNumericField(ctx.price_per_sf),

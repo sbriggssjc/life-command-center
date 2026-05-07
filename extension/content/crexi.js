@@ -515,13 +515,17 @@
   }
 
   function extractCrexiAskingPrice() {
-    // Round 76ej.e (2026-05-04): the body-innerText regex kept missing
-    // the price banner on real CREXi pages — sending '$' with no digits
-    // through to the synthesized text and confusing the AI extractor.
-    // Switch to a DOM-first strategy: scan small banner-area elements
-    // for one whose trimmed text is exactly a price string. Return null
-    // (not '$') when no number follows so the synthetic text and seed
-    // data omit the field entirely.
+    // Round 76ej.e (2026-05-04): switched to a DOM-first strategy after
+    // body-text scans were returning '$' with no digits.
+    // Round 76ej.w (2026-05-05): added a high-confidence banner-shape
+    // regex as the second priority. The Chadds Ford DaVita capture
+    // (265 Wilmington West Chester Pike) was returning $159,941 — the
+    // average household income figure from the marketing description
+    // — because the prior step-3 regex (`$X within 160 chars of cap
+    // rate`) accidentally matched the marketing prose ("...passive
+    // income-producing medical asset at a 6.74% cap rate") instead of
+    // the banner. The actual CREXi banner shape "$X | N days on
+    // market" is unique enough to anchor on directly.
     const PRICE_RE  = /^\$\s?[\d,]+(?:\.\d+)?$/;
     const PRICE_TXT = /\$\s?[\d,]+(?:\.\d+)?/;
 
@@ -536,29 +540,46 @@
       if (m && /\d/.test(m[0])) return m[0].replace(/\s+/g, '');
     }
 
-    // 2. Walk small near-the-top elements (h1-h4, span, div, p) and
-    //    return the first whose trimmed text is exactly a price.
-    //    Stop after 200 candidates — the banner is always near the top.
-    const cands = document.querySelectorAll('h1, h2, h3, h4, span, div, p');
+    // 2. CREXi banner shape: "$X | N days on market | Updated M days ago".
+    //    The "$X | N days on market" sequence is unique to the banner —
+    //    no other dollar figure on the page is followed by that exact
+    //    cadence (pipe + integer + "days on market"). Anchoring here
+    //    sidesteps the household-income / demographic-figure problem.
+    const text = document.body?.innerText || '';
+    const banner = text.match(/(\$\s?[\d,]+(?:\.\d+)?)\s*\|\s*\d+\s+days?\s+on\s+market/i);
+    if (banner) {
+      const value = banner[1].replace(/\s+/g, '');
+      const digits = value.replace(/\D/g, '');
+      if (digits.length >= 4) return value;
+    }
+
+    // 3. Walk small near-the-top elements and return the first whose
+    //    trimmed text is exactly a price. Stop at 200 candidates AND
+    //    stop early if we hit a section header that means we're past
+    //    the banner (Marketing description / Demographics / Investment
+    //    Highlights — those sections contain household-income $ values
+    //    and other non-asking-price figures we must NOT pick up).
+    const SECTION_STOP = /^(marketing\s+description|investment\s+highlights?|demographics?|in\s+the\s+area|property\s+overview|location\s+overview|nearby|tenant\s+overview)$/i;
+    const cands = document.querySelectorAll('h1, h2, h3, h4, h5, span, div, p');
     let scanned = 0;
     for (const el of cands) {
       if (scanned++ > 200) break;
       const t = el.textContent?.trim() || '';
-      if (t.length < 4 || t.length > 24) continue;
+      if (t.length < 4 || t.length > 60) continue;
+      if (SECTION_STOP.test(t)) break;
+      if (t.length > 24) continue;
       if (!PRICE_RE.test(t)) continue;
-      // Exclude the "$" with no digits case and tiny dollar values
-      // (e.g. "$3" cents-of-something widgets).
       const digits = t.replace(/\D/g, '');
       if (digits.length < 4) continue;
       return t.replace(/\s+/g, '');
     }
 
-    // 3. Last resort: anchor on "days on market" / "Cap Rate" within
-    //    160 chars of a $ in body innerText. Require ≥4 digits so
-    //    bare "$" won't slip through.
-    const text = document.body?.innerText || '';
+    // 4. Last resort: anchor on "days on market" specifically (NOT
+    //    "cap rate" — that one matched marketing prose. The "days on
+    //    market" phrase only appears in the banner area). Require the
+    //    $X to be within 60 chars (banner-tight) of the marker.
     const m = text.match(
-      /\$\s?([\d,]{4,}(?:\.\d+)?)(?=[^$\n]{0,160}?(?:days?\s+on\s+market|cap\s+rate))/i
+      /\$\s?([\d,]{4,}(?:\.\d+)?)(?=[^$\n]{0,60}?days?\s+on\s+market)/i
     );
     if (m && m[1].replace(/,/g, '').length >= 4) return '$' + m[1];
 
