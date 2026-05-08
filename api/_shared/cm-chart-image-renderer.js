@@ -66,6 +66,116 @@ function paletteSeries(brand) {
   ];
 }
 
+// Round 1 — PDF-matched chart-specific colors. The brand palette covers
+// blue-family series, but several PDF charts use accent colors that don't
+// fit there: purple/sage/teal for cap-rate cohorts (dialysis p.22), sage
+// green + light purple for sentiment bars (p.35), gray for "Outside Firm"
+// (gov p.13). Hard-coded here so they survive brand-token overrides.
+const PDF_COLORS = {
+  // Cap_by_Term cohort lines (dialysis p.22)
+  cap_long_term:    '#7E6BAD', // purple — 12+ Year (longest term)
+  cap_mid_long:     '#4CB582', // sage green — 8-12 Year (or 6-10)
+  cap_mid:          '#62B5E5', // sky blue — 6-8 Year (or <5)
+  cap_short:        '#003DA5', // dark navy — ≤5 Year (or outside firm)
+  cap_outside_firm: '#6A748C', // gray — Outside Firm (gov p.13)
+
+  // Sentiment bar colors (p.35)
+  sentiment_bar_all:   '#A6D9C9', // sage green — all-deals price change
+  sentiment_bar_long:  '#C8B6E2', // light purple — long-term price change
+
+  // Annotation styling
+  annotation_navy_bg:  '#003DA5',
+  annotation_sky_bg:   '#62B5E5',
+  annotation_text:     '#FFFFFF',
+};
+
+// Helper to build min/max/last-value annotation labels for time-series
+// charts. Picks 3 anchor data points and emits chartjs-plugin-annotation
+// label entries pointing at them. Format helpers per chart's units.
+//
+//   rows:    array of chart rows with `period_end` (or `year`)
+//   getter:  fn(row) → numeric value (or null)
+//   labelFn: fn(value) → display string (e.g. percent / currency / int)
+//   xKey:    'period_end' (default) or 'year'
+//
+// Returns an `annotation.annotations` object plug-and-play for
+// `options.plugins.annotation = { annotations: ... }`.
+function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
+  if (!Array.isArray(rows) || rows.length === 0) return {};
+  const points = rows
+    .map((r, i) => ({ i, x: r[xKey] || r.period_end || r.year, y: getter(r) }))
+    .filter(p => p.y != null && Number.isFinite(Number(p.y)));
+  if (points.length < 3) return {};
+
+  // Find indices for: max, min, last
+  let maxP = points[0], minP = points[0];
+  for (const p of points) {
+    if (Number(p.y) > Number(maxP.y)) maxP = p;
+    if (Number(p.y) < Number(minP.y)) minP = p;
+  }
+  const lastP = points[points.length - 1];
+
+  const labelStyle = (bgColor) => ({
+    backgroundColor: bgColor,
+    color: PDF_COLORS.annotation_text,
+    font: { size: 10, family: 'Calibri', weight: 'bold' },
+    padding: { top: 2, bottom: 2, left: 5, right: 5 },
+    borderRadius: 3,
+    z: 100,  // above everything
+  });
+
+  // Convert period_end (date) to a label like "Q4 '25" matching periodEndLabel
+  const xToLabel = (x) => {
+    if (!x) return null;
+    const dt = new Date(x);
+    if (Number.isNaN(dt.getTime())) return String(x);
+    const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+    return `Q${q} '${String(dt.getUTCFullYear()).slice(2)}`;
+  };
+
+  const out = {};
+  // Last data point — primary callout (navy)
+  out.lastVal = {
+    type: 'label',
+    xValue: xToLabel(lastP.x),
+    yValue: Number(lastP.y),
+    content: labelFn(Number(lastP.y)),
+    yAdjust: -16,
+    ...labelStyle(PDF_COLORS.annotation_navy_bg),
+  };
+  // Max — sky blue callout
+  if (maxP.i !== lastP.i) {
+    out.maxVal = {
+      type: 'label',
+      xValue: xToLabel(maxP.x),
+      yValue: Number(maxP.y),
+      content: labelFn(Number(maxP.y)),
+      yAdjust: -16,
+      ...labelStyle(PDF_COLORS.annotation_sky_bg),
+    };
+  }
+  // Min — sky blue callout
+  if (minP.i !== lastP.i && minP.i !== maxP.i) {
+    out.minVal = {
+      type: 'label',
+      xValue: xToLabel(minP.x),
+      yValue: Number(minP.y),
+      content: labelFn(Number(minP.y)),
+      yAdjust: 16,
+      ...labelStyle(PDF_COLORS.annotation_sky_bg),
+    };
+  }
+  return out;
+}
+
+// Format helpers for annotation labels.
+const fmtPct1 = (v) => (v * 100).toFixed(1) + '%';
+const fmtPct2 = (v) => (v * 100).toFixed(2) + '%';
+const fmtCurrencyM = (v) => '$' + (v / 1_000_000).toFixed(1) + 'M';
+const fmtCurrencyB = (v) => '$' + (v / 1_000_000_000).toFixed(2) + 'B';
+const fmtInteger = (v) => Math.round(v).toString();
+const fmtIndex = (v) => Number(v).toFixed(1);
+
 function periodEndLabel(d) {
   if (!d) return '';
   const dt = new Date(d);
@@ -215,12 +325,11 @@ const CAP_RATE_TIGHT_RANGE = { min: 0.05, max: 0.08 };
 // the up and down movement".
 const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.080 };
 
-// % of Ask Price axis range. User feedback (2026-05-07) on Data_DOM_Ask:
-// "the Y-axis for the % of Ask Price makes it look like one straight line
-// from left to right". Tightened from 0.80–1.10 to 0.90–1.05 (real
-// closed-sale data is 0.93–1.02; this gives breathing room without
-// flattening the line).
-const PCT_OF_ASK_RANGE = { min: 0.90, max: 1.05 };
+// % of Ask Price axis range. PDF dialysis p.33 + gov p.20 both pin
+// 84%–96% on the right axis. Switched to that exact range so our chart
+// matches the master deliverable visually (bars on left = DOM days,
+// line on right = % of Ask).
+const PCT_OF_ASK_RANGE = { min: 0.84, max: 0.96 };
 
 // ============================================================================
 // Per-template Chart.js v3 config builders
@@ -340,6 +449,13 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'avg_deal_size': {
+      const annotations = buildAnnotations(
+        rows, r => r.avg_deal_size, fmtCurrencyM
+      );
+      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT });
+      if (Object.keys(annotations).length) {
+        opts.plugins.annotation = { annotations };
+      }
       return {
         type: 'bar',
         data: {
@@ -351,7 +467,7 @@ function buildChartConfig(chart, brand) {
             borderRadius: 2,
           }],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT }),
+        options: opts,
       };
     }
 
@@ -377,22 +493,29 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'cap_rate_by_lease_term': {
+      // Round 1 colors per dialysis PDF p.22 + gov PDF p.13:
+      //   • Long-term (10+ ≈ "12+"):  purple   #7E6BAD
+      //   • Mid-long (6-10 ≈ "8-12"): sage     #4CB582
+      //   • Short (<5 ≈ "≤5"):         dark navy #003DA5
+      //   • Outside Firm:               gray     #6A748C (gov "Outside" cohort)
+      // Note: bucket boundaries differ slightly between PDF and our
+      // master_m views; bucket realignment is Round 3.
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
             { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
-              borderColor: palette[0], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
-              borderColor: palette[2], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
             { label: '< 5 Year',       data: rows.map(r => r.cap_less5),
-              borderColor: palette[1], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
             { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
-              borderColor: palette[4], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
           ],
         },
@@ -420,13 +543,19 @@ function buildChartConfig(chart, brand) {
               yAxisID: 'y1', order: 0 },
           ],
         },
-        options: comboOpts({
-          yLeftFormat:  AXIS_FORMAT_INTEGER,
-          yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-          // PCT_OF_ASK_RANGE tightened to 0.90-1.05 (was 0.80-1.10)
-          // so the % of Ask line shows real movement.
-          yRightRange:  PCT_OF_ASK_RANGE,
-        }),
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_INTEGER,
+            yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+            // PCT_OF_ASK_RANGE pinned to 0.84-0.96 (matches dialysis
+            // PDF p.33 + gov PDF p.20 right-axis labels).
+            yRightRange:  PCT_OF_ASK_RANGE,
+          });
+          // Annotations: peak/trough/last on % of Ask line
+          const ann = buildAnnotations(rows, r => r.pct_of_ask, fmtPct1);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
       };
     }
 
@@ -489,6 +618,27 @@ function buildChartConfig(chart, brand) {
 
     case 'seller_sentiment':
     case 'seller_sentiment_monthly': {
+      // Round 1 — PDF p.35 styling:
+      //   • Sage green bars: Price Change (TTM)
+      //   • Light purple bars: 8+ Yr Price Change (TTM)
+      //   • Dark navy line: Last Ask (TTM)
+      //   • Sky blue line: 8+ Yr Last Ask (TTM)
+      //   • Left axis 0%–70% (price change %, allows for the wide bar
+      //     range — was 0%–30% which clipped >30% values)
+      //   • Right axis 4.75%–7.25% (cap rate, tighter than BID_ASK
+      //     range to match PDF visual emphasis on movement)
+      const annotations = buildAnnotations(
+        rows, r => r.last_ask_cap_all, fmtPct2
+      );
+      const opts = comboOpts({
+        yLeftFormat:  AXIS_FORMAT_PERCENT_0DP,
+        yLeftRange:   { min: 0, max: 0.70 },
+        yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+        yRightRange:  { min: 0.0475, max: 0.0725 },
+      });
+      if (Object.keys(annotations).length) {
+        opts.plugins.annotation = { annotations };
+      }
       return {
         type: 'bar',
         data: {
@@ -497,36 +647,36 @@ function buildChartConfig(chart, brand) {
             // order=2 on bars pushes them behind the cap lines.
             { type: 'bar',  label: 'Price Change %',
               data: rows.map(r => r.pct_price_change_all),
-              backgroundColor: palette[3], borderRadius: 1,
+              backgroundColor: PDF_COLORS.sentiment_bar_all, borderRadius: 1,
               yAxisID: 'y', order: 2 },
             { type: 'bar',  label: '8+ Yr Term Price Change %',
               data: rows.map(r => r.pct_price_change_long_term),
-              backgroundColor: palette[1], borderRadius: 1,
+              backgroundColor: PDF_COLORS.sentiment_bar_long, borderRadius: 1,
               yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Last Asking Cap (all)',
               data: rows.map(r => r.last_ask_cap_all),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y1', order: 0 },
             { type: 'line', label: 'Last Asking Cap (8+ yr)',
               data: rows.map(r => r.last_ask_cap_long_term),
-              borderColor: palette[0], backgroundColor: 'transparent',
+              borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2,
               yAxisID: 'y1', order: 0 },
           ],
         },
-        options: comboOpts({
-          yLeftFormat:  AXIS_FORMAT_PERCENT_1DP,
-          yLeftRange:   { min: 0, max: 0.30 },  // price-change % up to 30%
-          yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          // Tighter than CAP_RATE_TIGHT_RANGE per user feedback —
-          // last-ask cap on sentiment lives 5.8-7.5%.
-          yRightRange:  CAP_RATE_BID_ASK_RANGE,
-        }),
+        options: opts,
       };
     }
 
     case 'valuation_index': {
+      const annotations = buildAnnotations(
+        rows, r => r.valuation_index, fmtIndex
+      );
+      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+      if (Object.keys(annotations).length) {
+        opts.plugins.annotation = { annotations };
+      }
       return {
         type: 'line',
         data: {
@@ -541,7 +691,7 @@ function buildChartConfig(chart, brand) {
             borderWidth: 2.5,
           }],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+        options: opts,
       };
     }
 
@@ -824,11 +974,17 @@ function buildChartConfig(chart, brand) {
               borderDash: [3, 3], yAxisID: 'y1', order: 0 },
           ],
         },
-        options: comboOpts({
-          yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
-          yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          yRightRange:  { min: 0.05, max: 0.09 },  // 5-9% — quartile band fits
-        }),
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
+            yRightFormat: AXIS_FORMAT_PERCENT_2DP,
+            yRightRange:  { min: 0.05, max: 0.09 },  // 5-9% — quartile band fits
+          });
+          // Annotations on Avg Cap Rate (the primary line — peak/trough/last)
+          const ann = buildAnnotations(rows, r => r.cap_rate, fmtPct2);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
       };
     }
 

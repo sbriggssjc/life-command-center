@@ -39,6 +39,99 @@ const FMT = {
   years_one_decimal:    '0.0" Years"',
 };
 
+// Round 1 — PDF-style footer caption strips. Italicized one-liner per
+// chart that summarizes intent, displayed in a pale blue strip between
+// the chart image (rows 1-22) and the title (row 24). Mirrors the
+// "tagline" boxes at the bottom of each PDF page (e.g., dialysis p.17:
+// "10-yr UST: 4.12% on Dec 31, 2025; year-end data confirms cap-rate
+// stabilization with gradual easing contingent on financing conditions
+// and asset quality").
+//
+// Captions are intentionally generic (no period-specific numbers) so
+// they remain accurate across export rotations. If a PDF deliverable
+// needs date-stamped tagline text, that's a per-rotation override that
+// could be wired through brand tokens or a dedicated catalog column.
+const CHART_FOOTER_CAPTIONS = {
+  valuation_index:
+    'Tracks the dialysis valuation index (line) over time vs YoY % change (bars). The index blends comparable cap-rate trends with changes in market rent and replacement cost to normalize values through cycles.',
+  cap_rate_ttm_by_quarter:
+    'Trailing-twelve-month average cap rate. Use as a baseline; pair with the volume + quartile panels for full pricing context.',
+  cap_rate_top_bottom_quartile:
+    'Cap-rate dispersion (upper/lower quartile + median). Wider bands indicate selectivity in the buyer pool; narrowing bands point to tighter pricing.',
+  volume_ttm_by_quarter:
+    'TTM transaction volume. Read alongside cap-rate trend for a fuller picture of liquidity and pricing momentum.',
+  volume_cap_quartile_combo:
+    'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
+  transaction_count_ttm:
+    'TTM transaction count. Helps frame the depth of the comparable set behind the cap-rate trend.',
+  yoy_volume_change:
+    'Year-over-year change in TTM volume. Sustained positive prints signal recovery; sharp drops match cycle inflections.',
+  cap_rate_yoy_change:
+    'Year-over-year change in TTM cap rate.',
+  avg_deal_size:
+    'TTM average deal size. Helps frame the size profile of recent comps.',
+  nm_vs_market_cap:
+    'Northmarq-brokered cap rates vs. broader market average. Persistent inside-the-market prints quantify the firm execution premium.',
+  cap_rate_by_lease_term:
+    'Cap-rate cohorts by remaining lease term. Term premium (longest minus shortest cohort) measures the discount investors apply for shorter dated assets.',
+  dom_and_pct_of_ask:
+    'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line). Improving % of ask + flat/falling DOM signals tightening bid/ask.',
+  dom_and_pct_of_ask_monthly:
+    'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line).',
+  bid_ask_spread:
+    'Bid-ask spread on closed sales: last asking cap rate vs. achieved cap rate. Tightening = sellers and buyers converging.',
+  bid_ask_spread_monthly:
+    'Bid-ask spread on closed sales.',
+  seller_sentiment:
+    'Share of broadly marketed deals that closed after a price adjustment, alongside the average asking cap rate at close. Lower price-change frequency + flat asking caps signals seller pricing discipline.',
+  seller_sentiment_monthly:
+    'Share of broadly marketed deals that closed after a price adjustment.',
+  asking_cap_quartiles_active:
+    'Active-listing asking cap quartiles for the Total Market and the 10+ Year Term cohort. Read alongside the closed-sale cap-rate panel to gauge seller vs. clearing pricing.',
+  available_market_size_combo:
+    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort.',
+  dom_price_change_active:
+    'Days on market and price-change frequency on active listings. Pair with the asking cap quartiles panel to gauge seller alignment with clearing pricing.',
+  buyer_class_pct_by_year:
+    'Annual breakdown of buyer pool by capital source. Private capital (individual/family/small fund) historically dominates dialysis; public REITs and institutional capital ebb and flow with the cycle.',
+  buyer_pool_breakdown:
+    'TTM buyer pool by capital source.',
+  cost_of_capital:
+    'Net-lease cost-of-capital snapshot: 10-Year Treasury (sky), TTM average cap rate (navy), and assumed loan-constant range (gray dashes between). Cap > loan constant indicates positive leverage.',
+  cash_leveraged_returns:
+    'Cash return index (TTM avg cap) and modeled leveraged return (50% LTV, 30-yr am, 10Y + 180–220 bps). Leveraged > cash means accretive financing is achievable.',
+  rent_psf_box_quarterly:
+    'Quarterly rent / SF distribution: IQR (bars), median (line), min/max (whiskers).',
+  ppsf_box_quarterly:
+    'Quarterly price / SF distribution: IQR (bars), median (line), min/max (whiskers).',
+  cap_rate_by_credit:
+    'Federal vs. State vs. Municipal TTM average cap rates. Federal carries credit and tenant-stability premiums; state and municipal tend to trade wider.',
+  cpi_vs_renewal_cagr:
+    'CPI YoY change vs. GSA renewal CAGR. Persistent gaps highlight whether GSA renewals are tracking inflation.',
+  fed_funds_vs_treasury:
+    'Federal Funds Rate vs. 10-Year Treasury vs. 30-Year Mortgage. Yield-curve slope is a leading indicator for cap-rate direction.',
+  lease_renewal_rate:
+    'GSA lease outcomes by quarter (TTM): renewed, succeeding/superseding, expired, terminated.',
+  lease_termination_rate:
+    'Termination rate as % of active leases (TTM).',
+  lease_structures:
+    'Distribution of lease structures by initial term + firm-term combination ("10, 5" = 10-year initial / 5-year firm).',
+  leased_inventory_by_state:
+    'Top states by total leased SF.',
+  net_lease_spread:
+    'Cap-rate spread over the 10-Year Treasury for Market / NM / Non-NM cohorts.',
+  renewal_rent_growth:
+    'TTM average GSA renewal rent / SF with quartile band.',
+  rent_by_year_built:
+    'Median rent / SF by build-year decade with quartile whiskers. Newer build years command rent premiums driven by interior fit-out costs and current code requirements.',
+  rent_heat_map:
+    'Top states by average rent / SF.',
+  sources_of_capital:
+    'Top buyer-state sources of capital by 15-year volume.',
+  case_for_renewal:
+    'Annual GSA new-lease commencements (bars) vs. average rent / SF (line).',
+};
+
 // Default brand tokens (used as fallback if cm_brand_tokens query failed)
 const DEFAULT_BRAND = {
   palette: {
@@ -758,6 +851,28 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         });
       } catch (e) {
         console.warn(`[cm-excel-export] addImage failed for ${chart.chart_template_id}: ${e?.message || e}`);
+      }
+
+      // Footer caption strip — pale blue full-width bar with italic
+      // summary text in row 23 (between the chart image and the title).
+      // Mirrors the PDF tagline boxes at the bottom of each chart page.
+      const captionText = CHART_FOOTER_CAPTIONS[chart.chart_template_id];
+      if (captionText) {
+        const captionRow = 23;
+        const lastCol = 14;  // span A:N (14 columns)
+        sheet.mergeCells(captionRow, 1, captionRow, lastCol);
+        const captionCell = sheet.getCell(`A${captionRow}`);
+        captionCell.value = captionText;
+        captionCell.font = {
+          name: fonts.body_family, size: 10, italic: true,
+          color: { argb: 'FF' + hex(palette.nm_navy) },
+        };
+        captionCell.fill = {
+          type: 'pattern', pattern: 'solid',
+          fgColor: { argb: 'FF' + hex(palette.nm_pale) },
+        };
+        captionCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
+        sheet.getRow(captionRow).height = 28;
       }
     }
 
