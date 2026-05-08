@@ -395,6 +395,13 @@ function buildChartConfig(chart, brand) {
         PDF_COLORS.cap_mid_long,  // sage — US Renal
         PDF_COLORS.cap_outside_firm, // muted gray — Other
       ];
+      // Round 6a — segment label color contrast fix (user feedback
+      // 2026-05-08: "label colors need to be lighter so we can see them").
+      // Use chartjs-plugin-datalabels to draw the value + share % on
+      // each wedge in white, which contrasts against navy / sky / sage /
+      // gray. QuickChart's hosted service includes this plugin by default.
+      const totalValue = tenantRows.reduce(
+        (sum, r) => sum + (Number(r[valueKey]) || 0), 0);
       return {
         type: 'doughnut',
         data: {
@@ -418,6 +425,26 @@ function buildChartConfig(chart, brand) {
               text: isVolume ? 'Volume Available by Tenant' : 'Count Available by Tenant',
               font: { size: 14, weight: 'bold' },
               color: PDF_COLORS.cap_short,
+            },
+            datalabels: {
+              color: '#FFFFFF',
+              font: { size: 11, weight: 'bold' },
+              textShadowBlur: 2,
+              textShadowColor: 'rgba(0,0,0,0.45)',
+              formatter: (value) => {
+                if (value == null || totalValue === 0) return '';
+                const share = (value / totalValue) * 100;
+                if (share < 4) return ''; // hide micro-segments
+                if (isVolume) {
+                  // $X.XM (or $X.XB) plus share %
+                  const m = value / 1_000_000;
+                  const label = m >= 1000 ? `$${(m / 1000).toFixed(1)}B` : `$${m.toFixed(1)}M`;
+                  return `${label}\n${share.toFixed(1)}%`;
+                }
+                return `${value}\n${share.toFixed(1)}%`;
+              },
+              anchor: 'center',
+              align: 'center',
             },
           },
           cutout: '55%',  // donut hole
@@ -487,6 +514,28 @@ function buildChartConfig(chart, brand) {
             ticks: {
               callback: (v) => (v * 100).toFixed(1) + '%',
               font: { size: 11 },
+            },
+          };
+          // Round 6a — total callouts above each price bar + count under the
+          // term-bucket label, per user feedback: "we want data labels and
+          // callouts so we can see the totals." datalabels plugin is shipped
+          // by QuickChart hosted; the formatter shows N listings + avg price.
+          opts.plugins = opts.plugins || {};
+          opts.plugins.datalabels = {
+            display: (ctx) => ctx.dataset.type === 'bar',
+            color: PDF_COLORS.cap_short,
+            font: { size: 11, weight: 'bold' },
+            anchor: 'end',
+            align: 'top',
+            offset: 4,
+            formatter: (value, ctx) => {
+              const i = ctx.dataIndex;
+              const row = termRows[i];
+              if (!row) return '';
+              const m = (Number(value) || 0) / 1_000_000;
+              const priceLabel = m >= 1 ? `$${m.toFixed(1)}M` : `$${(value/1000).toFixed(0)}K`;
+              const n = row.n_listings ?? 0;
+              return `${priceLabel}\n(n=${n})`;
             },
           };
           return opts;
@@ -1041,6 +1090,23 @@ function buildChartConfig(chart, brand) {
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
       opts.scales.y.max = 1.0;
+      // Round 6a — per-segment % labels per user feedback "we usually
+      // label the data over each bar in percentage terms." datalabels
+      // draws the share inside each segment with white text; segments
+      // <4% get hidden to avoid overlap.
+      opts.plugins = opts.plugins || {};
+      opts.plugins.datalabels = {
+        color: '#FFFFFF',
+        font: { size: 10, weight: 'bold' },
+        textShadowBlur: 2,
+        textShadowColor: 'rgba(0,0,0,0.45)',
+        formatter: (value) => {
+          if (value == null || value < 0.04) return ''; // hide micro-segments
+          return `${(value * 100).toFixed(0)}%`;
+        },
+        anchor: 'center',
+        align: 'center',
+      };
       return {
         type: 'bar',
         data: {
@@ -1240,7 +1306,14 @@ function buildChartConfig(chart, brand) {
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
             yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            yRightRange:  { min: 0.055, max: 0.085 },  // tighter to fit quartile band cleanly
+            // Round 6a — widened from 5.5%–8.5% to 5.0%–9.0% per user
+            // feedback "we need to adjust the Y-axis for the cap rates
+            // because we have data outside the range." Real data 2017+
+            // shows upper Q hits 8.58% and lower Q drops to 5.24%, both
+            // outside the prior tight band. PDF reference is also softer
+            // here than the gov 5.5–8.5 — gives breathing room without
+            // losing the quartile-band tightness.
+            yRightRange:  { min: 0.050, max: 0.090 },
           });
           // Annotations on Avg Cap Rate (the primary line — peak/trough/last)
           const ann = buildAnnotations(rows, r => r.cap_rate, fmtPct2);
