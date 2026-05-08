@@ -11895,6 +11895,36 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
     .sort((a, b) => a.distance_miles - b.distance_miles)
     .slice(0, count);
 
+  // Diagnostic logging — lets us tell apart "props came back but
+  // distance computation killed all of them" from "PostgREST returned
+  // an empty list to begin with." Logs to console with a stable prefix
+  // so it's easy to grep in browser devtools.
+  if (ranked.length === 0 && props.length > 0) {
+    const sample = props.slice(0, 3).map(p => ({
+      property_id: p.property_id,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      lat_type: typeof p.latitude,
+      lng_type: typeof p.longitude,
+      hav_miles: _udHaversineMiles(subject.latitude, subject.longitude, p.latitude, p.longitude)
+    }));
+    console.warn('[lease-comps] universe>0 but ranked=0', {
+      universe: props.length,
+      subject: {
+        property_id: subject.property_id,
+        latitude: subject.latitude,
+        longitude: subject.longitude,
+        lat_type: typeof subject.latitude,
+        lng_type: typeof subject.longitude
+      },
+      sample
+    });
+  } else if (props.length === 0) {
+    console.warn('[lease-comps] PostgREST returned no rows for properties.latitude=not.is.null');
+  } else {
+    console.info(`[lease-comps] universe=${props.length} ranked=${ranked.length} nearestMi=${ranked[0]?.distance_miles?.toFixed(2)}`);
+  }
+
   if (ranked.length === 0) return [];
 
   const ids = ranked.map(r => r.property_id);
