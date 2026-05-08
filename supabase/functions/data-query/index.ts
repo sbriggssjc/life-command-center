@@ -45,6 +45,14 @@ const GOV_WRITE_TABLES = new Set([
   // Portfolio sale-link resolver (Mode D — one sale, N properties). Backed by
   // government-lease/sql/20260506_gov_rpc_portfolio_sale_link.sql.
   "rpc/gov_resolve_portfolio_sale_link",
+  // GSA → Property Link Review resolver. Backed by
+  // government-lease/sql/20260507_gov_rpc_gsa_link_review_resolver.sql.
+  "rpc/gov_resolve_gsa_link_review",
+  // Ownership auto-resolve sweep (empty_shell + placeholder + comp_on_file +
+  // exact_dup buckets). Backed by
+  // government-lease/sql/20260507_gov_rpc_auto_resolve_ownership.sql and
+  // 20260508_gov_rpc_auto_resolve_ownership_exact_dup.sql.
+  "rpc/gov_auto_resolve_ownership",
 ]);
 
 const DIA_READ_TABLES = new Set([

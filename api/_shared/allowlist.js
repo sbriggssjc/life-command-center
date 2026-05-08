@@ -84,6 +84,14 @@ export const GOV_WRITE_TABLES = new Set([
   'rpc/upsert_lead',
   'rpc/save_research_outcome',
   'rpc/resolve_contact',
+  // Sale-link resolver (sql/20260429, sql/20260506)
+  'rpc/gov_resolve_sale_link',
+  'rpc/gov_create_property_from_pending',
+  'rpc/gov_resolve_portfolio_sale_link',
+  // GSA → Property Link Review resolver (sql/20260507)
+  'rpc/gov_resolve_gsa_link_review',
+  // Ownership auto-resolve sweep (sql/20260507, sql/20260508)
+  'rpc/gov_auto_resolve_ownership',
   // Capital Markets — Phase 1
   'cm_nm_broker_patterns',
   'rpc/cm_gov_refresh_nm_attribution',
