@@ -774,6 +774,20 @@ async function loadCountyAuthorities(states) {
 }
 
 function findCountyAuth(city, state) {
+  if (!state) return null;
+
+  // The bulk loader populates govData.countyAuth (a flat array). Lazily index
+  // it into countyCache on first lookup so countyBtns works on all three
+  // research surfaces without an extra async fetch.
+  if (!countyCache[state] && Array.isArray(govData.countyAuth) && govData.countyAuth.length) {
+    countyCache[state] = {};
+    for (const c of govData.countyAuth) {
+      if (c.state_code === state && c.county_name) {
+        countyCache[state][c.county_name.toLowerCase()] = c;
+      }
+    }
+  }
+
   if (!city || !countyCache[state]) return null;
 
   const cityLower = city.toLowerCase();
