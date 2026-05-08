@@ -11868,14 +11868,21 @@ function _udSubjectFromCache(db) {
 async function _udFetchLeaseCompCandidates(db, subject, count) {
   const qFn = db === 'gov' ? govQuery : diaQuery;
 
-  // Pull the property universe with coordinates. We can't yet pre-sort by
-  // distance server-side without PostGIS, so we cap at MAX_LIMIT and
-  // distance-sort client-side. 5000 covers the live inventory comfortably.
-  const propsRes = await qFn('v_property_detail', '*', {
+  // Pull the property universe from the BASE table — not v_property_detail.
+  // The view's column list varies and may not project latitude/longitude
+  // (that's what bit us on the subject), and PostgREST silently returns
+  // empty when the filter column is missing from the source. The
+  // `properties` table is the canonical home for the geocode columns.
+  // We cap at 5000 — covers any single-domain inventory comfortably.
+  const propsRes = await qFn('properties', '*', {
     filter: 'latitude=not.is.null',
     limit: 5000
   });
   const props = Array.isArray(propsRes) ? propsRes : (propsRes?.data || []);
+
+  // Diagnostic surface: surfaces the actual geocode-coverage shortfall.
+  // Stash on window so the next toast can read it without another fetch.
+  window._udLastGeocodeUniverseSize = props.length;
 
   // Distance-rank, drop the subject itself, slice to the requested count.
   const ranked = props
@@ -12055,7 +12062,13 @@ async function _udExportLeaseComps(db, propertyId, btn) {
       _udFetchLeaseCompCandidates(db, subject, count)
     ]);
     if (!comps.length) {
-      showToast('No comparable properties with coordinates found nearby', 'error');
+      const universe = Number(window._udLastGeocodeUniverseSize || 0);
+      const msg = universe === 0
+        ? 'No properties in this database have coordinates yet — a bulk geocode pass is needed before lease comps can be ranked by distance.'
+        : universe < 5
+          ? `Only ${universe} propert${universe === 1 ? 'y has' : 'ies have'} coordinates on file — bulk geocode the database to enable distance-ranked comps.`
+          : 'No comparable properties with coordinates found nearby';
+      showToast(msg, 'error');
       return;
     }
     await _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps);
