@@ -802,6 +802,24 @@ async function exportWorkbook(req, res) {
         last_ask_cap_all: r.last_ask_cap_all,
         last_ask_cap_long_term: r.last_ask_cap_long_term,
       })),
+      // Round 3 PDF parity (dialysis p.22): override the shared
+      // cap_rate_by_lease_term mapper to expose the dialysis-specific
+      // 12+/8-12/6-8/<=5 cohorts ALONGSIDE the legacy 10+/6-10/<5/outside.
+      // The renderer prefers the new fields when present.
+      cap_rate_by_lease_term: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        // Legacy gov-style (kept so other consumers don't break):
+        cap_10plus: r.cap_10plus_year,
+        cap_6to10: r.cap_6to10_year,
+        cap_5to10: r.cap_5to10_year ?? r.cap_6to10_year,
+        cap_less5: r.cap_less5_year,
+        cap_outside_firm: r.cap_outside_firm,
+        // NEW dialysis PDF-aligned cohorts:
+        cap_12plus: r.cap_12plus_year,
+        cap_8to12: r.cap_8to12_year,
+        cap_6to8: r.cap_6to8_year,
+        cap_5orless: r.cap_5orless_year,
+      })),
     } : {
       // Gov master_m carries cap-by-government-credit (federal/state/
       // municipal) but no long-term/short-term lease split for sentiment.

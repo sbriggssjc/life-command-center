@@ -493,32 +493,57 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'cap_rate_by_lease_term': {
-      // Round 1 colors per dialysis PDF p.22 + gov PDF p.13:
-      //   • Long-term (10+ ≈ "12+"):  purple   #7E6BAD
-      //   • Mid-long (6-10 ≈ "8-12"): sage     #4CB582
-      //   • Short (<5 ≈ "≤5"):         dark navy #003DA5
-      //   • Outside Firm:               gray     #6A748C (gov "Outside" cohort)
-      // Note: bucket boundaries differ slightly between PDF and our
-      // master_m views; bucket realignment is Round 3.
+      // Round 3 — bucket realignment per dialysis PDF p.22.
+      //
+      // Two cohort schemes coexist:
+      //   • Dialysis PDF (p.22):  12+ / 8-12 / 6-8 / ≤5
+      //   • Gov PDF (p.13):       10+ / 6-10 / <5 / Outside Firm
+      //
+      // master_m exposes BOTH (Round 3 migration); we detect dialysis
+      // cohorts by sniffing for cap_12plus on the row shape and pick
+      // the matching dataset configuration.
+      //
+      // Colors per PDF (kept consistent across both schemes so the legend
+      // reads the same chart family):
+      //   • Long-term:  purple   #7E6BAD
+      //   • Mid-long:   sage     #4CB582
+      //   • Mid:        sky      #62B5E5
+      //   • Short:      navy     #003DA5
+      //   • Outside:    gray     #6A748C (gov only)
+      const hasDialysisCohorts = rows.some(r =>
+        r.cap_12plus != null || r.cap_8to12 != null ||
+        r.cap_6to8 != null  || r.cap_5orless != null
+      );
+      const datasets = hasDialysisCohorts ? [
+        { label: '12+ Year',     data: rows.map(r => r.cap_12plus),
+          borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+        { label: '8-12 Year',    data: rows.map(r => r.cap_8to12),
+          borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        { label: '6-8 Year',     data: rows.map(r => r.cap_6to8),
+          borderColor: PDF_COLORS.cap_mid, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        { label: '≤5 Year',      data: rows.map(r => r.cap_5orless),
+          borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+      ] : [
+        { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
+          borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+        { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
+          borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        { label: '< 5 Year',       data: rows.map(r => r.cap_less5),
+          borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
+          borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
+      ];
       return {
         type: 'line',
-        data: {
-          labels,
-          datasets: [
-            { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
-              borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
-              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: '< 5 Year',       data: rows.map(r => r.cap_less5),
-              borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
-              borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
-          ],
-        },
+        data: { labels, datasets },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }

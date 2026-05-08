@@ -73,7 +73,7 @@ const CHART_FOOTER_CAPTIONS = {
   nm_vs_market_cap:
     'Northmarq-brokered cap rates vs. broader market average. Persistent inside-the-market prints quantify the firm execution premium.',
   cap_rate_by_lease_term:
-    'Cap-rate cohorts by remaining lease term. Term premium (longest minus shortest cohort) measures the discount investors apply for shorter dated assets.',
+    'Cap-rate cohorts by remaining lease term (TTM). Dialysis chart uses the PDF p.22 cohorts (12+/8-12/6-8/≤5); gov uses 10+/6-10/<5/outside. Term premium (longest minus shortest) is the discount investors apply for shorter-dated assets.',
   dom_and_pct_of_ask:
     'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line). Improving % of ask + flat/falling DOM signals tightening bid/ask.',
   dom_and_pct_of_ask_monthly:
@@ -206,10 +206,18 @@ const CHART_COLUMNS = {
   cap_rate_by_lease_term: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
+    // Legacy gov-style cohorts (10+/6-10/<5/outside) — used by gov vertical
+    // and kept on dialysis for backward compatibility.
     { key: 'cap_10plus',       header: '10+ Year Cap',        format: 'percent_basis_points', width: 14 },
-    { key: 'cap_6to10',        header: '6–10 Year Cap',  format: 'percent_basis_points', width: 16 },
+    { key: 'cap_6to10',        header: '6–10 Year Cap',       format: 'percent_basis_points', width: 16 },
     { key: 'cap_less5',        header: '< 5 Year Cap',        format: 'percent_basis_points', width: 14 },
     { key: 'cap_outside_firm', header: 'Outside Firm Cap',    format: 'percent_basis_points', width: 18 },
+    // Round 3 PDF-aligned dialysis cohorts (12+/8-12/6-8/≤5). NULL on gov
+    // because gov master_m never carried these fields.
+    { key: 'cap_12plus',       header: '12+ Year Cap',        format: 'percent_basis_points', width: 14 },
+    { key: 'cap_8to12',        header: '8–12 Year Cap',       format: 'percent_basis_points', width: 16 },
+    { key: 'cap_6to8',         header: '6–8 Year Cap',        format: 'percent_basis_points', width: 15 },
+    { key: 'cap_5orless',      header: '≤5 Year Cap',         format: 'percent_basis_points', width: 14 },
   ],
   cap_rate_by_credit: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
