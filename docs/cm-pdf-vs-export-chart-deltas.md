@@ -479,6 +479,38 @@ Visual style notes that apply globally to both decks:
 18. **Bid_Ask pre-2010 data** — CoStar field gap, can't fix without external data
 19. **Sentiment "many issues"** — needs specific examples
 20. **Val_Index monthly** — needs source-data extension
+
+### Round 6e — gov data-quality fixes (2026-05-09)
+
+User feedback flagged outliers in Case_Renewal (2019, 2026) and
+Renewal_Rate (2026 spike). Investigation found bulk-import sentinel
+dates in `gsa_lease_events`:
+
+| Date | Event Type | Count | Effect |
+|---|---|---|---|
+| 2026-03-01 | modified | 34,944 | Renewal_Rate 2026 ss=46k |
+| 2019-03-01 | new_award | 8,044 | Case_Renewal 2019 spike |
+| 2026-03-01 | renewed | 4,242 | Renewal_Rate 2026 renewed=14k |
+| 2025-12-01 | renewed | 4,145 | Renewal_Rate 2025-Q4 |
+| 2025-11-01 | renewed | 4,094 | Renewal_Rate 2025-Q4 |
+| 2026-03-01 | new_award | 3,115 | Case_Renewal 2026 spike |
+| 2026-03-01 | expired | 2,086 | Renewal_Rate 2026 |
+| 2026-02-01 | modified | 5,484 | Renewal_Rate 2026 |
+
+Fix: filter `(event_date, event_type)` pairs with daily count > 1,000
+from `cm_gov_case_for_renewal_y` and `cm_gov_lease_renewal_rate_q`.
+Realistic daily ceiling is < 100, so 1,000 leaves headroom for legitimate
+spikes. Migration: `GovernmentProject/sql/20260529_cm_gov_sentinel_date_filtering.sql`
+(applied to gov DB scknotsqkcheojiaewwh).
+
+Result: Case_Renewal 2019 went from 8,629 → 743 commencements;
+2026 went from 3,410 → 358. Renewal_Rate 2026-Q3 ss went from
+46,094 → 4,479. Both series now realistic.
+
+Also verified: `cm_gov_market_quarterly` and dialysis master_m correctly
+exclude NM transactions from the `non_nm_avg_cap` series (the "market"
+in NM_vs_Market). Math check on dialysis 2026-03 master_m:
+raw=7.61% / NM-only=7.42% / non-NM=7.63% — confirms NM is excluded.
 21. **Catalog rows missing TAB_NAMES (silent export drops)** — surfaced
     by the 2026-05-08 export-bundle audit. The chart_template_ids below
     have valid catalog rows (visible to the dashboard query path) but no
