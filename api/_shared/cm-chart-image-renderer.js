@@ -377,6 +377,44 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'buyer_pool_monthly_count': {
+      // Round 3c — PDF dialysis p.27. Stacked bar by buyer class, monthly.
+      // Series colors per the PDF deck:
+      //   • Private (Individual): dark navy #003DA5 (bottom of stack)
+      //   • Institutional/Fund:   sky blue  #62B5E5 (middle)
+      //   • REIT:                 sage      #4CB582 (top)
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Private',
+              data: rows.map(r => r.private_count),
+              backgroundColor: PDF_COLORS.cap_short, // navy
+              stack: 'pool', borderRadius: 0, barPercentage: 1.0,
+              categoryPercentage: 0.95 },
+            { label: 'Institutional / Fund',
+              data: rows.map(r => r.institutional_count),
+              backgroundColor: PDF_COLORS.cap_mid, // sky
+              stack: 'pool', borderRadius: 0, barPercentage: 1.0,
+              categoryPercentage: 0.95 },
+            { label: 'REIT',
+              data: rows.map(r => r.reit_count),
+              backgroundColor: PDF_COLORS.cap_mid_long, // sage
+              stack: 'pool', borderRadius: 0, barPercentage: 1.0,
+              categoryPercentage: 0.95 },
+          ],
+        },
+        options: (() => {
+          const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+          opts.scales = opts.scales || {};
+          opts.scales.x = { ...(opts.scales.x || {}), stacked: true };
+          opts.scales.y = { ...(opts.scales.y || {}), stacked: true };
+          return opts;
+        })(),
+      };
+    }
+
     case 'quarterly_volume_bars': {
       // Round 3b — PDF dialysis p.21 bottom (gov ~p.12). Per-quarter
       // transaction volume rendered as bars (NOT a TTM rolling line).

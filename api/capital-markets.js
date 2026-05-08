@@ -131,6 +131,12 @@ const SYNTHETIC_COMPOSERS = {
     return out;
   },
 
+  // Round 3c — Buyer_Pool_Monthly_Count (PDF dialysis p.27). Stacked
+  // monthly bars with Private/Institutional-Fund/REIT counts. Distinct
+  // from buyer_class_pct_by_year (annual %-stacked) used by gov p.18.
+  // No-op fallback; the master_m mapper fills rows.
+  'buyer_pool_monthly_count': () => [],
+
   // Round 3b — Quarterly_Volume_Bars (PDF dialysis p.21 bottom chart, gov
   // ~p.12). Distinct from volume_ttm_by_quarter which is a TTM rolling line;
   // this one is the quarter's own transaction volume as a bar.
@@ -841,6 +847,19 @@ async function exportWorkbook(req, res) {
         reit_count: r.reit_count,
         cross_border_count: r.cross_border_count,
         institutional_count: r.institutional_count,
+      })),
+      // Round 3c — Buyer_Pool_Monthly_Count (PDF dialysis p.27).
+      // master_m carries per-month counts; we relabel for the deck:
+      //   Private (Individual) ← private_count
+      //   Institutional/Fund   ← institutional_count
+      //   REIT                 ← reit_count
+      // Cross-border is rolled into "Other" (kept on row but not charted).
+      buyer_pool_monthly_count: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        private_count: r.private_count != null ? Number(r.private_count) : 0,
+        institutional_count: r.institutional_count != null ? Number(r.institutional_count) : 0,
+        reit_count: r.reit_count != null ? Number(r.reit_count) : 0,
+        cross_border_count: r.cross_border_count != null ? Number(r.cross_border_count) : 0,
       })),
     };
 

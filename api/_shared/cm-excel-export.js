@@ -62,6 +62,8 @@ const CHART_FOOTER_CAPTIONS = {
     'TTM transaction volume. Read alongside cap-rate trend for a fuller picture of liquidity and pricing momentum.',
   quarterly_volume_bars:
     'Per-quarter transaction volume (NOT TTM). Companion to YoY Change — bars show the quarter-by-quarter pulse; TTM line in Data_Volume_TTM smooths it.',
+  buyer_pool_monthly_count:
+    'Stacked monthly buyer count by classification: Private (Individual) navy, Institutional/Fund sky, REIT sage. Read alongside Data_Buyer_Pool (annual %-stacked) for the full picture.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -181,6 +183,13 @@ const CHART_COLUMNS = {
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',         width: 13 },
     { key: 'quarterly_volume',   header: 'Quarterly Volume ($)',format: 'currency_dollars',   width: 22 },
     { key: 'quarterly_count',    header: 'Quarterly Count',     format: 'integer_count',      width: 17 },
+  ],
+  buyer_pool_monthly_count: [
+    { key: 'period_end',           header: 'Month End',         format: 'date_short',         width: 13 },
+    { key: 'private_count',        header: 'Private (Individual)', format: 'integer_count',   width: 22 },
+    { key: 'institutional_count',  header: 'Institutional / Fund', format: 'integer_count',   width: 22 },
+    { key: 'reit_count',           header: 'REIT',                 format: 'integer_count',   width: 12 },
+    { key: 'cross_border_count',   header: 'Cross-Border',         format: 'integer_count',   width: 16 },
   ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -510,6 +519,7 @@ const PERIOD_SUMMARY_TEMPLATES = new Set([
 const TAB_NAMES = {
   volume_ttm_by_quarter:        'Data_Volume_TTM',
   quarterly_volume_bars:        'Data_Volume_Quarterly',
+  buyer_pool_monthly_count:     'Data_Buyer_Pool_M',
   transaction_count_ttm:        'Data_Txn_Count',
   cap_rate_ttm_by_quarter:      'Data_Cap_Avg',
   cap_rate_top_bottom_quartile: 'Data_Cap_Quartile',
