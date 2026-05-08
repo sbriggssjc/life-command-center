@@ -3,16 +3,23 @@
 // Life Command Center — Round 76gn (2026-05-08)
 //
 // Pulls a batch of `properties` rows where latitude IS NULL, geocodes each
-// against the US Census Bureau onelineaddress API, and PATCHes the result
-// back. Designed to be invoked on a short cron cadence so the background
-// trickle keeps the property universe fully geocoded — the lease-comps
-// export and any future distance-based ranking depend on lat/lng coverage.
+// against the US Census Bureau onelineaddress API, falls back to the Google
+// Maps Geocoding API on Census misses, and PATCHes the result back.
+// Designed to be invoked on a short cron cadence so the background trickle
+// keeps the property universe fully geocoded — the lease-comps export and
+// any future distance-based ranking (nearby owners, competitor analysis,
+// nearby sales) depend on lat/lng coverage.
 //
-// Why Census Bureau:
-//   - Free, no API key, no rate limit (their TIGER service is built for
-//     bulk municipal/research workloads).
-//   - US-only — fine for our dialysis + federal-lease portfolio.
-//   - ~95% match rate on residential / commercial street addresses.
+// Geocoder cascade (Round 76gn.b, 2026-05-08):
+//   1. US Census Bureau onelineaddress — free, no key, no rate limit, US-only
+//      and great at street addresses TIGER indexes (~70-80% hit rate on our
+//      data, 90%+ on gov/FRPP). ~300-500ms per call.
+//   2. Google Maps Geocoding API — paid (~$5/1000 calls), broad coverage,
+//      handles suite numbers / abbreviations / minor city-name typos that
+//      Census struggles with. ~+30 percentage points hit rate over Census
+//      alone in spot-check. Engaged ONLY on Census miss to keep cost low.
+//      Skipped silently when GOOGLE_MAPS_API_KEY is not configured (cron
+//      stays on Census-only behavior, no errors).
 //
 // Why no Nominatim fallback in the cron path:
 //   - Nominatim's TOS caps interactive use at ~1 req/sec, which would
@@ -29,7 +36,13 @@ import { authenticate } from '../_shared/auth.js';
 import { getDomainCredentials, domainQuery } from '../_shared/domain-db.js';
 
 const CENSUS_GEOCODER = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress';
+const GOOGLE_GEOCODER = 'https://maps.googleapis.com/maps/api/geocode/json';
 const DOMAIN_KEY_MAP = { dia: 'dialysis', gov: 'government' };
+
+// Logged once per cold start so a missing key surfaces in Railway logs without
+// flooding every tick. The handler still functions correctly — it just falls
+// back to Census-only behavior identical to the Round 76gn launch.
+let warnedAboutMissingGoogleKey = false;
 
 /**
  * Geocode one property's address via Census Bureau. Returns
@@ -39,7 +52,7 @@ const DOMAIN_KEY_MAP = { dia: 'dialysis', gov: 'government' };
  * missing zip, mixed casing. We require at least street + (city or zip)
  * to avoid sending obviously-incomplete inputs.
  */
-async function geocodeAddress(row) {
+async function geocodeAddressCensus(row) {
   const parts = [row.address, row.city, row.state, row.zip_code].filter(Boolean);
   if (parts.length < 2 || !row.address) return null;
   const url = CENSUS_GEOCODER
@@ -65,6 +78,53 @@ async function geocodeAddress(row) {
 }
 
 /**
+ * Geocode via Google Maps Geocoding API. Returns
+ * { lat, lng, location_type } on success, null on miss/error/no-key.
+ *
+ * `location_type` from Google ('ROOFTOP' | 'RANGE_INTERPOLATED' |
+ * 'GEOMETRIC_CENTER' | 'APPROXIMATE') is included so a future caller can
+ * decide whether the precision is good enough — for haversine ranking out
+ * to a few miles, even APPROXIMATE (zip-centroid-grade) is fine.
+ *
+ * We deliberately DO NOT validate that the returned formatted_address still
+ * resembles the input — for the address-corruption rows we identified
+ * (wrong city paired with real street), Google is more likely to find the
+ * STREET in the WRONG city and still return a coordinate. That's OK for
+ * the lease-comps use case: the comp will land near the wrong city, which
+ * makes it a non-comp and gets ranked away naturally. Better than NULL.
+ */
+async function geocodeAddressGoogle(row, apiKey) {
+  if (!apiKey) return null;
+  const parts = [row.address, row.city, row.state, row.zip_code].filter(Boolean);
+  if (parts.length < 2 || !row.address) return null;
+  const url = GOOGLE_GEOCODER
+    + '?address=' + encodeURIComponent(parts.join(', '))
+    + '&key=' + encodeURIComponent(apiKey);
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const resp = await fetch(url, { signal: ctl.signal });
+    clearTimeout(t);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    // Google returns status='ZERO_RESULTS' for genuine misses, 'OK' for
+    // hits, plus quota/auth statuses. Only OK is success.
+    if (data?.status !== 'OK') return null;
+    const r = data?.results?.[0];
+    const lat = Number(r?.geometry?.location?.lat);
+    const lng = Number(r?.geometry?.location?.lng);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return {
+      lat,
+      lng,
+      location_type: r?.geometry?.location_type || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Main handler — exposed via api/admin.js as ?_route=geocode-tick.
  *
  * Query params:
@@ -72,7 +132,15 @@ async function geocodeAddress(row) {
  *   limit     max rows per domain this tick (default 60, hard cap 200)
  *
  * Response:
- *   { mode, by_domain: { dia: {scanned, patched, ...}, gov: {...} }, totals: {...} }
+ *   {
+ *     mode,
+ *     by_domain: {
+ *       dia: { scanned, patched, patched_census, patched_google,
+ *              missed, skipped, errored },
+ *       gov: {...}
+ *     },
+ *     totals: {...}
+ *   }
  */
 export async function handleGeocodeTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -87,22 +155,38 @@ export async function handleGeocodeTick(req, res) {
     return res.status(400).json({ error: 'domain must be dia, gov, or both' });
   }
   // Per-Vercel-function we have ~25s of effective budget once auth + json
-  // overhead is paid; Census calls run ~300-500ms each, so 60 rows fits
-  // comfortably with headroom for the PATCH writes. Cap at 200 if a caller
-  // gets ambitious — past that we risk function timeout.
+  // overhead is paid; Census calls run ~300-500ms each + Google fallback
+  // adds ~200-300ms per Census miss. 60 rows fits comfortably with
+  // headroom for the PATCH writes. Cap at 200 — past that we risk timeout.
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '60', 10)));
   const dryRun = String(req.query.dry_run || '').toLowerCase() === 'true';
+
+  const googleKey = process.env.GOOGLE_MAPS_API_KEY || '';
+  if (!googleKey && !warnedAboutMissingGoogleKey) {
+    // One-time warning per cold start. The handler still works — Census-only
+    // mode matches the Round 76gn launch behavior. Set GOOGLE_MAPS_API_KEY
+    // in the Railway env to enable the +30pp hit rate boost.
+    console.warn('[geocode-tick] GOOGLE_MAPS_API_KEY not set — Google fallback disabled, using Census-only.');
+    warnedAboutMissingGoogleKey = true;
+  }
 
   const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
   const out = {
     mode: dryRun ? 'dry_run' : 'apply',
+    google_fallback: googleKey ? 'enabled' : 'disabled',
     by_domain: {},
-    totals: { scanned: 0, patched: 0, missed: 0, skipped: 0, errored: 0 }
+    totals: {
+      scanned: 0, patched: 0, patched_census: 0, patched_google: 0,
+      missed: 0, skipped: 0, errored: 0,
+    },
   };
 
   for (const short of targets) {
     const domain = DOMAIN_KEY_MAP[short];
-    const stats = { scanned: 0, patched: 0, missed: 0, skipped: 0, errored: 0 };
+    const stats = {
+      scanned: 0, patched: 0, patched_census: 0, patched_google: 0,
+      missed: 0, skipped: 0, errored: 0,
+    };
 
     if (!getDomainCredentials(domain)) {
       stats.errored = 1;
@@ -137,13 +221,25 @@ export async function handleGeocodeTick(req, res) {
         stats.skipped += 1;
         continue;
       }
-      const result = await geocodeAddress(row);
+
+      // Geocoder cascade: try Census first (free), fall back to Google
+      // (paid, ~$0.005/call) only when Census misses. We track the source
+      // separately so the cron stats expose Google's contribution.
+      let result = await geocodeAddressCensus(row);
+      let source = 'census';
+      if (!result && googleKey) {
+        result = await geocodeAddressGoogle(row, googleKey);
+        if (result) source = 'google';
+      }
+
       if (!result) {
         stats.missed += 1;
         continue;
       }
       if (dryRun) {
         stats.patched += 1;
+        if (source === 'census') stats.patched_census += 1;
+        else stats.patched_google += 1;
         continue;
       }
       // Single-row PATCH keyed on property_id. Failures here are individual
@@ -158,6 +254,8 @@ export async function handleGeocodeTick(req, res) {
       );
       if (patchRes.ok) {
         stats.patched += 1;
+        if (source === 'census') stats.patched_census += 1;
+        else stats.patched_google += 1;
       } else {
         stats.errored += 1;
         if (!stats.error) stats.error = `first patch fail: ${patchRes.status}`;
@@ -167,6 +265,8 @@ export async function handleGeocodeTick(req, res) {
     out.by_domain[short] = stats;
     out.totals.scanned += stats.scanned;
     out.totals.patched += stats.patched;
+    out.totals.patched_census += stats.patched_census;
+    out.totals.patched_google += stats.patched_google;
     out.totals.missed += stats.missed;
     out.totals.skipped += stats.skipped;
     out.totals.errored += stats.errored;
