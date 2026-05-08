@@ -106,6 +106,10 @@ const CHART_FOOTER_CAPTIONS = {
     'Stacked monthly buyer count by classification: Private (Individual) navy, Institutional/Fund sky, REIT sage. Read alongside Data_Buyer_Pool (annual %-stacked) for the full picture.',
   on_market_snapshot:
     'Side-by-side comparison of Total Market vs 10+ Year Term active-listing metrics: count, avg price, avg/upper/lower/median cap, DOM, price-change rate. ↑/↓/→ marks year-over-year direction of change.',
+  available_by_tenant_count_donut:
+    'Active-listing count share by tenant (DaVita / FMC / US Renal / Other). Donut at the latest reported quarter; segments sum to total available count.',
+  available_by_tenant_volume_donut:
+    'Active-listing volume share by tenant (DaVita / FMC / US Renal / Other). Donut at the latest reported quarter; segments sum to total available dollar volume.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -232,6 +236,16 @@ const CHART_COLUMNS = {
     { key: 'institutional_count',  header: 'Institutional / Fund', format: 'integer_count',   width: 22 },
     { key: 'reit_count',           header: 'REIT',                 format: 'integer_count',   width: 12 },
     { key: 'cross_border_count',   header: 'Cross-Border',         format: 'integer_count',   width: 16 },
+  ],
+  available_by_tenant_count_donut: [
+    { key: 'tenant',         header: 'Tenant',          width: 18 },
+    { key: 'count_active',   header: 'Count Available', format: 'integer_count', width: 18 },
+    { key: 'period_end',     header: 'As of',           format: 'date_short',    width: 13 },
+  ],
+  available_by_tenant_volume_donut: [
+    { key: 'tenant',           header: 'Tenant',           width: 18 },
+    { key: 'volume_available', header: 'Volume Available', format: 'currency_dollars', width: 22 },
+    { key: 'period_end',       header: 'As of',            format: 'date_short',       width: 13 },
   ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -563,6 +577,8 @@ const TAB_NAMES = {
   quarterly_volume_bars:        'Data_Volume_Quarterly',
   buyer_pool_monthly_count:     'Data_Buyer_Pool_M',
   on_market_snapshot:           'Data_On_Market_Snapshot',
+  available_by_tenant_count_donut:  'Data_Avail_Tenant_CountD',
+  available_by_tenant_volume_donut: 'Data_Avail_Tenant_VolD',
   transaction_count_ttm:        'Data_Txn_Count',
   cap_rate_ttm_by_quarter:      'Data_Cap_Avg',
   cap_rate_top_bottom_quartile: 'Data_Cap_Quartile',

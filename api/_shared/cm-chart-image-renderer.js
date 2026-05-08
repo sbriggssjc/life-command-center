@@ -377,6 +377,54 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'available_by_tenant_count_donut':
+    case 'available_by_tenant_volume_donut': {
+      // Round 4b — PDF dialysis p.32. Single-period donut, 4 segments
+      // (DaVita / FMC / US Renal / Other). For doughnut charts the row
+      // shape is single-period: each row is one tenant segment.
+      // Use the un-cropped chart.rows here — recentRows truncates to a
+      // time window which would drop everything for a non-time-series
+      // chart.
+      const tenantRows = chart.rows || [];
+      const isVolume = chart.chart_template_id === 'available_by_tenant_volume_donut';
+      const valueKey = isVolume ? 'volume_available' : 'count_active';
+      // PDF p.32 colors: dark navy / sky / sage / muted gray for "Other"
+      const segmentColors = [
+        PDF_COLORS.cap_short,     // dark navy — DaVita
+        PDF_COLORS.cap_mid,       // sky — FMC
+        PDF_COLORS.cap_mid_long,  // sage — US Renal
+        PDF_COLORS.cap_outside_firm, // muted gray — Other
+      ];
+      return {
+        type: 'doughnut',
+        data: {
+          labels: tenantRows.map(r => r.tenant || 'Unknown'),
+          datasets: [{
+            label: isVolume ? 'Volume Available' : 'Count Available',
+            data: tenantRows.map(r => Number(r[valueKey]) || 0),
+            backgroundColor: tenantRows.map((_, i) => segmentColors[i] || segmentColors[3]),
+            borderColor: '#FFFFFF',
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { font: { size: 12 } },
+            },
+            title: {
+              display: true,
+              text: isVolume ? 'Volume Available by Tenant' : 'Count Available by Tenant',
+              font: { size: 14, weight: 'bold' },
+              color: PDF_COLORS.cap_short,
+            },
+          },
+          cutout: '55%',  // donut hole
+        },
+      };
+    }
+
     case 'buyer_pool_monthly_count': {
       // Round 3c — PDF dialysis p.27. Stacked bar by buyer class, monthly.
       // Series colors per the PDF deck:
