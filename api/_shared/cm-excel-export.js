@@ -130,6 +130,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Top buyer-state sources of capital by 15-year volume.',
   case_for_renewal:
     'Annual GSA new-lease commencements (bars) vs. average rent / SF (line).',
+  pace_of_cap_rate_expansion:
+    'Month-over-month change (annualized) in TTM avg cap rate (all cohort, navy) and 10+ Year Term cohort (sky). Bars above zero = expansion (cap rates rising); below zero = compression. Use to spot the rate-cycle inflection.',
 };
 
 // Default brand tokens (used as fallback if cm_brand_tokens query failed)
