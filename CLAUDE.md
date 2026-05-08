@@ -357,3 +357,33 @@ geocoded comparables. Below ~70% domain coverage, most subjects
 return empty result sets and the feature looks broken even though
 the SQL is correct. That's why the cron + Google fallback is worth
 the spend even at $40 backfill + ~$5/month steady-state.
+
+### medicare_clinics city un-truncation (Round 76gn.c, 2026-05-08)
+
+Pre-flight investigation of "what if we sync property city/state from
+the linked CMS facility?" turned up the opposite problem: a historical
+CMS ingest had truncated `medicare_clinics.city` to ~11 characters
+(`STATEN ISLA`, `OKLAHOMA CI`, `RAINBOW CIT`, etc.) for 1,026 rows,
+while the property records carried the un-truncated values from a
+different pipeline. We did a one-shot data fix that propagates the
+property's city back to medicare_clinics for every (mc, p) pair where
+mc.city is a strict case-insensitive prefix of p.city, length(mc.city)
+>= 6, and states match. **Direction is property → CMS, not the other
+way around** — properties are the trusted side.
+
+Result: 1,026 medicare_clinics rows fixed, leaving 215 (177 city_diff
++ 38 state_diff) for human review via a new
+`v_property_cms_link_suspect` view. That view scores each row with
+`suspect_kind` (`state_diff` is highest concern), `street_looks_unrelated`
+(first 6 alnum chars of address differ — strong bad-link signal), and
+`zip5_matches` (cities differ but zip+street match → likely
+neighborhood-vs-municipality alias, low concern).
+
+Migration:
+`supabase/migrations/dialysis/20260508120000_dia_round_76gn_c_cms_property_link_suspect.sql`.
+
+The fix does **not** directly improve the geocode-tick cron's hit rate
+— that cron pulls from `properties`, not `medicare_clinics`. The value
+is downstream: every `v_clinic_*` view now shows clean city names, and
+the medicare_clinics rows can serve as a clean address source for any
+future CMS-seeded geocoding pass.
