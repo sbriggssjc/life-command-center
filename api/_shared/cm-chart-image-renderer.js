@@ -1389,6 +1389,19 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'leased_inventory_by_state': {
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      //
+      // The PDF (gov p.26) ships this as a US choropleth — states colored
+      // by lease count. QuickChart's hosted service does NOT bundle the
+      // chartjs-chart-geo plugin, so `type: 'choropleth'` returns a 400.
+      // We ship the horizontal-bar fallback below; when CM_QUICKCHART_URL
+      // points at a self-hosted instance with chartjs-chart-geo installed,
+      // a future PR can swap this to:
+      //
+      //   if (process.env.CM_CHOROPLETH_ENABLED === 'true') {
+      //     return { type: 'choropleth', data: { ... outline: '$states' ... } };
+      //   }
+      //
       // Top 15 states by lease_count
       const top = (rows || []).slice(0, 15);
       return {
@@ -1480,6 +1493,12 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'rent_heat_map': {
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // PDF (gov p.33) ships as a US choropleth color-graded by avg rent PSF.
+      // Choropleth requires chartjs-chart-geo plugin not bundled in QuickChart
+      // hosted; when self-hosted instance comes online, swap to choropleth via
+      // CM_CHOROPLETH_ENABLED feature flag.
+      //
       // Top 15 states by avg rent PSF (horizontal bar; labels=state)
       const top = (rows || [])
         .filter(r => r.avg_rpsf != null)
@@ -1501,6 +1520,12 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'sources_of_capital': {
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // PDF (gov p.19) ships as a US bubble map (states colored by dollar
+      // volume + circles overlaid on top states with $X.XB labels). Bubble
+      // map = scatter geo overlay, also requires chartjs-chart-geo plugin.
+      // Bar fallback below; choropleth swap behind CM_CHOROPLETH_ENABLED flag.
+      //
       // Top 15 buyer states by 15y volume
       const top = (rows || []).slice(0, 15);
       return {
