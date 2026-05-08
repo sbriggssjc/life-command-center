@@ -26,6 +26,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/o
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
+import { lookupLlc } from './_shared/llc-research.js';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -88,6 +89,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     case 'availability-promotion-sweep': return handleAvailabilityPromotionSweep(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
+    case 'llc-research-tick':       return handleLlcResearchTick(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -2575,4 +2577,189 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     failed:   results.failed,
     by_source: results.by_source,
   });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.j Phase 2 — LLC research worker.
+//
+// Drains the per-domain `llc_research_queue` table populated by the
+// upsertDomainOwners writer hook. For each queued row, calls lookupLlc()
+// (which today routes to OpenCorporates when OPENCORPORATES_API_KEY is set,
+// otherwise no-ops) and writes the enrichment back to recorded_owners +
+// the queue row.
+//
+// GET  → dry-run; reports what WOULD be looked up but does no API calls
+//        and no DB writes. Useful for sanity-checking the queue.
+// POST → live; processes up to `limit` queued rows.
+//
+// Query params:
+//   domain  = 'dia' | 'gov' | 'both' (default 'both')
+//   limit   = max rows per domain per tick (default 10, max 50)
+//
+// The handler is idempotent and safe to retry — queue rows are stamped
+// status='in_progress' before lookup and 'done'/'failed'/'no_match'/
+// 'unsupported_state' after, and the UNIQUE(recorded_owner_id) constraint
+// on the queue blocks duplicate inserts.
+// ────────────────────────────────────────────────────────────────────────────
+async function handleLlcResearchTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia', 'gov', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia, gov, or both' });
+  }
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '10', 10)));
+  const dryRun = req.method === 'GET';
+
+  const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    handler_configured: !!process.env.OPENCORPORATES_API_KEY,
+    scanned: 0,
+    enriched: 0,
+    no_match: 0,
+    unsupported_state: 0,
+    failed: 0,
+    by_domain: {},
+  };
+
+  for (const target of targets) {
+    const dom = target === 'dia' ? 'dialysis' : 'government';
+    const summary = { scanned: 0, enriched: 0, no_match: 0, unsupported_state: 0, failed: 0, items: [] };
+
+    // Pull queued rows. Sort by created_at so older entries get drained first.
+    const queueRes = await domainQuery(dom, 'GET',
+      `llc_research_queue?status=eq.queued` +
+      `&select=queue_id,recorded_owner_id,property_id,search_name,guessed_state,attempts` +
+      `&order=created_at.asc&limit=${limit}`
+    );
+    if (!queueRes.ok) {
+      summary.error = { stage: 'list', status: queueRes.status, detail: queueRes.data };
+      result.by_domain[dom] = summary;
+      continue;
+    }
+    const queued = Array.isArray(queueRes.data) ? queueRes.data : [];
+    summary.scanned = queued.length;
+    result.scanned += queued.length;
+
+    if (queued.length === 0 || dryRun) {
+      summary.items = queued.map(q => ({
+        queue_id: q.queue_id,
+        search_name: q.search_name,
+        guessed_state: q.guessed_state,
+      }));
+      result.by_domain[dom] = summary;
+      continue;
+    }
+
+    for (const q of queued) {
+      const item = { queue_id: q.queue_id, search_name: q.search_name };
+      try {
+        // 1. Mark in_progress so concurrent ticks don't double-process.
+        await domainQuery(dom, 'PATCH',
+          `llc_research_queue?queue_id=eq.${q.queue_id}`,
+          {
+            status: 'in_progress',
+            attempts: (q.attempts || 0) + 1,
+            last_attempt_at: new Date().toISOString(),
+          });
+
+        // 2. Look up.
+        const r = await lookupLlc({ name: q.search_name, state: q.guessed_state });
+
+        // 3. Map result → terminal state.
+        if (!r.found) {
+          const status =
+            r.reason === 'no_match'              ? 'no_match' :
+            r.reason === 'unsupported_state'     ? 'unsupported_state' :
+            r.reason === 'no_handler_configured' ? 'queued' :  // re-queue: the key may land later
+                                                   'failed';
+          await domainQuery(dom, 'PATCH',
+            `llc_research_queue?queue_id=eq.${q.queue_id}`,
+            {
+              status,
+              last_error: r.reason || 'unknown',
+              resolved_at: status === 'queued' ? null : new Date().toISOString(),
+            });
+          item.outcome = status;
+          summary[status === 'queued' ? 'failed' : status] += 1;
+          if (status === 'queued') result.failed += 1;
+          else result[status] += 1;
+          continue;
+        }
+
+        // 4. Found: write enrichment to recorded_owners. dia uses
+        //    state_of_incorporation; gov uses filing_state.
+        const isGov = dom === 'government';
+        const stateCol = isGov ? 'filing_state' : 'state_of_incorporation';
+        const ownerPatch = stripNullsLocal({
+          [stateCol]:               r.filing_state,
+          filing_id:                r.filing_id,
+          filing_date:              r.filing_date,
+          filing_status:            r.filing_status,
+          registered_agent_name:    r.registered_agent_name,
+          registered_agent_address: r.registered_agent_address,
+          manager_name:             r.manager_name,
+          manager_role:             r.manager_role,
+          llc_research_at:          new Date().toISOString(),
+          llc_research_source:      r.source,
+        });
+        await domainQuery(dom, 'PATCH',
+          `recorded_owners?recorded_owner_id=eq.${q.recorded_owner_id}`,
+          ownerPatch);
+
+        // 5. Mark queue row done.
+        await domainQuery(dom, 'PATCH',
+          `llc_research_queue?queue_id=eq.${q.queue_id}`,
+          {
+            status: 'done',
+            found_filing_id: r.filing_id || null,
+            found_filing_state: r.filing_state || null,
+            enrichment_payload: r.payload || null,
+            resolved_at: new Date().toISOString(),
+            last_error: null,
+          });
+
+        item.outcome = 'enriched';
+        item.filing_state = r.filing_state;
+        item.filing_status = r.filing_status;
+        summary.enriched += 1;
+        result.enriched += 1;
+      } catch (err) {
+        // Network / parse failures land here. Mark failed but keep the row
+        // so a future tick can retry — attempts column tracks the retry
+        // count for visibility.
+        await domainQuery(dom, 'PATCH',
+          `llc_research_queue?queue_id=eq.${q.queue_id}`,
+          {
+            status: 'failed',
+            last_error: String(err?.message || err).slice(0, 500),
+          });
+        item.outcome = 'error';
+        item.error = err?.message || String(err);
+        summary.failed += 1;
+        result.failed += 1;
+      }
+      summary.items.push(item);
+    }
+
+    result.by_domain[dom] = summary;
+  }
+
+  return res.status(200).json(result);
+}
+
+// Local stripNulls — admin.js doesn't import the sidebar-pipeline version
+// to avoid pulling its full dependency tree just for one helper.
+function stripNullsLocal(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v !== null && v !== undefined && v !== '') out[k] = v;
+  }
+  return out;
 }
