@@ -442,12 +442,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
             ${_udKeyFields(db, synthProperty, ownership)}
           </div>
           ${dismissBtn}
-          ${_udLeaseCompsControlHtml(db, ids.property_id)}
+          ${_udLeaseCompsControlHtml(db, propertyId || synthProperty?.property_id || ids.property_id)}
           <button class="detail-action-btn" id="consolidateBtn"
             title="Find duplicate properties + same-tenant clusters"
-            onclick="openConsolidateModal('${db}', ${ids.property_id || 'null'})"
+            onclick="openConsolidateModal('${db}', ${(propertyId || ids.property_id) || 'null'})"
             style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
-            ${ids.property_id ? '' : 'disabled'}>
+            ${(propertyId || ids.property_id) ? '' : 'disabled'}>
             🔗 Consolidate
           </button>
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
@@ -11982,6 +11982,15 @@ function _udFmtBumps(pct, intervalMo) {
 }
 
 async function _udExportLeaseComps(db, propertyId, btn) {
+  // Fall back to whatever the panel resolved during load. The header HTML
+  // is generated once, but for CMS-clinic / fallback-only clicks the
+  // property_id only materializes after a medicare_clinics or address
+  // lookup — so the inline arg can lag behind reality. Cache wins.
+  if (!propertyId) {
+    propertyId = _udCache?.property?.property_id
+              || _udCache?.ids?.property_id
+              || null;
+  }
   if (!propertyId) {
     showToast('Open a property with a property_id to export lease comps', 'error');
     return;
