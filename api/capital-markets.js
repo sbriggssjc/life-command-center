@@ -802,9 +802,30 @@ async function exportWorkbook(req, res) {
     const monthlyView = vertical === 'dialysis'
       ? 'cm_dialysis_market_quarterly_master_m'
       : 'cm_gov_market_quarterly_master_m';
-    const monthlyPath = `${monthlyView}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
-    const monthlyResult = await domainQuery(domain, 'GET', monthlyPath);
+    // Round 6b — gov master_m fetch was returning 0 rows in production
+    // (user's 2026-03-31 gov export shows every tab with quarterly view
+    // counts ~70-115 rows, never master_m's ~300 monthly rows). Direct
+    // SQL probe shows the view has 303 rows for subspecialty='all'. The
+    // single strict fetch was failing silently — likely a PostgREST
+    // serialization issue with one of the 39 columns.
+    //
+    // Use the resilient fetchView ladder (standard → no-subspecialty →
+    // no-order → bare) instead of a single attempt, and log which try
+    // succeeded so we can diagnose in Vercel logs.
+    const monthlyResult = await fetchView(monthlyView, 'period_end');
     masterMonthlyRows = monthlyResult.ok !== false ? (monthlyResult.data || []) : [];
+    console.log(
+      `[exportWorkbook] vertical=${vertical} master_m=${monthlyView}: ` +
+      `fetched ${masterMonthlyRows.length} rows ` +
+      `(ok=${monthlyResult.ok}, status=${monthlyResult.status || 'n/a'})`
+    );
+    if (masterMonthlyRows.length === 0 && monthlyResult.ok === false) {
+      console.warn(
+        `[exportWorkbook] ${monthlyView} fetch failed; mapper block will be ` +
+        `skipped, charts will fall back to per-view quarterly data. ` +
+        `error=${JSON.stringify(monthlyResult.data)?.slice(0, 200)}`
+      );
+    }
   }
 
   // 4a. For dialysis charts that map to a master_m column, override the
@@ -824,8 +845,16 @@ async function exportWorkbook(req, res) {
         period_end: r.period_end,
         volume_dollars: r.ttm_volume,
       })),
+      // Round 6b — user feedback: "Data_Cap_Average looks great but this
+      // is a weighted average. I think we have historically used an
+      // average." master_m carries both ttm_weighted_cap_rate and
+      // avg_cap_rate_ttm; the latter is the simple TTM mean while the
+      // former weights by sold_price. Switch to the simple mean for
+      // consistency with the manual Excel deliverable.
       cap_rate_ttm_by_quarter: (rows) => rows.map(r => ({
         period_end: r.period_end,
+        // Field name preserved for renderer compatibility, but the value
+        // is now the simple TTM avg, not the dollar-weighted version.
         ttm_weighted_cap_rate: r.avg_cap_rate_ttm,
       })),
       transaction_count_ttm: (rows) => rows.map(r => ({

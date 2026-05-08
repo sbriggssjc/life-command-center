@@ -29,40 +29,51 @@ import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js'
 // builder computes current/prior/YoY/prior-cycle/5y/10y/15y averages from
 // the chart's row stream and emits a small block above the raw data dump.
 // PDF parity: gov p.11/p.13/p.14/p.17/p.20/p.21, dialysis p.22/p.25/p.33.
-const INLINE_SUMMARY_METRICS = {
-  cap_rate_by_lease_term: [
-    // Dialysis cohorts (PDF p.22, 12+/8-12/6-8/≤5):
-    { label: '12+ Year Cap',  format: 'percent_basis_points', fieldKeys: ['cap_12plus'] },
-    { label: '8-12 Year Cap', format: 'percent_basis_points', fieldKeys: ['cap_8to12'] },
-    { label: '6-8 Year Cap',  format: 'percent_basis_points', fieldKeys: ['cap_6to8'] },
-    { label: '≤5 Year Cap',   format: 'percent_basis_points', fieldKeys: ['cap_5orless'] },
-    // Gov cohorts (PDF p.13, 10+/6-10/<5/outside) — only one set will
-    // actually populate per vertical (legacy fields always present so
-    // both render but gov rows have the dialysis fields null → pickValue
-    // returns null → the row prints empty cells which is fine).
-    { label: '10+ Year Cap',         format: 'percent_basis_points', fieldKeys: ['cap_10plus'] },
-    { label: '6-10 Year Cap',        format: 'percent_basis_points', fieldKeys: ['cap_6to10', 'cap_5to10'] },
-    { label: '< 5 Year Cap',         format: 'percent_basis_points', fieldKeys: ['cap_less5'] },
-    { label: 'Outside Firm Cap',     format: 'percent_basis_points', fieldKeys: ['cap_outside_firm'] },
-  ],
-  cap_rate_top_bottom_quartile: [
-    { label: 'Top Quartile Cap',    format: 'percent_basis_points', fieldKeys: ['top_quartile'] },
-    { label: 'Median Cap',          format: 'percent_basis_points', fieldKeys: ['median'] },
-    { label: 'Bottom Quartile Cap', format: 'percent_basis_points', fieldKeys: ['bottom_quartile'] },
-  ],
-  dom_and_pct_of_ask: [
-    { label: 'Avg Days on Market (TTM)', format: 'integer_count',        fieldKeys: ['avg_dom'] },
-    { label: 'Sale % of Ask Price (TTM)', format: 'percent_one_decimal', fieldKeys: ['pct_of_ask'] },
-  ],
-  bid_ask_spread: [
-    { label: 'Avg Bid-Ask Spread (TTM)', format: 'percent_basis_points', fieldKeys: ['avg_bid_ask_spread'] },
-    { label: 'Last Asking Cap (TTM)',     format: 'percent_basis_points', fieldKeys: ['avg_last_ask_cap'] },
-    { label: 'Pct Listings w/ Price Change (TTM)', format: 'percent_one_decimal', fieldKeys: ['pct_price_change'] },
-  ],
-  cap_rate_ttm_by_quarter: [
-    { label: 'Avg Cap Rate (TTM)', format: 'percent_basis_points', fieldKeys: ['ttm_weighted_cap_rate'] },
-  ],
-};
+// Round 6b — vertical-aware version. The Cap_by_Term cohort scheme
+// differs between dialysis (12+/8-12/6-8/≤5 per PDF p.22) and gov
+// (10+/6-10/<5/outside per PDF p.13). Mixing both into one summary
+// produced 4 empty rows per export ("jumbled mess" — user feedback
+// 2026-05-09). This function returns just the cohorts that actually
+// populate for the active vertical.
+function getInlineSummaryMetrics(chartId, vertical) {
+  const COMMON = {
+    cap_rate_top_bottom_quartile: [
+      { label: 'Top Quartile Cap',    format: 'percent_basis_points', fieldKeys: ['top_quartile'] },
+      { label: 'Median Cap',          format: 'percent_basis_points', fieldKeys: ['median'] },
+      { label: 'Bottom Quartile Cap', format: 'percent_basis_points', fieldKeys: ['bottom_quartile'] },
+    ],
+    dom_and_pct_of_ask: [
+      { label: 'Avg Days on Market (TTM)', format: 'integer_count',        fieldKeys: ['avg_dom'] },
+      { label: 'Sale % of Ask Price (TTM)', format: 'percent_one_decimal', fieldKeys: ['pct_of_ask'] },
+    ],
+    bid_ask_spread: [
+      { label: 'Avg Bid-Ask Spread (TTM)', format: 'percent_basis_points', fieldKeys: ['avg_bid_ask_spread'] },
+      { label: 'Last Asking Cap (TTM)',     format: 'percent_basis_points', fieldKeys: ['avg_last_ask_cap'] },
+      { label: 'Pct Listings w/ Price Change (TTM)', format: 'percent_one_decimal', fieldKeys: ['pct_price_change'] },
+    ],
+    cap_rate_ttm_by_quarter: [
+      { label: 'Avg Cap Rate (TTM)', format: 'percent_basis_points', fieldKeys: ['ttm_weighted_cap_rate'] },
+    ],
+  };
+  if (chartId === 'cap_rate_by_lease_term') {
+    if (vertical === 'dialysis') {
+      return [
+        { label: '12+ Year Cap',  format: 'percent_basis_points', fieldKeys: ['cap_12plus'] },
+        { label: '8-12 Year Cap', format: 'percent_basis_points', fieldKeys: ['cap_8to12'] },
+        { label: '6-8 Year Cap',  format: 'percent_basis_points', fieldKeys: ['cap_6to8'] },
+        { label: '≤5 Year Cap',   format: 'percent_basis_points', fieldKeys: ['cap_5orless'] },
+      ];
+    }
+    // gov + national_st use the legacy 10+/6-10/<5/outside cohorts
+    return [
+      { label: '10+ Year Cap',     format: 'percent_basis_points', fieldKeys: ['cap_10plus'] },
+      { label: '6-10 Year Cap',    format: 'percent_basis_points', fieldKeys: ['cap_6to10', 'cap_5to10'] },
+      { label: '< 5 Year Cap',     format: 'percent_basis_points', fieldKeys: ['cap_less5'] },
+      { label: 'Outside Firm Cap', format: 'percent_basis_points', fieldKeys: ['cap_outside_firm'] },
+    ];
+  }
+  return COMMON[chartId];
+}
 
 // Excel number-format codes (matching cm_brand_tokens.axis_formats)
 const FMT = {
@@ -1018,7 +1029,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // configured). Block is { rows: [...], height: N } where N is the
     // number of Excel rows the block consumes (1 header + 1 column-header
     // + len(metrics) metric rows + 1 spacer = len + 3).
-    const summaryMetrics = INLINE_SUMMARY_METRICS[chart.chart_template_id];
+    // Round 6b — vertical-aware so dialysis cohorts (12+/8-12/6-8/≤5) and
+    // gov cohorts (10+/6-10/<5/outside) don't render side by side with
+    // half the rows blank ("jumbled mess" — user feedback 2026-05-09).
+    const summaryMetrics = getInlineSummaryMetrics(chart.chart_template_id, vertical);
     let summaryRows = [];
     if (summaryMetrics && Array.isArray(chart.rows) && chart.rows.length > 0) {
       try {
