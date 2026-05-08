@@ -1798,3 +1798,46 @@ export function exportFilename({ vertical, subspecialty, asOf }) {
                     : String(vertical || 'CapitalMarkets');
   return `NM-CapMarkets-${verticalStr}${subStr}-${dateStr}.xlsx`;
 }
+
+// ============================================================================
+// Audit hook (Round 5b — silent-drop CI gate)
+// ============================================================================
+//
+// Returns a snapshot of the per-tab dispatch tables so a CI test can verify
+// that every chart_template_id in the catalog has both a tab name AND a
+// column schema. The Round 5a audit caught 14 silent drops where a catalog
+// row existed but TAB_NAMES / CHART_COLUMNS were missing — this hook makes
+// the next one detectable on PR rather than after deploy.
+//
+// Returned shape (read-only — do NOT mutate from callers):
+//   {
+//     tabNames:                 { [chart_template_id]: 'Data_*' },
+//     chartColumns:             { [chart_template_id]: ColumnSchema[] },
+//     periodSummaryTemplates:   Set<chart_template_id>,
+//     specialRenderers:         Set<chart_template_id>,
+//   }
+//
+// `specialRenderers` enumerates chart_template_ids that have a dedicated
+// render path (kpi_block, on_market_snapshot, period_summary_table) and
+// therefore don't need a CHART_COLUMNS entry — the audit test should treat
+// these as exempt from the columns check.
+export function getExportBundleSchema() {
+  return {
+    tabNames:               TAB_NAMES,
+    chartColumns:           CHART_COLUMNS,
+    periodSummaryTemplates: PERIOD_SUMMARY_TEMPLATES,
+    // Charts whose worksheet is built via a dedicated renderPeriodSummaryTab /
+    // renderKpiBlockTab / renderOnMarketSnapshotTab path. They need a tab name
+    // but NOT a CHART_COLUMNS entry — the dedicated renderer owns the layout.
+    specialRenderers: new Set([
+      ...PERIOD_SUMMARY_TEMPLATES,
+      'on_market_snapshot',          // renderOnMarketSnapshotTab
+      // KPI block charts are detected at runtime by chart.chart_type==='kpi_block',
+      // not by template_id, so they're handled via runtime dispatch — list them
+      // here too to keep the audit honest.
+      'value_proposition_results',
+      'whatsnew_quarter_kpis',
+      'inventory_snapshot_kpis',
+    ]),
+  };
+}

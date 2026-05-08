@@ -486,6 +486,14 @@ Visual style notes that apply globally to both decks:
     which means the per-tab loop's `if (!tabName || !cols) continue;`
     silently skips them in every export. Audit-fix shipped Round 5a for
     `top_buyers_table`, `top_sellers_table`, `nm_notable_transactions`.
+
+    **Round 5b CI gate**: `test/cm-export-bundle-audit.test.js` enforces
+    that every dialysis-or-gov catalog row has a TAB_NAMES + CHART_COLUMNS
+    entry, with explicit allow-listing for the 11 known-missing items
+    below. Refresh the snapshot after catalog migrations via
+    `npm run cm:refresh-catalog-snapshot`. New silent drops will fail
+    `npm test` on PR rather than slip silently into deploy.
+
     Still missing (lower priority — chart-type renderers needed, not
     just data tables):
       - `available_cap_rate_scatter` (ScatterChart, dialysis+gov)
