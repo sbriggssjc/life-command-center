@@ -626,3 +626,37 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
     grid-template-columns: 1fr;
   }
 }
+
+/* Sweep auto-resolvable bar */
+.own-sweep-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #2a2d34);
+  background: rgba(107, 124, 255, 0.04);
+  border-radius: 6px;
+}
+.own-sweep-bar button {
+  white-space: nowrap;
+}
+.own-sweep-bar-help {
+  font-size: 11px;
+  color: var(--text3, #7a7f88);
+  line-height: 1.4;
+}
+
+/* Address-source provenance hint when address came from a fallback table */
+.own-addr-src {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text3, #7a7f88);
+  font-size: 10px;
+}
+
+/* Empty-shell call-out (no research handle on the row) */
+.own-empty-shell {
+  color: var(--text3, #7a7f88);
+  font-style: italic;
+}
