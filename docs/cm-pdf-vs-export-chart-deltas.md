@@ -508,6 +508,43 @@ Visual style notes that apply globally to both decks:
       - `predicted_cap_rate` (LineChart, national_st+gov)
       - `rent_survey_yearly` (LineChart, gov)
 
+    **Round 5d finding (2026-05-08):** before wiring renderers for the
+    remaining 9 templates, I probed each one's `view_name_template`
+    against the live Supabase projects (gov + dialysis). **Eight of
+    nine have NO backing view in production.** The catalog rows were
+    created in earlier phase-planning passes but the SQL views were
+    never built. Adding TAB_NAMES + a chart-type renderer for these
+    would not deliver user value — the export would render an empty
+    tab.
+
+    | chart_template_id | chart_type | gov view? | dialysis view? | notes |
+    |---|---|---|---|---|
+    | `available_cap_rate_scatter` | ScatterChart | ❌ | ❌ | view never built |
+    | `cap_rate_yoy_change`        | LineChart    | ❌ | n/a | view never built |
+    | `dom_price_adjustments`      | BarChart     | ❌ | ❌ | view never built |
+    | `listings_count_q`           | BarChart     | ❌ | ❌ | view never built |
+    | `market_share_pie_ttm`       | PieChart     | ✅ | ✅ | ⚠️ data-quality issue: bucket labels include broker contact strings (e.g., `"Buyer Contactsfrank Mushmel(818) 788-2590 (P)"`) — view needs cleanup before charting |
+    | `nm_share_of_market`         | BarChart     | ❌ | n/a | view never built |
+    | `ppsf_box_quarterly`         | StockChart   | ❌ | n/a | view never built |
+    | `predicted_cap_rate`         | LineChart    | ❌ | n/a | view never built |
+    | `rent_survey_yearly`         | LineChart    | ❌ | n/a | view never built |
+
+    **Recommended cleanup paths** (user decision):
+    1. **Drop the 8 view-less catalog rows** — keep the catalog as
+       "things we actually ship" not "things we wanted to ship someday."
+       Single SQL: `delete from cm_chart_catalog where chart_template_id
+       in (...);`. Then prune the audit allow-list to match.
+    2. **Build the 8 missing views** — only worthwhile if these charts
+       are actually wanted in the deliverable. Each view is its own
+       small migration; renderers come after.
+    3. **Mark them `phase=99` (deferred)** — soft-disable so the export
+       path skips them while keeping the catalog rows for future
+       reference. Less destructive than option 1.
+    4. **Fix the `market_share_pie_ttm` view** to produce clean bucket
+       labels (top-N tenants / NM-vs-Other / by-buyer-class), then wire
+       the pie renderer. This is the only template in the list with
+       active data.
+
 22. **US choropleth maps** (Sources / Inventory / Rent Heat Map) — **infra-blocked.**
     QuickChart's hosted service does NOT bundle the chartjs-chart-geo plugin
     (probed 2026-05-08; returns HTTP 400 with an error PNG when `type:
