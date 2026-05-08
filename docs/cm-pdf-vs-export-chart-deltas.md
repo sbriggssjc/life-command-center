@@ -494,16 +494,17 @@ Visual style notes that apply globally to both decks:
     `npm run cm:refresh-catalog-snapshot`. New silent drops will fail
     `npm test` on PR rather than slip silently into deploy.
 
-    Still missing (lower priority — chart-type renderers needed, not
-    just data tables):
+    Round 5c shipped the 2 DataTable templates (\`nm_buyer_distribution\`,
+    \`nm_track_record_buyer_type\`) — they reused the existing data-table
+    render path so just needed TAB_NAMES + CHART_COLUMNS.
+
+    Still missing (lower priority — chart-type renderers needed):
       - `available_cap_rate_scatter` (ScatterChart, dialysis+gov)
       - `cap_rate_yoy_change` (LineChart, gov+national_st)
       - `dom_price_adjustments` (BarChart, dialysis+gov)
       - `listings_count_q` (BarChart, gov+dialysis)
       - `market_share_pie_ttm` (PieChart, dialysis+gov)
-      - `nm_buyer_distribution` (DataTable, gov)
       - `nm_share_of_market` (BarChart, gov+national_st)
-      - `nm_track_record_buyer_type` (DataTable, gov)
       - `ppsf_box_quarterly` (StockChart, national_st+gov)
       - `predicted_cap_rate` (LineChart, national_st+gov)
       - `rent_survey_yearly` (LineChart, gov)

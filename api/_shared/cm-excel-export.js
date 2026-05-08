@@ -118,6 +118,10 @@ const CHART_FOOTER_CAPTIONS = {
     'Top sellers ranked by TTM-volume across the latest available quarter. Reverse view of buyer ranking; helps identify dispositions and platform churn.',
   nm_notable_transactions:
     'Notable Northmarq-brokered healthcare transactions, ranked by sale price within the rotation window. Flagship comp set for marketing decks.',
+  nm_buyer_distribution:
+    'Northmarq buyer distribution by state for the latest TTM window. Volume + count + share-of-NM-business per state, ranked. Identifies geographic concentration of NM-brokered capital flow.',
+  nm_track_record_buyer_type:
+    'Northmarq track record by buyer type (REIT / Private / Institutional / Cross-Border / etc.) for the latest TTM window. Volume + count + avg cap rate + share-of-NM-business per buyer class.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -276,6 +280,24 @@ const CHART_COLUMNS = {
     { key: 'sale_price',     header: 'Sale Price ($)',     format: 'currency_dollars', width: 18 },
     { key: 'cap_rate',       header: 'Cap Rate',           format: 'percent_basis_points', width: 12 },
     { key: 'buyer_type',     header: 'Buyer Type',                                      width: 16 },
+  ],
+  // Round 5c — gov NM tracking DataTables. Both views use cm_nm_* (no
+  // vertical placeholder) and ship for gov only per the catalog.
+  nm_buyer_distribution: [
+    { key: 'period_end',     header: 'Quarter End',         format: 'date_short',          width: 13 },
+    { key: 'rank',           header: '#',                   format: 'integer_count',       width: 5 },
+    { key: 'state',          header: 'Buyer State',                                        width: 14 },
+    { key: 'deal_count',     header: 'Deal Count',          format: 'integer_count',       width: 13 },
+    { key: 'volume_dollars', header: 'Volume ($)',          format: 'currency_dollars',    width: 18 },
+    { key: 'share_pct',      header: 'Share of NM',         format: 'percent_one_decimal', width: 14 },
+  ],
+  nm_track_record_buyer_type: [
+    { key: 'period_end',     header: 'Quarter End',         format: 'date_short',           width: 13 },
+    { key: 'buyer_type',     header: 'Buyer Type',                                          width: 18 },
+    { key: 'deal_count',     header: 'Deal Count',          format: 'integer_count',        width: 13 },
+    { key: 'volume_dollars', header: 'Volume ($)',          format: 'currency_dollars',     width: 18 },
+    { key: 'avg_cap_rate',   header: 'Avg Cap Rate',        format: 'percent_basis_points', width: 14 },
+    { key: 'share_pct',      header: 'Share of NM',         format: 'percent_one_decimal',  width: 14 },
   ],
   available_by_tenant_count_donut: [
     { key: 'tenant',         header: 'Tenant',          width: 18 },
@@ -632,6 +654,9 @@ const TAB_NAMES = {
   top_buyers_table:             'Data_Top_Buyers',
   top_sellers_table:            'Data_Top_Sellers',
   nm_notable_transactions:      'Data_NM_Notable_Txns',
+  // Round 5c — gov NM tracking tabs (lifts allow-list deferrals)
+  nm_buyer_distribution:        'Data_NM_Buyer_Distrib',
+  nm_track_record_buyer_type:   'Data_NM_TR_BuyerType',
   available_by_tenant_count_donut:  'Data_Avail_Tenant_CountD',
   available_by_tenant_volume_donut: 'Data_Avail_Tenant_VolD',
   available_by_term_summary:        'Data_Avail_by_Term_Summary',
