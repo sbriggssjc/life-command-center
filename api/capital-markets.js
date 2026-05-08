@@ -137,6 +137,76 @@ const SYNTHETIC_COMPOSERS = {
   // No-op fallback; the master_m mapper fills rows.
   'buyer_pool_monthly_count': () => [],
 
+  // Round 4b — Available_by_Tenant donuts (PDF dialysis p.32). Both
+  // donuts source from cm_dialysis_available_by_tenant for the LATEST
+  // period_end. Composer pulls existing chart rows and reshapes for
+  // a single-period 4-segment donut.
+  'available_by_tenant_count_donut': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const tenantRows = find('available_by_tenant');
+    if (!tenantRows.length) return [];
+    // Pick the latest period_end
+    const latestPeriod = tenantRows
+      .map(r => r.period_end)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0];
+    const latest = tenantRows
+      .filter(r => r.period_end === latestPeriod)
+      .sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99));
+    return latest.map(r => ({
+      tenant: r.tenant,
+      count_active: Number(r.count_active) || 0,
+      period_end: r.period_end,
+    }));
+  },
+  'available_by_tenant_volume_donut': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const tenantRows = find('available_by_tenant');
+    if (!tenantRows.length) return [];
+    const latestPeriod = tenantRows
+      .map(r => r.period_end)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0];
+    const latest = tenantRows
+      .filter(r => r.period_end === latestPeriod)
+      .sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99));
+    return latest.map(r => ({
+      tenant: r.tenant,
+      volume_available: Number(r.volume_available) || 0,
+      period_end: r.period_end,
+    }));
+  },
+
+  // Round 4c — Available_by_Term Summary (PDF dialysis p.30 bottom).
+  // 4 grouped bars (Avg Price) + 4 dot series (Avg/Upper Q/Median/Lower Q
+  // cap) by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Pulls existing
+  // available_by_term_bucket chart rows for the LATEST period_end.
+  'available_by_term_summary': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const termRows = find('available_by_term_bucket');
+    if (!termRows.length) return [];
+    const latestPeriod = termRows
+      .map(r => r.period_end)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0];
+    const latest = termRows
+      .filter(r => r.period_end === latestPeriod)
+      .sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99));
+    return latest.map(r => ({
+      term_bucket: r.term_bucket,
+      n_listings: Number(r.n_listings) || 0,
+      avg_price: r.avg_price != null ? Number(r.avg_price) : null,
+      avg_cap: r.avg_cap != null ? Number(r.avg_cap) : null,
+      upper_quartile_cap: r.upper_quartile_cap != null ? Number(r.upper_quartile_cap) : null,
+      median_cap: r.median_cap != null ? Number(r.median_cap) : null,
+      lower_quartile_cap: r.lower_quartile_cap != null ? Number(r.lower_quartile_cap) : null,
+      period_end: r.period_end,
+    }));
+  },
+
   // Round 3b — Quarterly_Volume_Bars (PDF dialysis p.21 bottom chart, gov
   // ~p.12). Distinct from volume_ttm_by_quarter which is a TTM rolling line;
   // this one is the quarter's own transaction volume as a bar.

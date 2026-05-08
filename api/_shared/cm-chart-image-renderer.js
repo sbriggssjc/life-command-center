@@ -377,6 +377,123 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'available_by_tenant_count_donut':
+    case 'available_by_tenant_volume_donut': {
+      // Round 4b — PDF dialysis p.32. Single-period donut, 4 segments
+      // (DaVita / FMC / US Renal / Other). For doughnut charts the row
+      // shape is single-period: each row is one tenant segment.
+      // Use the un-cropped chart.rows here — recentRows truncates to a
+      // time window which would drop everything for a non-time-series
+      // chart.
+      const tenantRows = chart.rows || [];
+      const isVolume = chart.chart_template_id === 'available_by_tenant_volume_donut';
+      const valueKey = isVolume ? 'volume_available' : 'count_active';
+      // PDF p.32 colors: dark navy / sky / sage / muted gray for "Other"
+      const segmentColors = [
+        PDF_COLORS.cap_short,     // dark navy — DaVita
+        PDF_COLORS.cap_mid,       // sky — FMC
+        PDF_COLORS.cap_mid_long,  // sage — US Renal
+        PDF_COLORS.cap_outside_firm, // muted gray — Other
+      ];
+      return {
+        type: 'doughnut',
+        data: {
+          labels: tenantRows.map(r => r.tenant || 'Unknown'),
+          datasets: [{
+            label: isVolume ? 'Volume Available' : 'Count Available',
+            data: tenantRows.map(r => Number(r[valueKey]) || 0),
+            backgroundColor: tenantRows.map((_, i) => segmentColors[i] || segmentColors[3]),
+            borderColor: '#FFFFFF',
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { font: { size: 12 } },
+            },
+            title: {
+              display: true,
+              text: isVolume ? 'Volume Available by Tenant' : 'Count Available by Tenant',
+              font: { size: 14, weight: 'bold' },
+              color: PDF_COLORS.cap_short,
+            },
+          },
+          cutout: '55%',  // donut hole
+        },
+      };
+    }
+
+    case 'available_by_term_summary': {
+      // Round 4c — PDF dialysis p.30 bottom. 4 grouped sky-blue bars
+      // (Avg Price, left axis $0–$8M) + 4 dot/line series (Avg Cap,
+      // Upper Quartile, Lower Quartile, Median) on right axis (3.5%–8%).
+      //
+      // X-axis is categorical (term buckets), not time-series. Use the
+      // un-cropped chart.rows directly — recentRows truncation would
+      // drop categories for non-time-series charts.
+      const termRows = chart.rows || [];
+      const termLabels = termRows.map(r => r.term_bucket || '?');
+      const dotPointRadius = 6;
+      const dotPointStyle = 'rectRot'; // diamond marker, similar to PDF
+      return {
+        type: 'bar',
+        data: {
+          labels: termLabels,
+          datasets: [
+            { type: 'bar', label: 'Avg Price (left axis)',
+              data: termRows.map(r => r.avg_price),
+              backgroundColor: PDF_COLORS.cap_mid, // sky
+              borderColor: PDF_COLORS.cap_mid,
+              borderRadius: 1,
+              barPercentage: 0.6, categoryPercentage: 0.85,
+              yAxisID: 'y', order: 5 },
+            { type: 'scatter', label: 'Avg Cap',
+              data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
+              backgroundColor: PDF_COLORS.cap_short, // navy
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 1 },
+            { type: 'scatter', label: 'Upper Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_long_term, // purple
+              borderColor: PDF_COLORS.cap_long_term,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 2 },
+            { type: 'scatter', label: 'Lower Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_outside_firm, // gray
+              borderColor: PDF_COLORS.cap_outside_firm,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 3 },
+            { type: 'scatter', label: 'Median',
+              data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
+              backgroundColor: PDF_COLORS.cap_mid_long, // sage
+              borderColor: PDF_COLORS.cap_mid_long,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 4 },
+          ],
+        },
+        options: (() => {
+          const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT });
+          opts.scales = opts.scales || {};
+          opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
+          opts.scales.y1 = {
+            type: 'linear',
+            position: 'right',
+            min: 0.035, max: 0.08,  // 3.5%–8% per PDF
+            grid: { drawOnChartArea: false },
+            ticks: {
+              callback: (v) => (v * 100).toFixed(1) + '%',
+              font: { size: 11 },
+            },
+          };
+          return opts;
+        })(),
+      };
+    }
+
     case 'buyer_pool_monthly_count': {
       // Round 3c — PDF dialysis p.27. Stacked bar by buyer class, monthly.
       // Series colors per the PDF deck:
@@ -1272,6 +1389,19 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'leased_inventory_by_state': {
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      //
+      // The PDF (gov p.26) ships this as a US choropleth — states colored
+      // by lease count. QuickChart's hosted service does NOT bundle the
+      // chartjs-chart-geo plugin, so `type: 'choropleth'` returns a 400.
+      // We ship the horizontal-bar fallback below; when CM_QUICKCHART_URL
+      // points at a self-hosted instance with chartjs-chart-geo installed,
+      // a future PR can swap this to:
+      //
+      //   if (process.env.CM_CHOROPLETH_ENABLED === 'true') {
+      //     return { type: 'choropleth', data: { ... outline: '$states' ... } };
+      //   }
+      //
       // Top 15 states by lease_count
       const top = (rows || []).slice(0, 15);
       return {
@@ -1363,6 +1493,12 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'rent_heat_map': {
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // PDF (gov p.33) ships as a US choropleth color-graded by avg rent PSF.
+      // Choropleth requires chartjs-chart-geo plugin not bundled in QuickChart
+      // hosted; when self-hosted instance comes online, swap to choropleth via
+      // CM_CHOROPLETH_ENABLED feature flag.
+      //
       // Top 15 states by avg rent PSF (horizontal bar; labels=state)
       const top = (rows || [])
         .filter(r => r.avg_rpsf != null)
@@ -1384,6 +1520,12 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'sources_of_capital': {
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // PDF (gov p.19) ships as a US bubble map (states colored by dollar
+      // volume + circles overlaid on top states with $X.XB labels). Bubble
+      // map = scatter geo overlay, also requires chartjs-chart-geo plugin.
+      // Bar fallback below; choropleth swap behind CM_CHOROPLETH_ENABLED flag.
+      //
       // Top 15 buyer states by 15y volume
       const top = (rows || []).slice(0, 15);
       return {

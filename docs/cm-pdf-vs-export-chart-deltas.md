@@ -479,6 +479,21 @@ Visual style notes that apply globally to both decks:
 18. **Bid_Ask pre-2010 data** — CoStar field gap, can't fix without external data
 19. **Sentiment "many issues"** — needs specific examples
 20. **Val_Index monthly** — needs source-data extension
+21. **US choropleth maps** (Sources / Inventory / Rent Heat Map) — **infra-blocked.**
+    QuickChart's hosted service does NOT bundle the chartjs-chart-geo plugin
+    (probed 2026-05-08; returns HTTP 400 with an error PNG when `type:
+    'choropleth'` is sent). Options to unblock:
+      a. Spin up a self-hosted QuickChart Docker image (`ianw/quickchart`) with
+         `chartjs-chart-geo` pre-loaded as a custom plugin; point CM_QUICKCHART_URL
+         at it. ~30 min of infra work + a long-running container.
+      b. Swap to Datawrapper, Mapbox, or another map service (heavier change —
+         needs separate auth + a new image-fetch path in cm-chart-image-renderer).
+      c. Generate the PNG via a server-side D3 + topojson script and skip
+         QuickChart entirely for these 3 charts. Requires `d3-geo` + `canvas`
+         npm deps in the API package.
+    Until then: ship the horizontal-bar fallback (top 15 states) which the
+    existing Data_Sources / Data_Inventory_State / Data_Rent_Heat_Map tabs
+    already provide. The bar fallback was deliberately preserved.
 
 ---
 
