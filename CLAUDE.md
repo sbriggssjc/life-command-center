@@ -263,3 +263,40 @@ Downstream writers that still need Y1 rent should pull `base_rent`. The
 current dialysis.js Sales Comps loader (`loadDiaSalesCompsFromTxns`) bypasses
 the view and assembles rows from `sales_transactions` + `leases` directly, so
 it continues to show Y1 rent until switched over to the view.
+
+## Geocode backfill (Round 76gn, 2026-05-08)
+
+The lease-comps export (Briggs template, `_udExportLeaseComps` in
+`detail.js`) ranks comparables by haversine distance from the subject
+property's lat/lng. An audit on 2026-05-08 found that essentially zero
+rows in `dia.properties` (and likely `gov.properties`) had
+`latitude`/`longitude` populated — legacy CSV / CMS imports, OM intake,
+and CoStar capture all wrote rows without geocoding them. Result: every
+Export Lease Comps click fell through to "no comps near this subject."
+
+Two artifacts now keep coverage current:
+
+1. **`api/_handlers/geocode-backfill.js` → `?_route=geocode-tick`**
+   (also rewritten to `/api/geocode-tick`). Pulls up to `limit` rows
+   per domain WHERE `latitude IS NULL`, geocodes each via the US
+   Census Bureau onelineaddress API (free, no key, no rate limit, US-
+   only), and PATCHes the result back. Cron-friendly — defaults to
+   `limit=60` so a tick fits inside Vercel's function budget. Returns
+   `{by_domain: {dia/gov: {scanned, patched, missed, skipped, errored}}}`.
+   No Nominatim fallback in the cron path (TOS rate cap would push tick
+   duration over budget); the long-tail OSM fallback lives only in the
+   one-shot script.
+
+2. **`pg_cron lcc-geocode-backfill`** (`*/10 * * * *`,
+   `supabase/migrations/20260508120000_lcc_geocode_backfill_cron.sql`).
+   Calls the handler via `lcc_cron_post('/api/geocode-tick?...', ...,
+   'vercel')`. At 60 rows/tick × 6 ticks/hr = 360 rows/hr the per-domain
+   backlog drains in ~14h; afterwards the cron just maintains coverage
+   as new rows arrive.
+
+For a one-shot fast backfill (~25 min for 5000 rows, Census-only),
+run `scripts/geocode-properties-backfill.mjs` from a workstation with
+`DIA_SUPABASE_URL` / `DIA_SUPABASE_SERVICE_KEY` (and the GOV pair) in
+env. The script also has a Nominatim fallback enabled by default for
+addresses Census can't resolve (PO boxes, recent construction, etc.).
+Use `--skip-nominatim` for Census-only.

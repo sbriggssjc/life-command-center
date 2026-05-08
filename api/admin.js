@@ -26,6 +26,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/o
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
+import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -87,6 +88,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     case 'availability-promotion-sweep': return handleAvailabilityPromotionSweep(req, res);
+    case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
