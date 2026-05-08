@@ -193,6 +193,43 @@ function recentRows(rows, n) {
   return rows.slice(rows.length - n);
 }
 
+// Round 6c — clip rows whose period_end (or year) falls before a minimum
+// year. User feedback (2026-05-09) on multiple charts: "missing data
+// prior to 2017" + "missing data prior to 2010" — underlying data is
+// sparse/unreliable in those eras and the chart shows misleading dips.
+// Per-chart we set a min year via CHART_MIN_YEAR and the renderer
+// filters first.
+function clipBeforeYear(rows, minYear) {
+  if (!minYear || !Array.isArray(rows)) return rows;
+  return rows.filter((r) => {
+    const yKey = r.year != null ? Number(r.year)
+                                : new Date(r.period_end || 0).getUTCFullYear();
+    return Number.isFinite(yKey) && yKey >= minYear;
+  });
+}
+
+// Round 6c — per-chart minimum-year clip for charts where pre-N data
+// is unreliable (sparse / data-quality / not collected pre-2017).
+// Applied INSIDE the dispatch switch right after recentRows, so
+// per-chart settings can override the global recent-window logic.
+const CHART_MIN_YEAR = {
+  // Pre-2017 unreliable per user feedback:
+  bid_ask_spread:           2011, // gov pre-2011 missing per user; was complaining about gaps
+  bid_ask_spread_monthly:   2011,
+  dom_and_pct_of_ask:        2017,
+  dom_and_pct_of_ask_monthly: 2017,
+  seller_sentiment:          2017,
+  seller_sentiment_monthly:  2017,
+  rent_psf_box_quarterly:    2017,
+  available_market_size_combo: 2017,
+  asking_cap_quartiles_active: 2017,
+  dom_price_change_active:   2017,
+  pace_of_cap_rate_expansion: 2017,
+  // Pre-2010 unreliable per user feedback:
+  cash_leveraged_returns:    2010,
+  cost_of_capital:           2010,
+};
+
 // Defense-in-depth against QuickChart's 250-point limit. After the
 // recent-window crop, if the chart still has more rows than QuickChart
 // will accept, downsample by taking every Nth row. This preserves the
@@ -351,9 +388,14 @@ function buildChartConfig(chart, brand) {
   const windowSize = isAnnual  ? RECENT_YEARS_DEFAULT
                    : isMonthly ? RECENT_MONTHS_DEFAULT
                    :             RECENT_QUARTERS_DEFAULT;
+  // Round 6c — clipBeforeYear removes pre-N data when the source has
+  // sparse / unreliable history (e.g., DOM_Ask pre-2017, Returns_Idx
+  // pre-2010). Per-chart override via CHART_MIN_YEAR map.
   // recentRows = clip to recent window; cropForRender = downsample if
   // we still exceed QuickChart's 250-point hard limit. Belt + suspenders.
-  const rows = cropForRender(recentRows(chart.rows, windowSize));
+  const minYear = CHART_MIN_YEAR[chart.chart_template_id];
+  const clippedRows = minYear ? clipBeforeYear(chart.rows, minYear) : chart.rows;
+  const rows = cropForRender(recentRows(clippedRows, windowSize));
   const labels = rows.map(r => periodEndLabel(r.period_end || r.year));
 
   switch (chart.chart_template_id) {
