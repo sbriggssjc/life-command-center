@@ -263,6 +263,11 @@ function commonOpts({ yAxisFormat, yAxisRange, xMaxTicks = 12, legendPosition = 
       // emits chartjs-plugin-annotation labels at exactly 3 points), and
       // charts that want per-segment labels (donuts, stacked %) override
       // `plugins.datalabels` locally.
+      // Pace_Cap_Expand etc. Suppress globally; charts that want the
+      // most-recent + high + low pattern use buildAnnotations() (which
+      // emits chartjs-plugin-annotation labels at exactly 3 points), and
+      // charts that want per-segment labels (donuts, stacked bar %)
+      // override `plugins.datalabels` locally.
       datalabels: { display: false },
     },
     scales: {
@@ -1085,6 +1090,9 @@ function buildChartConfig(chart, brand) {
           });
           // Round 6c — annotations on avg cap (primary navy line). User:
           // "Data_Cost_Capital needs labels."
+          // Round 6c — most-recent + high + low labels per user feedback
+          // "Data_Cost_Capital needs labels". Anchor on the avg cap line
+          // (the primary navy series).
           const ann = buildAnnotations(rows, r => r.avg_cap_rate, fmtPct2);
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
@@ -1412,6 +1420,9 @@ function buildChartConfig(chart, brand) {
           const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP });
           // Round 6c — labels on the GSA renewal CAGR (primary navy).
           // User: "Data_CPI_CAGR... add labels."
+          // Round 6c — labels on the GSA renewal CAGR series (primary navy)
+          // per user feedback "Data_CPI_CAGR is still quarterly... add
+          // labels."
           const ann = buildAnnotations(rows, r => r.gsa_renewal_cagr, fmtPct1);
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
@@ -1659,6 +1670,17 @@ function buildChartConfig(chart, brand) {
       // Right-axis range tightened around the rent series so movement
       // is visible despite the bar-count axis dominating; outliers in
       // commencement_count remain as a Round 6e SQL probe.
+      // Round 6c — user feedback 2026-05-09: "Data_Case_Renewal has
+      // outlier commencements in 2026 and 2019 that need to be
+      // investigated and the y-axis needs to be adjusted to show the
+      // movement in the average rent figure. Let's add low high and
+      // most recent labels too."
+      //
+      // Outliers: visible in chart but underlying data needs SQL-side
+      // investigation (logged as Round 6f follow-up). For now:
+      //  • Tighten right-axis min/max around the rent series so movement
+      //    is visible despite the bar-count axis dominating
+      //  • Add low/high/most-recent labels on the rent line (primary)
       const rentVals = rows.map(r => Number(r.avg_rent_per_sf)).filter(Number.isFinite);
       const rentMin = rentVals.length ? Math.min(...rentVals) : null;
       const rentMax = rentVals.length ? Math.max(...rentVals) : null;
@@ -1688,6 +1710,9 @@ function buildChartConfig(chart, brand) {
             yRightFormat: AXIS_FORMAT_CURRENCY,
             yRightRange:  rentRange,
           });
+            yRightRange:  rentRange,  // tighter so rent movement is visible
+          });
+          // Annotations on rent series (year axis, not period_end).
           const ann = buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year');
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
@@ -1733,6 +1758,8 @@ function buildChartConfig(chart, brand) {
             yAxisRange: { min: -0.015, max: 0.025 },
           });
           // Round 6c — annotations on pace_all (primary navy bars).
+          // Round 6c — most-recent + high + low labels on pace_all (the
+          // primary navy bar series).
           const ann = buildAnnotations(rows, r => r.pace_all, fmtPct2);
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
