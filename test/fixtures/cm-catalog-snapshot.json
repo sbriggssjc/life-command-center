@@ -53,15 +53,6 @@
       "phase": 4
     },
     {
-      "chart_template_id": "available_cap_rate_scatter",
-      "chart_type": "ScatterChart",
-      "applies_to_verticals": [
-        "dialysis",
-        "gov"
-      ],
-      "phase": 2
-    },
-    {
       "chart_template_id": "available_market_size_combo",
       "chart_type": "BarChart",
       "applies_to_verticals": [
@@ -143,15 +134,6 @@
       "phase": 1
     },
     {
-      "chart_template_id": "cap_rate_yoy_change",
-      "chart_type": "LineChart",
-      "applies_to_verticals": [
-        "gov",
-        "national_st"
-      ],
-      "phase": 2
-    },
-    {
       "chart_template_id": "case_for_renewal",
       "chart_type": "BarChart",
       "applies_to_verticals": [
@@ -196,15 +178,6 @@
         "gov"
       ],
       "phase": 1
-    },
-    {
-      "chart_template_id": "dom_price_adjustments",
-      "chart_type": "BarChart",
-      "applies_to_verticals": [
-        "dialysis",
-        "gov"
-      ],
-      "phase": 2
     },
     {
       "chart_template_id": "dom_price_change_active",
@@ -274,15 +247,6 @@
       "phase": 1
     },
     {
-      "chart_template_id": "listings_count_q",
-      "chart_type": "BarChart",
-      "applies_to_verticals": [
-        "gov",
-        "dialysis"
-      ],
-      "phase": 2
-    },
-    {
       "chart_template_id": "market_share_pie_ttm",
       "chart_type": "PieChart",
       "applies_to_verticals": [
@@ -315,15 +279,6 @@
         "dialysis"
       ],
       "phase": 3
-    },
-    {
-      "chart_template_id": "nm_share_of_market",
-      "chart_type": "BarChart",
-      "applies_to_verticals": [
-        "gov",
-        "national_st"
-      ],
-      "phase": 2
     },
     {
       "chart_template_id": "nm_track_record_buyer_type",
@@ -359,24 +314,6 @@
         "gov"
       ],
       "phase": 2
-    },
-    {
-      "chart_template_id": "ppsf_box_quarterly",
-      "chart_type": "StockChart",
-      "applies_to_verticals": [
-        "national_st",
-        "gov"
-      ],
-      "phase": 2
-    },
-    {
-      "chart_template_id": "predicted_cap_rate",
-      "chart_type": "LineChart",
-      "applies_to_verticals": [
-        "national_st",
-        "gov"
-      ],
-      "phase": 3
     },
     {
       "chart_template_id": "quarterly_volume_bars",
@@ -420,14 +357,6 @@
         "dialysis"
       ],
       "phase": 2
-    },
-    {
-      "chart_template_id": "rent_survey_yearly",
-      "chart_type": "LineChart",
-      "applies_to_verticals": [
-        "gov"
-      ],
-      "phase": 1
     },
     {
       "chart_template_id": "seller_sentiment",

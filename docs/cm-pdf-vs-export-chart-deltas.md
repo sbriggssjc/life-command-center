@@ -562,21 +562,20 @@ raw=7.61% / NM-only=7.42% / non-NM=7.63% — confirms NM is excluded.
     | `predicted_cap_rate`         | LineChart    | ❌ | n/a | view never built |
     | `rent_survey_yearly`         | LineChart    | ❌ | n/a | view never built |
 
-    **Recommended cleanup paths** (user decision):
-    1. **Drop the 8 view-less catalog rows** — keep the catalog as
-       "things we actually ship" not "things we wanted to ship someday."
-       Single SQL: `delete from cm_chart_catalog where chart_template_id
-       in (...);`. Then prune the audit allow-list to match.
-    2. **Build the 8 missing views** — only worthwhile if these charts
-       are actually wanted in the deliverable. Each view is its own
-       small migration; renderers come after.
-    3. **Mark them `phase=99` (deferred)** — soft-disable so the export
-       path skips them while keeping the catalog rows for future
-       reference. Less destructive than option 1.
-    4. **Fix the `market_share_pie_ttm` view** to produce clean bucket
-       labels (top-N tenants / NM-vs-Other / by-buyer-class), then wire
-       the pie renderer. This is the only template in the list with
-       active data.
+    **Round 6h cleanup (2026-05-09):** user picked path 1. Dropped 8 of
+    the 9 deferred catalog rows that had no backing view. Catalog is now
+    "things we actually ship," and audit allow-list shrunk from 11 → 1
+    entry. Only `market_share_pie_ttm` remains on the allow-list because
+    its view DOES exist but has the broker-contact-string label-quality
+    issue — fixing that needs a view rewrite (top-N tenants / NM-vs-Other
+    / by-buyer-class), which is a separate scope from this cleanup.
+
+    Dropped chart_template_ids:
+    `available_cap_rate_scatter`, `cap_rate_yoy_change`,
+    `dom_price_adjustments`, `listings_count_q`, `nm_share_of_market`,
+    `ppsf_box_quarterly`, `predicted_cap_rate`, `rent_survey_yearly`.
+
+    Effect: 8 fewer empty tabs in every gov + dialysis export.
 
 22. **US choropleth maps** (Sources / Inventory / Rent Heat Map) — **infra-blocked.**
     QuickChart's hosted service does NOT bundle the chartjs-chart-geo plugin
