@@ -136,10 +136,11 @@ async function geocodeViaNominatim(row) {
 
 // ── Supabase REST helpers (PostgREST direct, no proxy) ─────────────────────
 
-async function fetchNullCoordsBatch(cfg, limit) {
+async function fetchNullCoordsBatch(cfg, limit, afterId = 0) {
   const url = new URL(cfg.url + '/rest/v1/properties');
   url.searchParams.set('select', 'property_id,address,city,state,zip_code');
   url.searchParams.set('latitude', 'is.null');
+  url.searchParams.set('property_id', `gt.${afterId}`);
   url.searchParams.set('order', 'property_id.asc');
   url.searchParams.set('limit', String(limit));
   const resp = await fetch(url.toString(), {
@@ -175,16 +176,16 @@ async function runDomain(domain) {
   }
   console.log(`[${domain}] starting backfill (limit=${maxRows}, batch=${batchSize}, dryRun=${dryRun}, skipNominatim=${skipNominatim})`);
 
-  const failedThisRun = new Set();
   const stats = { fetched: 0, census: 0, nominatim: 0, failed: 0, skipped: 0, patched: 0 };
   const t0 = Date.now();
+  let cursor = 0;
 
   while (stats.fetched < maxRows) {
     const remaining = maxRows - stats.fetched;
     const want = Math.min(batchSize, remaining);
     let batch;
     try {
-      batch = await fetchNullCoordsBatch(cfg, want);
+      batch = await fetchNullCoordsBatch(cfg, want, cursor);
     } catch (e) {
       console.error(`[${domain}] batch fetch failed:`, e.message);
       break;
@@ -194,20 +195,16 @@ async function runDomain(domain) {
       break;
     }
 
-    // Filter out rows we already failed on this run (otherwise the same NULL
-    // rows come back next iteration since they don't leave the result set
-    // when geocoding fails).
-    const todo = batch.filter(r => !failedThisRun.has(r.property_id));
-    if (todo.length === 0) {
-      console.log(`[${domain}] all remaining NULL rows already failed this run — stopping`);
-      break;
-    }
+    // Advance the cursor to the highest property_id in this batch BEFORE we
+    // process the rows. Rows that fail geocoding stay latitude=NULL but the
+    // cursor moves past them, so the next batch fetches genuinely new rows
+    // instead of re-fetching the same head-of-queue failures forever.
+    cursor = batch.reduce((m, r) => Math.max(m, r.property_id), cursor);
 
-    for (const row of todo) {
+    for (const row of batch) {
       stats.fetched++;
       if (!row.address || (!row.city && !row.zip_code)) {
         stats.skipped++;
-        failedThisRun.add(row.property_id);
         continue;
       }
 
@@ -225,7 +222,6 @@ async function runDomain(domain) {
 
       if (!result) {
         stats.failed++;
-        failedThisRun.add(row.property_id);
         continue;
       }
 
@@ -238,7 +234,6 @@ async function runDomain(domain) {
         } catch (e) {
           console.error(`[${domain}] patch failed for ${row.property_id}:`, e.message);
           stats.failed++;
-          failedThisRun.add(row.property_id);
         }
       }
 
