@@ -60,17 +60,14 @@ const auditableTemplates = snapshot.templates.filter((t) =>
 // the line below. The test should then pass.
 // ---------------------------------------------------------------------------
 const KNOWN_MISSING_TAB_NAMES = new Set([
-  'available_cap_rate_scatter',     // ScatterChart, dialysis+gov   — needs scatter renderer
-  'cap_rate_yoy_change',            // LineChart, gov               — needs line renderer
-  'dom_price_adjustments',          // BarChart, dialysis+gov       — needs bar renderer
-  'listings_count_q',               // BarChart, dialysis+gov       — needs bar renderer
-  'market_share_pie_ttm',           // PieChart, dialysis+gov       — needs pie renderer
-  // nm_buyer_distribution         — fixed Round 5c
-  'nm_share_of_market',             // BarChart, gov                — needs bar renderer
-  // nm_track_record_buyer_type    — fixed Round 5c
-  'ppsf_box_quarterly',             // StockChart, gov              — needs stock renderer
-  'predicted_cap_rate',             // LineChart, gov               — needs line renderer
-  'rent_survey_yearly',             // LineChart, gov               — needs line renderer
+  // Round 6h (2026-05-09) — 7 of the prior 11 entries removed because the
+  // catalog rows themselves were deleted (no backing views, never had TAB_NAMES,
+  // never going to ship). Path 1 cleanup per deltas-doc Item #21.
+  // Remaining holdouts:
+  'market_share_pie_ttm',           // PieChart, dialysis+gov — view exists but
+                                    // bucket-label data quality issue (broker
+                                    // contact strings as labels). Fix view
+                                    // before wiring renderer.
 ]);
 
 test('cm-export-bundle-audit: every catalog row has a TAB_NAMES entry (excluding the deltas-doc-#21 deferral list)', () => {
