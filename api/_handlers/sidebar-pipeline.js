@@ -5305,9 +5305,34 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
     }
   }
 
+  const isGov = domain === 'government';
+
+  // Round 76ek.h: link a non-CMBS loan's "Borrower" (the SPE LLC that signed
+  // the note) to a recorded_owner row so loans.recorded_owner_id is populated.
+  // We never auto-CREATE a recorded_owner here — that's reserved for the
+  // dedicated upsertDomainOwners path which handles canonicalization and
+  // dedup against the existing owner universe. Look up only.
+  async function resolveBorrowerOwnerId(borrowerName) {
+    if (!borrowerName || typeof borrowerName !== 'string') return null;
+    const trimmed = borrowerName.trim();
+    if (trimmed.length < 3) return null;
+    const nameCol = isGov ? 'canonical_name' : 'normalized_name';
+    // Match by case-insensitive ilike; the recorded_owners normalization
+    // strategy lives in upsertDomainOwners, which runs in the same request
+    // so the row should already exist by the time this lookup fires.
+    const r = await domainQuery(domain, 'GET',
+      `recorded_owners?${nameCol}=ilike.${encodeURIComponent(trimmed)}` +
+      `&select=recorded_owner_id&limit=1`);
+    if (r.ok && r.data?.[0]?.recorded_owner_id) return r.data[0].recorded_owner_id;
+    return null;
+  }
+
   let processed = 0;
   for (const lr of records) {
     if (!lr || typeof lr !== 'object') continue;
+
+    // ── Step 0: resolve borrower → recorded_owner_id (best-effort).
+    const borrowerOwnerId = await resolveBorrowerOwnerId(lr.borrower);
 
     // ── Step 1: find or create the loans row.
     let matchedLoanId = null;
@@ -5329,7 +5354,6 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
     }
 
     // Build the domain-specific loans payload.
-    const isGov = domain === 'government';
     const loanAmount = lr.loan_amount != null ? lr.loan_amount
                      : (lr.origination_amount != null ? lr.origination_amount : null);
 
@@ -5362,6 +5386,7 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
       pct_of_total_loan:     lr.pct_of_total_loan != null ? lr.pct_of_total_loan : null,
       origination_appraisal: lr.origination_appraisal != null ? lr.origination_appraisal : null,
       appraisal_date:        lr.appraisal_date || null,
+      recorded_owner_id:     borrowerOwnerId,
       costar_loan_id:        lr.costar_loan_id || null,
       source_url:            lr.source_url || null,
       data_source:           'costar_cmbs_loan',
@@ -5390,6 +5415,7 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
       pct_of_total_loan:     lr.pct_of_total_loan != null ? lr.pct_of_total_loan : null,
       origination_appraisal: lr.origination_appraisal != null ? lr.origination_appraisal : null,
       appraisal_date:        lr.appraisal_date || null,
+      recorded_owner_id:     borrowerOwnerId,
       costar_loan_id:        lr.costar_loan_id || null,
       source_url:            lr.source_url || null,
       data_source:           'costar_cmbs_loan',

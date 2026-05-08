@@ -1465,7 +1465,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     }
 
     // ── Section-anchored extraction
+    // Round 76ek.h (2026-05-08): non-CMBS loans (county-records-derived,
+    // not securitized) use a much simpler layout — header is just "Loan"
+    // instead of "Collateral / Terms / Performance / …" and the only
+    // sections are "Loan" and "Contacts". Treat the bare "Loan" header
+    // as an alias for "Collateral" so the same field-extraction branch
+    // fires. Otherwise origination_amount, origination_date, doc number
+    // never reach the writer (Martek Ice IDF LLC, 2075 North Blvd —
+    // 2026-05-08 user report).
     const SECTIONS = new Set([
+      'Loan',
       'Collateral', 'Performance', 'Terms', 'Prepayment Periods',
       'Contacts', 'Portfolio Loan Detail', 'Top Tenants', 'Commentary',
     ]);
@@ -1507,7 +1516,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         continue;
       }
 
-      if (currentSection === 'Collateral') {
+      // Round 76ek.h: 'Loan' is the bare-page header on non-CMBS loan tabs;
+      // it carries the same field labels (Origination Amount / Origination
+      // Date / Doc Number) as the CMBS Collateral block, just without the
+      // pool-allocation columns. Process it through the same branch.
+      if (currentSection === 'Collateral' || currentSection === 'Loan') {
         // CoStar truncates labels with "..." — match on prefixes.
         // Origination Am... = allocated balance for THIS collateral
         // Origination Ap... = origination appraisal value
@@ -1590,6 +1603,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         else if (/^special\s+servicer$/i.test(line)) rec.special_servicer = next || null;
         else if (/^originator$/i.test(line)) rec.originator = next || null;
         else if (/^sponsor$/i.test(line)) rec.sponsor = next || null;
+        // Round 76ek.h: Borrower (the SPE LLC that signed the note). On
+        // non-CMBS loans this is the only Contacts entry besides Originator.
+        // Distinct from Sponsor: borrower = LLC entity, sponsor = principals.
+        else if (/^borrower$/i.test(line)) rec.borrower = next || null;
         continue;
       }
 
