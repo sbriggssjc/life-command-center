@@ -1977,7 +1977,16 @@ function wirePropertyActions(ctx, lccEntity) {
         asset_type: (() => {
           const rawType = fields.property_type || liveCtx.property_subtype || null;
           const INVALID_TYPES = ['size', 'type', 'class', 'sf', 'rba', 'stories'];
-          return (rawType && !INVALID_TYPES.includes(rawType.toLowerCase())) ? rawType : 'property';
+          // Round 76ek.g: defense for parser leaks. The CoStar leasing panel
+          // emits "SF Avail" / "Office Avail" / "Retail Avail" / "For Lease"
+          // labels that occasionally pair with a "Type" label and reach this
+          // derivation. Reject any value that contains "Avail" or matches
+          // common leasing-status labels — those are never property types.
+          const AVAIL_OR_LEASING_RE = /\b(avail(able)?|for\s+(lease|sale)|asking|listing|smallest\s+space|max\s+contiguous|vacant)\b/i;
+          if (!rawType) return 'property';
+          if (INVALID_TYPES.includes(rawType.toLowerCase())) return 'property';
+          if (AVAIL_OR_LEASING_RE.test(rawType)) return 'property';
+          return rawType;
         })(),
         description: `Imported from ${domainLabel}`,
         metadata,

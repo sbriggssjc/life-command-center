@@ -962,7 +962,22 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       if (!data.parking && /^parking\s+ratio$/i.test(line) && next) data.parking = next;
 
       if (!data.property_type && /^type$/i.test(line)) {
-        if (next && next.length < 50 && !/^\d/.test(next) && !/^(investment|sale)/i.test(next) && !/^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i.test(next)) data.property_type = next;
+        // Round 76ek.g (2026-05-08): "SF Avail" / "Office Avail" / "Retail Avail"
+        // were leaking through as property_type because the For Lease panel's
+        // "Office Avail | 24,105 SF" cell sometimes lands adjacent to a "Type"
+        // label in the line stream. Reject anything ending in "Avail" or
+        // "Available" — those are leasing-availability columns, never the
+        // property type. Also reject "For Lease" / "For Sale" / "Asking" labels
+        // that show up in the same neighborhood.
+        if (next
+            && next.length < 50
+            && !/^\d/.test(next)
+            && !/^(investment|sale)/i.test(next)
+            && !/^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i.test(next)
+            && !/\b(avail|available)\b/i.test(next)
+            && !/^(for\s+(lease|sale)|asking(\s+(rent|price))?|listing|smallest\s+space|max\s+contiguous|vacant|leased|service\s+type)$/i.test(next)) {
+          data.property_type = next;
+        }
       }
 
       if (!data.noi && /^noi$/i.test(line)) {
@@ -2339,6 +2354,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     if (!s || s.length < 2) return true;
     const trimmed = s.trim();
     if (CONTACT_NAME_REJECT.test(trimmed)) return true;
+    // Round 76ek.g (2026-05-08): CoStar's per-sale Verification block
+    // surfaces sentence-shaped footnotes that the contact extractor was
+    // capturing as TRUE_SELLER_CONTACT names — e.g. "The sale price RBA
+    // were verified with listing broker" / "The deed was unavailable
+    // at the time of publication." Reject any string that's clearly a
+    // sentence: starts with a determiner (the/this/a/an/it), contains a
+    // verb auxiliary (was/were/is/are/has/have/had/will/would), and has
+    // ≥4 tokens. Real contact names are at most 4 tokens (First Middle
+    // Last, optional Sr./Jr.) and don't have verb auxiliaries.
+    const SENTENCE_SHAPE_RE =
+      /^(the|this|that|a|an|it|all|none|no)\b[\s\S]+\b(was|were|is|are|has|have|had|will|would|been|verified|unavailable|confirmed|disclosed|published|obtained|recorded|reported)\b/i;
+    if (SENTENCE_SHAPE_RE.test(trimmed) && trimmed.split(/\s+/).length >= 4) return true;
+    // Trailing period on a multi-word string is a strong sentence signal
+    // for our contact-name domain (legitimate names never end in '.').
+    if (/\w\.\s*$/.test(trimmed) && trimmed.split(/\s+/).length >= 4) return true;
     // City, ST ZIP pattern (e.g. "Los Angeles, CA 90048")
     if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(s)) return true;
     // Concatenated multi-line address (contains ZIP mid-string with no break)

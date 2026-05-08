@@ -1574,6 +1574,22 @@ function isJunkContactName(name) {
   if (trimmed.split(/\s+/).length >= 6 && /\.$/.test(trimmed)) return true;
   if (/^(This transaction|The seller|The buyer|This listing|The property|This property|This sale)/i.test(trimmed)) return true;
 
+  // Round 76ek.g (2026-05-08): CoStar's per-sale Verification footnotes
+  // landed as TRUE_SELLER_CONTACT names on 38275 W Twelve Mile Rd. Examples:
+  //   "The sale price RBA were verified with listing broker"
+  //   "The deed was unavailable at the time of publication."
+  //   "Information was obtained from public records and CoStar research."
+  // Extended narrative-opener list AND a verb-auxiliary detector for any
+  // multi-word string that opens with a determiner and contains a tense
+  // marker. Real person names never contain "was/were/is/are/has/have".
+  if (/^(The sale|The deed|The transaction|The data|The information|The price|The asking|The cap|The NOI|This property|This deal|Information|Sale price|Asking price)\b/i.test(trimmed)) return true;
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length >= 4
+      && /^(the|this|that|a|an|it|all|none|no)$/i.test(tokens[0])
+      && /\b(was|were|is|are|has|have|had|will|would|been|verified|unavailable|disclosed|published|obtained|recorded|reported|confirmed)\b/i.test(trimmed)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -6708,6 +6724,12 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
   // 'Office' / 'Retail' on Pettit Ave. NOT a substring match — those
   // would false-positive on real medical-tenant names. Anchored.
   const COSTAR_USE_CATEGORY_RE = /^(medical|office|retail|industrial|warehouse|flex|mixed[-\s]?use|residential|hospitality|specialty|land|other)\s*$/i;
+  // Round 76ek.g (2026-05-08): bare industry-role labels CoStar surfaces in
+  // its tenant-mix column ("Retailer", "Wholesaler", "Operator", etc.). On
+  // 38275 W Twelve Mile Rd the tenant list dropped a bare "Retailer" row.
+  // These are role classifications, never tenant names. Anchored — won't
+  // false-positive on real names like "Joe's Retailer LLC".
+  const COSTAR_INDUSTRY_ROLE_RE = /^(retailer|wholesaler|distributor|operator|manufacturer|supplier|service\s+provider|landlord|owner\s+occupier|owner[-\s]?occupied)\s*$/i;
   // 'Unkwn' / 'Unknown' / 'N/A' / 'TBD' / '--' / dashes — CoStar
   // placeholder values for unknown-yet fields.
   const COSTAR_PLACEHOLDER_RE = /^(unkwn|unknown|n\/?a|tbd|none|null|-+|—+|\.{2,})\s*$/i;
@@ -6728,6 +6750,7 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     // labels and CoStar placeholder values + date-string residue.
     if (COSTAR_LABEL_JUNK_RE.test(n)) return true;
     if (COSTAR_USE_CATEGORY_RE.test(n)) return true;
+    if (COSTAR_INDUSTRY_ROLE_RE.test(n)) return true;
     if (COSTAR_PLACEHOLDER_RE.test(n)) return true;
     if (COSTAR_DATE_RE.test(n)) return true;
     // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
