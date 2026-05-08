@@ -442,6 +442,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
             ${_udKeyFields(db, synthProperty, ownership)}
           </div>
           ${dismissBtn}
+          ${_udLeaseCompsControlHtml(db, ids.property_id)}
           <button class="detail-action-btn" id="consolidateBtn"
             title="Find duplicate properties + same-tenant clusters"
             onclick="openConsolidateModal('${db}', ${ids.property_id || 'null'})"
@@ -11682,3 +11683,437 @@ document.addEventListener('keydown', function (e) {
 window.openBrokerDrawer = openBrokerDrawer;
 window._switchBrokerDrawerTab = _switchBrokerDrawerTab;
 window._brokerDrawerBeginProspecting = _brokerDrawerBeginProspecting;
+
+// ============================================================================
+// LEASE COMPS EXPORT — sidebar header button (Dia + Gov)
+// Renders the count dropdown + "Export Lease Comps" button in the unified
+// detail header. Pulls the N nearest comparable lease properties (by great-
+// circle distance from the subject's lat/lng), enriches them with current /
+// last-known rent and owner-of-record info, flags owner-occupied comps, and
+// writes a single-sheet xlsx with the subject as a header row.
+// ============================================================================
+
+const _UD_LEASE_COMPS_COUNTS = [10, 15, 20, 25, 50];
+const _UD_LEASE_COMPS_DEFAULT = 20;
+
+function _udLeaseCompsControlHtml(db, propertyId) {
+  // Disable when there's no anchor property — we can't compute distances
+  // without subject lat/lng, and lat/lng comes from the property record.
+  const disabled = propertyId ? '' : 'disabled';
+  const opts = _UD_LEASE_COMPS_COUNTS.map(n =>
+    `<option value="${n}"${n === _UD_LEASE_COMPS_DEFAULT ? ' selected' : ''}>${n}</option>`
+  ).join('');
+  // Wrap select+button in a single inline-flex group so they read as one
+  // control. Styling mirrors the consolidate button's neutral chrome.
+  return `
+    <div style="display:inline-flex;align-items:stretch;gap:0;margin-right:8px" title="${disabled ? 'Open a property with a property_id to export lease comps' : 'Export the N nearest lease comparables to Excel'}">
+      <select id="udLeaseCompsCount" ${disabled}
+        style="background:transparent;border:1px solid var(--border);border-right:none;color:var(--text2);padding:6px 8px;border-radius:6px 0 0 6px;font-size:12px;font-family:Outfit,sans-serif;${disabled ? 'opacity:0.6;cursor:not-allowed' : 'cursor:pointer'}"
+        title="Number of nearest comps to include">
+        ${opts}
+      </select>
+      <button class="detail-action-btn" id="udLeaseCompsExportBtn"
+        onclick="_udExportLeaseComps('${db}', ${propertyId || 'null'}, this)"
+        ${disabled}
+        style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:0 6px 6px 0;font-size:12px;cursor:${disabled ? 'not-allowed' : 'pointer'};${disabled ? 'opacity:0.6' : ''}">
+        📊 Export Lease Comps
+      </button>
+    </div>`;
+}
+
+// Great-circle distance in miles. Returns null if any coordinate is missing
+// or non-numeric — callers should treat null as "unknown" rather than 0.
+function _udHaversineMiles(lat1, lon1, lat2, lon2) {
+  const a1 = Number(lat1), n1 = Number(lon1), a2 = Number(lat2), n2 = Number(lon2);
+  if (!isFinite(a1) || !isFinite(n1) || !isFinite(a2) || !isFinite(n2)) return null;
+  const R = 3958.7613; // Earth's mean radius in statute miles
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(a2 - a1);
+  const dLon = toRad(n2 - n1);
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function _udNormName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\b(inc|llc|llp|lp|ltd|corp|corporation|company|co|holdings|trust|properties|realty|partners|the)\b/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim();
+}
+
+// "Owner-occupied" = the recorded/true owner of the building is the same
+// entity as the operator/tenant. We don't have a persisted flag, so we
+// fuzzy-compare normalized names. Returns true only on a confident match
+// (exact-equal after stripping legal suffixes, or one fully contains the
+// other and the shorter side is at least 5 normalized chars).
+function _udIsOwnerOccupied(tenant, owner) {
+  const t = _udNormName(tenant);
+  const o = _udNormName(owner);
+  if (!t || !o) return false;
+  if (t === o) return true;
+  const shorter = t.length < o.length ? t : o;
+  const longer  = t.length < o.length ? o : t;
+  if (shorter.length >= 5 && longer.includes(shorter)) return true;
+  return false;
+}
+
+function _udNumOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+function _udYearsBetween(fromIso, toIso) {
+  if (!fromIso || !toIso) return null;
+  const a = new Date(fromIso), b = new Date(toIso);
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.round(((b - a) / (365.25 * 86400 * 1000)) * 10) / 10;
+}
+
+function _udFmtDateIso(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (isNaN(dt)) return String(d).slice(0, 10);
+  return dt.toISOString().slice(0, 10);
+}
+
+// We pull v_property_detail with select='*' rather than an explicit column
+// list — the view's column set differs slightly between Dia and Gov, and
+// PostgREST 400s on any unknown column. Bandwidth is fine for ≤ 5000 rows.
+
+function _udSubjectFromCache() {
+  const c = _udCache || {};
+  const p = c.property || {};
+  const fb = c.fallback || {};
+  const own = c.ownership || {};
+  const lease = (c.leases && c.leases[0]) || {};
+  return {
+    property_id: c.ids?.property_id || p.property_id || null,
+    lease_number: p.lease_number || c.ids?.lease_number || null,
+    tenant: p.operator_name || p.tenant_operator || p.tenant || p.facility_name
+            || p.agency_short || p.agency_full || fb.tenant_operator || fb.agency
+            || fb.facility_name || lease.tenant_name || lease.tenant || '',
+    address: p.address || fb.address || '',
+    city: p.city || fb.city || '',
+    state: p.state || fb.state || '',
+    zip: p.zip_code || fb.zip || '',
+    latitude: _udNumOrNull(p.latitude || fb.latitude),
+    longitude: _udNumOrNull(p.longitude || fb.longitude),
+    building_sf: _udNumOrNull(p.building_size || p.building_sf || p.rba || fb.building_sf),
+    year_built: _udNumOrNull(p.year_built || fb.year_built),
+    lease_start: lease.lease_start || lease.lease_commencement || p.lease_commencement || fb.lease_start || null,
+    lease_expiration: lease.lease_expiration || lease.expiration_date || fb.lease_end || null,
+    annual_rent: _udNumOrNull(lease.annual_rent || p.annual_rent || fb.annual_rent),
+    rent_per_sf: _udNumOrNull(lease.rent_per_sf || p.rent_per_sf || fb.rent_per_sf),
+    expense_structure: lease.expense_structure || p.expense_structure || '',
+    lease_bump_pct: _udNumOrNull(p.lease_bump_pct || lease.lease_bump_pct),
+    lease_bump_interval_mo: _udNumOrNull(p.lease_bump_interval_mo || lease.lease_bump_interval_mo),
+    recorded_owner: own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || '',
+    true_owner: own.true_owner || own.true_owner_name || p.true_owner_name || ''
+  };
+}
+
+async function _udFetchLeaseCompCandidates(db, subject, count) {
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+
+  // Pull the property universe with coordinates. We can't yet pre-sort by
+  // distance server-side without PostGIS, so we cap at MAX_LIMIT and
+  // distance-sort client-side. 5000 covers the live inventory comfortably.
+  const propsRes = await qFn('v_property_detail', '*', {
+    filter: 'latitude=not.is.null',
+    limit: 5000
+  });
+  const props = Array.isArray(propsRes) ? propsRes : (propsRes?.data || []);
+
+  // Distance-rank, drop the subject itself, slice to the requested count.
+  const ranked = props
+    .filter(p => p.property_id && p.property_id !== subject.property_id)
+    .map(p => {
+      const d = _udHaversineMiles(subject.latitude, subject.longitude, p.latitude, p.longitude);
+      return d == null ? null : Object.assign({}, p, { distance_miles: d });
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.distance_miles - b.distance_miles)
+    .slice(0, count);
+
+  if (ranked.length === 0) return [];
+
+  const ids = ranked.map(r => r.property_id);
+
+  // PostgREST in.() filter — comma-joined list of property_ids
+  const inList = ids.map(id => encodeURIComponent(id)).join(',');
+
+  // Pull current lease + ownership in parallel for the chosen comp set.
+  // Both queries are best-effort: failure shouldn't block the export.
+  const [leaseRes, ownRes] = await Promise.allSettled([
+    qFn('v_lease_detail', '*', {
+      filter: `property_id=in.(${inList})`,
+      limit: ids.length * 5
+    }),
+    qFn('v_ownership_current', '*', {
+      filter: `property_id=in.(${inList})`,
+      limit: ids.length * 2
+    })
+  ]);
+  const leases = leaseRes.status === 'fulfilled'
+    ? (Array.isArray(leaseRes.value) ? leaseRes.value : (leaseRes.value?.data || []))
+    : [];
+  const owners = ownRes.status === 'fulfilled'
+    ? (Array.isArray(ownRes.value) ? ownRes.value : (ownRes.value?.data || []))
+    : [];
+
+  // Index leases by property_id, preferring the active term (or latest expiration).
+  const leaseByProp = new Map();
+  for (const l of leases) {
+    const pid = l.property_id;
+    if (!pid) continue;
+    const cur = leaseByProp.get(pid);
+    if (!cur) { leaseByProp.set(pid, l); continue; }
+    const isActive = (x) => x && (x.is_active === true || x.is_active === 'true');
+    if (isActive(l) && !isActive(cur)) { leaseByProp.set(pid, l); continue; }
+    const expA = new Date(l.lease_expiration || l.expiration_date || 0).getTime();
+    const expB = new Date(cur.lease_expiration || cur.expiration_date || 0).getTime();
+    if (expA > expB) leaseByProp.set(pid, l);
+  }
+
+  const ownerByProp = new Map();
+  for (const o of owners) {
+    if (o.property_id && !ownerByProp.has(o.property_id)) ownerByProp.set(o.property_id, o);
+  }
+
+  return ranked.map(p => {
+    const l = leaseByProp.get(p.property_id) || {};
+    const o = ownerByProp.get(p.property_id) || {};
+    const tenant = p.operator_name || p.tenant_operator || p.tenant
+                || p.facility_name || p.agency_short || p.agency_full
+                || l.tenant_name || l.tenant || '';
+    const owner  = o.true_owner || o.recorded_owner
+                || p.true_owner_name || p.true_owner
+                || p.recorded_owner_name || p.recorded_owner || '';
+    return {
+      property_id: p.property_id,
+      lease_number: p.lease_number || l.lease_number || '',
+      tenant,
+      owner,
+      owner_occupied: _udIsOwnerOccupied(tenant, owner),
+      address: p.address || '',
+      city: p.city || '',
+      state: p.state || '',
+      zip: p.zip_code || '',
+      latitude: p.latitude,
+      longitude: p.longitude,
+      distance_miles: p.distance_miles,
+      building_sf: _udNumOrNull(p.building_size || p.building_sf || p.rba),
+      year_built: _udNumOrNull(p.year_built),
+      lease_start: l.lease_start || l.lease_commencement || p.lease_commencement || null,
+      lease_expiration: l.lease_expiration || l.expiration_date || null,
+      annual_rent: _udNumOrNull(l.annual_rent || p.annual_rent),
+      rent_per_sf: _udNumOrNull(l.rent_per_sf || p.rent_per_sf),
+      expense_structure: l.expense_structure || p.expense_structure || '',
+      lease_bump_pct: _udNumOrNull(l.lease_bump_pct || p.lease_bump_pct),
+      lease_bump_interval_mo: _udNumOrNull(l.lease_bump_interval_mo || p.lease_bump_interval_mo)
+    };
+  });
+}
+
+function _udLeaseCompRowFromSubject(subject, db) {
+  const s = subject;
+  // Detect owner-occupied for the subject too — same heuristic as comps.
+  const ownerOccupied = _udIsOwnerOccupied(s.tenant, s.true_owner || s.recorded_owner);
+  return {
+    role: 'SUBJECT',
+    tenant: s.tenant,
+    address: s.address,
+    city: s.city,
+    state: s.state,
+    zip: s.zip,
+    building_sf: s.building_sf,
+    year_built: s.year_built,
+    lease_start: s.lease_start,
+    lease_expiration: s.lease_expiration,
+    annual_rent: s.annual_rent,
+    rent_per_sf: s.rent_per_sf,
+    expense_structure: s.expense_structure,
+    bumps: _udFmtBumps(s.lease_bump_pct, s.lease_bump_interval_mo),
+    distance_miles: null, // subject has no distance to itself
+    owner: s.true_owner || s.recorded_owner || '',
+    owner_occupied: ownerOccupied
+  };
+}
+
+function _udFmtBumps(pct, intervalMo) {
+  if (pct == null && intervalMo == null) return '';
+  const p = pct == null ? '?' : (Number(pct).toFixed(2).replace(/\.?0+$/, '') + '%');
+  const i = intervalMo == null ? '?' : (Number(intervalMo) + 'mo');
+  return `${p} / ${i}`;
+}
+
+function _udLeaseCompTenantLabel(db) {
+  return db === 'gov' ? 'Agency' : 'Tenant / Operator';
+}
+
+async function _udExportLeaseComps(db, propertyId, btn) {
+  if (typeof XLSX === 'undefined') {
+    showToast('Excel export library not loaded yet — please try again', 'error');
+    return;
+  }
+  if (!propertyId) {
+    showToast('Open a property with a property_id to export lease comps', 'error');
+    return;
+  }
+  const sel = document.getElementById('udLeaseCompsCount');
+  const count = Math.max(1, parseInt(sel?.value || String(_UD_LEASE_COMPS_DEFAULT), 10) || _UD_LEASE_COMPS_DEFAULT);
+
+  const subject = _udSubjectFromCache();
+  if (subject.latitude == null || subject.longitude == null) {
+    showToast('Subject property has no coordinates — cannot rank by distance', 'error');
+    return;
+  }
+
+  // Inline button feedback so the user knows the click registered. Async fetch
+  // can take 1-2s on a cold proxy hit.
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Building...'; }
+
+  try {
+    const comps = await _udFetchLeaseCompCandidates(db, subject, count);
+    if (!comps.length) {
+      showToast('No comparable properties with coordinates found nearby', 'error');
+      return;
+    }
+    _udBuildLeaseCompsWorkbook(db, subject, comps);
+    showToast(`Exported ${comps.length} lease comp${comps.length === 1 ? '' : 's'} to Excel`, 'success');
+  } catch (err) {
+    console.error('Lease comps export error:', err);
+    showToast('Lease comps export failed: ' + (err?.message || 'unknown error'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+}
+
+function _udBuildLeaseCompsWorkbook(db, subject, comps) {
+  const tenantLabel = _udLeaseCompTenantLabel(db);
+  const today = new Date().toISOString().slice(0, 10);
+  const subjectRow = _udLeaseCompRowFromSubject(subject, db);
+
+  // AOA layout: title + meta block, then a SUBJECT mini-table, then the comps
+  // table with matching column structure. Keeping subject + comps on one
+  // sheet (per spec) but with visually separated banner rows.
+  const headerCols = [
+    '#', tenantLabel, 'Address', 'City', 'State', 'ZIP',
+    'Building SF', 'Year Built', 'Lease Start', 'Lease Expiration',
+    'Term Remaining (yrs)', 'Annual Rent', 'Rent / SF', 'Escalation',
+    'Lease Type', 'Distance (mi)', 'Owner', 'Owner-Occupied'
+  ];
+
+  const aoa = [];
+  aoa.push([db === 'gov' ? 'Government Lease Comparable Analysis' : 'Dialysis Lease Comparable Analysis']);
+  aoa.push([`Subject: ${subject.address || subject.tenant || subject.property_id}`]);
+  aoa.push([`Prepared: ${today}`]);
+  aoa.push([`Comparables: ${comps.length} nearest by great-circle distance`]);
+  aoa.push([]);
+  aoa.push(['SUBJECT PROPERTY']);
+  aoa.push(headerCols);
+  aoa.push(_udLeaseCompAoaRow('Subject', subjectRow));
+  aoa.push([]);
+  aoa.push(['COMPARABLE PROPERTIES']);
+  aoa.push(headerCols);
+  comps.forEach((c, i) => aoa.push(_udLeaseCompAoaRow(i + 1, c)));
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Column widths chosen to fit content without horizontal scroll for
+  // typical address/tenant lengths.
+  ws['!cols'] = [
+    { wch: 8 },   // #
+    { wch: 30 },  // Tenant / Agency
+    { wch: 32 },  // Address
+    { wch: 16 },  // City
+    { wch: 6 },   // State
+    { wch: 8 },   // ZIP
+    { wch: 12 },  // Building SF
+    { wch: 11 },  // Year Built
+    { wch: 12 },  // Lease Start
+    { wch: 14 },  // Lease Expiration
+    { wch: 10 },  // Term Remaining
+    { wch: 14 },  // Annual Rent
+    { wch: 11 },  // Rent / SF
+    { wch: 14 },  // Escalation
+    { wch: 14 },  // Lease Type
+    { wch: 11 },  // Distance
+    { wch: 28 },  // Owner
+    { wch: 14 }   // Owner-Occupied
+  ];
+
+  // Merge title + section banner cells across the full column span so they
+  // read as banners rather than single-cell labels.
+  const lastCol = headerCols.length - 1;
+  ws['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: lastCol } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: lastCol } },
+    { s: { r: 5, c: 0 }, e: { r: 5, c: lastCol } },
+    { s: { r: 9, c: 0 }, e: { r: 9, c: lastCol } }
+  ];
+
+  // Apply number formats. Building SF rows: subject @ row 7, comps starting
+  // at row 11 (zero-indexed). We just walk the sheet by header column.
+  const colIdx = (name) => headerCols.indexOf(name);
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const numericFmtCols = {
+    'Building SF': '#,##0',
+    'Annual Rent': '$#,##0',
+    'Rent / SF': '$#,##0.00',
+    'Distance (mi)': '0.00',
+    'Year Built': '0',
+    'Term Remaining (yrs)': '0.0'
+  };
+  for (let R = 6; R <= range.e.r; R++) {
+    for (const [name, fmt] of Object.entries(numericFmtCols)) {
+      const c = colIdx(name);
+      if (c < 0) continue;
+      const cell = ws[XLSX.utils.encode_cell({ r: R, c })];
+      if (cell && typeof cell.v === 'number') { cell.t = 'n'; cell.z = fmt; }
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  const sheetName = (db === 'gov' ? 'Gov' : 'Dia') + ' Lease Comps';
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+  const slug = String(subject.address || subject.property_id || 'subject')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'subject';
+  const fname = `LCC_LeaseComps_${db === 'gov' ? 'GOV' : 'DIA'}_${slug}_${today}.xlsx`;
+  XLSX.writeFile(wb, fname);
+}
+
+function _udLeaseCompAoaRow(idLabel, r) {
+  return [
+    idLabel,
+    r.tenant || '',
+    r.address || '',
+    r.city || '',
+    r.state || '',
+    r.zip || '',
+    r.building_sf != null ? r.building_sf : '',
+    r.year_built != null ? r.year_built : '',
+    _udFmtDateIso(r.lease_start),
+    _udFmtDateIso(r.lease_expiration),
+    _udYearsBetween(new Date().toISOString(), r.lease_expiration) ?? '',
+    r.annual_rent != null ? r.annual_rent : '',
+    r.rent_per_sf != null ? r.rent_per_sf : '',
+    r.bumps || _udFmtBumps(r.lease_bump_pct, r.lease_bump_interval_mo),
+    r.expense_structure || '',
+    r.distance_miles != null ? r.distance_miles : '',
+    r.owner || '',
+    r.owner_occupied ? 'Yes' : 'No'
+  ];
+}
+
+window._udExportLeaseComps = _udExportLeaseComps;
