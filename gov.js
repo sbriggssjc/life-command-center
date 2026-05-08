@@ -1265,16 +1265,17 @@ window.govIntelSweepPreview = async function() {
       return;
     }
     const labels = {
-      true_junk_stub:     'Stub properties (no RBA / year / owner / county data / firm term) → mark junk',
-      tier2_complete:     'Tier 2 complete — A/B grade in window, all intel filled → mark approved',
-      tier3c_complete:    'Tier 3c complete — C grade in window, all intel filled → mark approved',
-      frpp_year_built:    'Backfill year_built from FRPP year_of_construction',
-      frpp_rba:           'Backfill RBA from FRPP square_feet',
-      gsa_lease_rba:      'Backfill RBA from gsa_leases.lease_rsf (where FRPP didn\'t have it)',
-      sale_sync:          'Sync latest sale price + deed date from sales_transactions (last 5y)',
-      true_owner_non_spe: 'Default true_owner = recorded_owner for non-SPE properties (owner_is_spe=false)'
+      true_junk_stub:         'Stub properties (no RBA / year / owner / county data / firm term) → mark junk',
+      tier2_complete:         'Tier 2 complete — A/B grade in window, all intel filled → mark approved',
+      tier3c_complete:        'Tier 3c complete — C grade in window, all intel filled → mark approved',
+      stale_lease_no_renewal: 'Stale lease — expired 5+ yrs ago, no GSA renewal, not in active deal pipeline',
+      frpp_year_built:        'Backfill year_built from FRPP year_of_construction',
+      frpp_rba:               'Backfill RBA from FRPP square_feet',
+      gsa_lease_rba:          'Backfill RBA from gsa_leases.lease_rsf (where FRPP didn\'t have it)',
+      sale_sync:              'Sync latest sale price + deed date from sales_transactions (last 5y)',
+      true_owner_non_spe:     'Default true_owner = recorded_owner for non-SPE properties (owner_is_spe=false)'
     };
-    const _resolveBuckets = ['true_junk_stub', 'tier2_complete', 'tier3c_complete'];
+    const _resolveBuckets = ['true_junk_stub', 'tier2_complete', 'tier3c_complete', 'stale_lease_no_renewal'];
     const _backfillBuckets = ['frpp_year_built', 'frpp_rba', 'gsa_lease_rba', 'sale_sync', 'true_owner_non_spe'];
     const _resolveLines = buckets
       .filter(b => Number(b.matched) > 0 && _resolveBuckets.includes(b.bucket))
@@ -1298,7 +1299,7 @@ window.govIntelSweepPreview = async function() {
     // writes). Without this split, "Swept 2,000 properties — refreshing
     // queue" misleads the reviewer when only 3 rows actually leave the
     // queue and 1,997 just had RBA / year_built backfilled. Round 76eo.
-    const _exitBuckets    = new Set(['true_junk_stub', 'tier2_complete', 'tier3c_complete']);
+    const _exitBuckets    = new Set(['true_junk_stub', 'tier2_complete', 'tier3c_complete', 'stale_lease_no_renewal']);
     const exitTotal     = applied.filter(b => _exitBuckets.has(b.bucket)).reduce((s, b) => s + (Number(b.applied) || 0), 0);
     const backfillTotal = applied.filter(b => !_exitBuckets.has(b.bucket)).reduce((s, b) => s + (Number(b.applied) || 0), 0);
     const parts = [];
