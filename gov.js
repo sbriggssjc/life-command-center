@@ -1156,7 +1156,8 @@ window.govOwnershipSweepPreview = async function() {
     const labels = {
       empty_shell:  'Empty shells (only true_owner_name)',
       placeholder:  'Boilerplate prior_owner ("Unknown" / "Previous Owner")',
-      comp_on_file: 'Comp already in sales_transactions (±90d match)'
+      comp_on_file: 'Comp already in sales_transactions (±90d match)',
+      exact_dup:    'Exact-duplicate event rows (same lease + date + new_owner)'
     };
     const lines = buckets
       .filter(b => Number(b.matched) > 0)
@@ -1166,7 +1167,8 @@ window.govOwnershipSweepPreview = async function() {
       'Auto-resolve ' + total + ' ownership_history row' + (total === 1 ? '' : 's') + '?\n\n' + lines + '\n\n' +
       'Empty shells → research_status="junk_no_data"\n' +
       'Placeholder rows → research_status="junk_placeholder"\n' +
-      'Comp-on-file → research_status="comp_on_file"\n\n' +
+      'Comp-on-file → research_status="comp_on_file"\n' +
+      'Exact-dup events → research_status="duplicate_of_event" (oldest row kept)\n\n' +
       'You can re-run this sweep any time.',
       'Apply sweep'
     );
