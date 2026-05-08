@@ -12000,7 +12000,28 @@ async function _udExportLeaseComps(db, propertyId, btn) {
 
   const subject = _udSubjectFromCache(db);
   if (subject.latitude == null || subject.longitude == null) {
-    showToast('Subject property has no coordinates — cannot rank by distance', 'error');
+    // v_property_detail's column list varies by deployment and doesn't
+    // always expose latitude/longitude — those columns live on the
+    // underlying `properties` table. Self-fetch from there as a fallback
+    // before declaring the subject ungeocoded.
+    const qFn = db === 'gov' ? govQuery : diaQuery;
+    try {
+      const res = await qFn('properties', 'property_id,latitude,longitude', {
+        filter: `property_id=eq.${propertyId}`,
+        limit: 1
+      });
+      const row = (Array.isArray(res) ? res : (res?.data || []))[0] || null;
+      if (row) {
+        subject.latitude = _udNumOrNull(row.latitude);
+        subject.longitude = _udNumOrNull(row.longitude);
+      }
+    } catch (e) { console.warn('subject coord fetch failed', e); }
+  }
+  if (subject.latitude == null || subject.longitude == null) {
+    showToast(
+      'Subject property has no coordinates on file — geocode the property record first (lat/lng required to rank comps by distance)',
+      'error'
+    );
     return;
   }
 
