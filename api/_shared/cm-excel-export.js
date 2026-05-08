@@ -124,9 +124,9 @@ const CHART_FOOTER_CAPTIONS = {
   available_by_term_summary:
     'Active listings by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Sky bars: avg asking price (left axis). Diamond dots: avg cap (navy), upper quartile (purple), median (sage), lower quartile (gray) on the right axis.',
   top_buyers_table:
-    'Top buyers ranked by TTM-volume across the latest available quarter. Use to spot active capital deploying into the sector + concentration risk.',
+    'Top 25 buyers all-time, ranked by transaction count. Use to spot active capital deploying into the sector + concentration risk.',
   top_sellers_table:
-    'Top sellers ranked by TTM-volume across the latest available quarter. Reverse view of buyer ranking; helps identify dispositions and platform churn.',
+    'Top 25 sellers all-time, ranked by transaction count. Reverse view of buyer ranking; helps identify dispositions and platform churn.',
   nm_notable_transactions:
     'Notable Northmarq-brokered healthcare transactions, ranked by sale price within the rotation window. Flagship comp set for marketing decks.',
   nm_buyer_distribution:
@@ -267,19 +267,22 @@ const CHART_COLUMNS = {
   ],
   // Audit-fix: catalog rows existed but TAB_NAMES + CHART_COLUMNS were missing,
   // so these DataTables were silently dropped from every export.
+  // Round 6d — user feedback 2026-05-09: "We just want an aggregate
+  // list from most transactions to least over all time with no date
+  // filter." Dropped the period_end column and renamed the volume/count
+  // labels to "Total" (the underlying view now aggregates all-time;
+  // "TTM" wording was misleading).
   top_buyers_table: [
-    { key: 'period_end', header: 'Quarter End',         format: 'date_short',       width: 13 },
     { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
     { key: 'buyer',      header: 'Buyer',                                            width: 38 },
-    { key: 'ttm_volume', header: 'TTM Volume ($)',      format: 'currency_dollars', width: 18 },
-    { key: 'ttm_count',  header: 'TTM Count',           format: 'integer_count',    width: 12 },
+    { key: 'ttm_count',  header: 'Total Transactions', format: 'integer_count',    width: 18 },
+    { key: 'ttm_volume', header: 'Total Volume ($)',    format: 'currency_dollars', width: 20 },
   ],
   top_sellers_table: [
-    { key: 'period_end', header: 'Quarter End',         format: 'date_short',       width: 13 },
     { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
     { key: 'seller',     header: 'Seller',                                           width: 38 },
-    { key: 'ttm_volume', header: 'TTM Volume ($)',      format: 'currency_dollars', width: 18 },
-    { key: 'ttm_count',  header: 'TTM Count',           format: 'integer_count',    width: 12 },
+    { key: 'ttm_count',  header: 'Total Transactions', format: 'integer_count',    width: 18 },
+    { key: 'ttm_volume', header: 'Total Volume ($)',    format: 'currency_dollars', width: 20 },
   ],
   nm_notable_transactions: [
     { key: 'rank',           header: '#',                  format: 'integer_count',    width: 5 },
