@@ -2708,7 +2708,19 @@ async function upsertDomainProperty(domain, entity, metadata) {
   const primaryTenant = (rawTenant && rawTenant.length > 2 && !INVALID_TENANT_VALUES.test(rawTenant))
     ? canonicalizeTenant(cleanTenantValue(rawTenant))
     : null;
-  const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
+  // Round 76ek.i: filter out federal-government anti-pattern owner candidates
+  // when a private alternative exists (e.g. CoStar surfacing "U S A" because
+  // ICE has personal property recorded at the address — not the real owner).
+  const ownerContact = selectAuthoritativeOwner(metadata);
+  // Belt-and-suspenders: warn if the chosen owner is the federal anti-pattern
+  // (means there was no private alternative; the data may need manual review).
+  if (ownerContact && isFederalOwnerAntiPattern(ownerContact.name)) {
+    console.warn(
+      `[upsertDomainProperty] property ${propertyId || '<new>'} ` +
+      `recorded_owner_name="${ownerContact.name}" — federal anti-pattern accepted ` +
+      `(no private alternative). Verify this is actually federally-owned.`
+    );
+  }
 
   // Build property data from CoStar metadata — domain-aware field names.
   // Dialysis build stays as-is; government overrides follow below because
@@ -5288,6 +5300,131 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
 //     unconditionally; for dia they write only when
 //     dia.properties.track_cmbs_snapshots = true.
 // ────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.i (2026-05-08): federal-government anti-pattern owner guard.
+//
+// CoStar's "Recorded Owner" / "Current Owner" panel sometimes pulls from
+// county personal-property records (federal agencies leasing equipment in
+// the building) rather than real-property records. When a federal-leased
+// office shows up with "U S A" as the recorded owner but a private LLC in
+// deed_records / sales_history, the USA candidate is the personal-property
+// bleed-through and should not overwrite the real owner.
+//
+// Concrete report: 2075 North Blvd Idaho Falls — Martek Ice IDF LLC owns
+// the dirt and leases space to ICE (federal). CoStar's Public Record tab
+// surfaced "Current Owner: U S A / Government" because ICE has personal
+// property recorded at the address. Without this guard the USA candidate
+// would have been written to gov.properties.recorded_owner_name, masking
+// the real LLC owner from every downstream cap-rate / ownership query.
+//
+// Detection: candidate name matches one of the bare federal labels.
+// Decision: if there is at least one non-federal owner candidate
+// (contacts[role=owner] OR sales_history[*].buyer), suppress the federal
+// candidate. If federal is the ONLY candidate (e.g. an actual federal
+// courthouse owned by GSA), let it through — the data really is what it is.
+const FEDERAL_OWNER_ANTI_PATTERN_RE =
+  /^(usa?|u\.?\s*s\.?\s*a?\.?|united\s+states(\s+of\s+america)?|u\.?\s*s\.?\s+government|federal\s+government|government)\s*$/i;
+
+function isFederalOwnerAntiPattern(name) {
+  if (!name || typeof name !== 'string') return false;
+  return FEDERAL_OWNER_ANTI_PATTERN_RE.test(name.trim());
+}
+
+/**
+ * Pick the most authoritative recorded-owner candidate from metadata.
+ * Returns the contact object, or null if no candidate is usable.
+ *
+ * Order of preference:
+ *   1. Owner-role contact whose name does NOT match the federal anti-pattern.
+ *   2. The most recent sales_history buyer whose name does NOT match it.
+ *   3. The first owner-role contact (even if federal anti-pattern) — used
+ *      only when no private alternative exists (e.g. genuinely USPS-owned).
+ */
+function selectAuthoritativeOwner(metadata) {
+  const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
+  const owners = contacts.filter(c => c && c.role === 'owner' && c.name);
+  const privateOwner = owners.find(c => !isFederalOwnerAntiPattern(c.name));
+  if (privateOwner) return privateOwner;
+
+  // No private owner contact — try sales_history buyers (most recent first)
+  const sales = Array.isArray(metadata?.sales_history) ? metadata.sales_history : [];
+  const sortedSales = sales
+    .filter(s => s && s.buyer && !isFederalOwnerAntiPattern(s.buyer))
+    .sort((a, b) => {
+      const ad = a.sale_date ? new Date(a.sale_date).getTime() : 0;
+      const bd = b.sale_date ? new Date(b.sale_date).getTime() : 0;
+      return bd - ad;
+    });
+  if (sortedSales[0]) {
+    return { role: 'owner', name: sortedSales[0].buyer, type: 'entity', _from_sales_history: true };
+  }
+
+  // Fall through to the federal candidate only if it's all we have.
+  if (owners[0]) {
+    if (isFederalOwnerAntiPattern(owners[0].name)) {
+      console.warn(
+        `[selectAuthoritativeOwner] only candidate is federal anti-pattern (${owners[0].name}); ` +
+        `accepting because no private alternative is present. ` +
+        `Verify this property is actually federally-owned (USPS / GSA-titled).`
+      );
+    }
+    return owners[0];
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.j Phase 1b (2026-05-08): LLC research queue enqueue.
+//
+// Called from upsertDomainOwners after a new recorded_owner row is created.
+// Enqueues the owner for SOS-record enrichment when the name looks like a
+// private business entity. Best-effort; failures never block the write.
+//
+// Filter rules:
+//   - Skip federal-government anti-pattern names (USA, Government, etc.)
+//   - Skip names that don't have a recognizable business-entity suffix
+//     (LLC / LP / LLP / Inc / Corp / Co / Trust / Holdings / Partners /
+//     Associates). Individuals and bare-noun names get manual research.
+//   - Skip if a row already exists for this recorded_owner_id (UNIQUE
+//     constraint on the queue table — INSERT will fail with 409, which we
+//     swallow as a no-op).
+//
+// `guessedState` defaults to the owner's mailing-address state when known.
+// The research handler in Phase 2 will fall back to the property's state if
+// the owner address state isn't a recognized SOS-supported jurisdiction.
+const PRIVATE_LLC_SUFFIX_RE =
+  /\b(llc|l\.l\.c\.?|lp|l\.p\.?|llp|l\.l\.p\.?|inc|inc\.?|incorporated|corp|corp\.?|corporation|co\.|company|companies|trust|holdings?|partners|associates|properties|capital|ventures|management|group|enterprises?|investments?)\b\.?\s*$/i;
+
+function looksLikePrivateLlc(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (isFederalOwnerAntiPattern(name)) return false;
+  return PRIVATE_LLC_SUFFIX_RE.test(name.trim());
+}
+
+async function enqueueLlcResearch(domain, recordedOwnerId, propertyId, name, guessedState) {
+  if (!recordedOwnerId || !name) return;
+  if (!looksLikePrivateLlc(name)) return;
+
+  const payload = stripNulls({
+    recorded_owner_id: recordedOwnerId,
+    property_id:       propertyId || null,
+    search_name:       name.trim(),
+    guessed_state:     (guessedState || '').trim().toUpperCase().slice(0, 2) || null,
+    status:            'queued',
+  });
+
+  const r = await domainQuery(domain, 'POST', 'llc_research_queue', payload);
+  // 409 (UNIQUE on recorded_owner_id) is the no-op success case — the owner
+  // is already queued or already researched. Any other non-2xx is logged.
+  if (!r.ok && r.status !== 409) {
+    console.warn(
+      `[enqueueLlcResearch] insert failed status=${r.status} ` +
+      `owner_id=${recordedOwnerId} name="${name}": `,
+      r.data
+    );
+  }
+}
+
 async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
   const records = Array.isArray(metadata?.loan_records) ? metadata.loan_records : [];
   if (records.length === 0) return 0;
@@ -5798,14 +5935,34 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
           ...(addrFields.city ? { city: addrFields.city } : {}),
           ...(addrFields.state ? { state: addrFields.state } : {}),
         });
+        // Round 76ek.j Phase 1b: enqueue this newly-created owner for LLC
+        // research enrichment when it looks like a private business entity.
+        // Best-effort and isolated — failures here never block the write.
+        try {
+          await enqueueLlcResearch(domain, id, propertyId, name.trim(), addrFields.state || null);
+        } catch (err) {
+          console.warn('[upsertDomainOwners] enqueueLlcResearch failed (non-fatal):',
+            err?.message || err);
+        }
       }
       return id;
     }
     return null;
   }
 
-  // Process contacts with role=owner
-  const ownerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  // Process contacts with role=owner.
+  // Round 76ek.i: skip federal-government anti-pattern names (USA, U S A,
+  // Government, etc.) when there's a private alternative — those almost
+  // always come from CoStar's personal-property record bleed-through.
+  const allOwnerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  const hasPrivateOwner = allOwnerContacts.some(c => c.name && !isFederalOwnerAntiPattern(c.name));
+  const ownerContacts = hasPrivateOwner
+    ? allOwnerContacts.filter(c => c.name && !isFederalOwnerAntiPattern(c.name))
+    : allOwnerContacts;
+  if (hasPrivateOwner && ownerContacts.length < allOwnerContacts.length) {
+    const dropped = allOwnerContacts.filter(c => c.name && isFederalOwnerAntiPattern(c.name)).map(c => c.name);
+    console.warn(`[upsertDomainOwners] property=${propertyId} dropped federal anti-pattern owners (private alternative present): ${dropped.join(', ')}`);
+  }
   for (const contact of ownerContacts) {
     await ensureRecordedOwner(contact.name, contact.address);
   }
@@ -6005,8 +6162,9 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
   // captured, no deed entries with buyer names), write one from the
   // current owner contact and the most recent sale date.
   if (results.history === 0) {
-    const ownerContact = (metadata.contacts || [])
-      .find(c => c.role === 'owner');
+    // Round 76ek.i: same filter as the property writer — prefer a private
+    // owner over the federal-government anti-pattern when both exist.
+    const ownerContact = selectAuthoritativeOwner(metadata);
     if (ownerContact?.name) {
       const ownerId = await ensureRecordedOwner(
         ownerContact.name,
