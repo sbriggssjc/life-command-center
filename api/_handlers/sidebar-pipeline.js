@@ -5373,6 +5373,58 @@ function selectAuthoritativeOwner(metadata) {
   return null;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.j Phase 1b (2026-05-08): LLC research queue enqueue.
+//
+// Called from upsertDomainOwners after a new recorded_owner row is created.
+// Enqueues the owner for SOS-record enrichment when the name looks like a
+// private business entity. Best-effort; failures never block the write.
+//
+// Filter rules:
+//   - Skip federal-government anti-pattern names (USA, Government, etc.)
+//   - Skip names that don't have a recognizable business-entity suffix
+//     (LLC / LP / LLP / Inc / Corp / Co / Trust / Holdings / Partners /
+//     Associates). Individuals and bare-noun names get manual research.
+//   - Skip if a row already exists for this recorded_owner_id (UNIQUE
+//     constraint on the queue table — INSERT will fail with 409, which we
+//     swallow as a no-op).
+//
+// `guessedState` defaults to the owner's mailing-address state when known.
+// The research handler in Phase 2 will fall back to the property's state if
+// the owner address state isn't a recognized SOS-supported jurisdiction.
+const PRIVATE_LLC_SUFFIX_RE =
+  /\b(llc|l\.l\.c\.?|lp|l\.p\.?|llp|l\.l\.p\.?|inc|inc\.?|incorporated|corp|corp\.?|corporation|co\.|company|companies|trust|holdings?|partners|associates|properties|capital|ventures|management|group|enterprises?|investments?)\b\.?\s*$/i;
+
+function looksLikePrivateLlc(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (isFederalOwnerAntiPattern(name)) return false;
+  return PRIVATE_LLC_SUFFIX_RE.test(name.trim());
+}
+
+async function enqueueLlcResearch(domain, recordedOwnerId, propertyId, name, guessedState) {
+  if (!recordedOwnerId || !name) return;
+  if (!looksLikePrivateLlc(name)) return;
+
+  const payload = stripNulls({
+    recorded_owner_id: recordedOwnerId,
+    property_id:       propertyId || null,
+    search_name:       name.trim(),
+    guessed_state:     (guessedState || '').trim().toUpperCase().slice(0, 2) || null,
+    status:            'queued',
+  });
+
+  const r = await domainQuery(domain, 'POST', 'llc_research_queue', payload);
+  // 409 (UNIQUE on recorded_owner_id) is the no-op success case — the owner
+  // is already queued or already researched. Any other non-2xx is logged.
+  if (!r.ok && r.status !== 409) {
+    console.warn(
+      `[enqueueLlcResearch] insert failed status=${r.status} ` +
+      `owner_id=${recordedOwnerId} name="${name}": `,
+      r.data
+    );
+  }
+}
+
 async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
   const records = Array.isArray(metadata?.loan_records) ? metadata.loan_records : [];
   if (records.length === 0) return 0;
@@ -5883,6 +5935,15 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
           ...(addrFields.city ? { city: addrFields.city } : {}),
           ...(addrFields.state ? { state: addrFields.state } : {}),
         });
+        // Round 76ek.j Phase 1b: enqueue this newly-created owner for LLC
+        // research enrichment when it looks like a private business entity.
+        // Best-effort and isolated — failures here never block the write.
+        try {
+          await enqueueLlcResearch(domain, id, propertyId, name.trim(), addrFields.state || null);
+        } catch (err) {
+          console.warn('[upsertDomainOwners] enqueueLlcResearch failed (non-fatal):',
+            err?.message || err);
+        }
       }
       return id;
     }
