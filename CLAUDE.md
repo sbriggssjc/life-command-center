@@ -300,3 +300,60 @@ run `scripts/geocode-properties-backfill.mjs` from a workstation with
 env. The script also has a Nominatim fallback enabled by default for
 addresses Census can't resolve (PO boxes, recent construction, etc.).
 Use `--skip-nominatim` for Census-only.
+
+### Google Maps fallback (Round 76gn.b, 2026-05-08)
+
+The Round 76gn launch used Census-only geocoding and got ~70-80% hit
+rate on gov + ~20% on dia (dia has widespread address-corruption from
+the legacy CMS/CSV import — wrong city paired with real street). To
+lift dia coverage without source-data cleanup, the cron handler now
+falls back to **Google Maps Geocoding API** on every Census miss.
+
+Configuration:
+- Set `GOOGLE_MAPS_API_KEY` in the Railway env. The handler reads it on
+  every invocation; no redeploy needed after adding the key.
+- When the key is absent, the handler logs a one-line warning at cold
+  start and gracefully runs Census-only (identical to the Round 76gn
+  launch behavior — no errors, no missed ticks).
+- Cost ≈ $5 per 1,000 calls. Engaged ONLY on Census miss, so the
+  marginal cost on a fully-geocoded universe is near zero (only new
+  rows trigger calls); backfilling the dia long tail (~8,000 chronic
+  Census misses) costs ~$40 one-time.
+
+Telemetry: tick response now includes
+`patched_census` + `patched_google` per-domain so cron logs reveal
+the cascade ratio. After a few hundred dia ticks you can run
+
+```sql
+SELECT
+  jsonb_path_query(content, '$.by_domain.dia.patched_census')::int AS dia_census,
+  jsonb_path_query(content, '$.by_domain.dia.patched_google')::int AS dia_google
+FROM net._http_response
+WHERE created > now() - interval '2 hours'
+  AND content::jsonb ? 'google_fallback'
+ORDER BY id DESC LIMIT 10;
+```
+
+to confirm Google is contributing. Expected pattern: census 50-70% of
+patches on the corrupted-data dia rows, google making up the rest.
+
+### Why the geocoding investment matters beyond lease-comps
+
+Several upcoming features depend on lat/lng coverage being high enough
+that haversine ranking is meaningful, not "no comps near this subject":
+
+- **Lease comps export** (the one this round was built for) — already
+  uses lat/lng + haversine in `_udExportLeaseComps`.
+- **Nearby owners** (planned) — find all properties owned by the same
+  recorded_owner within N miles of the subject, for outreach lists.
+- **Competitor analysis** (planned) — for a dialysis subject, what are
+  the next 5 nearest dialysis facilities? Useful for tenant
+  concentration / replacement risk.
+- **Nearby sales** (planned) — recently-closed sales_transactions
+  within N miles for a price/SF anchor.
+
+Anything that ranks "near this subject" needs a critical mass of
+geocoded comparables. Below ~70% domain coverage, most subjects
+return empty result sets and the feature looks broken even though
+the SQL is correct. That's why the cron + Google fallback is worth
+the spend even at $40 backfill + ~$5/month steady-state.
