@@ -698,20 +698,31 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'cap_rate_top_bottom_quartile': {
+      // Round 6b — color distinction per user feedback "we need to address
+      // the colors so we can tell which line is which." Previous palette
+      // indices (1/0/2) gave sky-blue/navy/pale-blue — three blues that
+      // blend at the screen sizes in the workbook export. Switch to
+      // distinct hues from the PDF deck:
+      //   • Top Quartile    → purple #7E6BAD  (cap_long_term)
+      //   • Median          → dark navy #003DA5 (cap_short — anchor)
+      //   • Bottom Quartile → sage #4CB582    (cap_mid_long)
+      // Top + Bottom thinner; Median emphasized.
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
             { label: 'Top Quartile',    data: rows.map(r => r.top_quartile),
-              borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              borderDash: [4, 3] },
             { label: 'Median',          data: rows.map(r => r.median),
-              borderColor: palette[0], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'Bottom Quartile', data: rows.map(r => r.bottom_quartile),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              borderDash: [4, 3] },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
@@ -1336,23 +1347,32 @@ function buildChartConfig(chart, brand) {
     case 'cap_rate_by_credit': {
       // 3-line: federal / state / municipal cap rates over time.
       // Source view: cm_gov_cap_by_credit_q OR master_m (if mapper kicks).
+      //
+      // Round 6b — Y-axis was CAP_RATE_TIGHT_RANGE (5%–8%) which clipped
+      // federal data into the top edge. Real gov federal cap data ranges
+      // 5%–26% (with outliers); typical band is 5.5%–9.5%. Use the
+      // standard CAP_RATE_RANGE (5%–10%) for headroom without letting
+      // outliers dominate the visual. State + municipal still missing
+      // (deltas-doc item #17 — gov feed has 0 state/muni rows with
+      // populated cap rate; user feedback: "missing the state and
+      // municipal data" persists until we get that data feed).
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
             { label: 'Federal',   data: rows.map(r => r.federal_cap),
-              borderColor: palette[0], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_short,    backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'State',     data: rows.map(r => r.state_cap),
-              borderColor: palette[1], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_mid,      backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
-              borderColor: palette[2], backgroundColor: 'transparent',
+              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_TIGHT_RANGE }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
       };
     }
 
@@ -1442,23 +1462,11 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'lease_structures': {
-      // Horizontal bar: pct_of_total by term_bucket.
-      // User feedback (2026-05-07): "the term buckets should be displayed
-      // like 10, 5 (which would indicate an initial term of 10 years with
-      // the first 5 years firm)" — that formatting is owned by the view
-      // (term_bucket label). For now render whatever label the view ships.
-      return {
-        type: 'bar',
-        data: {
-          labels: rows.map(r => r.term_bucket),
-          datasets: [{
-            label: '% of Total',
-            data: rows.map(r => r.pct_of_total),
-            backgroundColor: palette[0], borderRadius: 2,
-          }],
-        },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_0DP, xMaxTicks: 12, legendPosition: 'top' }),
-      };
+      // Round 6b — user feedback 2026-05-09: "Data_Lease_Terms has a chart
+      // when what's in the PDF is just a table side by side." The PDF
+      // (gov p.27) shows two tables (TTM + Last 5 Years), no chart.
+      // Return null so the export renders only the data table on this tab.
+      return null;
     }
 
     case 'leased_inventory_by_state': {
