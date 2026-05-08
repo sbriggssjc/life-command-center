@@ -175,6 +175,7 @@ const fmtCurrencyM = (v) => '$' + (v / 1_000_000).toFixed(1) + 'M';
 const fmtCurrencyB = (v) => '$' + (v / 1_000_000_000).toFixed(2) + 'B';
 const fmtInteger = (v) => Math.round(v).toString();
 const fmtIndex = (v) => Number(v).toFixed(1);
+const fmtCurrencyPerSf = (v) => '$' + Number(v).toFixed(2);
 
 function periodEndLabel(d) {
   if (!d) return '';
@@ -254,6 +255,15 @@ function commonOpts({ yAxisFormat, yAxisRange, xMaxTicks = 12, legendPosition = 
         position: legendPosition,
         labels: { color: '#191919', font: { family: 'Calibri', size: 11 } },
       },
+      // Round 6c — QuickChart v4 ships chartjs-plugin-datalabels enabled
+      // by default, drawing a label on every data point. That's the
+      // "floating data labels" problem on Avg_Deal / DOM_Ask / Sentiment /
+      // Pace_Cap_Expand. Suppress globally; charts that want the
+      // most-recent + high + low pattern use buildAnnotations() (which
+      // emits chartjs-plugin-annotation labels at exactly 3 points), and
+      // charts that want per-segment labels (donuts, stacked %) override
+      // `plugins.datalabels` locally.
+      datalabels: { display: false },
     },
     scales: {
       x: {
@@ -1068,10 +1078,17 @@ function buildChartConfig(chart, brand) {
               order: 0 },
           ],
         },
-        options: commonOpts({
-          yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
-          yAxisRange: { min: 0, max: 0.10 },
-        }),
+        options: (() => {
+          const o = commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
+            yAxisRange: { min: 0, max: 0.10 },
+          });
+          // Round 6c — annotations on avg cap (primary navy line). User:
+          // "Data_Cost_Capital needs labels."
+          const ann = buildAnnotations(rows, r => r.avg_cap_rate, fmtPct2);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
       };
     }
 
@@ -1391,7 +1408,14 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+        options: (() => {
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP });
+          // Round 6c — labels on the GSA renewal CAGR (primary navy).
+          // User: "Data_CPI_CAGR... add labels."
+          const ann = buildAnnotations(rows, r => r.gsa_renewal_cagr, fmtPct1);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
       };
     }
 
@@ -1625,7 +1649,23 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'case_for_renewal': {
-      // Bar: commencement_count by year + line: avg_rent_per_sf
+      // Bar: commencement_count by year + line: avg_rent_per_sf.
+      //
+      // Round 6c — user feedback 2026-05-09: "outlier commencements in
+      // 2026 and 2019 that need to be investigated and the y-axis needs
+      // to be adjusted to show the movement in the average rent figure.
+      // Let's add low high and most recent labels too."
+      //
+      // Right-axis range tightened around the rent series so movement
+      // is visible despite the bar-count axis dominating; outliers in
+      // commencement_count remain as a Round 6e SQL probe.
+      const rentVals = rows.map(r => Number(r.avg_rent_per_sf)).filter(Number.isFinite);
+      const rentMin = rentVals.length ? Math.min(...rentVals) : null;
+      const rentMax = rentVals.length ? Math.max(...rentVals) : null;
+      const rentRange = rentMin != null && rentMax != null
+        ? { min: Math.max(0, Math.floor((rentMin - 1) * 2) / 2),
+            max: Math.ceil((rentMax + 1) * 2) / 2 }
+        : null;
       return {
         type: 'bar',
         data: {
@@ -1642,10 +1682,16 @@ function buildChartConfig(chart, brand) {
               yAxisID: 'y1', order: 0 },
           ],
         },
-        options: comboOpts({
-          yLeftFormat:  AXIS_FORMAT_INTEGER,
-          yRightFormat: AXIS_FORMAT_CURRENCY,
-        }),
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_INTEGER,
+            yRightFormat: AXIS_FORMAT_CURRENCY,
+            yRightRange:  rentRange,
+          });
+          const ann = buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year');
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
       };
     }
 
@@ -1681,10 +1727,16 @@ function buildChartConfig(chart, brand) {
               order: 0 },
           ],
         },
-        options: commonOpts({
-          yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange: { min: -0.015, max: 0.025 },
-        }),
+        options: (() => {
+          const o = commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+            yAxisRange: { min: -0.015, max: 0.025 },
+          });
+          // Round 6c — annotations on pace_all (primary navy bars).
+          const ann = buildAnnotations(rows, r => r.pace_all, fmtPct2);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
       };
     }
 
