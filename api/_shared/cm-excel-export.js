@@ -104,6 +104,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Per-quarter transaction volume (NOT TTM). Companion to YoY Change — bars show the quarter-by-quarter pulse; TTM line in Data_Volume_TTM smooths it.',
   buyer_pool_monthly_count:
     'Stacked monthly buyer count by classification: Private (Individual) navy, Institutional/Fund sky, REIT sage. Read alongside Data_Buyer_Pool (annual %-stacked) for the full picture.',
+  on_market_snapshot:
+    'Side-by-side comparison of Total Market vs 10+ Year Term active-listing metrics: count, avg price, avg/upper/lower/median cap, DOM, price-change rate. ↑/↓/→ marks year-over-year direction of change.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -560,6 +562,7 @@ const TAB_NAMES = {
   volume_ttm_by_quarter:        'Data_Volume_TTM',
   quarterly_volume_bars:        'Data_Volume_Quarterly',
   buyer_pool_monthly_count:     'Data_Buyer_Pool_M',
+  on_market_snapshot:           'Data_On_Market_Snapshot',
   transaction_count_ttm:        'Data_Txn_Count',
   cap_rate_ttm_by_quarter:      'Data_Cap_Avg',
   cap_rate_top_bottom_quartile: 'Data_Cap_Quartile',
@@ -869,6 +872,17 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     if (PERIOD_SUMMARY_TEMPLATES.has(chart.chart_template_id)) {
       if (!tabName) continue;
       renderPeriodSummaryTab({
+        wb, tabName, chart, palette, fonts, asOf, subspecialty,
+      });
+      continue;
+    }
+
+    // Round 4a — On-Market Snapshot (PDF dialysis p.29). Two side-by-side
+    // cohort tables ("Total Market" | "10+ Year Term") with arrow indicators
+    // showing current vs prior-year change. No chart image; pure layout.
+    if (chart.chart_template_id === 'on_market_snapshot') {
+      if (!tabName) continue;
+      renderOnMarketSnapshotTab({
         wb, tabName, chart, palette, fonts, asOf, subspecialty,
       });
       continue;
@@ -1407,6 +1421,189 @@ function renderPeriodSummaryTab({ wb, tabName, chart, palette, fonts, asOf, subs
   sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
   sheet.mergeCells(`A${footRow}:H${footRow}`);
   sheet.getRow(footRow).height = 22;
+}
+
+// ============================================================================
+// On-Market Snapshot tab renderer (Round 4a — PDF dialysis p.29)
+// ============================================================================
+//
+// Two side-by-side cohort tables:
+//   • Left:  Total Market (cohort='total')
+//   • Right: 10+ Year Term (cohort='core_10plus')
+//
+// Each table has 4 columns: Metric | Current Q | Trend (↑↓→) | Prior Y Q.
+// "Prior Y Q" = same quarter, 4 quarters back (year-over-year compare).
+// Trend arrow direction depends on the metric's "good direction":
+//   • count_available, avg_price → up=green (more activity / higher price)
+//   • avg_cap, upper_q_cap, lower_q_cap, median_cap, avg_dom,
+//     pct_price_change → up=red (rising caps + DOM + price-change rate
+//     all signal weakening pricing)
+// We don't bake the color semantic into the cell; we just emit the arrow
+// glyph so marketing can re-color in the PDF version.
+
+function renderOnMarketSnapshotTab({ wb, tabName, chart, palette, fonts, asOf, subspecialty }) {
+  const sheet = wb.addWorksheet(tabName, { views: [{ showGridLines: false }] });
+  const navy = 'FF' + hex(palette.nm_navy);
+  const pale = 'FF' + hex(palette.nm_pale);
+  const text = 'FF' + hex(palette.nm_text);
+  const muted = 'FF' + hex(palette.nm_text_muted);
+
+  // Title block
+  sheet.getCell('A1').value = chart.name;
+  sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: navy } };
+  sheet.getRow(1).height = 22;
+
+  // Find the most recent period_end across all rows
+  const rows = (chart.rows || []).filter((r) => r.period_end);
+  if (rows.length === 0) {
+    sheet.getCell('A3').value = 'No on-market data available.';
+    sheet.getCell('A3').font = { name: fonts.body_family, size: 10, italic: true, color: { argb: muted } };
+    return;
+  }
+  // Sort desc by period_end; pick latest
+  const sorted = [...rows].sort((a, b) =>
+    String(a.period_end) < String(b.period_end) ? 1 : -1
+  );
+  const currentPeriod = sorted[0].period_end;
+  // 4 quarters back
+  const yearAgo = (() => {
+    const d = new Date(currentPeriod);
+    d.setMonth(d.getMonth() - 12);
+    // last day of that month
+    return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
+  })();
+
+  const findRow = (period, cohort) => sorted.find((r) => r.period_end === period && r.cohort === cohort) || {};
+
+  // Subtitle
+  sheet.getCell('A2').value = `Snapshot — subspecialty=${subspecialty} · current=${currentPeriod} · prior-year=${yearAgo}`;
+  sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
+
+  // Metric rows: [label, fieldKey, formatKey]
+  const METRICS = [
+    { label: 'Number Available',     key: 'count_available',  format: 'integer_count' },
+    { label: 'Average Price',        key: 'avg_price',        format: 'currency_dollars' },
+    { label: 'Average Cap',          key: 'avg_cap',          format: 'percent_basis_points' },
+    { label: 'Upper Quartile Cap',   key: 'upper_q_cap',      format: 'percent_basis_points' },
+    { label: 'Lower Quartile Cap',   key: 'lower_q_cap',      format: 'percent_basis_points' },
+    { label: 'Median Cap',           key: 'median_cap',       format: 'percent_basis_points' },
+    { label: 'Days on Market (avg)', key: 'avg_dom',          format: 'integer_count' },
+    { label: 'Price Change %',       key: 'pct_price_change', format: 'percent_one_decimal' },
+  ];
+
+  // Render one cohort block at the given start column. Returns the next
+  // available row after the block.
+  function renderCohortBlock(startCol, cohort, cohortLabel) {
+    const headerRow_n = 4;
+    // Column-header row: cohort label spanning the 4 columns
+    const labelCell = sheet.getCell(headerRow_n, startCol);
+    labelCell.value = cohortLabel;
+    labelCell.font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+    labelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    labelCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.mergeCells(headerRow_n, startCol, headerRow_n, startCol + 3);
+    sheet.getRow(headerRow_n).height = 22;
+
+    // Sub-header row with column titles
+    const subHdr = headerRow_n + 1;
+    const subHeaders = ['Metric', formatPeriodLabel(currentPeriod), '', formatPeriodLabel(yearAgo)];
+    subHeaders.forEach((h, i) => {
+      const c = sheet.getCell(subHdr, startCol + i);
+      c.value = h;
+      c.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: navy } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pale } };
+      c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'center' };
+      c.border = { bottom: { style: 'thin', color: { argb: navy } } };
+    });
+    sheet.getRow(subHdr).height = 18;
+
+    const cur = findRow(currentPeriod, cohort);
+    const prv = findRow(yearAgo, cohort);
+
+    // Metric rows
+    METRICS.forEach((m, mi) => {
+      const r = subHdr + 1 + mi;
+      const curVal = cur[m.key];
+      const prvVal = prv[m.key];
+
+      const labelC = sheet.getCell(r, startCol);
+      labelC.value = m.label;
+      labelC.font = { name: fonts.body_family, size: 10, color: { argb: text } };
+      labelC.alignment = { vertical: 'middle', horizontal: 'left' };
+
+      const curC = sheet.getCell(r, startCol + 1);
+      curC.value = curVal == null ? null : Number(curVal);
+      if (FMT[m.format]) curC.numFmt = FMT[m.format];
+      curC.font = { name: fonts.body_family, size: 10, bold: true, color: { argb: navy } };
+      curC.alignment = { vertical: 'middle', horizontal: 'right' };
+
+      const trendC = sheet.getCell(r, startCol + 2);
+      trendC.value = arrowFor(curVal, prvVal);
+      trendC.font = { name: fonts.body_family, size: 12, bold: true, color: { argb: text } };
+      trendC.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      const prvC = sheet.getCell(r, startCol + 3);
+      prvC.value = prvVal == null ? null : Number(prvVal);
+      if (FMT[m.format]) prvC.numFmt = FMT[m.format];
+      prvC.font = { name: fonts.body_family, size: 10, color: { argb: muted } };
+      prvC.alignment = { vertical: 'middle', horizontal: 'right' };
+
+      // Zebra-stripe alternate rows
+      if (mi % 2 === 0) {
+        for (let cc = 0; cc < 4; cc++) {
+          sheet.getCell(r, startCol + cc).fill = {
+            type: 'pattern', pattern: 'solid',
+            fgColor: { argb: 'FFF7F9FC' },
+          };
+        }
+      }
+    });
+
+    return subHdr + METRICS.length + 1;
+  }
+
+  // Column widths: 2 blocks of [label=22, current=14, trend=6, prior=14] = 56 cols across A:H
+  // Layout: cols A-D (1-4) for Total, F-I (6-9) for Core 10+, col E (5) is spacer
+  sheet.getColumn(1).width = 24;
+  sheet.getColumn(2).width = 14;
+  sheet.getColumn(3).width = 6;
+  sheet.getColumn(4).width = 14;
+  sheet.getColumn(5).width = 3;  // spacer
+  sheet.getColumn(6).width = 24;
+  sheet.getColumn(7).width = 14;
+  sheet.getColumn(8).width = 6;
+  sheet.getColumn(9).width = 14;
+
+  renderCohortBlock(1, 'total',       'Total Market');
+  renderCohortBlock(6, 'core_10plus', '10+ Year Term');
+
+  // Footer caption
+  const footRow = 4 + 1 + METRICS.length + 2;
+  sheet.getCell(`A${footRow}`).value =
+    'On-Market Snapshot — current quarter vs prior-year-same-quarter for Dialysis (Total Market | 10+ Year Term cohort). ↑/↓/→ shows direction of change. ↑ on cap/DOM/price-change indicates softening; ↑ on count/price indicates strengthening. Source: cm_dialysis_on_market_snapshot_q.';
+  sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
+  sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
+  sheet.mergeCells(`A${footRow}:I${footRow}`);
+  sheet.getRow(footRow).height = 36;
+}
+
+function formatPeriodLabel(d) {
+  if (!d) return '';
+  const m = String(d).match(/^(\d{4})-(\d{2})/);
+  if (!m) return String(d);
+  const year = m[1];
+  const month = parseInt(m[2], 10);
+  const q = Math.ceil(month / 3);
+  return `${q}Q-${year}`;
+}
+
+function arrowFor(cur, prv) {
+  if (cur == null || prv == null) return '—';
+  const c = Number(cur), p = Number(prv);
+  if (!Number.isFinite(c) || !Number.isFinite(p)) return '—';
+  if (c > p) return '↑';
+  if (c < p) return '↓';
+  return '→';
 }
 
 // ============================================================================
