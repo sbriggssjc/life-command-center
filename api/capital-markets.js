@@ -72,6 +72,64 @@ const SYNTHETIC_COMPOSERS = {
       quartileRows: find('cap_rate_top_bottom_quartile'),
     });
   },
+
+  // Round 2b — Pace of Cap Rate Expansion (dialysis PDF p.24, gov p.~).
+  // Computes month-over-month cap-rate delta (annualized × 12) for both
+  // the all-cohort TTM avg and the 10+ Year Term cohort. Renders as a
+  // 2-bar (overlapping) chart. Treasury delta line is deferred until
+  // monthly treasury data is available.
+  //
+  // Inputs (master_m-mapped via the per-vertical monthly mapper):
+  //   cap_rate_ttm_by_quarter  → ttm_weighted_cap_rate (avg cap, TTM)
+  //   cap_rate_by_lease_term   → cap_10plus           (10+ cap cohort, TTM)
+  'pace_of_cap_rate_expansion': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const capRows = find('cap_rate_ttm_by_quarter');
+    const termRows = find('cap_rate_by_lease_term');
+    if (capRows.length === 0 && termRows.length === 0) return [];
+
+    // Index by period_end, merging both sources
+    const byPeriod = new Map();
+    for (const r of capRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      // Field name varies by mapper: monthly mapper emits ttm_weighted_cap_rate,
+      // quarterly view emits avg_cap_rate. Coalesce.
+      byPeriod.get(k).avg_cap = r.ttm_weighted_cap_rate ?? r.avg_cap_rate;
+    }
+    for (const r of termRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      byPeriod.get(k).cap_10plus = r.cap_10plus;
+    }
+
+    // Sort by period_end ascending and compute MoM deltas (annualized).
+    // For monthly cadence, multiply by 12; quarterly, multiply by 4.
+    const sorted = [...byPeriod.values()].sort((a, b) =>
+      String(a.period_end) < String(b.period_end) ? -1 : 1
+    );
+    if (sorted.length < 2) return [];
+
+    // Detect cadence: if successive period_ends are ~30 days apart, monthly;
+    // if ~90 days, quarterly.
+    const t0 = new Date(sorted[0].period_end).getTime();
+    const t1 = new Date(sorted[1].period_end).getTime();
+    const diffDays = Math.abs(t1 - t0) / 86400000;
+    const annualMultiplier = diffDays < 60 ? 12 : 4;
+
+    const out = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1], curr = sorted[i];
+      const pace_all = (curr.avg_cap != null && prev.avg_cap != null)
+        ? (Number(curr.avg_cap) - Number(prev.avg_cap)) * annualMultiplier
+        : null;
+      const pace_core = (curr.cap_10plus != null && prev.cap_10plus != null)
+        ? (Number(curr.cap_10plus) - Number(prev.cap_10plus)) * annualMultiplier
+        : null;
+      out.push({ period_end: curr.period_end, pace_all, pace_core });
+    }
+    return out;
+  },
 };
 
 function syntheticRecipeFor(template) {
