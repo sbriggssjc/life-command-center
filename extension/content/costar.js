@@ -1315,6 +1315,20 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data.loan_records = parseCmbsLoanDetail(lines, pageUrl);
     }
 
+    // Round 76ek.e (2026-05-08): CMBS Financials tab. Same property-detail
+    // page, /detail/lookup/{N}/cmbs-financials route. Captures multi-year
+    // actual operating financials. Hard rules:
+    //   1. Only ingest when "Property" toggle is active (not "Market"). The
+    //      Market view shows submarket Avg PSF — worthless for our purposes.
+    //   2. Only ingest "Totals" view (not "Per SF").
+    //   3. Skip the "Underwritten" column — it's the lender's pro-forma at
+    //      origination, not actual.
+    //   4. "Most Recent" YTD partial-year columns are kept but tagged with
+    //      months_covered < 12 so analytics can annualize before comparing.
+    if (CMBS_FINANCIALS_URL_RE.test(pageUrl || '')) {
+      data.property_financials = parseCmbsFinancials(lines, pageUrl);
+    }
+
     // Round 76ex (2026-04-29): the historical-asking-price guard previously
     // lived here, but this scope's `data` object never contains sales_history
     // (sales_history is built separately by extractSalesHistory() and merged
@@ -1612,6 +1626,321 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     });
 
     return [rec];
+  }
+
+  // ── Round 76ek.e: CMBS Financials tab parser ──────────────────────────
+  //
+  // The Financials tab (/detail/lookup/{N}/cmbs-financials) shows multi-year
+  // actual operating financials sourced from the CMBS servicer. Layout:
+  //
+  //   [Property | Market]   [Totals | Per SF]
+  //   Income Statement
+  //   ┌─────────────────────────┬───────────┬─────┬─────┬─────┬─────────────┐
+  //   │                         │ Most      │ 2023│ 2022│ 2021│ Underwritten│
+  //   │                         │ Recent    │     │     │     │             │
+  //   ├─────────────────────────┼───────────┼─────┼─────┼─────┼─────────────┤
+  //   │ Number of Months Covered│ 6         │ 12  │ 12  │ 12  │             │
+  //   │ Statement Ending Date   │ Jun 30… │ Dec…│ Dec…│ Dec…│ Dec 30, 2014│
+  //   │ INCOME:                 │           │     │     │     │             │
+  //   │ Gross Potential Rent    │ $920,246  │ ... │ ... │ ... │ $1,834,699  │
+  //   │ Vacancy/Collection Loss │ -         │ -   │ -   │ -   │ ($293,552)  │
+  //   │ Base Rent               │ ...       │ ... │ ... │ ... │ -           │
+  //   │ Effective Gross Income  │ ...       │ ... │ ... │ ... │ ...         │
+  //   │ OPERATING EXPENSES:     │           │     │     │     │             │
+  //   │ Real Estate Taxes       │ ...       │ ... │ ... │ ... │ ...         │
+  //   │ Total Operating Expenses│ ...       │ ... │ ... │ ... │ ...         │
+  //   │ Net Operating Income    │ ...       │ ... │ ... │ ... │ ...         │
+  //   │ Capital Expenditures    │ ...       │ ... │ ... │ ... │ ...         │
+  //   └─────────────────────────┴───────────┴─────┴─────┴─────┴─────────────┘
+  //
+  // Hard ingestion rules (per user, Round 76ek.e):
+  //   • Property toggle MUST be active. Market = submarket Avg PSF; useless.
+  //   • Totals toggle MUST be active. Per SF = ratio, not absolute.
+  //   • Underwritten column is SKIPPED — it's lender pro-forma, not actual.
+  //   • "Most Recent" partial-year is captured but tagged months_covered < 12.
+  const CMBS_FINANCIALS_URL_RE = /\/detail\/lookup\/(\d+)\/cmbs-financials(?:\/?$|\?|#)/i;
+
+  // Mapping from CoStar income-statement labels to property_financials columns.
+  // Anything not in this map lands in the line_items JSONB instead.
+  const FIN_LABEL_TO_COLUMN = {
+    'gross potential rent':       'gross_income',
+    'vacancy/collection loss':    'vacancy',
+    'effective gross income':     'effective_gross_income',
+    'real estate taxes':          'taxes',
+    'property insurance':         'insurance',
+    'cam':                        'cam',
+    'common area maintenance':    'cam',
+    'total operating expenses':   'operating_expenses',
+    'net operating income':       'noi',
+    'noi':                        'noi',
+    'capital expenditures':       'capex',
+    'capex':                      'capex',
+  };
+
+  // line_items snake_case key for any label that isn't promoted to a column.
+  function fin_labelToKey(label) {
+    return String(label || '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function fin_parseMoney(s) {
+    if (s == null) return null;
+    const t = String(s).trim();
+    if (!t || t === '-' || t === '–' || t === '—') return null;
+    // "($293,552)" → -293552  (parens = negative on financial reports)
+    const isNeg = /^\s*\(.+\)\s*$/.test(t);
+    const cleaned = t.replace(/[$()\s,]/g, '');
+    if (cleaned === '' || cleaned === '-') return null;
+    const n = parseFloat(cleaned);
+    if (!Number.isFinite(n)) return null;
+    return isNeg ? -n : n;
+  }
+
+  function fin_parseDate(s) {
+    if (!s) return null;
+    const t = String(s).trim();
+    const monNames = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
+                      Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+    const m = t.match(/^([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(\d{4})$/);
+    if (m && monNames[m[1]]) {
+      return `${m[3]}-${monNames[m[1]]}-${String(m[2]).padStart(2,'0')}`;
+    }
+    return null;
+  }
+
+  function parseCmbsFinancials(lines, pageUrl) {
+    if (!CMBS_FINANCIALS_URL_RE.test(pageUrl || '')) return [];
+
+    // ── Step 1: detect toggle state. We scan for the toggle labels and
+    //    verify both required selections are active. CoStar's DOM marks
+    //    the active toggle with aria-pressed="true" or a class change,
+    //    but the line walker collapses those, so we use a simpler heuristic:
+    //    if "Per SF" appears in a stat-card-shaped value position (i.e.
+    //    the page is rendering SF values like "$25.32 / SF" or "Per SF"
+    //    appears alongside totals), treat as Per SF mode and bail.
+    //
+    // Practically: the cleanest signal is the presence of "/SF" or "Per SF"
+    // suffixes on the value cells. If we see them on income-statement rows,
+    // we're in Per SF mode. We also bail if we see the "Market" subhead
+    // (which only appears in Market mode).
+    let inMarketMode = false;
+    let inPerSfMode  = false;
+    let propertyToggleSeen = false;
+    let totalsToggleSeen   = false;
+    for (const raw of lines) {
+      const line = String(raw || '').trim();
+      if (/^market\s+income\s+statement$/i.test(line)) inMarketMode = true;
+      if (/^submarket\s+(avg|average)\s+/i.test(line)) inMarketMode = true;
+      if (/^property$/i.test(line)) propertyToggleSeen = true;
+      if (/^totals$/i.test(line))   totalsToggleSeen = true;
+      // Per-SF mode signature: values like "$25.32" with "/SF" suffix on
+      // the same row, or a header row that explicitly says "$ / SF".
+      if (/\$\/\s*sf|\/\s*sf$/i.test(line)) inPerSfMode = true;
+    }
+
+    if (inMarketMode) {
+      console.log('[LCC CoStar] Round 76ek.e: cmbs-financials in Market mode — skipping ingestion (submarket avgs are not useful).');
+      return [];
+    }
+    if (inPerSfMode) {
+      console.log('[LCC CoStar] Round 76ek.e: cmbs-financials in Per SF mode — skipping ingestion (need Totals).');
+      return [];
+    }
+    // We don't *require* the Property/Totals labels to be visible (CoStar's
+    // DOM sometimes hides the inactive toggle), but if neither indicator
+    // fired we log it for debugging.
+    if (!propertyToggleSeen && !totalsToggleSeen) {
+      console.log('[LCC CoStar] Round 76ek.e: toggle indicators not detected; proceeding with default Property/Totals assumption.');
+    }
+
+    // ── Step 2: identify column positions. Walk to the header row that
+    //    contains "Most Recent" or year tokens, then read the column labels.
+    //    Each subsequent income/expense row should produce N values where
+    //    N = number of columns.
+    //
+    // CoStar's DOM renders the table cells as separate lines in our walker.
+    // The reliable way to assemble rows is to look for known row labels and
+    // grab the next K lines as values, where K = number of columns minus
+    // any leading label-area blank.
+
+    // First, harvest column headers. We expect a sequence like:
+    //   "" (top-left blank), "Most Recent", "2023", "2022", "2021", "Underwritten"
+    // But the leading blank may be missing. Look for the run of column-header
+    // tokens: "Most Recent" + 1-4 year tokens + optional "Underwritten".
+    let columnLabels = [];
+    let columnsHeaderIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const line = String(lines[i] || '').trim();
+      if (line !== 'Most Recent') continue;
+      // Look ahead up to 6 lines for years and Underwritten
+      const candidate = ['Most Recent'];
+      let j = i + 1;
+      while (j < lines.length && j < i + 8) {
+        const next = String(lines[j] || '').trim();
+        if (/^\d{4}$/.test(next))     { candidate.push(next); j++; continue; }
+        if (/^underwritten$/i.test(next)) { candidate.push('Underwritten'); j++; continue; }
+        break;
+      }
+      if (candidate.length >= 2) {
+        columnLabels = candidate;
+        columnsHeaderIdx = i;
+        break;
+      }
+    }
+    if (columnLabels.length === 0) {
+      console.log('[LCC CoStar] Round 76ek.e: column header row not found.');
+      return [];
+    }
+
+    // Build the column index → drop_underwritten map.
+    const dropMask = columnLabels.map(c => /^underwritten$/i.test(c));
+
+    // ── Step 3: walk rows. For each known row label, read N consecutive
+    //    value lines and assign them to columns by index.
+    //
+    // ROW_LABELS is the set of labels we recognize. Anything else under
+    // INCOME: / OPERATING EXPENSES: gets dumped into line_items.
+    //
+    // We don't care about exact label matching beyond what FIN_LABEL_TO_COLUMN
+    // covers; the rest goes into the JSONB blob keyed by snake_case label.
+    const N = columnLabels.length;
+
+    // Per-column accumulators: one bucket per non-Underwritten year-column.
+    const buckets = columnLabels.map((label, idx) => ({
+      label,
+      drop:           dropMask[idx],
+      months_covered: null,
+      period_end:     null,  // ISO date
+      cols:           {},    // structured columns
+      line_items:     {},    // unmapped labels → numeric values
+    }));
+
+    // Helper: at line i with label `lbl`, read the next N lines as values.
+    function captureRow(i, label) {
+      const values = [];
+      let j = i + 1;
+      let read = 0;
+      while (j < lines.length && read < N) {
+        const v = String(lines[j] || '').trim();
+        // Skip empty lines (CoStar sometimes emits blank cells as empty strings)
+        if (v === '' && read < N) { j++; continue; }
+        // Stop if we hit the next row label (heuristic: lines that are not
+        // numeric, not "-", not date-shaped, and not a parenthesized number
+        // are probably the next label, so we abort).
+        const isNumeric = /^\(?\s*\$?[\d,.]+\s*\)?$|^-$|^–$|^—$/.test(v);
+        const isDate    = /^[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}$/.test(v);
+        if (read > 0 && !isNumeric && !isDate) {
+          // Probably hit the next row's label; stop here even if read < N.
+          break;
+        }
+        values.push(v);
+        read++;
+        j++;
+      }
+      return { values, nextIdx: j };
+    }
+
+    let lastIdx = columnsHeaderIdx + columnLabels.length;
+    for (let i = lastIdx; i < lines.length; i++) {
+      const line = String(lines[i] || '').trim();
+      if (!line) continue;
+
+      // Stop scanning when we hit a non-financials section.
+      if (/^(rent\s+roll|income\s+statement|expense\s+history|loan\s+details|sales|images|map|public\s+record|news|by\s+using\s+this|©\s*\d{4})/i.test(line)) {
+        // Income Statement is the section we're parsing — don't break on it
+        if (!/^income\s+statement$/i.test(line)) break;
+      }
+
+      // Section headers we just skip past (INCOME:, OPERATING EXPENSES:)
+      if (/^(income|operating\s+expenses|or)\s*:?$/i.test(line)) continue;
+
+      // Special row: Number of Months Covered
+      if (/^number\s+of\s+months\s+covered$/i.test(line)) {
+        const { values, nextIdx } = captureRow(i, line);
+        for (let c = 0; c < Math.min(values.length, N); c++) {
+          const m = parseInt(String(values[c]).replace(/[^\d]/g, ''), 10);
+          if (Number.isFinite(m)) buckets[c].months_covered = m;
+        }
+        i = nextIdx - 1;
+        continue;
+      }
+
+      // Special row: Statement Ending Date
+      if (/^statement\s+ending\s+date$/i.test(line)) {
+        const { values, nextIdx } = captureRow(i, line);
+        for (let c = 0; c < Math.min(values.length, N); c++) {
+          const d = fin_parseDate(values[c]);
+          if (d) buckets[c].period_end = d;
+        }
+        i = nextIdx - 1;
+        continue;
+      }
+
+      // All other rows: numeric values. Capture if next N lines look like
+      // money/dash/parenthesized.
+      const { values, nextIdx } = captureRow(i, line);
+      if (values.length === 0) continue;
+
+      const lower = line.toLowerCase();
+      const mappedCol = FIN_LABEL_TO_COLUMN[lower];
+      const liKey     = mappedCol ? null : fin_labelToKey(line);
+
+      for (let c = 0; c < Math.min(values.length, N); c++) {
+        const num = fin_parseMoney(values[c]);
+        if (num == null) continue;
+        if (mappedCol) {
+          buckets[c].cols[mappedCol] = num;
+        } else if (liKey) {
+          buckets[c].line_items[liKey] = num;
+        }
+      }
+      i = nextIdx - 1;
+    }
+
+    // ── Step 4: build property_financials rows from non-Underwritten buckets
+    //    that actually have data.
+    const out = [];
+    for (const b of buckets) {
+      if (b.drop) continue;
+      if (!b.period_end) continue;  // can't write without a fiscal_year anchor
+      const hasAny = b.months_covered != null
+        || Object.keys(b.cols).length > 0
+        || Object.keys(b.line_items).length > 0;
+      if (!hasAny) continue;
+
+      const fiscalYear = parseInt(b.period_end.slice(0, 4), 10);
+      if (!Number.isFinite(fiscalYear)) continue;
+
+      out.push({
+        source:          'costar_cmbs_loan',
+        fiscal_year:     fiscalYear,
+        period_end_date: b.period_end,
+        months_covered:  b.months_covered != null ? b.months_covered : null,
+        is_actual:       true,
+        ...b.cols,
+        line_items:      Object.keys(b.line_items).length > 0 ? b.line_items : null,
+        source_url:      pageUrl,
+        data_source:     'costar_cmbs_loan',
+      });
+    }
+
+    console.log('[LCC CoStar] Round 76ek.e: parsed CMBS financials', {
+      columns:      columnLabels,
+      dropped:      columnLabels.filter((_, i) => dropMask[i]),
+      rows_emitted: out.length,
+      summary:      out.map(r => ({
+        fy:     r.fiscal_year,
+        end:    r.period_end_date,
+        months: r.months_covered,
+        noi:    r.noi,
+        opex:   r.operating_expenses,
+        egi:    r.effective_gross_income,
+        li_keys: r.line_items ? Object.keys(r.line_items).length : 0,
+      })),
+    });
+
+    return out;
   }
 
   function parseMarketData(lines, data) {

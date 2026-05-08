@@ -2126,6 +2126,14 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     domain, propertyId, metadata, provCollect
   );
 
+  // Step 5c3: Upsert CMBS multi-year financials (Round 76ek.e).
+  // metadata.property_financials[] arrives from /detail/lookup/{N}/cmbs-financials.
+  // The parser drops Market-mode and Per-SF-mode captures and skips the
+  // Underwritten column at the source. Same dia opt-in gate as snapshots.
+  results.records.property_financials = await upsertPropertyFinancials(
+    domain, propertyId, metadata, provCollect
+  );
+
   // Step 5d: Upsert recorded owners + ownership history
   const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata, provCollect);
   results.records.owners = ownerResults.owners;
@@ -5495,6 +5503,113 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
     } else if (lr.snapshot && !tracksSnapshots) {
       console.log(`[upsertLoanRecords] dia property=${propertyId} ` +
         `track_cmbs_snapshots=false — skipping snapshot/top_tenants fan-out`);
+    }
+  }
+
+  return processed;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.e: CMBS multi-year financials writer.
+//
+// metadata.property_financials[] arrives from extension/content/costar.js when
+// the user is on a /detail/lookup/{N}/cmbs-financials page in Property+Totals
+// mode. The parser already drops Market mode, Per-SF mode, and the
+// Underwritten column at the source, so anything reaching this writer is
+// actual operating financials.
+//
+// Each row is shaped:
+//   {
+//     source: 'costar_cmbs_loan',
+//     fiscal_year, period_end_date, months_covered, is_actual: true,
+//     gross_income, vacancy, effective_gross_income,
+//     operating_expenses, taxes, insurance, cam, noi, capex,
+//     line_items: { base_rent: ..., utilities: ..., ... } | null,
+//     source_url, data_source: 'costar_cmbs_loan',
+//   }
+//
+// Routing: writes for both gov and dia, but dia is gated on
+// dia.properties.track_cmbs_snapshots (same flag as loan snapshots).
+// Property is the natural identity; we upsert by
+// (property_id, fiscal_year, source).
+// ────────────────────────────────────────────────────────────────────────────
+async function upsertPropertyFinancials(domain, propertyId, metadata, provCollect) {
+  const rows = Array.isArray(metadata?.property_financials) ? metadata.property_financials : [];
+  if (rows.length === 0) return 0;
+
+  // Dia opt-in: same gate as snapshots/top-tenants.
+  if (domain === 'dialysis') {
+    try {
+      const r = await domainQuery(domain, 'GET',
+        `properties?property_id=eq.${propertyId}&select=track_cmbs_snapshots&limit=1`);
+      const tracks = !!(r.ok && r.data?.[0]?.track_cmbs_snapshots);
+      if (!tracks) {
+        console.log(`[upsertPropertyFinancials] dia property=${propertyId} ` +
+          `track_cmbs_snapshots=false — skipping ${rows.length} financial rows`);
+        return 0;
+      }
+    } catch (err) {
+      console.warn('[upsertPropertyFinancials] dia track_cmbs_snapshots lookup failed:', err?.message);
+      return 0;
+    }
+  }
+
+  let processed = 0;
+  for (const r of rows) {
+    if (!r || !r.fiscal_year || r.is_actual !== true) continue;
+
+    const payload = stripNulls({
+      property_id:            propertyId,
+      fiscal_year:            r.fiscal_year,
+      period_end_date:        r.period_end_date || null,
+      source:                 r.source || 'costar_cmbs_loan',
+      months_covered:         r.months_covered != null ? r.months_covered : null,
+      is_actual:              true,
+      gross_income:           r.gross_income != null ? r.gross_income : null,
+      vacancy:                r.vacancy != null ? r.vacancy : null,
+      effective_gross_income: r.effective_gross_income != null ? r.effective_gross_income : null,
+      operating_expenses:     r.operating_expenses != null ? r.operating_expenses : null,
+      taxes:                  r.taxes != null ? r.taxes : null,
+      insurance:              r.insurance != null ? r.insurance : null,
+      cam:                    r.cam != null ? r.cam : null,
+      noi:                    r.noi != null ? r.noi : null,
+      capex:                  r.capex != null ? r.capex : null,
+      line_items:             r.line_items || null,
+      source_url:             r.source_url || null,
+    });
+
+    // Find existing row by (property_id, fiscal_year, source) — the table's
+    // unique constraint guarantees at most one match.
+    const lookup = await domainQuery(domain, 'GET',
+      `property_financials?property_id=eq.${propertyId}` +
+      `&fiscal_year=eq.${r.fiscal_year}` +
+      `&source=eq.${encodeURIComponent(r.source || 'costar_cmbs_loan')}` +
+      `&select=id&limit=1`);
+
+    if (lookup.ok && lookup.data?.[0]?.id) {
+      const id = lookup.data[0].id;
+      const patch = { ...payload, updated_at: new Date().toISOString() };
+      delete patch.is_actual; // CHECK constraint forbids changing this; safe to omit on PATCH
+      const r2 = await domainQuery(domain, 'PATCH',
+        `property_financials?id=eq.${id}`, patch);
+      if (r2.ok) {
+        pushProvenance(provCollect, 'property_financials', id, patch, 0.85, 'costar_cmbs_loan');
+        processed++;
+      }
+    } else {
+      const r2 = await domainQuery(domain, 'POST', 'property_financials', payload);
+      if (r2.ok) {
+        const ins = Array.isArray(r2.data) ? r2.data[0] : r2.data;
+        if (ins?.id) {
+          pushProvenance(provCollect, 'property_financials', ins.id, payload, 0.85, 'costar_cmbs_loan');
+          processed++;
+        }
+      } else {
+        console.warn('[upsertPropertyFinancials] insert failed', {
+          property_id: propertyId, fiscal_year: r.fiscal_year,
+          status: r2.status, data: r2.data,
+        });
+      }
     }
   }
 
