@@ -22,7 +22,47 @@
 // ============================================================================
 
 import ExcelJS from 'exceljs';
-import { summaryColumnHeaders } from './cm-summary-table.js';
+import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js';
+
+// Round 3d — Inline summary blocks under selected chart tabs.
+// Each entry maps a chart_template_id to a metrics array; the worksheet
+// builder computes current/prior/YoY/prior-cycle/5y/10y/15y averages from
+// the chart's row stream and emits a small block above the raw data dump.
+// PDF parity: gov p.11/p.13/p.14/p.17/p.20/p.21, dialysis p.22/p.25/p.33.
+const INLINE_SUMMARY_METRICS = {
+  cap_rate_by_lease_term: [
+    // Dialysis cohorts (PDF p.22, 12+/8-12/6-8/≤5):
+    { label: '12+ Year Cap',  format: 'percent_basis_points', fieldKeys: ['cap_12plus'] },
+    { label: '8-12 Year Cap', format: 'percent_basis_points', fieldKeys: ['cap_8to12'] },
+    { label: '6-8 Year Cap',  format: 'percent_basis_points', fieldKeys: ['cap_6to8'] },
+    { label: '≤5 Year Cap',   format: 'percent_basis_points', fieldKeys: ['cap_5orless'] },
+    // Gov cohorts (PDF p.13, 10+/6-10/<5/outside) — only one set will
+    // actually populate per vertical (legacy fields always present so
+    // both render but gov rows have the dialysis fields null → pickValue
+    // returns null → the row prints empty cells which is fine).
+    { label: '10+ Year Cap',         format: 'percent_basis_points', fieldKeys: ['cap_10plus'] },
+    { label: '6-10 Year Cap',        format: 'percent_basis_points', fieldKeys: ['cap_6to10', 'cap_5to10'] },
+    { label: '< 5 Year Cap',         format: 'percent_basis_points', fieldKeys: ['cap_less5'] },
+    { label: 'Outside Firm Cap',     format: 'percent_basis_points', fieldKeys: ['cap_outside_firm'] },
+  ],
+  cap_rate_top_bottom_quartile: [
+    { label: 'Top Quartile Cap',    format: 'percent_basis_points', fieldKeys: ['top_quartile'] },
+    { label: 'Median Cap',          format: 'percent_basis_points', fieldKeys: ['median'] },
+    { label: 'Bottom Quartile Cap', format: 'percent_basis_points', fieldKeys: ['bottom_quartile'] },
+  ],
+  dom_and_pct_of_ask: [
+    { label: 'Avg Days on Market (TTM)', format: 'integer_count',        fieldKeys: ['avg_dom'] },
+    { label: 'Sale % of Ask Price (TTM)', format: 'percent_one_decimal', fieldKeys: ['pct_of_ask'] },
+  ],
+  bid_ask_spread: [
+    { label: 'Avg Bid-Ask Spread (TTM)', format: 'percent_basis_points', fieldKeys: ['avg_bid_ask_spread'] },
+    { label: 'Last Asking Cap (TTM)',     format: 'percent_basis_points', fieldKeys: ['avg_last_ask_cap'] },
+    { label: 'Pct Listings w/ Price Change (TTM)', format: 'percent_one_decimal', fieldKeys: ['pct_price_change'] },
+  ],
+  cap_rate_ttm_by_quarter: [
+    { label: 'Avg Cap Rate (TTM)', format: 'percent_basis_points', fieldKeys: ['ttm_weighted_cap_rate'] },
+  ],
+};
 
 // Excel number-format codes (matching cm_brand_tokens.axis_formats)
 const FMT = {
@@ -849,18 +889,41 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
 
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
+    //   Row 23:    caption strip (only when chart image present)
     //   Row 24:    title block
     //   Row 25:    subtitle (metric_focus · chart_type · subspecialty)
     //   Row 26:    meta (N rows · view name)
-    //   Row 27:    header row
-    //   Row 28+:   data rows
+    //   Row 27+:   inline summary block (Round 3d, only for selected charts)
+    //   Row N:     header row
+    //   Row N+1+:  data rows
     // When no chart image is available, the tab uses the legacy layout
     // (title at row 1, header at row 4, data at row 5).
     const png = chartImagesById.get(chart.chart_template_id);
     const titleRow  = png ? 24 : 1;
     const subRow    = titleRow + 1;
     const metaRow   = titleRow + 2;
-    const headerRow_n = png ? 27 : 4;
+
+    // Round 3d — compute the inline summary block for this chart (when
+    // configured). Block is { rows: [...], height: N } where N is the
+    // number of Excel rows the block consumes (1 header + 1 column-header
+    // + len(metrics) metric rows + 1 spacer = len + 3).
+    const summaryMetrics = INLINE_SUMMARY_METRICS[chart.chart_template_id];
+    let summaryRows = [];
+    if (summaryMetrics && Array.isArray(chart.rows) && chart.rows.length > 0) {
+      try {
+        summaryRows = buildInlineSummary({
+          rows: chart.rows,
+          metrics: summaryMetrics,
+          asOf: null,  // resolve from data
+        });
+      } catch (e) {
+        console.warn(`[cm-excel-export] inline-summary failed for ${chart.chart_template_id}: ${e?.message || e}`);
+        summaryRows = [];
+      }
+    }
+    const summaryRowCount = summaryRows.length > 0 ? (summaryRows.length + 3) : 0;
+
+    const headerRow_n = png ? (27 + summaryRowCount) : 4;
     const dataStart = headerRow_n + 1;
 
     const sheet = wb.addWorksheet(tabName, {
@@ -914,6 +977,61 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
 
     sheet.getCell(`A${metaRow}`).value = `${(chart.rows || []).length} rows · view=${chart.view_name || ''}`;
     sheet.getCell(`A${metaRow}`).font = { name: fonts.body_family, size: 9, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+
+    // Round 3d — Inline summary block. Renders metric × period averages
+    // between the meta row and the data header. Skipped when no summary
+    // metrics are configured for this chart, or when computation returned
+    // an empty array.
+    if (summaryRows.length > 0 && png) {
+      const summaryStart = metaRow + 1;
+      // Title sub-header for the block
+      sheet.getCell(`A${summaryStart}`).value = 'Period Summary';
+      sheet.getCell(`A${summaryStart}`).font = {
+        name: fonts.title_family, size: 11, bold: true,
+        color: { argb: 'FF' + hex(palette.nm_navy) },
+      };
+      sheet.getRow(summaryStart).height = 18;
+
+      // Column headers — Metric + 7 period columns. Resolve dynamic
+      // headers (e.g. "2Q-2024" instead of "Current Q") via summaryColumnHeaders.
+      const resolvedAsOf = summaryRows[0]?.as_of || null;
+      const periodHeaders = summaryColumnHeaders(resolvedAsOf);
+      const headers = ['Metric', ...periodHeaders];
+      const summaryHeaderRow = summaryStart + 1;
+      headers.forEach((h, i) => {
+        const cell = sheet.getCell(summaryHeaderRow, i + 1);
+        cell.value = h;
+        cell.font = { name: fonts.title_family, size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex(palette.nm_navy) } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      });
+      sheet.getRow(summaryHeaderRow).height = 16;
+
+      // Metric rows
+      summaryRows.forEach((sRow, rIdx) => {
+        const exRow = summaryHeaderRow + 1 + rIdx;
+        const metricCell = sheet.getCell(exRow, 1);
+        metricCell.value = sRow.metric;
+        metricCell.font = { name: fonts.body_family, size: 9, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+        metricCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+        const periodVals = [
+          sRow.current_q, sRow.prior_q, sRow.yoy_q, sRow.prior_cycle_q,
+          sRow.avg_5yr,   sRow.avg_10yr, sRow.avg_15yr,
+        ];
+        periodVals.forEach((v, i) => {
+          const cell = sheet.getCell(exRow, i + 2);
+          cell.value = v;
+          if (sRow.format && FMT[sRow.format]) cell.numFmt = FMT[sRow.format];
+          cell.font = { name: fonts.body_family, size: 9, color: { argb: 'FF' + hex(palette.nm_text || '333333') } };
+          cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          // Alternating row banding for readability
+          if (rIdx % 2 === 0) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex(palette.nm_pale) } };
+          }
+        });
+      });
+    }
 
     // Header row
     const headerRow = sheet.getRow(headerRow_n);

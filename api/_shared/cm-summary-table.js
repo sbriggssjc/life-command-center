@@ -260,5 +260,86 @@ export function joinVolumeCapQuartile({ volumeRows = [], capRows = [], quartileR
   return out;
 }
 
+// ============================================================================
+// Inline summary-table builder (Round 3d — under-chart summary blocks)
+// ============================================================================
+//
+// Generic version of buildVolumeCapSummary for any chart whose data tab
+// should ship a small period-summary block above the raw data dump. Mirrors
+// the gov PDF "summary table beneath each chart" pattern (p.11, p.13, p.14,
+// p.17, p.20, p.21).
+//
+// The caller supplies `metrics` — an array of { label, format, fieldKeys }
+// triples — and we compute current Q + prior Q + YoY + prior cycle +
+// 5/10/15-yr trailing averages from the same row-stream. Mostly meant for
+// monthly master_m rows since that's where most chart data lives now, but
+// works equally well on quarterly rows (we walk the array, not a calendar).
+//
+// @param {object} args
+// @param {Array}  args.rows    - source rows, sorted ASC by period_end. The
+//                                 master_m monthly stream is fine here; we
+//                                 anchor on the latest non-null period.
+// @param {Array}  args.metrics - [{ label, format, fieldKeys }] — fieldKeys
+//                                 is an array of candidate column names.
+// @param {string} args.asOf    - target period (YYYY-MM-DD); falls back to
+//                                 the latest period that has any non-null
+//                                 metric.
+// @returns {Array<object>} one row per metric with current_q / prior_q /
+//   yoy_q / prior_cycle_q / avg_5yr / avg_10yr / avg_15yr.
+// ============================================================================
+export function buildInlineSummary({ rows = [], metrics = [], asOf = null }) {
+  if (!Array.isArray(rows) || rows.length === 0 || !metrics.length) return [];
+  // Resolve as_of: latest period with any non-null metric value.
+  let resolved = asOf;
+  if (!resolved) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const anyVal = metrics.some((m) => pickValue(r, m.fieldKeys) != null);
+      if (anyVal) { resolved = r.period_end; break; }
+    }
+  }
+  if (!resolved) return [];
+
+  const periods = {
+    current_q:     resolved,
+    prior_q:       quartersBefore(resolved, 1),
+    yoy_q:         quartersBefore(resolved, 4),
+    prior_cycle_q: quartersBefore(resolved, 8),
+  };
+
+  // Compute trailing N-period averages on the supplied row stream. For
+  // monthly master_m we use a 12× multiplier so 5-yr = 60 monthly samples;
+  // for quarterly streams we use 4× so 5-yr = 20 quarterly samples. We
+  // detect cadence by scanning the period_end gap between the last two rows.
+  let stride = 4;  // quarterly default
+  if (rows.length >= 2) {
+    const t1 = new Date(rows[rows.length - 1].period_end).getTime();
+    const t0 = new Date(rows[rows.length - 2].period_end).getTime();
+    const days = Math.abs(t1 - t0) / 86400000;
+    if (days > 0 && days < 60) stride = 12;  // monthly
+  }
+
+  return metrics.map((m) => {
+    const cur = rowAt(rows, periods.current_q);
+    const prq = rowAt(rows, periods.prior_q);
+    const yoy = rowAt(rows, periods.yoy_q);
+    const cyc = rowAt(rows, periods.prior_cycle_q);
+    return {
+      metric:        m.label,
+      format:        m.format,
+      // Resolved as_of date (YYYY-MM-DD) — same on every row, used by the
+      // caller to compute period-specific column headers ("2Q-2024" etc.)
+      as_of:         resolved,
+      current_q:     pickValue(cur, m.fieldKeys),
+      prior_q:       pickValue(prq, m.fieldKeys),
+      yoy_q:         pickValue(yoy, m.fieldKeys),
+      prior_cycle_q: pickValue(cyc, m.fieldKeys),
+      avg_5yr:       trailingAvg(rows, resolved, 5  * stride, m.fieldKeys),
+      avg_10yr:      trailingAvg(rows, resolved, 10 * stride, m.fieldKeys),
+      avg_15yr:      trailingAvg(rows, resolved, 15 * stride, m.fieldKeys),
+    };
+  });
+}
+
 // Internal exports for tests
 export const _internal = { quartersBefore, trailingAvg, rowAt, pickValue, FIELD_KEYS };
