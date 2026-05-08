@@ -130,6 +130,36 @@ const SYNTHETIC_COMPOSERS = {
     }
     return out;
   },
+
+  // Round 3b — Quarterly_Volume_Bars (PDF dialysis p.21 bottom chart, gov
+  // ~p.12). Distinct from volume_ttm_by_quarter which is a TTM rolling line;
+  // this one is the quarter's own transaction volume as a bar.
+  // Source: cm_<vertical>_market_quarterly (the per-quarter aggregator
+  // already computes quarterly_volume + quarterly_count). We pull from the
+  // existing volume_ttm_by_quarter chart's row stream because it carries
+  // both ttm and per-quarter fields after Round GD1 fixes.
+  'quarterly_volume_bars': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const volRows = find('volume_ttm_by_quarter');
+    if (!volRows.length) return [];
+    // Strip TTM-only entries (period_end with no quarterly_volume) and
+    // dedupe to one row per period_end.
+    const byPeriod = new Map();
+    for (const r of volRows) {
+      const k = r.period_end;
+      const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
+                  ?? r.volume_dollars_quarterly;
+      if (qv == null) continue;
+      byPeriod.set(k, {
+        period_end: k,
+        quarterly_volume: Number(qv),
+        quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+      });
+    }
+    return [...byPeriod.values()].sort((a, b) =>
+      String(a.period_end) < String(b.period_end) ? -1 : 1
+    );
+  },
 };
 
 function syntheticRecipeFor(template) {
@@ -734,6 +764,27 @@ async function exportWorkbook(req, res) {
         period_end: r.period_end,
         yoy_change_pct: r.yoy_change_pct,
       })),
+      // Round 3b — Quarterly_Volume_Bars (PDF dialysis p.21 bottom).
+      // master_m carries `quarterly_volume` on every monthly anchor; we
+      // dedupe to the last day of each quarter so the rendered bars are
+      // truly quarterly (not 12 monthly snapshots of the same number).
+      quarterly_volume_bars: (rows) => {
+        const byQuarter = new Map();
+        for (const r of rows) {
+          if (r.quarterly_volume == null && r.quarterly_count == null) continue;
+          // period_end is YYYY-MM-DD; quarter-end months are 03/06/09/12
+          const m = String(r.period_end).slice(5, 7);
+          if (m !== '03' && m !== '06' && m !== '09' && m !== '12') continue;
+          byQuarter.set(r.period_end, {
+            period_end: r.period_end,
+            quarterly_volume: Number(r.quarterly_volume) || 0,
+            quarterly_count: r.quarterly_count != null ? Number(r.quarterly_count) : null,
+          });
+        }
+        return [...byQuarter.values()].sort((a, b) =>
+          String(a.period_end) < String(b.period_end) ? -1 : 1
+        );
+      },
       cap_rate_yoy_change: (rows) => rows.map(r => ({
         period_end: r.period_end,
         yoy_change_pct: r.yoy_change_pct,

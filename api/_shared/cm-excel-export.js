@@ -60,6 +60,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Cap-rate dispersion (upper/lower quartile + median). Wider bands indicate selectivity in the buyer pool; narrowing bands point to tighter pricing.',
   volume_ttm_by_quarter:
     'TTM transaction volume. Read alongside cap-rate trend for a fuller picture of liquidity and pricing momentum.',
+  quarterly_volume_bars:
+    'Per-quarter transaction volume (NOT TTM). Companion to YoY Change — bars show the quarter-by-quarter pulse; TTM line in Data_Volume_TTM smooths it.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -174,6 +176,11 @@ const CHART_COLUMNS = {
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
     { key: 'volume_dollars',   header: 'TTM Volume ($)',      format: 'currency_dollars',    width: 18 },
     { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13 },
+  ],
+  quarterly_volume_bars: [
+    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',         width: 13 },
+    { key: 'quarterly_volume',   header: 'Quarterly Volume ($)',format: 'currency_dollars',   width: 22 },
+    { key: 'quarterly_count',    header: 'Quarterly Count',     format: 'integer_count',      width: 17 },
   ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -502,6 +509,7 @@ const PERIOD_SUMMARY_TEMPLATES = new Set([
 // Tab name per chart (kept short — Excel limits to 31 chars)
 const TAB_NAMES = {
   volume_ttm_by_quarter:        'Data_Volume_TTM',
+  quarterly_volume_bars:        'Data_Volume_Quarterly',
   transaction_count_ttm:        'Data_Txn_Count',
   cap_rate_ttm_by_quarter:      'Data_Cap_Avg',
   cap_rate_top_bottom_quartile: 'Data_Cap_Quartile',

@@ -377,6 +377,28 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'quarterly_volume_bars': {
+      // Round 3b — PDF dialysis p.21 bottom (gov ~p.12). Per-quarter
+      // transaction volume rendered as bars (NOT a TTM rolling line).
+      // Sky-blue bars per the deck.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Quarterly Volume',
+            data: rows.map(r => r.quarterly_volume),
+            backgroundColor: PDF_COLORS.cap_mid, // sky #62B5E5
+            borderColor: PDF_COLORS.cap_mid,
+            borderRadius: 1,
+            barPercentage: 0.85,
+            categoryPercentage: 0.9,
+          }],
+        },
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT }),
+      };
+    }
+
     case 'cap_rate_ttm_by_quarter': {
       return {
         type: 'line',
