@@ -341,9 +341,37 @@ const GOV_TENANT_PATTERNS = [
   /\bforest service\b/,           // United States Forest Service (Butte)
   /\bnational forest\b/,
   /\bdivision of\b/,              // "Montana Division of Criminal Investigation"
-  /\bfish,?\s+wildlife/,          // state Fish/Wildlife/Parks agencies
+  /\bfish\s+(?:and\s+|,\s*)?wildlife\b/,  // "U.S. Fish and Wildlife Service" or "Fish, Wildlife & Parks"
   /\bcriminal investigation\b/,
-];
+  // Round 76ej.v (2026-05-08): full-agency-name variants. CoStar / CREXi
+  // pages frequently spell out federal agencies rather than using the
+  // acronym, e.g. "U.S. Citizenship and Immigration Services" (USCIS),
+  // "Mine Safety & Health Administration" (MSHA), "Indian Health
+  // Services" (IHS). Audit on 2026-05-08 found 20 LCC entities stuck at
+  // pipeline_status=failed / no_domain because their tenant prose used
+  // these long forms and none of the existing acronym patterns matched.
+  // Affected tenants included: U.S. Citizenship and Immigration
+  // Services (Louisville KY), Mine Safety & Health Administration
+  // (Helena MT), Indian Health Services (701 Market Dr), US Justice
+  // Department (402 W Main St), Alabama Law Enforcement Agency
+  // (Tuscaloosa), Los Angeles County Health Service.
+  /\bcitizenship\b/,                              // USCIS full name
+  /\bimmigration\s+(?:services?|and\s+customs|and\s+naturalization)\b/,
+  /\bmine\s+safety\b/,                            // MSHA
+  /\bindian\s+health\b/,                          // IHS
+  /\bjustice\s+department\b/,                     // alt phrasing for DOJ
+  /\blaw\s+enforcement\b/,                        // state law enforcement agencies
+  /\bhealth\s+service\b/,                         // county/state health services
+  /\bdrug\s+enforcement\b/,                       // DEA full name
+  /\bemergency\s+management\b/,                   // FEMA / state EM agencies
+  /\bcustoms\s+and\s+border\b/,                   // CBP full name
+  /\btransportation\s+security\b/,                // TSA full name
+  /\bu\.?s\.?\s+attorney(?:'s)?(?:\s+office)?\b/, // "U.S. Attorney's Office", "US Attorney"
+  /\bbankruptcy\s+court\b/,                       // "United States Bankruptcy Court"
+  /\btax\s+court\b/,                              // U.S. Tax Court
+  /\bappeals\s+court\b/,                          // Appeals Courts
+  /\bcourt\s+of\s+appeals\b/,                     // Court of Appeals (alt phrasing)
+
 
 const DIALYSIS_TENANT_PATTERNS = [
   /\bfresenius\b/,  /\bfresnius\b/,  // common misspelling from CoStar OCR
@@ -616,7 +644,7 @@ function cleanTenantValue(raw) {
 
 const MEDICAL_TENANT_PRIORITY = /fresenius|davita|dialysis|fmc|dci\b|kidney|renal|nephrology|satellite|healthcare|medical|clinic|health\s+care/i;
 
-const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government|\bepa\b|environmental protection|\bfda\b|food and drug|\bdoj\b|department of justice|\bdod\b|department of defense|\bnoaa\b|national oceanic|\bfaa\b|federal aviation|\bnps\b|national park service|office of|supreme court|district court|superior court|court of|courthouse|attorney general|national guard|\bmilitary\b|united states government|u\.s\.\s+government|us government|forest service|national forest|division of|criminal investigation|fish,?\s+wildlife/i;
+const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government|\bepa\b|environmental protection|\bfda\b|food and drug|\bdoj\b|department of justice|\bdod\b|department of defense|\bnoaa\b|national oceanic|\bfaa\b|federal aviation|\bnps\b|national park service|office of|supreme court|district court|superior court|court of|courthouse|attorney general|national guard|\bmilitary\b|united states government|u\.s\.\s+government|us government|forest service|national forest|division of|criminal investigation|fish,?\s+wildlife|citizenship|immigration\s+(?:services?|and\s+customs|and\s+naturalization)|mine\s+safety|indian\s+health|justice\s+department|law\s+enforcement|health\s+service|drug\s+enforcement|emergency\s+management|customs\s+and\s+border|transportation\s+security|u\.?s\.?\s+attorney|bankruptcy\s+court|tax\s+court|appeals\s+court|court\s+of\s+appeals|fish\s+(?:and\s+|,\s*)?wildlife/i;
 
 // Round 76eq (2026-04-29): defensive parser for stringified-array tenant
 // values. The OM extractor's AI sometimes returns tenant_name as a JSON-
