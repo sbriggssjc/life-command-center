@@ -1302,6 +1302,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // ── Parse market data sections separately ───────────────────
     parseMarketData(lines, data);
 
+    // Round 76ek.b (2026-05-08): when the user is on a CMBS Loan Details
+    // sub-page (product.costar.com/detail/lookup/{N}/loan), capture the
+    // visible loan record into data.loan_records[]. The backend writers
+    // upsertLoanRecord / upsertLoanSnapshot / upsertLoanTopTenants will
+    // fan it out into gov.loans + gov.loan_snapshots + gov.loan_top_tenants
+    // (and the dia mirror, gated on properties.track_cmbs_snapshots for
+    // the snapshot+tenants tables). Pagination across the top-of-page
+    // "1 of N" loan-record list and the "1 of N Commentary Entries"
+    // sub-pager are deferred to Round 76ek.c/d.
+    if (LOAN_DETAIL_URL_RE.test(pageUrl || '')) {
+      data.loan_records = parseCmbsLoanDetail(lines, pageUrl);
+    }
+
     // Round 76ex (2026-04-29): the historical-asking-price guard previously
     // lived here, but this scope's `data` object never contains sales_history
     // (sales_history is built separately by extractSalesHistory() and merged
@@ -1309,6 +1322,296 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // fired. It's now hoisted into extract() AFTER both data and salesHistory
     // are computed — see the call site near `const salesHistory = ...`.
     return data;
+  }
+
+  // ── Round 76ek.b: CMBS Loan Details parser ─────────────────────────────
+  //
+  // The Loan Details sub-page (.../detail/lookup/{N}/loan) presents a CMBS
+  // servicer report: header (Originated/Disposed dates, Maturity, Origination
+  // Amount, Originator), Collateral block (this loan's allocation + a snapshot
+  // of NOI/DSCR/GLA), Top Tenants table (rent-roll snapshot at the report
+  // date), Terms (interest_rate, term, IO period, …), Performance (loan_status,
+  // delinquency count, modification, watchlist), Prepayment Periods (defeasance
+  // status), Contacts (servicer / special servicer / originator / sponsor),
+  // and a Commentary block.
+  //
+  // This .b cut captures only the *currently-visible* loan record. Round
+  // 76ek.d adds the top-of-page "1 of N" loan-record pager loop. Round 76ek.c
+  // adds the commentary pager. Round 76ek.e adds the financial-history tab.
+  const LOAN_DETAIL_URL_RE = /\/detail\/lookup\/(\d+)\/loan(?:\/?$|\?|#)/i;
+
+  function parseCmbsLoanDetail(lines, pageUrl) {
+    const urlMatch = (pageUrl || '').match(LOAN_DETAIL_URL_RE);
+    if (!urlMatch) return [];
+
+    const rec = {
+      costar_loan_id: urlMatch[1],
+      source_url:     pageUrl,
+      data_source:    'costar_cmbs_loan',
+    };
+    const snapshot = {
+      data_source: 'costar_cmbs_loan',
+      top_tenants: [],
+    };
+
+    // ── Local parsing helpers (kept inside the function so they don't
+    //    pollute the outer scope and don't accidentally collide with the
+    //    file's other parseDate/parseCurrency-shaped helpers).
+    function lp_parseDate(s) {
+      if (!s) return null;
+      const t = String(s).trim();
+      const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (slash) {
+        const [, mo, d, y] = slash;
+        return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      }
+      const monNames = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
+                        Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+      const monYear = t.match(/^([A-Z][a-z]{2})\s+(\d{4})$/);
+      if (monYear && monNames[monYear[1]]) {
+        const mm = monNames[monYear[1]];
+        const lastDay = new Date(parseInt(monYear[2]), parseInt(mm), 0).getDate();
+        return `${monYear[2]}-${mm}-${String(lastDay).padStart(2,'0')}`;
+      }
+      const monDayYear = t.match(/^([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(\d{4})$/);
+      if (monDayYear && monNames[monDayYear[1]]) {
+        const mm = monNames[monDayYear[1]];
+        return `${monDayYear[3]}-${mm}-${String(monDayYear[2]).padStart(2,'0')}`;
+      }
+      return null;
+    }
+    function lp_parseCurrency(s) {
+      if (!s) return null;
+      const n = parseFloat(String(s).replace(/[$,\s]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    }
+    function lp_parsePct(s) {
+      if (!s) return null;
+      const m = String(s).match(/(-?[\d.]+)\s*%/);
+      if (!m) return null;
+      const n = parseFloat(m[1]);
+      return Number.isFinite(n) ? n / 100 : null;
+    }
+    function lp_parseInt(s) {
+      if (!s) return null;
+      const n = parseInt(String(s).replace(/[,\s]/g, ''), 10);
+      return Number.isFinite(n) ? n : null;
+    }
+    function lp_parseMonths(s) {
+      if (!s) return null;
+      const m = String(s).match(/(\d+)\s*Mos?/i);
+      return m ? parseInt(m[1], 10) : null;
+    }
+    function lp_parseSF(s) {
+      if (!s) return null;
+      const m = String(s).match(/(-?[\d,]+)\s*SF/i);
+      return m ? parseFloat(m[1].replace(/,/g, '')) : null;
+    }
+    function lp_parseFloat(s) {
+      if (!s) return null;
+      const n = parseFloat(String(s).replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    }
+
+    // ── Header: "Originated 7/1/2015, Disposed 11/25/2020"
+    for (const line of lines) {
+      const m = String(line).match(/^Originated\s+(\d{1,2}\/\d{1,2}\/\d{4})(?:,\s*Disposed\s+(\d{1,2}\/\d{1,2}\/\d{4}))?/i);
+      if (m) {
+        rec.origination_date = lp_parseDate(m[1]);
+        // Disposition date is informational only — loan_status carries
+        // the temporal context (e.g. "Disposed").
+        break;
+      }
+    }
+
+    // ── "Data Source: CMBS, As of Nov 2020" → snapshot as_of_date hint
+    //    Used only when the more precise "NOI Date" inside Collateral is
+    //    absent (rare). Anchored to month-end.
+    for (const line of lines) {
+      const m = String(line).match(/Data\s+Source:\s*CMBS,\s*As\s+of\s+([A-Z][a-z]{2}\s+\d{4})/i);
+      if (m) {
+        snapshot.as_of_date = lp_parseDate(m[1]);
+        break;
+      }
+    }
+
+    // ── Section-anchored extraction
+    const SECTIONS = new Set([
+      'Collateral', 'Performance', 'Terms', 'Prepayment Periods',
+      'Contacts', 'Portfolio Loan Detail', 'Top Tenants', 'Commentary',
+    ]);
+
+    let currentSection = null;
+    for (let i = 0; i < lines.length; i++) {
+      const line = String(lines[i] || '').trim();
+      const next = String(lines[i + 1] || '').trim();
+      const prev = String(lines[i - 1] || '').trim();
+
+      if (SECTIONS.has(line)) {
+        currentSection = line;
+        continue;
+      }
+
+      // Top Tenants block — rows of (tenant_name, expiration_date, occupied_sf)
+      // emitted as three consecutive lines by the DOM walker.
+      if (currentSection === 'Top Tenants') {
+        if (/^top\s+tenants\s+as\s+reported/i.test(line)) {
+          currentSection = null;
+          continue;
+        }
+        const isLabelRow = /^(top\s+tenants?|expiration\s+date|occupied)$/i.test(line);
+        const isDate     = /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(line);
+        const isSF       = /^[\d,]+\s*SF$/i.test(line);
+        if (!isLabelRow && !isDate && !isSF) {
+          const next2 = String(lines[i + 2] || '').trim();
+          if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(next) && /^[\d,]+\s*SF$/i.test(next2)) {
+            snapshot.top_tenants.push({
+              rank:            snapshot.top_tenants.length + 1,
+              tenant_name:     line,
+              expiration_date: lp_parseDate(next),
+              occupied_sf:     lp_parseSF(next2),
+            });
+            i += 2;
+            continue;
+          }
+        }
+        continue;
+      }
+
+      if (currentSection === 'Collateral') {
+        // CoStar truncates labels with "..." — match on prefixes.
+        // Origination Am... = allocated balance for THIS collateral
+        // Origination Ap... = origination appraisal value
+        if (/^origination\s+am(?:ount|\.\.\.)?$/i.test(line)) {
+          rec.loan_amount = lp_parseCurrency(next);
+        } else if (/^origination\s+ap(?:praisal|\.\.\.)?$/i.test(line)) {
+          rec.origination_appraisal = lp_parseCurrency(next);
+        } else if (/^%\s+of\s+total\s+loan$/i.test(line)) {
+          rec.pct_of_total_loan = lp_parsePct(next);
+        } else if (/^#\s+of\s+collateral$/i.test(line)) {
+          rec.num_collateral = lp_parseInt(next);
+        } else if (/^origination\s+ltv$/i.test(line)) {
+          rec.ltv = lp_parsePct(next);
+        } else if (/^appraisal\s+date$/i.test(line)) {
+          rec.appraisal_date = lp_parseDate(next);
+        } else if (/^noi$/i.test(line) && lp_parseCurrency(next) != null) {
+          snapshot.noi = lp_parseCurrency(next);
+        } else if (/^debt\s+service$/i.test(line)) {
+          snapshot.debt_service = lp_parseCurrency(next);
+        } else if (/^noi\s+dscr/i.test(line)) {
+          snapshot.noi_dscr = lp_parseFloat(next);
+        } else if (/^noi\s+date$/i.test(line)) {
+          const d = lp_parseDate(next);
+          if (d) snapshot.as_of_date = d;
+        } else if (/^gla$/i.test(line)) {
+          snapshot.gla = lp_parseSF(next);
+        }
+        continue;
+      }
+
+      if (currentSection === 'Terms') {
+        if (/^origination\s+date$/i.test(line)) {
+          rec.origination_date = lp_parseDate(next) || rec.origination_date;
+        } else if (/^maturity\s+date$/i.test(line)) {
+          rec.maturity_date = lp_parseDate(next);
+        } else if (/^origination\s+a(?:mortization|m\.\.\.)$/i.test(line)) {
+          rec.amortization_months = lp_parseMonths(next);
+        } else if (/^origination\s+ter(?:m|\.\.\.)$/i.test(line)) {
+          rec.origination_term_months = lp_parseMonths(next);
+        } else if (/^origination\s+io/i.test(line)) {
+          rec.origination_io_months = lp_parseMonths(next);
+        } else if (/^interest\s+rate$/i.test(line)) {
+          rec.interest_rate = lp_parsePct(next);
+        } else if (/^rate\s+type$/i.test(line)) {
+          rec.rate_type = next || null;
+        } else if (/^balloon\s+maturity$/i.test(line)) {
+          rec.balloon_maturity = /^yes$/i.test(next);
+        } else if (/^interest\s+only$/i.test(line)) {
+          rec.interest_only = next || null;
+        } else if (/^pay\s+frequency$/i.test(line)) {
+          rec.pay_frequency = next || null;
+        }
+        continue;
+      }
+
+      if (currentSection === 'Performance') {
+        if (/^loan\s+status$/i.test(line)) {
+          rec.loan_status = next || null;
+        } else if (/^#\s+delinquent/i.test(line)) {
+          rec.num_delinquent = lp_parseInt(next);
+        } else if (/^modification$/i.test(line)) {
+          rec.modification = /^yes$/i.test(next);
+        } else if (/^special\s+servicing$/i.test(line)) {
+          rec.special_servicing = next || null;
+        } else if (/^watchlist$/i.test(line)) {
+          rec.watchlist = next || null;
+        }
+        continue;
+      }
+
+      if (currentSection === 'Prepayment Periods') {
+        if (/^status\s+at\s+disposal$/i.test(line)) {
+          rec.status_at_disposal = next || null;
+        }
+        continue;
+      }
+
+      if (currentSection === 'Contacts') {
+        if (/^servicer$/i.test(line)) rec.servicer = next || null;
+        else if (/^special\s+servicer$/i.test(line)) rec.special_servicer = next || null;
+        else if (/^originator$/i.test(line)) rec.originator = next || null;
+        else if (/^sponsor$/i.test(line)) rec.sponsor = next || null;
+        continue;
+      }
+
+      // Stat-card area (before any section header) — values render BEFORE
+      // their labels in CoStar's stat-card layout, so we look at `prev`.
+      if (!currentSection) {
+        if (/^maturity\s+date$/i.test(line) && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(prev)) {
+          rec.maturity_date = rec.maturity_date || lp_parseDate(prev);
+        } else if (/^origination\s+amount$/i.test(line) && /^\$/.test(prev)) {
+          rec.origination_amount = lp_parseCurrency(prev);
+        } else if (/^originator$/i.test(line) && prev && !/[\$%]|^\d/.test(prev)) {
+          rec.originator = rec.originator || prev;
+        }
+      }
+    }
+
+    // Pooled CMBS: this collateral's allocated balance is what we treat as
+    // loan_amount for the loans-table row. Single-property loans: the
+    // header origination_amount IS the loan amount.
+    if (rec.loan_amount == null && rec.origination_amount != null) {
+      rec.loan_amount = rec.origination_amount;
+    }
+
+    // Identity guard — only emit a record when we got at least one of the
+    // loan-identifying fields. Prevents empty {} payloads on partially-loaded
+    // pages (the MutationObserver sometimes fires before the DOM settles).
+    if (!rec.origination_date && !rec.maturity_date && !rec.originator
+        && !rec.origination_amount && !rec.loan_amount) {
+      return [];
+    }
+
+    if (snapshot.noi != null || snapshot.noi_dscr != null
+        || snapshot.gla != null || snapshot.top_tenants.length > 0) {
+      rec.snapshot = snapshot;
+    }
+
+    console.log('[LCC CoStar] Round 76ek.b: parsed CMBS loan record', {
+      costar_loan_id:    rec.costar_loan_id,
+      origination_date:  rec.origination_date,
+      maturity_date:     rec.maturity_date,
+      originator:        rec.originator,
+      loan_amount:       rec.loan_amount,
+      interest_rate:     rec.interest_rate,
+      loan_status:       rec.loan_status,
+      snapshot_noi:      snapshot.noi,
+      snapshot_dscr:     snapshot.noi_dscr,
+      snapshot_as_of:    snapshot.as_of_date,
+      top_tenant_count:  snapshot.top_tenants.length,
+    });
+
+    return [rec];
   }
 
   function parseMarketData(lines, data) {

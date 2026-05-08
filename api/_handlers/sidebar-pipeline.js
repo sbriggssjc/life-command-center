@@ -237,7 +237,7 @@ async function recordFieldProvenance(args) {
  * Safe to call with provCollect=undefined — no-op in that case so writers
  * stay backwards-compatible with non-sidebar callers.
  */
-function pushProvenance(provCollect, table, recordPk, fields, confidence) {
+function pushProvenance(provCollect, table, recordPk, fields, confidence, source) {
   if (!Array.isArray(provCollect) || !table || !recordPk || !fields) return;
   // Drop null/undefined fields up front so the consumer doesn't have to.
   const filtered = {};
@@ -245,7 +245,11 @@ function pushProvenance(provCollect, table, recordPk, fields, confidence) {
     if (v !== null && v !== undefined && v !== '') filtered[k] = v;
   }
   if (Object.keys(filtered).length === 0) return;
-  provCollect.push({ table, recordPk: String(recordPk), fields: filtered, confidence });
+  // Round 76ek.b: optional `source` override lets a single writer (e.g.
+  // upsertLoanRecords) tag its rows with a different source than the batch
+  // default (costar_sidebar). The flush loop below honors it by passing
+  // per-field source mapping to recordCoStarFieldsProvenance.
+  provCollect.push({ table, recordPk: String(recordPk), fields: filtered, confidence, source });
 }
 
 async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}, perFieldSource = {}) {
@@ -371,7 +375,7 @@ const GOV_TENANT_PATTERNS = [
   /\btax\s+court\b/,                              // U.S. Tax Court
   /\bappeals\s+court\b/,                          // Appeals Courts
   /\bcourt\s+of\s+appeals\b/,                     // Court of Appeals (alt phrasing)
-
+];
 
 const DIALYSIS_TENANT_PATTERNS = [
   /\bfresenius\b/,  /\bfresnius\b/,  // common misspelling from CoStar OCR
@@ -2113,6 +2117,15 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   // Step 5c: Upsert loans
   results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect);
 
+  // Step 5c2: Upsert CMBS loan records (Round 76ek.b).
+  // metadata.loan_records[] arrives from extension/content/costar.js when the
+  // user is on a /detail/lookup/{N}/loan page. Each record carries CMBS-grade
+  // loan facts (servicer / sponsor / origination LTV / etc.) plus an embedded
+  // snapshot block (NOI / DSCR / GLA / top tenants @ as_of_date).
+  results.records.loan_records = await upsertLoanRecords(
+    domain, propertyId, metadata, provCollect
+  );
+
   // Step 5d: Upsert recorded owners + ownership history
   const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata, provCollect);
   results.records.owners = ownerResults.owners;
@@ -2363,11 +2376,22 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
         if (entry.confidence != null) {
           for (const k of Object.keys(entry.fields)) perField[k] = entry.confidence;
         }
+        // Round 76ek.b: when an entry was pushed with an explicit `source`
+        // override (e.g. upsertLoanRecords stamps its rows as
+        // 'costar_cmbs_loan'), build a per-field source map so the flush
+        // tags those fields correctly. Falls through to the batch sourceTag
+        // for entries without an override (the existing CoStar-sidebar path).
+        const entryFieldSource = { ...perFieldSource };
+        if (entry.source) {
+          for (const k of Object.keys(entry.fields)) {
+            entryFieldSource[k] = entry.source;
+          }
+        }
         await recordCoStarFieldsProvenance(
           { ...provCtx, targetTable: `${tablePrefix}.${entry.table}`, recordPk: entry.recordPk },
           entry.fields,
           perField,
-          perFieldSource
+          entryFieldSource
         );
       }
     }
@@ -5210,6 +5234,271 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   }
 
   return count;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.b: CMBS loan-record writer.
+//
+// metadata.loan_records[] arrives from extension/content/costar.js when the
+// user is on a /detail/lookup/{N}/loan page. Each entry is shaped:
+//
+//   {
+//     costar_loan_id, source_url, data_source: 'costar_cmbs_loan',
+//     origination_date, maturity_date, originator,
+//     loan_amount, origination_amount, pct_of_total_loan,
+//     num_collateral, ltv, origination_appraisal, appraisal_date,
+//     origination_term_months, origination_io_months, amortization_months,
+//     interest_rate, rate_type, balloon_maturity, interest_only, pay_frequency,
+//     loan_status, num_delinquent, modification, special_servicing, watchlist,
+//     status_at_disposal, servicer, special_servicer, sponsor,
+//     snapshot: {                       // optional
+//       as_of_date, noi, noi_dscr, debt_service, gla, occupied_sf,
+//       occupancy_pct, loan_balance,
+//       top_tenants: [ { rank, tenant_name, expiration_date, occupied_sf } ]
+//     }
+//   }
+//
+// Routing rules (per Round 76ek.a scope):
+//   - loans + loan_commentary write for both gov and dia.
+//   - loan_snapshots + loan_top_tenants + property_financials write for gov
+//     unconditionally; for dia they write only when
+//     dia.properties.track_cmbs_snapshots = true.
+// ────────────────────────────────────────────────────────────────────────────
+async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
+  const records = Array.isArray(metadata?.loan_records) ? metadata.loan_records : [];
+  if (records.length === 0) return 0;
+
+  // Resolve dia opt-in once per property (gov: always tracked).
+  let tracksSnapshots = true;
+  if (domain === 'dialysis') {
+    try {
+      const r = await domainQuery(domain, 'GET',
+        `properties?property_id=eq.${propertyId}&select=track_cmbs_snapshots&limit=1`);
+      tracksSnapshots = !!(r.ok && r.data?.[0]?.track_cmbs_snapshots);
+    } catch (err) {
+      console.warn('[upsertLoanRecords] dia track_cmbs_snapshots lookup failed:', err?.message);
+      tracksSnapshots = false;
+    }
+  }
+
+  let processed = 0;
+  for (const lr of records) {
+    if (!lr || typeof lr !== 'object') continue;
+
+    // ── Step 1: find or create the loans row.
+    let matchedLoanId = null;
+
+    if (lr.costar_loan_id) {
+      const r = await domainQuery(domain, 'GET',
+        `loans?costar_loan_id=eq.${encodeURIComponent(lr.costar_loan_id)}` +
+        `&select=loan_id&limit=1`);
+      if (r.ok && r.data?.[0]) matchedLoanId = r.data[0].loan_id;
+    }
+    // Fallback: same property + same origination_date (CMBS loans on the
+    // same collateral don't share an origination_date, so this is safe).
+    if (!matchedLoanId && lr.origination_date) {
+      const r = await domainQuery(domain, 'GET',
+        `loans?property_id=eq.${propertyId}` +
+        `&origination_date=eq.${lr.origination_date}` +
+        `&select=loan_id&limit=1`);
+      if (r.ok && r.data?.[0]) matchedLoanId = r.data[0].loan_id;
+    }
+
+    // Build the domain-specific loans payload.
+    const isGov = domain === 'government';
+    const loanAmount = lr.loan_amount != null ? lr.loan_amount
+                     : (lr.origination_amount != null ? lr.origination_amount : null);
+
+    const loanData = stripNulls(isGov ? {
+      property_id:           propertyId,
+      origination_date:      lr.origination_date || null,
+      maturity_date:         lr.maturity_date || null,
+      loan_amount:           loanAmount,
+      interest_rate:         lr.interest_rate != null ? lr.interest_rate : null,
+      term_years:            lr.origination_term_months != null
+                               ? lr.origination_term_months / 12 : null,
+      io_period_months:      lr.origination_io_months || null,
+      ltv:                   lr.ltv != null ? lr.ltv : null,
+      rate_type:             lr.rate_type || null,
+      status:                lr.loan_status || null,
+      prepayment_type:       lr.status_at_disposal || null,
+      // CMBS-specific (added in Round 76ek.a)
+      originator:            lr.originator || null,
+      servicer:              lr.servicer || null,
+      special_servicer:      lr.special_servicer || null,
+      sponsor:               lr.sponsor || null,
+      num_delinquent:        lr.num_delinquent != null ? lr.num_delinquent : null,
+      modification:          lr.modification != null ? lr.modification : null,
+      watchlist:             lr.watchlist || null,
+      special_servicing:     lr.special_servicing || null,
+      status_at_disposal:    lr.status_at_disposal || null,
+      balloon_maturity:      lr.balloon_maturity != null ? lr.balloon_maturity : null,
+      pay_frequency:         lr.pay_frequency || null,
+      num_collateral:        lr.num_collateral != null ? lr.num_collateral : null,
+      pct_of_total_loan:     lr.pct_of_total_loan != null ? lr.pct_of_total_loan : null,
+      origination_appraisal: lr.origination_appraisal != null ? lr.origination_appraisal : null,
+      appraisal_date:        lr.appraisal_date || null,
+      costar_loan_id:        lr.costar_loan_id || null,
+      source_url:            lr.source_url || null,
+      data_source:           'costar_cmbs_loan',
+    } : {
+      property_id:           propertyId,
+      lender_name:           lr.originator || null,
+      origination_date:      lr.origination_date || null,
+      maturity_date:         lr.maturity_date || null,
+      loan_amount:           loanAmount,
+      interest_rate_percent: lr.interest_rate != null ? lr.interest_rate * 100 : null,
+      loan_term:             lr.origination_term_months || null,
+      loan_to_value:         lr.ltv != null ? lr.ltv : null,
+      // CMBS-specific (added in Round 76ek.a)
+      originator:            lr.originator || null,
+      servicer:              lr.servicer || null,
+      special_servicer:      lr.special_servicer || null,
+      sponsor:               lr.sponsor || null,
+      num_delinquent:        lr.num_delinquent != null ? lr.num_delinquent : null,
+      modification:          lr.modification != null ? lr.modification : null,
+      watchlist:             lr.watchlist || null,
+      special_servicing:     lr.special_servicing || null,
+      status_at_disposal:    lr.status_at_disposal || null,
+      balloon_maturity:      lr.balloon_maturity != null ? lr.balloon_maturity : null,
+      pay_frequency:         lr.pay_frequency || null,
+      num_collateral:        lr.num_collateral != null ? lr.num_collateral : null,
+      pct_of_total_loan:     lr.pct_of_total_loan != null ? lr.pct_of_total_loan : null,
+      origination_appraisal: lr.origination_appraisal != null ? lr.origination_appraisal : null,
+      appraisal_date:        lr.appraisal_date || null,
+      costar_loan_id:        lr.costar_loan_id || null,
+      source_url:            lr.source_url || null,
+      data_source:           'costar_cmbs_loan',
+    });
+
+    let loanId = matchedLoanId;
+    if (matchedLoanId != null) {
+      // Field-priority filter: costar_cmbs_loan @ priority 20 outranks
+      // costar_sidebar @ 60-65 and om_extraction @ 30-40 for the shared
+      // loan columns. The filter consults field_source_priority and drops
+      // any field whose registered priority is lower (= more authoritative).
+      let filtered = loanData;
+      try {
+        filtered = await filterByFieldPriority({
+          targetDb:    isGov ? 'gov_db' : 'dia_db',
+          targetTable: isGov ? 'gov.loans' : 'dia.loans',
+          source:      'costar_cmbs_loan',
+          confidence:  0.85,
+          recordPk:    matchedLoanId,
+          fields:      loanData,
+        }) || loanData;
+      } catch (err) {
+        console.warn('[upsertLoanRecords] field-priority filter failed:', err?.message);
+      }
+      const patch = { ...filtered, updated_at: new Date().toISOString() };
+      const r = await domainQuery(domain, 'PATCH',
+        `loans?loan_id=eq.${matchedLoanId}`, patch);
+      if (r.ok) {
+        pushProvenance(provCollect, 'loans', matchedLoanId, patch, 0.85, 'costar_cmbs_loan');
+      }
+    } else {
+      const r = await domainQuery(domain, 'POST', 'loans', loanData);
+      if (r.ok) {
+        const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+        loanId = inserted?.loan_id || null;
+        if (loanId != null) {
+          pushProvenance(provCollect, 'loans', loanId, loanData, 0.85, 'costar_cmbs_loan');
+        }
+      }
+    }
+
+    if (loanId == null) {
+      console.warn('[upsertLoanRecords] failed to write loan', {
+        property_id: propertyId, costar_loan_id: lr.costar_loan_id,
+      });
+      continue;
+    }
+    processed++;
+
+    // ── Step 2: snapshot + top tenants (gov always; dia opt-in).
+    if (lr.snapshot && tracksSnapshots) {
+      const snap = lr.snapshot;
+      if (snap.as_of_date) {
+        const snapData = stripNulls({
+          loan_id:      loanId,
+          as_of_date:   snap.as_of_date,
+          noi:          snap.noi != null ? snap.noi : null,
+          noi_dscr:     snap.noi_dscr != null ? snap.noi_dscr : null,
+          debt_service: snap.debt_service != null ? snap.debt_service : null,
+          gla:          snap.gla != null ? snap.gla : null,
+          occupied_sf:  snap.occupied_sf != null ? snap.occupied_sf : null,
+          occupancy_pct: snap.occupancy_pct != null ? snap.occupancy_pct : null,
+          loan_balance: snap.loan_balance != null ? snap.loan_balance : null,
+          data_source:  'costar_cmbs_loan',
+          source_url:   lr.source_url || null,
+        });
+
+        // Find existing snapshot by (loan_id, as_of_date) — the table's
+        // unique constraint guarantees at most one row.
+        const lookup = await domainQuery(domain, 'GET',
+          `loan_snapshots?loan_id=eq.${loanId}` +
+          `&as_of_date=eq.${snap.as_of_date}` +
+          `&select=snapshot_id&limit=1`);
+
+        let snapshotId = null;
+        if (lookup.ok && lookup.data?.[0]) {
+          snapshotId = lookup.data[0].snapshot_id;
+          const patch = { ...snapData, updated_at: new Date().toISOString() };
+          await domainQuery(domain, 'PATCH',
+            `loan_snapshots?snapshot_id=eq.${snapshotId}`, patch);
+        } else {
+          const r = await domainQuery(domain, 'POST', 'loan_snapshots',
+            snapData);
+          if (r.ok) {
+            const ins = Array.isArray(r.data) ? r.data[0] : r.data;
+            snapshotId = ins?.snapshot_id || null;
+          }
+        }
+
+        if (snapshotId != null) {
+          pushProvenance(provCollect, 'loan_snapshots', snapshotId, snapData, 0.85, 'costar_cmbs_loan');
+
+          // Replace top-tenants for this snapshot. The CMBS report is the
+          // authoritative rent-roll snapshot for this as_of_date, so we
+          // delete-then-insert rather than merge — the snapshot is the
+          // unit of truth, not individual rows.
+          const tenants = Array.isArray(snap.top_tenants) ? snap.top_tenants : [];
+          if (tenants.length > 0) {
+            await domainQuery(domain, 'DELETE',
+              `loan_top_tenants?snapshot_id=eq.${snapshotId}`,
+              null);
+            const tenantRows = tenants
+              .filter(t => t && t.tenant_name)
+              .map(t => stripNulls({
+                snapshot_id:     snapshotId,
+                rank:            t.rank != null ? t.rank : null,
+                tenant_name:     t.tenant_name,
+                expiration_date: t.expiration_date || null,
+                occupied_sf:     t.occupied_sf != null ? t.occupied_sf : null,
+                data_source:     'costar_cmbs_loan',
+              }));
+            if (tenantRows.length > 0) {
+              const r = await domainQuery(domain, 'POST', 'loan_top_tenants',
+                tenantRows);
+              if (r.ok) {
+                const insertedRows = Array.isArray(r.data) ? r.data : [];
+                for (const ins of insertedRows) {
+                  if (ins?.id != null) {
+                    pushProvenance(provCollect, 'loan_top_tenants', ins.id, ins, 0.85, 'costar_cmbs_loan');
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else if (lr.snapshot && !tracksSnapshots) {
+      console.log(`[upsertLoanRecords] dia property=${propertyId} ` +
+        `track_cmbs_snapshots=false — skipping snapshot/top_tenants fan-out`);
+    }
+  }
+
+  return processed;
 }
 
 /**
