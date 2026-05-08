@@ -12017,9 +12017,23 @@ async function _udExportLeaseComps(db, propertyId, btn) {
       }
     } catch (e) { console.warn('subject coord fetch failed', e); }
   }
+  // Last-resort: geocode the subject's address via Nominatim (OpenStreetMap)
+  // and persist the result back to properties so subsequent exports use the
+  // stored coords. This handles legacy / CMS-imported clinics that landed in
+  // the table without geocoding. Best-effort: any failure (CORS, rate limit,
+  // unparsable address) leaves us in the original ungeocoded state.
+  if ((subject.latitude == null || subject.longitude == null) && subject.address) {
+    if (btn) btn.textContent = '🌍 Geocoding...';
+    const geo = await _udGeocodeSubject(db, subject, propertyId);
+    if (geo) {
+      subject.latitude = geo.lat;
+      subject.longitude = geo.lng;
+      showToast('Geocoded subject from address — coords saved to property record', 'success');
+    }
+  }
   if (subject.latitude == null || subject.longitude == null) {
     showToast(
-      'Subject property has no coordinates on file — geocode the property record first (lat/lng required to rank comps by distance)',
+      'Subject property has no coordinates on file and could not be geocoded from the address — set lat/lng manually before exporting',
       'error'
     );
     return;
@@ -12077,6 +12091,67 @@ function _udLoadExcelJs() {
     document.head.appendChild(s);
   });
   return _udExcelJsPromise;
+}
+
+// Geocode the subject's address via Nominatim (OpenStreetMap). Free, no API
+// key, but capped at ~1 req/sec by their usage policy. We only call this on
+// explicit user action (Export Lease Comps click), so volume stays well
+// inside their limits. On success we patch latitude/longitude back to the
+// `properties` row so the next export skips this path.
+//
+// Returns { lat, lng } on success, null on any failure. The caller decides
+// whether to abort or proceed without coords.
+async function _udGeocodeSubject(db, subject, propertyId) {
+  const parts = [subject.address, subject.city, subject.state, subject.zip].filter(Boolean);
+  if (parts.length < 2) return null; // need at least street + city/state to geocode reliably
+  const q = parts.join(', ');
+  let lat = null, lng = null;
+  try {
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(q);
+    // Browser sets Origin and a real User-Agent on our behalf — both satisfy
+    // Nominatim's policy for low-volume interactive use.
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) {
+      console.warn('Nominatim geocode HTTP', resp.status);
+      return null;
+    }
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    lat = parseFloat(data[0].lat);
+    lng = parseFloat(data[0].lon);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+  } catch (e) {
+    console.warn('Nominatim geocode failed', e);
+    return null;
+  }
+
+  // Persist back to properties — best effort. PATCH goes through dia-query
+  // proxy directly for dia, and through gov-write for gov. Either failure
+  // is non-fatal: we still return the coords so the export proceeds.
+  try {
+    if (db === 'gov') {
+      // Gov writes to properties must go through the gov-write service
+      // (see GOV_WRITE_SERVICE_TABLES in api/_shared/allowlist.js).
+      await fetch('/api/gov-write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: 'property-update',
+          property_id: propertyId,
+          patch: { latitude: lat, longitude: lng }
+        })
+      });
+    } else {
+      await fetch('/api/dia-query?table=properties&filter=' +
+        encodeURIComponent(`property_id=eq.${propertyId}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude: lat, longitude: lng })
+      });
+    }
+  } catch (e) { console.warn('persist geocode failed', e); }
+
+  return { lat, lng };
 }
 
 // Path to the committed Briggs lease comps template. Express + Vercel both
