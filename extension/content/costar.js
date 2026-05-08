@@ -962,7 +962,22 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       if (!data.parking && /^parking\s+ratio$/i.test(line) && next) data.parking = next;
 
       if (!data.property_type && /^type$/i.test(line)) {
-        if (next && next.length < 50 && !/^\d/.test(next) && !/^(investment|sale)/i.test(next) && !/^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i.test(next)) data.property_type = next;
+        // Round 76ek.g (2026-05-08): "SF Avail" / "Office Avail" / "Retail Avail"
+        // were leaking through as property_type because the For Lease panel's
+        // "Office Avail | 24,105 SF" cell sometimes lands adjacent to a "Type"
+        // label in the line stream. Reject anything ending in "Avail" or
+        // "Available" — those are leasing-availability columns, never the
+        // property type. Also reject "For Lease" / "For Sale" / "Asking" labels
+        // that show up in the same neighborhood.
+        if (next
+            && next.length < 50
+            && !/^\d/.test(next)
+            && !/^(investment|sale)/i.test(next)
+            && !/^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i.test(next)
+            && !/\b(avail|available)\b/i.test(next)
+            && !/^(for\s+(lease|sale)|asking(\s+(rent|price))?|listing|smallest\s+space|max\s+contiguous|vacant|leased|service\s+type)$/i.test(next)) {
+          data.property_type = next;
+        }
       }
 
       if (!data.noi && /^noi$/i.test(line)) {
@@ -1450,7 +1465,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     }
 
     // ── Section-anchored extraction
+    // Round 76ek.h (2026-05-08): non-CMBS loans (county-records-derived,
+    // not securitized) use a much simpler layout — header is just "Loan"
+    // instead of "Collateral / Terms / Performance / …" and the only
+    // sections are "Loan" and "Contacts". Treat the bare "Loan" header
+    // as an alias for "Collateral" so the same field-extraction branch
+    // fires. Otherwise origination_amount, origination_date, doc number
+    // never reach the writer (Martek Ice IDF LLC, 2075 North Blvd —
+    // 2026-05-08 user report).
     const SECTIONS = new Set([
+      'Loan',
       'Collateral', 'Performance', 'Terms', 'Prepayment Periods',
       'Contacts', 'Portfolio Loan Detail', 'Top Tenants', 'Commentary',
     ]);
@@ -1492,7 +1516,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         continue;
       }
 
-      if (currentSection === 'Collateral') {
+      // Round 76ek.h: 'Loan' is the bare-page header on non-CMBS loan tabs;
+      // it carries the same field labels (Origination Amount / Origination
+      // Date / Doc Number) as the CMBS Collateral block, just without the
+      // pool-allocation columns. Process it through the same branch.
+      if (currentSection === 'Collateral' || currentSection === 'Loan') {
         // CoStar truncates labels with "..." — match on prefixes.
         // Origination Am... = allocated balance for THIS collateral
         // Origination Ap... = origination appraisal value
@@ -1575,6 +1603,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         else if (/^special\s+servicer$/i.test(line)) rec.special_servicer = next || null;
         else if (/^originator$/i.test(line)) rec.originator = next || null;
         else if (/^sponsor$/i.test(line)) rec.sponsor = next || null;
+        // Round 76ek.h: Borrower (the SPE LLC that signed the note). On
+        // non-CMBS loans this is the only Contacts entry besides Originator.
+        // Distinct from Sponsor: borrower = LLC entity, sponsor = principals.
+        else if (/^borrower$/i.test(line)) rec.borrower = next || null;
         continue;
       }
 
@@ -2339,6 +2371,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     if (!s || s.length < 2) return true;
     const trimmed = s.trim();
     if (CONTACT_NAME_REJECT.test(trimmed)) return true;
+    // Round 76ek.g (2026-05-08): CoStar's per-sale Verification block
+    // surfaces sentence-shaped footnotes that the contact extractor was
+    // capturing as TRUE_SELLER_CONTACT names — e.g. "The sale price RBA
+    // were verified with listing broker" / "The deed was unavailable
+    // at the time of publication." Reject any string that's clearly a
+    // sentence: starts with a determiner (the/this/a/an/it), contains a
+    // verb auxiliary (was/were/is/are/has/have/had/will/would), and has
+    // ≥4 tokens. Real contact names are at most 4 tokens (First Middle
+    // Last, optional Sr./Jr.) and don't have verb auxiliaries.
+    const SENTENCE_SHAPE_RE =
+      /^(the|this|that|a|an|it|all|none|no)\b[\s\S]+\b(was|were|is|are|has|have|had|will|would|been|verified|unavailable|confirmed|disclosed|published|obtained|recorded|reported)\b/i;
+    if (SENTENCE_SHAPE_RE.test(trimmed) && trimmed.split(/\s+/).length >= 4) return true;
+    // Trailing period on a multi-word string is a strong sentence signal
+    // for our contact-name domain (legitimate names never end in '.').
+    if (/\w\.\s*$/.test(trimmed) && trimmed.split(/\s+/).length >= 4) return true;
     // City, ST ZIP pattern (e.g. "Los Angeles, CA 90048")
     if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(s)) return true;
     // Concatenated multi-line address (contains ZIP mid-string with no break)

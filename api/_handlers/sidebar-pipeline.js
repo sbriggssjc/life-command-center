@@ -1574,6 +1574,22 @@ function isJunkContactName(name) {
   if (trimmed.split(/\s+/).length >= 6 && /\.$/.test(trimmed)) return true;
   if (/^(This transaction|The seller|The buyer|This listing|The property|This property|This sale)/i.test(trimmed)) return true;
 
+  // Round 76ek.g (2026-05-08): CoStar's per-sale Verification footnotes
+  // landed as TRUE_SELLER_CONTACT names on 38275 W Twelve Mile Rd. Examples:
+  //   "The sale price RBA were verified with listing broker"
+  //   "The deed was unavailable at the time of publication."
+  //   "Information was obtained from public records and CoStar research."
+  // Extended narrative-opener list AND a verb-auxiliary detector for any
+  // multi-word string that opens with a determiner and contains a tense
+  // marker. Real person names never contain "was/were/is/are/has/have".
+  if (/^(The sale|The deed|The transaction|The data|The information|The price|The asking|The cap|The NOI|This property|This deal|Information|Sale price|Asking price)\b/i.test(trimmed)) return true;
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length >= 4
+      && /^(the|this|that|a|an|it|all|none|no)$/i.test(tokens[0])
+      && /\b(was|were|is|are|has|have|had|will|would|been|verified|unavailable|disclosed|published|obtained|recorded|reported|confirmed)\b/i.test(trimmed)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -5289,9 +5305,34 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
     }
   }
 
+  const isGov = domain === 'government';
+
+  // Round 76ek.h: link a non-CMBS loan's "Borrower" (the SPE LLC that signed
+  // the note) to a recorded_owner row so loans.recorded_owner_id is populated.
+  // We never auto-CREATE a recorded_owner here — that's reserved for the
+  // dedicated upsertDomainOwners path which handles canonicalization and
+  // dedup against the existing owner universe. Look up only.
+  async function resolveBorrowerOwnerId(borrowerName) {
+    if (!borrowerName || typeof borrowerName !== 'string') return null;
+    const trimmed = borrowerName.trim();
+    if (trimmed.length < 3) return null;
+    const nameCol = isGov ? 'canonical_name' : 'normalized_name';
+    // Match by case-insensitive ilike; the recorded_owners normalization
+    // strategy lives in upsertDomainOwners, which runs in the same request
+    // so the row should already exist by the time this lookup fires.
+    const r = await domainQuery(domain, 'GET',
+      `recorded_owners?${nameCol}=ilike.${encodeURIComponent(trimmed)}` +
+      `&select=recorded_owner_id&limit=1`);
+    if (r.ok && r.data?.[0]?.recorded_owner_id) return r.data[0].recorded_owner_id;
+    return null;
+  }
+
   let processed = 0;
   for (const lr of records) {
     if (!lr || typeof lr !== 'object') continue;
+
+    // ── Step 0: resolve borrower → recorded_owner_id (best-effort).
+    const borrowerOwnerId = await resolveBorrowerOwnerId(lr.borrower);
 
     // ── Step 1: find or create the loans row.
     let matchedLoanId = null;
@@ -5313,7 +5354,6 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
     }
 
     // Build the domain-specific loans payload.
-    const isGov = domain === 'government';
     const loanAmount = lr.loan_amount != null ? lr.loan_amount
                      : (lr.origination_amount != null ? lr.origination_amount : null);
 
@@ -5346,6 +5386,7 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
       pct_of_total_loan:     lr.pct_of_total_loan != null ? lr.pct_of_total_loan : null,
       origination_appraisal: lr.origination_appraisal != null ? lr.origination_appraisal : null,
       appraisal_date:        lr.appraisal_date || null,
+      recorded_owner_id:     borrowerOwnerId,
       costar_loan_id:        lr.costar_loan_id || null,
       source_url:            lr.source_url || null,
       data_source:           'costar_cmbs_loan',
@@ -5374,6 +5415,7 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
       pct_of_total_loan:     lr.pct_of_total_loan != null ? lr.pct_of_total_loan : null,
       origination_appraisal: lr.origination_appraisal != null ? lr.origination_appraisal : null,
       appraisal_date:        lr.appraisal_date || null,
+      recorded_owner_id:     borrowerOwnerId,
       costar_loan_id:        lr.costar_loan_id || null,
       source_url:            lr.source_url || null,
       data_source:           'costar_cmbs_loan',
@@ -6708,6 +6750,12 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
   // 'Office' / 'Retail' on Pettit Ave. NOT a substring match — those
   // would false-positive on real medical-tenant names. Anchored.
   const COSTAR_USE_CATEGORY_RE = /^(medical|office|retail|industrial|warehouse|flex|mixed[-\s]?use|residential|hospitality|specialty|land|other)\s*$/i;
+  // Round 76ek.g (2026-05-08): bare industry-role labels CoStar surfaces in
+  // its tenant-mix column ("Retailer", "Wholesaler", "Operator", etc.). On
+  // 38275 W Twelve Mile Rd the tenant list dropped a bare "Retailer" row.
+  // These are role classifications, never tenant names. Anchored — won't
+  // false-positive on real names like "Joe's Retailer LLC".
+  const COSTAR_INDUSTRY_ROLE_RE = /^(retailer|wholesaler|distributor|operator|manufacturer|supplier|service\s+provider|landlord|owner\s+occupier|owner[-\s]?occupied)\s*$/i;
   // 'Unkwn' / 'Unknown' / 'N/A' / 'TBD' / '--' / dashes — CoStar
   // placeholder values for unknown-yet fields.
   const COSTAR_PLACEHOLDER_RE = /^(unkwn|unknown|n\/?a|tbd|none|null|-+|—+|\.{2,})\s*$/i;
@@ -6728,6 +6776,7 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     // labels and CoStar placeholder values + date-string residue.
     if (COSTAR_LABEL_JUNK_RE.test(n)) return true;
     if (COSTAR_USE_CATEGORY_RE.test(n)) return true;
+    if (COSTAR_INDUSTRY_ROLE_RE.test(n)) return true;
     if (COSTAR_PLACEHOLDER_RE.test(n)) return true;
     if (COSTAR_DATE_RE.test(n)) return true;
     // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
