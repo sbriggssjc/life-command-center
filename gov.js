@@ -236,7 +236,11 @@ async function loadGovOverviewStats() {
 let _govDataLoading = false;
 
 // Helper function to paginate a query until all rows are fetched
-async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 5000) {
+// Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap.
+// pageSize MUST be ≤ Supabase's max_rows (1000) — passing a larger value caused
+// every batch to come back with len < pageSize on the first call, exiting the
+// loop after a single page and silently truncating the result. Round 76el.
+async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 1000) {
   let all = [], offset = 0;
   while (true) {
     const batch = await govQuery(table, columns, { ...options, limit: pageSize, offset, count: false });
@@ -289,7 +293,17 @@ async function loadGovData() {
         { order: 'priority_score.desc' }
       ),
       _loadPaginatedQuery('properties',
-        'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type'
+        // Identifier + research handles + financials + intel signals.
+        // Intel card needs all of these; the auto-resolve sweep keys on
+        // intel_status + the no-handle bucket. Round 76em.
+        'property_id,lease_number,location_code,address,city,state,zip_code,' +
+        'agency,agency_full_name,government_type,' +
+        'rba,sf_leased,year_built,year_renovated,land_acres,' +
+        'lease_commencement,lease_expiration,firm_term_remaining,term_remaining,firm_term_years,total_term_years,' +
+        'gross_rent,gross_rent_psf,noi,noi_psf,estimated_value,' +
+        'recorded_owner_id,true_owner_id,assessed_owner,latest_deed_grantee,latest_deed_date,latest_sale_price,' +
+        'investment_score,deal_grade,agency_risk_level,location_tier,' +
+        'intel_status,status,data_source'
       ),
       govQuery('properties', 'property_id', { limit: 0 }),
       govQueryAll('available_listings',
@@ -1200,6 +1214,161 @@ window.govOwnershipSweepPreview = async function() {
   }
 };
 
+// Intel sweep — same two-step pattern, hits gov_auto_resolve_intel which
+// only has the true_junk_stub bucket today (8 rows in 2026-05-08 audit).
+async function _govIntelSweepCall(dryRun) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', 'rpc/gov_auto_resolve_intel');
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_dry_run: dryRun })
+  });
+  const text = await resp.text();
+  let data; try { data = JSON.parse(text); } catch (_) { data = text; }
+  if (!resp.ok) {
+    const detail = (data && data.error) || (typeof data === 'string' ? data : ('HTTP ' + resp.status));
+    const err = new Error(detail);
+    err.status = resp.status;
+    throw err;
+  }
+  return Array.isArray(data) ? data : (data ? [data] : []);
+}
+
+window.govIntelSweepPreview = async function() {
+  const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
+  try {
+    const buckets = await _govIntelSweepCall(true);
+    const total = buckets.reduce((s, b) => s + (Number(b.matched) || 0), 0);
+    if (total === 0) {
+      showToast('Nothing to sweep — no auto-resolvable rows in the Intel queue', 'info');
+      return;
+    }
+    const labels = {
+      true_junk_stub: 'Stub properties (no RBA / year / owner / county data / firm term)'
+    };
+    const lines = buckets
+      .filter(b => Number(b.matched) > 0)
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched)
+      .join('\n');
+    const ok = await lccConfirm(
+      'Auto-resolve ' + total + ' propert' + (total === 1 ? 'y' : 'ies') + '?\n\n' + lines + '\n\n' +
+      'Stub → properties.intel_status="junk_no_data"\n\n' +
+      'You can re-run this sweep any time.',
+      'Apply sweep'
+    );
+    if (!ok) return;
+    if (btn) { btn.textContent = 'Applying…'; }
+    const applied = await _govIntelSweepCall(false);
+    const appliedTotal = applied.reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    showToast('Swept ' + appliedTotal + ' propert' + (appliedTotal === 1 ? 'y' : 'ies') + ' — refreshing queue', 'success');
+    govData.portfolioProperties = [];
+    researchQueue = [];
+    researchIdx = 0;
+    if (typeof loadGovData === 'function') {
+      loadGovData().then(() => loadResearchQueue()).then(() => renderGovTab());
+    } else {
+      await loadResearchQueue();
+      renderGovTab();
+    }
+  } catch (err) {
+    console.error('govIntelSweepPreview failed:', err);
+    const msg = (err && err.message) || String(err);
+    const friendly = /could not find the function|function .* does not exist|404/i.test(msg)
+      ? 'RPC gov_auto_resolve_intel not deployed yet — apply sql/20260508_gov_intel_status_and_auto_resolve.sql'
+      : msg;
+    showToast('Sweep failed: ' + friendly, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig || '🧹 Sweep auto-resolvable (preview)'; }
+  }
+};
+
+// ──────────────────────────────────────────────────────────────
+// Intel queue annotation — prioritises the Intel research workbench
+// against the LCC sidebar workflow. The queue is dominated by 10K+
+// properties and the matcher / pipeline already filled most of the
+// non-research fields, so the reviewer's job is "fill the gaps that
+// matter for the sell-side conversation."
+//
+// Priority semantics (lower = higher priority):
+//   1  Hot: A/B grade + firm_term in [-1, 5] + missing core intel
+//   2  Hot: A/B grade + firm_term in [-1, 5] + intel mostly there
+//      (still review for accuracy)
+//   3  Warm: A/B grade + firm_term > 5 (long-fuse pipeline)
+//   4  Cold: C grade or unknown firm_term
+//   5  D/F grade or junk stub (deprioritised)
+//
+// Adds:
+//   _priority (number)
+//   _priorityLabel (text), _priorityClass (badge color)
+//   _missingFields (array of human labels)
+//   _completeness (percent)
+//   _hasCountyData (bool — assessed_owner / latest_deed_grantee filled)
+//   _termWindow ("expired" | "<2y" | "2-5y" | ">5y" | "unknown")
+function govIntelAnnotate(rec) {
+  if (!rec) return;
+  const grade = rec.deal_grade || null;
+  const firm  = (rec.firm_term_remaining == null) ? null : Number(rec.firm_term_remaining);
+  const isAB  = grade === 'A' || grade === 'B';
+  const isC   = grade === 'C';
+  const inHotWindow = firm != null && firm >= -1 && firm <= 5;
+  const longFuse    = firm != null && firm > 5;
+
+  // What's missing for a complete intel write-up
+  const missing = [];
+  if (!rec.rba)                                 missing.push('RBA');
+  if (!rec.year_built)                          missing.push('Year built');
+  if (!rec.recorded_owner_id && !rec.assessed_owner) missing.push('Recorded owner');
+  if (!rec.true_owner_id)                       missing.push('True owner');
+  if (!rec.gross_rent && !rec.noi)              missing.push('Rent / NOI');
+  if (!rec.estimated_value)                     missing.push('Est. value');
+  // Sale recency: a county-records sale within the last 5y satisfies the
+  // "do we have a comp?" question
+  const fiveYrsAgo = Date.now() - 5 * 365.25 * 86400 * 1000;
+  const recentDeed = rec.latest_deed_date && new Date(rec.latest_deed_date).getTime() >= fiveYrsAgo;
+  const recentSale = !!rec.latest_sale_price && recentDeed;
+  if (!recentSale)                              missing.push('Recent sale');
+
+  const coreMissing = missing.length >= 3;
+
+  let priority;
+  if (grade === 'D' || grade === 'F')           priority = 5;
+  else if (isAB && inHotWindow && coreMissing)  priority = 1;
+  else if (isAB && inHotWindow)                 priority = 2;
+  else if (isAB && longFuse)                    priority = 3;
+  else if (isC && inHotWindow)                  priority = 3;
+  else                                          priority = 4;
+
+  let priorityLabel, priorityClass, priorityHint;
+  switch (priority) {
+    case 1: priorityLabel = 'Hot — research'; priorityClass = 'urgent';      priorityHint = 'A/B grade in sell-side window; core intel missing'; break;
+    case 2: priorityLabel = 'Hot — verify';   priorityClass = 'urgent';      priorityHint = 'A/B grade in sell-side window; intel ready to confirm'; break;
+    case 3: priorityLabel = 'Warm';            priorityClass = 'needs-input'; priorityHint = isAB ? 'A/B grade, longer fuse' : 'C grade, sell-side window'; break;
+    case 4: priorityLabel = 'Backfill';        priorityClass = 'ready';       priorityHint = 'Maintenance — fill gaps as time allows'; break;
+    case 5: priorityLabel = 'Low value';       priorityClass = 'ready';       priorityHint = 'D/F grade; deprioritised'; break;
+  }
+
+  // Term window category (drives the secondary sort)
+  let termWindow;
+  if (firm == null)              termWindow = 'unknown';
+  else if (firm <= 0)            termWindow = 'expired';
+  else if (firm <= 2)            termWindow = '<2y';
+  else if (firm <= 5)            termWindow = '2-5y';
+  else                            termWindow = '>5y';
+
+  const filled = 6 - missing.length;
+  rec._priority      = priority;
+  rec._priorityLabel = priorityLabel;
+  rec._priorityClass = priorityClass;
+  rec._priorityHint  = priorityHint;
+  rec._missingFields = missing;
+  rec._completeness  = Math.max(0, Math.round((filled / 6) * 100));
+  rec._hasCountyData = !!(rec.assessed_owner || rec.latest_deed_grantee || rec.latest_sale_price);
+  rec._termWindow    = termWindow;
+}
+
 async function loadResearchQueue() {
   researchQueue = [];
   researchIdx = 0;
@@ -1213,15 +1382,16 @@ async function loadResearchQueue() {
       filtered = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending'));
     }
   } else if (researchMode === 'intel') {
-    // Intel queue: portfolio properties missing key financial/physical details
+    // Intel queue: portfolio properties needing intel research. Annotate
+    // every row first so the priority/missing-fields chips are correct
+    // for both Pending and All views.
     const portfolio = govData.portfolioProperties || [];
+    portfolio.forEach(govIntelAnnotate);
     if (researchFilter === 'all') {
       filtered = portfolio.slice();
     } else {
-      filtered = portfolio.filter(p =>
-        !p.intel_status || p.intel_status === 'pending' ||
-        (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
-      );
+      // Pending = anything not in a terminal status. NULL = pending.
+      filtered = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending');
     }
   } else {
     if (researchFilter === 'all') {
@@ -1282,6 +1452,23 @@ async function loadResearchQueue() {
       const ta = a.transfer_date ? new Date(a.transfer_date).getTime() : 0;
       const tb = b.transfer_date ? new Date(b.transfer_date).getTime() : 0;
       return tb - ta;
+    });
+  }
+
+  // Intel queue: priority asc, then by firm-term proximity to the sell-side
+  // window (closer to expiration / holdover surfaces first inside each tier),
+  // then by investment_score desc as a final tiebreaker. Round 76em.
+  if (researchMode === 'intel') {
+    const _termRank = { 'expired': 0, '<2y': 1, '2-5y': 2, '>5y': 3, 'unknown': 4 };
+    researchQueue.sort((a, b) => {
+      const pa = a._priority || 9, pb = b._priority || 9;
+      if (pa !== pb) return pa - pb;
+      const ta = _termRank[a._termWindow] ?? 5;
+      const tb = _termRank[b._termWindow] ?? 5;
+      if (ta !== tb) return ta - tb;
+      const sa = Number(a.investment_score) || 0;
+      const sb = Number(b.investment_score) || 0;
+      return sb - sa;
     });
   }
 
@@ -1951,71 +2138,149 @@ function renderIntelResearchCard(rec) {
     window._govFormDraft = {};
   }
 
+  // Defensive: annotate even if the row didn't pass through the loader
+  // (e.g. when the queue is rebuilt mid-session).
+  if (rec._priority == null) govIntelAnnotate(rec);
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = rec._loan || (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
-  let html = '<div class="research-card">';
+  let html = '<div class="research-card own-research-card">';
 
   // ────────────────────────────────────────────────────────────
-  // CONTEXT PANEL (LEFT)
+  // LEFT — research-first read view. The reviewer ingests via the
+  // LCC Chrome sidebar against CoStar / county pages in another tab,
+  // so the manual entry form on the right is collapsed by default.
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
 
-  // Task header
   html += '<div class="task-header">';
   html += '<div>Intel Research</div>';
-  let badge = 'ready';
-  if (!rec.rba || !rec.recorded_owner) badge = 'needs-input';
-  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += `<span class="task-badge ${esc(rec._priorityClass || 'ready')}">${esc(rec._priorityLabel || 'Review')}</span>`;
+  html += '</div>';
+  if (rec._priorityHint) {
+    html += `<div class="own-priority-sub">${esc(rec._priorityHint)}${rec._completeness != null ? ' · ' + rec._completeness + '% complete' : ''}</div>`;
+  }
+
+  // Property header (address + city/state/zip + facts row)
+  const _addr = rec.address || frpp.street_address || '';
+  const _city = rec.city || frpp.city_name || '';
+  const _state = rec.state || frpp.state_name || '';
+  const _zip = rec.zip_code || '';
+  const _isStub = !_addr && !rec.lease_number && !rec.firm_term_remaining && !rec.assessed_owner;
+  const tenant = rec.agency_full_name || rec.agency || frpp.using_agency || frpp.using_bureau || '';
+  html += '<div class="context-block">';
+  html += '<div class="context-label">Property</div>';
+  if (_isStub) {
+    html += '<div class="context-value own-empty-shell">No research handle on this row</div>';
+    html += '<div class="context-sub">Use <strong>Mark stub</strong> below or the <em>Sweep auto-resolvable</em> button.</div>';
+  } else {
+    html += `<div class="context-value">${esc(_addr || '—')}</div>`;
+    const cityState = [_city, _state].filter(Boolean).join(', ') + (_zip ? ' ' + _zip : '');
+    if (cityState.trim()) html += `<div class="context-sub">${esc(cityState)}</div>`;
+    const _facts = [];
+    if (rec.rba)        _facts.push(fmtN(rec.rba) + ' SF RBA');
+    else if (rec.sf_leased) _facts.push(fmtN(rec.sf_leased) + ' SF leased');
+    if (rec.year_built) _facts.push('Built ' + esc(rec.year_built));
+    if (tenant)         _facts.push(esc(tenant));
+    if (_facts.length) html += `<div class="own-facts-row">${_facts.join(' · ')}</div>`;
+  }
   html += '</div>';
 
-  html += `<div class="context-block">
-    <div class="context-label">Property</div>
-    <div class="context-value">${esc(rec.address || '')}</div>
-    <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')} ${esc(rec.zip_code || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lease / Annual Rent</div>
-    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.gross_rent || rec.annual_rent || 0)}/yr</div>
-  </div>`;
-
-  if (rec.agency) {
-    html += `<div class="context-block">
-      <div class="context-label">Agency / Tenant</div>
-      <div class="context-value">${esc(rec.agency || '')}</div>
-      <div class="context-sub">${rec.sf_leased ? fmtN(rec.sf_leased) + ' SF leased' : ''}</div>
-    </div>`;
+  // Lease + sale signal block — what we already know vs. what's missing
+  html += '<div class="context-block own-sale-block">';
+  html += '<div class="context-label">Lease &amp; Income</div>';
+  html += '<dl class="own-kv">';
+  html += '<dt>Lease #</dt><dd>' + (rec.lease_number ? '<code>' + esc(rec.lease_number) + '</code>' : '<span class="own-blank">—</span>') + '</dd>';
+  if (snapshot.lease_effective || rec.lease_commencement) {
+    const start = (snapshot.lease_effective || rec.lease_commencement || '').substring(0, 10);
+    const end   = (snapshot.lease_expiration || rec.lease_expiration || '').substring(0, 10);
+    html += '<dt>Term</dt><dd>' + esc(start || '—') + ' → ' + esc(end || '—') + '</dd>';
   }
-
-  if (snapshot.lease_effective) {
-    html += `<div class="context-block">
-      <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} – ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
-      <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
-    </div>`;
-  }
-
   if (rec.firm_term_remaining !== null && rec.firm_term_remaining !== undefined) {
-    html += `<div class="context-block">
-      <div class="context-label">Firm Term Remaining</div>
-      <div class="context-value">${Number(rec.firm_term_remaining).toFixed(1)} yrs</div>
-    </div>`;
+    const yrs = Number(rec.firm_term_remaining).toFixed(1);
+    const cls = rec._termWindow === 'expired' ? 'own-term-expired'
+              : rec._termWindow === '<2y'     ? 'own-term-hot'
+              : rec._termWindow === '2-5y'    ? 'own-term-warm'
+              : '';
+    html += '<dt>Firm rem.</dt><dd class="' + cls + '">' + yrs + ' yrs</dd>';
+  }
+  html += '<dt>Gross rent</dt><dd>' + (rec.gross_rent ? fmt(rec.gross_rent) + '/yr' : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>NOI</dt><dd>' + (rec.noi ? fmt(rec.noi) + '/yr' : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>Est. value</dt><dd>' + (rec.estimated_value ? fmt(rec.estimated_value) : '<span class="own-blank">—</span>') + '</dd>';
+  html += '</dl>';
+  if (rec._missingFields && rec._missingFields.length) {
+    html += `<div class="own-missing">Missing: ${rec._missingFields.map(esc).join(', ')}</div>`;
+  }
+  html += '</div>';
+
+  // Owners side-by-side: Recorded vs True vs Assessed (county). Assessed
+  // gets its own column when present so the reviewer can sanity-check
+  // against the deed-level record without leaving the card.
+  html += '<div class="own-owners-grid own-owners-grid-3">';
+  html += '<div class="own-owners-col-head">Recorded <span class="own-owners-col-sub">(deed)</span></div>';
+  html += '<div class="own-owners-col-head">True <span class="own-owners-col-sub">(beneficial)</span></div>';
+  html += '<div class="own-owners-col-head">County <span class="own-owners-col-sub">(assessor / latest deed)</span></div>';
+
+  // Recorded
+  html += '<div class="own-owners-cell">';
+  if (rec.recorded_owner_id || rec.recorded_owner_name) {
+    html += `<div class="own-owners-flow"><div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">Linked</span> ${esc(rec.recorded_owner_name || ('owner #' + rec.recorded_owner_id))}</div></div>`;
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— sidebar / county lookup needed —</div>';
+  }
+  html += '</div>';
+
+  // True
+  html += '<div class="own-owners-cell">';
+  if (rec.true_owner_id || rec.true_owner_name) {
+    html += `<div class="own-owners-flow"><div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">Linked</span> ${esc(rec.true_owner_name || ('owner #' + rec.true_owner_id))}</div></div>`;
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— SOS / SPE chain needed —</div>';
+  }
+  html += '</div>';
+
+  // County / assessor
+  html += '<div class="own-owners-cell">';
+  if (rec.assessed_owner || rec.latest_deed_grantee) {
+    if (rec.assessed_owner) {
+      html += `<div class="own-owners-detail"><span class="own-owners-tag">Assessor</span> ${esc(rec.assessed_owner)}</div>`;
+    }
+    if (rec.latest_deed_grantee && rec.latest_deed_grantee !== rec.assessed_owner) {
+      html += `<div class="own-owners-detail"><span class="own-owners-tag">Latest deed</span> ${esc(rec.latest_deed_grantee)}${rec.latest_deed_date ? ' <span style="color:var(--text3)">' + esc(String(rec.latest_deed_date).substring(0, 10)) + '</span>' : ''}</div>`;
+    }
+    if (rec.latest_sale_price) {
+      html += `<div class="own-owners-detail">Latest sale: <strong>${fmt(rec.latest_sale_price)}</strong></div>`;
+    }
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— no county data on file —</div>';
+  }
+  html += '</div>';
+  html += '</div>'; // own-owners-grid
+
+  // Investment-quality strip (helps the reviewer prioritise without scrolling)
+  if (rec.deal_grade || rec.investment_score || rec.location_tier || rec.agency_risk_level) {
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Investment quality</div>';
+    const parts = [];
+    if (rec.deal_grade)        parts.push('<span class="own-grade-pill own-grade-' + esc(String(rec.deal_grade).toLowerCase()) + '">' + esc(rec.deal_grade) + '</span>');
+    if (rec.investment_score)  parts.push('<span>score ' + esc(rec.investment_score) + '</span>');
+    if (rec.location_tier)     parts.push('<span>' + esc(rec.location_tier) + '</span>');
+    if (rec.agency_risk_level) parts.push('<span>risk ' + esc(rec.agency_risk_level) + '</span>');
+    html += '<div class="own-quality-row">' + parts.join(' · ') + '</div>';
+    html += '</div>';
   }
 
-  if (frpp.street_address) {
-    html += `<div class="context-block">
-      <div class="context-label">FRPP Property Type</div>
-      <div class="context-value">${esc(frpp.property_type || '')}</div>
-      <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
-    </div>`;
-  }
+  // Sidebar tip — make the workflow expectation explicit
+  html += '<div class="own-sidebar-tip">';
+  html += '<span class="own-sidebar-tip-icon">📎</span>';
+  html += '<span>Capture from CoStar / county records via the <strong>LCC sidebar</strong> (Chrome) — values land here automatically. Use the manual form on the right only when no source page is available.</span>';
+  html += '</div>';
 
   if (loan.index_name) {
     html += `<div class="context-block">
-      <div class="context-label">Known Lender</div>
+      <div class="context-label">Known lender</div>
       <div class="context-value">${esc(loan.index_name)}</div>
       <div class="context-sub">${loan.loan_amount ? fmt(loan.loan_amount) : ''} ${loan.loan_type ? '· ' + esc(loan.loan_type) : ''}</div>
     </div>`;
@@ -2024,31 +2289,41 @@ function renderIntelResearchCard(rec) {
   html += '</div>';
 
   // ────────────────────────────────────────────────────────────
-  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // RIGHT — research-first action surface. Same sidebar-first pattern
+  // as the Ownership card: primary action buttons up top, manual form
+  // collapsed by default (Round 76em).
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
   // Completeness bar — representative fields from each step
   const allFields = [
     { value: rec.rba, required: true },                       // Property
-    { value: rec.recorded_owner || rec.lessor_name, required: true }, // Ownership
+    { value: rec.recorded_owner_id || rec.assessed_owner, required: true }, // Ownership
     { value: loan.index_name, required: false },              // Financing
-    { value: rec.last_known_rent || rec.gross_rent, required: false }, // Valuation
+    { value: rec.gross_rent || rec.noi, required: false },    // Valuation
     { value: rec.year_built, required: false },               // Property
-    { value: rec.true_owner, required: false },               // Ownership
+    { value: rec.true_owner_id, required: false },            // Ownership
     { value: loan.loan_amount, required: false },             // Financing
-    { value: rec.current_value_estimate, required: false }    // Valuation
+    { value: rec.estimated_value, required: false }           // Valuation
   ];
   const completeness = computeCompleteness(allFields);
   html += renderCompletenessBar(completeness);
+
+  const _formOpen = !!window._govIntelFormOpen;
+  html += '<details class="own-manual-details"' + (_formOpen ? ' open' : '') + ' ontoggle="window._govIntelFormOpen=this.open">';
+  html += '<summary class="own-manual-summary">';
+  html += '<span class="own-manual-summary-icon">✏️</span>';
+  html += '<span class="own-manual-summary-label">Edit fields manually</span>';
+  html += '<span class="own-manual-summary-hint">— sidebar capture preferred; open only when no source page is available</span>';
+  html += '</summary>';
 
   // Step navigation
   const steps = [
     {label: 'Transaction', complete: false},
     {label: 'Property', complete: !!rec.rba},
-    {label: 'Ownership', complete: !!(rec.recorded_owner || rec.lessor_name)},
+    {label: 'Ownership', complete: !!(rec.recorded_owner_id || rec.assessed_owner)},
     {label: 'Financing', complete: !!loan.index_name},
-    {label: 'Valuation', complete: !!(rec.last_known_rent || rec.gross_rent)}
+    {label: 'Valuation', complete: !!(rec.gross_rent || rec.noi)}
   ];
   html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
@@ -2133,26 +2408,38 @@ function renderIntelResearchCard(rec) {
   html += guidedField('res-intel-date', 'Research Date', new Date().toISOString().substring(0, 10), {type:'date'});
   html += '</div>';
 
-  html += '</div>';
-
-  // ────────────────────────────────────────────────────────────
-  // ACTION ROW
-  // ────────────────────────────────────────────────────────────
-  html += '<div class="action-row">';
+  // Manual-form internal action row (Back / Next / Save) — only shows
+  // when the reviewer opens the <details>.
+  html += '<div class="action-row own-manual-action-row">';
   if (govResearchStep > 0) {
     html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
   }
   if (govResearchStep < 4) {
-    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
-  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
-  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSaveInPlace)">Save manual edits</button>`;
+  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSave)">Save &amp; Next</button>`;
   html += '</div>';
 
+  html += '</details>'; // own-manual-details
+
+  // ────────────────────────────────────────────────────────────
+  // PRIMARY ACTION ROW — research-driven decisions, always visible.
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row own-primary-actions">';
+  if (_isStub) {
+    html += `<button class="btn-action primary" title="No research handle — clear from queue" onclick="_udActionBtnGuard(this, researchMark, 'junk_no_data')">⊘ Mark stub</button>`;
+  } else {
+    html += `<button class="btn-action primary" title="Intel research complete — mark resolved" onclick="_udActionBtnGuard(this, researchMark, 'approve')">✓ Approve</button>`;
+  }
+  html += `<button class="btn-action danger" title="Out of scope / not actionable" onclick="_udActionBtnGuard(this, researchMark, 'reject')">✗ Reject</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)" title="Skip to next">→ Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')" title="Same true owner, different SPE">↻ SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')" title="Not applicable">N/A</button>`;
   html += '</div>';
+
+  html += '</div>'; // research-form
+  html += '</div>'; // research-card
 
   return html;
 }
@@ -2920,6 +3207,7 @@ async function researchMark(mark) {
   if (mark === 'approve')      status = 'completed';
   if (mark === 'reject')       status = 'rejected';
   if (mark === 'comp_on_file') status = 'comp_on_file';
+  if (mark === 'junk_no_data') status = 'junk_no_data';
 
   const _reEnableMarks = () => markBtns.forEach(b => {
     b.disabled = false;
@@ -2954,7 +3242,8 @@ async function researchMark(mark) {
     na: 'N/A',
     approve: 'Approved (research complete)',
     reject: 'Rejected',
-    comp_on_file: '✓ Comp on file'
+    comp_on_file: '✓ Comp on file',
+    junk_no_data: '⊘ Stub — no research handle'
   };
   const markLabel = _markLabels[mark] || mark;
   showToast('Marked as ' + markLabel, 'success');
@@ -6797,6 +7086,14 @@ function renderGovResearch() {
           🧹 Sweep auto-resolvable (preview)
         </button>
         <span class="own-sweep-bar-help">Resolves rows with no research handle, bot-generated placeholder priors, and comps already on file.</span>
+      </div>`;
+    }
+    if (researchMode === 'intel' && pendingCount > 0) {
+      html += `<div class="own-sweep-bar" style="margin-top:8px">
+        <button class="btn-secondary" onclick="window.govIntelSweepPreview()" title="Preview properties the system can auto-resolve (true junk stubs with no research handle)">
+          🧹 Sweep auto-resolvable (preview)
+        </button>
+        <span class="own-sweep-bar-help">Clears stub properties with no research handle (no RBA / year / owner / county data / firm term).</span>
       </div>`;
     }
 

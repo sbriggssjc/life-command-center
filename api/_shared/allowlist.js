@@ -92,6 +92,8 @@ export const GOV_WRITE_TABLES = new Set([
   'rpc/gov_resolve_gsa_link_review',
   // Ownership auto-resolve sweep (sql/20260507, sql/20260508)
   'rpc/gov_auto_resolve_ownership',
+  // Intel auto-resolve sweep (sql/20260508_gov_intel_status_and_auto_resolve.sql)
+  'rpc/gov_auto_resolve_intel',
   // Capital Markets — Phase 1
   'cm_nm_broker_patterns',
   'rpc/cm_gov_refresh_nm_attribution',

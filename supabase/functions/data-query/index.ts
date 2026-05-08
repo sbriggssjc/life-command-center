@@ -53,6 +53,9 @@ const GOV_WRITE_TABLES = new Set([
   // government-lease/sql/20260507_gov_rpc_auto_resolve_ownership.sql and
   // 20260508_gov_rpc_auto_resolve_ownership_exact_dup.sql.
   "rpc/gov_auto_resolve_ownership",
+  // Intel auto-resolve sweep (true_junk_stub bucket on properties.intel_status).
+  // Backed by government-lease/sql/20260508_gov_intel_status_and_auto_resolve.sql.
+  "rpc/gov_auto_resolve_intel",
 ]);
 
 const DIA_READ_TABLES = new Set([
