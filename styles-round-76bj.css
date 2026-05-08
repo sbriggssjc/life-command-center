@@ -715,3 +715,53 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .own-grade-pill.own-grade-c { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); }
 .own-grade-pill.own-grade-d { background: rgba(239, 68, 68, 0.15);  color: #ef4444; border-color: rgba(239, 68, 68, 0.4); }
 .own-grade-pill.own-grade-f { background: rgba(239, 68, 68, 0.20);  color: #ef4444; border-color: rgba(239, 68, 68, 0.5); }
+
+/* Intel tier-count strip — sits above the Sweep button; gives the
+   reviewer a 1-glance read on how the queue is distributed across
+   priority tiers. (Round 76en) */
+.own-tier-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.own-tier-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: 12px;
+  background: var(--s2, #14161c);
+  font-size: 11px;
+  color: var(--text2, #a0a4ad);
+}
+.own-tier-pill-icon { font-size: 11px; }
+.own-tier-pill-label { letter-spacing: 0.02em; }
+.own-tier-pill-n {
+  font-weight: 700;
+  color: var(--text, #e6e8ec);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.own-tier-pill.own-tier-urgent       { background: rgba(239, 68, 68, 0.06); border-color: rgba(239, 68, 68, 0.35); color: #f87171; }
+.own-tier-pill.own-tier-urgent .own-tier-pill-n { color: #f87171; }
+.own-tier-pill.own-tier-needs-input  { background: rgba(245, 158, 11, 0.06); border-color: rgba(245, 158, 11, 0.35); color: #fbbf24; }
+.own-tier-pill.own-tier-needs-input .own-tier-pill-n { color: #fbbf24; }
+.own-tier-pill.own-tier-ready        { background: var(--s2, #14161c); }
+
+.own-tier-jump {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--accent, #6b7cff);
+  background: rgba(107, 124, 255, 0.12);
+  color: var(--accent, #6b7cff);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.own-tier-jump:hover {
+  background: rgba(107, 124, 255, 0.2);
+}

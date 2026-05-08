@@ -1235,6 +1235,24 @@ async function _govIntelSweepCall(dryRun) {
   return Array.isArray(data) ? data : (data ? [data] : []);
 }
 
+// Jump the reviewer to the first row in a given Intel priority tier.
+// Useful for "start with the 386 Tier 2 ready-to-approve rows" before
+// digging into the bigger Hot Research bucket.
+window.govIntelJumpToTier = function(targetTier) {
+  if (!Array.isArray(researchQueue) || researchQueue.length === 0) {
+    showToast('Queue is empty', 'info');
+    return;
+  }
+  const idx = researchQueue.findIndex(r => (r._priority || 9) === Number(targetTier));
+  if (idx < 0) {
+    showToast('No rows in Tier ' + targetTier + ' in the current view', 'info');
+    return;
+  }
+  researchIdx = idx;
+  showToast('Jumped to Tier ' + targetTier + ' (' + (idx + 1) + ' / ' + researchQueue.length + ')', 'success');
+  renderGovTab();
+};
+
 window.govIntelSweepPreview = async function() {
   const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
   const orig = btn?.textContent;
@@ -1247,16 +1265,27 @@ window.govIntelSweepPreview = async function() {
       return;
     }
     const labels = {
-      true_junk_stub: 'Stub properties (no RBA / year / owner / county data / firm term)'
+      true_junk_stub:  'Stub properties (no RBA / year / owner / county data / firm term) → mark junk',
+      tier2_complete:  'Tier 2 complete — A/B grade in window, all intel filled → mark approved',
+      frpp_year_built: 'Backfill year_built from FRPP year_of_construction',
+      frpp_rba:        'Backfill RBA from FRPP square_feet',
+      sale_sync:       'Sync latest sale price + deed date from sales_transactions (last 5y)'
     };
-    const lines = buckets
-      .filter(b => Number(b.matched) > 0)
-      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched)
-      .join('\n');
+    const _resolveBuckets = ['true_junk_stub', 'tier2_complete'];
+    const _backfillBuckets = ['frpp_year_built', 'frpp_rba', 'sale_sync'];
+    const _resolveLines = buckets
+      .filter(b => Number(b.matched) > 0 && _resolveBuckets.includes(b.bucket))
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched);
+    const _backfillLines = buckets
+      .filter(b => Number(b.matched) > 0 && _backfillBuckets.includes(b.bucket))
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched);
+    const sections = [];
+    if (_resolveLines.length) sections.push('▸ Resolve queue items:\n' + _resolveLines.join('\n'));
+    if (_backfillLines.length) sections.push('▸ Backfill missing fields:\n' + _backfillLines.join('\n'));
+    const lines = sections.join('\n\n');
     const ok = await lccConfirm(
       'Auto-resolve ' + total + ' propert' + (total === 1 ? 'y' : 'ies') + '?\n\n' + lines + '\n\n' +
-      'Stub → properties.intel_status="junk_no_data"\n\n' +
-      'You can re-run this sweep any time.',
+      'You can re-run this sweep any time as new data lands.',
       'Apply sweep'
     );
     if (!ok) return;
@@ -7089,11 +7118,45 @@ function renderGovResearch() {
       </div>`;
     }
     if (researchMode === 'intel' && pendingCount > 0) {
+      // Tier count strip — gives the reviewer the priority distribution at
+      // a glance so they know "how much of this is hot vs. backfill"
+      // before scrolling. govData.portfolioProperties was just annotated
+      // by the loader, so we can summarise it directly.
+      const portfolio = govData.portfolioProperties || [];
+      const _pendOnly = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending');
+      const tierCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      _pendOnly.forEach(p => { tierCounts[p._priority || 9]++; });
+      const tierMeta = [
+        { id: 1, cls: 'urgent',      label: 'Hot research', icon: '🔥' },
+        { id: 2, cls: 'urgent',      label: 'Hot verify',   icon: '✓' },
+        { id: 3, cls: 'needs-input', label: 'Warm',         icon: '◐' },
+        { id: 4, cls: 'ready',       label: 'Backfill',     icon: '·' },
+        { id: 5, cls: 'ready',       label: 'Low value',    icon: '↓' }
+      ];
+      html += '<div class="own-tier-strip">';
+      tierMeta.forEach(t => {
+        const n = tierCounts[t.id] || 0;
+        if (n === 0) return;
+        html += `<span class="own-tier-pill own-tier-${t.cls}" title="${esc(t.label)}">
+          <span class="own-tier-pill-icon">${t.icon}</span>
+          <span class="own-tier-pill-label">${esc(t.label)}</span>
+          <span class="own-tier-pill-n">${n.toLocaleString()}</span>
+        </span>`;
+      });
+      // Quick "Start with Hot Verify" jump button — Tier 2 is highest-leverage
+      // (full intel, just needs a click). Surface it when present.
+      if (tierCounts[2] > 0) {
+        html += `<button class="own-tier-jump" onclick="window.govIntelJumpToTier(2)" title="Jump to Tier 2 — A/B grade, sell-side window, intel ready to confirm">
+          → Start with Hot verify (${tierCounts[2]})
+        </button>`;
+      }
+      html += '</div>';
+
       html += `<div class="own-sweep-bar" style="margin-top:8px">
-        <button class="btn-secondary" onclick="window.govIntelSweepPreview()" title="Preview properties the system can auto-resolve (true junk stubs with no research handle)">
+        <button class="btn-secondary" onclick="window.govIntelSweepPreview()" title="Preview properties the system can auto-resolve (junk stubs, tier-2 ready-to-approve, FRPP backfills, sale syncs)">
           🧹 Sweep auto-resolvable (preview)
         </button>
-        <span class="own-sweep-bar-help">Clears stub properties with no research handle (no RBA / year / owner / county data / firm term).</span>
+        <span class="own-sweep-bar-help">Marks stubs + tier-2-complete; backfills year_built / RBA from FRPP and recent sale from sales_transactions.</span>
       </div>`;
     }
 
