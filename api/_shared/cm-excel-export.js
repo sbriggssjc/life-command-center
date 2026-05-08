@@ -110,6 +110,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Active-listing count share by tenant (DaVita / FMC / US Renal / Other). Donut at the latest reported quarter; segments sum to total available count.',
   available_by_tenant_volume_donut:
     'Active-listing volume share by tenant (DaVita / FMC / US Renal / Other). Donut at the latest reported quarter; segments sum to total available dollar volume.',
+  available_by_term_summary:
+    'Active listings by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Sky bars: avg asking price (left axis). Diamond dots: avg cap (navy), upper quartile (purple), median (sage), lower quartile (gray) on the right axis.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -246,6 +248,16 @@ const CHART_COLUMNS = {
     { key: 'tenant',           header: 'Tenant',           width: 18 },
     { key: 'volume_available', header: 'Volume Available', format: 'currency_dollars', width: 22 },
     { key: 'period_end',       header: 'As of',            format: 'date_short',       width: 13 },
+  ],
+  available_by_term_summary: [
+    { key: 'term_bucket',         header: 'Term Bucket',     width: 18 },
+    { key: 'n_listings',          header: 'Listings',        format: 'integer_count',       width: 12 },
+    { key: 'avg_price',           header: 'Avg Price ($)',   format: 'currency_dollars',    width: 18 },
+    { key: 'avg_cap',             header: 'Avg Cap',         format: 'percent_basis_points', width: 13 },
+    { key: 'upper_quartile_cap',  header: 'Upper Q Cap',     format: 'percent_basis_points', width: 14 },
+    { key: 'median_cap',          header: 'Median Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'lower_quartile_cap',  header: 'Lower Q Cap',     format: 'percent_basis_points', width: 14 },
+    { key: 'period_end',          header: 'As of',           format: 'date_short',          width: 13 },
   ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -579,6 +591,7 @@ const TAB_NAMES = {
   on_market_snapshot:           'Data_On_Market_Snapshot',
   available_by_tenant_count_donut:  'Data_Avail_Tenant_CountD',
   available_by_tenant_volume_donut: 'Data_Avail_Tenant_VolD',
+  available_by_term_summary:        'Data_Avail_by_Term_Summary',
   transaction_count_ttm:        'Data_Txn_Count',
   cap_rate_ttm_by_quarter:      'Data_Cap_Avg',
   cap_rate_top_bottom_quartile: 'Data_Cap_Quartile',
