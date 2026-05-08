@@ -2468,6 +2468,28 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
     }
 
+    // Round 76ej.y (2026-05-05): "Last Sale" / "Last Loan" summary
+    // blocks. Counties without per-deed records (Bay County, FL —
+    // Panama City Beach 140 Richard Jackson Blvd / 6494163) collapse
+    // their CoStar Public Record tab into a single Last Sale + Last
+    // Loan summary instead of an expandable Sale/Loan History list.
+    // Without this branch, the only historical sale on those listings
+    // never reached sales_history → never landed in dia/gov
+    // sales_transactions → property looked like it had no prior sale
+    // even though CoStar shows the $4.9M MARINA LAKES LLC purchase
+    // from 12/19/2006 right at the top of the page.
+    if (sales.length === 0) {
+      for (let i = 0; i < lines.length; i++) {
+        if (/^last\s+sale$/i.test(lines[i])) {
+          const lastSale = parseLastSaleSummary(lines, i + 1);
+          if (lastSale && (lastSale.sale_date || lastSale.sale_price)) {
+            sales.push(lastSale);
+          }
+          break;
+        }
+      }
+    }
+
     return sales;
   }
 
@@ -2608,6 +2630,83 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
     }
     return parts.length ? parts.join(', ') : null;
+  }
+
+  // Parse the single-record "Last Sale" summary that some CoStar
+  // counties show in lieu of an expandable Sale/Loan History. Field
+  // labels overlap parseDeedHistory's set with two key differences:
+  //   - "Sale Date"        (instead of "Transaction Date")
+  //   - "Sale Price (LTV)" — strip the "(LTV X%)" suffix
+  // Also walks an immediately-following "Last Loan" block and merges
+  // its origination_date / loan_amount / lender into the sale record
+  // (for these counties the loan IS the financing of the same sale).
+  function parseLastSaleSummary(lines, startIdx) {
+    const sale = {};
+    const STOP = /^(improvements|assessment|owner|tax|parcel|tenants?|listings|public\s+record|land\b|building\b|building\s+info|map\s+view|photos)$/i;
+    let i;
+    let inLoanBlock = false;
+
+    for (i = startIdx; i < lines.length; i++) {
+      const line = lines[i];
+      const next = i + 1 < lines.length ? lines[i + 1] : '';
+
+      if (/^last\s+loan$/i.test(line))    { inLoanBlock = true; continue; }
+      if (STOP.test(line)) break;
+      if (/^(transaction|sale\s+contact\s+details|loan\s+details|contact\s+details)$/i.test(line)) continue;
+
+      // Sale (and Last Sale) fields
+      if (!inLoanBlock) {
+        if (/^sale\s+date$/i.test(line) && next)             { sale.sale_date = next; continue; }
+        if (/^recordation\s+date$/i.test(line) && next)      { sale.recordation_date = next; continue; }
+        if (/^sale\s+type$/i.test(line) && next)             { sale.sale_type = next; continue; }
+        if (/^transaction\s+type$/i.test(line) && next)      { sale.transaction_type = next; continue; }
+        if (/^deed\s+type$/i.test(line) && next)             { sale.deed_type = next; continue; }
+        if (/^document\s+#$/i.test(line) && next)            { sale.document_number = next; continue; }
+        if (/^doc\s+book\/page$/i.test(line) && next)        { sale.doc_book_page = next; continue; }
+        if (/^sale\s+price(?:\s+\(ltv\))?$/i.test(line) && next && /^\$/.test(next)) {
+          // "Sale Price (LTV)" → next line is "$4,900,000 (LTV 73%)".
+          // Keep only the dollar amount; LTV stays in transaction_type/notes.
+          const m = next.match(/^\$[\d,]+(?:\.\d+)?/);
+          sale.sale_price = m ? m[0] : next;
+          continue;
+        }
+
+        if (/^buyer$/i.test(line)) {
+          if (next && next.length < 80 && !/^(address|seller|title|loan)/i.test(next)) {
+            sale.buyer = next;
+            sale.buyer_address = findEntityAddress(lines, i + 2);
+          }
+          continue;
+        }
+        if (/^seller$/i.test(line)) {
+          if (next && next.length < 80 && !/^(title|buyer|address|lender|loan)/i.test(next)) {
+            sale.seller = next;
+            sale.seller_address = findEntityAddress(lines, i + 2);
+          }
+          continue;
+        }
+        if (/^title\s+company$/i.test(line) && next && next.length < 80) {
+          sale.title_company = next;
+          continue;
+        }
+      } else {
+        // Last Loan block — these fields associate with the same sale.
+        if (/^origination\s+date$/i.test(line) && next)      { sale.loan_origination_date = next; continue; }
+        if (/^loan\s+amount$/i.test(line) && next)           { sale.loan_amount = next; continue; }
+        if (/^loan\s+type$/i.test(line) && next)             { sale.loan_type = next; continue; }
+        if (/^loan\s+term$/i.test(line) && next)             { sale.loan_term = next; continue; }
+        if (/^(originator|lender)$/i.test(line) && next && next.length < 80) {
+          sale.lender = next; continue;
+        }
+        if (/^document\s+#$/i.test(line) && next)            { sale.loan_document_number = next; continue; }
+        if (/^doc\s+book\/page$/i.test(line) && next)        { sale.loan_doc_book_page = next; continue; }
+        if (/^borrower$/i.test(line) && next && !sale.buyer && next.length < 80) {
+          sale.buyer = next; continue;
+        }
+      }
+    }
+
+    return sale;
   }
 
   function parseHistoricSalesSection(lines, startIdx) {
