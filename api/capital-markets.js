@@ -728,6 +728,10 @@ async function exportWorkbook(req, res) {
         chart_type: tmpl.chart_type,
         data_shape: tmpl.data_shape,
         metric_focus: tmpl.metric_focus,
+        // Round 6g — propagate cadence from catalog so the renderer uses
+        // monthly window for charts whose underlying view is `_m` even
+        // when not going through master_m mapper path.
+        cadence: tmpl.cadence,
         view_name,
         rows: result.ok !== false ? (result.data || []) : [],
       };
@@ -736,6 +740,7 @@ async function exportWorkbook(req, res) {
         chart_template_id: tmpl.chart_template_id,
         name: tmpl.name,
         chart_type: tmpl.chart_type,
+        cadence: tmpl.cadence,
         view_name,
         rows: [],
       };
@@ -755,6 +760,7 @@ async function exportWorkbook(req, res) {
       chart_type: tmpl.chart_type,
       data_shape: tmpl.data_shape,
       metric_focus: tmpl.metric_focus,
+      cadence: tmpl.cadence,
       view_name: tmpl.view_name_template,
       rows,
     };
