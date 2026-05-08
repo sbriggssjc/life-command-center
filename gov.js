@@ -1802,6 +1802,22 @@ function renderOwnershipResearchCard(rec) {
   html += '</div>';
   html += '</div>'; // own-owners-grid
 
+  // Research links — surface county/SOS/Google buttons up front so the
+  // reviewer can chase a missing true owner without opening the manual form.
+  const _ownSearchQuery = (rec.recorded_owner_name || rec.new_owner || rec.true_owner_name || '')
+    + ' ' + (_addr || '') + ' ' + (_city || '') + ' ' + (_state || '');
+  const _ownCountyHtml = countyBtns(_city, _state);
+  const _ownSosHtml = sosBtns(_state, rec.state_of_incorporation);
+  if (_ownSearchQuery.trim() || _ownCountyHtml || _ownSosHtml) {
+    html += '<div class="quick-actions own-research-links">';
+    if (_ownSearchQuery.trim()) {
+      html += searchBtn('Google Search', _ownSearchQuery.trim());
+    }
+    html += _ownSosHtml;
+    html += _ownCountyHtml;
+    html += '</div>';
+  }
+
   // Sidebar tip — explicit, since the form is collapsed by default
   html += '<div class="own-sidebar-tip">';
   html += '<span class="own-sidebar-tip-icon">📎</span>';
@@ -1971,6 +1987,7 @@ function renderOwnershipResearchCard(rec) {
   html += `<button class="btn-action" onclick="researchNav(1,true)" title="Skip to next">→ Skip</button>`;
   html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')" title="Same true owner, different SPE">↻ SPE Rename</button>`;
   html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')" title="Not applicable">N/A</button>`;
+  html += `<button class="btn-action danger" onclick="_udActionBtnGuard(this, researchMark, 'multi_tenant')" title="Discard — small lease in a multi-tenant building (out of single-tenant scope)">🚫 Multi-tenant</button>`;
   if (rec._compOnFile) {
     // Still expose Approve as a secondary path even when comp is on file,
     // for cases where the reviewer wants to record additional research.
@@ -3254,6 +3271,23 @@ async function researchMark(mark) {
     b.textContent = 'Marking…';
   });
 
+  const _reEnableMarks = () => markBtns.forEach(b => {
+    b.disabled = false;
+    b.textContent = b.dataset.origText || b.textContent;
+  });
+
+  // Confirm before discarding a property as too multi-tenant — this also
+  // flags the parent property so it stays out of consideration in other LCC
+  // views, not just the ownership queue.
+  if (mark === 'multi_tenant') {
+    const _confirmed = await lccConfirm(
+      'Discard this property as too multi-tenant for our single-tenant focus? ' +
+      'The ownership row will be marked discarded and the property will be flagged out of scope.',
+      'Discard property'
+    );
+    if (!_confirmed) { _reEnableMarks(); return; }
+  }
+
   let status = 'marked';
   if (mark === 'spe_rename')   status = 'spe_rename';
   if (mark === 'na')           status = 'not_applicable';
@@ -3261,15 +3295,23 @@ async function researchMark(mark) {
   if (mark === 'reject')       status = 'rejected';
   if (mark === 'comp_on_file') status = 'comp_on_file';
   if (mark === 'junk_no_data') status = 'junk_no_data';
-
-  const _reEnableMarks = () => markBtns.forEach(b => {
-    b.disabled = false;
-    b.textContent = b.dataset.origText || b.textContent;
-  });
+  if (mark === 'multi_tenant') status = 'discarded_multi_tenant';
 
   if (researchMode === 'ownership') {
     const ok = await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, { research_status: status });
     if (!ok) { _reEnableMarks(); return; }
+    // For multi-tenant discards, also flag the parent property so it falls
+    // out of consideration in other LCC surfaces (intel queue, pipeline, etc).
+    if (mark === 'multi_tenant') {
+      const propertyId = rec.matched_property_id || rec.property_id;
+      if (propertyId) {
+        try {
+          await patchRecord('properties', 'property_id', propertyId, { intel_status: 'discarded_multi_tenant' });
+        } catch (err) {
+          console.warn('Multi-tenant discard: ownership row marked but failed to flag property', err);
+        }
+      }
+    }
   } else if (researchMode === 'intel') {
     const propertyId = rec.property_id;
     if (propertyId) {
@@ -3296,7 +3338,8 @@ async function researchMark(mark) {
     approve: 'Approved (research complete)',
     reject: 'Rejected',
     comp_on_file: '✓ Comp on file',
-    junk_no_data: '⊘ Stub — no research handle'
+    junk_no_data: '⊘ Stub — no research handle',
+    multi_tenant: '🚫 Discarded — too multi-tenant'
   };
   const markLabel = _markLabels[mark] || mark;
   showToast('Marked as ' + markLabel, 'success');
