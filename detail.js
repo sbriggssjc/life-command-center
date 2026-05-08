@@ -11783,26 +11783,76 @@ function _udFmtDateIso(d) {
 // list — the view's column set differs slightly between Dia and Gov, and
 // PostgREST 400s on any unknown column. Bandwidth is fine for ≤ 5000 rows.
 
-function _udSubjectFromCache() {
+// Coerce whatever land-size field the source view exposes into acres. Dia
+// properties carry both `lot_sf` (square feet) and `land_area` (sometimes
+// SF, sometimes acres depending on import); gov mostly carries `land_acres`.
+// Heuristic: anything > 100 is treated as square feet (43,560 SF = 1 acre);
+// values ≤ 100 are already acres.
+function _udLandAcres(rec) {
+  if (!rec) return null;
+  const acres = _udNumOrNull(rec.land_acres);
+  if (acres != null && acres > 0) return acres;
+  const lotSf = _udNumOrNull(rec.lot_sf);
+  if (lotSf != null && lotSf > 0) return Math.round((lotSf / 43560) * 100) / 100;
+  const landArea = _udNumOrNull(rec.land_area);
+  if (landArea == null) return null;
+  if (landArea > 100) return Math.round((landArea / 43560) * 100) / 100;
+  return Math.round(landArea * 100) / 100;
+}
+
+// Pick the chain / parent operator name (TENANT column) separate from the
+// local facility / sub-entity (OPERATOR column). For dialysis, TENANT is
+// usually the chain (DaVita, Fresenius); OPERATOR is the local clinic
+// trade name. For gov, TENANT is the agency short code; OPERATOR is the
+// full agency or sub-component.
+function _udExtractTenantOperator(db, rec, fb, lease) {
+  rec = rec || {}; fb = fb || {}; lease = lease || {};
+  if (db === 'gov') {
+    const tenant = rec.agency_short || rec.agency || fb.tenant_agency
+                || fb.agency || lease.tenant_name || '';
+    const operator = rec.agency_full || rec.agency || fb.agency_full
+                  || tenant || '';
+    return { tenant, operator };
+  }
+  // Dialysis: chain vs local operator
+  const chain = rec.chain_organization || fb.chain_organization || rec.tenant
+             || rec.tenant_operator || lease.tenant_name || '';
+  const local = rec.operator_name || fb.operator_name || rec.facility_name
+             || fb.facility_name || '';
+  return {
+    tenant: chain || local || lease.tenant_name || '',
+    operator: local || chain || ''
+  };
+}
+
+function _udSubjectFromCache(db) {
   const c = _udCache || {};
   const p = c.property || {};
   const fb = c.fallback || {};
   const own = c.ownership || {};
   const lease = (c.leases && c.leases[0]) || {};
+  const buildingSf = _udNumOrNull(p.building_size || p.building_sf || p.rba || fb.building_sf);
+  const leasedArea = _udNumOrNull(lease.leased_area || lease.leased_sf || p.leased_area)
+                  || buildingSf;
+  const { tenant, operator } = _udExtractTenantOperator(db || c.db, p, fb, lease);
   return {
     property_id: c.ids?.property_id || p.property_id || null,
     lease_number: p.lease_number || c.ids?.lease_number || null,
-    tenant: p.operator_name || p.tenant_operator || p.tenant || p.facility_name
-            || p.agency_short || p.agency_full || fb.tenant_operator || fb.agency
-            || fb.facility_name || lease.tenant_name || lease.tenant || '',
+    db: c.db || null,
+    tenant, // chain
+    operator, // local entity (clinic / sub-agency)
     address: p.address || fb.address || '',
     city: p.city || fb.city || '',
     state: p.state || fb.state || '',
     zip: p.zip_code || fb.zip || '',
     latitude: _udNumOrNull(p.latitude || fb.latitude),
     longitude: _udNumOrNull(p.longitude || fb.longitude),
-    building_sf: _udNumOrNull(p.building_size || p.building_sf || p.rba || fb.building_sf),
+    building_sf: buildingSf,
+    leased_area: leasedArea,
+    occupancy: (buildingSf && leasedArea) ? Math.min(1, leasedArea / buildingSf) : null,
+    land_acres: _udLandAcres({ land_acres: p.land_acres, land_area: p.land_area, lot_sf: p.lot_sf }),
     year_built: _udNumOrNull(p.year_built || fb.year_built),
+    year_renovated: _udNumOrNull(p.year_renovated || fb.year_renovated),
     lease_start: lease.lease_start || lease.lease_commencement || p.lease_commencement || fb.lease_start || null,
     lease_expiration: lease.lease_expiration || lease.expiration_date || fb.lease_end || null,
     annual_rent: _udNumOrNull(lease.annual_rent || p.annual_rent || fb.annual_rent),
@@ -11886,18 +11936,20 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
   return ranked.map(p => {
     const l = leaseByProp.get(p.property_id) || {};
     const o = ownerByProp.get(p.property_id) || {};
-    const tenant = p.operator_name || p.tenant_operator || p.tenant
-                || p.facility_name || p.agency_short || p.agency_full
-                || l.tenant_name || l.tenant || '';
+    const { tenant, operator } = _udExtractTenantOperator(db, p, {}, l);
     const owner  = o.true_owner || o.recorded_owner
                 || p.true_owner_name || p.true_owner
                 || p.recorded_owner_name || p.recorded_owner || '';
+    const buildingSf = _udNumOrNull(p.building_size || p.building_sf || p.rba);
+    const leasedArea = _udNumOrNull(l.leased_area || l.leased_sf || p.leased_area)
+                    || buildingSf;
     return {
       property_id: p.property_id,
       lease_number: p.lease_number || l.lease_number || '',
       tenant,
+      operator,
       owner,
-      owner_occupied: _udIsOwnerOccupied(tenant, owner),
+      owner_occupied: _udIsOwnerOccupied(tenant, owner) || _udIsOwnerOccupied(operator, owner),
       address: p.address || '',
       city: p.city || '',
       state: p.state || '',
@@ -11905,8 +11957,12 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
       latitude: p.latitude,
       longitude: p.longitude,
       distance_miles: p.distance_miles,
-      building_sf: _udNumOrNull(p.building_size || p.building_sf || p.rba),
+      building_sf: buildingSf,
+      leased_area: leasedArea,
+      occupancy: (buildingSf && leasedArea) ? Math.min(1, leasedArea / buildingSf) : null,
+      land_acres: _udLandAcres({ land_acres: p.land_acres, land_area: p.land_area, lot_sf: p.lot_sf }),
       year_built: _udNumOrNull(p.year_built),
+      year_renovated: _udNumOrNull(p.year_renovated),
       lease_start: l.lease_start || l.lease_commencement || p.lease_commencement || null,
       lease_expiration: l.lease_expiration || l.expiration_date || null,
       annual_rent: _udNumOrNull(l.annual_rent || p.annual_rent),
@@ -11918,31 +11974,6 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
   });
 }
 
-function _udLeaseCompRowFromSubject(subject, db) {
-  const s = subject;
-  // Detect owner-occupied for the subject too — same heuristic as comps.
-  const ownerOccupied = _udIsOwnerOccupied(s.tenant, s.true_owner || s.recorded_owner);
-  return {
-    role: 'SUBJECT',
-    tenant: s.tenant,
-    address: s.address,
-    city: s.city,
-    state: s.state,
-    zip: s.zip,
-    building_sf: s.building_sf,
-    year_built: s.year_built,
-    lease_start: s.lease_start,
-    lease_expiration: s.lease_expiration,
-    annual_rent: s.annual_rent,
-    rent_per_sf: s.rent_per_sf,
-    expense_structure: s.expense_structure,
-    bumps: _udFmtBumps(s.lease_bump_pct, s.lease_bump_interval_mo),
-    distance_miles: null, // subject has no distance to itself
-    owner: s.true_owner || s.recorded_owner || '',
-    owner_occupied: ownerOccupied
-  };
-}
-
 function _udFmtBumps(pct, intervalMo) {
   if (pct == null && intervalMo == null) return '';
   const p = pct == null ? '?' : (Number(pct).toFixed(2).replace(/\.?0+$/, '') + '%');
@@ -11950,15 +11981,7 @@ function _udFmtBumps(pct, intervalMo) {
   return `${p} / ${i}`;
 }
 
-function _udLeaseCompTenantLabel(db) {
-  return db === 'gov' ? 'Agency' : 'Tenant / Operator';
-}
-
 async function _udExportLeaseComps(db, propertyId, btn) {
-  if (typeof XLSX === 'undefined') {
-    showToast('Excel export library not loaded yet — please try again', 'error');
-    return;
-  }
   if (!propertyId) {
     showToast('Open a property with a property_id to export lease comps', 'error');
     return;
@@ -11966,24 +11989,32 @@ async function _udExportLeaseComps(db, propertyId, btn) {
   const sel = document.getElementById('udLeaseCompsCount');
   const count = Math.max(1, parseInt(sel?.value || String(_UD_LEASE_COMPS_DEFAULT), 10) || _UD_LEASE_COMPS_DEFAULT);
 
-  const subject = _udSubjectFromCache();
+  const subject = _udSubjectFromCache(db);
   if (subject.latitude == null || subject.longitude == null) {
     showToast('Subject property has no coordinates — cannot rank by distance', 'error');
     return;
   }
 
-  // Inline button feedback so the user knows the click registered. Async fetch
-  // can take 1-2s on a cold proxy hit.
+  // Inline button feedback so the user knows the click registered. Cold path:
+  // first click downloads ExcelJS (~900KB) + fetches the template; subsequent
+  // clicks are instant once both are cached.
   const origText = btn ? btn.textContent : null;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Building...'; }
 
   try {
-    const comps = await _udFetchLeaseCompCandidates(db, subject, count);
+    // Lazy-load ExcelJS in parallel with the comp data fetch — both are
+    // independent and the network round-trips cost the same when run side
+    // by side. ExcelJS is required for template-based output (style fidelity);
+    // without it we can't preserve the Briggs branding.
+    const [ExcelJS, comps] = await Promise.all([
+      _udLoadExcelJs(),
+      _udFetchLeaseCompCandidates(db, subject, count)
+    ]);
     if (!comps.length) {
       showToast('No comparable properties with coordinates found nearby', 'error');
       return;
     }
-    _udBuildLeaseCompsWorkbook(db, subject, comps);
+    await _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps);
     showToast(`Exported ${comps.length} lease comp${comps.length === 1 ? '' : 's'} to Excel`, 'success');
   } catch (err) {
     console.error('Lease comps export error:', err);
@@ -11993,127 +12024,207 @@ async function _udExportLeaseComps(db, propertyId, btn) {
   }
 }
 
-function _udBuildLeaseCompsWorkbook(db, subject, comps) {
-  const tenantLabel = _udLeaseCompTenantLabel(db);
-  const today = new Date().toISOString().slice(0, 10);
-  const subjectRow = _udLeaseCompRowFromSubject(subject, db);
+// Lazy-loads the ExcelJS UMD bundle on first export click. Adds the
+// stylepreserving Excel writer to window.ExcelJS without bloating the
+// initial page payload — most users never click Export Lease Comps so
+// the ~900KB cost is deferred until needed.
+let _udExcelJsPromise = null;
+function _udLoadExcelJs() {
+  if (typeof window !== 'undefined' && window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  if (_udExcelJsPromise) return _udExcelJsPromise;
+  _udExcelJsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    s.async = true;
+    s.onload = () => {
+      if (window.ExcelJS) resolve(window.ExcelJS);
+      else reject(new Error('ExcelJS loaded but global is missing'));
+    };
+    s.onerror = () => {
+      _udExcelJsPromise = null; // allow retry on next click
+      reject(new Error('Failed to load ExcelJS from CDN'));
+    };
+    document.head.appendChild(s);
+  });
+  return _udExcelJsPromise;
+}
 
-  // AOA layout: title + meta block, then a SUBJECT mini-table, then the comps
-  // table with matching column structure. Keeping subject + comps on one
-  // sheet (per spec) but with visually separated banner rows.
-  const headerCols = [
-    '#', tenantLabel, 'Address', 'City', 'State', 'ZIP',
-    'Building SF', 'Year Built', 'Lease Start', 'Lease Expiration',
-    'Term Remaining (yrs)', 'Annual Rent', 'Rent / SF', 'Escalation',
-    'Lease Type', 'Distance (mi)', 'Owner', 'Owner-Occupied'
-  ];
+// Path to the committed Briggs lease comps template. Express + Vercel both
+// serve assets/** as static files, and we already include this directory in
+// vercel.json's includeFiles for the api/capital-markets bundle.
+const _UD_LEASE_COMPS_TEMPLATE_URL = '/assets/cm-templates/dialysis-lease-comps-template.xlsx';
 
-  const aoa = [];
-  aoa.push([db === 'gov' ? 'Government Lease Comparable Analysis' : 'Dialysis Lease Comparable Analysis']);
-  aoa.push([`Subject: ${subject.address || subject.tenant || subject.property_id}`]);
-  aoa.push([`Prepared: ${today}`]);
-  aoa.push([`Comparables: ${comps.length} nearest by great-circle distance`]);
-  aoa.push([]);
-  aoa.push(['SUBJECT PROPERTY']);
-  aoa.push(headerCols);
-  aoa.push(_udLeaseCompAoaRow('Subject', subjectRow));
-  aoa.push([]);
-  aoa.push(['COMPARABLE PROPERTIES']);
-  aoa.push(headerCols);
-  comps.forEach((c, i) => aoa.push(_udLeaseCompAoaRow(i + 1, c)));
+// Template constants — sourced from a structural read of the committed
+// template. If the template layout changes (banners moved, column added),
+// update these and the populate functions below in lockstep.
+const _UD_TPL = {
+  subjectHeaderRow: 3,    // "TENANT | OPERATOR | ... | BUMPS" header row for SUBJECT
+  subjectDataRow: 4,
+  compsHeaderRow: 7,      // "TENANT | ... | USER/OWNER | DISTANCE TO SUBJECT"
+  compsFirstDataRow: 8,
+  compsLastTemplatedRow: 40, // template ships with rows 8..40 pre-styled
+  cols: {
+    counter: 1, tenant: 2, operator: 3, address: 4, city: 5, state: 6,
+    land: 7, built: 8, renovated: 9, rba: 10, sfLeased: 11, occupancy: 12,
+    rentPsf: 13, currentRent: 14, commence: 15, exp: 16, initialTerm: 17,
+    termRem: 18, expenses: 19, bumps: 20, userOwner: 21, distance: 22
+  }
+};
 
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
+// Years between two date-ish values (ISO strings or Date). Returns null
+// if either side is missing or unparseable.
+function _udYearsBetweenDates(a, b) {
+  if (!a || !b) return null;
+  const ad = a instanceof Date ? a : new Date(a);
+  const bd = b instanceof Date ? b : new Date(b);
+  if (isNaN(ad) || isNaN(bd)) return null;
+  return Math.round(((bd - ad) / (365.25 * 86400 * 1000)) * 10) / 10;
+}
 
-  // Column widths chosen to fit content without horizontal scroll for
-  // typical address/tenant lengths.
-  ws['!cols'] = [
-    { wch: 8 },   // #
-    { wch: 30 },  // Tenant / Agency
-    { wch: 32 },  // Address
-    { wch: 16 },  // City
-    { wch: 6 },   // State
-    { wch: 8 },   // ZIP
-    { wch: 12 },  // Building SF
-    { wch: 11 },  // Year Built
-    { wch: 12 },  // Lease Start
-    { wch: 14 },  // Lease Expiration
-    { wch: 10 },  // Term Remaining
-    { wch: 14 },  // Annual Rent
-    { wch: 11 },  // Rent / SF
-    { wch: 14 },  // Escalation
-    { wch: 14 },  // Lease Type
-    { wch: 11 },  // Distance
-    { wch: 28 },  // Owner
-    { wch: 14 }   // Owner-Occupied
-  ];
+function _udToDateOrNull(v) {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v) ? null : v;
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
 
-  // Merge title + section banner cells across the full column span so they
-  // read as banners rather than single-cell labels.
-  const lastCol = headerCols.length - 1;
-  ws['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
-    { s: { r: 2, c: 0 }, e: { r: 2, c: lastCol } },
-    { s: { r: 3, c: 0 }, e: { r: 3, c: lastCol } },
-    { s: { r: 5, c: 0 }, e: { r: 5, c: lastCol } },
-    { s: { r: 9, c: 0 }, e: { r: 9, c: lastCol } }
-  ];
+// Set a cell value WITHOUT clobbering its style. ExcelJS' `cell.value = X`
+// preserves cell.style; we use this when writing into pre-styled template
+// cells so the column's formatting (currency, dates, etc.) survives.
+function _udSetCell(sheet, row, col, value) {
+  const cell = sheet.getRow(row).getCell(col);
+  cell.value = (value === undefined || value === '' || value === null) ? null : value;
+  return cell;
+}
 
-  // Apply number formats. Building SF rows: subject @ row 7, comps starting
-  // at row 11 (zero-indexed). We just walk the sheet by header column.
-  const colIdx = (name) => headerCols.indexOf(name);
-  const range = XLSX.utils.decode_range(ws['!ref']);
-  const numericFmtCols = {
-    'Building SF': '#,##0',
-    'Annual Rent': '$#,##0',
-    'Rent / SF': '$#,##0.00',
-    'Distance (mi)': '0.00',
-    'Year Built': '0',
-    'Term Remaining (yrs)': '0.0'
-  };
-  for (let R = 6; R <= range.e.r; R++) {
-    for (const [name, fmt] of Object.entries(numericFmtCols)) {
-      const c = colIdx(name);
-      if (c < 0) continue;
-      const cell = ws[XLSX.utils.encode_cell({ r: R, c })];
-      if (cell && typeof cell.v === 'number') { cell.t = 'n'; cell.z = fmt; }
+// Populate one data row (subject or comp). The template's number formats
+// are already applied to each column at the data-row level, so we just set
+// the raw value in the right type and Excel renders it formatted.
+function _udPopulateDataRow(sheet, db, rowIdx, rec, opts) {
+  const c = _UD_TPL.cols;
+  const isSubject = !!opts?.subject;
+
+  _udSetCell(sheet, rowIdx, c.tenant, rec.tenant || '');
+  _udSetCell(sheet, rowIdx, c.operator, rec.operator || '');
+  _udSetCell(sheet, rowIdx, c.address, rec.address || '');
+  _udSetCell(sheet, rowIdx, c.city, rec.city || '');
+  _udSetCell(sheet, rowIdx, c.state, rec.state || '');
+  _udSetCell(sheet, rowIdx, c.land, rec.land_acres != null ? rec.land_acres : null);
+  _udSetCell(sheet, rowIdx, c.built, rec.year_built != null ? rec.year_built : null);
+  _udSetCell(sheet, rowIdx, c.renovated, rec.year_renovated != null ? rec.year_renovated : null);
+  _udSetCell(sheet, rowIdx, c.rba, rec.building_sf != null ? rec.building_sf : null);
+  _udSetCell(sheet, rowIdx, c.sfLeased, rec.leased_area != null ? rec.leased_area : null);
+  // Occupancy column is formatted as 0% — write the raw decimal so Excel
+  // does the percent rendering itself.
+  _udSetCell(sheet, rowIdx, c.occupancy, rec.occupancy != null ? rec.occupancy : null);
+  _udSetCell(sheet, rowIdx, c.rentPsf, rec.rent_per_sf != null ? rec.rent_per_sf : null);
+  _udSetCell(sheet, rowIdx, c.currentRent, rec.annual_rent != null ? rec.annual_rent : null);
+
+  const startDate = _udToDateOrNull(rec.lease_start);
+  const endDate = _udToDateOrNull(rec.lease_expiration);
+  _udSetCell(sheet, rowIdx, c.commence, startDate);
+  _udSetCell(sheet, rowIdx, c.exp, endDate);
+  _udSetCell(sheet, rowIdx, c.initialTerm, _udYearsBetweenDates(startDate, endDate));
+  _udSetCell(sheet, rowIdx, c.termRem, _udYearsBetweenDates(new Date(), endDate));
+  _udSetCell(sheet, rowIdx, c.expenses, rec.expense_structure || '');
+  _udSetCell(sheet, rowIdx, c.bumps, _udFmtBumps(rec.lease_bump_pct, rec.lease_bump_interval_mo));
+
+  // USER/OWNER + DISTANCE only apply to comparables. The template has no
+  // U/V cells in row 4 (subject), so we leave them untouched there.
+  if (!isSubject) {
+    const userOwnerLabel = rec.owner_occupied
+      ? (rec.owner ? `User (${rec.owner})` : 'User')
+      : (rec.owner || '');
+    _udSetCell(sheet, rowIdx, c.userOwner, userOwnerLabel);
+    _udSetCell(sheet, rowIdx, c.distance, rec.distance_miles != null ? rec.distance_miles : null);
+  }
+}
+
+// Clone every cell-level style attribute from a source row so a newly
+// extended row matches the templated rows pixel-for-pixel. ExcelJS doesn't
+// inherit cell styles from columns the way native Excel does once the
+// workbook has been written, so we have to re-stamp explicitly.
+function _udCloneRowStyles(sheet, srcRowIdx, dstRowIdx, colCount) {
+  const srcRow = sheet.getRow(srcRowIdx);
+  const dstRow = sheet.getRow(dstRowIdx);
+  dstRow.height = srcRow.height;
+  for (let c = 1; c <= colCount; c++) {
+    const srcCell = srcRow.getCell(c);
+    const dstCell = dstRow.getCell(c);
+    // Deep-copy via JSON to detach references; ExcelJS stores font/fill
+    // objects by reference so a shallow copy would keep both rows pointing
+    // at the same style, breaking later per-cell tweaks.
+    if (srcCell.style) {
+      dstCell.style = JSON.parse(JSON.stringify(srcCell.style));
+    }
+  }
+}
+
+async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
+  // Fetch the template binary. Static asset fetch — auth interceptor only
+  // touches /api/ paths, so this passes through unmodified.
+  const resp = await fetch(_UD_LEASE_COMPS_TEMPLATE_URL);
+  if (!resp.ok) throw new Error(`Template fetch failed: HTTP ${resp.status}`);
+  const ab = await resp.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(ab);
+  const sheet = wb.worksheets[0];
+  if (!sheet) throw new Error('Template has no worksheets');
+
+  // ── Subject row (single row at template position 4) ──────────────────
+  _udPopulateDataRow(sheet, db, _UD_TPL.subjectDataRow, subject, { subject: true });
+
+  // ── Comp rows ────────────────────────────────────────────────────────
+  // Template ships with 33 pre-styled rows (8..40). For counts >33 we
+  // clone row 8's per-cell styles into rows 41..(8+count-1) so they
+  // render with identical formats/heights/alignment.
+  const lastDataRow = _UD_TPL.compsFirstDataRow + comps.length - 1;
+  const lastTpl = _UD_TPL.compsLastTemplatedRow;
+  if (lastDataRow > lastTpl) {
+    for (let r = lastTpl + 1; r <= lastDataRow; r++) {
+      _udCloneRowStyles(sheet, _UD_TPL.compsFirstDataRow, r, _UD_TPL.cols.distance);
+      // Stamp the running counter formula so column A keeps incrementing.
+      sheet.getRow(r).getCell(_UD_TPL.cols.counter).value = { formula: `A${r - 1}+1` };
     }
   }
 
-  const wb = XLSX.utils.book_new();
-  const sheetName = (db === 'gov' ? 'Gov' : 'Dia') + ' Lease Comps';
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  comps.forEach((c, i) => {
+    const rowIdx = _UD_TPL.compsFirstDataRow + i;
+    _udPopulateDataRow(sheet, db, rowIdx, c, { subject: false });
+  });
 
+  // Clear any unused pre-styled comp rows so a count of 10 doesn't ship
+  // with 23 blank-but-counted rows trailing it. We blank the data cells
+  // (B..V) but keep column A's counter formula AND the row formatting,
+  // which lets the user paste additional comps later if they want.
+  if (comps.length < (lastTpl - _UD_TPL.compsFirstDataRow + 1)) {
+    for (let r = _UD_TPL.compsFirstDataRow + comps.length; r <= lastTpl; r++) {
+      const row = sheet.getRow(r);
+      for (let c = _UD_TPL.cols.tenant; c <= _UD_TPL.cols.distance; c++) {
+        row.getCell(c).value = null;
+      }
+    }
+  }
+
+  // Generate workbook and trigger browser download.
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const today = new Date().toISOString().slice(0, 10);
   const slug = String(subject.address || subject.property_id || 'subject')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'subject';
   const fname = `LCC_LeaseComps_${db === 'gov' ? 'GOV' : 'DIA'}_${slug}_${today}.xlsx`;
-  XLSX.writeFile(wb, fname);
-}
-
-function _udLeaseCompAoaRow(idLabel, r) {
-  return [
-    idLabel,
-    r.tenant || '',
-    r.address || '',
-    r.city || '',
-    r.state || '',
-    r.zip || '',
-    r.building_sf != null ? r.building_sf : '',
-    r.year_built != null ? r.year_built : '',
-    _udFmtDateIso(r.lease_start),
-    _udFmtDateIso(r.lease_expiration),
-    _udYearsBetween(new Date().toISOString(), r.lease_expiration) ?? '',
-    r.annual_rent != null ? r.annual_rent : '',
-    r.rent_per_sf != null ? r.rent_per_sf : '',
-    r.bumps || _udFmtBumps(r.lease_bump_pct, r.lease_bump_interval_mo),
-    r.expense_structure || '',
-    r.distance_miles != null ? r.distance_miles : '',
-    r.owner || '',
-    r.owner_occupied ? 'Yes' : 'No'
-  ];
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Free the object URL after the click handler had a chance to read it.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 window._udExportLeaseComps = _udExportLeaseComps;
