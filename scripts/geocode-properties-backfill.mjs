@@ -21,8 +21,8 @@
  * stay NULL and are tracked in a per-run Set so we don't loop on them.
  *
  * Required env (set the ones for the domains you're running):
- *   DIA_SUPABASE_URL, DIA_SUPABASE_SERVICE_KEY
- *   GOV_SUPABASE_URL, GOV_SUPABASE_SERVICE_KEY
+ *   DIA_SUPABASE_URL, DIA_SUPABASE_KEY  (legacy: DIA_SUPABASE_SERVICE_KEY)
+ *   GOV_SUPABASE_URL, GOV_SUPABASE_KEY  (legacy: GOV_SUPABASE_SERVICE_KEY)
  *
  * Usage:
  *   node scripts/geocode-properties-backfill.mjs --domain=dia
@@ -54,8 +54,14 @@ const censusRateMs = parseInt(args['census-rate-ms'] || '50', 10);
 const nominatimRateMs = parseInt(args['nominatim-rate-ms'] || '1100', 10);
 
 const DOMAIN_CONFIG = {
-  dia: { url: process.env.DIA_SUPABASE_URL, key: process.env.DIA_SUPABASE_SERVICE_KEY },
-  gov: { url: process.env.GOV_SUPABASE_URL, key: process.env.GOV_SUPABASE_SERVICE_KEY }
+  dia: {
+    url: process.env.DIA_SUPABASE_URL,
+    key: process.env.DIA_SUPABASE_KEY || process.env.DIA_SUPABASE_SERVICE_KEY
+  },
+  gov: {
+    url: process.env.GOV_SUPABASE_URL,
+    key: process.env.GOV_SUPABASE_KEY || process.env.GOV_SUPABASE_SERVICE_KEY
+  }
 };
 
 function parseArgs(argv) {
