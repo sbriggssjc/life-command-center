@@ -112,6 +112,12 @@ const CHART_FOOTER_CAPTIONS = {
     'Active-listing volume share by tenant (DaVita / FMC / US Renal / Other). Donut at the latest reported quarter; segments sum to total available dollar volume.',
   available_by_term_summary:
     'Active listings by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Sky bars: avg asking price (left axis). Diamond dots: avg cap (navy), upper quartile (purple), median (sage), lower quartile (gray) on the right axis.',
+  top_buyers_table:
+    'Top buyers ranked by TTM-volume across the latest available quarter. Use to spot active capital deploying into the sector + concentration risk.',
+  top_sellers_table:
+    'Top sellers ranked by TTM-volume across the latest available quarter. Reverse view of buyer ranking; helps identify dispositions and platform churn.',
+  nm_notable_transactions:
+    'Notable Northmarq-brokered healthcare transactions, ranked by sale price within the rotation window. Flagship comp set for marketing decks.',
   volume_cap_quartile_combo:
     'Combined view: TTM volume area + cap-rate range bars + average cap dot. Quartile band shows pricing dispersion at each point.',
   transaction_count_ttm:
@@ -238,6 +244,38 @@ const CHART_COLUMNS = {
     { key: 'institutional_count',  header: 'Institutional / Fund', format: 'integer_count',   width: 22 },
     { key: 'reit_count',           header: 'REIT',                 format: 'integer_count',   width: 12 },
     { key: 'cross_border_count',   header: 'Cross-Border',         format: 'integer_count',   width: 16 },
+  ],
+  pace_of_cap_rate_expansion: [
+    { key: 'period_end', header: 'Month End',                          format: 'date_short',          width: 13 },
+    { key: 'pace_all',   header: 'Pace — All Cohort (annualized)',     format: 'percent_basis_points', width: 28 },
+    { key: 'pace_core',  header: 'Pace — 10+ Year Cohort (annualized)',format: 'percent_basis_points', width: 32 },
+  ],
+  // Audit-fix: catalog rows existed but TAB_NAMES + CHART_COLUMNS were missing,
+  // so these DataTables were silently dropped from every export.
+  top_buyers_table: [
+    { key: 'period_end', header: 'Quarter End',         format: 'date_short',       width: 13 },
+    { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
+    { key: 'buyer',      header: 'Buyer',                                            width: 38 },
+    { key: 'ttm_volume', header: 'TTM Volume ($)',      format: 'currency_dollars', width: 18 },
+    { key: 'ttm_count',  header: 'TTM Count',           format: 'integer_count',    width: 12 },
+  ],
+  top_sellers_table: [
+    { key: 'period_end', header: 'Quarter End',         format: 'date_short',       width: 13 },
+    { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
+    { key: 'seller',     header: 'Seller',                                           width: 38 },
+    { key: 'ttm_volume', header: 'TTM Volume ($)',      format: 'currency_dollars', width: 18 },
+    { key: 'ttm_count',  header: 'TTM Count',           format: 'integer_count',    width: 12 },
+  ],
+  nm_notable_transactions: [
+    { key: 'rank',           header: '#',                  format: 'integer_count',    width: 5 },
+    { key: 'sale_date',      header: 'Sale Date',          format: 'date_short',       width: 13 },
+    { key: 'tenant_display', header: 'Tenant',                                          width: 22 },
+    { key: 'building_name',  header: 'Property',                                        width: 32 },
+    { key: 'city',           header: 'City',                                            width: 18 },
+    { key: 'state',          header: 'State',                                           width: 8 },
+    { key: 'sale_price',     header: 'Sale Price ($)',     format: 'currency_dollars', width: 18 },
+    { key: 'cap_rate',       header: 'Cap Rate',           format: 'percent_basis_points', width: 12 },
+    { key: 'buyer_type',     header: 'Buyer Type',                                      width: 16 },
   ],
   available_by_tenant_count_donut: [
     { key: 'tenant',         header: 'Tenant',          width: 18 },
@@ -589,6 +627,11 @@ const TAB_NAMES = {
   quarterly_volume_bars:        'Data_Volume_Quarterly',
   buyer_pool_monthly_count:     'Data_Buyer_Pool_M',
   on_market_snapshot:           'Data_On_Market_Snapshot',
+  pace_of_cap_rate_expansion:   'Data_Pace_Cap_Expand',
+  // Audit-fix tab names (catalog rows existed; TAB_NAMES were missing):
+  top_buyers_table:             'Data_Top_Buyers',
+  top_sellers_table:            'Data_Top_Sellers',
+  nm_notable_transactions:      'Data_NM_Notable_Txns',
   available_by_tenant_count_donut:  'Data_Avail_Tenant_CountD',
   available_by_tenant_volume_donut: 'Data_Avail_Tenant_VolD',
   available_by_term_summary:        'Data_Avail_by_Term_Summary',
