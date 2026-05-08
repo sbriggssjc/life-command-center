@@ -1389,7 +1389,7 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'leased_inventory_by_state': {
-      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #22):
       //
       // The PDF (gov p.26) ships this as a US choropleth — states colored
       // by lease count. QuickChart's hosted service does NOT bundle the
@@ -1493,7 +1493,7 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'rent_heat_map': {
-      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #22):
       // PDF (gov p.33) ships as a US choropleth color-graded by avg rent PSF.
       // Choropleth requires chartjs-chart-geo plugin not bundled in QuickChart
       // hosted; when self-hosted instance comes online, swap to choropleth via
@@ -1520,7 +1520,7 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'sources_of_capital': {
-      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #21):
+      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #22):
       // PDF (gov p.19) ships as a US bubble map (states colored by dollar
       // volume + circles overlaid on top states with $X.XB labels). Bubble
       // map = scatter geo overlay, also requires chartjs-chart-geo plugin.

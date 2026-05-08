@@ -479,7 +479,28 @@ Visual style notes that apply globally to both decks:
 18. **Bid_Ask pre-2010 data** — CoStar field gap, can't fix without external data
 19. **Sentiment "many issues"** — needs specific examples
 20. **Val_Index monthly** — needs source-data extension
-21. **US choropleth maps** (Sources / Inventory / Rent Heat Map) — **infra-blocked.**
+21. **Catalog rows missing TAB_NAMES (silent export drops)** — surfaced
+    by the 2026-05-08 export-bundle audit. The chart_template_ids below
+    have valid catalog rows (visible to the dashboard query path) but no
+    entries in `TAB_NAMES` / `CHART_COLUMNS` in `cm-excel-export.js`,
+    which means the per-tab loop's `if (!tabName || !cols) continue;`
+    silently skips them in every export. Audit-fix shipped Round 5a for
+    `top_buyers_table`, `top_sellers_table`, `nm_notable_transactions`.
+    Still missing (lower priority — chart-type renderers needed, not
+    just data tables):
+      - `available_cap_rate_scatter` (ScatterChart, dialysis+gov)
+      - `cap_rate_yoy_change` (LineChart, gov+national_st)
+      - `dom_price_adjustments` (BarChart, dialysis+gov)
+      - `listings_count_q` (BarChart, gov+dialysis)
+      - `market_share_pie_ttm` (PieChart, dialysis+gov)
+      - `nm_buyer_distribution` (DataTable, gov)
+      - `nm_share_of_market` (BarChart, gov+national_st)
+      - `nm_track_record_buyer_type` (DataTable, gov)
+      - `ppsf_box_quarterly` (StockChart, national_st+gov)
+      - `predicted_cap_rate` (LineChart, national_st+gov)
+      - `rent_survey_yearly` (LineChart, gov)
+
+22. **US choropleth maps** (Sources / Inventory / Rent Heat Map) — **infra-blocked.**
     QuickChart's hosted service does NOT bundle the chartjs-chart-geo plugin
     (probed 2026-05-08; returns HTTP 400 with an error PNG when `type:
     'choropleth'` is sent). Options to unblock:
