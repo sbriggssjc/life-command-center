@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v284';
+const CACHE_NAME = 'lcc-v285';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -66,28 +66,34 @@ self.addEventListener('fetch', event => {
   // Never intercept API calls — let the browser handle them directly
   if (url.pathname.startsWith('/api/')) return;
 
-  // Network-first with 4s timeout for same-origin resources
-  // Uses cache: 'no-cache' for JS/CSS/HTML to always revalidate with server
-  // Falls back to SW cache if network is slow or unavailable (critical for mobile)
+  // Network-first with 4s timeout for same-origin resources.
+  // For JS files we DO NOT cache the response — silently shadowing a
+  // post-deploy code change with a stale cache hit (which we hit the
+  // hard way in May 2026) is more painful than the modest benefit of
+  // an offline JS fallback. CSS/HTML/icons still cache for offline.
   if (url.origin === self.location.origin) {
     var isAppCode = /\.(js|css|html)$/.test(url.pathname) || url.pathname === '/' || url.pathname === './';
+    var isJs = /\.js$/.test(url.pathname);
     event.respondWith(
       fetchWithTimeout(event.request, 4000, isAppCode)
         .then(response => {
-          if (response.ok) {
+          if (response.ok && !isJs) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
           }
           return response;
         })
-        .catch(() =>
-          caches.match(event.request).then(cached => {
+        .catch(() => {
+          // JS never gets a cache fallback either — fail loudly so the
+          // user sees a real load error rather than silently running
+          // last week's code.
+          if (isJs) return new Response('// network error — refresh to retry', { status: 504, headers: { 'Content-Type': 'application/javascript' } });
+          return caches.match(event.request).then(cached => {
             if (cached) return cached;
-            // Navigation requests (HTML pages) get the offline fallback
             if (event.request.mode === 'navigate') return caches.match('./offline.html');
-            return cached; // undefined — browser default error
-          })
-        )
+            return cached;
+          });
+        })
     );
     return;
   }
