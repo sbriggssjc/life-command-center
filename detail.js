@@ -11868,13 +11868,19 @@ function _udSubjectFromCache(db) {
 async function _udFetchLeaseCompCandidates(db, subject, count) {
   const qFn = db === 'gov' ? govQuery : diaQuery;
 
-  // Pull the property universe from the BASE table — not v_property_detail.
-  // The view's column list varies and may not project latitude/longitude
-  // (that's what bit us on the subject), and PostgREST silently returns
-  // empty when the filter column is missing from the source. The
-  // `properties` table is the canonical home for the geocode columns.
-  // We cap at 5000 — covers any single-domain inventory comfortably.
-  const propsRes = await qFn('properties', '*', {
+  // Two-stage fetch:
+  //
+  // 1) Universe pull from base `properties` — ONLY the columns needed to
+  //    rank by distance (property_id + lat/lng). v_property_detail times
+  //    out at the DB (Postgres 57014) when fully-projected with limit
+  //    5000 because it joins ownership, leases, parcel records, etc.
+  //    Selecting just three integer/numeric columns keeps the payload
+  //    well under any statement-timeout budget.
+  //
+  // 2) Top-K enrichment after the haversine sort — v_property_detail,
+  //    v_lease_detail and v_ownership_current pulled for at most ~50 rows.
+  //    Those joins are fine at that scale.
+  const propsRes = await qFn('properties', 'property_id,latitude,longitude', {
     filter: 'latitude=not.is.null',
     limit: 5000
   });
@@ -11932,9 +11938,15 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
   // PostgREST in.() filter — comma-joined list of property_ids
   const inList = ids.map(id => encodeURIComponent(id)).join(',');
 
-  // Pull current lease + ownership in parallel for the chosen comp set.
-  // Both queries are best-effort: failure shouldn't block the export.
-  const [leaseRes, ownRes] = await Promise.allSettled([
+  // Pull rich property attributes + current lease + ownership in parallel
+  // for the chosen comp set. v_property_detail is heavy but bounded here
+  // to ≤50 rows, so the joins finish in milliseconds. All three are
+  // best-effort: any one failing shouldn't block the export.
+  const [propRes, leaseRes, ownRes] = await Promise.allSettled([
+    qFn('v_property_detail', '*', {
+      filter: `property_id=in.(${inList})`,
+      limit: ids.length
+    }),
     qFn('v_lease_detail', '*', {
       filter: `property_id=in.(${inList})`,
       limit: ids.length * 5
@@ -11944,12 +11956,20 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
       limit: ids.length * 2
     })
   ]);
+  const propDetails = propRes.status === 'fulfilled'
+    ? (Array.isArray(propRes.value) ? propRes.value : (propRes.value?.data || []))
+    : [];
   const leases = leaseRes.status === 'fulfilled'
     ? (Array.isArray(leaseRes.value) ? leaseRes.value : (leaseRes.value?.data || []))
     : [];
   const owners = ownRes.status === 'fulfilled'
     ? (Array.isArray(ownRes.value) ? ownRes.value : (ownRes.value?.data || []))
     : [];
+
+  const propByPid = new Map();
+  for (const row of propDetails) {
+    if (row?.property_id && !propByPid.has(row.property_id)) propByPid.set(row.property_id, row);
+  }
 
   // Index leases by property_id, preferring the active term (or latest expiration).
   const leaseByProp = new Map();
@@ -11970,7 +11990,12 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
     if (o.property_id && !ownerByProp.has(o.property_id)) ownerByProp.set(o.property_id, o);
   }
 
-  return ranked.map(p => {
+  return ranked.map(rk => {
+    // Merge the slim ranked row (property_id, lat/lng, distance) with the
+    // rich v_property_detail row (address, sf, year_built, ...). Rank row
+    // wins for fields it explicitly carries (id, lat/lng, distance_miles).
+    const det = propByPid.get(rk.property_id) || {};
+    const p = Object.assign({}, det, rk);
     const l = leaseByProp.get(p.property_id) || {};
     const o = ownerByProp.get(p.property_id) || {};
     const { tenant, operator } = _udExtractTenantOperator(db, p, {}, l);
