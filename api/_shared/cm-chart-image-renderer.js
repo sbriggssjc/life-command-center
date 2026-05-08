@@ -561,9 +561,17 @@ function buildChartConfig(chart, brand) {
 
     case 'bid_ask_spread':
     case 'bid_ask_spread_monthly': {
-      // Deliverable p.34: Bid-Ask Spread bars (left axis) + Last Ask line
-      // (right axis, cap-rate range). When avg_last_ask_cap is missing
-      // (older quarterly view) we fall back to spread-only.
+      // Round 2a — match dialysis PDF p.34 + gov p.21 visual:
+      //   • Each x-position has a vertical floating bar showing the
+      //     bid-ask spread RANGE from achieved cap (= Last Ask − spread)
+      //     up to Last Ask.
+      //   • Sky blue dot at bar BOTTOM = Last Ask cap (= achieved cap)
+      //     — wait, PDF shows Last Ask at BOTTOM and the spread is the
+      //     bar above it. So bar = [last_ask, last_ask + spread]. The
+      //     visual: thin bar with sky tint, with marker at bottom for
+      //     Last Ask cap.
+      //   • Single Y axis for cap rate (PDF range ~5.25%–8.00% dialysis,
+      //     ~6.50%–10.00% gov).
       const hasLastAsk = rows.some(r => r.avg_last_ask_cap != null);
       if (hasLastAsk) {
         return {
@@ -571,29 +579,47 @@ function buildChartConfig(chart, brand) {
           data: {
             labels,
             datasets: [
-              // Chart.js draws lower `order` LATER (on top). Bar order=2
-              // pushes the bars BEHIND the line so the Last Ask Cap line
-              // is visible across the chart even when the bar ranges
-              // overlap with it. User feedback (2026-05-07): "want the
-              // line to display above the bar chart elements for as
-              // much of the data as possible".
-              { type: 'bar',  label: 'Bid-Ask Spread (bps)',
-                data: rows.map(r => r.avg_bid_ask_spread),
-                backgroundColor: palette[3], borderRadius: 1,
-                yAxisID: 'y', order: 2 },
-              { type: 'line', label: 'Last Ask Cap',
+              // Floating bar: spread range from Last Ask up by spread amount
+              { type: 'bar', label: 'Bid-Ask Spread Range',
+                data: rows.map(r => {
+                  const last = r.avg_last_ask_cap;
+                  const spread = r.avg_bid_ask_spread;
+                  return (last != null && spread != null) ? [last, last + spread] : null;
+                }),
+                backgroundColor: 'rgba(224,232,244,0.6)',  // pale blue fill
+                borderColor: palette[1],                    // sky border
+                borderWidth: 1,
+                borderSkipped: false,
+                barPercentage: 0.5,
+                categoryPercentage: 0.85,
+                order: 2 },
+              // Last Ask Cap dots at bar bottom
+              { type: 'line', label: 'Last Ask Cap (TTM)',
                 data: rows.map(r => r.avg_last_ask_cap),
-                borderColor: palette[0], backgroundColor: 'transparent',
-                tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-                yAxisID: 'y1', order: 0 },
+                borderColor: 'transparent',
+                backgroundColor: palette[1],
+                pointRadius: 2.5,
+                pointStyle: 'circle',
+                showLine: false,
+                order: 0 },
+              // Bid-Ask spread (achieved cap) at bar top — derived
+              { type: 'line', label: 'Bid-Ask Spread Top (Achieved Cap)',
+                data: rows.map(r => {
+                  const last = r.avg_last_ask_cap;
+                  const spread = r.avg_bid_ask_spread;
+                  return (last != null && spread != null) ? last + spread : null;
+                }),
+                borderColor: 'transparent',
+                backgroundColor: palette[0],  // navy dot
+                pointRadius: 2.5,
+                pointStyle: 'circle',
+                showLine: false,
+                order: 0 },
             ],
           },
-          options: comboOpts({
-            yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
-            yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            // 5.5-8% — last-ask cap data lives 5.8-7.5%. Tighter than
-            // CAP_RATE_TIGHT_RANGE so the line shows movement.
-            yRightRange:  CAP_RATE_BID_ASK_RANGE,
+          options: commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+            yAxisRange: CAP_RATE_BID_ASK_RANGE,
           }),
         };
       }
@@ -737,29 +763,53 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'cost_of_capital': {
+      // Round 2a — match dialysis PDF p.23 + gov p.15 visual:
+      //   • Sky blue line (lower): 10-Year Treasury yield
+      //   • Dark navy line (upper): TTM Avg Cap Rate
+      //   • Vertical floating gray range bars BETWEEN them: Low–High
+      //     loan constant (mortgage constant) band, hashed border
+      //   • Single Y-axis 0%–10%
+      //
+      // Was: 5 separate lines (treasury, avg cap, 10+ cap, low LC,
+      // high LC). PDF only shows 2 lines + the band; "10+ Year Cap"
+      // is dropped (the gov PDF p.15 keeps it as a third line, but
+      // the dialysis PDF p.23 doesn't — go with 2-line for clarity).
       return {
-        type: 'line',
+        type: 'bar',
         data: {
           labels,
           datasets: [
-            { label: '10Y Treasury',         data: rows.map(r => r.treasury_10y_yield),
+            // Mortgage constant range bar (low to high), order=2 (back)
+            { type: 'bar', label: 'Mortgage Constant Band',
+              data: rows.map(r => {
+                const lo = r.low_loan_constant, hi = r.high_loan_constant;
+                return (lo != null && hi != null) ? [lo, hi] : null;
+              }),
+              backgroundColor: 'rgba(106,116,140,0.12)',  // pale gray fill
+              borderColor: '#6A748C',                      // gray border
+              borderWidth: 1,
+              borderSkipped: false,
+              barPercentage: 0.4,
+              categoryPercentage: 0.7,
+              order: 2 },
+            // 10Y Treasury (sky blue)
+            { type: 'line', label: '10Y Treasury Yield',
+              data: rows.map(r => r.treasury_10y_yield),
               borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Avg Cap Rate (TTM)',   data: rows.map(r => r.avg_cap_rate),
-              borderColor: palette[3], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: '10+ Year Cap',         data: rows.map(r => r.cap_10plus_year),
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              order: 1 },
+            // Avg Cap Rate (TTM) (dark navy, primary)
+            { type: 'line', label: 'Avg Cap Rate (TTM)',
+              data: rows.map(r => r.avg_cap_rate),
               borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Low Loan Constant',    data: rows.map(r => r.low_loan_constant),
-              borderColor: palette[4], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
-            { label: 'High Loan Constant',   data: rows.map(r => r.high_loan_constant),
-              borderColor: palette[4], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              order: 0 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
+          yAxisRange: { min: 0, max: 0.10 },
+        }),
       };
     }
 
@@ -940,45 +990,55 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'volume_cap_quartile_combo': {
-      // Front-cover combo: TTM volume area + cap rate line + quartile band.
-      // Synthetic chart that the API composes from volume_ttm_by_quarter
-      // + cap_rate_ttm_by_quarter + cap_rate_top_bottom_quartile.
-      // User feedback (2026-05-07): "the line charts displayed behind and
-      // hidden by the area chart for volume". Fix: order=2 on the volume
-      // area pushes it BEHIND the cap-rate lines (Chart.js draws lower
-      // `order` LATER, on top).
+      // Round 2a — match dialysis PDF p.19 + gov p.11 visual:
+      //   • Light blue shaded area (back) = TTM volume on left axis
+      //   • Vertical floating bars = cap-rate range upper-to-lower quartile
+      //     on right axis (was 2 dashed lines)
+      //   • Dots on top of bars = TTM avg cap rate (was a line)
+      //
+      // Floating bars use Chart.js v4 `[lower, upper]` data point shape.
+      // Dots are a line dataset with showLine:false so Chart.js renders
+      // only the markers.
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
+            // Volume area (background, lowest z-order)
             { type: 'line', label: 'TTM Volume',
               data: rows.map(r => r.volume_dollars),
               borderColor: palette[0], backgroundColor: palette[3],
               fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2.5,
-              yAxisID: 'y', order: 2 },
+              yAxisID: 'y', order: 3 },
+            // Cap-rate range bars (upper-to-lower quartile per period)
+            { type: 'bar', label: 'Cap Rate Range (Q1–Q3)',
+              data: rows.map(r => {
+                const lo = r.lower_quartile, hi = r.upper_quartile;
+                return (lo != null && hi != null) ? [lo, hi] : null;
+              }),
+              backgroundColor: 'rgba(98,181,229,0.25)',  // pale sky fill
+              borderColor: palette[1],                    // sky border
+              borderWidth: 1,
+              borderSkipped: false,
+              barPercentage: 0.6,
+              categoryPercentage: 0.8,
+              yAxisID: 'y1', order: 1 },
+            // Avg cap rate dots (foreground, highest z-order)
             { type: 'line', label: 'Avg Cap Rate (TTM)',
               data: rows.map(r => r.cap_rate),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              borderColor: 'transparent',
+              backgroundColor: palette[0],
+              pointRadius: 3,
+              pointStyle: 'circle',
+              showLine: false,
               yAxisID: 'y1', order: 0 },
-            { type: 'line', label: 'Upper Quartile Cap',
-              data: rows.map(r => r.upper_quartile),
-              borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1.5,
-              borderDash: [3, 3], yAxisID: 'y1', order: 0 },
-            { type: 'line', label: 'Lower Quartile Cap',
-              data: rows.map(r => r.lower_quartile),
-              borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1.5,
-              borderDash: [3, 3], yAxisID: 'y1', order: 0 },
           ],
         },
         options: (() => {
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
             yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            yRightRange:  { min: 0.05, max: 0.09 },  // 5-9% — quartile band fits
+            yRightRange:  { min: 0.055, max: 0.085 },  // tighter to fit quartile band cleanly
           });
           // Annotations on Avg Cap Rate (the primary line — peak/trough/last)
           const ann = buildAnnotations(rows, r => r.cap_rate, fmtPct2);
