@@ -1292,8 +1292,18 @@ window.govIntelSweepPreview = async function() {
     if (!ok) return;
     if (btn) { btn.textContent = 'Applying…'; }
     const applied = await _govIntelSweepCall(false);
-    const appliedTotal = applied.reduce((s, b) => s + (Number(b.applied) || 0), 0);
-    showToast('Swept ' + appliedTotal + ' propert' + (appliedTotal === 1 ? 'y' : 'ies') + ' — refreshing queue', 'success');
+    // Distinguish queue exits (status writes) from field backfills (data
+    // writes). Without this split, "Swept 2,000 properties — refreshing
+    // queue" misleads the reviewer when only 3 rows actually leave the
+    // queue and 1,997 just had RBA / year_built backfilled. Round 76eo.
+    const _exitBuckets    = new Set(['true_junk_stub', 'tier2_complete']);
+    const exitTotal     = applied.filter(b => _exitBuckets.has(b.bucket)).reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    const backfillTotal = applied.filter(b => !_exitBuckets.has(b.bucket)).reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    const parts = [];
+    if (exitTotal)     parts.push(exitTotal.toLocaleString() + ' queue exit' + (exitTotal === 1 ? '' : 's'));
+    if (backfillTotal) parts.push(backfillTotal.toLocaleString() + ' field backfill' + (backfillTotal === 1 ? '' : 's'));
+    const summary = parts.length ? parts.join(' + ') : 'no changes applied';
+    showToast('Swept: ' + summary + ' — refreshing queue', 'success');
     govData.portfolioProperties = [];
     researchQueue = [];
     researchIdx = 0;
