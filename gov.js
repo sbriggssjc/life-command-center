@@ -1269,10 +1269,11 @@ window.govIntelSweepPreview = async function() {
       tier2_complete:  'Tier 2 complete — A/B grade in window, all intel filled → mark approved',
       frpp_year_built: 'Backfill year_built from FRPP year_of_construction',
       frpp_rba:        'Backfill RBA from FRPP square_feet',
+      gsa_lease_rba:   'Backfill RBA from gsa_leases.lease_rsf (where FRPP didn\'t have it)',
       sale_sync:       'Sync latest sale price + deed date from sales_transactions (last 5y)'
     };
     const _resolveBuckets = ['true_junk_stub', 'tier2_complete'];
-    const _backfillBuckets = ['frpp_year_built', 'frpp_rba', 'sale_sync'];
+    const _backfillBuckets = ['frpp_year_built', 'frpp_rba', 'gsa_lease_rba', 'sale_sync'];
     const _resolveLines = buckets
       .filter(b => Number(b.matched) > 0 && _resolveBuckets.includes(b.bucket))
       .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched);
@@ -1352,7 +1353,12 @@ function govIntelAnnotate(rec) {
   if (!rec.recorded_owner_id && !rec.assessed_owner) missing.push('Recorded owner');
   if (!rec.true_owner_id)                       missing.push('True owner');
   if (!rec.gross_rent && !rec.noi)              missing.push('Rent / NOI');
-  if (!rec.estimated_value)                     missing.push('Est. value');
+  // estimated_value is intentionally NOT in the missing list — the column
+  // exists but no production pipeline populates it (audit 2026-05-08
+  // showed has_est_value=0 across all 10,647 rows). Including it inflated
+  // every row's missing_count by 1 and pushed otherwise-complete records
+  // into Tier 1 (Hot research). Compute downstream from NOI / cap rate
+  // when needed, don't gate the queue on it.
   // Sale recency: a county-records sale within the last 5y satisfies the
   // "do we have a comp?" question
   const fiveYrsAgo = Date.now() - 5 * 365.25 * 86400 * 1000;
@@ -1387,13 +1393,18 @@ function govIntelAnnotate(rec) {
   else if (firm <= 5)            termWindow = '2-5y';
   else                            termWindow = '>5y';
 
-  const filled = 6 - missing.length;
+  // Annotator now tracks 5 fields (RBA / year built / recorded owner /
+  // true owner / rent or NOI / recent sale) — est_value is dropped per
+  // the audit. Add 1 because there are actually 6 checks above (recent
+  // sale included).
+  const totalChecks = 6;
+  const filled = totalChecks - missing.length;
   rec._priority      = priority;
   rec._priorityLabel = priorityLabel;
   rec._priorityClass = priorityClass;
   rec._priorityHint  = priorityHint;
   rec._missingFields = missing;
-  rec._completeness  = Math.max(0, Math.round((filled / 6) * 100));
+  rec._completeness  = Math.max(0, Math.round((filled / totalChecks) * 100));
   rec._hasCountyData = !!(rec.assessed_owner || rec.latest_deed_grantee || rec.latest_sale_price);
   rec._termWindow    = termWindow;
 }
@@ -7005,7 +7016,7 @@ function renderGovResearch() {
   const owCount = govData.ownership ? govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length : 0;
   const ldCount = govData.leads ? govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length : 0;
   const portfolio = govData.portfolioProperties || [];
-  const intelCount = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending' || (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)).length;
+  const intelCount = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending').length;
 
   // Pipeline step definitions — ordered from data quality to prospecting to monitoring
   const pipelineSteps = [
