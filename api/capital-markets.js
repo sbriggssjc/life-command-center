@@ -960,6 +960,57 @@ async function exportWorkbook(req, res) {
         reit_count: r.reit_count != null ? Number(r.reit_count) : 0,
         cross_border_count: r.cross_border_count != null ? Number(r.cross_border_count) : 0,
       })),
+      // Round 6f — switch macro/cost-of-capital charts from per-view
+      // quarterly to monthly TTM. master_m now carries treasury_10y_yield,
+      // low/high_loan_constant, fed_funds_rate, mortgage_30y_rate, cpi_index
+      // (joined from cm_<vertical>_macro_rates_m + cm_<vertical>_loan_constant_m).
+      // User: "we want rolling monthly TTM and not quarterly data here."
+      cost_of_capital: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        treasury_10y_yield: r.treasury_10y_yield,
+        avg_cap_rate:       r.avg_cap_rate_ttm,
+        cap_10plus_year:    r.cap_10plus_year,
+        low_loan_constant:  r.low_loan_constant,
+        high_loan_constant: r.high_loan_constant,
+      })),
+      cash_leveraged_returns: (rows) => rows.map(r => {
+        // Match the cm_<vertical>_returns_indexes_q derivation: cash_return =
+        // avg_cap_rate; leveraged_return_mid uses 50% LTV on the mid loan
+        // constant. Reproduce the formula here so monthly TTM chart matches
+        // quarterly view shape.
+        const cap = r.avg_cap_rate_ttm;
+        const lo = r.low_loan_constant, hi = r.high_loan_constant;
+        const mid = (lo != null && hi != null) ? (lo + hi) / 2.0 : null;
+        const lev = (cap != null && mid != null)
+          ? (Number(cap) - Number(mid) * 0.5) / 0.5 : null;
+        return {
+          period_end: r.period_end,
+          cash_return: cap,
+          leveraged_return_mid: lev,
+        };
+      }),
+      net_lease_spread: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        treasury_10y_yield: r.treasury_10y_yield,
+        avg_cap_rate:       r.avg_cap_rate_ttm,
+        nm_avg_cap:         r.nm_avg_cap_ttm,
+        non_nm_avg_cap:     r.non_nm_avg_cap_ttm,
+        market_spread: (r.treasury_10y_yield != null && r.avg_cap_rate_ttm != null)
+                       ? Number(r.avg_cap_rate_ttm) - Number(r.treasury_10y_yield) : null,
+        nm_spread: (r.treasury_10y_yield != null && r.nm_avg_cap_ttm != null)
+                   ? Number(r.nm_avg_cap_ttm) - Number(r.treasury_10y_yield) : null,
+        non_nm_spread: (r.treasury_10y_yield != null && r.non_nm_avg_cap_ttm != null)
+                       ? Number(r.non_nm_avg_cap_ttm) - Number(r.treasury_10y_yield) : null,
+      })),
+      fed_funds_vs_treasury: (rows) => rows.map(r => ({
+        period_end: r.period_end,
+        fed_funds_rate:    r.fed_funds_rate,
+        treasury_10y_yield: r.treasury_10y_yield,
+        mortgage_30y_rate: r.mortgage_30y_rate,
+      })),
+      // NOTE: cpi_vs_renewal_cagr deferred to Round 6g — needs a monthly
+      // TTM gsa_renewal_cagr view (not yet built). Until then it stays
+      // on the per-view quarterly fetch (cm_gov_cpi_vs_renewal_cagr).
     };
 
     // Vertical-specific mappers — fields that live on only one master_m.
