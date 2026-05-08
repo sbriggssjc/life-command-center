@@ -65,9 +65,9 @@ const KNOWN_MISSING_TAB_NAMES = new Set([
   'dom_price_adjustments',          // BarChart, dialysis+gov       — needs bar renderer
   'listings_count_q',               // BarChart, dialysis+gov       — needs bar renderer
   'market_share_pie_ttm',           // PieChart, dialysis+gov       — needs pie renderer
-  'nm_buyer_distribution',          // DataTable, gov               — table only, easy add
+  // nm_buyer_distribution         — fixed Round 5c
   'nm_share_of_market',             // BarChart, gov                — needs bar renderer
-  'nm_track_record_buyer_type',     // DataTable, gov               — table only, easy add
+  // nm_track_record_buyer_type    — fixed Round 5c
   'ppsf_box_quarterly',             // StockChart, gov              — needs stock renderer
   'predicted_cap_rate',             // LineChart, gov               — needs line renderer
   'rent_survey_yearly',             // LineChart, gov               — needs line renderer
