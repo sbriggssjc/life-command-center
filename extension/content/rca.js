@@ -372,7 +372,11 @@
             else if (unit === 'k') dollars *= 1e3;
             else if (unit === 'b') dollars *= 1e9;
             if (Number.isFinite(dollars) && dollars > 0) {
-              evt.loan_amount = dollars;
+              // Round 76eo (2026-05-09): integer round for currency. JS
+              // floating-point makes 130.8 * 1e6 = 130800000.00000001
+              // which rendered ugly in the sidebar. Cents don't matter at
+              // multi-million-dollar scale, so coerce to nearest dollar.
+              evt.loan_amount = Math.round(dollars);
             }
             // Strip trailing parenthetical so lender name is clean
             evt.lender = evt.lender.replace(/\s*\(\s*\$[\d,.]+\s*[mkb]?\s*(?:approx)?\s*\)\s*$/i, '').trim();
