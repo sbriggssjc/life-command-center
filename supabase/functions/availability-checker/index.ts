@@ -244,7 +244,20 @@ function pickUrl(row: ListingRow, cfg: DomainConfig): string | null {
 function shouldSkipHost(u: string): boolean {
   try {
     const host = new URL(u).host.toLowerCase();
-    return SKIP_HOSTS.some((s) => host.includes(s));
+    // Hostname-anchored match. The previous host.includes(s) form would
+    // false-positive whenever a SKIP_HOSTS entry happened to appear as a
+    // substring in an unrelated host — e.g. "t.co" matched "product.costar.com"
+    // (the `t.co` formed by `producT.COstar`), which silently dropped every
+    // CoStar-Suite URL the function ever saw.
+    //
+    // Entries ending with "." are label prefixes (e.g. "tracking." matches
+    // tracking.foo.com but not retracking.com). Bare entries match either
+    // the exact host or any subdomain.
+    return SKIP_HOSTS.some((s) =>
+      s.endsWith(".")
+        ? host.startsWith(s)
+        : host === s || host.endsWith("." + s)
+    );
   } catch {
     return true;
   }
@@ -754,7 +767,21 @@ async function handleDebugCheckUrl(req: Request): Promise<Response> {
   }
   if (!target) return errorResponse(req, "url required in JSON body", 400);
   if (shouldSkipHost(target)) {
-    return jsonResponse(req, { skipped: true, reason: "tracking host" });
+    // Wrap the skip in the same envelope as a real parse so the acceptance
+    // script (and any other caller) can categorize the result by
+    // `parsed.outcome` rather than having to special-case a separate
+    // `{ skipped: true }` shape.
+    return jsonResponse(req, {
+      requested: target,
+      final_url: target,
+      http_status: 0,
+      parsed: {
+        outcome: "skipped",
+        http_status: 0,
+        parser: "skip",
+        notes: "host on SKIP_HOSTS list (tracking / shortener / known-paywall)",
+      } as ParseResult,
+    });
   }
   const fetched = await fetchListingPage(target);
   const parsed = fetched.ok

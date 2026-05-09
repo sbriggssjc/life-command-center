@@ -29,6 +29,7 @@ const GOV_READ_TABLES = new Set([
   "sales_comps", "research_queue_outcomes", "pending_updates",
   "ingestion_tracker", "ingestion_log",
   "unified_contacts", "contact_change_log", "contact_merge_queue",
+  "gsa_leases", "frpp_records",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -36,7 +37,25 @@ const GOV_WRITE_TABLES = new Set([
   "recorded_owners", "true_owners", "sales_transactions", "property_sale_events", "loans",
   "research_queue_outcomes",
   "unified_contacts", "contact_change_log", "contact_merge_queue",
+  "pending_updates",
   "rpc/upsert_lead", "rpc/save_research_outcome", "rpc/resolve_contact",
+  // Sale-link resolver (Mode A/B/C). Backed by SQL in
+  // government-lease/sql/20260429_gov_rpc_sale_link_resolver.sql.
+  "rpc/gov_resolve_sale_link", "rpc/gov_create_property_from_pending",
+  // Portfolio sale-link resolver (Mode D — one sale, N properties). Backed by
+  // government-lease/sql/20260506_gov_rpc_portfolio_sale_link.sql.
+  "rpc/gov_resolve_portfolio_sale_link",
+  // GSA → Property Link Review resolver. Backed by
+  // government-lease/sql/20260507_gov_rpc_gsa_link_review_resolver.sql.
+  "rpc/gov_resolve_gsa_link_review",
+  // Ownership auto-resolve sweep (empty_shell + placeholder + comp_on_file +
+  // exact_dup buckets). Backed by
+  // government-lease/sql/20260507_gov_rpc_auto_resolve_ownership.sql and
+  // 20260508_gov_rpc_auto_resolve_ownership_exact_dup.sql.
+  "rpc/gov_auto_resolve_ownership",
+  // Intel auto-resolve sweep (true_junk_stub bucket on properties.intel_status).
+  // Backed by government-lease/sql/20260508_gov_intel_status_and_auto_resolve.sql.
+  "rpc/gov_auto_resolve_intel",
 ]);
 
 const DIA_READ_TABLES = new Set([

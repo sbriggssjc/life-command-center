@@ -27,6 +27,7 @@ import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
+import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -88,6 +89,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     case 'availability-promotion-sweep': return handleAvailabilityPromotionSweep(req, res);
+    case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
     default:
@@ -1721,16 +1723,21 @@ const US_STREET_SUFFIX_MAP = {
   st: 'street', str: 'street', 'st.': 'street',
   rd: 'road', 'rd.': 'road',
   ave: 'avenue', av: 'avenue', 'ave.': 'avenue',
-  blvd: 'boulevard', 'blvd.': 'boulevard',
-  dr: 'drive', 'dr.': 'drive',
+  blvd: 'boulevard', bvd: 'boulevard', 'blvd.': 'boulevard',
+  dr: 'drive', drv: 'drive', 'dr.': 'drive',
   ln: 'lane', 'ln.': 'lane',
   ct: 'court', 'ct.': 'court',
   cir: 'circle', 'cir.': 'circle',
-  pkwy: 'parkway', 'pkwy.': 'parkway',
+  pkwy: 'parkway', pky: 'parkway', pkway: 'parkway', 'pkwy.': 'parkway',
   hwy: 'highway', 'hwy.': 'highway',
+  expy: 'expressway', fwy: 'freeway',
   pl: 'place', 'pl.': 'place',
   ter: 'terrace', 'ter.': 'terrace',
   trl: 'trail', 'trl.': 'trail',
+  trce: 'trace',
+  xing: 'crossing',
+  sq: 'square',
+  byp: 'bypass',
   way: 'way', wy: 'way',
   n: 'north', s: 'south', e: 'east', w: 'west',
   ne: 'northeast', nw: 'northwest',
@@ -1864,15 +1871,23 @@ async function fetchCandidateClinics(env, { zip, state, city }) {
     const stateFilter = `state=eq.${encodeURIComponent(state)}`;
     const cityFilter = city ? `&city=ilike.${encodeURIComponent(city)}` : '';
     tryQueries.push(`medicare_clinics?select=*&${stateFilter}${cityFilter}&limit=200`);
+    // Final wide net: state-only. Reached when a property has no zip AND
+    // its city differs from CMS's spelling (e.g., property "St. Louis" vs
+    // CMS "SAINT LOUIS"). 500-row cap is enough for any single state.
+    if (city) tryQueries.push(`medicare_clinics?select=*&${stateFilter}&limit=500`);
   }
   for (const q of tryQueries) {
     try {
       const r = await diaRest(env, 'GET', q);
-      if (r.ok && Array.isArray(r.data) && r.data.length) return r.data;
+      if (r.ok && Array.isArray(r.data) && r.data.length) {
+        console.log('[cms-match] candidates from', q.split('?')[1].split('&').slice(1, 4).join('&'), '→', r.data.length);
+        return r.data;
+      }
     } catch (e) {
       console.warn('[cms-match] candidate fetch failed for', q, e.message);
     }
   }
+  console.warn('[cms-match] no candidates found — zip:', zip || '(none)', 'state:', state || '(none)', 'city:', city || '(none)');
   return [];
 }
 

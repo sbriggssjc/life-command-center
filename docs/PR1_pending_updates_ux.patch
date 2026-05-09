@@ -1,0 +1,226 @@
+--- gov.js.orig	2026-05-06 15:49:05.660519207 +0000
++++ gov.js	2026-05-06 15:47:18.776517379 +0000
+@@ -4602,17 +4602,26 @@
+   intake_unmatched_property: {
+     label: 'Unmatched Intake Property',
+     category: 'intake',
+-    guidance: 'An intake landed but we couldn\'t auto-link it to a property in inventory. Approve only after confirming the property exists or should be created.'
++    kind: 'link_pick',
++    guidance: 'An intake landed but we couldn\'t auto-link it to a property in inventory. The source_context.match_details.candidates array carries pre-ranked options for the link-pick UI; for now use Reject if out-of-scope, or Skip.'
+   },
+   unmatched_property: {
+     label: 'Unmatched Property',
+     category: 'intake',
+-    guidance: 'A record references a property we can\'t find in our inventory. Approve to create it; reject if it\'s a duplicate or out-of-scope.'
++    kind: 'link_pick',
++    guidance: 'A lead references a property we either do not have in inventory yet, or a previously-linked match was unlinked by an audit (check Source Context for previously_linked_property_id). Pick the right property when the link-pick UI lands; for now use Reject if the lead is out of scope, or Skip.'
+   },
+   unmatched_contact: {
+     label: 'Unmatched Contact',
+     category: 'intake',
+-    guidance: 'A new contact appeared that doesn\'t match anyone in our directory. Approve to create the contact record; reject if it\'s a duplicate.'
++    kind: 'link_pick',
++    guidance: 'A new contact appeared that doesn\'t match anyone in our directory. (No auto-create flow exists today — approving here only marks the queue row resolved without creating the contact. Use Reject for now or wait for the link-pick UI.)'
++  },
++  gsa_property_link_review: {
++    label: 'GSA → Property Link Review',
++    category: 'link_review',
++    kind: 'link_pick',
++    guidance: 'A GSA lease was auto-linked to a property whose street number AND lease number both disagree. Some are correct (city normalisation like Mt vs Mount; range addresses like 160-180 Main; building complexes with multiple lease numbers); others are genuine wrong matches. Confirm the records are the same physical building (approve when the link-pick UI lands), or reject so the matcher can try again.'
+   },
+   // sale_property_link_* — all variants describe linking a sales_transaction to
+   // a property when the public inventory doesn't cleanly cover it.
+@@ -4689,19 +4698,36 @@
+ };
+ 
+ const GOV_PENDING_CATEGORIES = [
+-  { id: 'sale_link',  label: 'Property Linking', icon: '🔗', desc: 'Linking sales transactions to properties' },
+-  { id: 'ownership',  label: 'Ownership',        icon: '🏛',  desc: 'Owner-of-record disagreements' },
+-  { id: 'confidence', label: 'Match Confidence', icon: '⚖',  desc: 'Low-confidence record matches awaiting confirmation' },
+-  { id: 'intake',     label: 'Intake Review',    icon: '📥', desc: 'Inbound emails / unmatched properties / contacts' },
+-  { id: 'other',      label: 'Other',            icon: '•',  desc: 'Uncategorised reason codes' }
++  { id: 'sale_link',    label: 'Property Linking', icon: '🔗', desc: 'Linking sales transactions to properties' },
++  { id: 'ownership',    label: 'Ownership',        icon: '🏛',  desc: 'Owner-of-record disagreements' },
++  { id: 'confidence',   label: 'Match Confidence', icon: '⚖',  desc: 'Low-confidence record matches awaiting confirmation' },
++  { id: 'link_review',  label: 'Link Review',      icon: '🔍', desc: 'Auto-flagged record↔property links that need human confirmation' },
++  { id: 'intake',       label: 'Intake Review',    icon: '📥', desc: 'Inbound emails / unmatched properties / contacts' },
++  { id: 'other',        label: 'Other',            icon: '•',  desc: 'Uncategorised reason codes' }
+ ];
+ 
++// Reasons emitted by writers that don't match a taxonomy key 1:1.
++// Map them to the canonical entry so we don't have to keep two strings in sync.
++const GOV_PENDING_REASON_ALIASES = {
++  // Writer emits the *_gap suffix; taxonomy entry omits it.
++  'sale_property_link_unrepresented_street_public_inventory_gap':
++    'sale_property_link_unrepresented_street_public_inventory'
++};
++
+ function govPendingTaxonomy(reason) {
+-  if (reason && GOV_PENDING_REASON_TAXONOMY[reason]) return GOV_PENDING_REASON_TAXONOMY[reason];
+-  // Fallback: best-effort label, "other" category.
+-  const r = String(reason || 'other');
++  const canonical = (reason && GOV_PENDING_REASON_ALIASES[reason]) || reason;
++  const entry = canonical && GOV_PENDING_REASON_TAXONOMY[canonical];
++  if (entry) {
++    // Backfill kind for entries that don't specify one. sale_link entries
++    // route through their own resolver; everything else is a field_change
++    // (old_value -> new_value diff). Explicit `kind` on an entry wins.
++    const defaultKind = entry.category === 'sale_link' ? 'sale_link' : 'field_change';
++    return Object.assign({ kind: defaultKind }, entry);
++  }
++  // Fallback for unknown reasons: best-effort label, "other" category.
++  const r = String(canonical || 'other');
+   const label = r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+-  return { label, category: 'other', guidance: 'No guidance defined for this reason yet — review the source context and use your judgment.' };
++  return { label, category: 'other', kind: 'field_change', guidance: 'No guidance defined for this reason yet — review the source context and use your judgment.' };
+ }
+ 
+ function govPendingRelativeAge(iso) {
+@@ -4750,12 +4776,15 @@
+ 
+ window.bulkApproveGovPending = async function() {
+   const view = window._govPendingCurrentView || [];
+-  // Sale-link items are NEVER bulk-approvable — approve is a no-op until a
+-  // property_id is picked. Exclude them.
++  // Only field_change rows are bulk-approvable. sale_link and link_pick
++  // rows have no meaningful old/new diff — approve on them is either a
++  // resolver-required action (sale_link) or a silent no-op that would
++  // cement a flagged-as-suspect link / leave a lead un-relinked
++  // (link_pick). Exclude both.
+   const eligible = view.filter(r => {
+     if (Number(r.confidence || 0) < 0.8) return false;
+     const tax = govPendingTaxonomy(r.reason);
+-    return tax.category !== 'sale_link';
++    return tax.kind === 'field_change';
+   });
+   if (eligible.length === 0) {
+     showToast('No items in this view meet the high-confidence (≥80%) bar', 'info');
+@@ -4802,11 +4831,18 @@
+       govPendingUpdatesIdx = Math.max(0, govPendingUpdatesIdx - 1);
+       e.preventDefault(); renderGovTab();
+     } else if (k === 'a' && sel) {
+-      // Sale-link items have no proposed value — Approve is a no-op for them.
+-      // Force the user to pick a candidate or create a property.
++      // Approve only writes through for true field_change rows. sale_link
++      // needs the resolver; link_pick needs the (forthcoming) candidate
++      // picker. Show a hint and bail otherwise so the green-key reflex
++      // doesn't silently no-op or cement a flagged-as-suspect link.
+       const tax = govPendingTaxonomy(sel.reason);
+-      if (tax.category === 'sale_link') {
+-        showToast('Use Link → on a candidate, or expand "Create new property"', 'info');
++      if (tax.kind !== 'field_change') {
++        showToast(
++          tax.kind === 'sale_link'
++            ? 'Use Link → on a candidate, or expand "Create new property"'
++            : 'No proposed value yet — press R to reject, or S to skip',
++          'info'
++        );
+         return;
+       }
+       e.preventDefault();
+@@ -4821,6 +4857,19 @@
+   });
+ }
+ 
++// Drop pending rows that are obviously seed/test fixtures (e.g. an intake
++// email whose subject starts with "Test" and has no old/new value to
++// review). Matched at the strictest possible boundary so a real intake
++// like "Test Pilot Air Base" can never be hidden.
++function govIsLikelyTestRow(r) {
++  if (!r || !r.source_context || typeof r.source_context !== 'object') return false;
++  // Only filter empty-shell rows (no value to approve/reject anyway).
++  if (r.old_value != null || r.new_value != null) return false;
++  const subj = typeof r.source_context.subject === 'string' ? r.source_context.subject.trim() : '';
++  if (!subj) return false;
++  return /^(?:(?:re|fwd?):\s*)?test\b/i.test(subj);
++}
++
+ let govPendingUpdatesRefreshedAt = null;
+ window.loadGovPendingUpdates = async function() {
+   if (govPendingUpdatesLoading) return;
+@@ -4830,7 +4879,7 @@
+       filter: 'status=eq.pending',
+       order: 'priority_score.desc'
+     });
+-    govPendingUpdates = result.data || [];
++    govPendingUpdates = (result.data || []).filter(r => !govIsLikelyTestRow(r));
+     govPendingUpdatesRefreshedAt = new Date();
+ 
+     // Also fetch recently auto-resolved items so the trends strip can
+@@ -5548,10 +5597,12 @@
+   // Detail header
+   html += '<div class="pu-detail-head">';
+   html += `<div class="pu-detail-title">${esc(tax.label)}</div>`;
++  const recIdStr = selected.record_id != null ? String(selected.record_id) : '';
+   html += `<div class="pu-detail-meta">
+     <span class="pu-conf-pill" style="background:${conf.color}1a;color:${conf.color};border-color:${conf.color}55">${conf.pct}% ${conf.label}</span>
+     ${age ? '<span class="pu-detail-age">' + esc(age) + '</span>' : ''}
+     <code class="pu-detail-table">${esc(selected.table_name)}.${esc(selected.field_name || '')}</code>
++    ${recIdStr ? `<code class="pu-detail-recid" title="record_id (click to copy)" onclick="navigator.clipboard.writeText('${esc(recIdStr).replace(/'/g, "\\'")}'); showToast('record_id copied', 'success')">#${esc(recIdStr)}</code>` : ''}
+   </div>`;
+   html += '</div>';
+ 
+@@ -5561,12 +5612,15 @@
+     <div class="pu-guidance-body">${esc(tax.guidance)}</div>
+   </div>`;
+ 
+-  // For sale_property_link_* we don't have a meaningful old/new diff —
+-  // the system is asking the human to PICK a property_id. Render the
+-  // resolver (sale record + candidates + create-new-property) instead.
+-  const isSaleLink = tax.category === 'sale_link';
++  // Three rendering modes, keyed off taxonomy.kind:
++  //   field_change — old_value -> new_value diff (Approve writes the field)
++  //   sale_link    — full resolver (sale record + candidates + create form)
++  //   link_pick    — placeholder until the link-pick UI lands; no Approve
++  const isFieldChange = tax.kind === 'field_change';
++  const isSaleLink    = tax.kind === 'sale_link';
++  const isLinkPick    = tax.kind === 'link_pick';
+ 
+-  if (!isSaleLink) {
++  if (isFieldChange) {
+     // Standard value-change diff
+     html += '<div class="pu-diff">';
+     html += `<div class="pu-diff-cell pu-diff-old">
+@@ -5579,8 +5633,21 @@
+       <div class="pu-diff-value">${esc(newVal)}</div>
+     </div>`;
+     html += '</div>';
+-  } else {
++  } else if (isSaleLink) {
+     html += renderGovSaleLinkResolver(selected);
++  } else if (isLinkPick) {
++    // Empty (NULL -> NULL) on link_pick rows means the action isn't a value
++    // write — it's a property selection that the queue UI doesn't yet
++    // support. Show a placeholder so the misleading "(empty) -> (empty)"
++    // diff disappears and the reviewer is steered toward Reject / Skip.
++    html += `<div class="pu-link-pick-placeholder">
++      <div class="pu-lpp-title">${esc(tax.label)}</div>
++      <div class="pu-lpp-body">
++        This row needs a property selection that the link-pick UI doesn\'t render yet.
++        Use <kbd>R</kbd> to reject if it\'s out of scope, or <kbd>S</kbd> to skip.
++        See Source Context below for the relevant fields.
++      </div>
++    </div>`;
+   }
+ 
+   // Source context summary (parsed) + collapsible raw — useful for both modes
+@@ -5604,9 +5671,11 @@
+   html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 2, placeholder: 'Optional — why you approved/rejected'});
+ 
+   html += '<div class="action-row pu-action-row">';
+-  if (!isSaleLink) {
++  if (isFieldChange) {
+     html += `<button class="btn-action primary" title="Approve (A)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve <span class="pu-kbd">A</span></button>`;
+   }
++  // sale_link rows have their own Link/Create buttons inside the resolver.
++  // link_pick rows get no Approve button until the candidate-picker UI lands.
+   html += `<button class="btn-action danger" title="Reject (R)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject <span class="pu-kbd">R</span></button>`;
+   html += `<button class="btn-action" title="Skip to next (S)" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % (window._govPendingCurrentView||[]).length; renderGovTab();">→ Skip <span class="pu-kbd">S</span></button>`;
+   html += `<button class="btn-action" style="margin-left:auto;background:#fb923c1a;color:#fb923c;border-color:#fb923c55" title="Mark as expired" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
+@@ -8429,4 +8498,4 @@
+  */
+ window.govQuickAddToPipeline = function(record) {
+   showDetail(record, 'gov-lead', 'Intel');
+-};
+\ No newline at end of file
++};

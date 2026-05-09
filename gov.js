@@ -236,7 +236,11 @@ async function loadGovOverviewStats() {
 let _govDataLoading = false;
 
 // Helper function to paginate a query until all rows are fetched
-async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 5000) {
+// Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap.
+// pageSize MUST be ≤ Supabase's max_rows (1000) — passing a larger value caused
+// every batch to come back with len < pageSize on the first call, exiting the
+// loop after a single page and silently truncating the result. Round 76el.
+async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 1000) {
   let all = [], offset = 0;
   while (true) {
     const batch = await govQuery(table, columns, { ...options, limit: pageSize, offset, count: false });
@@ -289,7 +293,17 @@ async function loadGovData() {
         { order: 'priority_score.desc' }
       ),
       _loadPaginatedQuery('properties',
-        'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type'
+        // Identifier + research handles + financials + intel signals.
+        // Intel card needs all of these; the auto-resolve sweep keys on
+        // intel_status + the no-handle bucket. Round 76em.
+        'property_id,lease_number,location_code,address,city,state,zip_code,' +
+        'agency,agency_full_name,government_type,' +
+        'rba,sf_leased,year_built,year_renovated,land_acres,' +
+        'lease_commencement,lease_expiration,firm_term_remaining,term_remaining,firm_term_years,total_term_years,' +
+        'gross_rent,gross_rent_psf,noi,noi_psf,estimated_value,' +
+        'recorded_owner_id,true_owner_id,assessed_owner,latest_deed_grantee,latest_deed_date,latest_sale_price,' +
+        'investment_score,deal_grade,agency_risk_level,location_tier,' +
+        'intel_status,status,data_source'
       ),
       govQuery('properties', 'property_id', { limit: 0 }),
       govQueryAll('available_listings',
@@ -760,6 +774,20 @@ async function loadCountyAuthorities(states) {
 }
 
 function findCountyAuth(city, state) {
+  if (!state) return null;
+
+  // The bulk loader populates govData.countyAuth (a flat array). Lazily index
+  // it into countyCache on first lookup so countyBtns works on all three
+  // research surfaces without an extra async fetch.
+  if (!countyCache[state] && Array.isArray(govData.countyAuth) && govData.countyAuth.length) {
+    countyCache[state] = {};
+    for (const c of govData.countyAuth) {
+      if (c.state_code === state && c.county_name) {
+        countyCache[state][c.county_name.toLowerCase()] = c;
+      }
+    }
+  }
+
   if (!city || !countyCache[state]) return null;
 
   const cityLower = city.toLowerCase();
@@ -1064,6 +1092,350 @@ function attachAutocomplete() {
 // RESEARCH WORKBENCH
 // ============================================================================
 
+// ──────────────────────────────────────────────────────────────
+// Ownership queue annotation — used by the prioritised research queue
+// loader to surface what's missing and whether the comp is already on
+// file before the reviewer commits to a card.
+// Priority semantics (lower number = higher priority):
+//   1  no sale + no owners                  — urgent, gather everything
+//   2  no sale, partial owners              — sale price still missing
+//   3  sale present, owners missing         — fill in owner fields
+//   4  sale present + at least one owner    — verify only
+//   5  comp already on file in sales_txns   — bottom of queue
+function govOwnershipAnnotate(rec) {
+  if (!rec) return;
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const hasSale = !!(rec.sale_price);
+  const hasRecordedOwner = !!(rec.recorded_owner_name && String(rec.recorded_owner_name).trim());
+  const hasTrueOwner = !!(rec.true_owner_name && String(rec.true_owner_name).trim());
+  const ownerCount = (hasRecordedOwner ? 1 : 0) + (hasTrueOwner ? 1 : 0);
+
+  // Comp-on-file detection: a sales_transactions row with the same
+  // lease_number whose sale_date sits within ±90d of the transfer_date.
+  let compMatch = null;
+  if (rec.lease_number && Array.isArray(govData.salesComps)) {
+    const transferTs = rec.transfer_date ? new Date(rec.transfer_date).getTime() : null;
+    const window = 90 * 86400 * 1000;
+    const ln = norm(rec.lease_number);
+    for (const c of govData.salesComps) {
+      if (norm(c.lease_number) !== ln) continue;
+      if (!transferTs) { compMatch = c; break; }
+      const ct = c.sale_date ? new Date(c.sale_date).getTime() : null;
+      if (ct && Math.abs(ct - transferTs) <= window) { compMatch = c; break; }
+    }
+  }
+
+  const missing = [];
+  if (!hasSale) missing.push('Sale price');
+  if (!rec.transfer_date) missing.push('Transfer date');
+  if (!hasRecordedOwner) missing.push('Recorded owner');
+  if (!hasTrueOwner) missing.push('True owner');
+  if (!rec.cap_rate) missing.push('Cap rate');
+
+  let priority;
+  if (compMatch) priority = 5;
+  else if (hasSale && ownerCount >= 1) priority = 4;
+  else if (hasSale) priority = 3;
+  else if (ownerCount >= 1) priority = 2;
+  else priority = 1;
+
+  rec._compOnFile = !!compMatch;
+  rec._matchedComp = compMatch;
+  rec._missingFields = missing;
+  rec._priority = priority;
+  rec._completeness = Math.round(
+    (((hasSale ? 1 : 0) + (rec.transfer_date ? 1 : 0) + (hasRecordedOwner ? 1 : 0) + (hasTrueOwner ? 1 : 0) + (rec.cap_rate ? 1 : 0)) / 5) * 100
+  );
+}
+
+// Two-step UX: preview (dry run) shows bucket counts; confirm runs the
+// apply pass on the gov DB. govRpc strips down to the first row of a
+// rowset, but we need all three buckets, so call /api/gov-query directly.
+async function _govOwnershipSweepCall(dryRun) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', 'rpc/gov_auto_resolve_ownership');
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_dry_run: dryRun })
+  });
+  const text = await resp.text();
+  let data; try { data = JSON.parse(text); } catch (_) { data = text; }
+  if (!resp.ok) {
+    const detail = (data && data.error) || (typeof data === 'string' ? data : ('HTTP ' + resp.status));
+    const err = new Error(detail);
+    err.status = resp.status;
+    throw err;
+  }
+  return Array.isArray(data) ? data : (data ? [data] : []);
+}
+
+window.govOwnershipSweepPreview = async function() {
+  const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
+  try {
+    const buckets = await _govOwnershipSweepCall(true);
+    const total = buckets.reduce((s, b) => s + (Number(b.matched) || 0), 0);
+    if (total === 0) {
+      showToast('Nothing to sweep — no auto-resolvable rows in the queue', 'info');
+      return;
+    }
+    const labels = {
+      empty_shell:  'Empty shells (only true_owner_name)',
+      placeholder:  'Boilerplate prior_owner ("Unknown" / "Previous Owner")',
+      comp_on_file: 'Comp already in sales_transactions (±90d match)',
+      exact_dup:    'Exact-duplicate event rows (same lease + date + new_owner)'
+    };
+    const lines = buckets
+      .filter(b => Number(b.matched) > 0)
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched)
+      .join('\n');
+    const ok = await lccConfirm(
+      'Auto-resolve ' + total + ' ownership_history row' + (total === 1 ? '' : 's') + '?\n\n' + lines + '\n\n' +
+      'Empty shells → research_status="junk_no_data"\n' +
+      'Placeholder rows → research_status="junk_placeholder"\n' +
+      'Comp-on-file → research_status="comp_on_file"\n' +
+      'Exact-dup events → research_status="duplicate_of_event" (oldest row kept)\n\n' +
+      'You can re-run this sweep any time.',
+      'Apply sweep'
+    );
+    if (!ok) return;
+    if (btn) { btn.textContent = 'Applying…'; }
+    const applied = await _govOwnershipSweepCall(false);
+    const appliedTotal = applied.reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    showToast('Swept ' + appliedTotal + ' row' + (appliedTotal === 1 ? '' : 's') + ' — refreshing queue', 'success');
+    // Force a fresh fetch of ownership_history; reload the research
+    // queue once new data lands so the sweep effect is visible.
+    govData.ownership = [];
+    researchQueue = [];
+    researchIdx = 0;
+    if (typeof loadGovData === 'function') {
+      loadGovData().then(() => loadResearchQueue()).then(() => renderGovTab());
+    } else {
+      await loadResearchQueue();
+      renderGovTab();
+    }
+  } catch (err) {
+    console.error('govOwnershipSweepPreview failed:', err);
+    const msg = (err && err.message) || String(err);
+    const friendly = /could not find the function|function .* does not exist|404/i.test(msg)
+      ? 'RPC gov_auto_resolve_ownership not deployed yet — apply sql/20260507_gov_rpc_auto_resolve_ownership.sql'
+      : msg;
+    showToast('Sweep failed: ' + friendly, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig || '🧹 Sweep auto-resolvable (preview)'; }
+  }
+};
+
+// Intel sweep — same two-step pattern, hits gov_auto_resolve_intel which
+// only has the true_junk_stub bucket today (8 rows in 2026-05-08 audit).
+async function _govIntelSweepCall(dryRun) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', 'rpc/gov_auto_resolve_intel');
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_dry_run: dryRun })
+  });
+  const text = await resp.text();
+  let data; try { data = JSON.parse(text); } catch (_) { data = text; }
+  if (!resp.ok) {
+    const detail = (data && data.error) || (typeof data === 'string' ? data : ('HTTP ' + resp.status));
+    const err = new Error(detail);
+    err.status = resp.status;
+    throw err;
+  }
+  return Array.isArray(data) ? data : (data ? [data] : []);
+}
+
+// Jump the reviewer to the first row in a given Intel priority tier.
+// Useful for "start with the 386 Tier 2 ready-to-approve rows" before
+// digging into the bigger Hot Research bucket.
+window.govIntelJumpToTier = function(targetTier) {
+  if (!Array.isArray(researchQueue) || researchQueue.length === 0) {
+    showToast('Queue is empty', 'info');
+    return;
+  }
+  const idx = researchQueue.findIndex(r => (r._priority || 9) === Number(targetTier));
+  if (idx < 0) {
+    showToast('No rows in Tier ' + targetTier + ' in the current view', 'info');
+    return;
+  }
+  researchIdx = idx;
+  showToast('Jumped to Tier ' + targetTier + ' (' + (idx + 1) + ' / ' + researchQueue.length + ')', 'success');
+  renderGovTab();
+};
+
+window.govIntelSweepPreview = async function() {
+  const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
+  try {
+    const buckets = await _govIntelSweepCall(true);
+    const total = buckets.reduce((s, b) => s + (Number(b.matched) || 0), 0);
+    if (total === 0) {
+      showToast('Nothing to sweep — no auto-resolvable rows in the Intel queue', 'info');
+      return;
+    }
+    const labels = {
+      true_junk_stub:         'Stub properties (no RBA / year / owner / county data / firm term) → mark junk',
+      tier2_complete:         'Tier 2 complete — A/B grade in window, all intel filled → mark approved',
+      tier3c_complete:        'Tier 3c complete — C grade in window, all intel filled → mark approved',
+      stale_lease_no_renewal: 'Stale lease — expired 5+ yrs ago, no GSA renewal, not in active deal pipeline',
+      frpp_year_built:        'Backfill year_built from FRPP year_of_construction',
+      frpp_rba:               'Backfill RBA from FRPP square_feet',
+      gsa_lease_rba:          'Backfill RBA from gsa_leases.lease_rsf (where FRPP didn\'t have it)',
+      sale_sync:              'Sync latest sale price + deed date from sales_transactions (last 5y)',
+      true_owner_non_spe:     'Default true_owner = recorded_owner for non-SPE properties (owner_is_spe=false)'
+    };
+    const _resolveBuckets = ['true_junk_stub', 'tier2_complete', 'tier3c_complete', 'stale_lease_no_renewal'];
+    const _backfillBuckets = ['frpp_year_built', 'frpp_rba', 'gsa_lease_rba', 'sale_sync', 'true_owner_non_spe'];
+    const _resolveLines = buckets
+      .filter(b => Number(b.matched) > 0 && _resolveBuckets.includes(b.bucket))
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched);
+    const _backfillLines = buckets
+      .filter(b => Number(b.matched) > 0 && _backfillBuckets.includes(b.bucket))
+      .map(b => '  • ' + (labels[b.bucket] || b.bucket) + ': ' + b.matched);
+    const sections = [];
+    if (_resolveLines.length) sections.push('▸ Resolve queue items:\n' + _resolveLines.join('\n'));
+    if (_backfillLines.length) sections.push('▸ Backfill missing fields:\n' + _backfillLines.join('\n'));
+    const lines = sections.join('\n\n');
+    const ok = await lccConfirm(
+      'Auto-resolve ' + total + ' propert' + (total === 1 ? 'y' : 'ies') + '?\n\n' + lines + '\n\n' +
+      'You can re-run this sweep any time as new data lands.',
+      'Apply sweep'
+    );
+    if (!ok) return;
+    if (btn) { btn.textContent = 'Applying…'; }
+    const applied = await _govIntelSweepCall(false);
+    // Distinguish queue exits (status writes) from field backfills (data
+    // writes). Without this split, "Swept 2,000 properties — refreshing
+    // queue" misleads the reviewer when only 3 rows actually leave the
+    // queue and 1,997 just had RBA / year_built backfilled. Round 76eo.
+    const _exitBuckets    = new Set(['true_junk_stub', 'tier2_complete', 'tier3c_complete', 'stale_lease_no_renewal']);
+    const exitTotal     = applied.filter(b => _exitBuckets.has(b.bucket)).reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    const backfillTotal = applied.filter(b => !_exitBuckets.has(b.bucket)).reduce((s, b) => s + (Number(b.applied) || 0), 0);
+    const parts = [];
+    if (exitTotal)     parts.push(exitTotal.toLocaleString() + ' queue exit' + (exitTotal === 1 ? '' : 's'));
+    if (backfillTotal) parts.push(backfillTotal.toLocaleString() + ' field backfill' + (backfillTotal === 1 ? '' : 's'));
+    const summary = parts.length ? parts.join(' + ') : 'no changes applied';
+    showToast('Swept: ' + summary + ' — refreshing queue', 'success');
+    govData.portfolioProperties = [];
+    researchQueue = [];
+    researchIdx = 0;
+    if (typeof loadGovData === 'function') {
+      loadGovData().then(() => loadResearchQueue()).then(() => renderGovTab());
+    } else {
+      await loadResearchQueue();
+      renderGovTab();
+    }
+  } catch (err) {
+    console.error('govIntelSweepPreview failed:', err);
+    const msg = (err && err.message) || String(err);
+    const friendly = /could not find the function|function .* does not exist|404/i.test(msg)
+      ? 'RPC gov_auto_resolve_intel not deployed yet — apply sql/20260508_gov_intel_status_and_auto_resolve.sql'
+      : msg;
+    showToast('Sweep failed: ' + friendly, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig || '🧹 Sweep auto-resolvable (preview)'; }
+  }
+};
+
+// ──────────────────────────────────────────────────────────────
+// Intel queue annotation — prioritises the Intel research workbench
+// against the LCC sidebar workflow. The queue is dominated by 10K+
+// properties and the matcher / pipeline already filled most of the
+// non-research fields, so the reviewer's job is "fill the gaps that
+// matter for the sell-side conversation."
+//
+// Priority semantics (lower = higher priority):
+//   1  Hot: A/B grade + firm_term in [-1, 5] + missing core intel
+//   2  Hot: A/B grade + firm_term in [-1, 5] + intel mostly there
+//      (still review for accuracy)
+//   3  Warm: A/B grade + firm_term > 5 (long-fuse pipeline)
+//   4  Cold: C grade or unknown firm_term
+//   5  D/F grade or junk stub (deprioritised)
+//
+// Adds:
+//   _priority (number)
+//   _priorityLabel (text), _priorityClass (badge color)
+//   _missingFields (array of human labels)
+//   _completeness (percent)
+//   _hasCountyData (bool — assessed_owner / latest_deed_grantee filled)
+//   _termWindow ("expired" | "<2y" | "2-5y" | ">5y" | "unknown")
+function govIntelAnnotate(rec) {
+  if (!rec) return;
+  const grade = rec.deal_grade || null;
+  const firm  = (rec.firm_term_remaining == null) ? null : Number(rec.firm_term_remaining);
+  const isAB  = grade === 'A' || grade === 'B';
+  const isC   = grade === 'C';
+  const inHotWindow = firm != null && firm >= -1 && firm <= 5;
+  const longFuse    = firm != null && firm > 5;
+
+  // What's missing for a complete intel write-up
+  const missing = [];
+  if (!rec.rba)                                 missing.push('RBA');
+  if (!rec.year_built)                          missing.push('Year built');
+  if (!rec.recorded_owner_id && !rec.assessed_owner) missing.push('Recorded owner');
+  if (!rec.true_owner_id)                       missing.push('True owner');
+  if (!rec.gross_rent && !rec.noi)              missing.push('Rent / NOI');
+  // estimated_value is intentionally NOT in the missing list — the column
+  // exists but no production pipeline populates it (audit 2026-05-08
+  // showed has_est_value=0 across all 10,647 rows). Including it inflated
+  // every row's missing_count by 1 and pushed otherwise-complete records
+  // into Tier 1 (Hot research). Compute downstream from NOI / cap rate
+  // when needed, don't gate the queue on it.
+  // Sale recency: a county-records sale within the last 5y satisfies the
+  // "do we have a comp?" question
+  const fiveYrsAgo = Date.now() - 5 * 365.25 * 86400 * 1000;
+  const recentDeed = rec.latest_deed_date && new Date(rec.latest_deed_date).getTime() >= fiveYrsAgo;
+  const recentSale = !!rec.latest_sale_price && recentDeed;
+  if (!recentSale)                              missing.push('Recent sale');
+
+  const coreMissing = missing.length >= 3;
+
+  let priority;
+  if (grade === 'D' || grade === 'F')           priority = 5;
+  else if (isAB && inHotWindow && coreMissing)  priority = 1;
+  else if (isAB && inHotWindow)                 priority = 2;
+  else if (isAB && longFuse)                    priority = 3;
+  else if (isC && inHotWindow)                  priority = 3;
+  else                                          priority = 4;
+
+  let priorityLabel, priorityClass, priorityHint;
+  switch (priority) {
+    case 1: priorityLabel = 'Hot — research'; priorityClass = 'urgent';      priorityHint = 'A/B grade in sell-side window; core intel missing'; break;
+    case 2: priorityLabel = 'Hot — verify';   priorityClass = 'urgent';      priorityHint = 'A/B grade in sell-side window; intel ready to confirm'; break;
+    case 3: priorityLabel = 'Warm';            priorityClass = 'needs-input'; priorityHint = isAB ? 'A/B grade, longer fuse' : 'C grade, sell-side window'; break;
+    case 4: priorityLabel = 'Backfill';        priorityClass = 'ready';       priorityHint = 'Maintenance — fill gaps as time allows'; break;
+    case 5: priorityLabel = 'Low value';       priorityClass = 'ready';       priorityHint = 'D/F grade; deprioritised'; break;
+  }
+
+  // Term window category (drives the secondary sort)
+  let termWindow;
+  if (firm == null)              termWindow = 'unknown';
+  else if (firm <= 0)            termWindow = 'expired';
+  else if (firm <= 2)            termWindow = '<2y';
+  else if (firm <= 5)            termWindow = '2-5y';
+  else                            termWindow = '>5y';
+
+  // Annotator now tracks 5 fields (RBA / year built / recorded owner /
+  // true owner / rent or NOI / recent sale) — est_value is dropped per
+  // the audit. Add 1 because there are actually 6 checks above (recent
+  // sale included).
+  const totalChecks = 6;
+  const filled = totalChecks - missing.length;
+  rec._priority      = priority;
+  rec._priorityLabel = priorityLabel;
+  rec._priorityClass = priorityClass;
+  rec._priorityHint  = priorityHint;
+  rec._missingFields = missing;
+  rec._completeness  = Math.max(0, Math.round((filled / totalChecks) * 100));
+  rec._hasCountyData = !!(rec.assessed_owner || rec.latest_deed_grantee || rec.latest_sale_price);
+  rec._termWindow    = termWindow;
+}
+
 async function loadResearchQueue() {
   researchQueue = [];
   researchIdx = 0;
@@ -1077,15 +1449,16 @@ async function loadResearchQueue() {
       filtered = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending'));
     }
   } else if (researchMode === 'intel') {
-    // Intel queue: portfolio properties missing key financial/physical details
+    // Intel queue: portfolio properties needing intel research. Annotate
+    // every row first so the priority/missing-fields chips are correct
+    // for both Pending and All views.
     const portfolio = govData.portfolioProperties || [];
+    portfolio.forEach(govIntelAnnotate);
     if (researchFilter === 'all') {
       filtered = portfolio.slice();
     } else {
-      filtered = portfolio.filter(p =>
-        !p.intel_status || p.intel_status === 'pending' ||
-        (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
-      );
+      // Pending = anything not in a terminal status. NULL = pending.
+      filtered = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending');
     }
   } else {
     if (researchFilter === 'all') {
@@ -1127,7 +1500,43 @@ async function loadResearchQueue() {
       if (loan) rec._loan = loan;
     }
 
+    // Ownership rows: annotate with priority + comp-on-file so the queue
+    // can be sorted to surface missing sales/owners first and bury items
+    // we already have comps for.
+    if (researchMode === 'ownership') {
+      govOwnershipAnnotate(rec);
+    }
+
     researchQueue.push(rec);
+  }
+
+  // Re-order ownership queue by priority (urgent first, comp-on-file last).
+  // Tiebreaker: most-recent transfer_date first so fresh activity surfaces.
+  if (researchMode === 'ownership') {
+    researchQueue.sort((a, b) => {
+      const pa = a._priority || 9, pb = b._priority || 9;
+      if (pa !== pb) return pa - pb;
+      const ta = a.transfer_date ? new Date(a.transfer_date).getTime() : 0;
+      const tb = b.transfer_date ? new Date(b.transfer_date).getTime() : 0;
+      return tb - ta;
+    });
+  }
+
+  // Intel queue: priority asc, then by firm-term proximity to the sell-side
+  // window (closer to expiration / holdover surfaces first inside each tier),
+  // then by investment_score desc as a final tiebreaker. Round 76em.
+  if (researchMode === 'intel') {
+    const _termRank = { 'expired': 0, '<2y': 1, '2-5y': 2, '>5y': 3, 'unknown': 4 };
+    researchQueue.sort((a, b) => {
+      const pa = a._priority || 9, pb = b._priority || 9;
+      if (pa !== pb) return pa - pb;
+      const ta = _termRank[a._termWindow] ?? 5;
+      const tb = _termRank[b._termWindow] ?? 5;
+      if (ta !== tb) return ta - tb;
+      const sa = Number(a.investment_score) || 0;
+      const sb = Number(b.investment_score) || 0;
+      return sb - sa;
+    });
   }
 
   if (filtered.length > maxToLoad) {
@@ -1184,7 +1593,9 @@ let govPendingUpdates = null;
 let govPendingUpdatesLoading = false;
 let govPendingUpdatesIdx = 0;
 let govPendingAutoResolved = null;
-let govPendingFilter = 'all'; // reason filter
+let govPendingFilter = 'all'; // category filter (taxonomy.category id)
+let govPendingSubtypeFilter = 'all'; // optional reason filter within a category
+let govPendingKeysBound = false;
 let govFinOverrideRec = null;
 let govPipelineRuns = null;
 let govPipelineLoading = false;
@@ -1261,69 +1672,192 @@ function renderOwnershipResearchCard(rec) {
     window._govFormDraft = {};
   }
 
+  // Make sure annotation flags exist even on records that didn't pass through
+  // the queue loader (defensive — the loader does this for the current view).
+  if (rec._priority == null) govOwnershipAnnotate(rec);
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
-  let html = '<div class="research-card">';
+  let html = '<div class="research-card own-research-card">';
 
   // ────────────────────────────────────────────────────────────
-  // CONTEXT PANEL (LEFT)
+  // CONTEXT PANEL (LEFT) — research-first read view.
+  // The reviewer ingests data via the LCC Chrome sidebar against
+  // CoStar / county pages in another tab, so the manual entry form
+  // is collapsed by default (see <details> on the right).
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
 
-  // Task header
+  // Task header — badge reflects the prioritisation tier
+  const _priorityMeta = (() => {
+    if (rec._compOnFile)  return { cls: 'comp',         label: 'Comp on file', sub: 'Already in sales_transactions' };
+    if (rec._priority === 1) return { cls: 'urgent',    label: 'Urgent',       sub: 'No sale, no owners' };
+    if (rec._priority === 2) return { cls: 'urgent',    label: 'Sale missing', sub: 'Owner data partial' };
+    if (rec._priority === 3) return { cls: 'needs-input', label: 'Owners missing', sub: 'Sale on file, owners blank' };
+    if (rec._priority === 4) return { cls: 'ready',     label: 'Verify',       sub: 'Sale + 1 owner present' };
+    return { cls: 'ready', label: 'Review', sub: '' };
+  })();
   html += '<div class="task-header">';
   html += '<div>Ownership Change Research</div>';
-  let badge = 'ready';
-  if (!rec.sale_price) badge = 'urgent';
-  else if (!rec.recorded_owner_name || !rec.true_owner_name || !rec.rba) badge = 'needs-input';
-  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += `<span class="task-badge ${_priorityMeta.cls}">${esc(_priorityMeta.label)}</span>`;
   html += '</div>';
-
-  html += `<div class="context-block">
-    <div class="context-label">Property</div>
-    <div class="context-value">${esc(rec.address || '')}</div>
-    <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Prior Owner → New Owner</div>
-    <div class="context-value">${esc(rec.prior_owner || '')}</div>
-    <div class="context-sub">→ ${esc(rec.new_owner || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Transfer Date</div>
-    <div class="context-value">${rec.transfer_date ? rec.transfer_date.substring(0, 10) : 'Unknown'}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lease / Annual Rent</div>
-    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
-  </div>`;
-
-  if (snapshot.lease_effective) {
-    html += `<div class="context-block">
-      <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
-      <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
-    </div>`;
+  if (_priorityMeta.sub) {
+    html += `<div class="own-priority-sub">${esc(_priorityMeta.sub)}${rec._completeness != null ? ' · ' + rec._completeness + '% complete' : ''}</div>`;
   }
 
+  // Comp-on-file banner — surfaces the matching sales_transactions row
+  // and lets the reviewer one-click clear the queue entry.
+  if (rec._compOnFile && rec._matchedComp) {
+    const c = rec._matchedComp;
+    const sd = c.sale_date ? String(c.sale_date).substring(0, 10) : '—';
+    html += '<div class="own-comp-banner">';
+    html += '<div class="own-comp-banner-row">';
+    html += '<span class="own-comp-banner-icon">✓</span>';
+    html += '<span class="own-comp-banner-label">Comp already on file</span>';
+    html += `<span class="own-comp-banner-meta">${esc(sd)} · ${c.sold_price ? fmt(c.sold_price) : 'price unknown'}${c.sold_cap_rate ? ' · ' + (Number(c.sold_cap_rate) * 100).toFixed(2) + '%' : ''}</span>`;
+    html += '</div>';
+    html += '<div class="own-comp-banner-sub">This ownership row duplicates a sales_transactions record — clear it with <strong>Already on file</strong> below.</div>';
+    html += '</div>';
+  }
+
+  // Property facts. Fall back from ownership_history.address (often NULL on
+  // bot-generated rows) → gsa_snapshots.address (joined by lease_number) →
+  // FRPP street_address. Make the source explicit so the reviewer trusts it.
+  const _addr  = rec.address  || snapshot.address  || frpp.street_address || '';
+  const _city  = rec.city     || snapshot.city     || frpp.city_name      || '';
+  const _state = rec.state    || snapshot.state    || frpp.state_name      || '';
+  const _addrSrc = rec.address ? '' : (snapshot.address ? ' · from gsa_snapshots' : (frpp.street_address ? ' · from FRPP' : ''));
+  const _isEmptyShell = !_addr && !rec.lease_number && !rec.prior_owner && !rec.new_owner && !rec.transfer_date && !rec.sale_price && !rec.recorded_owner_name;
+  const rba = rec.rba || rec.square_feet || frpp.square_feet || snapshot.lease_rsf || null;
+  const yearBuilt = rec.year_built || frpp.year_built || null;
+  const tenant = rec.tenant_agency || rec.agency_full_name || frpp.using_agency || frpp.using_bureau || '';
+  html += '<div class="context-block">';
+  html += '<div class="context-label">Property' + (_addrSrc ? ' <span class="own-addr-src">' + esc(_addrSrc) + '</span>' : '') + '</div>';
+  if (_isEmptyShell) {
+    html += '<div class="context-value own-empty-shell">No research handle on this row</div>';
+    html += '<div class="context-sub">Only true_owner_name is set — no lease #, address, or transfer info to chase. Use <strong>Reject</strong> or the <em>Sweep auto-resolvable</em> button.</div>';
+  } else {
+    html += `<div class="context-value">${esc(_addr || '—')}</div>`;
+    html += `<div class="context-sub">${esc(_city)}${_city && _state ? ', ' : ''}${esc(_state)}</div>`;
+    const _facts = [];
+    if (rba)        _facts.push(fmtN(rba) + ' SF');
+    if (yearBuilt)  _facts.push('Built ' + esc(yearBuilt));
+    if (tenant)     _facts.push(esc(tenant));
+    if (_facts.length) html += `<div class="own-facts-row">${_facts.join(' · ')}</div>`;
+  }
+  html += '</div>';
+
+  // Lease summary
+  if (rec.lease_number || rec.annual_rent || snapshot.lease_effective) {
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Lease</div>';
+    if (rec.lease_number) html += `<div class="context-value"><code>${esc(rec.lease_number)}</code>${rec.location_code ? ' <span style="color:var(--text3)">· loc ' + esc(rec.location_code) + '</span>' : ''}</div>`;
+    const _annual = rec.annual_rent || snapshot.annual_rent || null;
+    if (_annual) html += `<div class="context-sub">${fmt(_annual)}/yr${snapshot.lease_rsf ? ' · ' + fmtN(snapshot.lease_rsf) + ' RSF' : ''}</div>`;
+    if (snapshot.lease_effective) {
+      html += `<div class="context-sub">Term: ${snapshot.lease_effective.substring(0, 10)} → ${(snapshot.lease_expiration || '').substring(0, 10)}</div>`;
+    }
+    html += '</div>';
+  }
+
+  // Sale block — explicit "blank" rendering when missing
+  html += '<div class="context-block own-sale-block">';
+  html += '<div class="context-label">Sale</div>';
+  html += '<dl class="own-kv">';
+  html += '<dt>Sale date</dt><dd>' + (rec.transfer_date ? esc(String(rec.transfer_date).substring(0, 10)) : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>Sale price</dt><dd>' + (rec.sale_price ? fmt(rec.sale_price) : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>Cap rate</dt><dd>' + (rec.cap_rate ? (Number(rec.cap_rate) <= 1 ? (Number(rec.cap_rate) * 100).toFixed(2) : Number(rec.cap_rate).toFixed(2)) + '%' : '<span class="own-blank">—</span>') + '</dd>';
+  html += '</dl>';
+  if (rec._missingFields && rec._missingFields.length) {
+    html += `<div class="own-missing">Missing: ${rec._missingFields.map(esc).join(', ')}</div>`;
+  }
+  html += '</div>';
+
+  // Owners side-by-side — Recorded (deed-level) vs True (beneficial)
+  // Each side carries the prior → new pair so the reviewer sees the
+  // transfer in one glance.
+  html += '<div class="own-owners-grid">';
+  html += '<div class="own-owners-col-head">Recorded owner <span class="own-owners-col-sub">(deed)</span></div>';
+  html += '<div class="own-owners-col-head">True owner <span class="own-owners-col-sub">(beneficial / parent)</span></div>';
+
+  // Recorded side
+  html += '<div class="own-owners-cell">';
+  html += '<div class="own-owners-flow">';
+  html += `<div class="own-owners-prior"><span class="own-owners-tag">Prior</span> ${esc(rec.prior_owner || '—')}</div>`;
+  html += `<div class="own-owners-arrow">↓</div>`;
+  html += `<div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">New</span> ${esc(rec.new_owner || rec.recorded_owner_name || '—')}</div>`;
+  html += '</div>';
+  if (rec.recorded_owner_name && rec.recorded_owner_name !== rec.new_owner) {
+    html += `<div class="own-owners-detail">Recorded as: <strong>${esc(rec.recorded_owner_name)}</strong></div>`;
+  }
+  if (rec.state_of_incorporation) {
+    html += `<div class="own-owners-detail">State of inc: ${esc(rec.state_of_incorporation)}</div>`;
+  }
+  if (rec.mailing_address) {
+    html += `<div class="own-owners-detail own-owners-mailing">${esc(rec.mailing_address)}${rec.mailing_address_2 ? '<br>' + esc(rec.mailing_address_2) : ''}</div>`;
+  }
+  html += '</div>';
+
+  // True side
+  html += '<div class="own-owners-cell">';
+  if (rec.true_owner_name) {
+    html += `<div class="own-owners-flow"><div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">Current</span> ${esc(rec.true_owner_name)}</div></div>`;
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— sidebar / county lookup needed —</div>';
+  }
+  if (rec.principal_names) {
+    html += `<div class="own-owners-detail">Principals: ${esc(rec.principal_names)}</div>`;
+  }
+  if (rec.phone_2) {
+    html += `<div class="own-owners-detail">Phone: ${esc(rec.phone_2)}</div>`;
+  }
+  html += '</div>';
+  html += '</div>'; // own-owners-grid
+
+  // Research links — surface county/SOS/Google buttons up front so the
+  // reviewer can chase a missing true owner without opening the manual form.
+  const _ownSearchQuery = (rec.recorded_owner_name || rec.new_owner || rec.true_owner_name || '')
+    + ' ' + (_addr || '') + ' ' + (_city || '') + ' ' + (_state || '');
+  const _ownCountyHtml = countyBtns(_city, _state);
+  const _ownSosHtml = sosBtns(_state, rec.state_of_incorporation);
+  if (_ownSearchQuery.trim() || _ownCountyHtml || _ownSosHtml) {
+    html += '<div class="quick-actions own-research-links">';
+    if (_ownSearchQuery.trim()) {
+      html += searchBtn('Google Search', _ownSearchQuery.trim());
+    }
+    html += _ownSosHtml;
+    html += _ownCountyHtml;
+    html += '</div>';
+  }
+
+  // Sidebar tip — explicit, since the form is collapsed by default
+  html += '<div class="own-sidebar-tip">';
+  html += '<span class="own-sidebar-tip-icon">📎</span>';
+  html += '<span>Capture from CoStar / county records via the <strong>LCC sidebar</strong> (Chrome) — values land here automatically. Use the manual form below only when no source page is available.</span>';
+  html += '</div>';
+
   if (frpp.street_address) {
-    html += `<div class="context-block">
-      <div class="context-label">FRPP Property Type</div>
+    html += `<div class="context-block" style="opacity:0.75">
+      <div class="context-label">FRPP Reference</div>
       <div class="context-value">${esc(frpp.property_type || '')}</div>
-      <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
+      <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF${frpp.using_agency ? ' · ' + esc(frpp.using_agency) : ''}</div>
     </div>`;
   }
 
   html += '</div>';
 
   // ────────────────────────────────────────────────────────────
-  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // RIGHT PANEL — research-first action surface.
+  // Most ingestion flows through the LCC Chrome sidebar against CoStar /
+  // county pages, so the manual 6-step form is collapsed into a <details>
+  // block by default. The reviewer's primary actions live up top:
+  //   ✓ Approve   — research complete, mark resolved
+  //   ⛓ Reject    — out of scope / bad data
+  //   ↻ SPE Rename — same true owner, different SPE
+  //   N/A         — not applicable
+  //   ✓ Already on file — comp_on_file shortcut (also surfaces when matched)
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
@@ -1332,8 +1866,18 @@ function renderOwnershipResearchCard(rec) {
   const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1, 2, 3].includes(i) })));
   html += renderCompletenessBar(completeness);
 
-  // Step navigation (6 steps — added Prior Sales)
+  // Manual entry is collapsed by default. Open it only when the sidebar
+  // can't reach the source data (e.g. paper-only deeds, manual notes).
   const _priorSales = window._govPriorSales || [];
+  const _formOpen = !!window._govOwnFormOpen;
+  html += '<details class="own-manual-details"' + (_formOpen ? ' open' : '') + ' ontoggle="window._govOwnFormOpen=this.open">';
+  html += '<summary class="own-manual-summary">';
+  html += '<span class="own-manual-summary-icon">✏️</span>';
+  html += '<span class="own-manual-summary-label">Edit fields manually</span>';
+  html += '<span class="own-manual-summary-hint">— sidebar capture preferred; open only when no source page is available</span>';
+  html += '</summary>';
+
+  // Step navigation (6 steps — added Prior Sales)
   const steps = [
     {label: 'Sale Details', complete: !!rec.sale_price},
     {label: 'Entity', complete: !!rec.recorded_owner_name},
@@ -1429,26 +1973,43 @@ function renderOwnershipResearchCard(rec) {
   html += `<button class="btn-action" onclick="govAddPriorSale()" style="margin-bottom:8px">+ Add Prior Sale</button>`;
   html += '</div>';
 
-  html += '</div>';
-
-  // ────────────────────────────────────────────────────────────
-  // ACTION ROW
-  // ────────────────────────────────────────────────────────────
-  html += '<div class="action-row">';
+  // Manual-form internal action row (Back / Next / Save) lives inside the
+  // <details> so it only shows when the reviewer opens the form.
+  html += '<div class="action-row own-manual-action-row">';
   if (govResearchStep > 0) {
     html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
   }
   if (govResearchStep < 5) {
-    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
-  html += `<button class="btn-action${govResearchStep === 5 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
-  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSaveInPlace)">Save manual edits</button>`;
+  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSave)">Save &amp; Next</button>`;
   html += '</div>';
 
+  html += '</details>'; // own-manual-details
+
+  // ────────────────────────────────────────────────────────────
+  // PRIMARY ACTION ROW — research-driven decisions, always visible.
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row own-primary-actions">';
+  if (rec._compOnFile) {
+    html += `<button class="btn-action primary" title="Already in sales_transactions — clear from queue" onclick="_udActionBtnGuard(this, researchMark, 'comp_on_file')">✓ Already on file</button>`;
+  } else {
+    html += `<button class="btn-action primary" title="Research complete — mark resolved" onclick="_udActionBtnGuard(this, researchMark, 'approve')">✓ Approve</button>`;
+  }
+  html += `<button class="btn-action danger" title="Out of scope / bad data" onclick="_udActionBtnGuard(this, researchMark, 'reject')">✗ Reject</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)" title="Skip to next">→ Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')" title="Same true owner, different SPE">↻ SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')" title="Not applicable">N/A</button>`;
+  html += `<button class="btn-action danger" onclick="_udActionBtnGuard(this, researchMark, 'multi_tenant')" title="Discard — small lease in a multi-tenant building (out of single-tenant scope)">🚫 Multi-tenant</button>`;
+  if (rec._compOnFile) {
+    // Still expose Approve as a secondary path even when comp is on file,
+    // for cases where the reviewer wants to record additional research.
+    html += `<button class="btn-action" style="margin-left:auto" title="Mark research complete" onclick="_udActionBtnGuard(this, researchMark, 'approve')">Approve</button>`;
+  }
   html += '</div>';
+
+  html += '</div>'; // research-form
 
   return html;
 }
@@ -1661,71 +2222,149 @@ function renderIntelResearchCard(rec) {
     window._govFormDraft = {};
   }
 
+  // Defensive: annotate even if the row didn't pass through the loader
+  // (e.g. when the queue is rebuilt mid-session).
+  if (rec._priority == null) govIntelAnnotate(rec);
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = rec._loan || (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
-  let html = '<div class="research-card">';
+  let html = '<div class="research-card own-research-card">';
 
   // ────────────────────────────────────────────────────────────
-  // CONTEXT PANEL (LEFT)
+  // LEFT — research-first read view. The reviewer ingests via the
+  // LCC Chrome sidebar against CoStar / county pages in another tab,
+  // so the manual entry form on the right is collapsed by default.
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
 
-  // Task header
   html += '<div class="task-header">';
   html += '<div>Intel Research</div>';
-  let badge = 'ready';
-  if (!rec.rba || !rec.recorded_owner) badge = 'needs-input';
-  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += `<span class="task-badge ${esc(rec._priorityClass || 'ready')}">${esc(rec._priorityLabel || 'Review')}</span>`;
+  html += '</div>';
+  if (rec._priorityHint) {
+    html += `<div class="own-priority-sub">${esc(rec._priorityHint)}${rec._completeness != null ? ' · ' + rec._completeness + '% complete' : ''}</div>`;
+  }
+
+  // Property header (address + city/state/zip + facts row)
+  const _addr = rec.address || frpp.street_address || '';
+  const _city = rec.city || frpp.city_name || '';
+  const _state = rec.state || frpp.state_name || '';
+  const _zip = rec.zip_code || '';
+  const _isStub = !_addr && !rec.lease_number && !rec.firm_term_remaining && !rec.assessed_owner;
+  const tenant = rec.agency_full_name || rec.agency || frpp.using_agency || frpp.using_bureau || '';
+  html += '<div class="context-block">';
+  html += '<div class="context-label">Property</div>';
+  if (_isStub) {
+    html += '<div class="context-value own-empty-shell">No research handle on this row</div>';
+    html += '<div class="context-sub">Use <strong>Mark stub</strong> below or the <em>Sweep auto-resolvable</em> button.</div>';
+  } else {
+    html += `<div class="context-value">${esc(_addr || '—')}</div>`;
+    const cityState = [_city, _state].filter(Boolean).join(', ') + (_zip ? ' ' + _zip : '');
+    if (cityState.trim()) html += `<div class="context-sub">${esc(cityState)}</div>`;
+    const _facts = [];
+    if (rec.rba)        _facts.push(fmtN(rec.rba) + ' SF RBA');
+    else if (rec.sf_leased) _facts.push(fmtN(rec.sf_leased) + ' SF leased');
+    if (rec.year_built) _facts.push('Built ' + esc(rec.year_built));
+    if (tenant)         _facts.push(esc(tenant));
+    if (_facts.length) html += `<div class="own-facts-row">${_facts.join(' · ')}</div>`;
+  }
   html += '</div>';
 
-  html += `<div class="context-block">
-    <div class="context-label">Property</div>
-    <div class="context-value">${esc(rec.address || '')}</div>
-    <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')} ${esc(rec.zip_code || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lease / Annual Rent</div>
-    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.gross_rent || rec.annual_rent || 0)}/yr</div>
-  </div>`;
-
-  if (rec.agency) {
-    html += `<div class="context-block">
-      <div class="context-label">Agency / Tenant</div>
-      <div class="context-value">${esc(rec.agency || '')}</div>
-      <div class="context-sub">${rec.sf_leased ? fmtN(rec.sf_leased) + ' SF leased' : ''}</div>
-    </div>`;
+  // Lease + sale signal block — what we already know vs. what's missing
+  html += '<div class="context-block own-sale-block">';
+  html += '<div class="context-label">Lease &amp; Income</div>';
+  html += '<dl class="own-kv">';
+  html += '<dt>Lease #</dt><dd>' + (rec.lease_number ? '<code>' + esc(rec.lease_number) + '</code>' : '<span class="own-blank">—</span>') + '</dd>';
+  if (snapshot.lease_effective || rec.lease_commencement) {
+    const start = (snapshot.lease_effective || rec.lease_commencement || '').substring(0, 10);
+    const end   = (snapshot.lease_expiration || rec.lease_expiration || '').substring(0, 10);
+    html += '<dt>Term</dt><dd>' + esc(start || '—') + ' → ' + esc(end || '—') + '</dd>';
   }
-
-  if (snapshot.lease_effective) {
-    html += `<div class="context-block">
-      <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} – ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
-      <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
-    </div>`;
-  }
-
   if (rec.firm_term_remaining !== null && rec.firm_term_remaining !== undefined) {
-    html += `<div class="context-block">
-      <div class="context-label">Firm Term Remaining</div>
-      <div class="context-value">${Number(rec.firm_term_remaining).toFixed(1)} yrs</div>
-    </div>`;
+    const yrs = Number(rec.firm_term_remaining).toFixed(1);
+    const cls = rec._termWindow === 'expired' ? 'own-term-expired'
+              : rec._termWindow === '<2y'     ? 'own-term-hot'
+              : rec._termWindow === '2-5y'    ? 'own-term-warm'
+              : '';
+    html += '<dt>Firm rem.</dt><dd class="' + cls + '">' + yrs + ' yrs</dd>';
+  }
+  html += '<dt>Gross rent</dt><dd>' + (rec.gross_rent ? fmt(rec.gross_rent) + '/yr' : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>NOI</dt><dd>' + (rec.noi ? fmt(rec.noi) + '/yr' : '<span class="own-blank">—</span>') + '</dd>';
+  html += '<dt>Est. value</dt><dd>' + (rec.estimated_value ? fmt(rec.estimated_value) : '<span class="own-blank">—</span>') + '</dd>';
+  html += '</dl>';
+  if (rec._missingFields && rec._missingFields.length) {
+    html += `<div class="own-missing">Missing: ${rec._missingFields.map(esc).join(', ')}</div>`;
+  }
+  html += '</div>';
+
+  // Owners side-by-side: Recorded vs True vs Assessed (county). Assessed
+  // gets its own column when present so the reviewer can sanity-check
+  // against the deed-level record without leaving the card.
+  html += '<div class="own-owners-grid own-owners-grid-3">';
+  html += '<div class="own-owners-col-head">Recorded <span class="own-owners-col-sub">(deed)</span></div>';
+  html += '<div class="own-owners-col-head">True <span class="own-owners-col-sub">(beneficial)</span></div>';
+  html += '<div class="own-owners-col-head">County <span class="own-owners-col-sub">(assessor / latest deed)</span></div>';
+
+  // Recorded
+  html += '<div class="own-owners-cell">';
+  if (rec.recorded_owner_id || rec.recorded_owner_name) {
+    html += `<div class="own-owners-flow"><div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">Linked</span> ${esc(rec.recorded_owner_name || ('owner #' + rec.recorded_owner_id))}</div></div>`;
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— sidebar / county lookup needed —</div>';
+  }
+  html += '</div>';
+
+  // True
+  html += '<div class="own-owners-cell">';
+  if (rec.true_owner_id || rec.true_owner_name) {
+    html += `<div class="own-owners-flow"><div class="own-owners-new"><span class="own-owners-tag own-owners-tag-new">Linked</span> ${esc(rec.true_owner_name || ('owner #' + rec.true_owner_id))}</div></div>`;
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— SOS / SPE chain needed —</div>';
+  }
+  html += '</div>';
+
+  // County / assessor
+  html += '<div class="own-owners-cell">';
+  if (rec.assessed_owner || rec.latest_deed_grantee) {
+    if (rec.assessed_owner) {
+      html += `<div class="own-owners-detail"><span class="own-owners-tag">Assessor</span> ${esc(rec.assessed_owner)}</div>`;
+    }
+    if (rec.latest_deed_grantee && rec.latest_deed_grantee !== rec.assessed_owner) {
+      html += `<div class="own-owners-detail"><span class="own-owners-tag">Latest deed</span> ${esc(rec.latest_deed_grantee)}${rec.latest_deed_date ? ' <span style="color:var(--text3)">' + esc(String(rec.latest_deed_date).substring(0, 10)) + '</span>' : ''}</div>`;
+    }
+    if (rec.latest_sale_price) {
+      html += `<div class="own-owners-detail">Latest sale: <strong>${fmt(rec.latest_sale_price)}</strong></div>`;
+    }
+  } else {
+    html += '<div class="own-owners-flow own-owners-empty">— no county data on file —</div>';
+  }
+  html += '</div>';
+  html += '</div>'; // own-owners-grid
+
+  // Investment-quality strip (helps the reviewer prioritise without scrolling)
+  if (rec.deal_grade || rec.investment_score || rec.location_tier || rec.agency_risk_level) {
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Investment quality</div>';
+    const parts = [];
+    if (rec.deal_grade)        parts.push('<span class="own-grade-pill own-grade-' + esc(String(rec.deal_grade).toLowerCase()) + '">' + esc(rec.deal_grade) + '</span>');
+    if (rec.investment_score)  parts.push('<span>score ' + esc(rec.investment_score) + '</span>');
+    if (rec.location_tier)     parts.push('<span>' + esc(rec.location_tier) + '</span>');
+    if (rec.agency_risk_level) parts.push('<span>risk ' + esc(rec.agency_risk_level) + '</span>');
+    html += '<div class="own-quality-row">' + parts.join(' · ') + '</div>';
+    html += '</div>';
   }
 
-  if (frpp.street_address) {
-    html += `<div class="context-block">
-      <div class="context-label">FRPP Property Type</div>
-      <div class="context-value">${esc(frpp.property_type || '')}</div>
-      <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
-    </div>`;
-  }
+  // Sidebar tip — make the workflow expectation explicit
+  html += '<div class="own-sidebar-tip">';
+  html += '<span class="own-sidebar-tip-icon">📎</span>';
+  html += '<span>Capture from CoStar / county records via the <strong>LCC sidebar</strong> (Chrome) — values land here automatically. Use the manual form on the right only when no source page is available.</span>';
+  html += '</div>';
 
   if (loan.index_name) {
     html += `<div class="context-block">
-      <div class="context-label">Known Lender</div>
+      <div class="context-label">Known lender</div>
       <div class="context-value">${esc(loan.index_name)}</div>
       <div class="context-sub">${loan.loan_amount ? fmt(loan.loan_amount) : ''} ${loan.loan_type ? '· ' + esc(loan.loan_type) : ''}</div>
     </div>`;
@@ -1734,31 +2373,41 @@ function renderIntelResearchCard(rec) {
   html += '</div>';
 
   // ────────────────────────────────────────────────────────────
-  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // RIGHT — research-first action surface. Same sidebar-first pattern
+  // as the Ownership card: primary action buttons up top, manual form
+  // collapsed by default (Round 76em).
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
   // Completeness bar — representative fields from each step
   const allFields = [
     { value: rec.rba, required: true },                       // Property
-    { value: rec.recorded_owner || rec.lessor_name, required: true }, // Ownership
+    { value: rec.recorded_owner_id || rec.assessed_owner, required: true }, // Ownership
     { value: loan.index_name, required: false },              // Financing
-    { value: rec.last_known_rent || rec.gross_rent, required: false }, // Valuation
+    { value: rec.gross_rent || rec.noi, required: false },    // Valuation
     { value: rec.year_built, required: false },               // Property
-    { value: rec.true_owner, required: false },               // Ownership
+    { value: rec.true_owner_id, required: false },            // Ownership
     { value: loan.loan_amount, required: false },             // Financing
-    { value: rec.current_value_estimate, required: false }    // Valuation
+    { value: rec.estimated_value, required: false }           // Valuation
   ];
   const completeness = computeCompleteness(allFields);
   html += renderCompletenessBar(completeness);
+
+  const _formOpen = !!window._govIntelFormOpen;
+  html += '<details class="own-manual-details"' + (_formOpen ? ' open' : '') + ' ontoggle="window._govIntelFormOpen=this.open">';
+  html += '<summary class="own-manual-summary">';
+  html += '<span class="own-manual-summary-icon">✏️</span>';
+  html += '<span class="own-manual-summary-label">Edit fields manually</span>';
+  html += '<span class="own-manual-summary-hint">— sidebar capture preferred; open only when no source page is available</span>';
+  html += '</summary>';
 
   // Step navigation
   const steps = [
     {label: 'Transaction', complete: false},
     {label: 'Property', complete: !!rec.rba},
-    {label: 'Ownership', complete: !!(rec.recorded_owner || rec.lessor_name)},
+    {label: 'Ownership', complete: !!(rec.recorded_owner_id || rec.assessed_owner)},
     {label: 'Financing', complete: !!loan.index_name},
-    {label: 'Valuation', complete: !!(rec.last_known_rent || rec.gross_rent)}
+    {label: 'Valuation', complete: !!(rec.gross_rent || rec.noi)}
   ];
   html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
@@ -1843,26 +2492,38 @@ function renderIntelResearchCard(rec) {
   html += guidedField('res-intel-date', 'Research Date', new Date().toISOString().substring(0, 10), {type:'date'});
   html += '</div>';
 
-  html += '</div>';
-
-  // ────────────────────────────────────────────────────────────
-  // ACTION ROW
-  // ────────────────────────────────────────────────────────────
-  html += '<div class="action-row">';
+  // Manual-form internal action row (Back / Next / Save) — only shows
+  // when the reviewer opens the <details>.
+  html += '<div class="action-row own-manual-action-row">';
   if (govResearchStep > 0) {
     html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
   }
   if (govResearchStep < 4) {
-    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
-  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
-  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSaveInPlace)">Save manual edits</button>`;
+  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSave)">Save &amp; Next</button>`;
   html += '</div>';
 
+  html += '</details>'; // own-manual-details
+
+  // ────────────────────────────────────────────────────────────
+  // PRIMARY ACTION ROW — research-driven decisions, always visible.
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row own-primary-actions">';
+  if (_isStub) {
+    html += `<button class="btn-action primary" title="No research handle — clear from queue" onclick="_udActionBtnGuard(this, researchMark, 'junk_no_data')">⊘ Mark stub</button>`;
+  } else {
+    html += `<button class="btn-action primary" title="Intel research complete — mark resolved" onclick="_udActionBtnGuard(this, researchMark, 'approve')">✓ Approve</button>`;
+  }
+  html += `<button class="btn-action danger" title="Out of scope / not actionable" onclick="_udActionBtnGuard(this, researchMark, 'reject')">✗ Reject</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)" title="Skip to next">→ Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')" title="Same true owner, different SPE">↻ SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')" title="Not applicable">N/A</button>`;
   html += '</div>';
+
+  html += '</div>'; // research-form
+  html += '</div>'; // research-card
 
   return html;
 }
@@ -2624,18 +3285,47 @@ async function researchMark(mark) {
     b.textContent = 'Marking…';
   });
 
-  let status = 'marked';
-  if (mark === 'spe_rename') status = 'spe_rename';
-  if (mark === 'na') status = 'not_applicable';
-
   const _reEnableMarks = () => markBtns.forEach(b => {
     b.disabled = false;
     b.textContent = b.dataset.origText || b.textContent;
   });
 
+  // Confirm before discarding a property as too multi-tenant — this also
+  // flags the parent property so it stays out of consideration in other LCC
+  // views, not just the ownership queue.
+  if (mark === 'multi_tenant') {
+    const _confirmed = await lccConfirm(
+      'Discard this property as too multi-tenant for our single-tenant focus? ' +
+      'The ownership row will be marked discarded and the property will be flagged out of scope.',
+      'Discard property'
+    );
+    if (!_confirmed) { _reEnableMarks(); return; }
+  }
+
+  let status = 'marked';
+  if (mark === 'spe_rename')   status = 'spe_rename';
+  if (mark === 'na')           status = 'not_applicable';
+  if (mark === 'approve')      status = 'completed';
+  if (mark === 'reject')       status = 'rejected';
+  if (mark === 'comp_on_file') status = 'comp_on_file';
+  if (mark === 'junk_no_data') status = 'junk_no_data';
+  if (mark === 'multi_tenant') status = 'discarded_multi_tenant';
+
   if (researchMode === 'ownership') {
     const ok = await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, { research_status: status });
     if (!ok) { _reEnableMarks(); return; }
+    // For multi-tenant discards, also flag the parent property so it falls
+    // out of consideration in other LCC surfaces (intel queue, pipeline, etc).
+    if (mark === 'multi_tenant') {
+      const propertyId = rec.matched_property_id || rec.property_id;
+      if (propertyId) {
+        try {
+          await patchRecord('properties', 'property_id', propertyId, { intel_status: 'discarded_multi_tenant' });
+        } catch (err) {
+          console.warn('Multi-tenant discard: ownership row marked but failed to flag property', err);
+        }
+      }
+    }
   } else if (researchMode === 'intel') {
     const propertyId = rec.property_id;
     if (propertyId) {
@@ -2656,7 +3346,16 @@ async function researchMark(mark) {
     }
   }
 
-  const markLabel = mark === 'spe_rename' ? 'SPE Rename' : mark === 'na' ? 'N/A' : mark;
+  const _markLabels = {
+    spe_rename: 'SPE Rename',
+    na: 'N/A',
+    approve: 'Approved (research complete)',
+    reject: 'Rejected',
+    comp_on_file: '✓ Comp on file',
+    junk_no_data: '⊘ Stub — no research handle',
+    multi_tenant: '🚫 Discarded — too multi-tenant'
+  };
+  const markLabel = _markLabels[mark] || mark;
   showToast('Marked as ' + markLabel, 'success');
   researchQueue.splice(researchIdx, 1);
   // Don't increment — splice shifts next item into current index
@@ -4564,11 +5263,489 @@ window.setGovResearchSection = function(section) {
   renderGovTab();
 };
 
-window.setGovPendingFilter = function(reason) {
-  govPendingFilter = reason;
+window.setGovPendingFilter = function(category) {
+  govPendingFilter = category;
+  govPendingSubtypeFilter = 'all';
   govPendingUpdatesIdx = 0;
   renderGovTab();
 };
+
+window.setGovPendingSubtype = function(reason) {
+  govPendingSubtypeFilter = reason;
+  govPendingUpdatesIdx = 0;
+  renderGovTab();
+};
+
+// ── Reason taxonomy ──────────────────────────────────────────────────────────
+// Friendly labels and decision guidance for each pending-update reason. Anything
+// not in this map falls through `govPendingFriendlyReason()` for a sensible
+// default (snake_case → Title Case) so new reason codes don't break the UI.
+const GOV_PENDING_REASON_TAXONOMY = {
+  ownership_discrepancy: {
+    label: 'Ownership Discrepancy',
+    category: 'ownership',
+    guidance: 'The recorded owner on file disagrees with a newer source. Approve when the proposed value is from a more authoritative record (deed/county); reject if the existing value was manually curated.'
+  },
+  low_confidence_match: {
+    label: 'Low-Confidence Match',
+    category: 'confidence',
+    guidance: 'The matcher linked two records but is not certain. Verify the names/addresses align and approve, or reject to keep them separate.'
+  },
+  intake_attachment_review: {
+    label: 'Attachment Review',
+    category: 'intake',
+    guidance: 'An intake email had an attachment that needs human triage (was it an OM, a tax bill, junk?). Approve to accept the system\'s classification; reject to discard.'
+  },
+  intake_unmatched_property: {
+    label: 'Unmatched Intake Property',
+    category: 'intake',
+    kind: 'link_pick',
+    guidance: 'An intake landed but we couldn\'t auto-link it to a property in inventory. The source_context.match_details.candidates array carries pre-ranked options for the link-pick UI; for now use Reject if out-of-scope, or Skip.'
+  },
+  unmatched_property: {
+    label: 'Unmatched Property',
+    category: 'intake',
+    kind: 'link_pick',
+    guidance: 'A lead references a property we either do not have in inventory yet, or a previously-linked match was unlinked by an audit (check Source Context for previously_linked_property_id). Pick the right property when the link-pick UI lands; for now use Reject if the lead is out of scope, or Skip.'
+  },
+  unmatched_contact: {
+    label: 'Unmatched Contact',
+    category: 'intake',
+    kind: 'link_pick',
+    guidance: 'A new contact appeared that doesn\'t match anyone in our directory. (No auto-create flow exists today — approving here only marks the queue row resolved without creating the contact. Use Reject for now or wait for the link-pick UI.)'
+  },
+  gsa_property_link_review: {
+    label: 'GSA → Property Link Review',
+    category: 'link_review',
+    kind: 'link_pick',
+    guidance: 'The auto-matcher linked this GSA lease to a property whose address and/or lease number disagree. Compare the two sides below and decide: same physical building (Confirm) or wrong match (Break).'
+  },
+  // sale_property_link_* — all variants describe linking a sales_transaction to
+  // a property when the public inventory doesn't cleanly cover it.
+  sale_property_link_ambiguous_city_match: {
+    label: 'Sale → Property: Ambiguous City',
+    category: 'sale_link',
+    guidance: 'A sale matches multiple properties in the same city. Pick the right one, or reject if none of them is correct.'
+  },
+  sale_property_link_frpp_city_inventory_gap: {
+    label: 'Sale → Property: FRPP Gap',
+    category: 'sale_link',
+    guidance: 'FRPP shows the city has government inventory but the specific address is missing. Approve to create the link to the closest match, or reject to wait for better data.'
+  },
+  sale_property_link_frpp_city_presence_multi_facility: {
+    label: 'Sale → Property: Multi-Facility City',
+    category: 'sale_link',
+    guidance: 'FRPP shows multiple government facilities in this city. Confirm which one this sale belongs to before approving.'
+  },
+  sale_property_link_frpp_city_presence_single_facility: {
+    label: 'Sale → Property: Single-Facility City',
+    category: 'sale_link',
+    guidance: 'FRPP shows exactly one government facility in this city — high-confidence link. Verify the address matches and approve.'
+  },
+  sale_property_link_gsa_address_bridge_candidate: {
+    label: 'Sale → Property: GSA Bridge Candidate',
+    category: 'sale_link',
+    guidance: 'A GSA lease address looks like the bridge between this sale and a property. Approve if the address normalisation looks right.'
+  },
+  sale_property_link_multi_property_street_conflict: {
+    label: 'Sale → Property: Street Conflict',
+    category: 'sale_link',
+    guidance: 'Multiple properties share this street — pick the correct property number, or reject if none match.'
+  },
+  sale_property_link_named_site_or_partial_address: {
+    label: 'Sale → Property: Named Site',
+    category: 'sale_link',
+    guidance: 'The sale references a named site (e.g. "Oklahoma City VA Clinic") rather than a clean street address. Match by name + city, or reject if ambiguous.'
+  },
+  sale_property_link_no_public_inventory: {
+    label: 'Sale → Property: No Public Inventory',
+    category: 'sale_link',
+    guidance: 'Public inventory doesn\'t cover this address. Approve to record the sale against a derived property record, or reject if the deal isn\'t government-leased.'
+  },
+  sale_property_link_no_public_inventory_portfolio: {
+    label: 'Sale → Property: Portfolio (No Inventory)',
+    category: 'sale_link',
+    guidance: 'A portfolio sale where none of the addresses are in public inventory. Confirm this isn\'t a non-gov portfolio before approving.'
+  },
+  sale_property_link_no_public_inventory_route: {
+    label: 'Sale → Property: Route Only',
+    category: 'sale_link',
+    guidance: 'Only a rural route / PO-box style address is available. Approve only if you can confirm the property and tenant.'
+  },
+  sale_property_link_portfolio_address_gap: {
+    label: 'Sale → Property: Portfolio Address Gap',
+    category: 'sale_link',
+    guidance: 'A multi-property sale where some addresses match inventory and some don\'t. Approve the link for the matched address; the remaining gaps will surface as their own updates.'
+  },
+  sale_property_link_unknown_lease_number: {
+    label: 'Sale → Property: Unknown Lease #',
+    category: 'sale_link',
+    guidance: 'The sale references a lease number we don\'t have on file. Approve to record the sale anyway; reject if the lease number looks invalid.'
+  },
+  sale_property_link_unrepresented_street_no_public_inventory: {
+    label: 'Sale → Property: Unknown Street (No Inventory)',
+    category: 'sale_link',
+    guidance: 'A street we\'ve never seen, with no public inventory backing. Approve only if you can independently verify the property.'
+  },
+  sale_property_link_unrepresented_street_public_inventory: {
+    label: 'Sale → Property: Unknown Street (Has Inventory)',
+    category: 'sale_link',
+    guidance: 'A street we\'ve never seen, but the city has government inventory. Verify against FRPP/GSA and approve the link.'
+  }
+};
+
+const GOV_PENDING_CATEGORIES = [
+  { id: 'sale_link',    label: 'Property Linking', icon: '🔗', desc: 'Linking sales transactions to properties' },
+  { id: 'ownership',    label: 'Ownership',        icon: '🏛',  desc: 'Owner-of-record disagreements' },
+  { id: 'confidence',   label: 'Match Confidence', icon: '⚖',  desc: 'Low-confidence record matches awaiting confirmation' },
+  { id: 'link_review',  label: 'Link Review',      icon: '🔍', desc: 'Auto-flagged record↔property links that need human confirmation' },
+  { id: 'intake',       label: 'Intake Review',    icon: '📥', desc: 'Inbound emails / unmatched properties / contacts' },
+  { id: 'other',        label: 'Other',            icon: '•',  desc: 'Uncategorised reason codes' }
+];
+
+// Reasons emitted by writers that don't match a taxonomy key 1:1.
+// Map them to the canonical entry so we don't have to keep two strings in sync.
+const GOV_PENDING_REASON_ALIASES = {
+  // Writer emits the *_gap suffix; taxonomy entry omits it.
+  'sale_property_link_unrepresented_street_public_inventory_gap':
+    'sale_property_link_unrepresented_street_public_inventory'
+};
+
+function govPendingTaxonomy(reason) {
+  const canonical = (reason && GOV_PENDING_REASON_ALIASES[reason]) || reason;
+  const entry = canonical && GOV_PENDING_REASON_TAXONOMY[canonical];
+  if (entry) {
+    // Backfill kind for entries that don't specify one. sale_link entries
+    // route through their own resolver; everything else is a field_change
+    // (old_value -> new_value diff). Explicit `kind` on an entry wins.
+    const defaultKind = entry.category === 'sale_link' ? 'sale_link' : 'field_change';
+    return Object.assign({ kind: defaultKind }, entry);
+  }
+  // Fallback for unknown reasons: best-effort label, "other" category.
+  const r = String(canonical || 'other');
+  const label = r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return { label, category: 'other', kind: 'field_change', guidance: 'No guidance defined for this reason yet — review the source context and use your judgment.' };
+}
+
+function govPendingRelativeAge(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!t) return '';
+  const sec = Math.max(1, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return sec + 's ago';
+  const min = Math.round(sec / 60); if (min < 60) return min + 'm ago';
+  const hr  = Math.round(min / 60); if (hr < 24)  return hr  + 'h ago';
+  const day = Math.round(hr / 24);  if (day < 30) return day + 'd ago';
+  const mo  = Math.round(day / 30); return mo + 'mo ago';
+}
+
+function govPendingConfidenceMeta(c) {
+  const conf = Number(c) || 0;
+  if (conf >= 0.8) return { color: '#22c55e', label: 'High',   pct: Math.round(conf * 100) };
+  if (conf >= 0.5) return { color: '#f59e0b', label: 'Medium', pct: Math.round(conf * 100) };
+  return                   { color: '#ef4444', label: 'Low',    pct: Math.round(conf * 100) };
+}
+
+function govPendingSourceSummary(ctx) {
+  if (!ctx || typeof ctx !== 'object') return [];
+  const pick = (keys) => {
+    for (const k of keys) {
+      if (ctx[k] != null && ctx[k] !== '') return { key: k, value: ctx[k] };
+    }
+    return null;
+  };
+  const out = [];
+  const entries = [
+    ['Subject',         ['subject']],
+    ['Address',         ['address', 'property_address', 'street_address']],
+    ['Tenant',          ['tenant', 'tenant_name', 'occupant']],
+    ['Asking / Price',  ['asking_price', 'sale_price', 'price']],
+    ['Lease #',         ['lease_number', 'gsa_lease_number']],
+    ['Prev. property',  ['previously_linked_property_id']],
+    ['Prev. address',   ['previously_linked_address']],
+    ['Prev. lease #',   ['previously_linked_lease']],
+    ['Unlink reason',   ['unlinked_reason']],
+    ['Provenance',      ['discrepancy_source']],
+    ['Summary',         ['summary', 'description']],
+    ['Source',          ['source', 'data_source', 'origin']]
+  ];
+  for (const [label, keys] of entries) {
+    const hit = pick(keys);
+    if (hit) out.push({ label, value: hit.value });
+  }
+  return out;
+}
+
+// ── GSA Property Link Review ──────────────────────────────────────────────────
+// The auto-matcher linked a gsa_leases row to a properties row whose street
+// number AND lease number both disagree. The pending row carries a pre-baked
+// comparison in source_context (gsa_* / linked_* keys); we render it as a
+// side-by-side table so the reviewer can see what's being compared, and offer
+// two write actions:
+//   Approve link  → gsa_leases.match_status = 'human_confirmed'  (keep property_id)
+//   Reject link   → gsa_leases.match_status = 'human_rejected', property_id = NULL
+// Both also resolve the pending row.
+
+function govGsaLinkReviewFields(ctx) {
+  if (!ctx || typeof ctx !== 'object') return null;
+  const has = ['gsa_address','linked_address','gsa_lease_number','linked_lease_number']
+    .some(k => ctx[k] != null && ctx[k] !== '');
+  if (!has) return null;
+  const norm = (v) => v == null ? '' : String(v).trim();
+  const ci = (a, b) => norm(a).toLowerCase() === norm(b).toLowerCase();
+  const cmp = (a, b) => {
+    const A = norm(a), B = norm(b);
+    if (!A && !B) return 'both-empty';
+    if (A && B && ci(A, B)) return 'match';
+    return 'differ';
+  };
+  return {
+    flagReason:     ctx.flag_reason || '',
+    reviewGuidance: ctx.review_guidance || '',
+    rows: [
+      { label: 'Address', gsa: ctx.gsa_address, linked: ctx.linked_address,
+        state: cmp(ctx.gsa_address, ctx.linked_address) },
+      { label: 'City',    gsa: ctx.gsa_city,    linked: ctx.linked_city,
+        state: cmp(ctx.gsa_city,    ctx.linked_city) },
+      { label: 'State',   gsa: ctx.gsa_state,   linked: ctx.linked_state,
+        state: cmp(ctx.gsa_state,   ctx.linked_state) },
+      { label: 'Lease #', gsa: ctx.gsa_lease_number, linked: ctx.linked_lease_number,
+        state: cmp(ctx.gsa_lease_number, ctx.linked_lease_number), code: true }
+    ],
+    linkedPropertyId: ctx.linked_property_id != null ? String(ctx.linked_property_id) : ''
+  };
+}
+
+function renderGovGsaLinkReview(selected) {
+  const data = govGsaLinkReviewFields(selected.source_context);
+  if (!data) {
+    // Fallback: source_context didn't carry the comparison keys.
+    return `<div class="pu-link-pick-placeholder">
+      <div class="pu-lpp-title">GSA → Property Link Review</div>
+      <div class="pu-lpp-body">
+        This row is missing the gsa_* / linked_* comparison keys in source_context.
+        Inspect the Raw JSON below, then use <kbd>R</kbd> to reject the link or
+        <kbd>S</kbd> to skip.
+      </div>
+    </div>`;
+  }
+  let html = '<div class="pu-glr">';
+
+  // Banner — what the matcher flagged
+  if (data.flagReason) {
+    html += `<div class="pu-glr-banner">
+      <span class="pu-glr-banner-label">Flagged:</span>
+      <code class="pu-glr-banner-flag">${esc(data.flagReason)}</code>
+      ${data.reviewGuidance ? '<details class="pu-glr-why"><summary>Why</summary><div class="pu-glr-why-body">' + esc(data.reviewGuidance) + '</div></details>' : ''}
+    </div>`;
+  }
+
+  // The question
+  html += `<div class="pu-glr-question">Are these the same physical building?</div>`;
+
+  // Two-column comparison
+  html += '<div class="pu-glr-grid">';
+  html += `<div class="pu-glr-col-head pu-glr-col-gsa">GSA inventory <span class="pu-glr-col-sub">(authoritative)</span></div>`;
+  html += `<div class="pu-glr-col-head pu-glr-col-linked">Currently linked property${data.linkedPropertyId ? ' <span class="pu-glr-col-sub">#' + esc(data.linkedPropertyId) + '</span>' : ''}</div>`;
+  data.rows.forEach(row => {
+    const cls = 'pu-glr-row pu-glr-row-' + row.state;
+    const fmt = (v) => {
+      const s = v == null || v === '' ? '—' : String(v);
+      return row.code ? '<code>' + esc(s) + '</code>' : esc(s);
+    };
+    html += `<div class="pu-glr-label ${cls}">${esc(row.label)}</div>`;
+    html += `<div class="pu-glr-val pu-glr-val-gsa ${cls}">${fmt(row.gsa)}</div>`;
+    html += `<div class="pu-glr-val pu-glr-val-linked ${cls}">
+      ${fmt(row.linked)}
+      ${row.state === 'differ' ? '<span class="pu-glr-diff-flag" title="Disagrees with GSA">≠</span>' : ''}
+      ${row.state === 'match'  ? '<span class="pu-glr-same-flag" title="Matches GSA">=</span>' : ''}
+    </div>`;
+  });
+  html += '</div>';
+
+  // Pivot — copy the linked property_id so the reviewer can paste it into the
+  // inventory search and see other leases/sales at that record before deciding.
+  if (data.linkedPropertyId) {
+    const pidEsc = esc(data.linkedPropertyId).replace(/'/g, "\\'");
+    html += `<div class="pu-glr-pivot">
+      <button class="pu-glr-pivot-btn" onclick="navigator.clipboard.writeText('${pidEsc}'); showToast('property_id ${pidEsc} copied — paste into Inventory search', 'success')" title="Copy property_id to paste into Inventory search">
+        Copy property_id #${esc(data.linkedPropertyId)}
+      </button>
+      <span class="pu-glr-pivot-help">paste into Inventory search to see other leases / sales at this record before deciding</span>
+    </div>`;
+  }
+
+  html += '</div>'; // pu-glr
+  return html;
+}
+
+window.govResolveGsaLink = async function(pendingId, decision) {
+  const item = (govPendingUpdates || []).find(u => u.id === pendingId);
+  if (!item) {
+    showToast('Pending row not found in cache — refresh and retry', 'error');
+    return;
+  }
+  if (!item.record_id) {
+    showToast('Missing gsa_lease_id (record_id) on this row — cannot patch', 'error');
+    return;
+  }
+  const ctx = item.source_context || {};
+  const linkedPid = ctx.linked_property_id != null ? String(ctx.linked_property_id) : '';
+
+  let confirmMsg, toastSuccess;
+  if (decision === 'approved') {
+    confirmMsg = 'Confirm this GSA lease and property #' + (linkedPid || '?') +
+      ' describe the same building? gsa_leases.match_status will become human_confirmed and the pending row will resolve as approved.';
+    toastSuccess = 'Link confirmed — gsa_leases.match_status = human_confirmed';
+  } else if (decision === 'rejected') {
+    confirmMsg = 'Reject the link to property #' + (linkedPid || '?') +
+      '? gsa_leases.property_id will be cleared and match_status set to human_rejected. The matcher will retry on the next pass.';
+    toastSuccess = 'Link cleared — gsa_leases.match_status = human_rejected';
+  } else {
+    return;
+  }
+
+  const btn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const origText = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = decision === 'approved' ? 'Confirming…' : 'Rejecting…'; }
+
+  try {
+    if (!(await lccConfirm(confirmMsg, decision === 'approved' ? 'Confirm link' : 'Reject link'))) {
+      if (btn) { btn.disabled = false; btn.textContent = origText; }
+      return;
+    }
+    const notes = document.getElementById('pu-notes')?.value || null;
+    // Single atomic RPC — the dashboard role doesn't have direct UPDATE
+    // rights on gsa_leases (PATCH returns 403); gov_resolve_gsa_link_review
+    // is security definer and updates gsa_leases + pending_updates inside
+    // one transaction.
+    await govRpc('gov_resolve_gsa_link_review', {
+      p_pending_id: item.id,
+      p_decision: decision,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:gsa_link_review'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== item.id);
+    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, Math.max(0, govPendingUpdates.length - 1));
+    showToast(toastSuccess, 'success');
+    renderGovTab();
+  } catch (err) {
+    console.error('govResolveGsaLink failed:', err);
+    const verb = decision === 'approved' ? 'confirm' : 'reject';
+    const msg = (err && err.message) || String(err);
+    // Surface the most useful hint when the RPC isn't yet deployed.
+    const friendly = /could not find the function|function .* does not exist|404/i.test(msg)
+      ? 'RPC gov_resolve_gsa_link_review not deployed yet — apply sql/20260507_gov_rpc_gsa_link_review_resolver.sql on the gov DB'
+      : msg;
+    showToast('Failed to ' + verb + ' link: ' + friendly, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+};
+
+window.bulkApproveGovPending = async function() {
+  const view = window._govPendingCurrentView || [];
+  // Only field_change rows are bulk-approvable. sale_link and link_pick
+  // rows have no meaningful old/new diff — approve on them is either a
+  // resolver-required action (sale_link) or a silent no-op that would
+  // cement a flagged-as-suspect link / leave a lead un-relinked
+  // (link_pick). Exclude both.
+  const eligible = view.filter(r => {
+    if (Number(r.confidence || 0) < 0.8) return false;
+    const tax = govPendingTaxonomy(r.reason);
+    return tax.kind === 'field_change';
+  });
+  if (eligible.length === 0) {
+    showToast('No items in this view meet the high-confidence (≥80%) bar', 'info');
+    return;
+  }
+  const ok = await lccConfirm('Bulk-approve ' + eligible.length + ' high-confidence update' + (eligible.length === 1 ? '' : 's') + ' in this view? Items below 80% confidence will be skipped.', 'Approve all');
+  if (!ok) return;
+  const approved = new Set();
+  let failed = 0;
+  for (const item of eligible) {
+    try {
+      await govPatch('pending_updates', 'id=eq.' + item.id, {
+        status: 'approved',
+        resolved_by: 'dashboard_bulk',
+        resolved_at: new Date().toISOString()
+      });
+      approved.add(item.id);
+    } catch (_) { failed++; }
+  }
+  govPendingUpdates = govPendingUpdates.filter(r => !approved.has(r.id));
+  govPendingUpdatesIdx = 0;
+  showToast('Bulk approved ' + approved.size + (failed ? ' (' + failed + ' failed)' : ''), failed ? 'warning' : 'success');
+  renderGovTab();
+};
+
+function ensureGovPendingKeybinds() {
+  if (govPendingKeysBound) return;
+  govPendingKeysBound = true;
+  document.addEventListener('keydown', (e) => {
+    // Only handle when on the Pending Updates view and not typing in a field.
+    if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
+    if (typeof researchMode !== 'undefined' && researchMode !== 'pending_updates') return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const view = window._govPendingCurrentView || [];
+    if (view.length === 0) return;
+    const sel = view[govPendingUpdatesIdx] || view[0];
+    const k = e.key.toLowerCase();
+    if (k === 'j' || e.key === 'ArrowDown') {
+      govPendingUpdatesIdx = Math.min(view.length - 1, govPendingUpdatesIdx + 1);
+      e.preventDefault(); renderGovTab();
+    } else if (k === 'k' || e.key === 'ArrowUp') {
+      govPendingUpdatesIdx = Math.max(0, govPendingUpdatesIdx - 1);
+      e.preventDefault(); renderGovTab();
+    } else if (k === 'a' && sel) {
+      // Approve only writes through for true field_change rows and
+      // gsa_property_link_review (where Approve = "confirm the auto-link").
+      // sale_link needs the resolver; other link_pick reasons need the
+      // (forthcoming) candidate picker.
+      const tax = govPendingTaxonomy(sel.reason);
+      if (sel.reason === 'gsa_property_link_review') {
+        e.preventDefault();
+        window.govResolveGsaLink(sel.id, 'approved');
+        return;
+      }
+      if (tax.kind !== 'field_change') {
+        showToast(
+          tax.kind === 'sale_link'
+            ? 'Use Link → on a candidate, or expand "Create new property"'
+            : 'No proposed value yet — press R to reject, or S to skip',
+          'info'
+        );
+        return;
+      }
+      e.preventDefault();
+      window.resolveGovPendingUpdate(sel.id, 'approved');
+    } else if (k === 'r' && sel) {
+      e.preventDefault();
+      if (sel.reason === 'gsa_property_link_review') {
+        window.govResolveGsaLink(sel.id, 'rejected');
+      } else {
+        window.resolveGovPendingUpdate(sel.id, 'rejected');
+      }
+    } else if (k === 's') {
+      govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % view.length;
+      e.preventDefault(); renderGovTab();
+    }
+  });
+}
+
+// Drop pending rows that are obviously seed/test fixtures (e.g. an intake
+// email whose subject starts with "Test" and has no old/new value to
+// review). Matched at the strictest possible boundary so a real intake
+// like "Test Pilot Air Base" can never be hidden.
+function govIsLikelyTestRow(r) {
+  if (!r || !r.source_context || typeof r.source_context !== 'object') return false;
+  // Only filter empty-shell rows (no value to approve/reject anyway).
+  if (r.old_value != null || r.new_value != null) return false;
+  const subj = typeof r.source_context.subject === 'string' ? r.source_context.subject.trim() : '';
+  if (!subj) return false;
+  return /^(?:(?:re|fwd?):\s*)?test\b/i.test(subj);
+}
 
 let govPendingUpdatesRefreshedAt = null;
 window.loadGovPendingUpdates = async function() {
@@ -4579,7 +5756,7 @@ window.loadGovPendingUpdates = async function() {
       filter: 'status=eq.pending',
       order: 'priority_score.desc'
     });
-    govPendingUpdates = result.data || [];
+    govPendingUpdates = (result.data || []).filter(r => !govIsLikelyTestRow(r));
     govPendingUpdatesRefreshedAt = new Date();
 
     // Also fetch recently auto-resolved items so the trends strip can
@@ -4681,24 +5858,568 @@ window.resolveGovPendingUpdate = async function(id, resolution) {
   }
 };
 
+// ── Sale-Link Resolver ──────────────────────────────────────────────────────
+// Drives the Mode A (pick from candidates) / Mode C (create new property)
+// flow for sale_property_link_* pending updates. Backed by the gov-side RPCs
+// `gov_resolve_sale_link` and `gov_create_property_from_pending` (defined in
+// government-lease/sql/20260429_gov_rpc_sale_link_resolver.sql).
+//
+// Cache shape (keyed by pending_id):
+//   { loading, error, sale, candidates, candidatesQuery }
+const govResolverCache = {};
+const govResolverShowCreate = {};   // pending_id → bool (form expanded?)
+const govResolverNewProp   = {};    // pending_id → form draft
+const govResolverPortfolioSelected = {}; // pending_id → Set<property_id> (portfolio picker)
+const govResolverPortfolioFilter   = {}; // pending_id → search string (portfolio picker)
+
+const GOV_PORTFOLIO_REASONS = new Set([
+  'sale_property_link_portfolio_address_gap',
+  'sale_property_link_portfolio_high_confidence_candidate',
+]);
+
+async function govRpc(rpcName, args) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', 'rpc/' + rpcName);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const resp = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(args || {}),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const text = await resp.text();
+    let data; try { data = JSON.parse(text); } catch (_) { data = text; }
+    if (!resp.ok) {
+      const detail = (data && data.error) || (typeof data === 'string' ? data : ('HTTP ' + resp.status));
+      throw new Error(detail);
+    }
+    return Array.isArray(data) ? data[0] : data;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('RPC ' + rpcName + ' timed out');
+    throw err;
+  }
+}
+
+function govResolverContextOf(item) {
+  const ctx = (item && item.source_context) || {};
+  return {
+    address:      ctx.address || ctx.property_address || ctx.street_address || '',
+    city:         ctx.city || ctx.property_city || '',
+    state:        ctx.state || ctx.property_state || '',
+    leaseNumber:  ctx.lease_number || ctx.gsa_lease_number || '',
+    agency:       ctx.agency || '',
+    governmentType: ctx.government_type || ctx.gov_type || '',
+    buyer:        ctx.buyer || ctx.buyer_name || '',
+    seller:       ctx.seller || ctx.seller_name || '',
+    rawCity:      ctx.address || ''   // sometimes "PORT CHARLOTTE" lands in address only
+  };
+}
+
+window.loadGovSaleLinkContext = async function(pendingId) {
+  const item = (govPendingUpdates || []).find(u => u.id === pendingId);
+  if (!item) return;
+  const cache = govResolverCache[pendingId] || {};
+  if (cache.loading) return;
+  govResolverCache[pendingId] = { ...cache, loading: true, error: null };
+  renderGovTab();
+
+  try {
+    const ctx = govResolverContextOf(item);
+    // 1) Fetch the sale row by record_id (sale_id)
+    let sale = null;
+    if (item.record_id) {
+      const saleRes = await govQuery('sales_transactions',
+        'sale_id,sale_date,sold_price,sold_cap_rate,buyer,seller,address,city,state,lease_number,property_id', {
+          filter: 'sale_id=eq.' + item.record_id,
+          limit: 1, count: false
+        });
+      sale = (saleRes.data && saleRes.data[0]) || null;
+    }
+
+    // 2) Build candidate query from any signal we have:
+    //    a) lease_number exact
+    //    b) city (+ state) ilike
+    //    c) fall back to the sale's own city/state
+    const filters = [];
+    const lease = ctx.leaseNumber || (sale && sale.lease_number);
+    const city  = ctx.city  || (sale && sale.city);
+    const state = ctx.state || (sale && sale.state);
+
+    let candidates = [];
+    let candidatesQuery = '';
+    if (lease) {
+      const r = await govQuery('properties',
+        'property_id,address,city,state,lease_number,agency,government_type,sf_leased,lease_expiration', {
+          filter: 'lease_number=eq.' + encodeURIComponent(lease),
+          limit: 25, count: false
+        });
+      candidates = r.data || [];
+      candidatesQuery = 'lease_number=' + lease;
+    }
+    if (candidates.length === 0 && (city || state)) {
+      const parts = [];
+      if (city)  parts.push('city=ilike.' + encodeURIComponent(city.trim() + '%'));
+      if (state) parts.push('state=eq.'   + encodeURIComponent(state.trim().toUpperCase()));
+      const r = await govQuery('properties',
+        'property_id,address,city,state,lease_number,agency,government_type,sf_leased,lease_expiration', {
+          filter: parts.join('&'),
+          order: 'city.asc,address.asc',
+          limit: 25, count: false
+        });
+      candidates = r.data || [];
+      candidatesQuery = parts.join(' AND ');
+    }
+    if (candidates.length === 0 && ctx.rawCity) {
+      // Last resort: address field sometimes has a city-only value
+      const r = await govQuery('properties',
+        'property_id,address,city,state,lease_number,agency,government_type,sf_leased,lease_expiration', {
+          filter: 'city=ilike.' + encodeURIComponent(ctx.rawCity.trim() + '%'),
+          order: 'city.asc,address.asc',
+          limit: 25, count: false
+        });
+      candidates = r.data || [];
+      candidatesQuery = 'city~' + ctx.rawCity;
+    }
+
+    // 3) GSA inventory hits — these are the gold standard for sale-link
+    //    resolution. Even if the matcher pipeline missed it, the lease
+    //    number is the natural key and gsa_leases has the canonical
+    //    address/agency/sf. If a GSA row already has property_id set,
+    //    that's a one-click link. If not, it's a one-click create.
+    let gsaHits = [];
+    let gsaQuery = '';
+    if (lease) {
+      const r = await govQuery('gsa_leases',
+        'gsa_lease_id,lease_number,address,city,state,zip_code,field_office_name,annual_rent,lease_rsf,lease_effective,lease_expiration,lessor_name,property_id,match_status,snapshot_date', {
+          filter: 'lease_number=eq.' + encodeURIComponent(lease),
+          order: 'snapshot_date.desc.nullslast',
+          limit: 5, count: false
+        });
+      gsaHits = r.data || [];
+      gsaQuery = 'lease_number=' + lease;
+    }
+    if (gsaHits.length === 0 && (city || state)) {
+      const parts = [];
+      if (city)  parts.push('city=ilike.' + encodeURIComponent(city.trim() + '%'));
+      if (state) parts.push('state=eq.'   + encodeURIComponent(state.trim().toUpperCase()));
+      const r = await govQuery('gsa_leases',
+        'gsa_lease_id,lease_number,address,city,state,zip_code,field_office_name,annual_rent,lease_rsf,lease_effective,lease_expiration,lessor_name,property_id,match_status,snapshot_date', {
+          filter: parts.join('&'),
+          order: 'city.asc,address.asc',
+          limit: 25, count: false
+        });
+      gsaHits = r.data || [];
+      gsaQuery = parts.join(' AND ');
+    }
+    // Dedup gsaHits by lease_number — gsa_leases has one row per
+    // (lease_number, snapshot_date), and we want the latest snapshot.
+    if (gsaHits.length > 1) {
+      const seen = new Set();
+      gsaHits = gsaHits.filter(h => {
+        const k = h.lease_number || h.gsa_lease_id;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+    }
+
+    govResolverCache[pendingId] = {
+      loading: false, error: null,
+      sale, candidates, candidatesQuery,
+      gsaHits, gsaQuery
+    };
+  } catch (err) {
+    console.error('loadGovSaleLinkContext:', err);
+    govResolverCache[pendingId] = { loading: false, error: err.message || 'Failed to load context' };
+  }
+  renderGovTab();
+};
+
+window.govResolverLink = async function(pendingId, propertyId) {
+  if (!(await lccConfirm('Link this sale to property #' + propertyId + '? sales_transactions.property_id will be updated and the pending row approved.', 'Link'))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    await govRpc('gov_resolve_sale_link', {
+      p_pending_id: pendingId,
+      p_property_id: Number(propertyId),
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    govPendingUpdatesIdx = 0;
+    showToast('Sale linked to property #' + propertyId, 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('Link failed: ' + err.message, 'error');
+  }
+};
+
+window.govResolverUseGsa = async function(pendingId, gsaLeaseId) {
+  const cache = govResolverCache[pendingId];
+  const hit = (cache && cache.gsaHits || []).find(g => g.gsa_lease_id === gsaLeaseId);
+  if (!hit) return;
+
+  // If the GSA row is already linked to a property in our inventory, this is a
+  // straight Mode A link — just call gov_resolve_sale_link with that property_id.
+  if (hit.property_id) {
+    return window.govResolverLink(pendingId, hit.property_id);
+  }
+
+  // Otherwise, prefill the create form with GSA inventory data and call Mode C.
+  if (!(await lccConfirm('Create a new property from GSA inventory:\n\n' + (hit.address || '') + ', ' + (hit.city || '') + ', ' + (hit.state || '') + '\nLease # ' + (hit.lease_number || '') + '\n\nThis will insert into properties and link the sale atomically.', 'Create from GSA'))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    const overrides = {
+      address:      hit.address || '',
+      city:         hit.city || '',
+      state:        hit.state || '',
+      lease_number: hit.lease_number || '',
+      data_source:  'gsa_leases'
+    };
+    const res = await govRpc('gov_create_property_from_pending', {
+      p_pending_id: pendingId,
+      p_overrides: overrides,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver:gsa'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    govPendingUpdatesIdx = 0;
+    const action = (res && res.was_created === false) ? 'reused existing property' : 'property created from GSA';
+    showToast('Sale linked — ' + action + (res && res.property_id ? ' (#' + res.property_id + ')' : ''), 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('GSA-link failed: ' + err.message, 'error');
+  }
+};
+
+window.govResolverToggleCreate = function(pendingId) {
+  govResolverShowCreate[pendingId] = !govResolverShowCreate[pendingId];
+  if (govResolverShowCreate[pendingId] && !govResolverNewProp[pendingId]) {
+    const item = (govPendingUpdates || []).find(u => u.id === pendingId);
+    const ctx = govResolverContextOf(item);
+    const sale = (govResolverCache[pendingId] && govResolverCache[pendingId].sale) || {};
+    govResolverNewProp[pendingId] = {
+      address:        ctx.address || sale.address || '',
+      city:           ctx.city    || sale.city    || '',
+      state:          ctx.state   || sale.state   || '',
+      lease_number:   ctx.leaseNumber || sale.lease_number || '',
+      agency:         ctx.agency  || '',
+      government_type:ctx.governmentType || ''
+    };
+  }
+  renderGovTab();
+};
+
+window.govResolverNewPropChange = function(pendingId, field, value) {
+  govResolverNewProp[pendingId] = govResolverNewProp[pendingId] || {};
+  govResolverNewProp[pendingId][field] = value;
+};
+
+// Portfolio sale-link resolver (Mode D — one sale, N properties).
+// Backed by gov_resolve_portfolio_sale_link in
+// government-lease/sql/20260506_gov_rpc_portfolio_sale_link.sql.
+window.govResolverTogglePortfolioPick = function(pendingId, propertyId) {
+  if (!govResolverPortfolioSelected[pendingId]) {
+    govResolverPortfolioSelected[pendingId] = new Set();
+  }
+  const set = govResolverPortfolioSelected[pendingId];
+  const pid = Number(propertyId);
+  if (set.has(pid)) set.delete(pid); else set.add(pid);
+  renderGovTab();
+};
+
+window.govResolverPortfolioFilterChange = function(pendingId, value) {
+  govResolverPortfolioFilter[pendingId] = value || '';
+  renderGovTab();
+};
+
+window.govResolverLinkPortfolio = async function(pendingId) {
+  const set = govResolverPortfolioSelected[pendingId] || new Set();
+  const ids = Array.from(set);
+  if (ids.length === 0) {
+    showToast('Pick at least one property to link', 'warning');
+    return;
+  }
+  if (!(await lccConfirm(
+    'Link this sale to ' + ids.length + ' propert' + (ids.length === 1 ? 'y' : 'ies') +
+    ' (#' + ids.join(', #') + ')? sales_transactions.property_id will stay NULL — ' +
+    'the join lives in sales_transactions_properties.',
+    'Link ' + ids.length + ' propert' + (ids.length === 1 ? 'y' : 'ies')
+  ))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    const res = await govRpc('gov_resolve_portfolio_sale_link', {
+      p_pending_id: pendingId,
+      p_property_ids: ids,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver:portfolio'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    delete govResolverPortfolioSelected[pendingId];
+    delete govResolverPortfolioFilter[pendingId];
+    govPendingUpdatesIdx = 0;
+    const linked = (res && res.link_count != null) ? res.link_count : ids.length;
+    showToast('Sale linked to ' + linked + ' propert' + (linked === 1 ? 'y' : 'ies'), 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('Portfolio link failed: ' + err.message, 'error');
+  }
+};
+
+window.govResolverCreate = async function(pendingId) {
+  const draft = govResolverNewProp[pendingId] || {};
+  if (!draft.address || !draft.city || !draft.state) {
+    showToast('Address, city, and state are required to create a property', 'warning');
+    return;
+  }
+  if (!(await lccConfirm('Create a new property at "' + draft.address + ', ' + draft.city + ', ' + draft.state + '" and link this sale to it?', 'Create & link'))) return;
+  const notes = document.getElementById('pu-notes')?.value || null;
+  try {
+    const res = await govRpc('gov_create_property_from_pending', {
+      p_pending_id: pendingId,
+      p_overrides: draft,
+      p_notes: notes,
+      p_resolved_by: 'dashboard:resolver'
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== pendingId);
+    delete govResolverCache[pendingId];
+    delete govResolverShowCreate[pendingId];
+    delete govResolverNewProp[pendingId];
+    govPendingUpdatesIdx = 0;
+    const action = (res && res.was_created === false) ? 'reused existing property' : 'property created';
+    showToast('Sale linked — ' + action + (res && res.property_id ? ' (#' + res.property_id + ')' : ''), 'success');
+    renderGovTab();
+  } catch (err) {
+    showToast('Create failed: ' + err.message, 'error');
+  }
+};
+
+function renderGovSaleLinkResolver(selected) {
+  const id = selected.id;
+  const cache = govResolverCache[id];
+  let html = '<div class="pu-resolver">';
+
+  // Header
+  html += '<div class="pu-resolver-head">';
+  html += '<div class="pu-resolver-title">Sale-Link Resolver</div>';
+  html += '<button class="pu-resolver-refresh" onclick="window.loadGovSaleLinkContext(decodeURIComponent(\'' + encodeURIComponent(id) + '\'))" title="Reload context">↻</button>';
+  html += '</div>';
+
+  // Auto-load on first render
+  if (!cache) {
+    setTimeout(() => window.loadGovSaleLinkContext(id), 0);
+    html += '<div class="pu-resolver-loading"><div class="spinner"></div> Loading sale + candidates…</div>';
+    html += '</div>';
+    return html;
+  }
+  if (cache.loading) {
+    html += '<div class="pu-resolver-loading"><div class="spinner"></div> Loading sale + candidates…</div>';
+    html += '</div>';
+    return html;
+  }
+  if (cache.error) {
+    html += '<div class="pu-resolver-error">Couldn\'t load context: ' + esc(cache.error) + '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Sale record summary
+  const sale = cache.sale;
+  html += '<div class="pu-resolver-section">';
+  html += '<div class="pu-resolver-section-title">Sale Record</div>';
+  if (sale) {
+    const fmtMoney = (n) => n == null ? '—' : '$' + Number(n).toLocaleString();
+    const fmtCap = (n) => n == null ? '' : (Number(n) * 100).toFixed(2) + '%';
+    html += '<dl class="pu-resolver-dl">';
+    html += '<dt>Sale date</dt><dd>' + esc(sale.sale_date || '—') + '</dd>';
+    html += '<dt>Sold price</dt><dd>' + esc(fmtMoney(sale.sold_price)) + (sale.sold_cap_rate ? ' <span class="pu-resolver-muted">@ ' + esc(fmtCap(sale.sold_cap_rate)) + ' cap</span>' : '') + '</dd>';
+    html += '<dt>Address</dt><dd>' + esc([sale.address, sale.city, sale.state].filter(Boolean).join(', ') || '—') + '</dd>';
+    if (sale.lease_number) html += '<dt>Lease #</dt><dd><code>' + esc(sale.lease_number) + '</code></dd>';
+    html += '<dt>Buyer</dt><dd>' + esc(sale.buyer || '—') + '</dd>';
+    html += '<dt>Seller</dt><dd>' + esc(sale.seller || '—') + '</dd>';
+    if (sale.property_id) {
+      html += '<dt>Currently linked to</dt><dd class="pu-resolver-warn">⚠ property #' + esc(sale.property_id) + ' (already linked — approve will overwrite)</dd>';
+    }
+    html += '</dl>';
+  } else {
+    html += '<div class="pu-resolver-muted">Sale row not found (record_id=' + esc(selected.record_id || '') + ')</div>';
+  }
+  html += '</div>';
+
+  // GSA Inventory hits (highest-priority — gold standard for sale-link resolution)
+  const gsaHits = cache.gsaHits || [];
+  if (gsaHits.length > 0) {
+    html += '<div class="pu-resolver-section pu-resolver-gsa">';
+    html += '<div class="pu-resolver-section-title">';
+    html += '<span class="pu-gsa-badge">GSA INVENTORY</span> ';
+    html += 'Lease found in public inventory <span class="pu-resolver-muted">(' + gsaHits.length + (cache.gsaQuery ? ' · ' + esc(cache.gsaQuery) : '') + ')</span>';
+    html += '</div>';
+    html += '<div class="pu-cand-list">';
+    gsaHits.forEach(g => {
+      const linked = !!g.property_id;
+      const action = linked ? 'Link to property #' + g.property_id : 'Create & link';
+      const fmtMoney = (n) => n == null ? '' : '$' + Number(n).toLocaleString();
+      html += `<div class="pu-cand pu-cand-gsa">
+        <div class="pu-cand-main">
+          <div class="pu-cand-addr">${esc(g.address || '(no address)')}</div>
+          <div class="pu-cand-meta">
+            <span>${esc([g.city, g.state, g.zip_code].filter(Boolean).join(', '))}</span>
+            ${g.lease_number ? '· <code>' + esc(g.lease_number) + '</code>' : ''}
+            ${g.field_office_name ? '· ' + esc(g.field_office_name) : ''}
+            ${g.lease_rsf ? '· ' + Number(g.lease_rsf).toLocaleString() + ' RSF' : ''}
+            ${g.annual_rent ? '· ' + esc(fmtMoney(g.annual_rent)) + '/yr' : ''}
+            ${g.lease_expiration ? '· exp ' + esc(g.lease_expiration) : ''}
+          </div>
+          ${linked ? '<div class="pu-cand-meta pu-resolver-warn">✓ Already linked to property #' + esc(g.property_id) + '</div>' : ''}
+        </div>
+        <button class="pu-cand-link pu-cand-gsa-btn" onclick="window.govResolverUseGsa(decodeURIComponent('${encodeURIComponent(id)}'), decodeURIComponent('${encodeURIComponent(g.gsa_lease_id)}'))">${esc(action)} →</button>
+      </div>`;
+    });
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Candidates from properties table
+  const candidates = cache.candidates || [];
+  const isPortfolio = GOV_PORTFOLIO_REASONS.has(selected.reason);
+  const selectedSet = govResolverPortfolioSelected[id] || new Set();
+  const filterStr = (govResolverPortfolioFilter[id] || '').toLowerCase().trim();
+  const filteredCandidates = (isPortfolio && filterStr)
+    ? candidates.filter(p => {
+        const blob = [p.address, p.city, p.state, p.lease_number, p.agency].filter(Boolean).join(' ').toLowerCase();
+        return blob.includes(filterStr);
+      })
+    : candidates;
+  html += '<div class="pu-resolver-section">';
+  html += '<div class="pu-resolver-section-title">Candidate Properties <span class="pu-resolver-muted">(' + candidates.length + (cache.candidatesQuery ? ' · ' + esc(cache.candidatesQuery) : '') + ')</span></div>';
+  if (isPortfolio) {
+    html += '<div class="pu-resolver-portfolio-banner">';
+    html += '<strong>Portfolio sale.</strong> One sales_transactions row covers multiple properties — tick every property included in this deal, then confirm. ';
+    html += 'Single-property "Link →" still works if the address turned out not to be a portfolio after all.';
+    html += '</div>';
+    if (candidates.length > 8) {
+      const filterVal = govResolverPortfolioFilter[id] || '';
+      html += '<div class="pu-resolver-portfolio-filter">';
+      html += '<input type="text" placeholder="Filter by address, city, lease #, agency…" value="' + esc(filterVal) + '" ';
+      html += 'oninput="window.govResolverPortfolioFilterChange(decodeURIComponent(\'' + encodeURIComponent(id) + '\'), this.value)" />';
+      if (filterStr) {
+        html += '<span class="pu-resolver-muted"> ' + filteredCandidates.length + ' / ' + candidates.length + '</span>';
+      }
+      html += '</div>';
+    }
+  }
+  if (candidates.length === 0) {
+    html += '<div class="pu-resolver-empty">' + (gsaHits.length > 0
+      ? 'No additional candidates in the properties table. Use the GSA Inventory match above, or create a new property.'
+      : 'No candidates found in inventory. Use "Create new property" below.'
+    ) + '</div>';
+  } else {
+    html += '<div class="pu-cand-list">';
+    filteredCandidates.forEach(p => {
+      const exp = p.lease_expiration ? ' · exp ' + esc(p.lease_expiration) : '';
+      const checked = selectedSet.has(Number(p.property_id));
+      const checkbox = isPortfolio
+        ? `<label class="pu-cand-pick" title="Include in portfolio link"><input type="checkbox" ${checked ? 'checked' : ''} onchange="window.govResolverTogglePortfolioPick(decodeURIComponent('${encodeURIComponent(id)}'), ${p.property_id})" /></label>`
+        : '';
+      html += `<div class="pu-cand${checked ? ' pu-cand-picked' : ''}">
+        ${checkbox}
+        <div class="pu-cand-main">
+          <div class="pu-cand-addr">${esc(p.address || '(no address)')}</div>
+          <div class="pu-cand-meta">
+            <span>${esc([p.city, p.state].filter(Boolean).join(', '))}</span>
+            ${p.lease_number ? '· <code>' + esc(p.lease_number) + '</code>' : ''}
+            ${p.agency ? '· ' + esc(p.agency) : ''}
+            ${exp}
+          </div>
+        </div>
+        <button class="pu-cand-link" onclick="window.govResolverLink(decodeURIComponent('${encodeURIComponent(id)}'), ${p.property_id})">Link →</button>
+      </div>`;
+    });
+    if (isPortfolio && filteredCandidates.length === 0 && filterStr) {
+      html += '<div class="pu-resolver-empty">No candidates match "' + esc(filterStr) + '"</div>';
+    }
+    html += '</div>';
+    if (isPortfolio) {
+      const pickCount = selectedSet.size;
+      const disabled = pickCount === 0 ? ' disabled' : '';
+      html += '<div class="pu-resolver-portfolio-confirm">';
+      html += '<button class="pu-resolver-portfolio-confirm-btn"' + disabled + ' onclick="window.govResolverLinkPortfolio(decodeURIComponent(\'' + encodeURIComponent(id) + '\'))">';
+      html += pickCount === 0
+        ? 'Pick properties to enable portfolio link'
+        : 'Confirm ' + pickCount + '-property portfolio link →';
+      html += '</button>';
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+
+  // Create new property
+  const showCreate = !!govResolverShowCreate[id];
+  html += '<div class="pu-resolver-section">';
+  html += '<div class="pu-resolver-section-title">';
+  html += '<button class="pu-resolver-toggle" onclick="window.govResolverToggleCreate(decodeURIComponent(\'' + encodeURIComponent(id) + '\'))">' + (showCreate ? '▾' : '▸') + ' Create new property from this sale</button>';
+  html += '</div>';
+  if (showCreate) {
+    const draft = govResolverNewProp[id] || {};
+    const f = (name, label, req) => {
+      const v = draft[name] || '';
+      return `<label class="pu-newprop-field">
+        <span>${esc(label)}${req ? ' <span class="pu-resolver-warn">*</span>' : ''}</span>
+        <input type="text" value="${esc(v)}" oninput="window.govResolverNewPropChange(decodeURIComponent('${encodeURIComponent(id)}'), '${name}', this.value)" />
+      </label>`;
+    };
+    html += '<div class="pu-newprop-form">';
+    html += f('address', 'Address', true);
+    html += f('city',    'City',    true);
+    html += f('state',   'State',   true);
+    html += f('lease_number',    'Lease #', false);
+    html += f('agency',          'Agency', false);
+    html += f('government_type', 'Gov type', false);
+    html += '</div>';
+    html += '<div class="pu-newprop-help">If a property with the same lease # already exists, it will be reused (no duplicate).</div>';
+    html += `<button class="btn-action primary" onclick="window.govResolverCreate(decodeURIComponent('${encodeURIComponent(id)}'))">Create & link sale</button>`;
+  }
+  html += '</div>';
+
+  html += '</div>'; // pu-resolver
+  return html;
+}
+
 function renderGovPendingUpdates() {
   if (!govPendingUpdates && !govPendingUpdatesLoading) {
     window.loadGovPendingUpdates();
     return '<div class="gov-loading"><div class="spinner"></div> Loading pending updates...</div>';
   }
 
-  let html = '<div class="pipeline-ops-panel">';
+  ensureGovPendingKeybinds();
 
-  // Summary header
+  let html = '<div class="pipeline-ops-panel pu-panel">';
+
+  // ── Header ────────────────────────────────────────────────────────────────
   const totalPending = govPendingUpdates?.length || 0;
   html += `<div class="pipeline-header">
     <div class="header-title">Pending Updates</div>
-    <div class="header-subtitle">${totalPending} updates awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}</div>
+    <div class="header-subtitle">
+      ${totalPending} update${totalPending === 1 ? '' : 's'} awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}
+      <span class="pu-kbd-hint" title="Keyboard shortcuts">
+        <kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>A</kbd> approve · <kbd>R</kbd> reject · <kbd>S</kbd> skip
+      </span>
+    </div>
   </div>`;
 
-  // Auto-resolve trends — small inline strip showing what the system has
-  // cleared automatically. Reads govPendingAutoResolved (loaded alongside
-  // pending updates).
+  // Auto-resolved trends strip
   if (typeof govPendingAutoResolved !== 'undefined' && govPendingAutoResolved && govPendingAutoResolved.length > 0) {
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
     const recent = govPendingAutoResolved.filter(o => (o.resolved_at || '') >= sevenDaysAgo);
@@ -4710,10 +6431,10 @@ function renderGovPendingUpdates() {
     const total7d = recent.length;
     if (total7d > 0) {
       const breakdown = Object.keys(bySolver).sort((a,b) => bySolver[b]-bySolver[a])
-        .map(k => bySolver[k] + ' ' + k).join(' &middot; ');
-      html += '<div style="margin-bottom:12px;padding:8px 12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.25);border-radius:6px;font-size:12px;color:var(--text2);">';
-      html += '<span style="font-size:11px;color:#22c55e;font-weight:600;letter-spacing:0.5px;">AUTO-RESOLVED (7d)</span>';
-      html += ' &middot; ' + total7d + ' items cleared without manual review &middot; ' + breakdown;
+        .map(k => bySolver[k] + ' ' + k).join(' · ');
+      html += '<div class="pu-auto-strip">';
+      html += '<span class="pu-auto-label">AUTO-RESOLVED (7d)</span>';
+      html += ' · ' + total7d + ' items cleared without manual review · ' + breakdown;
       html += '</div>';
     }
   }
@@ -4724,112 +6445,239 @@ function renderGovPendingUpdates() {
     return html;
   }
 
-  // Reason breakdown
-  const reasonGroups = {};
-  govPendingUpdates.forEach(update => {
-    const reason = update.reason || 'other';
-    if (!reasonGroups[reason]) reasonGroups[reason] = [];
-    reasonGroups[reason].push(update);
+  // ── Bucket items by category & by reason ──────────────────────────────────
+  const byCategory = {};       // category id → items[]
+  const reasonGroups = {};     // reason → items[]
+  GOV_PENDING_CATEGORIES.forEach(c => { byCategory[c.id] = []; });
+  govPendingUpdates.forEach(u => {
+    const tax = govPendingTaxonomy(u.reason);
+    (byCategory[tax.category] = byCategory[tax.category] || []).push(u);
+    const r = u.reason || 'other';
+    (reasonGroups[r] = reasonGroups[r] || []).push(u);
   });
 
-  const reasons = Object.keys(reasonGroups).sort();
-
-  // Filter bar
-  html += '<div class="filter-bar" style="margin-bottom: 12px;">';
-  html += `<button class="filter-btn ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">All (${totalPending})</button>`;
-  reasons.forEach(reason => {
-    const count = reasonGroups[reason].length;
-    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter(decodeURIComponent('${encodeURIComponent(reason)}'))">${esc(reason)} (${count})</button>`;
-  });
-  html += '</div>';
-
-  // Get filtered items
-  let filteredItems = govPendingFilter === 'all' ? govPendingUpdates : reasonGroups[govPendingFilter] || [];
-
-  // Two-column layout: list on left, detail on right
-  html += '<div style="display: grid; grid-template-columns: 300px 1fr; gap: 16px;">';
-
-  // LEFT COLUMN: Scrollable list
-  html += '<div style="border-right: 1px solid var(--border); padding-right: 12px; max-height: 600px; overflow-y: auto;">';
-  filteredItems.forEach((item, idx) => {
-    const isActive = idx === govPendingUpdatesIdx;
-    const reasonBadge = item.reason || 'other';
-    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? 'rgba(108,140,255,0.1)' : 'var(--s1)'};">
-      <div style="font-weight: 600; font-size: 13px; color: var(--text);">${esc(item.field_name)}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${esc(item.table_name)}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; padding: 2px 6px; border-radius: 3px;">${esc(reasonBadge)}</span></div>
-    </div>`;
+  // ── Category chips ────────────────────────────────────────────────────────
+  html += '<div class="pu-cat-bar">';
+  html += `<button class="pu-cat ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">
+    <span class="pu-cat-icon">▣</span><span class="pu-cat-label">All</span><span class="pu-cat-count">${totalPending}</span>
+  </button>`;
+  GOV_PENDING_CATEGORIES.forEach(cat => {
+    const count = byCategory[cat.id]?.length || 0;
+    if (count === 0) return;
+    const active = govPendingFilter === cat.id;
+    html += `<button class="pu-cat ${active ? 'active' : ''}" title="${esc(cat.desc)}" onclick="window.setGovPendingFilter('${cat.id}')">
+      <span class="pu-cat-icon">${cat.icon}</span><span class="pu-cat-label">${esc(cat.label)}</span><span class="pu-cat-count">${count}</span>
+    </button>`;
   });
   html += '</div>';
 
-  // RIGHT COLUMN: Detail card
-  if (filteredItems.length > 0) {
-    const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
-    const oldVal = selected.old_value !== null ? String(selected.old_value) : '(empty)';
-    const newVal = selected.new_value !== null ? String(selected.new_value) : '(empty)';
-    const sourceCtx = selected.source_context || {};
+  // ── Selected category items ───────────────────────────────────────────────
+  let categoryItems;
+  if (govPendingFilter === 'all') {
+    categoryItems = govPendingUpdates.slice();
+  } else {
+    categoryItems = (byCategory[govPendingFilter] || []).slice();
+  }
 
-    // Confidence color coding
-    const conf = selected.confidence || 0;
-    let confColor = '#ef4444';
-    let confLabel = 'Low';
-    if (conf > 0.8) {
-      confColor = '#22c55e';
-      confLabel = 'High';
-    } else if (conf > 0.5) {
-      confColor = '#f59e0b';
-      confLabel = 'Medium';
-    }
+  // ── Subtype dropdown (only when this category has >1 reason) ─────────────
+  const subtypeCounts = {};
+  categoryItems.forEach(u => {
+    const r = u.reason || 'other';
+    subtypeCounts[r] = (subtypeCounts[r] || 0) + 1;
+  });
+  const subtypes = Object.keys(subtypeCounts).sort((a, b) => subtypeCounts[b] - subtypeCounts[a]);
 
-    html += '<div>';
-    html += '<div class="task-header">';
-    html += `<div>${esc(selected.field_name)} Update</div>`;
-    html += `<span class="task-badge needs-input">${esc(selected.reason || 'pending')}</span>`;
-    html += '</div>';
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Table</div>';
-    html += `<div class="context-value"><code>${esc(selected.table_name)}</code></div>`;
-    html += '</div>';
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Current Value</div>';
-    html += `<div style="background: var(--s2); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto; color: var(--text);">${esc(oldVal)}</div>`;
-    html += '</div>';
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Proposed Value</div>';
-    html += `<div style="background: var(--s3); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
-    html += '</div>';
-
-    if (sourceCtx && Object.keys(sourceCtx).length > 0) {
-      html += '<div class="context-block">';
-      html += '<div class="context-label">Source Context</div>';
-      html += `<div style="font-size: 12px; color: var(--text3);"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
-      html += '</div>';
-    }
-
-    html += '<div class="context-block">';
-    html += '<div class="context-label">Confidence Score</div>';
-    html += `<div style="display: flex; align-items: center; gap: 8px;">
-      <div style="width: 24px; height: 24px; border-radius: 50%; background: ${confColor}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${Math.round(conf * 100)}%</div>
-      <span style="font-size: 12px; color: var(--text3);">${confLabel} confidence</span>
-    </div>`;
-    html += '</div>';
-
-    html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
-
-    html += '<div class="action-row">';
-    html += `<button class="btn-action primary" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve</button>`;
-    html += `<button class="btn-action danger" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject</button>`;
-    html += `<button class="btn-action" style="background: #fb923c;" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
-    html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
-    html += '</div>';
+  if (subtypes.length > 1) {
+    html += '<div class="pu-subtype-row">';
+    html += '<label class="pu-subtype-label">Subtype</label>';
+    html += `<select class="pu-subtype-select" onchange="window.setGovPendingSubtype(this.value)">`;
+    html += `<option value="all" ${govPendingSubtypeFilter === 'all' ? 'selected' : ''}>All subtypes (${categoryItems.length})</option>`;
+    subtypes.forEach(r => {
+      const tax = govPendingTaxonomy(r);
+      const sel = govPendingSubtypeFilter === r ? 'selected' : '';
+      html += `<option value="${esc(r)}" ${sel}>${esc(tax.label)} — ${subtypeCounts[r]}</option>`;
+    });
+    html += '</select>';
     html += '</div>';
   }
 
+  // Apply subtype filter
+  let filteredItems = govPendingSubtypeFilter === 'all'
+    ? categoryItems
+    : categoryItems.filter(u => (u.reason || 'other') === govPendingSubtypeFilter);
+
+  // Sort: priority_score desc, then confidence desc, then created_at desc
+  filteredItems.sort((a, b) => {
+    const pa = Number(a.priority_score) || 0;
+    const pb = Number(b.priority_score) || 0;
+    if (pa !== pb) return pb - pa;
+    const ca = Number(a.confidence) || 0;
+    const cb = Number(b.confidence) || 0;
+    if (ca !== cb) return cb - ca;
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  });
+  // Expose to keybinds + bulk action
+  window._govPendingCurrentView = filteredItems;
+
+  // Clamp idx
+  if (govPendingUpdatesIdx >= filteredItems.length) govPendingUpdatesIdx = 0;
+
+  // ── Bulk action bar ───────────────────────────────────────────────────────
+  const highConfCount = filteredItems.filter(r => Number(r.confidence || 0) >= 0.8).length;
+  html += '<div class="pu-bulk-bar">';
+  html += `<span class="pu-bulk-summary">Showing <strong>${filteredItems.length}</strong> · <span style="color:#22c55e">${highConfCount}</span> at ≥80% confidence</span>`;
+  if (highConfCount > 0) {
+    html += `<button class="pu-bulk-btn" onclick="window.bulkApproveGovPending()" title="Approve every item in the current view at ≥80% confidence">
+      ✓ Bulk approve high-confidence (${highConfCount})
+    </button>`;
+  }
   html += '</div>';
+
+  if (filteredItems.length === 0) {
+    html += '<div class="empty-state" style="padding:32px"><div class="empty-icon">✓</div><div class="empty-title">Nothing in this view</div><div class="empty-desc">Pick a different category or clear the subtype filter.</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  // ── Two-column layout ─────────────────────────────────────────────────────
+  html += '<div class="pu-grid">';
+
+  // LEFT: list
+  html += '<div class="pu-list">';
+  filteredItems.forEach((item, idx) => {
+    const isActive = idx === govPendingUpdatesIdx;
+    const tax = govPendingTaxonomy(item.reason);
+    const conf = govPendingConfidenceMeta(item.confidence);
+    const age = govPendingRelativeAge(item.created_at);
+    html += `<div class="pu-list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();">
+      <div class="pu-list-row1">
+        <span class="pu-list-title">${esc(tax.label)}</span>
+        <span class="pu-conf-pill" style="background:${conf.color}1a;color:${conf.color};border-color:${conf.color}55">${conf.pct}%</span>
+      </div>
+      <div class="pu-list-row2">
+        <code>${esc(item.table_name)}</code>·<span>${esc(item.field_name || '')}</span>
+      </div>
+      <div class="pu-list-row3">
+        ${age ? '<span class="pu-list-age">' + esc(age) + '</span>' : ''}
+      </div>
+    </div>`;
+  });
   html += '</div>';
+
+  // RIGHT: detail
+  const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
+  const oldVal = selected.old_value !== null && selected.old_value !== undefined ? String(selected.old_value) : '(empty)';
+  const newVal = selected.new_value !== null && selected.new_value !== undefined ? String(selected.new_value) : '(empty)';
+  const sourceCtx = selected.source_context || {};
+  const tax = govPendingTaxonomy(selected.reason);
+  const conf = govPendingConfidenceMeta(selected.confidence);
+  const summary = govPendingSourceSummary(sourceCtx);
+  const age = govPendingRelativeAge(selected.created_at);
+
+  html += '<div class="pu-detail">';
+
+  // Detail header
+  html += '<div class="pu-detail-head">';
+  html += `<div class="pu-detail-title">${esc(tax.label)}</div>`;
+  const recIdStr = selected.record_id != null ? String(selected.record_id) : '';
+  html += `<div class="pu-detail-meta">
+    <span class="pu-conf-pill" style="background:${conf.color}1a;color:${conf.color};border-color:${conf.color}55">${conf.pct}% ${conf.label}</span>
+    ${age ? '<span class="pu-detail-age">' + esc(age) + '</span>' : ''}
+    <code class="pu-detail-table">${esc(selected.table_name)}.${esc(selected.field_name || '')}</code>
+    ${recIdStr ? `<code class="pu-detail-recid" title="record_id (click to copy)" onclick="navigator.clipboard.writeText('${esc(recIdStr).replace(/'/g, "\\'")}'); showToast('record_id copied', 'success')">#${esc(recIdStr)}</code>` : ''}
+  </div>`;
+  html += '</div>';
+
+  // Guidance banner
+  html += `<div class="pu-guidance">
+    <div class="pu-guidance-label">What you're approving</div>
+    <div class="pu-guidance-body">${esc(tax.guidance)}</div>
+  </div>`;
+
+  // Three rendering modes, keyed off taxonomy.kind:
+  //   field_change — old_value -> new_value diff (Approve writes the field)
+  //   sale_link    — full resolver (sale record + candidates + create form)
+  //   link_pick    — placeholder until the link-pick UI lands; no Approve
+  const isFieldChange = tax.kind === 'field_change';
+  const isSaleLink    = tax.kind === 'sale_link';
+  const isLinkPick    = tax.kind === 'link_pick';
+
+  if (isFieldChange) {
+    // Standard value-change diff
+    html += '<div class="pu-diff">';
+    html += `<div class="pu-diff-cell pu-diff-old">
+      <div class="pu-diff-label">Current</div>
+      <div class="pu-diff-value">${esc(oldVal)}</div>
+    </div>`;
+    html += `<div class="pu-diff-arrow">→</div>`;
+    html += `<div class="pu-diff-cell pu-diff-new">
+      <div class="pu-diff-label">Proposed</div>
+      <div class="pu-diff-value">${esc(newVal)}</div>
+    </div>`;
+    html += '</div>';
+  } else if (isSaleLink) {
+    html += renderGovSaleLinkResolver(selected);
+  } else if (isLinkPick) {
+    // gsa_property_link_review carries a pre-baked side-by-side comparison
+    // in source_context (gsa_* / linked_*) — render it inline so the
+    // reviewer sees what's being compared without expanding Raw JSON.
+    if (selected.reason === 'gsa_property_link_review') {
+      html += renderGovGsaLinkReview(selected);
+    } else {
+      // Other link_pick reasons (unmatched_property / unmatched_contact /
+      // intake_unmatched_property) still need their dedicated picker UI;
+      // until then, steer the reviewer to Reject / Skip.
+      html += `<div class="pu-link-pick-placeholder">
+        <div class="pu-lpp-title">${esc(tax.label)}</div>
+        <div class="pu-lpp-body">
+          This row needs a property selection that the link-pick UI doesn\'t render yet.
+          Use <kbd>R</kbd> to reject if it\'s out of scope, or <kbd>S</kbd> to skip.
+          See Source Context below for the relevant fields.
+        </div>
+      </div>`;
+    }
+  }
+
+  // Source context summary (parsed) + collapsible raw — useful for both modes
+  if (summary.length > 0 || Object.keys(sourceCtx).length > 0) {
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Source Context</div>';
+    if (summary.length > 0) {
+      html += '<dl class="pu-ctx-summary">';
+      summary.forEach(row => {
+        const v = typeof row.value === 'object' ? JSON.stringify(row.value) : String(row.value);
+        html += `<dt>${esc(row.label)}</dt><dd>${esc(v)}</dd>`;
+      });
+      html += '</dl>';
+    }
+    if (Object.keys(sourceCtx).length > 0) {
+      html += `<details class="pu-ctx-raw"><summary>Raw JSON</summary><pre>${esc(JSON.stringify(sourceCtx, null, 2))}</pre></details>`;
+    }
+    html += '</div>';
+  }
+
+  html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 2, placeholder: 'Optional — why you approved/rejected'});
+
+  html += '<div class="action-row pu-action-row">';
+  const isGsaLinkReview = isLinkPick && selected.reason === 'gsa_property_link_review';
+  if (isFieldChange) {
+    html += `<button class="btn-action primary" title="Approve (A)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve <span class="pu-kbd">A</span></button>`;
+  } else if (isGsaLinkReview) {
+    // Two real actions for GSA Link Review: confirm or break the auto-link.
+    html += `<button class="btn-action primary" title="Same building — confirm the link (A)" onclick="_udBtnGuard(this, window.govResolveGsaLink, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Same building — confirm link <span class="pu-kbd">A</span></button>`;
+    html += `<button class="btn-action danger" title="Different buildings — break the link (R)" onclick="_udBtnGuard(this, window.govResolveGsaLink, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">⛓ Different — break link <span class="pu-kbd">R</span></button>`;
+  } else {
+    // sale_link rows have their own Link/Create buttons inside the resolver.
+    // Other link_pick rows still need a generic Reject until their picker lands.
+    html += `<button class="btn-action danger" title="Reject (R)" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject <span class="pu-kbd">R</span></button>`;
+  }
+  html += `<button class="btn-action" title="Skip to next (S)" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % (window._govPendingCurrentView||[]).length; renderGovTab();">→ Skip <span class="pu-kbd">S</span></button>`;
+  html += `<button class="btn-action" style="margin-left:auto;background:#fb923c1a;color:#fb923c;border-color:#fb923c55" title="Mark as expired" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
+  html += '</div>';
+
+  html += '</div>'; // pu-detail
+  html += '</div>'; // pu-grid
+  html += '</div>'; // pu-panel
 
   return html;
 }
@@ -5238,7 +7086,7 @@ function renderGovResearch() {
   const owCount = govData.ownership ? govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length : 0;
   const ldCount = govData.leads ? govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length : 0;
   const portfolio = govData.portfolioProperties || [];
-  const intelCount = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending' || (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)).length;
+  const intelCount = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending').length;
 
   // Pipeline step definitions — ordered from data quality to prospecting to monitoring
   const pipelineSteps = [
@@ -5338,6 +7186,60 @@ function renderGovResearch() {
       <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
       <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
     </div>`;
+
+    // Sweep button — only on the ownership queue, only when there are
+    // pending rows. Calls gov_auto_resolve_ownership(p_dry_run=true) for
+    // a count preview, then a confirm + p_dry_run=false on apply.
+    if (researchMode === 'ownership' && pendingCount > 0) {
+      html += `<div class="own-sweep-bar" style="margin-top:8px">
+        <button class="btn-secondary" onclick="window.govOwnershipSweepPreview()" title="Preview rows the system can auto-resolve (empty shells, placeholder priors, comp-on-file)">
+          🧹 Sweep auto-resolvable (preview)
+        </button>
+        <span class="own-sweep-bar-help">Resolves rows with no research handle, bot-generated placeholder priors, and comps already on file.</span>
+      </div>`;
+    }
+    if (researchMode === 'intel' && pendingCount > 0) {
+      // Tier count strip — gives the reviewer the priority distribution at
+      // a glance so they know "how much of this is hot vs. backfill"
+      // before scrolling. govData.portfolioProperties was just annotated
+      // by the loader, so we can summarise it directly.
+      const portfolio = govData.portfolioProperties || [];
+      const _pendOnly = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending');
+      const tierCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      _pendOnly.forEach(p => { tierCounts[p._priority || 9]++; });
+      const tierMeta = [
+        { id: 1, cls: 'urgent',      label: 'Hot research', icon: '🔥' },
+        { id: 2, cls: 'urgent',      label: 'Hot verify',   icon: '✓' },
+        { id: 3, cls: 'needs-input', label: 'Warm',         icon: '◐' },
+        { id: 4, cls: 'ready',       label: 'Backfill',     icon: '·' },
+        { id: 5, cls: 'ready',       label: 'Low value',    icon: '↓' }
+      ];
+      html += '<div class="own-tier-strip">';
+      tierMeta.forEach(t => {
+        const n = tierCounts[t.id] || 0;
+        if (n === 0) return;
+        html += `<span class="own-tier-pill own-tier-${t.cls}" title="${esc(t.label)}">
+          <span class="own-tier-pill-icon">${t.icon}</span>
+          <span class="own-tier-pill-label">${esc(t.label)}</span>
+          <span class="own-tier-pill-n">${n.toLocaleString()}</span>
+        </span>`;
+      });
+      // Quick "Start with Hot Verify" jump button — Tier 2 is highest-leverage
+      // (full intel, just needs a click). Surface it when present.
+      if (tierCounts[2] > 0) {
+        html += `<button class="own-tier-jump" onclick="window.govIntelJumpToTier(2)" title="Jump to Tier 2 — A/B grade, sell-side window, intel ready to confirm">
+          → Start with Hot verify (${tierCounts[2]})
+        </button>`;
+      }
+      html += '</div>';
+
+      html += `<div class="own-sweep-bar" style="margin-top:8px">
+        <button class="btn-secondary" onclick="window.govIntelSweepPreview()" title="Preview properties the system can auto-resolve (junk stubs, tier-2 ready-to-approve, FRPP backfills, sale syncs)">
+          🧹 Sweep auto-resolvable (preview)
+        </button>
+        <span class="own-sweep-bar-help">Marks stubs + tier-2-complete; backfills year_built / RBA from FRPP and recent sale from sales_transactions.</span>
+      </div>`;
+    }
 
     // Load queue if empty
     if (researchQueue.length === 0) {
@@ -7644,4 +9546,4 @@ window.govQuickLogActivity = function(record, context) {
  */
 window.govQuickAddToPipeline = function(record) {
   showDetail(record, 'gov-lead', 'Intel');
-};
+};

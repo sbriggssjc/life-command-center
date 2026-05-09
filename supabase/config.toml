@@ -1,0 +1,25 @@
+# Supabase project config (CLI-managed).
+#
+# This file is intentionally minimal — it exists to lock per-function deploy
+# settings that would otherwise pick up CLI defaults.
+#
+# Why: `supabase functions deploy <name>` defaults `verify_jwt = true` for new
+# deployments, which puts the Supabase gateway's JWT check in front of the
+# function. Our availability-checker authenticates with `LCC_API_KEY` (an
+# opaque string, not a Supabase-issued JWT), so the gateway rejects every
+# request with `UNAUTHORIZED_NO_AUTH_HEADER` before the function ever runs.
+# Locking verify_jwt = false here makes the setting reproducible across
+# redeploys (and across operators who don't remember the --no-verify-jwt
+# flag). See issue #560 for the discovery write-up.
+#
+# Do not add other sections here without checking the Supabase CLI docs
+# first — empty/missing fields fall back to safe defaults, but populated
+# fields override remote project settings on the next sync.
+#
+# Functions whose default is also overridden (already deployed with
+# verify_jwt = false; listed for documentation):
+#   - daily-briefing (deployed pre-config.toml)
+#   - data-query     (deployed pre-config.toml)
+
+[functions.availability-checker]
+verify_jwt = false

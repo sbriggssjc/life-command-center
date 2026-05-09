@@ -170,6 +170,32 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     } catch (e) { console.warn('clinic→property lookup failed', e); }
   }
 
+  // Address-based fallback: if the CMS row had no medicare_clinics back-link
+  // (medicare_clinics.property_id is NULL — common for unlinked clinics), try
+  // to find the property by address+state. Without this, opening a CMS Data
+  // row for an unlinked clinic dead-ended at the fallback panel and the
+  // "Link CMS facility" button errored "Property ID not available" because
+  // _udCache.property was never populated. See diagnosis on
+  // claude/fix-fresenius-record-link-kLjaY.
+  if (!propertyId && db === 'dia' && fallback.address && fallback.state) {
+    try {
+      // ilike for case + minor punctuation differences (CMS = "DRIVE NE",
+      // properties = "Dr Ne"). Bound the search to state to avoid
+      // cross-state collisions on common street names.
+      const addrPattern = String(fallback.address).trim().split(/\s+/).slice(0, 3).join('%');
+      const addrRes = await diaQuery('properties', 'property_id', {
+        filter: `address=ilike.${encodeURIComponent('%' + addrPattern + '%')}&state=eq.${encodeURIComponent(fallback.state)}`,
+        limit: 2
+      });
+      const addrArr = Array.isArray(addrRes) ? addrRes : (addrRes?.data || []);
+      // Only auto-anchor when the address+state is unique. Multiple matches
+      // mean we'd need user disambiguation, which is out of scope here.
+      if (addrArr.length === 1 && addrArr[0].property_id) {
+        propertyId = addrArr[0].property_id;
+      }
+    } catch (e) { console.warn('clinic→property address fallback failed', e); }
+  }
+
   // Build filter — prefer property_id, fall back to lease_number
   const propFilter = propertyId ? `property_id=eq.${propertyId}` : null;
   const leaseFilter = leaseNumber ? `lease_number=eq.${encodeURIComponent(leaseNumber)}` : null;
@@ -217,7 +243,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       promises.push(diaQuery('properties',
         'property_id,medicare_id,linked_medicare_facility_id,' +
         'anchor_rent,anchor_rent_date,anchor_rent_source,lease_commencement,' +
-        'lease_bump_pct,lease_bump_interval_mo,building_size',
+        'lease_bump_pct,lease_bump_interval_mo,' +
+        // Site/building fields fed into the client-deliverable Operations
+        // export. v_property_detail exposes year_built/building_type but
+        // not building_size/land_area/lot_sf/year_renovated, so we pull
+        // them straight from the table.
+        'building_size,year_built,year_renovated,land_area,lot_sf,building_type',
         { filter: propFilter, limit: 1 }
       ));
     } else {
@@ -310,6 +341,17 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
           lease_commencement:     propertyCmsRow.lease_commencement     ?? synthProperty.lease_commencement     ?? null,
           lease_bump_pct:         propertyCmsRow.lease_bump_pct         ?? synthProperty.lease_bump_pct         ?? null,
           lease_bump_interval_mo: propertyCmsRow.lease_bump_interval_mo ?? synthProperty.lease_bump_interval_mo ?? null,
+          // Site/building fields used by the client-deliverable export.
+          building_size:          propertyCmsRow.building_size          ?? synthProperty.building_size          ?? null,
+          year_built:             propertyCmsRow.year_built             ?? synthProperty.year_built             ?? null,
+          year_renovated:         propertyCmsRow.year_renovated         ?? synthProperty.year_renovated         ?? null,
+          land_area:              propertyCmsRow.land_area              ?? synthProperty.land_area              ?? null,
+          lot_sf:                 propertyCmsRow.lot_sf                 ?? synthProperty.lot_sf                 ?? null,
+          building_type:          propertyCmsRow.building_type          ?? synthProperty.building_type          ?? null,
+          // CMS link columns — handy when the export wants to surface CCN
+          // even before the cms-match resolver runs.
+          medicare_id:                 propertyCmsRow.medicare_id                 ?? synthProperty.medicare_id                 ?? null,
+          linked_medicare_facility_id: propertyCmsRow.linked_medicare_facility_id ?? synthProperty.linked_medicare_facility_id ?? null,
         })
       : synthProperty;
 
@@ -400,11 +442,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
             ${_udKeyFields(db, synthProperty, ownership)}
           </div>
           ${dismissBtn}
+          ${_udLeaseCompsControlHtml(db, propertyId || synthProperty?.property_id || ids.property_id)}
           <button class="detail-action-btn" id="consolidateBtn"
             title="Find duplicate properties + same-tenant clusters"
-            onclick="openConsolidateModal('${db}', ${ids.property_id || 'null'})"
+            onclick="openConsolidateModal('${db}', ${(propertyId || ids.property_id) || 'null'})"
             style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
-            ${ids.property_id ? '' : 'disabled'}>
+            ${(propertyId || ids.property_id) ? '' : 'disabled'}>
             🔗 Consolidate
           </button>
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
@@ -774,12 +817,24 @@ function _udRenderMatchFacilityCard() {
   const city   = p.city || fb.city || '';
   const state  = p.state || fb.state || '';
   const zip    = p.zip_code || p.zip || fb.zip || fb.zip_code || '';
+  // Only true when /api/cms-match?action=resolve actually ran (cms.debug
+  // is only populated by the resolver). The card was previously claiming
+  // "Auto-match tried <addr>" even when the panel was opened with no
+  // property_id and the resolver was never called — misleading.
+  const autoMatchRan = !!(cms && cms.debug);
+  const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id || null;
 
   let html = '<div class="detail-empty" style="text-align:left;padding:24px;background:var(--s2);border-radius:12px">';
   html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">';
   html += '<div style="font-size:24px">&#x1F50D;</div>';
   html += '<div><div style="font-weight:700;color:var(--text)">No CMS facility linked to this property</div>';
-  html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">Auto-match tried <strong>' + esc(addr || '—') + '</strong>' + (zip ? ' (' + esc(zip) + ')' : '') + ' — no confident match found.</div>';
+  if (autoMatchRan) {
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">Auto-match tried <strong>' + esc(addr || '—') + '</strong>' + (zip ? ' (' + esc(zip) + ')' : '') + ' — no confident match found.</div>';
+  } else if (!propertyId) {
+    html += '<div style="font-size:12px;color:#f59e0b;margin-top:2px">This panel was opened without a linked property record. Linking from here would not persist — search Pipeline / Properties for this address and open it from there to link a CMS facility.</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">No auto-match run yet for this property. Use the search below to pick a CMS facility manually.</div>';
+  }
   html += '</div></div>';
 
   // Debug context (visible when all candidates fell below the auto-match threshold)
@@ -807,7 +862,11 @@ function _udRenderMatchFacilityCard() {
       html += '</div>';
       html += '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">';
       html += '<span style="font-size:10px;padding:2px 6px;border-radius:8px;background:' + (scorePct >= 70 ? 'rgba(16,185,129,0.18);color:#10b981' : 'rgba(251,191,36,0.18);color:#f59e0b') + ';font-weight:700">' + scorePct + '% match</span>';
-      html += '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'auto:address_zip\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Use this</button>';
+      if (propertyId) {
+        html += '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'auto:address_zip\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Use this</button>';
+      } else {
+        html += '<button disabled title="Open this record from Pipeline / Properties to link" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text3);font-weight:600;cursor:not-allowed">Use this</button>';
+      }
       html += '</div></div>';
     });
     html += '</div>';
@@ -855,15 +914,19 @@ function _udCmsTypeahead(q) {
       const rows = (data && data.candidates) || [];
       if (!resultsEl) return;
       if (rows.length === 0) { resultsEl.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text3)">No facilities found.</div>'; return; }
+      const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id || null;
       resultsEl.innerHTML = rows.map(c => {
         const line2 = [c.address, c.city, c.state, c.zip_code || c.zip].filter(Boolean).map(esc).join(', ');
+        const linkBtn = propertyId
+          ? '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'manual:typeahead\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Link</button>'
+          : '<button disabled title="Open this record from Pipeline / Properties to link" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text3);font-weight:600;cursor:not-allowed">Link</button>';
         return '<div style="display:flex;gap:10px;padding:8px 10px;background:var(--s1);border-radius:6px;border:1px solid var(--border);align-items:center">' +
           '<div style="flex:1;min-width:0">' +
           '<div style="font-weight:600;color:var(--text);font-size:12px">' + esc(c.facility_name || '(unnamed)') + '</div>' +
           '<div style="font-size:11px;color:var(--text2)">' + line2 + '</div>' +
           '<div style="font-size:10px;color:var(--text3);margin-top:1px">CCN ' + esc(c.medicare_id) + (c.chain_organization ? ' · ' + esc(c.chain_organization) : '') + '</div>' +
           '</div>' +
-          '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'manual:typeahead\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Link</button>' +
+          linkBtn +
         '</div>';
       }).join('');
     } catch (err) {
@@ -4254,6 +4317,8 @@ const NMQ_BRAND = {
 function _udExportOperations() {
   const rankings = _udCache.rankings;
   const cmsLink = _udCache.cms || null;
+  const property = _udCache.property || {};
+  const fb = _udCache.fallback || {};
   const ext = _opsExtraCache || {};
   const r = rankings || {};
   const finDetail = ext.financialDetail || {};
@@ -4277,11 +4342,29 @@ function _udExportOperations() {
   const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
   const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
-  const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || '';
+  const ccn = r.medicare_id
+    || (cmsLink && cmsLink.medicare_id)
+    || property.linked_medicare_facility_id
+    || property.medicare_id
+    || '';
   const _esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const facilityName = _esc(r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility');
-  const address = _esc([r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '');
-  const stationsVal = r.number_of_chairs || r.stations || null;
+  const facilityName = _esc(r.facility_name || property.facility_name || property.page_title || (cmsLink && cmsLink.facility_name) || fb.facility_name || 'Dialysis Facility');
+  // Address fields are not on v_property_rankings — pull from the
+  // merged property (v_property_detail + properties supplemental fetch),
+  // then fall back to the search-card record. Without this, the export
+  // subtitle was rendering empty for every clinic.
+  const addrLine = property.address || fb.address || '';
+  const cityVal  = property.city || fb.city || r.city || '';
+  const stateVal = property.state || fb.state || r.state || '';
+  const zipVal   = property.zip_code || property.zip || fb.zip_code || fb.zip || '';
+  const propertyId = property.property_id || _udCache.ids?.property_id || '';
+  const address = _esc([addrLine, cityVal, stateVal, zipVal].filter(Boolean).join(', ') || '');
+  const stationsVal = r.number_of_chairs || property.number_of_chairs || r.stations || null;
+  const buildingSize = property.building_size || null;
+  const yearBuilt    = property.year_built || null;
+  const yearReno     = property.year_renovated || null;
+  const landArea     = property.land_area || property.lot_sf || null;
+  const buildingType = property.building_type || '';
   const trendDir = trends.trend_direction || (r.patient_yoy_pct > 2 ? 'Growth' : r.patient_yoy_pct < -2 ? 'Decline' : 'Stable');
   let leaseExp = 'N/A';
   if (lease.expiration_date) { const d = new Date(lease.expiration_date); leaseExp = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
@@ -4317,6 +4400,17 @@ function _udExportOperations() {
 
   const fmtDollar = v => v ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
   const fmtPct = v => v != null ? Number(v).toFixed(1) + '%' : 'N/A';
+  const fmtSf = v => v ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SF' : 'N/A';
+  // Land area is stored in acres for some properties and SF for others —
+  // <= 50 implies acres, otherwise SF (50 acres = 2.18M SF, well above any
+  // single-clinic site). Conservative heuristic; surface both when possible.
+  const fmtLand = v => {
+    if (v == null) return 'N/A';
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 'N/A';
+    if (n <= 50) return n.toFixed(2) + ' acres';
+    return n.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SF (' + (n / 43560).toFixed(2) + ' acres)';
+  };
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
   const doc = `<!DOCTYPE html>
@@ -4393,6 +4487,22 @@ function _udExportOperations() {
 </div>
 
 <div class="content">
+
+<!-- Property identifiers (so the deliverable carries enough context to
+     stand alone if it's printed and detached from the analysis stack). -->
+<h2>Property Details</h2>
+<table class="data-table">
+  <tr><td>Address</td><td>${_esc(addrLine || 'N/A')}</td></tr>
+  <tr><td>City, State ZIP</td><td>${_esc([cityVal, stateVal].filter(Boolean).join(', ') + (zipVal ? ' ' + zipVal : '')) || 'N/A'}</td></tr>
+  <tr><td>Property ID</td><td>${propertyId ? _esc(String(propertyId)) : 'N/A'}</td></tr>
+  <tr><td>CMS Facility ID (CCN)</td><td>${ccn ? _esc(String(ccn)) : 'N/A'}</td></tr>
+  <tr><td>Operator</td><td>${_esc(r.operator_name || r.chain_organization || (operator && operator.label) || 'N/A')}</td></tr>
+  <tr><td>Dialysis Stations</td><td>${stationsVal ? Number(stationsVal).toLocaleString() : 'N/A'}</td></tr>
+  <tr><td>Building Size</td><td>${fmtSf(buildingSize)}</td></tr>
+  <tr><td>Year Built</td><td>${yearBuilt ? _esc(String(yearBuilt)) + (yearReno ? ' (renovated ' + _esc(String(yearReno)) + ')' : '') : 'N/A'}</td></tr>
+  <tr><td>Land Area</td><td>${fmtLand(landArea)}</td></tr>
+  ${buildingType ? '<tr><td>Building Type</td><td>' + _esc(buildingType) + '</td></tr>' : ''}
+</table>
 
 <!-- KPIs -->
 <div class="kpi-grid">
@@ -11573,3 +11683,721 @@ document.addEventListener('keydown', function (e) {
 window.openBrokerDrawer = openBrokerDrawer;
 window._switchBrokerDrawerTab = _switchBrokerDrawerTab;
 window._brokerDrawerBeginProspecting = _brokerDrawerBeginProspecting;
+
+// ============================================================================
+// LEASE COMPS EXPORT — sidebar header button (Dia + Gov)
+// Renders the count dropdown + "Export Lease Comps" button in the unified
+// detail header. Pulls the N nearest comparable lease properties (by great-
+// circle distance from the subject's lat/lng), enriches them with current /
+// last-known rent and owner-of-record info, flags owner-occupied comps, and
+// writes a single-sheet xlsx with the subject as a header row.
+// ============================================================================
+
+const _UD_LEASE_COMPS_COUNTS = [10, 15, 20, 25, 50];
+const _UD_LEASE_COMPS_DEFAULT = 20;
+
+function _udLeaseCompsControlHtml(db, propertyId) {
+  // Disable when there's no anchor property — we can't compute distances
+  // without subject lat/lng, and lat/lng comes from the property record.
+  const disabled = propertyId ? '' : 'disabled';
+  const opts = _UD_LEASE_COMPS_COUNTS.map(n =>
+    `<option value="${n}"${n === _UD_LEASE_COMPS_DEFAULT ? ' selected' : ''}>${n}</option>`
+  ).join('');
+  // Wrap select+button in a single inline-flex group so they read as one
+  // control. Styling mirrors the consolidate button's neutral chrome.
+  return `
+    <div style="display:inline-flex;align-items:stretch;gap:0;margin-right:8px" title="${disabled ? 'Open a property with a property_id to export lease comps' : 'Export the N nearest lease comparables to Excel'}">
+      <select id="udLeaseCompsCount" ${disabled}
+        style="background:transparent;border:1px solid var(--border);border-right:none;color:var(--text2);padding:6px 8px;border-radius:6px 0 0 6px;font-size:12px;font-family:Outfit,sans-serif;${disabled ? 'opacity:0.6;cursor:not-allowed' : 'cursor:pointer'}"
+        title="Number of nearest comps to include">
+        ${opts}
+      </select>
+      <button class="detail-action-btn" id="udLeaseCompsExportBtn"
+        onclick="_udExportLeaseComps('${db}', ${propertyId || 'null'}, this)"
+        ${disabled}
+        style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:0 6px 6px 0;font-size:12px;cursor:${disabled ? 'not-allowed' : 'pointer'};${disabled ? 'opacity:0.6' : ''}">
+        📊 Export Lease Comps
+      </button>
+    </div>`;
+}
+
+// Great-circle distance in miles. Returns null if any coordinate is missing
+// or non-numeric — callers should treat null as "unknown" rather than 0.
+function _udHaversineMiles(lat1, lon1, lat2, lon2) {
+  const a1 = Number(lat1), n1 = Number(lon1), a2 = Number(lat2), n2 = Number(lon2);
+  if (!isFinite(a1) || !isFinite(n1) || !isFinite(a2) || !isFinite(n2)) return null;
+  const R = 3958.7613; // Earth's mean radius in statute miles
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(a2 - a1);
+  const dLon = toRad(n2 - n1);
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function _udNormName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\b(inc|llc|llp|lp|ltd|corp|corporation|company|co|holdings|trust|properties|realty|partners|the)\b/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim();
+}
+
+// "Owner-occupied" = the recorded/true owner of the building is the same
+// entity as the operator/tenant. We don't have a persisted flag, so we
+// fuzzy-compare normalized names. Returns true only on a confident match
+// (exact-equal after stripping legal suffixes, or one fully contains the
+// other and the shorter side is at least 5 normalized chars).
+function _udIsOwnerOccupied(tenant, owner) {
+  const t = _udNormName(tenant);
+  const o = _udNormName(owner);
+  if (!t || !o) return false;
+  if (t === o) return true;
+  const shorter = t.length < o.length ? t : o;
+  const longer  = t.length < o.length ? o : t;
+  if (shorter.length >= 5 && longer.includes(shorter)) return true;
+  return false;
+}
+
+function _udNumOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+function _udYearsBetween(fromIso, toIso) {
+  if (!fromIso || !toIso) return null;
+  const a = new Date(fromIso), b = new Date(toIso);
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.round(((b - a) / (365.25 * 86400 * 1000)) * 10) / 10;
+}
+
+function _udFmtDateIso(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (isNaN(dt)) return String(d).slice(0, 10);
+  return dt.toISOString().slice(0, 10);
+}
+
+// We pull v_property_detail with select='*' rather than an explicit column
+// list — the view's column set differs slightly between Dia and Gov, and
+// PostgREST 400s on any unknown column. Bandwidth is fine for ≤ 5000 rows.
+
+// Coerce whatever land-size field the source view exposes into acres. Dia
+// properties carry both `lot_sf` (square feet) and `land_area` (sometimes
+// SF, sometimes acres depending on import); gov mostly carries `land_acres`.
+// Heuristic: anything > 100 is treated as square feet (43,560 SF = 1 acre);
+// values ≤ 100 are already acres.
+function _udLandAcres(rec) {
+  if (!rec) return null;
+  const acres = _udNumOrNull(rec.land_acres);
+  if (acres != null && acres > 0) return acres;
+  const lotSf = _udNumOrNull(rec.lot_sf);
+  if (lotSf != null && lotSf > 0) return Math.round((lotSf / 43560) * 100) / 100;
+  const landArea = _udNumOrNull(rec.land_area);
+  if (landArea == null) return null;
+  if (landArea > 100) return Math.round((landArea / 43560) * 100) / 100;
+  return Math.round(landArea * 100) / 100;
+}
+
+// Pick the chain / parent operator name (TENANT column) separate from the
+// local facility / sub-entity (OPERATOR column). For dialysis, TENANT is
+// usually the chain (DaVita, Fresenius); OPERATOR is the local clinic
+// trade name. For gov, TENANT is the agency short code; OPERATOR is the
+// full agency or sub-component.
+function _udExtractTenantOperator(db, rec, fb, lease) {
+  rec = rec || {}; fb = fb || {}; lease = lease || {};
+  if (db === 'gov') {
+    const tenant = rec.agency_short || rec.agency || fb.tenant_agency
+                || fb.agency || lease.tenant_name || '';
+    const operator = rec.agency_full || rec.agency || fb.agency_full
+                  || tenant || '';
+    return { tenant, operator };
+  }
+  // Dialysis: chain vs local operator
+  const chain = rec.chain_organization || fb.chain_organization || rec.tenant
+             || rec.tenant_operator || lease.tenant_name || '';
+  const local = rec.operator_name || fb.operator_name || rec.facility_name
+             || fb.facility_name || '';
+  return {
+    tenant: chain || local || lease.tenant_name || '',
+    operator: local || chain || ''
+  };
+}
+
+function _udSubjectFromCache(db) {
+  const c = _udCache || {};
+  const p = c.property || {};
+  const fb = c.fallback || {};
+  const own = c.ownership || {};
+  const lease = (c.leases && c.leases[0]) || {};
+  const buildingSf = _udNumOrNull(p.building_size || p.building_sf || p.rba || fb.building_sf);
+  const leasedArea = _udNumOrNull(lease.leased_area || lease.leased_sf || p.leased_area)
+                  || buildingSf;
+  const { tenant, operator } = _udExtractTenantOperator(db || c.db, p, fb, lease);
+  return {
+    property_id: c.ids?.property_id || p.property_id || null,
+    lease_number: p.lease_number || c.ids?.lease_number || null,
+    db: c.db || null,
+    tenant, // chain
+    operator, // local entity (clinic / sub-agency)
+    address: p.address || fb.address || '',
+    city: p.city || fb.city || '',
+    state: p.state || fb.state || '',
+    zip: p.zip_code || fb.zip || '',
+    latitude: _udNumOrNull(p.latitude || fb.latitude),
+    longitude: _udNumOrNull(p.longitude || fb.longitude),
+    building_sf: buildingSf,
+    leased_area: leasedArea,
+    occupancy: (buildingSf && leasedArea) ? Math.min(1, leasedArea / buildingSf) : null,
+    land_acres: _udLandAcres({ land_acres: p.land_acres, land_area: p.land_area, lot_sf: p.lot_sf }),
+    year_built: _udNumOrNull(p.year_built || fb.year_built),
+    year_renovated: _udNumOrNull(p.year_renovated || fb.year_renovated),
+    lease_start: lease.lease_start || lease.lease_commencement || p.lease_commencement || fb.lease_start || null,
+    lease_expiration: lease.lease_expiration || lease.expiration_date || fb.lease_end || null,
+    annual_rent: _udNumOrNull(lease.annual_rent || p.annual_rent || fb.annual_rent),
+    rent_per_sf: _udNumOrNull(lease.rent_per_sf || p.rent_per_sf || fb.rent_per_sf),
+    expense_structure: lease.expense_structure || p.expense_structure || '',
+    lease_bump_pct: _udNumOrNull(p.lease_bump_pct || lease.lease_bump_pct),
+    lease_bump_interval_mo: _udNumOrNull(p.lease_bump_interval_mo || lease.lease_bump_interval_mo),
+    recorded_owner: own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || '',
+    true_owner: own.true_owner || own.true_owner_name || p.true_owner_name || ''
+  };
+}
+
+async function _udFetchLeaseCompCandidates(db, subject, count) {
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+
+  // Two-stage fetch:
+  //
+  // 1) Universe pull from base `properties` — ONLY the columns needed to
+  //    rank by distance (property_id + lat/lng). v_property_detail times
+  //    out at the DB (Postgres 57014) when fully-projected with limit
+  //    5000 because it joins ownership, leases, parcel records, etc.
+  //    Selecting just three integer/numeric columns keeps the payload
+  //    well under any statement-timeout budget.
+  //
+  // 2) Top-K enrichment after the haversine sort — v_property_detail,
+  //    v_lease_detail and v_ownership_current pulled for at most ~50 rows.
+  //    Those joins are fine at that scale.
+  const propsRes = await qFn('properties', 'property_id,latitude,longitude', {
+    filter: 'latitude=not.is.null',
+    limit: 5000
+  });
+  const props = Array.isArray(propsRes) ? propsRes : (propsRes?.data || []);
+
+  // Diagnostic surface: surfaces the actual geocode-coverage shortfall.
+  // Stash on window so the next toast can read it without another fetch.
+  window._udLastGeocodeUniverseSize = props.length;
+
+  // Distance-rank, drop the subject itself, slice to the requested count.
+  const ranked = props
+    .filter(p => p.property_id && p.property_id !== subject.property_id)
+    .map(p => {
+      const d = _udHaversineMiles(subject.latitude, subject.longitude, p.latitude, p.longitude);
+      return d == null ? null : Object.assign({}, p, { distance_miles: d });
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.distance_miles - b.distance_miles)
+    .slice(0, count);
+
+  // Diagnostic logging — lets us tell apart "props came back but
+  // distance computation killed all of them" from "PostgREST returned
+  // an empty list to begin with." Logs to console with a stable prefix
+  // so it's easy to grep in browser devtools.
+  if (ranked.length === 0 && props.length > 0) {
+    const sample = props.slice(0, 3).map(p => ({
+      property_id: p.property_id,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      lat_type: typeof p.latitude,
+      lng_type: typeof p.longitude,
+      hav_miles: _udHaversineMiles(subject.latitude, subject.longitude, p.latitude, p.longitude)
+    }));
+    console.warn('[lease-comps] universe>0 but ranked=0', {
+      universe: props.length,
+      subject: {
+        property_id: subject.property_id,
+        latitude: subject.latitude,
+        longitude: subject.longitude,
+        lat_type: typeof subject.latitude,
+        lng_type: typeof subject.longitude
+      },
+      sample
+    });
+  } else if (props.length === 0) {
+    console.warn('[lease-comps] PostgREST returned no rows for properties.latitude=not.is.null');
+  } else {
+    console.info(`[lease-comps] universe=${props.length} ranked=${ranked.length} nearestMi=${ranked[0]?.distance_miles?.toFixed(2)}`);
+  }
+
+  if (ranked.length === 0) return [];
+
+  const ids = ranked.map(r => r.property_id);
+
+  // PostgREST in.() filter — comma-joined list of property_ids
+  const inList = ids.map(id => encodeURIComponent(id)).join(',');
+
+  // Pull rich property attributes + current lease + ownership in parallel
+  // for the chosen comp set. v_property_detail is heavy but bounded here
+  // to ≤50 rows, so the joins finish in milliseconds. All three are
+  // best-effort: any one failing shouldn't block the export.
+  const [propRes, leaseRes, ownRes] = await Promise.allSettled([
+    qFn('v_property_detail', '*', {
+      filter: `property_id=in.(${inList})`,
+      limit: ids.length
+    }),
+    qFn('v_lease_detail', '*', {
+      filter: `property_id=in.(${inList})`,
+      limit: ids.length * 5
+    }),
+    qFn('v_ownership_current', '*', {
+      filter: `property_id=in.(${inList})`,
+      limit: ids.length * 2
+    })
+  ]);
+  const propDetails = propRes.status === 'fulfilled'
+    ? (Array.isArray(propRes.value) ? propRes.value : (propRes.value?.data || []))
+    : [];
+  const leases = leaseRes.status === 'fulfilled'
+    ? (Array.isArray(leaseRes.value) ? leaseRes.value : (leaseRes.value?.data || []))
+    : [];
+  const owners = ownRes.status === 'fulfilled'
+    ? (Array.isArray(ownRes.value) ? ownRes.value : (ownRes.value?.data || []))
+    : [];
+
+  const propByPid = new Map();
+  for (const row of propDetails) {
+    if (row?.property_id && !propByPid.has(row.property_id)) propByPid.set(row.property_id, row);
+  }
+
+  // Index leases by property_id, preferring the active term (or latest expiration).
+  const leaseByProp = new Map();
+  for (const l of leases) {
+    const pid = l.property_id;
+    if (!pid) continue;
+    const cur = leaseByProp.get(pid);
+    if (!cur) { leaseByProp.set(pid, l); continue; }
+    const isActive = (x) => x && (x.is_active === true || x.is_active === 'true');
+    if (isActive(l) && !isActive(cur)) { leaseByProp.set(pid, l); continue; }
+    const expA = new Date(l.lease_expiration || l.expiration_date || 0).getTime();
+    const expB = new Date(cur.lease_expiration || cur.expiration_date || 0).getTime();
+    if (expA > expB) leaseByProp.set(pid, l);
+  }
+
+  const ownerByProp = new Map();
+  for (const o of owners) {
+    if (o.property_id && !ownerByProp.has(o.property_id)) ownerByProp.set(o.property_id, o);
+  }
+
+  return ranked.map(rk => {
+    // Merge the slim ranked row (property_id, lat/lng, distance) with the
+    // rich v_property_detail row (address, sf, year_built, ...). Rank row
+    // wins for fields it explicitly carries (id, lat/lng, distance_miles).
+    const det = propByPid.get(rk.property_id) || {};
+    const p = Object.assign({}, det, rk);
+    const l = leaseByProp.get(p.property_id) || {};
+    const o = ownerByProp.get(p.property_id) || {};
+    const { tenant, operator } = _udExtractTenantOperator(db, p, {}, l);
+    const owner  = o.true_owner || o.recorded_owner
+                || p.true_owner_name || p.true_owner
+                || p.recorded_owner_name || p.recorded_owner || '';
+    const buildingSf = _udNumOrNull(p.building_size || p.building_sf || p.rba);
+    const leasedArea = _udNumOrNull(l.leased_area || l.leased_sf || p.leased_area)
+                    || buildingSf;
+    return {
+      property_id: p.property_id,
+      lease_number: p.lease_number || l.lease_number || '',
+      tenant,
+      operator,
+      owner,
+      owner_occupied: _udIsOwnerOccupied(tenant, owner) || _udIsOwnerOccupied(operator, owner),
+      address: p.address || '',
+      city: p.city || '',
+      state: p.state || '',
+      zip: p.zip_code || '',
+      latitude: p.latitude,
+      longitude: p.longitude,
+      distance_miles: p.distance_miles,
+      building_sf: buildingSf,
+      leased_area: leasedArea,
+      occupancy: (buildingSf && leasedArea) ? Math.min(1, leasedArea / buildingSf) : null,
+      land_acres: _udLandAcres({ land_acres: p.land_acres, land_area: p.land_area, lot_sf: p.lot_sf }),
+      year_built: _udNumOrNull(p.year_built),
+      year_renovated: _udNumOrNull(p.year_renovated),
+      lease_start: l.lease_start || l.lease_commencement || p.lease_commencement || null,
+      lease_expiration: l.lease_expiration || l.expiration_date || null,
+      annual_rent: _udNumOrNull(l.annual_rent || p.annual_rent),
+      rent_per_sf: _udNumOrNull(l.rent_per_sf || p.rent_per_sf),
+      expense_structure: l.expense_structure || p.expense_structure || '',
+      lease_bump_pct: _udNumOrNull(l.lease_bump_pct || p.lease_bump_pct),
+      lease_bump_interval_mo: _udNumOrNull(l.lease_bump_interval_mo || p.lease_bump_interval_mo)
+    };
+  });
+}
+
+function _udFmtBumps(pct, intervalMo) {
+  if (pct == null && intervalMo == null) return '';
+  const p = pct == null ? '?' : (Number(pct).toFixed(2).replace(/\.?0+$/, '') + '%');
+  const i = intervalMo == null ? '?' : (Number(intervalMo) + 'mo');
+  return `${p} / ${i}`;
+}
+
+async function _udExportLeaseComps(db, propertyId, btn) {
+  // Fall back to whatever the panel resolved during load. The header HTML
+  // is generated once, but for CMS-clinic / fallback-only clicks the
+  // property_id only materializes after a medicare_clinics or address
+  // lookup — so the inline arg can lag behind reality. Cache wins.
+  if (!propertyId) {
+    propertyId = _udCache?.property?.property_id
+              || _udCache?.ids?.property_id
+              || null;
+  }
+  if (!propertyId) {
+    showToast('Open a property with a property_id to export lease comps', 'error');
+    return;
+  }
+  const sel = document.getElementById('udLeaseCompsCount');
+  const count = Math.max(1, parseInt(sel?.value || String(_UD_LEASE_COMPS_DEFAULT), 10) || _UD_LEASE_COMPS_DEFAULT);
+
+  const subject = _udSubjectFromCache(db);
+  if (subject.latitude == null || subject.longitude == null) {
+    // v_property_detail's column list varies by deployment and doesn't
+    // always expose latitude/longitude — those columns live on the
+    // underlying `properties` table. Self-fetch from there as a fallback
+    // before declaring the subject ungeocoded.
+    const qFn = db === 'gov' ? govQuery : diaQuery;
+    try {
+      const res = await qFn('properties', 'property_id,latitude,longitude', {
+        filter: `property_id=eq.${propertyId}`,
+        limit: 1
+      });
+      const row = (Array.isArray(res) ? res : (res?.data || []))[0] || null;
+      if (row) {
+        subject.latitude = _udNumOrNull(row.latitude);
+        subject.longitude = _udNumOrNull(row.longitude);
+      }
+    } catch (e) { console.warn('subject coord fetch failed', e); }
+  }
+  // Last-resort: geocode the subject's address via Nominatim (OpenStreetMap)
+  // and persist the result back to properties so subsequent exports use the
+  // stored coords. This handles legacy / CMS-imported clinics that landed in
+  // the table without geocoding. Best-effort: any failure (CORS, rate limit,
+  // unparsable address) leaves us in the original ungeocoded state.
+  if ((subject.latitude == null || subject.longitude == null) && subject.address) {
+    if (btn) btn.textContent = '🌍 Geocoding...';
+    const geo = await _udGeocodeSubject(db, subject, propertyId);
+    if (geo) {
+      subject.latitude = geo.lat;
+      subject.longitude = geo.lng;
+      showToast('Geocoded subject from address — coords saved to property record', 'success');
+    }
+  }
+  if (subject.latitude == null || subject.longitude == null) {
+    showToast(
+      'Subject property has no coordinates on file and could not be geocoded from the address — set lat/lng manually before exporting',
+      'error'
+    );
+    return;
+  }
+
+  // Inline button feedback so the user knows the click registered. Cold path:
+  // first click downloads ExcelJS (~900KB) + fetches the template; subsequent
+  // clicks are instant once both are cached.
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Building...'; }
+
+  try {
+    // Lazy-load ExcelJS in parallel with the comp data fetch — both are
+    // independent and the network round-trips cost the same when run side
+    // by side. ExcelJS is required for template-based output (style fidelity);
+    // without it we can't preserve the Briggs branding.
+    const [ExcelJS, comps] = await Promise.all([
+      _udLoadExcelJs(),
+      _udFetchLeaseCompCandidates(db, subject, count)
+    ]);
+    if (!comps.length) {
+      const universe = Number(window._udLastGeocodeUniverseSize || 0);
+      const msg = universe === 0
+        ? 'No properties in this database have coordinates yet — a bulk geocode pass is needed before lease comps can be ranked by distance.'
+        : universe < 5
+          ? `Only ${universe} propert${universe === 1 ? 'y has' : 'ies have'} coordinates on file — bulk geocode the database to enable distance-ranked comps.`
+          : 'No comparable properties with coordinates found nearby';
+      showToast(msg, 'error');
+      return;
+    }
+    await _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps);
+    showToast(`Exported ${comps.length} lease comp${comps.length === 1 ? '' : 's'} to Excel`, 'success');
+  } catch (err) {
+    console.error('Lease comps export error:', err);
+    showToast('Lease comps export failed: ' + (err?.message || 'unknown error'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+}
+
+// Lazy-loads the ExcelJS UMD bundle on first export click. Adds the
+// stylepreserving Excel writer to window.ExcelJS without bloating the
+// initial page payload — most users never click Export Lease Comps so
+// the ~900KB cost is deferred until needed.
+let _udExcelJsPromise = null;
+function _udLoadExcelJs() {
+  if (typeof window !== 'undefined' && window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  if (_udExcelJsPromise) return _udExcelJsPromise;
+  _udExcelJsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    s.async = true;
+    s.onload = () => {
+      if (window.ExcelJS) resolve(window.ExcelJS);
+      else reject(new Error('ExcelJS loaded but global is missing'));
+    };
+    s.onerror = () => {
+      _udExcelJsPromise = null; // allow retry on next click
+      reject(new Error('Failed to load ExcelJS from CDN'));
+    };
+    document.head.appendChild(s);
+  });
+  return _udExcelJsPromise;
+}
+
+// Geocode the subject's address via Nominatim (OpenStreetMap). Free, no API
+// key, but capped at ~1 req/sec by their usage policy. We only call this on
+// explicit user action (Export Lease Comps click), so volume stays well
+// inside their limits. On success we patch latitude/longitude back to the
+// `properties` row so the next export skips this path.
+//
+// Returns { lat, lng } on success, null on any failure. The caller decides
+// whether to abort or proceed without coords.
+async function _udGeocodeSubject(db, subject, propertyId) {
+  const parts = [subject.address, subject.city, subject.state, subject.zip].filter(Boolean);
+  if (parts.length < 2) return null; // need at least street + city/state to geocode reliably
+  const q = parts.join(', ');
+  let lat = null, lng = null;
+  try {
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(q);
+    // Browser sets Origin and a real User-Agent on our behalf — both satisfy
+    // Nominatim's policy for low-volume interactive use.
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) {
+      console.warn('Nominatim geocode HTTP', resp.status);
+      return null;
+    }
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    lat = parseFloat(data[0].lat);
+    lng = parseFloat(data[0].lon);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+  } catch (e) {
+    console.warn('Nominatim geocode failed', e);
+    return null;
+  }
+
+  // Persist back to properties — best effort. PATCH goes through dia-query
+  // proxy directly for dia, and through gov-write for gov. Either failure
+  // is non-fatal: we still return the coords so the export proceeds.
+  try {
+    if (db === 'gov') {
+      // Gov writes to properties must go through the gov-write service
+      // (see GOV_WRITE_SERVICE_TABLES in api/_shared/allowlist.js).
+      await fetch('/api/gov-write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: 'property-update',
+          property_id: propertyId,
+          patch: { latitude: lat, longitude: lng }
+        })
+      });
+    } else {
+      await fetch('/api/dia-query?table=properties&filter=' +
+        encodeURIComponent(`property_id=eq.${propertyId}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude: lat, longitude: lng })
+      });
+    }
+  } catch (e) { console.warn('persist geocode failed', e); }
+
+  return { lat, lng };
+}
+
+// Path to the committed Briggs lease comps template. Express + Vercel both
+// serve assets/** as static files, and we already include this directory in
+// vercel.json's includeFiles for the api/capital-markets bundle.
+const _UD_LEASE_COMPS_TEMPLATE_URL = '/assets/cm-templates/dialysis-lease-comps-template.xlsx';
+
+// Template constants — sourced from a structural read of the committed
+// template. If the template layout changes (banners moved, column added),
+// update these and the populate functions below in lockstep.
+const _UD_TPL = {
+  subjectHeaderRow: 3,    // "TENANT | OPERATOR | ... | BUMPS" header row for SUBJECT
+  subjectDataRow: 4,
+  compsHeaderRow: 7,      // "TENANT | ... | USER/OWNER | DISTANCE TO SUBJECT"
+  compsFirstDataRow: 8,
+  compsLastTemplatedRow: 40, // template ships with rows 8..40 pre-styled
+  cols: {
+    counter: 1, tenant: 2, operator: 3, address: 4, city: 5, state: 6,
+    land: 7, built: 8, renovated: 9, rba: 10, sfLeased: 11, occupancy: 12,
+    rentPsf: 13, currentRent: 14, commence: 15, exp: 16, initialTerm: 17,
+    termRem: 18, expenses: 19, bumps: 20, userOwner: 21, distance: 22
+  }
+};
+
+// Years between two date-ish values (ISO strings or Date). Returns null
+// if either side is missing or unparseable.
+function _udYearsBetweenDates(a, b) {
+  if (!a || !b) return null;
+  const ad = a instanceof Date ? a : new Date(a);
+  const bd = b instanceof Date ? b : new Date(b);
+  if (isNaN(ad) || isNaN(bd)) return null;
+  return Math.round(((bd - ad) / (365.25 * 86400 * 1000)) * 10) / 10;
+}
+
+function _udToDateOrNull(v) {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v) ? null : v;
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+
+// Set a cell value WITHOUT clobbering its style. ExcelJS' `cell.value = X`
+// preserves cell.style; we use this when writing into pre-styled template
+// cells so the column's formatting (currency, dates, etc.) survives.
+function _udSetCell(sheet, row, col, value) {
+  const cell = sheet.getRow(row).getCell(col);
+  cell.value = (value === undefined || value === '' || value === null) ? null : value;
+  return cell;
+}
+
+// Populate one data row (subject or comp). The template's number formats
+// are already applied to each column at the data-row level, so we just set
+// the raw value in the right type and Excel renders it formatted.
+function _udPopulateDataRow(sheet, db, rowIdx, rec, opts) {
+  const c = _UD_TPL.cols;
+  const isSubject = !!opts?.subject;
+
+  _udSetCell(sheet, rowIdx, c.tenant, rec.tenant || '');
+  _udSetCell(sheet, rowIdx, c.operator, rec.operator || '');
+  _udSetCell(sheet, rowIdx, c.address, rec.address || '');
+  _udSetCell(sheet, rowIdx, c.city, rec.city || '');
+  _udSetCell(sheet, rowIdx, c.state, rec.state || '');
+  _udSetCell(sheet, rowIdx, c.land, rec.land_acres != null ? rec.land_acres : null);
+  _udSetCell(sheet, rowIdx, c.built, rec.year_built != null ? rec.year_built : null);
+  _udSetCell(sheet, rowIdx, c.renovated, rec.year_renovated != null ? rec.year_renovated : null);
+  _udSetCell(sheet, rowIdx, c.rba, rec.building_sf != null ? rec.building_sf : null);
+  _udSetCell(sheet, rowIdx, c.sfLeased, rec.leased_area != null ? rec.leased_area : null);
+  // Occupancy column is formatted as 0% — write the raw decimal so Excel
+  // does the percent rendering itself.
+  _udSetCell(sheet, rowIdx, c.occupancy, rec.occupancy != null ? rec.occupancy : null);
+  _udSetCell(sheet, rowIdx, c.rentPsf, rec.rent_per_sf != null ? rec.rent_per_sf : null);
+  _udSetCell(sheet, rowIdx, c.currentRent, rec.annual_rent != null ? rec.annual_rent : null);
+
+  const startDate = _udToDateOrNull(rec.lease_start);
+  const endDate = _udToDateOrNull(rec.lease_expiration);
+  _udSetCell(sheet, rowIdx, c.commence, startDate);
+  _udSetCell(sheet, rowIdx, c.exp, endDate);
+  _udSetCell(sheet, rowIdx, c.initialTerm, _udYearsBetweenDates(startDate, endDate));
+  _udSetCell(sheet, rowIdx, c.termRem, _udYearsBetweenDates(new Date(), endDate));
+  _udSetCell(sheet, rowIdx, c.expenses, rec.expense_structure || '');
+  _udSetCell(sheet, rowIdx, c.bumps, _udFmtBumps(rec.lease_bump_pct, rec.lease_bump_interval_mo));
+
+  // USER/OWNER + DISTANCE only apply to comparables. The template has no
+  // U/V cells in row 4 (subject), so we leave them untouched there.
+  if (!isSubject) {
+    const userOwnerLabel = rec.owner_occupied
+      ? (rec.owner ? `User (${rec.owner})` : 'User')
+      : (rec.owner || '');
+    _udSetCell(sheet, rowIdx, c.userOwner, userOwnerLabel);
+    _udSetCell(sheet, rowIdx, c.distance, rec.distance_miles != null ? rec.distance_miles : null);
+  }
+}
+
+// Clone every cell-level style attribute from a source row so a newly
+// extended row matches the templated rows pixel-for-pixel. ExcelJS doesn't
+// inherit cell styles from columns the way native Excel does once the
+// workbook has been written, so we have to re-stamp explicitly.
+function _udCloneRowStyles(sheet, srcRowIdx, dstRowIdx, colCount) {
+  const srcRow = sheet.getRow(srcRowIdx);
+  const dstRow = sheet.getRow(dstRowIdx);
+  dstRow.height = srcRow.height;
+  for (let c = 1; c <= colCount; c++) {
+    const srcCell = srcRow.getCell(c);
+    const dstCell = dstRow.getCell(c);
+    // Deep-copy via JSON to detach references; ExcelJS stores font/fill
+    // objects by reference so a shallow copy would keep both rows pointing
+    // at the same style, breaking later per-cell tweaks.
+    if (srcCell.style) {
+      dstCell.style = JSON.parse(JSON.stringify(srcCell.style));
+    }
+  }
+}
+
+async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
+  // Fetch the template binary. Static asset fetch — auth interceptor only
+  // touches /api/ paths, so this passes through unmodified.
+  const resp = await fetch(_UD_LEASE_COMPS_TEMPLATE_URL);
+  if (!resp.ok) throw new Error(`Template fetch failed: HTTP ${resp.status}`);
+  const ab = await resp.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(ab);
+  const sheet = wb.worksheets[0];
+  if (!sheet) throw new Error('Template has no worksheets');
+
+  // ── Subject row (single row at template position 4) ──────────────────
+  _udPopulateDataRow(sheet, db, _UD_TPL.subjectDataRow, subject, { subject: true });
+
+  // ── Comp rows ────────────────────────────────────────────────────────
+  // Template ships with 33 pre-styled rows (8..40). For counts >33 we
+  // clone row 8's per-cell styles into rows 41..(8+count-1) so they
+  // render with identical formats/heights/alignment.
+  const lastDataRow = _UD_TPL.compsFirstDataRow + comps.length - 1;
+  const lastTpl = _UD_TPL.compsLastTemplatedRow;
+  if (lastDataRow > lastTpl) {
+    for (let r = lastTpl + 1; r <= lastDataRow; r++) {
+      _udCloneRowStyles(sheet, _UD_TPL.compsFirstDataRow, r, _UD_TPL.cols.distance);
+      // Stamp the running counter formula so column A keeps incrementing.
+      sheet.getRow(r).getCell(_UD_TPL.cols.counter).value = { formula: `A${r - 1}+1` };
+    }
+  }
+
+  comps.forEach((c, i) => {
+    const rowIdx = _UD_TPL.compsFirstDataRow + i;
+    _udPopulateDataRow(sheet, db, rowIdx, c, { subject: false });
+  });
+
+  // Clear any unused pre-styled comp rows so a count of 10 doesn't ship
+  // with 23 blank-but-counted rows trailing it. We blank the data cells
+  // (B..V) but keep column A's counter formula AND the row formatting,
+  // which lets the user paste additional comps later if they want.
+  if (comps.length < (lastTpl - _UD_TPL.compsFirstDataRow + 1)) {
+    for (let r = _UD_TPL.compsFirstDataRow + comps.length; r <= lastTpl; r++) {
+      const row = sheet.getRow(r);
+      for (let c = _UD_TPL.cols.tenant; c <= _UD_TPL.cols.distance; c++) {
+        row.getCell(c).value = null;
+      }
+    }
+  }
+
+  // Generate workbook and trigger browser download.
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const today = new Date().toISOString().slice(0, 10);
+  const slug = String(subject.address || subject.property_id || 'subject')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'subject';
+  const fname = `LCC_LeaseComps_${db === 'gov' ? 'GOV' : 'DIA'}_${slug}_${today}.xlsx`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Free the object URL after the click handler had a chance to read it.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+window._udExportLeaseComps = _udExportLeaseComps;

@@ -1,0 +1,477 @@
+{
+  "_doc": "Snapshot of cm_chart_catalog from LCC Opps (xengecqvemvfknjvbvrq) for the export-bundle audit test. Filtered to chart_template_ids that ship to dialysis or gov. Refresh via `node scripts/cm-refresh-catalog-snapshot.mjs` after catalog migrations land. The audit test (test/cm-export-bundle-audit.test.js) reads this file and asserts every entry has a TAB_NAMES entry in cm-excel-export.js.",
+  "_refreshed_at": "2026-05-09",
+  "_filter": "applies_to_verticals contains 'dialysis' or 'gov'",
+  "templates": [
+    {
+      "chart_template_id": "asking_cap_quartiles_active",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 5,
+      "cadence": "monthly"
+    },
+    {
+      "chart_template_id": "available_by_tenant",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 5
+    },
+    {
+      "chart_template_id": "available_by_tenant_count_donut",
+      "chart_type": "doughnut",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 4
+    },
+    {
+      "chart_template_id": "available_by_tenant_volume_donut",
+      "chart_type": "doughnut",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 4
+    },
+    {
+      "chart_template_id": "available_by_term_bucket",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 5
+    },
+    {
+      "chart_template_id": "available_by_term_summary",
+      "chart_type": "bar",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 4
+    },
+    {
+      "chart_template_id": "available_market_size_combo",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 5
+    },
+    {
+      "chart_template_id": "avg_deal_size",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "bid_ask_spread",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "buyer_class_pct_by_year",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "national_st",
+        "gov",
+        "dialysis"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "buyer_pool_monthly_count",
+      "chart_type": "bar",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 3
+    },
+    {
+      "chart_template_id": "cap_rate_by_credit",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "cap_rate_by_lease_term",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "cap_rate_top_bottom_quartile",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "cap_rate_ttm_by_quarter",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "case_for_renewal",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "cash_leveraged_returns",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "cost_of_capital",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "cpi_vs_renewal_cagr",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1,
+      "cadence": "monthly"
+    },
+    {
+      "chart_template_id": "dom_and_pct_of_ask",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "dom_price_change_active",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 5,
+      "cadence": "monthly"
+    },
+    {
+      "chart_template_id": "fed_funds_vs_treasury",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "national_st",
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "inventory_snapshot_kpis",
+      "chart_type": "kpi_block",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 5
+    },
+    {
+      "chart_template_id": "lease_renewal_rate",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1,
+      "cadence": "monthly"
+    },
+    {
+      "chart_template_id": "lease_structures",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "lease_termination_rate",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "leased_inventory_by_state",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "leasing_summary",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "market_share_pie_ttm",
+      "chart_type": "PieChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "net_lease_spread",
+      "chart_type": "AreaChart",
+      "applies_to_verticals": [
+        "national_st",
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "nm_buyer_distribution",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 3
+    },
+    {
+      "chart_template_id": "nm_notable_transactions",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 3
+    },
+    {
+      "chart_template_id": "nm_track_record_buyer_type",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 3
+    },
+    {
+      "chart_template_id": "nm_vs_market_cap",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "on_market_snapshot",
+      "chart_type": "table",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 4
+    },
+    {
+      "chart_template_id": "pace_of_cap_rate_expansion",
+      "chart_type": "bar",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 2
+    },
+    {
+      "chart_template_id": "quarterly_volume_bars",
+      "chart_type": "bar",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 3
+    },
+    {
+      "chart_template_id": "renewal_rent_growth",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1,
+      "cadence": "monthly"
+    },
+    {
+      "chart_template_id": "rent_by_year_built",
+      "chart_type": "ScatterChart",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "rent_heat_map",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "rent_psf_box_quarterly",
+      "chart_type": "StockChart",
+      "applies_to_verticals": [
+        "national_st",
+        "dialysis"
+      ],
+      "phase": 2
+    },
+    {
+      "chart_template_id": "seller_sentiment",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "sources_of_capital",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "top_buyers_table",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "top_sellers_table",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "transaction_count_ttm",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "valuation_index",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "dialysis",
+        "gov"
+      ],
+      "phase": 1,
+      "cadence": "monthly"
+    },
+    {
+      "chart_template_id": "value_proposition_results",
+      "chart_type": "kpi_block",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis"
+      ],
+      "phase": 4
+    },
+    {
+      "chart_template_id": "volume_cap_quartile_combo",
+      "chart_type": "LineChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "volume_cap_summary_table",
+      "chart_type": "DataTable",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "volume_ttm_by_quarter",
+      "chart_type": "AreaChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    },
+    {
+      "chart_template_id": "whatsnew_quarter_kpis",
+      "chart_type": "kpi_block",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "phase": 4
+    },
+    {
+      "chart_template_id": "yoy_volume_change",
+      "chart_type": "BarChart",
+      "applies_to_verticals": [
+        "gov",
+        "dialysis",
+        "national_st"
+      ],
+      "phase": 1
+    }
+  ]
+}
