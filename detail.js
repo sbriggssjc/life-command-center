@@ -11877,18 +11877,50 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
   //    Selecting just three integer/numeric columns keeps the payload
   //    well under any statement-timeout budget.
   //
+  //    The universe is constrained server-side to a bounding box around
+  //    the subject. Without it, PostgREST orders by primary key and the
+  //    5000-row cap silently drops geographically-relevant rows once
+  //    geocoded coverage exceeds 5000 (audit 2026-05-09: ~30% of dia
+  //    subjects and ~50% of gov subjects were getting wrong "nearest"
+  //    comps because the true nearest lived past pid 5000 in the
+  //    primary-key ordering). We try a tight radius first (covers nearly
+  //    every realistic dialysis use) and expand only if too few rows came
+  //    back — most queries finish in one round-trip.
+  //
   // 2) Top-K enrichment after the haversine sort — v_property_detail,
   //    v_lease_detail and v_ownership_current pulled for at most ~50 rows.
   //    Those joins are fine at that scale.
-  const propsRes = await qFn('properties', 'property_id,latitude,longitude', {
-    filter: 'latitude=not.is.null',
-    limit: 5000
-  });
-  const props = Array.isArray(propsRes) ? propsRes : (propsRes?.data || []);
+  const RADII_MI = [150, 500, 2000];
+  const lat0 = Number(subject.latitude);
+  const lng0 = Number(subject.longitude);
+  const cosLat = Math.cos(lat0 * Math.PI / 180);
+  let props = [];
+  let radiusUsed = null;
+  for (const radius of RADII_MI) {
+    const dLat = radius / 69.0;
+    const dLng = radius / Math.max(0.01, 69.0 * Math.abs(cosLat));
+    const bbox = 'and=(' + [
+      `latitude.gte.${(lat0 - dLat).toFixed(6)}`,
+      `latitude.lte.${(lat0 + dLat).toFixed(6)}`,
+      `longitude.gte.${(lng0 - dLng).toFixed(6)}`,
+      `longitude.lte.${(lng0 + dLng).toFixed(6)}`
+    ].join(',') + ')';
+    const propsRes = await qFn('properties', 'property_id,latitude,longitude', {
+      filter: bbox,
+      limit: 5000
+    });
+    props = Array.isArray(propsRes) ? propsRes : (propsRes?.data || []);
+    radiusUsed = radius;
+    // +1 because the subject itself is in its own box and gets filtered
+    // out of `ranked` below; we need `count` real comps after that drop.
+    if (props.length >= count + 1) break;
+  }
 
-  // Diagnostic surface: surfaces the actual geocode-coverage shortfall.
-  // Stash on window so the next toast can read it without another fetch.
+  // Diagnostic surface: now scoped to the bbox neighborhood, not the
+  // global geocoded set. Stash on window so the next toast can read it
+  // without another fetch.
   window._udLastGeocodeUniverseSize = props.length;
+  window._udLastGeocodeRadiusMi = radiusUsed;
 
   // Distance-rank, drop the subject itself, slice to the requested count.
   const ranked = props
@@ -11916,6 +11948,7 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
     }));
     console.warn('[lease-comps] universe>0 but ranked=0', {
       universe: props.length,
+      radius_mi: radiusUsed,
       subject: {
         property_id: subject.property_id,
         latitude: subject.latitude,
@@ -11926,9 +11959,9 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
       sample
     });
   } else if (props.length === 0) {
-    console.warn('[lease-comps] PostgREST returned no rows for properties.latitude=not.is.null');
+    console.warn(`[lease-comps] PostgREST returned no rows within ${radiusUsed} mi of subject (${subject.latitude},${subject.longitude})`);
   } else {
-    console.info(`[lease-comps] universe=${props.length} ranked=${ranked.length} nearestMi=${ranked[0]?.distance_miles?.toFixed(2)}`);
+    console.info(`[lease-comps] universe=${props.length} radius=${radiusUsed}mi ranked=${ranked.length} nearestMi=${ranked[0]?.distance_miles?.toFixed(2)}`);
   }
 
   if (ranked.length === 0) return [];
@@ -12118,11 +12151,10 @@ async function _udExportLeaseComps(db, propertyId, btn) {
     ]);
     if (!comps.length) {
       const universe = Number(window._udLastGeocodeUniverseSize || 0);
+      const radius = Number(window._udLastGeocodeRadiusMi || 0);
       const msg = universe === 0
-        ? 'No properties in this database have coordinates yet — a bulk geocode pass is needed before lease comps can be ranked by distance.'
-        : universe < 5
-          ? `Only ${universe} propert${universe === 1 ? 'y has' : 'ies have'} coordinates on file — bulk geocode the database to enable distance-ranked comps.`
-          : 'No comparable properties with coordinates found nearby';
+        ? `No geocoded properties found within ${radius} mi of the subject — coverage may be too sparse in this area for distance-ranked comps.`
+        : 'No comparable properties with coordinates found nearby';
       showToast(msg, 'error');
       return;
     }
