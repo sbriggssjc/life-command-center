@@ -1,0 +1,308 @@
+From b41e0507e89943805f6d3db395d284e3367f67c5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 9 May 2026 02:35:33 +0000
+Subject: [PATCH] fix(lease-comps): rebuild template + correct schema field names
+
+Apply with: git apply scripts/lease-comps-detail-js.patch
+---
+ detail.js | 200 ++++++++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 157 insertions(+), 43 deletions(-)
+
+diff --git a/detail.js b/detail.js
+index 37f435f..618008a 100644
+--- a/detail.js
++++ b/detail.js
+@@ -11809,18 +11809,22 @@ function _udExtractTenantOperator(db, rec, fb, lease) {
+   rec = rec || {}; fb = fb || {}; lease = lease || {};
+   if (db === 'gov') {
+     const tenant = rec.agency_short || rec.agency || fb.tenant_agency
+-                || fb.agency || lease.tenant_name || '';
++                || fb.agency || lease.tenant || lease.tenant_name || '';
+     const operator = rec.agency_full || rec.agency || fb.agency_full
+-                  || tenant || '';
++                  || lease.operator || tenant || '';
+     return { tenant, operator };
+   }
+-  // Dialysis: chain vs local operator
+-  const chain = rec.chain_organization || fb.chain_organization || rec.tenant
+-             || rec.tenant_operator || lease.tenant_name || '';
+-  const local = rec.operator_name || fb.operator_name || rec.facility_name
++  // Dialysis: chain vs local operator. The lease record (v_lease_detail) is
++  // authoritative for tenant/operator; only fall back to the property record
++  // when no lease row joined. v_property_detail does NOT carry tenant fields,
++  // but the underlying `properties` table does (chain_canonical, tenant,
++  // operator) — we project those at the bbox stage so they're available on rec.
++  const chain = lease.tenant || rec.chain_canonical || rec.tenant
++             || fb.chain_organization || fb.chain_canonical || '';
++  const local = lease.operator || rec.operator || fb.operator_name
+              || fb.facility_name || '';
+   return {
+-    tenant: chain || local || lease.tenant_name || '',
++    tenant: chain || local || '',
+     operator: local || chain || ''
+   };
+ }
+@@ -11831,9 +11835,8 @@ function _udSubjectFromCache(db) {
+   const fb = c.fallback || {};
+   const own = c.ownership || {};
+   const lease = (c.leases && c.leases[0]) || {};
+-  const buildingSf = _udNumOrNull(p.building_size || p.building_sf || p.rba || fb.building_sf);
+-  const leasedArea = _udNumOrNull(lease.leased_area || lease.leased_sf || p.leased_area)
+-                  || buildingSf;
++  const buildingSf = _udNumOrNull(p.building_sf || p.building_size || p.rba || fb.building_sf);
++  const leasedArea = _udNumOrNull(lease.leased_area || p.leased_area) || buildingSf;
+   const { tenant, operator } = _udExtractTenantOperator(db || c.db, p, fb, lease);
+   return {
+     property_id: c.ids?.property_id || p.property_id || null,
+@@ -11853,18 +11856,48 @@ function _udSubjectFromCache(db) {
+     land_acres: _udLandAcres({ land_acres: p.land_acres, land_area: p.land_area, lot_sf: p.lot_sf }),
+     year_built: _udNumOrNull(p.year_built || fb.year_built),
+     year_renovated: _udNumOrNull(p.year_renovated || fb.year_renovated),
+-    lease_start: lease.lease_start || lease.lease_commencement || p.lease_commencement || fb.lease_start || null,
+-    lease_expiration: lease.lease_expiration || lease.expiration_date || fb.lease_end || null,
+-    annual_rent: _udNumOrNull(lease.annual_rent || p.annual_rent || fb.annual_rent),
+-    rent_per_sf: _udNumOrNull(lease.rent_per_sf || p.rent_per_sf || fb.rent_per_sf),
+-    expense_structure: lease.expense_structure || p.expense_structure || '',
+-    lease_bump_pct: _udNumOrNull(p.lease_bump_pct || lease.lease_bump_pct),
+-    lease_bump_interval_mo: _udNumOrNull(p.lease_bump_interval_mo || lease.lease_bump_interval_mo),
+-    recorded_owner: own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || '',
+-    true_owner: own.true_owner || own.true_owner_name || p.true_owner_name || ''
++    lease_start: lease.lease_start || fb.lease_start || null,
++    lease_expiration: lease.lease_expiration || fb.lease_end || null,
++    initial_term_years: _udNumOrNull(lease.initial_term_years),
++    term_remaining_years: _udNumOrNull(lease.term_remaining_years),
++    annual_rent: _udNumOrNull(lease.annual_rent || lease.base_annual_rent || fb.annual_rent),
++    rent_per_sf: _udNumOrNull(lease.rent_psf || fb.rent_per_sf),
++    expense_structure: lease.expense_structure || '',
++    lease_bump_pct: null,
++    lease_bump_interval_mo: null,
++    recorded_owner: _udSanitizeOwner(own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || ''),
++    true_owner: _udSanitizeOwner(own.true_owner || own.true_owner_name || ''),
++    // Convenience field for the populator: prefer true owner over recorded.
++    owner: _udSanitizeOwner(own.true_owner || own.recorded_owner || own.true_owner_name || own.recorded_owner_name || p.recorded_owner_name || ''),
++    owner_occupied: false  // single-tenant subject; not flagged unless the caller knows otherwise
+   };
+ }
+ 
++// Best-effort lease fetch for the subject — covers the case where the
++// detail-tab cache hasn't loaded the lease record by the time the user clicks
++// Export. Without this the subject row used to ship with no rent / commence /
++// exp / term / expenses, even when the lease was on file. Returns the same
++// shape that `_udSubjectFromCache` would have read out of `c.leases[0]`.
++async function _udFetchSubjectLease(db, propertyId) {
++  if (!propertyId) return null;
++  const qFn = db === 'gov' ? govQuery : diaQuery;
++  try {
++    const res = await qFn('v_lease_detail', '*', {
++      filter: `property_id=eq.${propertyId}`,
++      order: 'lease_start.desc.nullslast',
++      limit: 5
++    });
++    const rows = Array.isArray(res) ? res : (res?.data || []);
++    if (!rows.length) return null;
++    // Prefer the active term, else the latest-expiring row.
++    const active = rows.find(r => r.is_active === true || r.is_active === 'true');
++    return active || rows[0];
++  } catch (e) {
++    console.warn('subject lease fetch failed', e);
++    return null;
++  }
++}
++
+ async function _udFetchLeaseCompCandidates(db, subject, count) {
+   const qFn = db === 'gov' ? govQuery : diaQuery;
+ 
+@@ -11905,7 +11938,17 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
+       `longitude.gte.${(lng0 - dLng).toFixed(6)}`,
+       `longitude.lte.${(lng0 + dLng).toFixed(6)}`
+     ].join(',') + ')';
+-    const propsRes = await qFn('properties', 'property_id,latitude,longitude', {
++    // Project tenant / operator / chain_canonical / year_renovated from the
++    // base `properties` table at the bbox stage. v_property_detail does not
++    // expose these fields but `properties` does, and we hit it anyway for
++    // lat/lng. This gets tenant/operator onto every ranked comp without an
++    // extra round-trip — important because `v_property_detail` for some
++    // comps returns no row at all (e.g. inactive listings) and otherwise
++    // tenant/operator would silently come back blank.
++    const projection = db === 'gov'
++      ? 'property_id,latitude,longitude,year_built,year_renovated'
++      : 'property_id,latitude,longitude,tenant,operator,chain_canonical,year_built,year_renovated';
++    const propsRes = await qFn('properties', projection, {
+       filter: bbox,
+       limit: 5000
+     });
+@@ -11923,6 +11966,12 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
+   window._udLastGeocodeUniverseSize = props.length;
+   window._udLastGeocodeRadiusMi = radiusUsed;
+ 
+   // Distance-rank, drop the subject itself, slice to the requested count.
++  // Dedupe by rounded lat/lng — the `properties` table sometimes carries
++  // multiple rows per physical building (different suite numbers / lease
++  // records / vintages), and emitting all of them produces three identical
++  // "2710 Telegraph Ave"-style rows at distance 0.04 mi. Round to ~1 m and
++  // keep the first hit at each coordinate.
++  const seenCoord = new Set();
+   const ranked = props
+     .filter(p => p.property_id && p.property_id !== subject.property_id)
+     .map(p => {
+@@ -11931,6 +11980,12 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
+     })
+     .filter(Boolean)
+     .sort((a, b) => a.distance_miles - b.distance_miles)
++    .filter(p => {
++      const key = `${Number(p.latitude).toFixed(5)},${Number(p.longitude).toFixed(5)}`;
++      if (seenCoord.has(key)) return false;
++      seenCoord.add(key);
++      return true;
++    })
+     .slice(0, count);
+ 
+   // Diagnostic logging — lets us tell apart "props came back but
+@@ -12024,20 +12079,22 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
+   }
+ 
+   return ranked.map(rk => {
+-    // Merge the slim ranked row (property_id, lat/lng, distance) with the
+-    // rich v_property_detail row (address, sf, year_built, ...). Rank row
+-    // wins for fields it explicitly carries (id, lat/lng, distance_miles).
++    // Merge the slim ranked row (property_id, lat/lng, distance, +
++    // tenant/operator/year_renovated/chain_canonical projected from the
++    // `properties` table at the bbox stage) with the rich v_property_detail
++    // row (address, sf, year_built, recorded_owner_name, ...). Rank row wins
++    // for fields it explicitly carries.
+     const det = propByPid.get(rk.property_id) || {};
+     const p = Object.assign({}, det, rk);
+     const l = leaseByProp.get(p.property_id) || {};
+     const o = ownerByProp.get(p.property_id) || {};
+     const { tenant, operator } = _udExtractTenantOperator(db, p, {}, l);
+-    const owner  = o.true_owner || o.recorded_owner
+-                || p.true_owner_name || p.true_owner
+-                || p.recorded_owner_name || p.recorded_owner || '';
+-    const buildingSf = _udNumOrNull(p.building_size || p.building_sf || p.rba);
+-    const leasedArea = _udNumOrNull(l.leased_area || l.leased_sf || p.leased_area)
+-                    || buildingSf;
++    const owner = _udSanitizeOwner(
++      o.true_owner || o.recorded_owner
++      || p.recorded_owner_name || ''
++    );
++    const buildingSf = _udNumOrNull(p.building_sf || p.building_size || p.rba);
++    const leasedArea = _udNumOrNull(l.leased_area || p.leased_area) || buildingSf;
+     return {
+       property_id: p.property_id,
+       lease_number: p.lease_number || l.lease_number || '',
+@@ -12058,17 +12115,36 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
+       land_acres: _udLandAcres({ land_acres: p.land_acres, land_area: p.land_area, lot_sf: p.lot_sf }),
+       year_built: _udNumOrNull(p.year_built),
+       year_renovated: _udNumOrNull(p.year_renovated),
+-      lease_start: l.lease_start || l.lease_commencement || p.lease_commencement || null,
+-      lease_expiration: l.lease_expiration || l.expiration_date || null,
+-      annual_rent: _udNumOrNull(l.annual_rent || p.annual_rent),
+-      rent_per_sf: _udNumOrNull(l.rent_per_sf || p.rent_per_sf),
+-      expense_structure: l.expense_structure || p.expense_structure || '',
+-      lease_bump_pct: _udNumOrNull(l.lease_bump_pct || p.lease_bump_pct),
+-      lease_bump_interval_mo: _udNumOrNull(l.lease_bump_interval_mo || p.lease_bump_interval_mo)
++      lease_start: l.lease_start || null,
++      lease_expiration: l.lease_expiration || null,
++      // v_lease_detail provides pre-computed term years; fall back to
++      // date-math only if the view doesn't have them.
++      initial_term_years: _udNumOrNull(l.initial_term_years),
++      term_remaining_years: _udNumOrNull(l.term_remaining_years),
++      annual_rent: _udNumOrNull(l.annual_rent || l.base_annual_rent),
++      rent_per_sf: _udNumOrNull(l.rent_psf),
++      expense_structure: l.expense_structure || '',
++      // Bumps live in lease_escalations (not v_lease_detail). Left null until
++      // the populator gains an escalation fetch — keeps the column for now.
++      lease_bump_pct: null,
++      lease_bump_interval_mo: null
+     };
+   });
+ }
+ 
++// Strip noise from owner strings that came in from CoStar / public records:
++//   trademark / registered marks, redundant whitespace, leading/trailing
++//   commas. Keeps "Davita Inc." readable as "Davita Inc."
++function _udSanitizeOwner(s) {
++  if (!s) return '';
++  return String(s)
++    .replace(/[®™]/g, '')
++    .replace(/\s+/g, ' ')
++    .replace(/[\s,]+$/, '')
++    .replace(/^[\s,]+/, '')
++    .trim();
++}
++
+ function _udFmtBumps(pct, intervalMo) {
+   if (pct == null && intervalMo == null) return '';
+   const p = pct == null ? '?' : (Number(pct).toFixed(2).replace(/\.?0+$/, '') + '%');
+@@ -12134,6 +12210,28 @@ async function _udExportLeaseComps(db, propertyId, btn) {
+     return;
+   }
+ 
++  // Subject lease fallback: when the detail-tab cache hasn't materialized
++  // the lease row by the time the user clicks Export, the subject row used
++  // to ship with no rent / commence / exp / term / expenses. Pull
++  // v_lease_detail synchronously here so the deliverable is complete.
++  if (subject.lease_expiration == null && subject.annual_rent == null && subject.rent_per_sf == null) {
++    const l = await _udFetchSubjectLease(db, propertyId);
++    if (l) {
++      subject.lease_start = subject.lease_start || l.lease_start || null;
++      subject.lease_expiration = subject.lease_expiration || l.lease_expiration || null;
++      subject.initial_term_years = subject.initial_term_years || _udNumOrNull(l.initial_term_years);
++      subject.term_remaining_years = subject.term_remaining_years || _udNumOrNull(l.term_remaining_years);
++      subject.annual_rent = subject.annual_rent || _udNumOrNull(l.annual_rent || l.base_annual_rent);
++      subject.rent_per_sf = subject.rent_per_sf || _udNumOrNull(l.rent_psf);
++      subject.expense_structure = subject.expense_structure || l.expense_structure || '';
++      if (!subject.tenant) {
++        const t = _udExtractTenantOperator(db, {}, {}, l);
++        if (t.tenant) subject.tenant = t.tenant;
++        if (t.operator) subject.operator = t.operator;
++      }
++    }
++  }
++
+   // Inline button feedback so the user knows the click registered. Cold path:
+   // first click downloads ExcelJS (~900KB) + fetches the template; subsequent
+   // clicks are instant once both are cached.
+@@ -12329,18 +12427,34 @@ function _udPopulateDataRow(sheet, db, rowIdx, rec, opts) {
+   const endDate = _udToDateOrNull(rec.lease_expiration);
+   _udSetCell(sheet, rowIdx, c.commence, startDate);
+   _udSetCell(sheet, rowIdx, c.exp, endDate);
+-  _udSetCell(sheet, rowIdx, c.initialTerm, _udYearsBetweenDates(startDate, endDate));
+-  _udSetCell(sheet, rowIdx, c.termRem, _udYearsBetweenDates(new Date(), endDate));
++
++  // Prefer the v_lease_detail-computed term years; fall back to date math
++  // only if the view didn't carry them.
++  const initialTerm = rec.initial_term_years != null
++    ? Number(rec.initial_term_years)
++    : _udYearsBetweenDates(startDate, endDate);
++  _udSetCell(sheet, rowIdx, c.initialTerm, initialTerm);
++
++  // TERM REM: for already-expired leases, write the negative number; the
++  // template's R-column number format `0.0" Years";"EXPIRED";"-"` then
++  // renders the negative section as the literal string "EXPIRED" instead
++  // of a confusing negative-years value.
++  const termRemRaw = rec.term_remaining_years != null
++    ? Number(rec.term_remaining_years)
++    : _udYearsBetweenDates(new Date(), endDate);
++  _udSetCell(sheet, rowIdx, c.termRem, termRemRaw);
+   _udSetCell(sheet, rowIdx, c.expenses, rec.expense_structure || '');
+   _udSetCell(sheet, rowIdx, c.bumps, _udFmtBumps(rec.lease_bump_pct, rec.lease_bump_interval_mo));
+ 
+   // USER/OWNER + DISTANCE only apply to comparables. The template has no
+-  // U/V cells in row 4 (subject), so we leave them untouched there.
++  // V cell in row 4 (subject — Subject table is B3:U4 so U is owner only),
++  // so we set USER/OWNER on the subject too but skip DISTANCE.
++  const userOwnerLabel = rec.owner_occupied
++    ? (rec.owner ? `User (${rec.owner})` : 'User')
++    : _udSanitizeOwner(rec.owner || '');
++  _udSetCell(sheet, rowIdx, c.userOwner, userOwnerLabel);
+   if (!isSubject) {
+-    const userOwnerLabel = rec.owner_occupied
+-      ? (rec.owner ? `User (${rec.owner})` : 'User')
+-      : (rec.owner || '');
+-    _udSetCell(sheet, rowIdx, c.userOwner, userOwnerLabel);
+     _udSetCell(sheet, rowIdx, c.distance, rec.distance_miles != null ? rec.distance_miles : null);
+   }
+ }
+-- 
+2.43.0
