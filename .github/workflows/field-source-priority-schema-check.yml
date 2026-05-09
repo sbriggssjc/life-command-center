@@ -14,13 +14,16 @@ name: Field-Source-Priority Schema Validity Check
 # See docs/architecture/field_source_priority_ramp_plan.md for the
 # broader rationale (why we audit field_source_priority at all).
 #
-# Required secrets (Settings → Secrets and variables → Actions):
+# Required secrets (Settings → Environments → Production):
 #   DIA_SUPABASE_URL  e.g. https://zqzrriwuavgrquhisnoa.supabase.co
 #   DIA_SUPABASE_KEY  anon key (RPC is SECURITY DEFINER, anon is fine)
 #   GOV_SUPABASE_URL  e.g. https://scknotsqkcheojiaewwh.supabase.co
 #   GOV_SUPABASE_KEY  anon key
 #   LCC_SUPABASE_URL  e.g. https://xengecqvemvfknjvbvrq.supabase.co
 #   LCC_SERVICE_ROLE_KEY  service_role key (refresh RPC is restricted)
+#
+# These secrets live under the Production environment, not at repo level.
+# Job declares `environment: Production` so they actually get injected.
 
 on:
   schedule:
@@ -38,6 +41,7 @@ jobs:
   check:
     name: Refresh column cache + audit
     runs-on: ubuntu-latest
+    environment: Production
     timeout-minutes: 5
     steps:
       - name: Refresh dia + gov column caches
@@ -53,6 +57,8 @@ jobs:
           for v in DIA_URL DIA_KEY GOV_URL GOV_KEY LCC_URL LCC_KEY; do
             if [[ -z "${!v}" ]]; then
               echo "::error::$v secret not set"
+              echo "Confirm it exists under Settings -> Environments -> Production,"
+              echo "and that this job has 'environment: Production' set."
               exit 1
             fi
           done
