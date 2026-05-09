@@ -19,6 +19,7 @@
     "ai:apply-manual": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example --target .env.local",
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
+    "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs",
     "check:functions": "node -e \"const c=require('fs').readdirSync('api').filter(f=>f.endsWith('.js')).length; console.log(c+'/12 serverless functions'); if(c>12){console.error('ERROR: exceeds Vercel Hobby 12-function limit');process.exit(1)}\""
   },
   "engines": {
@@ -28,7 +29,8 @@
     "cors": "^2.8.5",
     "exceljs": "^4.4.0",
     "express": "^4.19.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "eslint": "^9.0.0",

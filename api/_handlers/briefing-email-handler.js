@@ -75,12 +75,24 @@ function fmtDueDate(value) {
 }
 
 // ---------------------------------------------------------------------------
-// HTML rendering — inline-styled, max-width 600px, table-based, Calibri/Arial,
-// header color #003087. No <html>/<head>/<body> wrappers (email-client safe).
+// HTML rendering — inline-styled, max-width 600px, table-based, brand-aligned
+// Calibri/Arial fallback stack, NM Blue header. No <html>/<head>/<body>
+// wrappers (email-client safe).
+//
+// Brand tokens kept inline (rather than imported from
+// public/reports/cm_brand_tokens.json) because Vercel serverless can't easily
+// read /public assets at request time, and these few constants are stable.
+// If the brand tokens change, update both this file and the JSON.
 // ---------------------------------------------------------------------------
 
-const FONT = "font-family:Calibri,Arial,sans-serif;";
-const HEADER = "#003087";
+// Northmarq brand-aligned font stack — Calibri Light/Calibri are the
+// documented brand fonts for Excel/email contexts (see
+// public/reports/cm_brand_tokens.json#fonts.fallback_stack); Futura PT is
+// brand primary for clients that have it installed; Arial is the safe fallback.
+const FONT = 'font-family:"Futura PT",Calibri,"Segoe UI",Arial,sans-serif;';
+// NM Blue — Northmarq primary brand color (#003DA5).
+// Was #003087 (close-but-wrong); fixed 2026-05 for brand compliance.
+const HEADER = "#003DA5";
 
 function renderSectionHeader(title) {
   return (
@@ -94,7 +106,7 @@ function renderSectionHeader(title) {
 
 function renderEmptyRow(message) {
   return (
-    `<tr><td style="${FONT}padding:10px 20px;color:#666;font-size:13px;` +
+    `<tr><td style="${FONT}padding:10px 20px;color:#6A748C;font-size:13px;` +
     `font-style:italic;">${escapeHtml(message)}</td></tr>`
   );
 }
@@ -107,11 +119,11 @@ function renderItemRow(item) {
   if (item.priority) metaBits.push(escapeHtml(item.priority));
   if (due) metaBits.push(`due ${escapeHtml(due)}`);
   const meta = metaBits.length
-    ? `<div style="color:#666;font-size:12px;margin-top:2px;">${metaBits.join(' &middot; ')}</div>`
+    ? `<div style="color:#6A748C;font-size:12px;margin-top:2px;">${metaBits.join(' &middot; ')}</div>`
     : '';
   return (
     `<tr><td style="${FONT}padding:8px 20px;border-bottom:1px solid #eee;` +
-    `font-size:14px;color:#222;">` +
+    `font-size:14px;color:#191919;">` +
     `<div style="font-weight:600;">${title}</div>${meta}` +
     `</td></tr>`
   );
@@ -156,7 +168,7 @@ function renderPipelineSection(priorities, syncHealth) {
     `${s.error || 0} error`,
   ].join(' &middot; ');
   parts.push(
-    `<tr><td style="${FONT}padding:8px 20px;color:#444;font-size:12px;">` +
+    `<tr><td style="${FONT}padding:8px 20px;color:#6A748C;font-size:12px;">` +
     `Connectors: ${healthBits}</td></tr>`
   );
   return parts.join('');
@@ -173,9 +185,9 @@ function renderQueueSection(workCounts, inboxSummary) {
   const body = rows
     .map(
       ([label, value]) =>
-        `<tr><td style="${FONT}padding:6px 20px;font-size:14px;color:#222;` +
+        `<tr><td style="${FONT}padding:6px 20px;font-size:14px;color:#191919;` +
         `border-bottom:1px solid #eee;">${escapeHtml(label)}</td>` +
-        `<td style="${FONT}padding:6px 20px;font-size:14px;color:#222;` +
+        `<td style="${FONT}padding:6px 20px;font-size:14px;color:#191919;` +
         `text-align:right;border-bottom:1px solid #eee;font-weight:600;">` +
         `${escapeHtml(value)}</td></tr>`,
     )
@@ -201,10 +213,10 @@ function renderNewIntakesSection(newIntakes) {
       ? ' · $' + Number(it.asking_price).toLocaleString('en-US', { maximumFractionDigits: 0 })
       : '';
     return `<tr>` +
-      `<td style="${FONT}padding:6px 20px;font-size:13px;color:#222;border-bottom:1px solid #eee;">` +
+      `<td style="${FONT}padding:6px 20px;font-size:13px;color:#191919;border-bottom:1px solid #eee;">` +
       `<strong>${escapeHtml(title)}</strong>` +
-      (loc ? ` <span style="color:#666">· ${escapeHtml(loc)}</span>` : '') +
-      ` <span style="color:#888">(${escapeHtml((it.domain || 'gov').toUpperCase())})</span>` +
+      (loc ? ` <span style="color:#6A748C">· ${escapeHtml(loc)}</span>` : '') +
+      ` <span style="color:#9EA9B7">(${escapeHtml((it.domain || 'gov').toUpperCase())})</span>` +
       escapeHtml(broker + price) +
       `</td></tr>`;
   }).join('');
@@ -225,7 +237,7 @@ function renderHtml({ subject, priorities, syncHealth, workCounts, inboxSummary,
     `Generated ${escapeHtml(new Date(generatedAt).toUTCString())}</div>` +
     `</td></tr>`;
   const footer =
-    `<tr><td style="${FONT}padding:16px 20px;color:#888;font-size:11px;` +
+    `<tr><td style="${FONT}padding:16px 20px;color:#9EA9B7;font-size:11px;` +
     `border-top:1px solid #eee;">` +
     `Life Command Center &middot; automated briefing digest</td></tr>`;
   return (

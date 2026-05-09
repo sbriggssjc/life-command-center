@@ -26,7 +26,9 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 - Bridge + Workflows consolidated into operations.js
 - Intake functions consolidated into intake.js
 - admin.js: workspaces, members, flags, connectors, diagnostics (config/diag/treasury), edge proxies (data-query, daily-briefing)
-- Supabase Edge Functions: data-query (gov/dia PostgREST proxy), daily-briefing (snapshot orchestration), `availability-checker` (periodic listing URL probe — Round 76ej.g) on LCC Opps project
+- Supabase Edge Functions:
+  - **`data-query`** + **`daily-briefing`** are deployed on the **Dialysis_DB** project (ref `zqzrriwuavgrquhisnoa`) — `api/admin.js` `DATA_QUERY_EDGE_URL` hard-codes that ref. When you bump the data-query allowlist (e.g. to add a new RPC), deploy to that project, not LCC Opps.
+  - `availability-checker` (periodic listing URL probe — Round 76ej.g) lives on **LCC Opps** (`xengecqvemvfknjvbvrq`).
 - pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2), `lcc-auto-scrape-listings` (every 6h on the hour — sweeps overdue active listings, auto-marks Sold via sales_transactions match, Round 76cx Phase 4b), `lcc-availability-checker` (every 6h at :30 — Edge Function probes listing URLs and writes off_market/withdrawn via lcc_record_listing_check, Round 76ej.g), `lcc-availability-promotion-sweep` (every 6h at :45 — re-checks the availability-checker's `unverified_assumed_off` listings against sales_transactions and upgrades to Sold on a deed match, Round 76ej.h), `lcc-cron-health-check` (every hour at :15 — surfaces cron failures, pg_net non-2xx responses, and availability-checker bot-block alerts in `lcc_health_alerts`)
 - `lcc_cron_post()` helper reads API key from Supabase Vault, POSTs via pg_net to Vercel or Edge endpoints
 - All rewrites defined in vercel.json — order matters (specific before catch-all)
@@ -261,3 +263,127 @@ Downstream writers that still need Y1 rent should pull `base_rent`. The
 current dialysis.js Sales Comps loader (`loadDiaSalesCompsFromTxns`) bypasses
 the view and assembles rows from `sales_transactions` + `leases` directly, so
 it continues to show Y1 rent until switched over to the view.
+
+## Geocode backfill (Round 76gn, 2026-05-08)
+
+The lease-comps export (Briggs template, `_udExportLeaseComps` in
+`detail.js`) ranks comparables by haversine distance from the subject
+property's lat/lng. An audit on 2026-05-08 found that essentially zero
+rows in `dia.properties` (and likely `gov.properties`) had
+`latitude`/`longitude` populated — legacy CSV / CMS imports, OM intake,
+and CoStar capture all wrote rows without geocoding them. Result: every
+Export Lease Comps click fell through to "no comps near this subject."
+
+Two artifacts now keep coverage current:
+
+1. **`api/_handlers/geocode-backfill.js` → `?_route=geocode-tick`**
+   (also rewritten to `/api/geocode-tick`). Pulls up to `limit` rows
+   per domain WHERE `latitude IS NULL`, geocodes each via the US
+   Census Bureau onelineaddress API (free, no key, no rate limit, US-
+   only), and PATCHes the result back. Cron-friendly — defaults to
+   `limit=60` so a tick fits inside Vercel's function budget. Returns
+   `{by_domain: {dia/gov: {scanned, patched, missed, skipped, errored}}}`.
+   No Nominatim fallback in the cron path (TOS rate cap would push tick
+   duration over budget); the long-tail OSM fallback lives only in the
+   one-shot script.
+
+2. **`pg_cron lcc-geocode-backfill`** (`*/10 * * * *`,
+   `supabase/migrations/20260508120000_lcc_geocode_backfill_cron.sql`).
+   Calls the handler via `lcc_cron_post('/api/geocode-tick?...', ...,
+   'vercel')`. At 60 rows/tick × 6 ticks/hr = 360 rows/hr the per-domain
+   backlog drains in ~14h; afterwards the cron just maintains coverage
+   as new rows arrive.
+
+For a one-shot fast backfill (~25 min for 5000 rows, Census-only),
+run `scripts/geocode-properties-backfill.mjs` from a workstation with
+`DIA_SUPABASE_URL` / `DIA_SUPABASE_SERVICE_KEY` (and the GOV pair) in
+env. The script also has a Nominatim fallback enabled by default for
+addresses Census can't resolve (PO boxes, recent construction, etc.).
+Use `--skip-nominatim` for Census-only.
+
+### Google Maps fallback (Round 76gn.b, 2026-05-08)
+
+The Round 76gn launch used Census-only geocoding and got ~70-80% hit
+rate on gov + ~20% on dia (dia has widespread address-corruption from
+the legacy CMS/CSV import — wrong city paired with real street). To
+lift dia coverage without source-data cleanup, the cron handler now
+falls back to **Google Maps Geocoding API** on every Census miss.
+
+Configuration:
+- Set `GOOGLE_MAPS_API_KEY` in the Railway env. The handler reads it on
+  every invocation; no redeploy needed after adding the key.
+- When the key is absent, the handler logs a one-line warning at cold
+  start and gracefully runs Census-only (identical to the Round 76gn
+  launch behavior — no errors, no missed ticks).
+- Cost ≈ $5 per 1,000 calls. Engaged ONLY on Census miss, so the
+  marginal cost on a fully-geocoded universe is near zero (only new
+  rows trigger calls); backfilling the dia long tail (~8,000 chronic
+  Census misses) costs ~$40 one-time.
+
+Telemetry: tick response now includes
+`patched_census` + `patched_google` per-domain so cron logs reveal
+the cascade ratio. After a few hundred dia ticks you can run
+
+```sql
+SELECT
+  jsonb_path_query(content, '$.by_domain.dia.patched_census')::int AS dia_census,
+  jsonb_path_query(content, '$.by_domain.dia.patched_google')::int AS dia_google
+FROM net._http_response
+WHERE created > now() - interval '2 hours'
+  AND content::jsonb ? 'google_fallback'
+ORDER BY id DESC LIMIT 10;
+```
+
+to confirm Google is contributing. Expected pattern: census 50-70% of
+patches on the corrupted-data dia rows, google making up the rest.
+
+### Why the geocoding investment matters beyond lease-comps
+
+Several upcoming features depend on lat/lng coverage being high enough
+that haversine ranking is meaningful, not "no comps near this subject":
+
+- **Lease comps export** (the one this round was built for) — already
+  uses lat/lng + haversine in `_udExportLeaseComps`.
+- **Nearby owners** (planned) — find all properties owned by the same
+  recorded_owner within N miles of the subject, for outreach lists.
+- **Competitor analysis** (planned) — for a dialysis subject, what are
+  the next 5 nearest dialysis facilities? Useful for tenant
+  concentration / replacement risk.
+- **Nearby sales** (planned) — recently-closed sales_transactions
+  within N miles for a price/SF anchor.
+
+Anything that ranks "near this subject" needs a critical mass of
+geocoded comparables. Below ~70% domain coverage, most subjects
+return empty result sets and the feature looks broken even though
+the SQL is correct. That's why the cron + Google fallback is worth
+the spend even at $40 backfill + ~$5/month steady-state.
+
+### medicare_clinics city un-truncation (Round 76gn.c, 2026-05-08)
+
+Pre-flight investigation of "what if we sync property city/state from
+the linked CMS facility?" turned up the opposite problem: a historical
+CMS ingest had truncated `medicare_clinics.city` to ~11 characters
+(`STATEN ISLA`, `OKLAHOMA CI`, `RAINBOW CIT`, etc.) for 1,026 rows,
+while the property records carried the un-truncated values from a
+different pipeline. We did a one-shot data fix that propagates the
+property's city back to medicare_clinics for every (mc, p) pair where
+mc.city is a strict case-insensitive prefix of p.city, length(mc.city)
+>= 6, and states match. **Direction is property → CMS, not the other
+way around** — properties are the trusted side.
+
+Result: 1,026 medicare_clinics rows fixed, leaving 215 (177 city_diff
++ 38 state_diff) for human review via a new
+`v_property_cms_link_suspect` view. That view scores each row with
+`suspect_kind` (`state_diff` is highest concern), `street_looks_unrelated`
+(first 6 alnum chars of address differ — strong bad-link signal), and
+`zip5_matches` (cities differ but zip+street match → likely
+neighborhood-vs-municipality alias, low concern).
+
+Migration:
+`supabase/migrations/dialysis/20260508120000_dia_round_76gn_c_cms_property_link_suspect.sql`.
+
+The fix does **not** directly improve the geocode-tick cron's hit rate
+— that cron pulls from `properties`, not `medicare_clinics`. The value
+is downstream: every `v_clinic_*` view now shows clean city names, and
+the medicare_clinics rows can serve as a clean address source for any
+future CMS-seeded geocoding pass.

@@ -23,6 +23,7 @@ import { normalizeAddress, stripListingStatusPrefix } from '../_shared/entity-li
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
+import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -607,13 +608,20 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
             const status = String(prior.status || prior.listing_status || '').toLowerCase();
             const hasSale = prior.sold_date || prior.sold_price || prior.sale_transaction_id;
             if (!hasSale && !['sold', 'closed', 'closed but obligated'].includes(status)) {
+              // Drop paywalled CoStar Suite URLs before persisting
+              // (issue #560). Falls back to prior.listing_url so the
+              // revive doesn't blank out an already-good URL.
+              const safeSourceUrl = sanitizeListingUrl(
+                source_url || null,
+                `entities-handler:revive:${domain}.available_listings`,
+              );
               const patchRow = domain === 'dialysis'
                 ? {
                     is_active: true,
                     status: 'Active',
                     last_price: Number(asking_price),
                     current_cap_rate: cap_rate != null ? Number(cap_rate) : prior.current_cap_rate,
-                    listing_url: source_url || prior.listing_url,
+                    listing_url: safeSourceUrl || prior.listing_url,
                     last_seen: new Date().toISOString().slice(0, 10),
                     last_verified_at: new Date().toISOString(),
                     off_market_date: null,
@@ -625,7 +633,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                     listing_status: 'active',
                     asking_price: Number(asking_price),
                     asking_cap_rate: cap_rate != null ? Number(cap_rate) : prior.asking_cap_rate,
-                    source_url: source_url || prior.source_url,
+                    source_url: safeSourceUrl || prior.source_url,
                     last_seen_at: new Date().toISOString(),
                     last_verified_at: new Date().toISOString(),
                   };
@@ -655,6 +663,12 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
           // payload tried to insert data_source on both, which crashed dia
           // INSERTs with "column does not exist" → the verify button toast
           // showed "auto-create attempted but failed" on every click.
+          // Drop paywalled CoStar Suite URLs before persisting
+          // (issue #560). Same logic as the revive branch above.
+          const safeSourceUrlForCreate = sanitizeListingUrl(
+            source_url || null,
+            `entities-handler:create:${domain}.available_listings`,
+          );
           const newListing = domain === 'dialysis'
             ? {
                 property_id: Number(property_id),
@@ -662,7 +676,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 listing_date: new Date().toISOString().slice(0, 10),
                 last_price: Number(asking_price),
                 current_cap_rate: cap_rate != null ? Number(cap_rate) : null,
-                listing_url: source_url || null,
+                listing_url: safeSourceUrlForCreate,
                 last_seen: new Date().toISOString().slice(0, 10),
                 last_verified_at: new Date().toISOString(),
                 notes: 'auto-created by LCC sidebar verify-still-available',
@@ -673,7 +687,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 listing_date: new Date().toISOString().slice(0, 10),
                 asking_price: Number(asking_price),
                 asking_cap_rate: cap_rate != null ? Number(cap_rate) : null,
-                source_url: source_url || null,
+                source_url: safeSourceUrlForCreate,
                 first_seen_at: new Date().toISOString(),
                 last_seen_at: new Date().toISOString(),
                 last_verified_at: new Date().toISOString(),
