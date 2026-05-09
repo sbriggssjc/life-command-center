@@ -221,8 +221,31 @@
   }
 
   function extractPropertyHistory(data) {
-    // Each tr.ellipsify in #transactions table is one event.
-    const rows = document.querySelectorAll('#transactions tr.ellipsify');
+    // Round 76en (2026-05-09): broaden the row selector. The original
+    // 'tr.ellipsify' was missing Construction events on the FBI HQ Chelsea
+    // capture (RCA renders different event types with different CSS
+    // classes — Sale rows had .ellipsify, Construction rows had a
+    // different/no class). Now: try multiple selectors and merge unique
+    // rows, then filter inside the loop for rows that actually carry a
+    // td.transaction cell.
+    const rowSet = new Set();
+    [
+      '#transactions tr.ellipsify',
+      '#transactions tbody tr',
+      '#transactions tr',
+      'table.transactions tbody tr',
+      '[data-section="transactions"] tr',
+    ].forEach(sel => {
+      document.querySelectorAll(sel).forEach(tr => rowSet.add(tr));
+    });
+    const rows = [...rowSet];
+
+    // Diagnostic: surfaces what the selector found so users can DevTools
+    // their way to a fix when the sidebar doesn't match the page. Logged
+    // once per extract call.
+    console.log('[lcc-rca] Round 76en: extractPropertyHistory found',
+      rows.length, 'candidate rows');
+
     rows.forEach((tr) => {
       const txTd = tr.querySelector('td.transaction');
       const priceTd = tr.querySelector('td.transactionPrice');
@@ -232,12 +255,12 @@
 
       const txText = textOf(txTd);
       // 'Sale Feb '26 Office' or 'Refinance Mar '24 Office' etc.
-      const txTypeM = txText.match(/^\s*(Sale|Refinance|Construction|Distress|Foreclosure|Auction)/i);
+      const txTypeM = txText.match(/^\s*(Sale|Refinance|Construction|Distress|Foreclosure|Auction|Land\s+Sale|Land\s+Acquisition|Acquisition)/i);
       const dateM = txText.match(/(\w+\s+'?\d{2,4})/);
       if (!txTypeM) return;
 
       const evt = {
-        kind: txTypeM[1].toLowerCase(),
+        kind: txTypeM[1].toLowerCase().replace(/\s+/g, '_'),
         date_label: dateM ? dateM[1] : null,
         sale_date: rcaParseAbbrevDate(dateM ? dateM[1] : null),
       };
@@ -379,6 +402,22 @@
 
       data.sales_history.push(evt);
     });
+
+    // Round 76en (2026-05-09): diagnostic — what the parser actually
+    // captured. If the user reports "Construction event missing" this
+    // log line tells us whether the parser saw it or not.
+    console.log('[lcc-rca] Round 76en: extractPropertyHistory captured',
+      data.sales_history.length, 'events:',
+      data.sales_history.map(e => ({
+        kind:        e.kind,
+        date:        e.sale_date,
+        buyer:       e.buyer || null,
+        seller:      e.seller || null,
+        developer:   e.developer || null,
+        lender:      e.lender || null,
+        loan_amount: e.loan_amount || null,
+      }))
+    );
   }
 
   // Round 76em (2026-05-09): split a "<seller-or-developer> <lender> ($Xm approx)"
