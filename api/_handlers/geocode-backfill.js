@@ -36,6 +36,7 @@ import { authenticate } from '../_shared/auth.js';
 import { getDomainCredentials, domainQuery } from '../_shared/domain-db.js';
 
 const CENSUS_GEOCODER = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress';
+const GEOCODIO_GEOCODER = 'https://api.geocod.io/v1.7/geocode';
 const GOOGLE_GEOCODER = 'https://maps.googleapis.com/maps/api/geocode/json';
 const DOMAIN_KEY_MAP = { dia: 'dialysis', gov: 'government' };
 
@@ -43,6 +44,7 @@ const DOMAIN_KEY_MAP = { dia: 'dialysis', gov: 'government' };
 // flooding every tick. The handler still functions correctly — it just falls
 // back to Census-only behavior identical to the Round 76gn launch.
 let warnedAboutMissingGoogleKey = false;
+let warnedAboutMissingGeocodioKey = false;
 
 /**
  * Geocode one property's address via Census Bureau. Returns
@@ -93,6 +95,51 @@ async function geocodeAddressCensus(row) {
  * the lease-comps use case: the comp will land near the wrong city, which
  * makes it a non-comp and gets ranked away naturally. Better than NULL.
  */
+/**
+ * Geocodio — paid US/Canada geocoder. ~$0.50 per 1,000 calls (10x cheaper
+ * than Google), 2,500/day free tier, high accuracy on US street addresses
+ * including unit/suite-numbered entries that dominate the dia long tail.
+ * Sits between Census and Google in the cascade — Census is free so it goes
+ * first, and Google's worldwide coverage stays as a last resort.
+ *
+ * Returns { lat, lng, accuracy, accuracy_type } or null on miss/error.
+ * accuracy is 0..1 from Geocodio. accuracy_type is e.g. 'rooftop',
+ * 'range_interpolation', 'nearest_rooftop_match', 'point', 'place', 'state'.
+ * Anything coarser than 'place' / 'point' is essentially a centroid — we
+ * still accept it because a centroid is better than NULL for haversine
+ * comp ranking (puts the row at the city's center; if it's not actually
+ * near the subject, it ranks itself away naturally).
+ */
+async function geocodeAddressGeocodio(row, apiKey) {
+  if (!apiKey) return null;
+  const parts = [row.address, row.city, row.state, row.zip_code].filter(Boolean);
+  if (parts.length < 2 || !row.address) return null;
+  const url = GEOCODIO_GEOCODER
+    + '?q=' + encodeURIComponent(parts.join(', '))
+    + '&limit=1'
+    + '&api_key=' + encodeURIComponent(apiKey);
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const resp = await fetch(url, { signal: ctl.signal });
+    clearTimeout(t);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const r = data?.results?.[0];
+    const lat = Number(r?.location?.lat);
+    const lng = Number(r?.location?.lng);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return {
+      lat,
+      lng,
+      accuracy: r?.accuracy ?? null,
+      accuracy_type: r?.accuracy_type || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function geocodeAddressGoogle(row, apiKey) {
   if (!apiKey) return null;
   const parts = [row.address, row.city, row.state, row.zip_code].filter(Boolean);
@@ -161,22 +208,30 @@ export async function handleGeocodeTick(req, res) {
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '60', 10)));
   const dryRun = String(req.query.dry_run || '').toLowerCase() === 'true';
 
+  const geocodioKey = process.env.GEOCODIO_API_KEY || '';
+  if (!geocodioKey && !warnedAboutMissingGeocodioKey) {
+    console.warn('[geocode-tick] GEOCODIO_API_KEY not set — Geocodio tier disabled.');
+    warnedAboutMissingGeocodioKey = true;
+  }
   const googleKey = process.env.GOOGLE_MAPS_API_KEY || '';
   if (!googleKey && !warnedAboutMissingGoogleKey) {
-    // One-time warning per cold start. The handler still works — Census-only
-    // mode matches the Round 76gn launch behavior. Set GOOGLE_MAPS_API_KEY
-    // in the Railway env to enable the +30pp hit rate boost.
-    console.warn('[geocode-tick] GOOGLE_MAPS_API_KEY not set — Google fallback disabled, using Census-only.');
+    console.warn('[geocode-tick] GOOGLE_MAPS_API_KEY not set — Google final-resort fallback disabled.');
     warnedAboutMissingGoogleKey = true;
   }
 
   const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
   const out = {
     mode: dryRun ? 'dry_run' : 'apply',
+    cascade: [
+      'census',
+      geocodioKey ? 'geocodio' : null,
+      googleKey ? 'google' : null,
+    ].filter(Boolean).join(' -> '),
+    geocodio_fallback: geocodioKey ? 'enabled' : 'disabled',
     google_fallback: googleKey ? 'enabled' : 'disabled',
     by_domain: {},
     totals: {
-      scanned: 0, patched: 0, patched_census: 0, patched_google: 0,
+      scanned: 0, patched: 0, patched_census: 0, patched_geocodio: 0, patched_google: 0,
       missed: 0, skipped: 0, errored: 0,
     },
   };
@@ -184,7 +239,7 @@ export async function handleGeocodeTick(req, res) {
   for (const short of targets) {
     const domain = DOMAIN_KEY_MAP[short];
     const stats = {
-      scanned: 0, patched: 0, patched_census: 0, patched_google: 0,
+      scanned: 0, patched: 0, patched_census: 0, patched_geocodio: 0, patched_google: 0,
       missed: 0, skipped: 0, errored: 0,
     };
 
@@ -270,11 +325,16 @@ export async function handleGeocodeTick(req, res) {
         continue;
       }
 
-      // Geocoder cascade: try Census first (free), fall back to Google
-      // (paid, ~$0.005/call) only when Census misses. We track the source
-      // separately so the cron stats expose Google's contribution.
+      // Geocoder cascade: Census (free) → Geocodio (cheap, US-focused,
+      // $0.50/1k) → Google (worldwide, $5/1k, last resort). Each tier
+      // engages only when the prior one misses. We track the source
+      // separately so cron stats expose each tier's contribution.
       let result = await geocodeAddressCensus(row);
       let source = 'census';
+      if (!result && geocodioKey) {
+        result = await geocodeAddressGeocodio(row, geocodioKey);
+        if (result) source = 'geocodio';
+      }
       if (!result && googleKey) {
         result = await geocodeAddressGoogle(row, googleKey);
         if (result) source = 'google';
@@ -287,6 +347,7 @@ export async function handleGeocodeTick(req, res) {
       if (dryRun) {
         stats.patched += 1;
         if (source === 'census') stats.patched_census += 1;
+        else if (source === 'geocodio') stats.patched_geocodio += 1;
         else stats.patched_google += 1;
         continue;
       }
@@ -303,6 +364,7 @@ export async function handleGeocodeTick(req, res) {
       if (patchRes.ok) {
         stats.patched += 1;
         if (source === 'census') stats.patched_census += 1;
+        else if (source === 'geocodio') stats.patched_geocodio += 1;
         else stats.patched_google += 1;
       } else {
         stats.errored += 1;
@@ -336,6 +398,7 @@ export async function handleGeocodeTick(req, res) {
     out.totals.scanned += stats.scanned;
     out.totals.patched += stats.patched;
     out.totals.patched_census += stats.patched_census;
+    out.totals.patched_geocodio += stats.patched_geocodio;
     out.totals.patched_google += stats.patched_google;
     out.totals.missed += stats.missed;
     out.totals.skipped += stats.skipped;
