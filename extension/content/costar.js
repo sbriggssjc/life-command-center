@@ -35,6 +35,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   let paginationInProgress = false;
   let lastPaginatedPage = 0;
 
+  // Round 76ek.d (2026-05-08): separate state for the CMBS Loan Detail
+  // page's commentary pager. Scoped per-property: when the URL changes
+  // (different property) we reset to 0.
+  let commentaryPaginationInProgress = false;
+  let lastCommentaryPage = 0;
+  let commentaryPropertyKey = null;
+
   // Round 76de: minimal sendMessage wrapper. Just suppresses console noise
   // when the extension context is invalidated (extension reload mid-session).
   // No kill switch — let the content script keep trying; the page reload
@@ -139,6 +146,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       accumulated = { contacts: [], sales_history: [], tenants: [] };
       lastPaginatedPage = 0;
       paginationInProgress = false;
+      // Round 76ek.d: reset commentary pager too on property switch
+      lastCommentaryPage = 0;
+      commentaryPaginationInProgress = false;
+      commentaryPropertyKey = null;
     }
     accumulated._address = identifier;
 
@@ -437,6 +448,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
     // Auto-paginate through Public Record sale/loan history records
     autoPageSaleLoanHistory();
+
+    // Round 76ek.d: Auto-paginate through CMBS Commentary Entries.
+    // Each click triggers MutationObserver → re-fires extract() → captures
+    // the next visible entry. Backend dedupes by (loan_id, entry_label) so
+    // the per-page captures accumulate idempotently.
+    autoPageCommentaryEntries();
     } catch (err) {
       // Log error but don't crash — still send whatever we have
       console.error('[LCC CoStar] extraction error:', err);
@@ -508,6 +525,117 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Reset flag after a delay to allow MutationObserver to pick up the change
       setTimeout(() => { paginationInProgress = false; }, 1200);
     }, 600);
+  }
+
+  // ── Round 76ek.d: CMBS Commentary auto-pager ────────────────────────────
+  //
+  // The CMBS Loan Detail page (/detail/lookup/{N}/loan) shows dated
+  // narrative entries with their own paginator: "X of N Commentary Entries".
+  // When N > 1 we walk all entries so each one gets captured on its own
+  // extract() pass. Backend dedup (loan_commentary UNIQUE on
+  // (loan_id, entry_label)) makes per-page sends idempotent.
+  //
+  // This runs in addition to autoPageSaleLoanHistory(), but the URL guards
+  // mean only one of them ever fires per page (sale/loan history is on the
+  // /summary tab; commentary is on the /loan tab).
+  function autoPageCommentaryEntries() {
+    if (commentaryPaginationInProgress) return;
+
+    const url = window.location.href;
+    if (!/\/detail\/lookup\/\d+\/loan(?:\/?$|\?|#)/i.test(url)) return;
+
+    // Reset state when the property changes
+    const propMatch = url.match(/\/detail\/lookup\/(\d+)\/loan/i);
+    const propKey = propMatch ? propMatch[1] : null;
+    if (propKey !== commentaryPropertyKey) {
+      commentaryPropertyKey = propKey;
+      lastCommentaryPage = 0;
+    }
+
+    const allText = document.body.innerText;
+    const m = allText.match(/(\d+)\s+of\s+(\d+)\s+commentary\s+entries/i);
+    if (!m) return;
+
+    const cur = parseInt(m[1], 10);
+    const tot = parseInt(m[2], 10);
+    if (!Number.isFinite(cur) || !Number.isFinite(tot) || tot <= 1) return;
+    if (cur >= tot) {
+      // All entries viewed — reset for the next loan record / property
+      lastCommentaryPage = 0;
+      return;
+    }
+    if (cur === lastCommentaryPage) return;
+    lastCommentaryPage = cur;
+
+    console.log(`[LCC CoStar] Round 76ek.d: auto-paging commentary ${cur} of ${tot}`);
+    commentaryPaginationInProgress = true;
+
+    const nextBtn = findNextCommentaryButton();
+    if (!nextBtn) {
+      console.log('[LCC CoStar] Round 76ek.d: could not find commentary next-page button');
+      commentaryPaginationInProgress = false;
+      return;
+    }
+
+    setTimeout(() => {
+      try {
+        nextBtn.click();
+        console.log(`[LCC CoStar] Round 76ek.d: clicked commentary next → ${cur + 1} of ${tot}`);
+      } catch (err) {
+        console.error('[LCC CoStar] Round 76ek.d: commentary click error:', err);
+      }
+      setTimeout(() => { commentaryPaginationInProgress = false; }, 1200);
+    }, 600);
+  }
+
+  // Locate the next-button NEAR the "X of N Commentary Entries" text. The
+  // page may also have other paginators (loan-record, sale/loan history),
+  // so a global "next" selector isn't safe. We anchor on the Commentary
+  // text node and walk up the DOM ancestor chain looking for a sibling
+  // arrow button.
+  function findNextCommentaryButton() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        /\d+\s+of\s+\d+\s+commentary\s+entries/i.test(node.textContent || '')
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    });
+    const textNode = walker.nextNode();
+    if (!textNode) return null;
+
+    // Walk up to 6 levels looking for a parent that contains a Next button
+    // alongside our pagination text.
+    let parent = textNode.parentElement;
+    let depth = 0;
+    while (parent && depth < 6) {
+      // Prefer aria-labelled next/forward
+      const ariaNext = parent.querySelector(
+        '[aria-label*="next" i], [aria-label*="forward" i]'
+      );
+      if (ariaNext && isVisibleElement(ariaNext)) return ariaNext;
+
+      // Right-arrow / chevron buttons
+      const buttons = parent.querySelectorAll('button, [role="button"]');
+      for (const btn of buttons) {
+        if (!isVisibleElement(btn)) continue;
+        const hasArrow =
+          btn.querySelector('[class*="right"], [class*="next"], [class*="forward"], [class*="chevron-right"]') ||
+          /[▶►→❯]/.test(btn.textContent || '');
+        if (hasArrow) {
+          // Ensure the button is geometrically near our text (avoid
+          // matching a far-away paginator on the same page)
+          const tRect = textNode.parentElement?.getBoundingClientRect();
+          const bRect = btn.getBoundingClientRect();
+          if (!tRect || !bRect) continue;
+          const distancePx = Math.abs(bRect.top - tRect.top) + Math.abs(bRect.left - tRect.left);
+          if (distancePx < 400) return btn;       // 400 px proximity covers
+                                                  // CoStar's tight inline pagers
+        }
+      }
+
+      parent = parent.parentElement;
+      depth++;
+    }
+    return null;
   }
 
   function findNextPageButton() {
@@ -1382,6 +1510,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data_source: 'costar_cmbs_loan',
       top_tenants: [],
     };
+    // Round 76ek.c (2026-05-08): commentary entries — one per CMBS report
+    // narrative event ("Delinquency – December 2020", "Modification –
+    // Jul 2024", etc.). Multi-entry capture in this round only handles the
+    // currently-visible entry; auto-pagination across the "X of N
+    // Commentary Entries" pager comes in Round 76ek.d.
+    const commentaryEntries = [];
+    let pendingEntry = null;
 
     // ── Local parsing helpers (kept inside the function so they don't
     //    pollute the outer scope and don't accidentally collide with the
@@ -1610,6 +1745,60 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         continue;
       }
 
+      // Round 76ek.c: Commentary section parsing. CoStar's CMBS detail page
+      // shows dated narrative entries for loan events — delinquency, payoff,
+      // modification, watchlist removal, etc. Each entry has:
+      //   - sub-header "Commentary Entry"
+      //   - entry label like "Delinquency – December 2020"
+      //   - pagination indicator "X of N Commentary Entries"
+      //   - body text (free-form narrative)
+      //
+      // This .c cut captures only the currently-visible entry (the indicator
+      // tells us which "X of N" we're seeing). Round 76ek.d adds the
+      // auto-pager that walks all entries.
+      if (currentSection === 'Commentary') {
+        // Skip the sub-header
+        if (/^commentary\s+entry$/i.test(line)) continue;
+        // Pagination indicator — record which page we're on (entry rank)
+        const pagerMatch = line.match(/^(\d+)\s+of\s+(\d+)\s+commentary\s+entries$/i);
+        if (pagerMatch && pendingEntry) {
+          pendingEntry.rank = parseInt(pagerMatch[1], 10);
+          continue;
+        }
+        if (pagerMatch) continue;
+
+        // Entry label heuristic: "<event-name> – <Month> <Year>" or similar.
+        // Examples seen on CoStar: "Delinquency – December 2020", "Payoff –
+        // 2021", "Watchlist Removal – Mar 2024", "Modification – Q3 2023".
+        // Match leading capitalized phrase + dash + date-shaped trailer.
+        const entryLabelRe =
+          /^([A-Z][A-Za-z][\w\s\/]+?)\s*[-–—]\s*((?:Q[1-4]\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)?\s*\d{4})\s*$/;
+        if (entryLabelRe.test(line)) {
+          // Commit any in-progress entry first (we hit a new label)
+          if (pendingEntry && pendingEntry.body.length > 0) {
+            commentaryEntries.push(finalizeCommentaryEntry(pendingEntry));
+          }
+          const m = line.match(entryLabelRe);
+          pendingEntry = {
+            entry_label: line,
+            entry_event: (m[1] || '').trim(),
+            entry_period: (m[2] || '').trim(),
+            entry_date: parseCommentaryDate(m[2]),
+            body: [],
+            rank: null,
+          };
+          continue;
+        }
+
+        // Otherwise it's body text for the current entry. Skip empty lines
+        // and the literal "View 12 Month Pay Status History" link CoStar
+        // sometimes embeds.
+        if (pendingEntry && line && !/^view\s+\d+\s+month\s+pay\s+status/i.test(line)) {
+          pendingEntry.body.push(line);
+        }
+        continue;
+      }
+
       // Stat-card area (before any section header) — values render BEFORE
       // their labels in CoStar's stat-card layout, so we look at `prev`.
       if (!currentSection) {
@@ -1621,6 +1810,62 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
           rec.originator = rec.originator || prev;
         }
       }
+    }
+
+    // Round 76ek.c: commit any in-progress commentary entry once the
+    // section walk finishes.
+    if (pendingEntry && pendingEntry.body.length > 0) {
+      commentaryEntries.push(finalizeCommentaryEntry(pendingEntry));
+    }
+
+    // Helper: parse the date trailer of an entry label.
+    //   "December 2020" → 2020-12-31 (month-end anchor)
+    //   "Mar 2024"      → 2024-03-31
+    //   "Q3 2023"       → 2023-09-30 (quarter-end)
+    //   "2021"          → 2021-12-31 (year-end)
+    function parseCommentaryDate(s) {
+      if (!s) return null;
+      const t = String(s).trim();
+      const monNames = {
+        january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',
+        july:'07',august:'08',september:'09',october:'10',november:'11',december:'12',
+        jan:'01',feb:'02',mar:'03',apr:'04',jun:'06',jul:'07',aug:'08',
+        sep:'09',sept:'09',oct:'10',nov:'11',dec:'12',
+      };
+      // Q3 2023 → 2023-09-30
+      const quarter = t.match(/^Q([1-4])\s+(\d{4})$/i);
+      if (quarter) {
+        const q = parseInt(quarter[1], 10);
+        const y = quarter[2];
+        const m = q * 3;                       // 3, 6, 9, 12
+        const lastDay = new Date(parseInt(y), m, 0).getDate();
+        return `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+      }
+      // Month + Year
+      const monYear = t.match(/^([A-Za-z]+)\s+(\d{4})$/);
+      if (monYear && monNames[monYear[1].toLowerCase()]) {
+        const mm = monNames[monYear[1].toLowerCase()];
+        const lastDay = new Date(parseInt(monYear[2]), parseInt(mm), 0).getDate();
+        return `${monYear[2]}-${mm}-${String(lastDay).padStart(2,'0')}`;
+      }
+      // Year only
+      const yearOnly = t.match(/^(\d{4})$/);
+      if (yearOnly) return `${yearOnly[1]}-12-31`;
+      return null;
+    }
+
+    // Helper: collapse the body lines into a single string and trim.
+    function finalizeCommentaryEntry(entry) {
+      return {
+        entry_label: entry.entry_label,
+        entry_date:  entry.entry_date,
+        body:        entry.body.join(' ').replace(/\s+/g, ' ').trim(),
+        rank:        entry.rank,
+      };
+    }
+
+    if (commentaryEntries.length > 0) {
+      rec.commentary = commentaryEntries;
     }
 
     // Pooled CMBS: this collateral's allocated balance is what we treat as
@@ -1655,6 +1900,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       snapshot_dscr:     snapshot.noi_dscr,
       snapshot_as_of:    snapshot.as_of_date,
       top_tenant_count:  snapshot.top_tenants.length,
+      commentary_count:  commentaryEntries.length,
     });
 
     return [rec];
