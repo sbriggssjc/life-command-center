@@ -3928,6 +3928,106 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
   return 0;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Round 76ek.f (2026-05-08): cap-rate provenance back-write helper.
+//
+// When a gov sale lands with a cap_rate, point at the NOI source the cap was
+// computed from. The four-tier ladder (cmbs_audited → om_actual →
+// om_pro_forma → market_implied) lets analytics filter sales by the trust
+// level of their cap-rate denominator, and lets a UI show "this 7.2% cap was
+// audited against the Q4-2023 CMBS servicer report" instead of just "7.2%".
+//
+// Restricted to gov-domain sales per user spec — dia cap rates come from
+// net rent (NNN structure) and don't have an NOI source to point at.
+//
+// Lookup order:
+//   1. Loan snapshot for any loan on this property, as_of_date in the
+//      18 months before the sale → cmbs_audited.
+//   2. property_financials.is_actual=true, fiscal_year = sale_year or
+//      sale_year-1 → om_actual.
+//   3. metadata.noi present (CoStar / OM aggregate NOI) → om_pro_forma.
+//   4. Otherwise → market_implied.
+//
+// Returns {} when no annotation should be applied (dia, no cap rate, or
+// no sale date). Failures are swallowed and the write proceeds without
+// the new provenance fields — they're additive, never blocking.
+async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
+  if (domain !== 'government') return {};
+
+  const hasCapRate =
+    sale.cap_rate != null
+    || sale.stated_cap_rate != null
+    || sale.calculated_cap_rate != null
+    || sale.initial_cap_rate != null
+    || (metadata && metadata.cap_rate);
+  if (!hasCapRate || !propertyId || !sale.sale_date) return {};
+
+  const saleDate = String(sale.sale_date).slice(0, 10);
+  const saleYear = parseInt(saleDate.slice(0, 4), 10);
+  if (!Number.isFinite(saleYear)) return {};
+
+  // Window for snapshot lookup: 18 months before the sale date.
+  const eighteenMo = new Date(saleDate);
+  if (Number.isNaN(eighteenMo.getTime())) return {};
+  eighteenMo.setMonth(eighteenMo.getMonth() - 18);
+  const windowStart = eighteenMo.toISOString().slice(0, 10);
+
+  try {
+    // ── Tier 1: CMBS loan snapshot (servicer-audited NOI)
+    const loansRes = await domainQuery(domain, 'GET',
+      `loans?property_id=eq.${propertyId}&select=loan_id&limit=20`);
+    if (loansRes.ok && Array.isArray(loansRes.data) && loansRes.data.length > 0) {
+      const loanIds = loansRes.data
+        .map(l => l.loan_id)
+        .filter(Boolean)
+        .map(id => encodeURIComponent(id));
+      if (loanIds.length > 0) {
+        const snapsRes = await domainQuery(domain, 'GET',
+          `loan_snapshots?loan_id=in.(${loanIds.join(',')})` +
+          `&as_of_date=gte.${windowStart}` +
+          `&as_of_date=lte.${saleDate}` +
+          `&noi=not.is.null` +
+          `&select=snapshot_id,as_of_date,noi&order=as_of_date.desc&limit=1`);
+        if (snapsRes.ok && snapsRes.data?.[0]?.snapshot_id) {
+          return {
+            cap_rate_noi_source_table: 'loan_snapshots',
+            cap_rate_noi_source_id:    snapsRes.data[0].snapshot_id,
+            cap_rate_quality:          'cmbs_audited',
+          };
+        }
+      }
+    }
+
+    // ── Tier 2: property_financials actuals in same FY or year-prior
+    const finRes = await domainQuery(domain, 'GET',
+      `property_financials?property_id=eq.${propertyId}` +
+      `&is_actual=eq.true` +
+      `&fiscal_year=in.(${saleYear},${saleYear - 1})` +
+      `&noi=not.is.null` +
+      `&select=id,fiscal_year&order=fiscal_year.desc&limit=1`);
+    if (finRes.ok && finRes.data?.[0]?.id) {
+      return {
+        cap_rate_noi_source_table: 'property_financials',
+        cap_rate_noi_source_id:    finRes.data[0].id,
+        cap_rate_quality:          'om_actual',
+      };
+    }
+  } catch (err) {
+    console.warn('[resolveCapRateProvenance] lookup failed (proceeding without provenance):',
+      err?.message || err);
+  }
+
+  // ── Tier 3: OM/CoStar-derived NOI (pro-forma quality)
+  // We don't have a stable record_id to point at — these come from
+  // metadata.noi which is a transient capture artifact. Set quality only.
+  if (metadata?._intake_promoted || metadata?.noi) {
+    return { cap_rate_quality: 'om_pro_forma' };
+  }
+
+  // ── Tier 4: no NOI source identified — market-implied
+  return { cap_rate_quality: 'market_implied' };
+}
+
 /**
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
@@ -4233,6 +4333,15 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       continue;
     }
 
+    // Round 76ek.f: resolve cap-rate NOI provenance (gov only). Adds
+    // cap_rate_noi_source_table / cap_rate_noi_source_id / cap_rate_quality
+    // when an authoritative NOI source exists in our DB. No-op for dia (NNN
+    // cap rates aren't NOI-derived) and for sales without a cap rate.
+    const capRateProv = await resolveCapRateProvenance(domain, propertyId, saleData, metadata);
+    if (Object.keys(capRateProv).length > 0) {
+      Object.assign(saleData, capRateProv);
+    }
+
     if (lookup.ok && lookup.data?.length) {
       const existing = lookup.data[0];
 
@@ -4310,6 +4419,10 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         listing_broker:   saleData.listing_broker || null,
         procuring_broker: saleData.procuring_broker || saleData.purchasing_broker || null,
         transaction_type: saleData.transaction_type || null,
+        // Round 76ek.f: cap-rate NOI provenance (gov only; null on dia)
+        cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
+        cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
+        cap_rate_quality:          saleData.cap_rate_quality || null,
       });
     } else {
       // Create new
