@@ -1382,6 +1382,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data_source: 'costar_cmbs_loan',
       top_tenants: [],
     };
+    // Round 76ek.c (2026-05-08): commentary entries — one per CMBS report
+    // narrative event ("Delinquency – December 2020", "Modification –
+    // Jul 2024", etc.). Multi-entry capture in this round only handles the
+    // currently-visible entry; auto-pagination across the "X of N
+    // Commentary Entries" pager comes in Round 76ek.d.
+    const commentaryEntries = [];
+    let pendingEntry = null;
 
     // ── Local parsing helpers (kept inside the function so they don't
     //    pollute the outer scope and don't accidentally collide with the
@@ -1610,6 +1617,60 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         continue;
       }
 
+      // Round 76ek.c: Commentary section parsing. CoStar's CMBS detail page
+      // shows dated narrative entries for loan events — delinquency, payoff,
+      // modification, watchlist removal, etc. Each entry has:
+      //   - sub-header "Commentary Entry"
+      //   - entry label like "Delinquency – December 2020"
+      //   - pagination indicator "X of N Commentary Entries"
+      //   - body text (free-form narrative)
+      //
+      // This .c cut captures only the currently-visible entry (the indicator
+      // tells us which "X of N" we're seeing). Round 76ek.d adds the
+      // auto-pager that walks all entries.
+      if (currentSection === 'Commentary') {
+        // Skip the sub-header
+        if (/^commentary\s+entry$/i.test(line)) continue;
+        // Pagination indicator — record which page we're on (entry rank)
+        const pagerMatch = line.match(/^(\d+)\s+of\s+(\d+)\s+commentary\s+entries$/i);
+        if (pagerMatch && pendingEntry) {
+          pendingEntry.rank = parseInt(pagerMatch[1], 10);
+          continue;
+        }
+        if (pagerMatch) continue;
+
+        // Entry label heuristic: "<event-name> – <Month> <Year>" or similar.
+        // Examples seen on CoStar: "Delinquency – December 2020", "Payoff –
+        // 2021", "Watchlist Removal – Mar 2024", "Modification – Q3 2023".
+        // Match leading capitalized phrase + dash + date-shaped trailer.
+        const entryLabelRe =
+          /^([A-Z][A-Za-z][\w\s\/]+?)\s*[-–—]\s*((?:Q[1-4]\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)?\s*\d{4})\s*$/;
+        if (entryLabelRe.test(line)) {
+          // Commit any in-progress entry first (we hit a new label)
+          if (pendingEntry && pendingEntry.body.length > 0) {
+            commentaryEntries.push(finalizeCommentaryEntry(pendingEntry));
+          }
+          const m = line.match(entryLabelRe);
+          pendingEntry = {
+            entry_label: line,
+            entry_event: (m[1] || '').trim(),
+            entry_period: (m[2] || '').trim(),
+            entry_date: parseCommentaryDate(m[2]),
+            body: [],
+            rank: null,
+          };
+          continue;
+        }
+
+        // Otherwise it's body text for the current entry. Skip empty lines
+        // and the literal "View 12 Month Pay Status History" link CoStar
+        // sometimes embeds.
+        if (pendingEntry && line && !/^view\s+\d+\s+month\s+pay\s+status/i.test(line)) {
+          pendingEntry.body.push(line);
+        }
+        continue;
+      }
+
       // Stat-card area (before any section header) — values render BEFORE
       // their labels in CoStar's stat-card layout, so we look at `prev`.
       if (!currentSection) {
@@ -1621,6 +1682,62 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
           rec.originator = rec.originator || prev;
         }
       }
+    }
+
+    // Round 76ek.c: commit any in-progress commentary entry once the
+    // section walk finishes.
+    if (pendingEntry && pendingEntry.body.length > 0) {
+      commentaryEntries.push(finalizeCommentaryEntry(pendingEntry));
+    }
+
+    // Helper: parse the date trailer of an entry label.
+    //   "December 2020" → 2020-12-31 (month-end anchor)
+    //   "Mar 2024"      → 2024-03-31
+    //   "Q3 2023"       → 2023-09-30 (quarter-end)
+    //   "2021"          → 2021-12-31 (year-end)
+    function parseCommentaryDate(s) {
+      if (!s) return null;
+      const t = String(s).trim();
+      const monNames = {
+        january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',
+        july:'07',august:'08',september:'09',october:'10',november:'11',december:'12',
+        jan:'01',feb:'02',mar:'03',apr:'04',jun:'06',jul:'07',aug:'08',
+        sep:'09',sept:'09',oct:'10',nov:'11',dec:'12',
+      };
+      // Q3 2023 → 2023-09-30
+      const quarter = t.match(/^Q([1-4])\s+(\d{4})$/i);
+      if (quarter) {
+        const q = parseInt(quarter[1], 10);
+        const y = quarter[2];
+        const m = q * 3;                       // 3, 6, 9, 12
+        const lastDay = new Date(parseInt(y), m, 0).getDate();
+        return `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+      }
+      // Month + Year
+      const monYear = t.match(/^([A-Za-z]+)\s+(\d{4})$/);
+      if (monYear && monNames[monYear[1].toLowerCase()]) {
+        const mm = monNames[monYear[1].toLowerCase()];
+        const lastDay = new Date(parseInt(monYear[2]), parseInt(mm), 0).getDate();
+        return `${monYear[2]}-${mm}-${String(lastDay).padStart(2,'0')}`;
+      }
+      // Year only
+      const yearOnly = t.match(/^(\d{4})$/);
+      if (yearOnly) return `${yearOnly[1]}-12-31`;
+      return null;
+    }
+
+    // Helper: collapse the body lines into a single string and trim.
+    function finalizeCommentaryEntry(entry) {
+      return {
+        entry_label: entry.entry_label,
+        entry_date:  entry.entry_date,
+        body:        entry.body.join(' ').replace(/\s+/g, ' ').trim(),
+        rank:        entry.rank,
+      };
+    }
+
+    if (commentaryEntries.length > 0) {
+      rec.commentary = commentaryEntries;
     }
 
     // Pooled CMBS: this collateral's allocated balance is what we treat as
@@ -1655,6 +1772,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       snapshot_dscr:     snapshot.noi_dscr,
       snapshot_as_of:    snapshot.as_of_date,
       top_tenant_count:  snapshot.top_tenants.length,
+      commentary_count:  commentaryEntries.length,
     });
 
     return [rec];

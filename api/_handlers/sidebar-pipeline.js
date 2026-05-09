@@ -5683,6 +5683,56 @@ async function upsertLoanRecords(domain, propertyId, metadata, provCollect) {
       console.log(`[upsertLoanRecords] dia property=${propertyId} ` +
         `track_cmbs_snapshots=false — skipping snapshot/top_tenants fan-out`);
     }
+
+    // Round 76ek.c: write commentary entries. UNIQUE partial index on
+    // (loan_id, entry_label) WHERE entry_label IS NOT NULL handles dedup
+    // across re-captures. Unlike snapshots/top-tenants, commentary writes
+    // for both gov AND dia regardless of track_cmbs_snapshots — these are
+    // narrative loan events (delinquency, payoff, modification) that are
+    // useful BD context everywhere.
+    const commentary = Array.isArray(lr.commentary) ? lr.commentary : [];
+    for (const entry of commentary) {
+      if (!entry || !entry.body || !entry.entry_label) continue;
+      const commentaryRow = stripNulls({
+        loan_id:     loanId,
+        rank:        entry.rank != null ? entry.rank : null,
+        entry_date:  entry.entry_date || null,
+        entry_label: entry.entry_label,
+        body:        entry.body,
+        data_source: 'costar_cmbs_loan',
+        source_url:  lr.source_url || null,
+      });
+
+      // Try INSERT first; on conflict (duplicate label), PATCH instead so
+      // a re-capture refreshes the body (CoStar occasionally edits the
+      // narrative after the initial post). PostgREST surfaces the unique
+      // violation as 409.
+      const ins = await domainQuery(domain, 'POST', 'loan_commentary', commentaryRow);
+      if (ins.ok) {
+        const insertedRow = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+        if (insertedRow?.id) {
+          pushProvenance(provCollect, 'loan_commentary', insertedRow.id, commentaryRow, 0.85, 'costar_cmbs_loan');
+        }
+      } else if (ins.status === 409) {
+        // Existing row with this (loan_id, entry_label) — PATCH it.
+        // Safe because the body is the only field that meaningfully changes;
+        // entry_label / entry_date are stable identifiers.
+        const lookup = await domainQuery(domain, 'GET',
+          `loan_commentary?loan_id=eq.${loanId}` +
+          `&entry_label=eq.${encodeURIComponent(entry.entry_label)}` +
+          `&select=id&limit=1`);
+        const existingId = lookup.ok && lookup.data?.[0]?.id;
+        if (existingId) {
+          await domainQuery(domain, 'PATCH',
+            `loan_commentary?id=eq.${existingId}`,
+            { body: entry.body, rank: entry.rank ?? null });
+          pushProvenance(provCollect, 'loan_commentary', existingId, commentaryRow, 0.85, 'costar_cmbs_loan');
+        }
+      } else {
+        console.warn('[upsertLoanRecords] loan_commentary insert failed:',
+          { loan_id: loanId, entry_label: entry.entry_label, status: ins.status });
+      }
+    }
   }
 
   return processed;
