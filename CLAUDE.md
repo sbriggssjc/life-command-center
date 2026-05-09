@@ -387,3 +387,124 @@ The fix does **not** directly improve the geocode-tick cron's hit rate
 is downstream: every `v_clinic_*` view now shows clean city names, and
 the medicare_clinics rows can serve as a clean address source for any
 future CMS-seeded geocoding pass.
+
+
+## CMBS loan-history + LLC research pipeline (Round 76ek series, 2026-05-08)
+
+End-to-end ingestion for CoStar's CMBS Loan Detail and Financials tabs,
+plus owner-LLC research enrichment. Schema, parsers, writers, and worker
+endpoint all in place; tested via real captures, observable via
+`v_cmbs_pipeline_health` views on each domain.
+
+### What lands where
+
+- **CoStar `/detail/lookup/{N}/loan` (CMBS Loan Detail tab)** →
+  `data.loan_records[]` → `upsertLoanRecords` writes:
+  - `loans` row (extended with servicer, special_servicer, sponsor,
+    originator, num_delinquent, modification, watchlist,
+    special_servicing, status_at_disposal, balloon_maturity,
+    pay_frequency, num_collateral, pct_of_total_loan,
+    origination_appraisal, appraisal_date, costar_loan_id, source_url).
+  - `loan_snapshots` row keyed by (loan_id, as_of_date) — gov always;
+    dia gated on `dia.properties.track_cmbs_snapshots`.
+  - `loan_top_tenants` rent-roll snapshot per loan_snapshot.
+  - `loan_commentary` rows from the section walker AND the auto-pager
+    (Round 76ek.d clicks through "X of N Commentary Entries").
+- **CoStar `/detail/lookup/{N}/loan` simple non-CMBS layout** → same
+  `data.loan_records[]` envelope; parser also captures Borrower into
+  `loans.recorded_owner_id` via lookup-only (no auto-create).
+- **CoStar `/detail/lookup/{N}/cmbs-financials` Property+Totals mode**
+  → `data.property_financials[]` → `upsertPropertyFinancials` writes
+  `property_financials` rows. Drops Market mode and Per-SF mode at the
+  source, skips Underwritten column (lender pro-forma, not actual),
+  tags YTD partial-year columns with `months_covered<12`.
+
+### Critical schema gotcha (Round 76ek.k, 2026-05-08)
+
+`gov.property_financials` had a pre-existing 98k-row legacy table with a
+totally different column set (`financial_id` PK; `total_re_taxes` /
+`total_opex` / `noi_psf`; no `is_actual`, `gross_income`, `vacancy`,
+`source`). Round 76ek.a's CREATE TABLE IF NOT EXISTS was a silent no-op
+against it; Round 76ek.e's writer was silently failing on every gov
+capture. Round 76ek.k aligned the schemas via ADD COLUMN and made the
+writer + cap-rate provenance helper PK-aware (`financial_id` for gov,
+`id` for dia). Migration:
+`supabase/migrations/government/20260508130000_gov_round_76ek_k_pipeline_health_views.sql`.
+
+### LLC research enrichment
+
+`recorded_owners` extended with `manager_name`, `manager_role`,
+`registered_agent_name`, `registered_agent_address`, `filing_state`
+(gov) / `state_of_incorporation` (dia), `filing_id`, `filing_date`,
+`filing_status`, `llc_research_at`, `llc_research_source`. Per-domain
+`llc_research_queue` table populated automatically by `upsertDomainOwners`
+when a new private-LLC owner gets created (filtered by suffix:
+LLC / LP / LLP / Inc / Corp / Trust / Holdings / etc., excluding
+federal-government anti-pattern names).
+
+Worker endpoint: `?_route=llc-research-tick` (rewritten to
+`/api/llc-research-tick`). GET = dry-run, POST = drain. Feature-flagged
+on `OPENCORPORATES_API_KEY`; without the key, queue rows stay queued so
+a later run resumes when the key (or a free SOS-direct handler) lands.
+**User preference: free SOS-direct scrapers over paid OpenCorporates** —
+deferred to a future round.
+
+### Federal-government anti-pattern guard (Round 76ek.i)
+
+CoStar's "Recorded Owner" / "Current Owner" panel sometimes pulls from
+county personal-property records (federal agencies leasing equipment in
+the building) rather than real-property records. When a federal-leased
+office shows up with "U S A" / "Government" as the recorded owner but a
+private LLC in deed_records / sales_history, the USA candidate is the
+personal-property bleed-through and would otherwise overwrite the real
+owner. `selectAuthoritativeOwner()` and `isFederalOwnerAntiPattern()` in
+`api/_handlers/sidebar-pipeline.js` filter these unless they're the only
+candidate (genuinely federally-owned buildings still come through).
+
+### Cap-rate NOI provenance (Round 76ek.f)
+
+Each gov sale's `cap_rate` now carries `cap_rate_noi_source_table`,
+`cap_rate_noi_source_id`, and `cap_rate_quality` (`cmbs_audited` /
+`om_actual` / `om_pro_forma` / `market_implied`). Resolved by
+`resolveCapRateProvenance()` walking a four-tier ladder: CMBS loan
+snapshot in the 18 months before the sale → property_financials actuals
+in the same FY or year-prior → metadata.noi presence (pro-forma) →
+fallback market_implied. Restricted to gov; dia cap rates come from
+net rent (NNN structure), not NOI.
+
+### Junk-value filters added in this series
+
+Extending the existing `isJunkTenant()` / `isJunkContactName()` /
+`isContactNameGarbage()` filters:
+
+- **Industry-role tenants** (Round 76ek.g): "Retailer" / "Wholesaler" /
+  "Distributor" / "Operator" / "Service Provider" — bare role labels
+  CoStar emits in tenant-mix columns. Anchored ^...$ so legit names
+  like "Joe's Retailer LLC" still pass.
+- **Verification footnote sentences** (Round 76ek.g): "The sale price
+  RBA were verified with listing broker", "The deed was unavailable at
+  the time of publication." — sentence-shape detector for any 4+-token
+  string starting with a determiner (the/this/a/an/it) and containing
+  a tense marker (was/were/is/are/has/have/verified/unavailable/...).
+- **"SF Avail" property_type leak** (Round 76ek.g): two-layer fix at
+  the parser (extractFields next-line filter) + sidepanel.js asset_type
+  derivation. Rejects `\b(avail|available)\b` + leasing-status labels
+  (for lease, asking, smallest space, max contiguous, vacant).
+
+### Pipeline observability
+
+```sql
+-- Top-of-funnel: count what's been captured
+SELECT * FROM v_cmbs_pipeline_health;
+
+-- Queue depth + retry health
+SELECT * FROM v_llc_research_queue_health;
+
+-- Cap-rate quality distribution (gov DB; dia normally all NULL)
+SELECT cap_rate_quality, count(*)
+FROM sales_transactions
+GROUP BY cap_rate_quality
+ORDER BY 2 DESC;
+```
+
+Both views live on gov + dia DBs.

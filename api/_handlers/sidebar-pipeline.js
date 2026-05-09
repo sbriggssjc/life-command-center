@@ -3998,17 +3998,19 @@ async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
       }
     }
 
-    // ── Tier 2: property_financials actuals in same FY or year-prior
+    // ── Tier 2: property_financials actuals in same FY or year-prior.
+    // Round 76ek.k: gov uses `financial_id`, dia uses `id`.
+    const finPkCol = domain === 'government' ? 'financial_id' : 'id';
     const finRes = await domainQuery(domain, 'GET',
       `property_financials?property_id=eq.${propertyId}` +
       `&is_actual=eq.true` +
       `&fiscal_year=in.(${saleYear},${saleYear - 1})` +
       `&noi=not.is.null` +
-      `&select=id,fiscal_year&order=fiscal_year.desc&limit=1`);
-    if (finRes.ok && finRes.data?.[0]?.id) {
+      `&select=${finPkCol},fiscal_year&order=fiscal_year.desc&limit=1`);
+    if (finRes.ok && finRes.data?.[0]?.[finPkCol]) {
       return {
         cap_rate_noi_source_table: 'property_financials',
-        cap_rate_noi_source_id:    finRes.data[0].id,
+        cap_rate_noi_source_id:    finRes.data[0][finPkCol],
         cap_rate_quality:          'om_actual',
       };
     }
@@ -5879,6 +5881,13 @@ async function upsertPropertyFinancials(domain, propertyId, metadata, provCollec
   const rows = Array.isArray(metadata?.property_financials) ? metadata.property_financials : [];
   if (rows.length === 0) return 0;
 
+  // Round 76ek.k: gov.property_financials uses `financial_id` as its PK
+  // (legacy 98k-row schema), dia uses `id`. The dia-aligned columns
+  // (gross_income, vacancy, is_actual, etc.) were ADD COLUMN'd onto gov
+  // in 20260508130000 so the unified payload writes cleanly on both. The
+  // PK column name is the only remaining domain-specific bit.
+  const pkCol = domain === 'government' ? 'financial_id' : 'id';
+
   // Dia opt-in: same gate as snapshots/top-tenants.
   if (domain === 'dialysis') {
     try {
@@ -5926,14 +5935,14 @@ async function upsertPropertyFinancials(domain, propertyId, metadata, provCollec
       `property_financials?property_id=eq.${propertyId}` +
       `&fiscal_year=eq.${r.fiscal_year}` +
       `&source=eq.${encodeURIComponent(r.source || 'costar_cmbs_loan')}` +
-      `&select=id&limit=1`);
+      `&select=${pkCol}&limit=1`);
 
-    if (lookup.ok && lookup.data?.[0]?.id) {
-      const id = lookup.data[0].id;
+    if (lookup.ok && lookup.data?.[0]?.[pkCol]) {
+      const id = lookup.data[0][pkCol];
       const patch = { ...payload, updated_at: new Date().toISOString() };
-      delete patch.is_actual; // CHECK constraint forbids changing this; safe to omit on PATCH
+      delete patch.is_actual; // immutable post-insert; safe to omit on PATCH
       const r2 = await domainQuery(domain, 'PATCH',
-        `property_financials?id=eq.${id}`, patch);
+        `property_financials?${pkCol}=eq.${id}`, patch);
       if (r2.ok) {
         pushProvenance(provCollect, 'property_financials', id, patch, 0.85, 'costar_cmbs_loan');
         processed++;
@@ -5942,8 +5951,9 @@ async function upsertPropertyFinancials(domain, propertyId, metadata, provCollec
       const r2 = await domainQuery(domain, 'POST', 'property_financials', payload);
       if (r2.ok) {
         const ins = Array.isArray(r2.data) ? r2.data[0] : r2.data;
-        if (ins?.id) {
-          pushProvenance(provCollect, 'property_financials', ins.id, payload, 0.85, 'costar_cmbs_loan');
+        const insertedId = ins?.[pkCol];
+        if (insertedId) {
+          pushProvenance(provCollect, 'property_financials', insertedId, payload, 0.85, 'costar_cmbs_loan');
           processed++;
         }
       } else {
