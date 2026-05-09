@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v285';
+const CACHE_NAME = 'lcc-v286';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const STATIC_ASSETS = [
   './gov.js',
   './dialysis.js',
   './detail.js',
+  './detail-lease-comps-fix.js',
   './contacts-ui.js',
   './manifest.json'
 ];
