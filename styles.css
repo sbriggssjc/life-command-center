@@ -1,14 +1,25 @@
 /* Northmarq brand-aligned dark theme.
-   --accent uses NM Sky (#62B5E5) — the brand's "actionable digital accent" per
-   the Brand Book color palette page; well-suited to dark UI affordances.
-   --accent2 uses NM Blue (#003DA5) — primary brand color, used on active-tab
-   badges and emphasis backgrounds. Status colors (green/red/amber/purple/cyan)
-   are kept as semantic indicators (brand has no red/green/orange so semantic
-   status stays). Government category tokens (--gov-*) are likewise semantic
-   per-vertical indicators, not brand decoration. */
+   Dark surfaces (--bg / --s1..--s3 / --card / --border) are tinted toward
+   NM Blue rather than neutral cool grey, so the dark UI feels visually
+   connected to the brand without compromising contrast. Text greys
+   (--text2 / --text3) are an exact match for NM Steel / NM Slate from the
+   Brand Book palette page. --accent uses NM Sky (#62B5E5) — the brand's
+   "actionable digital accent" per the palette page, well-suited to dark
+   UI affordances. --accent2 uses NM Blue (#003DA5) — primary brand color,
+   used on active-tab badges and emphasis backgrounds. Status colors
+   (green/red/amber/purple/cyan) are kept as semantic indicators (brand has
+   no red/green/orange so semantic status stays). Government category
+   tokens (--gov-*) are likewise semantic per-vertical indicators, not
+   brand decoration. */
 :root {
-  --bg: #0f1117; --s1: #1a1d27; --s2: #242836; --s3: #2e3345; --card: #242836;
-  --border: #2e3345; --text: #e4e6ed; --text1: #f0f2f7; --text2: #9498a8; --text3: #6b7080;
+  /* NM-Blue-tinted dark surfaces — same lightness ladder as the previous
+     neutral palette, just shifted toward hue 222 (NM Blue territory). */
+  --bg: #0A0E1A; --s1: #131826; --s2: #1B2235; --s3: #232B42; --card: #1B2235;
+  --bg2: #1B2235; /* hover/badge bg used by .auth-sign-out-btn:hover and .auth-dev-badge */
+  --border: #283146;
+  --text: #e4e6ed; --text1: #f0f2f7;
+  --text2: #9EA9B7; /* NM Steel — exact brand match */
+  --text3: #6A748C; /* NM Slate — exact brand match */
   --accent: #62B5E5; --accent2: #003DA5; --green: #34d399; --yellow: #fbbf24;
   --red: #f87171; --orange: #fb923c; --purple: #a78bfa; --cyan: #22d3ee; --pink: #f472b6;
   --radius: 12px; --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -43,7 +54,7 @@ input, select { font-family: inherit; }
 .auth-sign-out-btn:hover { color: var(--text1); background: var(--bg2); }
 .auth-sign-in-btn { background: var(--accent); color: white; border: none; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
 .auth-dev-badge { padding: 2px 8px; border-radius: 4px; background: var(--bg2); }
-.login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+.login-overlay { position: fixed; inset: 0; background: rgba(0,8,32,0.55); display: flex; align-items: center; justify-content: center; z-index: 9999; }
 .login-card { background: var(--s1); border-radius: 12px; padding: 32px; width: 360px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
 .login-card h2 { margin: 0 0 4px; color: var(--text1); font-size: 20px; }
 
@@ -315,7 +326,7 @@ tr.clickable-row:hover td { background: var(--s2); }
 .pipeline-tab.active { background: var(--accent); color: #fff; }
 
 /* AI Copilot */
-.copilot-fab { position: fixed; bottom: calc(70px + var(--safe-bottom)); right: 16px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--purple)); border: none; color: #fff; font-size: 22px; cursor: pointer; z-index: 150; box-shadow: 0 4px 16px rgba(98,181,229,0.4); display: flex; align-items: center; justify-content: center; transition: transform 0.2s, box-shadow 0.2s; }
+.copilot-fab { position: fixed; bottom: calc(70px + var(--safe-bottom)); right: 16px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; color: #fff; font-size: 22px; cursor: pointer; z-index: 150; box-shadow: 0 4px 16px rgba(98,181,229,0.4); display: flex; align-items: center; justify-content: center; transition: transform 0.2s, box-shadow 0.2s; }
 .copilot-fab:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(98,181,229,0.5); }
 .copilot-fab.hidden { display: none; }
 .copilot-panel { position: fixed; bottom: 0; right: 0; width: 100%; max-width: 420px; height: 70vh; max-height: 600px; background: var(--s1); border-top-left-radius: 16px; border-top-right-radius: 16px; border: 1px solid var(--border); z-index: 250; display: none; flex-direction: column; box-shadow: 0 -4px 32px rgba(0,0,0,0.4); }
@@ -793,7 +804,7 @@ body.compact .greeting { font-size: 18px; }
 .empty-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
 .empty-desc { font-size: 14px; color: var(--text2); margin-bottom: 20px; }
 
-.live-ingest-card { margin-bottom: 18px; padding: 18px; border: 1px solid rgba(98, 181, 229, 0.28); border-radius: 16px; background: linear-gradient(180deg, rgba(98, 181, 229, 0.09), rgba(15, 17, 23, 0.94)); box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22); }
+.live-ingest-card { margin-bottom: 18px; padding: 18px; border: 1px solid rgba(98, 181, 229, 0.28); border-radius: 16px; background: linear-gradient(180deg, rgba(98, 181, 229, 0.09), rgba(10, 14, 26, 0.94)); box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22); }
 .live-ingest-card.collapsed { padding: 12px 18px; }
 .live-ingest-card.collapsed .live-ingest-grid,
 .live-ingest-card.collapsed .live-ingest-results,
