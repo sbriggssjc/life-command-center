@@ -11,9 +11,13 @@ that turn raw SF records into LCC entities, links, and the
 |-----------|------|---------|
 | Migration | `supabase/migrations/20260603000000_phase1_salesforce_bridges.sql` | `salesforce_activity_log` table + `v_competitive_touches` view. |
 | Seed     | `supabase/seeds/phase1_salesforce_bridges.sql` | Inserts five bridge rows (four inbound + one paused outbound) for a given workspace. |
-| Endpoint | `api/salesforce-changes.js` | `POST /api/salesforce-changes?bridge=sf.<name>` — receives PA batches, validates allowlist, enqueues jobs. |
+| Router   | `api/bridges.js` (`_route=ingest&_source=salesforce`) | Receives PA batches, validates allowlist, enqueues jobs. Same function also serves `_route=worker` and `_route=admin`. |
 | Handlers | `api/_shared/bridge-handlers-salesforce.js` | Per-`job_type` upsert logic. Reuses the existing `external_identities` + `entities.metadata.salesforce` pattern. |
-| Worker   | `api/enrichment-worker.js` (updated) | HANDLERS map wired + inline stuck-job recovery sweep. |
+| Rewrites | `vercel.json` | Maps `/api/salesforce-changes`, `/api/enrichment-worker`, `/api/admin/bridges` to the consolidated router. |
+
+> **Function count:** Phase 0 + Phase 1 add exactly **one** Vercel function
+> (`api/bridges.js`). Phase 2+ adds zero — new sources land as additional
+> entries in the router's `INGEST_SOURCES` / `HANDLERS` maps.
 
 ## Headline payoff: `v_competitive_touches`
 
@@ -33,8 +37,10 @@ rep's `touches_90d` for a tracked account jumps over a threshold.
 
 ## Deployment steps
 
-1. **Apply the migration** to OPS Supabase (`supabase db push`, or via the
-   Supabase MCP `apply_migration`).
+1. **Migrations applied** — Phase 0 + Phase 1 are live on the OPS Supabase
+   (`xengecqvemvfknjvbvrq`). To re-verify: `select table_name from
+   information_schema.tables where table_schema='public' and table_name in
+   ('connector_bridges','enrichment_jobs','salesforce_activity_log');`
 2. **Seed bridges per workspace** — for each workspace that should receive
    Salesforce data, run:
    ```sh
@@ -48,9 +54,11 @@ rep's `touches_90d` for a tracked account jumps over a threshold.
    used by the existing `salesforce-sync.js`.
 4. **Wire Vercel Cron** (or PA scheduled flow) to hit
    `POST /api/enrichment-worker?batch=20` every minute with the
-   `X-LCC-Key` header.
+   `X-LCC-Key` header. (Internally rewrites to
+   `/api/bridges?_route=worker&batch=20`.)
 5. **Build the four PA flows below** and point them at
-   `POST /api/salesforce-changes?bridge=sf.<name>`.
+   `POST /api/salesforce-changes?bridge=sf.<name>`. (Internally rewrites
+   to `/api/bridges?_route=ingest&_source=salesforce&bridge=sf.<name>`.)
 
 ## Power Automate flow specs
 
@@ -190,7 +198,7 @@ WhoId, WhatId, Subject, Description, ActivityDate, Type, Status,
 Priority). It's seeded so the contract is documented, but stays paused
 until:
 
-1. `/api/salesforce-write` endpoint is built (it'll use
+1. A `_route=write` action is added to `api/bridges.js` (uses
    `enforceWriteAllowlist` from `bridges.js`).
 2. A PA flow is created that listens for outbound webhook calls and
    inserts the SF Task on behalf of the LCC.
