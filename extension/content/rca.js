@@ -190,7 +190,34 @@
     else if (label === 'walk score')    data.walk_score = value;
     else if (label === 'transit score') data.transit_score = value;
     else if (label === 'apn')           data.parcel_number = value.split(/\s+/)[0]; // first APN
-    else if (label === 'deed')          data.deed_book_page = value;
+    else if (label === 'deed') {
+      data.deed_book_page = value;
+      // Round 76em (2026-05-09): structure deed text into individual records
+      // so the existing upsert*DeedRecords writers in sidebar-pipeline.js can
+      // pick them up. RCA emits multiple deeds as a single string, e.g.
+      // "072584000221 18195 072584000213 18192" for property 201 Maple St —
+      // four tokens that pair off as (document_number, book_page) per deed.
+      // Each token group maps to one historical event (a Sale or Construction).
+      // We DON'T try to correlate-by-date here (events render in a separate
+      // table) — just emit the structured records so the backend matcher can
+      // align them to sales_history entries by index or by trying.
+      const tokens = value.split(/[\s,;]+/).filter(t => t && /\d/.test(t));
+      const deedRecords = [];
+      for (let i = 0; i < tokens.length; i += 2) {
+        const docNum = tokens[i];
+        const bookPage = tokens[i + 1] || null;
+        if (docNum && /^\d{6,}$/.test(docNum)) {
+          deedRecords.push({
+            document_number: docNum,
+            book_page:       bookPage,
+            data_source:     'rca_sidebar',
+          });
+        }
+      }
+      if (deedRecords.length > 0) {
+        data.deed_records = deedRecords;
+      }
+    }
   }
 
   function extractPropertyHistory(data) {
@@ -249,14 +276,13 @@
 
           // Strip a trailing lender chunk from the seller text. Pattern:
           //   '...Trust 2016 First Citizens ($3.4m approx)'
-          // We split on 2+ space run, '$N.Nm' suffix, or known lender/bank
-          // sentinels. Conservative — only fires when '$N.Nm approx' is
-          // present at the end of the string.
-          const trailingLender = sellerRaw.match(/^(.+?)\s+([A-Z][A-Za-z0-9 &'\-]+?)\s*\(\s*\$[\d.,]+\s*[mk]?\s*(?:approx)?\s*\)\s*$/);
-          if (trailingLender) {
-            sellerRaw = trailingLender[1].trim();
-            const lenderText = `${trailingLender[2].trim()} (${entitiesText.match(/\$[\d.,]+\s*[mk]?\s*(?:approx)?/i)?.[0] || ''})`.trim();
-            if (!lenderRaw) lenderRaw = lenderText;
+          // Round 76em: use entity-suffix-anchored splitter (Group/LLC/Corp/
+          // Trust/Holdings/...) so seller "ACS Dev corp JV Molasky Group"
+          // doesn't get truncated to "ACS" with the rest leaked into lender.
+          const split = splitSellerAndLenderFromTail(sellerRaw);
+          if (split) {
+            sellerRaw = split.seller;
+            if (!lenderRaw) lenderRaw = split.lender;
           }
 
           evt.seller = sellerRaw || null;
@@ -267,6 +293,23 @@
           if (refiMatch) {
             evt.buyer  = (refiMatch[1] || '').trim() || null;
             evt.lender = (refiMatch[2] || '').trim() || null;
+          } else if (evt.kind === 'construction') {
+            // Round 76em (2026-05-09): Construction events on RCA show the
+            // developer as the sole entity, optionally followed by a
+            // construction lender in '$X.Xm approx' tail form. Example
+            // (FBI HQ Chelsea, 201 Maple St): 'ACS Dev corp JV Molasky Group
+            // TIAA-CREF ($130.8m approx)'. The fromMatch + refiMatch paths
+            // above both fail because there's no 'from' or '↔' separator —
+            // result: developer + construction loan both dropped silently.
+            const cSplit = splitSellerAndLenderFromTail(entitiesText);
+            if (cSplit) {
+              evt.developer = cSplit.seller;
+              evt.lender    = cSplit.lender;
+            } else {
+              // No trailing $ amount or no entity-suffix split — the whole
+              // text is the developer.
+              evt.developer = entitiesText.trim() || null;
+            }
           }
         }
 
@@ -282,6 +325,36 @@
           if (/lender|fund/.test(role) && !evt.lender) evt.lender = txt;
           if (/broker/.test(role)      && !evt.broker) evt.broker = txt;
         });
+
+        // Round 76em (2026-05-09): extract the loan amount from the lender
+        // string. RCA formats it inline as 'Old National Bank ($94.2m approx)'
+        // — without a separate column for the dollar value. upsertDomainLoans
+        // needs sale.loan_amount to be set or it skips the row entirely
+        // (line ~4990 in sidebar-pipeline.js), so without this extraction
+        // every RCA capture has its loan amount silently dropped.
+        //
+        // CRITICAL: emit the EXPANDED number, not the "$Xm" shorthand.
+        // Backend parseCurrency (api/_handlers/sidebar-pipeline.js:427)
+        // strips $/, but doesn't handle the m/k/b suffix — so "$94.2m"
+        // would parse as 94.2 dollars, not 94,200,000. Pass the raw
+        // number; parseCurrency handles numeric input cleanly via its
+        // typeof===number short-circuit.
+        if (evt.lender) {
+          const amtMatch = evt.lender.match(/\$\s*([\d,.]+)\s*([mkb]?)\s*(?:approx)?/i);
+          if (amtMatch) {
+            const num = parseFloat(amtMatch[1].replace(/,/g, ''));
+            const unit = (amtMatch[2] || '').toLowerCase();
+            let dollars = num;
+            if (unit === 'm') dollars *= 1e6;
+            else if (unit === 'k') dollars *= 1e3;
+            else if (unit === 'b') dollars *= 1e9;
+            if (Number.isFinite(dollars) && dollars > 0) {
+              evt.loan_amount = dollars;
+            }
+            // Strip trailing parenthetical so lender name is clean
+            evt.lender = evt.lender.replace(/\s*\(\s*\$[\d,.]+\s*[mkb]?\s*(?:approx)?\s*\)\s*$/i, '').trim();
+          }
+        }
       }
 
       // Comments: narrative
@@ -306,6 +379,42 @@
 
       data.sales_history.push(evt);
     });
+  }
+
+  // Round 76em (2026-05-09): split a "<seller-or-developer> <lender> ($Xm approx)"
+  // string into its two entity halves. The previous lazy-quantifier regex
+  // (^(.+?)\s+([A-Z][A-Za-z0-9 &'\-]+?)\s*\(\s*\$[\d.,]+...) split on the
+  // FIRST capitalized token, so "ACS Dev corp JV Molasky Group Old National
+  // Bank ($94.2m approx)" became seller="ACS" / lender="Dev corp JV Molasky
+  // Group Old National Bank". Heuristic that actually works on RCA's data:
+  // walk the string and find the LAST entity-suffix word (Group/LLC/Corp/
+  // Trust/Holdings/etc.) — that marks the end of the seller name. Everything
+  // after = lender. Works for FBI HQ Chelsea (Group → Old National Bank) and
+  // construction equivalent (Group → TIAA-CREF).
+  function splitSellerAndLenderFromTail(text) {
+    if (!text) return null;
+    const parenMatch = text.match(/\s*\(\s*\$[\d.,]+\s*[mkb]?\s*(?:approx)?\s*\)\s*$/i);
+    if (!parenMatch) return null;
+    const parenSuffix = parenMatch[0];
+    const noParens = text.slice(0, parenMatch.index).trim();
+    const ENTITY_SUFFIX_RE =
+      /\b(Group|LLC|L\.L\.C\.?|LP|L\.P\.?|LLP|Corp|Corporation|Inc|Incorporated|Trust|Fund|Capital|Partners|Realty|REIT|Holdings?|Bancorp|Company|Companies|Co\.?|Ventures|Properties|Investments?|Acquisitions?|Management|JV|Equities|Equity|Associates)\b/g;
+    let lastMatch = null;
+    let m;
+    while ((m = ENTITY_SUFFIX_RE.exec(noParens)) !== null) {
+      lastMatch = { idx: m.index, len: m[0].length };
+    }
+    if (!lastMatch) return null;
+    const splitPos = lastMatch.idx + lastMatch.len;
+    const seller = noParens.slice(0, splitPos).trim();
+    const lenderName = noParens.slice(splitPos).trim();
+    // Lender must have at least one capitalized name token after the
+    // suffix; otherwise the split was bogus (entity-suffix at end of string).
+    if (!seller || !lenderName || !/[A-Z]/.test(lenderName)) return null;
+    return {
+      seller,
+      lender: `${lenderName} ${parenSuffix}`.replace(/\s+/g, ' ').trim(),
+    };
   }
 
   // Convert RCA's abbreviated 'Feb '26' / 'May 16' style to ISO YYYY-MM-01.
