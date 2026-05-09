@@ -1683,6 +1683,26 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         } else if (/^gla$/i.test(line)) {
           snapshot.gla = lp_parseSF(next);
         }
+        // Round 76ek.l (2026-05-08): non-CMBS Loan tab fields. The simple
+        // /detail/lookup/{N}/loan layout lists Origination Date / Doc Number /
+        // Multi Properties? all under the "Loan" header. In CMBS captures,
+        // origination_date lives in the "Terms" section, but on this layout
+        // Terms doesn't exist — the field would never be captured without
+        // adding a handler here. 2026-05-08 user report: 2075 North Blvd
+        // Idaho Falls / Martek Building had loan_amount + originator
+        // captured but origination_date null, leaving the gov.loans row
+        // missing the key date.
+        else if (/^origination\s+date$/i.test(line)) {
+          rec.origination_date = lp_parseDate(next) || rec.origination_date;
+        } else if (/^maturity\s+date$/i.test(line)) {
+          rec.maturity_date = lp_parseDate(next) || rec.maturity_date;
+        } else if (/^doc(?:ument)?\s+(?:number|#|num\.?)$/i.test(line)) {
+          // No dedicated column; tag onto the loan source_url query string
+          // for traceability. Parser-side only — backend already preserves
+          // source_url verbatim.
+          if (next && next.length < 50) rec.doc_number = next;
+        }
+        // Multi Properties? / # of Properties → no column, skip silently.
         continue;
       }
 
@@ -1874,6 +1894,25 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     if (rec.loan_amount == null && rec.origination_amount != null) {
       rec.loan_amount = rec.origination_amount;
     }
+
+    // Round 76ek.l (2026-05-08): pre-guard diagnostic. Logs whatever was
+    // captured BEFORE the identity guard runs, so when the user reports
+    // "loan details aren't being pulled in" we can see in DevTools whether
+    // the parser actually fired but bailed at the guard, vs. didn't fire
+    // at all. Prefixed with the URL so multi-tab captures stay separable.
+    console.log('[LCC CoStar] Round 76ek.l: parseCmbsLoanDetail pre-guard state', {
+      url:                pageUrl,
+      origination_date:   rec.origination_date,
+      maturity_date:      rec.maturity_date,
+      originator:         rec.originator,
+      borrower:           rec.borrower,
+      origination_amount: rec.origination_amount,
+      loan_amount:        rec.loan_amount,
+      doc_number:         rec.doc_number,
+      will_emit:          !!(rec.origination_date || rec.maturity_date
+                            || rec.originator || rec.origination_amount
+                            || rec.loan_amount),
+    });
 
     // Identity guard — only emit a record when we got at least one of the
     // loan-identifying fields. Prevents empty {} payloads on partially-loaded
