@@ -2916,8 +2916,21 @@ function renderSalesHistory(sales, ctx) {
 
     // Lender/Loan
     if (s.lender || s.loan_amount) {
-      let lenderLine = s.lender ? `<strong>Lender:</strong> ${escapeHtml(s.lender)}` : '<strong>Loan:</strong>';
-      if (s.loan_amount) lenderLine += ` — ${escapeHtml(s.loan_amount)}`;
+      // Round 76eo (2026-05-09): defensive strip of "($X.Xm approx)" tail
+      // from the lender display. Pre-Round-76em RCA captures stored the
+      // raw "Old National Bank ($94.2m approx)" string; subsequent clean
+      // captures couldn't overwrite it because background.js sales merge
+      // (lines 450-454) preserves existing non-null fields. Strip at
+      // render time so cached state shows the clean version regardless.
+      const cleanLender = s.lender
+        ? String(s.lender).replace(/\s*\(\s*\$[\d,.]+\s*[mkb]?\s*(?:approx)?\s*\)\s*$/i, '').trim()
+        : '';
+      let lenderLine = cleanLender ? `<strong>Lender:</strong> ${escapeHtml(cleanLender)}` : '<strong>Loan:</strong>';
+      // Format loan_amount as currency when it's a number
+      const formattedAmount = typeof s.loan_amount === 'number'
+        ? '$' + Math.round(s.loan_amount).toLocaleString()
+        : s.loan_amount;
+      if (formattedAmount) lenderLine += ` — ${escapeHtml(String(formattedAmount))}`;
       if (s.loan_type) lenderLine += ` (${escapeHtml(s.loan_type)})`;
       if (s.interest_rate) lenderLine += ` @ ${escapeHtml(s.interest_rate)}`;
       if (s.loan_origination_date) lenderLine += ` — originated ${escapeHtml(s.loan_origination_date)}`;
