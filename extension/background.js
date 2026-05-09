@@ -298,10 +298,24 @@ function propertyIdentityKey(url) {
     // properties were collapsing to the same key. Match params named
     // *id (case-insensitive) whose value is numeric or UUID-shaped.
     // Sort to keep the key stable regardless of URL parameter order.
+    //
+    // Round 76el (2026-05-09): the original regex `/(^|[^a-z])id$/i` failed
+    // on camelCase keys like `propertyKeyId` (RCA's primary identifier)
+    // because `[^a-z]` under the `/i` flag becomes `[^a-zA-Z]`, which means
+    // the lowercase letter `y` immediately before `Id` is rejected. Result:
+    // EVERY RCA property page mapped to the same identity key
+    // `app.rcanalytics.com/property/detail`, cross-merging tenants /
+    // contacts / sales_history across unrelated properties (user-reported:
+    // FBI HQ Chelsea sidebar showing Hobby Lobby Oklahoma City tenant +
+    // Lauricella $14M sale + United Properties Corp owner — all from a
+    // previously-viewed RCA page). Replace with a case-aware pattern that
+    // recognizes camelCase (`<lowercase>Id`), snake_case (`_id`), and
+    // standalone (`^id$` / `^Id$`) endings without false-positive matches
+    // on words like "paid" / "avoid" / "rapid" that happen to end in 'id'.
     const idQueryParts = [];
     for (const [key, value] of u.searchParams) {
       if (!value) continue;
-      if (!/(^|[^a-z])id$/i.test(key)) continue;
+      if (!/(^[Ii]d$|_id$|[a-z]Id$)/.test(key)) continue;
       if (!/^[\w-]+$/.test(value)) continue;
       if (!/\d/.test(value) && value.length < 20) continue;
       idQueryParts.push(`${key.toLowerCase()}=${value.toLowerCase()}`);
