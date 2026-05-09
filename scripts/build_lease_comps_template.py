@@ -3,7 +3,13 @@
 Generates the Northmarq-branded dialysis lease-comps XLSX template at
 assets/cm-templates/dialysis-lease-comps-template.xlsx.
 
-Fixes vs. prior hand-edited template (Round 76gn.f audit):
+Round 76gn.i additions:
+  - New PATIENTS column at W (latest_patient_count). Subject table and Comps
+    table both extend to W. AVERAGE formula appended for column W.
+  - Subject section band extends to column W so the heading bar covers the
+    new column too.
+
+Prior fixes (Round 76gn.f / 76gn.h):
   - Header cell number formats corrected (date format was applied to text headers,
     accounting/currency formats applied to year/occupancy/date columns).
   - Freeze pane moved from B30 to B8 so the comps header stays visible while scrolling.
@@ -11,7 +17,7 @@ Fixes vs. prior hand-edited template (Round 76gn.f audit):
   - Section title bands ("Subject Property", "Lease Comps") get a navy band.
   - Body uses Open Sans / Trebuchet MS per NMQ_BRAND in detail.js.
   - Comps rows alternate warm-white / white fill.
-  - Subject table extended to B3:U4 so subject's owner/user can render too.
+  - Subject table extended to B3:W4 so subject's owner/user/patient count render.
 
 Run from repo root:
     python scripts/build_lease_comps_template.py
@@ -49,30 +55,33 @@ OUT_PATH = Path("assets/cm-templates/dialysis-lease-comps-template.xlsx")
 COMP_FIRST_DATA_ROW = 8
 COMP_LAST_TEMPLATED_ROW = 40
 COMP_TOTAL_ROW = 60
+LAST_COL_LETTER = "W"
+LAST_COL_INDEX = 23  # column W (1-based)
 
 COLUMNS = [
-    ("counter",   "A", "",                       3.5,  "0",                         False),
-    ("tenant",    "B", "TENANT",                25,    "@",                         False),
-    ("operator",  "C", "OPERATOR",              22,    "@",                         False),
-    ("address",   "D", "ADDRESS",               24,    "@",                         False),
-    ("city",      "E", "CITY",                  14,    "@",                         False),
-    ("state",     "F", "STATE",                  7,    "@",                         True),
-    ("land",      "G", "LAND",                  10,    '#,##0.0" ac"',              True),
-    ("built",     "H", "BUILT",                  9,    "0",                         True),
-    ("renovated", "I", "RENOVATED",             11,    "0",                         True),
-    ("rba",       "J", "RBA",                   11,    "#,##0",                     True),
-    ("sfLeased",  "K", "SF LEASED",             12,    "#,##0",                     True),
-    ("occupancy", "L", "OCCUPANCY",             11,    "0%",                        True),
-    ("rentPsf",   "M", "RENT/SF",               11,    '"$"#,##0.00',               True),
-    ("current",   "N", "CURRENT RENT",          14,    '"$"#,##0',                  True),
-    ("commence",  "O", "COMMENCE",              11,    "mmm-yy",                    True),
-    ("exp",       "P", "EXP",                   11,    "mmm-yy",                    True),
-    ("initTerm",  "Q", "INITIAL TERM",          13,    '0.0" Years"',               True),
-    ("termRem",   "R", "TERM REM",              13,    '0.0" Years";"EXPIRED";"-"', True),
-    ("expenses",  "S", "EXPENSES",              13,    "@",                         True),
-    ("bumps",     "T", "BUMPS",                 14,    "@",                         True),
-    ("userOwner", "U", "USER/OWNER",            22,    "@",                         False),
-    ("distance",  "V", "DISTANCE TO SUBJECT",   16,    '#,##0.0" mi"',              True),
+    ("counter",      "A", "",                       3.5,  "0",                         False),
+    ("tenant",       "B", "TENANT",                25,    "@",                         False),
+    ("operator",     "C", "OPERATOR",              22,    "@",                         False),
+    ("address",      "D", "ADDRESS",               24,    "@",                         False),
+    ("city",         "E", "CITY",                  14,    "@",                         False),
+    ("state",        "F", "STATE",                  7,    "@",                         True),
+    ("land",         "G", "LAND",                  10,    '#,##0.0" ac"',              True),
+    ("built",        "H", "BUILT",                  9,    "0",                         True),
+    ("renovated",    "I", "RENOVATED",             11,    "0",                         True),
+    ("rba",          "J", "RBA",                   11,    "#,##0",                     True),
+    ("sfLeased",     "K", "SF LEASED",             12,    "#,##0",                     True),
+    ("occupancy",    "L", "OCCUPANCY",             11,    "0%",                        True),
+    ("rentPsf",      "M", "RENT/SF",               11,    '"$"#,##0.00',               True),
+    ("current",      "N", "CURRENT RENT",          14,    '"$"#,##0',                  True),
+    ("commence",     "O", "COMMENCE",              11,    "mmm-yy",                    True),
+    ("exp",          "P", "EXP",                   11,    "mmm-yy",                    True),
+    ("initTerm",     "Q", "INITIAL TERM",          13,    '0.0" Years"',               True),
+    ("termRem",      "R", "TERM REM",              13,    '0.0" Years";"EXPIRED";"-"', True),
+    ("expenses",     "S", "EXPENSES",              13,    "@",                         True),
+    ("bumps",        "T", "BUMPS",                 14,    "@",                         True),
+    ("userOwner",    "U", "USER/OWNER",            12,    "@",                         True),
+    ("distance",     "V", "DISTANCE TO SUBJECT",   16,    '#,##0.0" mi"',              True),
+    ("patientCount", "W", "PATIENTS",              11,    "#,##0",                     True),
 ]
 
 
@@ -82,36 +91,38 @@ def build():
     ws.title = "Lease Comps"
     ws.sheet_properties.tabColor = NMQ["blue"][2:]
 
-    # Column widths + default cell number formats per column
     for _, letter, _label, width, _fmt, _center in COLUMNS:
         ws.column_dimensions[letter].width = width
 
-    # Hide gridlines for the deliverable look
     ws.sheet_view.showGridLines = False
 
-    # Top brand band: row 1
+    # Top brand band: row 1 — extends across all columns B..W
     ws.row_dimensions[1].height = 30
     band = ws.cell(row=1, column=2, value="NORTHMARQ  ·  LEASE COMPS")
     band.font = Font(name=HEADING_FONT, size=14, bold=True, color=NMQ["white"])
     band.fill = PatternFill(fill_type="solid", fgColor=NMQ["blue"])
     band.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=22)
-    for col in range(2, 23):
+    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=LAST_COL_INDEX)
+    for col in range(2, LAST_COL_INDEX + 1):
         c = ws.cell(row=1, column=col)
         c.fill = PatternFill(fill_type="solid", fgColor=NMQ["blue"])
 
-    # Subject section
+    # Subject section band — extends to W so PATIENTS column header is covered.
+    # DISTANCE column (V) intentionally left out of the subject data (not
+    # meaningful for the subject itself), but the section band still spans it.
     ws.row_dimensions[2].height = 24
     sec = ws.cell(row=2, column=2, value="Subject Property")
     sec.font = Font(name=HEADING_FONT, size=13, bold=True, color=NMQ["white"])
     sec.fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
     sec.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=21)
-    for col in range(2, 22):
+    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=LAST_COL_INDEX)
+    for col in range(2, LAST_COL_INDEX + 1):
         ws.cell(row=2, column=col).fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
 
-    _write_header_row(ws, 3, columns_subset=COLUMNS[1:21])
-    _write_data_row_styles(ws, 4, columns_subset=COLUMNS[1:21], stripe=False)
+    # Subject header + data row — exclude column A (counter) and DISTANCE (V).
+    subject_cols = [c for c in COLUMNS if c[0] not in ("counter", "distance")]
+    _write_header_row(ws, 3, columns_subset=subject_cols)
+    _write_data_row_styles(ws, 4, columns_subset=subject_cols, stripe=False)
     ws.row_dimensions[3].height = 24
     ws.row_dimensions[4].height = 22
 
@@ -122,8 +133,8 @@ def build():
     sec2.font = Font(name=HEADING_FONT, size=13, bold=True, color=NMQ["white"])
     sec2.fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
     sec2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.merge_cells(start_row=6, start_column=2, end_row=6, end_column=22)
-    for col in range(2, 23):
+    ws.merge_cells(start_row=6, start_column=2, end_row=6, end_column=LAST_COL_INDEX)
+    for col in range(2, LAST_COL_INDEX + 1):
         ws.cell(row=6, column=col).fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
 
     _write_header_row(ws, 7, columns_subset=COLUMNS[1:])
@@ -182,6 +193,7 @@ def build():
         "Q": '=IFERROR(SUBTOTAL(101,Comps[INITIAL TERM]),"")',
         "R": '=IFERROR(SUBTOTAL(101,Comps[TERM REM]),"")',
         "V": '=IFERROR(AVERAGE(Comps[DISTANCE TO SUBJECT]),"")',
+        "W": '=IFERROR(AVERAGE(Comps[PATIENTS]),"")',
     }
     fmt_by_letter = {letter: fmt for _, letter, _l, _w, fmt, _c in COLUMNS}
     for letter, formula in avg_formulas.items():
@@ -193,7 +205,7 @@ def build():
         c.number_format = fmt_by_letter[letter]
         _bottom_border(c, top=True)
 
-    for col in range(7, 23):
+    for col in range(7, LAST_COL_INDEX + 1):
         cell = ws.cell(row=tr, column=col)
         if cell.value is None:
             cell.fill = PatternFill(fill_type="solid", fgColor=NMQ["blueTint"])
@@ -202,14 +214,14 @@ def build():
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # Excel tables
-    subj_tbl = Table(displayName="Subject", ref="B3:U4")
+    subj_tbl = Table(displayName="Subject", ref=f"B3:{LAST_COL_LETTER}4")
     subj_tbl.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight1", showFirstColumn=False, showLastColumn=False,
         showRowStripes=False, showColumnStripes=False
     )
     ws.add_table(subj_tbl)
 
-    comps_tbl = Table(displayName="Comps", ref=f"B7:V{COMP_TOTAL_ROW}")
+    comps_tbl = Table(displayName="Comps", ref=f"B7:{LAST_COL_LETTER}{COMP_TOTAL_ROW}")
     comps_tbl.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight1", showFirstColumn=False, showLastColumn=False,
         showRowStripes=False, showColumnStripes=False
