@@ -31,6 +31,7 @@ concurrency:
 
 permissions:
   issues: write
+  contents: read
 
 jobs:
   check:
@@ -39,6 +40,14 @@ jobs:
     environment: Production
     timeout-minutes: 5
     steps:
+      # Required so the `gh` CLI can resolve the repo context for
+      # `gh label list / gh issue create / gh issue comment` below.
+      # Without a .git directory those calls fail with
+      # "fatal: not a git repository". Lightweight: --depth 1, no submodules.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Fetch dia signature
         id: dia
         env:
