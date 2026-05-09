@@ -13,7 +13,7 @@
 //     this way).
 //
 // What it does:
-//   GET https://api.supabase.com/v1/projects/{ref}/advisors?type=security
+//   GET https://api.supabase.com/v1/projects/{ref}/advisors/security
 //   for each project, filters to {level: ERROR}, projects to {name, detail},
 //   sorts deterministically, writes the JSON file.
 //
@@ -58,7 +58,10 @@ const targets = requested.length === 0
 
 for (const project of targets) {
   const ref = PROJECTS[project];
-  const url = `https://api.supabase.com/v1/projects/${ref}/advisors?type=security`;
+  // Endpoint shape: GET /v1/projects/{ref}/advisors/security (path
+  // segment, NOT ?type=security — the query-string form returns 404).
+  // Response is either a bare array or {lints: [...]}; normalize below.
+  const url = `https://api.supabase.com/v1/projects/${ref}/advisors/security`;
   process.stdout.write(`${project} (${ref}): fetching... `);
 
   const res = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -67,12 +70,13 @@ for (const project of targets) {
     process.exit(3);
   }
   const body = await res.json();
+  const rawLints = Array.isArray(body) ? body : (body.lints ?? []);
   // Strip the \` decorative escapes from detail (must match the
   // workflow's gsub in supabase-advisor-check.yml — diffing live data
   // against the allowlist requires identical normalization on both
   // sides). Lint name + cleaned detail still uniquely identify the
   // finding.
-  const errorLints = (body.lints ?? [])
+  const errorLints = rawLints
     .filter(l => l.level === 'ERROR')
     .map(l => ({ name: l.name, detail: l.detail.replace(/\\`/g, '') }))
     .sort((a, b) => (a.name + a.detail).localeCompare(b.name + b.detail));

@@ -59,7 +59,7 @@ jobs:
           - project: dia
             ref: zqzrriwuavgrquhisnoa
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
@@ -84,20 +84,32 @@ jobs:
             exit 1
           fi
 
-          # Pull current security advisors. Only ERROR-level entries are
-          # in scope for this audit; project to {name, detail} so the
-          # diff against the allowlist is exact (level/categories/etc.
-          # are noise that would invalidate the diff on minor changes).
-          curl -fsS -H "Authorization: Bearer $PAT" \
-            "https://api.supabase.com/v1/projects/${REF}/advisors?type=security" \
-            > /tmp/raw.json
+          # Pull current security advisors. Endpoint shape:
+          # GET /v1/projects/{ref}/advisors/security  (path segment, NOT
+          # ?type=security — the latter returns 404). Response shape varies
+          # by Supabase version: sometimes a bare `[{...}]` array, sometimes
+          # `{"lints":[...]}` — the jq pipeline below handles both.
+          # Drop -f so we capture the response body on a 4xx/5xx for
+          # diagnostics; explicit status check follows.
+          HTTP_STATUS=$(curl -sS -o /tmp/raw.json -w '%{http_code}' \
+            -H "Authorization: Bearer $PAT" \
+            "https://api.supabase.com/v1/projects/${REF}/advisors/security")
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::Supabase Management API returned HTTP $HTTP_STATUS for ${PROJECT} (${REF})"
+            echo "Response body:"
+            cat /tmp/raw.json
+            echo
+            echo "Confirm SUPABASE_ACCESS_TOKEN is a valid Personal Access Token from"
+            echo "https://supabase.com/dashboard/account/tokens with access to this org."
+            exit 1
+          fi
 
           # Strip the \\` decorative escapes Supabase wraps table/view
           # names with in advisor detail strings — the allowlist files
           # store cleaned details, so the diff has to apply the same
           # transformation to live data. Lint name + cleaned detail
           # still uniquely identify the finding.
-          jq '(.lints // []) | map(select(.level=="ERROR")) | map({name, detail: (.detail | gsub("\\\\`"; ""))}) | sort_by(.name + .detail)' \
+          jq '(if type == "array" then . else (.lints // []) end) | map(select(.level=="ERROR")) | map({name, detail: (.detail | gsub("\\\\`"; ""))}) | sort_by(.name + .detail)' \
             /tmp/raw.json > /tmp/current.json
 
           CURRENT=$(jq 'length' /tmp/current.json)
