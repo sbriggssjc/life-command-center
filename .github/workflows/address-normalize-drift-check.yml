@@ -9,11 +9,16 @@ name: Address Normalizer Drift Check
 # rules. When you intentionally update one normalizer, update both and
 # this check passes again.
 #
-# Required secrets (Settings → Secrets and variables → Actions):
+# Required secrets (Settings → Environments → Production):
 #   DIA_SUPABASE_URL  e.g. https://zqzrriwuavgrquhisnoa.supabase.co
 #   DIA_SUPABASE_KEY  anon key (RPC is SECURITY DEFINER, anon is fine)
 #   GOV_SUPABASE_URL  e.g. https://scknotsqkcheojiaewwh.supabase.co
 #   GOV_SUPABASE_KEY  anon key
+#
+# These secrets live under the Production environment, not at repo level.
+# GitHub Actions only injects environment-scoped secrets when the job
+# declares `environment: <Name>` — otherwise they render to empty strings
+# and the preflight (correctly) reports them as missing.
 
 on:
   schedule:
@@ -31,6 +36,7 @@ jobs:
   check:
     name: Compare normalizer signatures
     runs-on: ubuntu-latest
+    environment: Production
     timeout-minutes: 5
     steps:
       - name: Fetch dia signature
@@ -42,6 +48,8 @@ jobs:
           set -euo pipefail
           if [[ -z "$URL" || -z "$KEY" ]]; then
             echo "::error::DIA_SUPABASE_URL or DIA_SUPABASE_KEY secret not set"
+            echo "Confirm they exist under Settings -> Environments -> Production,"
+            echo "and that this job has 'environment: Production' set."
             exit 1
           fi
           MD5=$(curl -fsS -X POST "$URL/rest/v1/rpc/get_address_normalize_signature" \
@@ -61,6 +69,8 @@ jobs:
           set -euo pipefail
           if [[ -z "$URL" || -z "$KEY" ]]; then
             echo "::error::GOV_SUPABASE_URL or GOV_SUPABASE_KEY secret not set"
+            echo "Confirm they exist under Settings -> Environments -> Production,"
+            echo "and that this job has 'environment: Production' set."
             exit 1
           fi
           MD5=$(curl -fsS -X POST "$URL/rest/v1/rpc/get_address_normalize_signature" \
