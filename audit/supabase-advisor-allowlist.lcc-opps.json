@@ -1,0 +1,346 @@
+{
+  "_comment": "Generated allowlist of ERROR-level Supabase advisors known to be present on lcc-opps (project xengecqvemvfknjvbvrq) as of bootstrap. Anything ERROR-level not in this list will trigger an alert via the supabase-advisor-check workflow. To remove an entry: fix the underlying issue (enable RLS, switch SECURITY DEFINER -> SECURITY INVOKER, etc.) and delete the matching row. To regenerate from scratch: run scripts/bootstrap-advisor-allowlist.mjs.",
+  "_project_ref": "xengecqvemvfknjvbvrq",
+  "lints": [
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_brand_tokens is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_chart_catalog is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_features is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_macro_rates_q is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_narratives is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_nm_broker_patterns is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_rca_imports is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_rca_quarterly is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_report_snapshots is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_reports is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_subspecialties is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.cm_verticals is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.contact_change_log is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.contact_merge_queue is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.data_corrections is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.dia_link_provenance_watermark is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.domain_table_columns is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.field_provenance is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.field_source_priority is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.intake_share_inbox is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.lcc_health_alerts is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.listing_bd_runs is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.marketing_leads is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.perf_metrics is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.perf_targets is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.sf_sync_queue is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.staged_intake_matches is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.staged_intake_promotions is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.unified_contacts is public, but RLS has not been enabled."
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_avg_deal_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_buyer_share_y is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_cap_quartile_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_cap_ttm_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_cap_yoy_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_cost_of_capital_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_count_ttm_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_macro_rates_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_net_lease_spread_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_nm_share_y is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_nm_vs_market_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_rca_unioned is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_returns_indexes_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_sources_capital is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_top_buyers is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_top_sellers is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_volume_ttm_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cm_natl_st_yoy_change_q is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.cross_domain_contacts is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.high_performing_templates is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.ignored_recommendation_contacts is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.slow_action_report is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_composite_unique_with is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_connector_checklist is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_cron_health_summary is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_duplicate_candidates is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_entity_completeness is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_entity_timeline is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_provenance_actionable is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_provenance_conflicts is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_provenance_current is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_provenance_unranked is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_provenance_would_block is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_source_priority_invalid_columns is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_field_source_priority_unobserved is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_fk_references_to is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_inbox_triage is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_manager_overview is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_matcher_accuracy_recent is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_mv_freshness is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_my_work is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_orphaned_actions is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_overdue_touchpoints is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_perf_endpoint_summary is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_perf_hourly_throughput is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_perf_slow_requests is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_perf_target_compliance is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_perf_workspace_summary is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_research_queue is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_stale_identities is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_stuck_intakes is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_sync_exceptions is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_team_queue is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_unassigned_work is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_unlinked_entities is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_work_counts is defined with the SECURITY DEFINER property"
+    }
+  ]
+}
