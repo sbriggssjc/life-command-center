@@ -1,0 +1,139 @@
+name: Cron Heartbeat Check
+
+# Catches the case where a Supabase pg_cron job stops firing (or starts
+# failing) silently. Issue #561 was a near-miss: the
+# lcc-availability-promotion-sweep cron looked broken from its output
+# table (listing_verification_history was empty) but was actually
+# running fine — we'd been looking at the wrong canonical source.
+#
+# The canonical source is `cron.job_run_details`, joined to `cron.job`.
+# `lcc_audit_cron_health()` (see migration
+# 20260509120000_lcc_audit_cron_health.sql) does this join and returns
+# one row per active job that's stale (>25h since last success),
+# failing (any non-success in 24h), or has no run history in 7 days.
+#
+# Required secrets (Settings → Environments → Production):
+#   LCC_SUPABASE_URL       e.g. https://xengecqvemvfknjvbvrq.supabase.co
+#   LCC_SERVICE_ROLE_KEY   service_role key (RPC is restricted to it)
+
+on:
+  schedule:
+    - cron: '30 13 * * *'   # 13:30 UTC daily — 15 min after field-source-priority audit
+  workflow_dispatch:
+
+concurrency:
+  group: cron-heartbeat-check
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    name: Audit pg_cron health
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Query lcc_audit_cron_health()
+        id: audit
+        env:
+          LCC_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          for v in LCC_URL LCC_KEY; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::$v secret not set"
+              echo "Confirm it exists under Settings -> Environments -> Production,"
+              echo "and that this job has 'environment: Production' set."
+              exit 1
+            fi
+          done
+
+          ROWS=$(curl -fsS -X POST "$LCC_URL/rest/v1/rpc/lcc_audit_cron_health" \
+            -H "apikey: $LCC_KEY" \
+            -H "Authorization: Bearer $LCC_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+
+          COUNT=$(echo "$ROWS" | jq 'length')
+          echo "Unhealthy jobs: $COUNT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if (( COUNT > 0 )); then
+            echo "$ROWS" | jq -r '.[] | "  - \(.jobname) [\(.problem)] last_success=\(.last_success_at // "never") hrs_since=\(.hours_since_last_success // "n/a") recent_failures=\(.recent_failures)"'
+            echo "$ROWS" > /tmp/cron_health.json
+          fi
+
+      - name: Open / update tracking issue
+        if: steps.audit.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          DETAILS=$(jq -r '.[] | "- `\(.jobname)` (schedule: `\(.schedule)`) — **\(.problem)**\n  last successful run: \(.last_success_at // "_never in last 7 days_")\n  hours since: \(.hours_since_last_success // "_n/a_")\n  non-success runs in last 24h: \(.recent_failures)"' /tmp/cron_health.json)
+
+          BODY=$(cat <<EOF
+          The daily cron heartbeat audit found Supabase pg_cron jobs on
+          LCC Opps that are either stale, failing, or have no run history.
+
+          $DETAILS
+
+          ## What "stale", "failing", and "no_runs_7d" mean
+
+          - **stale**: last successful run was more than 25 hours ago. Every
+            active LCC pg_cron job runs at least daily, so this is suspicious.
+          - **failing**: at least one non-success run in the last 24 hours.
+            Check \`cron.job_run_details.return_message\` for the error.
+          - **no_runs_7d**: no entries in \`cron.job_run_details\` at all in
+            the last 7 days. The job is registered but pg_cron isn't picking
+            it up — most often a syntax error in \`cron.job.command\`.
+
+          ## Triage commands
+
+          \`\`\`sql
+          -- Recent run history for all flagged jobs:
+          SELECT j.jobname, jrd.start_time, jrd.status,
+                 left(jrd.return_message, 200) AS detail
+          FROM cron.job_run_details jrd
+          JOIN cron.job j ON j.jobid = jrd.jobid
+          WHERE jrd.start_time > now() - interval '48 hours'
+          ORDER BY jrd.start_time DESC;
+          \`\`\`
+
+          Run: $RUN_URL
+          Audit RPC: \`public.lcc_audit_cron_health()\`
+          EOF
+          )
+
+          if ! gh label list --search cron-heartbeat-stale --json name --jq '.[].name' | grep -qx cron-heartbeat-stale; then
+            gh label create cron-heartbeat-stale \
+              --color D93F0B \
+              --description "Auto-opened by cron-heartbeat-check workflow"
+          fi
+
+          EXISTING=$(gh issue list \
+            --label cron-heartbeat-stale \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "pg_cron heartbeat: $(jq 'length' /tmp/cron_health.json) unhealthy job(s) ($(date -u +%Y-%m-%d))" \
+              --label cron-heartbeat-stale \
+              --body "$BODY"
+          fi
+
+      - name: Fail job on unhealthy crons
+        if: steps.audit.outputs.count != '0'
+        run: exit 1

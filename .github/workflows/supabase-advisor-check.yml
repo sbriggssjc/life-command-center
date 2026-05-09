@@ -1,0 +1,182 @@
+name: Supabase Advisor Audit
+
+# Daily ERROR-level Supabase advisor diff across the 3 projects (LCC
+# Opps, gov, dia). New ERROR findings — anything not in the per-project
+# allowlist at audit/supabase-advisor-allowlist.{project}.json — open a
+# tracking issue. Catches the class of bug where a new migration
+# introduces an exposure (RLS off, SECURITY DEFINER on a public view,
+# sensitive columns exposed via PostgREST, etc.) without the author
+# noticing.
+#
+# Sample case the audit was built to catch: today (2026-05-09) the
+# Dashboard advisor surfaced `system_tokens` (LCC Opps + gov) as
+# `sensitive_columns_exposed` because anon/authenticated could SELECT
+# access_token + refresh_token. Same pattern hit dia chat_* tables.
+# Lockdown landed in
+# 20260509000000_lockdown_system_tokens_revoke_anon_auth.sql etc.;
+# this workflow ensures any future regressions are caught within 24h.
+#
+# To unwind an allowlisted finding: fix the underlying issue (enable
+# RLS, switch SECURITY DEFINER -> SECURITY INVOKER, etc.) and delete
+# the matching {name, detail} entry from the allowlist file. To
+# regenerate the allowlist from scratch (e.g. after a big refactor):
+# run `node scripts/bootstrap-advisor-allowlist.mjs`.
+#
+# Required secrets (Settings -> Environments -> Production):
+#   SUPABASE_ACCESS_TOKEN  Personal Access Token from
+#                          https://supabase.com/dashboard/account/tokens
+#                          (used as `Authorization: Bearer <token>` against
+#                          api.supabase.com — different from the per-project
+#                          anon/service_role keys)
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 14:00 UTC daily — 30min after cron-heartbeat
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-advisor-check
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    name: Audit ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: lcc-opps
+            ref: xengecqvemvfknjvbvrq
+          - project: gov
+            ref: scknotsqkcheojiaewwh
+          - project: dia
+            ref: zqzrriwuavgrquhisnoa
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Fetch advisors and diff against allowlist
+        id: audit
+        env:
+          PAT: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT: ${{ matrix.project }}
+          REF: ${{ matrix.ref }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PAT:-}" ]]; then
+            echo "::error::SUPABASE_ACCESS_TOKEN secret not set"
+            echo "Confirm it exists under Settings -> Environments -> Production,"
+            echo "and that this job has 'environment: Production' set."
+            exit 1
+          fi
+
+          ALLOWLIST="audit/supabase-advisor-allowlist.${PROJECT}.json"
+          if [[ ! -f "$ALLOWLIST" ]]; then
+            echo "::error::Allowlist not found at $ALLOWLIST"
+            exit 1
+          fi
+
+          # Pull current security advisors. Only ERROR-level entries are
+          # in scope for this audit; project to {name, detail} so the
+          # diff against the allowlist is exact (level/categories/etc.
+          # are noise that would invalidate the diff on minor changes).
+          curl -fsS -H "Authorization: Bearer $PAT" \
+            "https://api.supabase.com/v1/projects/${REF}/advisors?type=security" \
+            > /tmp/raw.json
+
+          # Strip the \\` decorative escapes Supabase wraps table/view
+          # names with in advisor detail strings — the allowlist files
+          # store cleaned details, so the diff has to apply the same
+          # transformation to live data. Lint name + cleaned detail
+          # still uniquely identify the finding.
+          jq '(.lints // []) | map(select(.level=="ERROR")) | map({name, detail: (.detail | gsub("\\\\`"; ""))}) | sort_by(.name + .detail)' \
+            /tmp/raw.json > /tmp/current.json
+
+          CURRENT=$(jq 'length' /tmp/current.json)
+          ALLOWED=$(jq '.lints | length' "$ALLOWLIST")
+          echo "Current ERROR findings: $CURRENT (allowlisted: $ALLOWED)"
+
+          # NEW = CURRENT - ALLOWLIST (deep object equality on {name, detail}).
+          jq --slurpfile allow "$ALLOWLIST" '. - $allow[0].lints' /tmp/current.json > /tmp/new.json
+          NEW=$(jq 'length' /tmp/new.json)
+          echo "New (un-allowlisted) findings: $NEW"
+          echo "count=$NEW" >> "$GITHUB_OUTPUT"
+
+          if (( NEW > 0 )); then
+            jq -r '.[] | "  - [\(.name)] \(.detail)"' /tmp/new.json
+          fi
+
+      - name: Open / update tracking issue
+        if: steps.audit.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT: ${{ matrix.project }}
+          REF: ${{ matrix.ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          DETAILS=$(jq -r '.[] | "- **\(.name)**\n  \(.detail | gsub("\\\\`"; "`"))"' /tmp/new.json)
+
+          BODY=$(cat <<EOF
+          The daily Supabase advisor audit detected ERROR-level
+          findings on \`$PROJECT\` (project \`$REF\`) that are not
+          in \`audit/supabase-advisor-allowlist.${PROJECT}.json\`.
+
+          $DETAILS
+
+          ## How to resolve
+
+          For each finding above, either:
+
+          1. **Fix the underlying issue** — enable RLS, revoke anon/
+             authenticated grants, switch SECURITY DEFINER to SECURITY
+             INVOKER, etc. The next workflow run will see the finding
+             gone and clear the alert.
+
+          2. **Allowlist it** as intentional — append the \`{name, detail}\`
+             pair to \`audit/supabase-advisor-allowlist.${PROJECT}.json\`
+             with a comment explaining why. Use this for known service-
+             role-only tables, intentional SECURITY DEFINER views, etc.
+
+          To regenerate the allowlist from scratch (after a fix batch):
+          \`node scripts/bootstrap-advisor-allowlist.mjs\`.
+
+          Run: $RUN_URL
+          Dashboard: https://supabase.com/dashboard/project/${REF}/advisors/security
+          EOF
+          )
+
+          LABEL="supabase-advisor-drift-${PROJECT}"
+          if ! gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL"; then
+            gh label create "$LABEL" \
+              --color D93F0B \
+              --description "Auto-opened by supabase-advisor-check workflow ($PROJECT)"
+          fi
+
+          EXISTING=$(gh issue list \
+            --label "$LABEL" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "Supabase advisor drift on $PROJECT: $(jq 'length' /tmp/new.json) new ERROR finding(s) ($(date -u +%Y-%m-%d))" \
+              --label "$LABEL" \
+              --body "$BODY"
+          fi
+
+      - name: Fail job on un-allowlisted findings
+        if: steps.audit.outputs.count != '0'
+        run: exit 1
