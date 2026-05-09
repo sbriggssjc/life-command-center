@@ -196,14 +196,36 @@ export async function handleGeocodeTick(req, res) {
       continue;
     }
 
-    // Pull this tick's batch — keyset-style ordering on property_id keeps
-    // results stable across paginated calls if a future caller offsets.
+    // Read the per-domain pagination cursor. Without this, every tick fetches
+    // the same head-of-queue rows (Round 76gn.d). If the geocode_cursor table
+    // doesn't exist yet (deploy preceding migration), fall back to cursor=0
+    // so this handler stays compatible with both schema states.
+    let cursor = 0;
+    let cursorTableMissing = false;
+    {
+      const cursorRes = await domainQuery(
+        domain,
+        'GET',
+        'geocode_cursor?id=eq.1&select=last_seen_property_id'
+      );
+      if (cursorRes.ok && Array.isArray(cursorRes.data) && cursorRes.data[0]) {
+        cursor = Number(cursorRes.data[0].last_seen_property_id) || 0;
+      } else if (cursorRes.status === 404 || cursorRes.status === 400) {
+        cursorTableMissing = true;
+      }
+    }
+    stats.cursor_in = cursor;
+
+    // Pull this tick's batch using keyset pagination on property_id. Failed
+    // rows stay latitude=NULL but the cursor advances past them, so the next
+    // tick fetches genuinely new rows instead of re-reading the failure wall.
     const batchPath = `properties`
       + `?select=property_id,address,city,state,zip_code`
       + `&latitude=is.null`
+      + `&property_id=gt.${cursor}`
       + `&order=property_id.asc`
       + `&limit=${limit}`;
-    const batchRes = await domainQuery(domain, 'GET', batchPath);
+    let batchRes = await domainQuery(domain, 'GET', batchPath);
     if (!batchRes.ok) {
       stats.errored = 1;
       stats.error = `batch fetch failed: ${batchRes.status}`;
@@ -211,7 +233,33 @@ export async function handleGeocodeTick(req, res) {
       out.totals.errored += 1;
       continue;
     }
-    const rows = Array.isArray(batchRes.data) ? batchRes.data : [];
+    let rows = Array.isArray(batchRes.data) ? batchRes.data : [];
+
+    // Wrap-around: empty batch + non-zero cursor means we've reached the end
+    // of the queue. Reset to 0 and re-fetch so this tick still does work
+    // (picks up any newly-arrived ungeocoded rows, plus retries the chronic
+    // misses one more time — Google's index improves over weeks).
+    if (rows.length === 0 && cursor > 0 && !cursorTableMissing && !dryRun) {
+      const resetRes = await domainQuery(
+        domain,
+        'PATCH',
+        'geocode_cursor?id=eq.1',
+        { last_seen_property_id: 0 },
+        { Prefer: 'return=minimal' }
+      );
+      if (resetRes.ok) {
+        cursor = 0;
+        stats.cursor_wrapped = true;
+        const refetch = await domainQuery(
+          domain,
+          'GET',
+          `properties?select=property_id,address,city,state,zip_code`
+            + `&latitude=is.null&property_id=gt.0`
+            + `&order=property_id.asc&limit=${limit}`
+        );
+        if (refetch.ok && Array.isArray(refetch.data)) rows = refetch.data;
+      }
+    }
 
     for (const row of rows) {
       stats.scanned += 1;
@@ -259,6 +307,28 @@ export async function handleGeocodeTick(req, res) {
       } else {
         stats.errored += 1;
         if (!stats.error) stats.error = `first patch fail: ${patchRes.status}`;
+      }
+    }
+
+    // Advance the cursor to the highest property_id seen this tick (regardless
+    // of geocode success/failure) so the next tick fetches new rows. If the
+    // cursor table doesn't exist yet, skip silently.
+    if (!cursorTableMissing && rows.length > 0 && !dryRun) {
+      const newCursor = rows.reduce(
+        (m, r) => (r.property_id > m ? r.property_id : m),
+        cursor
+      );
+      if (newCursor > cursor) {
+        const writeRes = await domainQuery(
+          domain,
+          'PATCH',
+          'geocode_cursor?id=eq.1',
+          { last_seen_property_id: newCursor },
+          { Prefer: 'return=minimal' }
+        );
+        stats.cursor_out = writeRes.ok ? newCursor : cursor;
+      } else {
+        stats.cursor_out = cursor;
       }
     }
 
