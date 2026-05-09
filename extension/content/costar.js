@@ -35,6 +35,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   let paginationInProgress = false;
   let lastPaginatedPage = 0;
 
+  // Round 76ek.d (2026-05-08): separate state for the CMBS Loan Detail
+  // page's commentary pager. Scoped per-property: when the URL changes
+  // (different property) we reset to 0.
+  let commentaryPaginationInProgress = false;
+  let lastCommentaryPage = 0;
+  let commentaryPropertyKey = null;
+
   // Round 76de: minimal sendMessage wrapper. Just suppresses console noise
   // when the extension context is invalidated (extension reload mid-session).
   // No kill switch — let the content script keep trying; the page reload
@@ -139,6 +146,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       accumulated = { contacts: [], sales_history: [], tenants: [] };
       lastPaginatedPage = 0;
       paginationInProgress = false;
+      // Round 76ek.d: reset commentary pager too on property switch
+      lastCommentaryPage = 0;
+      commentaryPaginationInProgress = false;
+      commentaryPropertyKey = null;
     }
     accumulated._address = identifier;
 
@@ -437,6 +448,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
     // Auto-paginate through Public Record sale/loan history records
     autoPageSaleLoanHistory();
+
+    // Round 76ek.d: Auto-paginate through CMBS Commentary Entries.
+    // Each click triggers MutationObserver → re-fires extract() → captures
+    // the next visible entry. Backend dedupes by (loan_id, entry_label) so
+    // the per-page captures accumulate idempotently.
+    autoPageCommentaryEntries();
     } catch (err) {
       // Log error but don't crash — still send whatever we have
       console.error('[LCC CoStar] extraction error:', err);
@@ -508,6 +525,117 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Reset flag after a delay to allow MutationObserver to pick up the change
       setTimeout(() => { paginationInProgress = false; }, 1200);
     }, 600);
+  }
+
+  // ── Round 76ek.d: CMBS Commentary auto-pager ────────────────────────────
+  //
+  // The CMBS Loan Detail page (/detail/lookup/{N}/loan) shows dated
+  // narrative entries with their own paginator: "X of N Commentary Entries".
+  // When N > 1 we walk all entries so each one gets captured on its own
+  // extract() pass. Backend dedup (loan_commentary UNIQUE on
+  // (loan_id, entry_label)) makes per-page sends idempotent.
+  //
+  // This runs in addition to autoPageSaleLoanHistory(), but the URL guards
+  // mean only one of them ever fires per page (sale/loan history is on the
+  // /summary tab; commentary is on the /loan tab).
+  function autoPageCommentaryEntries() {
+    if (commentaryPaginationInProgress) return;
+
+    const url = window.location.href;
+    if (!/\/detail\/lookup\/\d+\/loan(?:\/?$|\?|#)/i.test(url)) return;
+
+    // Reset state when the property changes
+    const propMatch = url.match(/\/detail\/lookup\/(\d+)\/loan/i);
+    const propKey = propMatch ? propMatch[1] : null;
+    if (propKey !== commentaryPropertyKey) {
+      commentaryPropertyKey = propKey;
+      lastCommentaryPage = 0;
+    }
+
+    const allText = document.body.innerText;
+    const m = allText.match(/(\d+)\s+of\s+(\d+)\s+commentary\s+entries/i);
+    if (!m) return;
+
+    const cur = parseInt(m[1], 10);
+    const tot = parseInt(m[2], 10);
+    if (!Number.isFinite(cur) || !Number.isFinite(tot) || tot <= 1) return;
+    if (cur >= tot) {
+      // All entries viewed — reset for the next loan record / property
+      lastCommentaryPage = 0;
+      return;
+    }
+    if (cur === lastCommentaryPage) return;
+    lastCommentaryPage = cur;
+
+    console.log(`[LCC CoStar] Round 76ek.d: auto-paging commentary ${cur} of ${tot}`);
+    commentaryPaginationInProgress = true;
+
+    const nextBtn = findNextCommentaryButton();
+    if (!nextBtn) {
+      console.log('[LCC CoStar] Round 76ek.d: could not find commentary next-page button');
+      commentaryPaginationInProgress = false;
+      return;
+    }
+
+    setTimeout(() => {
+      try {
+        nextBtn.click();
+        console.log(`[LCC CoStar] Round 76ek.d: clicked commentary next → ${cur + 1} of ${tot}`);
+      } catch (err) {
+        console.error('[LCC CoStar] Round 76ek.d: commentary click error:', err);
+      }
+      setTimeout(() => { commentaryPaginationInProgress = false; }, 1200);
+    }, 600);
+  }
+
+  // Locate the next-button NEAR the "X of N Commentary Entries" text. The
+  // page may also have other paginators (loan-record, sale/loan history),
+  // so a global "next" selector isn't safe. We anchor on the Commentary
+  // text node and walk up the DOM ancestor chain looking for a sibling
+  // arrow button.
+  function findNextCommentaryButton() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        /\d+\s+of\s+\d+\s+commentary\s+entries/i.test(node.textContent || '')
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    });
+    const textNode = walker.nextNode();
+    if (!textNode) return null;
+
+    // Walk up to 6 levels looking for a parent that contains a Next button
+    // alongside our pagination text.
+    let parent = textNode.parentElement;
+    let depth = 0;
+    while (parent && depth < 6) {
+      // Prefer aria-labelled next/forward
+      const ariaNext = parent.querySelector(
+        '[aria-label*="next" i], [aria-label*="forward" i]'
+      );
+      if (ariaNext && isVisibleElement(ariaNext)) return ariaNext;
+
+      // Right-arrow / chevron buttons
+      const buttons = parent.querySelectorAll('button, [role="button"]');
+      for (const btn of buttons) {
+        if (!isVisibleElement(btn)) continue;
+        const hasArrow =
+          btn.querySelector('[class*="right"], [class*="next"], [class*="forward"], [class*="chevron-right"]') ||
+          /[▶►→❯]/.test(btn.textContent || '');
+        if (hasArrow) {
+          // Ensure the button is geometrically near our text (avoid
+          // matching a far-away paginator on the same page)
+          const tRect = textNode.parentElement?.getBoundingClientRect();
+          const bRect = btn.getBoundingClientRect();
+          if (!tRect || !bRect) continue;
+          const distancePx = Math.abs(bRect.top - tRect.top) + Math.abs(bRect.left - tRect.left);
+          if (distancePx < 400) return btn;       // 400 px proximity covers
+                                                  // CoStar's tight inline pagers
+        }
+      }
+
+      parent = parent.parentElement;
+      depth++;
+    }
+    return null;
   }
 
   function findNextPageButton() {
