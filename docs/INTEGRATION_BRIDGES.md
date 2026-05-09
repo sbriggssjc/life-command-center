@@ -42,10 +42,16 @@ Schema-only scaffold + a stub worker. No live bridges are wired up yet.
 
 ### Routes
 
-| Route | Method | Purpose |
-|-------|--------|---------|
-| `/api/admin/bridges` | GET | Freshness page. Returns `bridges[]` + `queue` counts for the caller's workspace. |
-| `/api/enrichment-worker` | POST | Drains up to N pending jobs. Phase 0 calls a stub handler — Phase 1+ replaces with real handlers per `job_type`. Supports `?dry=1` for queue inspection. |
+All bridge logic lives in a single Vercel function — `api/bridges.js` —
+dispatched by `?_route=worker|ingest|admin` (Hobby-plan budget: see
+"Function count" below). Friendly URLs are mapped via `vercel.json`
+rewrites:
+
+| Friendly URL | Method | Internal | Purpose |
+|--------------|--------|----------|---------|
+| `/api/admin/bridges` | GET | `/api/bridges?_route=admin` | Freshness page. Returns `bridges[]` + `queue` counts. |
+| `/api/enrichment-worker` | POST | `/api/bridges?_route=worker` | Drains up to N pending jobs. Supports `?dry=1` for queue inspection. |
+| `/api/salesforce-changes` | POST | `/api/bridges?_route=ingest&_source=salesforce` | Phase 1+: receives a PA batch for a given `bridge=sf.<name>`. |
 
 ### Helpers (`api/_shared/bridges.js`)
 
@@ -56,44 +62,45 @@ Schema-only scaffold + a stub worker. No live bridges are wired up yet.
 - `enqueueEnrichmentJob({...})` — push a job onto the queue.
 - `claimPendingJobs(batchSize)` / `finishJob(job, outcome)` — worker dequeue + finalize with exponential backoff.
 
-## How a Phase 1+ bridge will plug in
+## Function count
+
+We're on Vercel Hobby (12-function ceiling). Every bridge concern —
+worker, ingest receivers, admin freshness — lives in one
+`api/bridges.js` file dispatched by `_route` and (for ingest) `_source`.
+Phase 2 SharePoint, Phase 3 Outlook/Calendar, and any future inbound
+sources add new entries to the `INGEST_SOURCES` map and the `HANDLERS`
+map inside that file. **No additional Vercel functions are needed for
+the rest of the integration roadmap.**
+
+## How a Phase 1+ source plugs in
+
+Add an entry to `INGEST_SOURCES` in `api/bridges.js`:
 
 ```js
-// api/salesforce-changes.js  (illustrative — not in this PR)
-import { authenticate } from './_shared/auth.js';
-import { getBridgeByKey, applyAllowlist, runBridgeIngest, enqueueEnrichmentJob }
-  from './_shared/bridges.js';
-
-export default async (req, res) => {
-  const user = await authenticate(req, res); if (!user) return;
-  const bridge = await getBridgeByKey(user.memberships[0].workspace_id, 'sf.accounts');
-  if (!bridge || bridge.status !== 'active') return res.status(404).json({});
-
-  const incoming = req.body?.records || [];
-  await runBridgeIngest(bridge, { externalRunId: req.body?.runId }, async (report) => {
-    let maxLastModified = bridge.watermark?.last_modified || null;
-    for (const raw of incoming) {
-      report.in();
-      const { kept, dropped, dropReasons } = applyAllowlist(bridge, 'Account', raw);
-      if (dropped) for (const r of Object.values(dropReasons)) report.drop(0, r);
-      if (!kept.Id) { report.drop(1, 'missing_id'); continue; }
-      // ...upsert kept fields into LCC...
-      await enqueueEnrichmentJob({
-        workspaceId: bridge.workspace_id, bridge,
-        jobType: 'salesforce.account.upsert',
-        externalId: kept.Id, payload: kept
-      });
-      report.accept();
-      if (raw.LastModifiedDate > (maxLastModified || '')) maxLastModified = raw.LastModifiedDate;
-    }
-    report.watermark({ last_modified: maxLastModified });
-  });
-  res.status(200).json({ ok: true });
+const INGEST_SOURCES = {
+  salesforce: { 'sf.accounts': { object: 'Account', jobType: 'salesforce.account.upsert' }, ... },
+  sharepoint: { 'sharepoint.properties': { object: 'DriveItem', jobType: 'sharepoint.document.classify' } },
 };
 ```
 
-The worker side replaces `stubHandler` in `api/enrichment-worker.js` with
-a real handler keyed by `job_type`.
+Add a handler to `HANDLERS`:
+
+```js
+import { handleSharepointDocumentClassify } from './_shared/bridge-handlers-sharepoint.js';
+const HANDLERS = {
+  ...,
+  'sharepoint.document.classify': handleSharepointDocumentClassify,
+};
+```
+
+Add a `vercel.json` rewrite if you want a friendly URL:
+
+```json
+{ "source": "/api/sharepoint-changes",
+  "destination": "/api/bridges?_route=ingest&_source=sharepoint" }
+```
+
+That's it — one function, one rewrite per source.
 
 ## Write-back policy (current decision)
 
@@ -112,15 +119,14 @@ a real handler keyed by `job_type`.
 
 ## Phase 0 → Phase 1 hand-off
 
-Phase 1 (next) seeds the first bridges into `connector_bridges`:
+Phase 1 (now shipped) seeds the first bridges into `connector_bridges`:
 
 - `sf.accounts`, `sf.contacts`, `sf.opportunities`, `sf.activities`, with
   field allowlists derived from the LCC scaffolding decisions.
 - Power Automate flows on a 5-minute schedule that POST batches to
-  `/api/salesforce-changes?bridge=sf.<name>` (new endpoint added in
-  Phase 1).
+  `/api/salesforce-changes?bridge=sf.<name>`.
 - Worker handlers for `salesforce.*.upsert` and `salesforce.activity.append`
-  replace `stubHandler`.
+  replace the `stubHandler`.
 
 Phase 2 wires `sharepoint.properties` (the `/Properties/<Letter>/<City,
 State>/` walker). Phase 3 adds `outlook.*` and `calendar.*`. Phase 5 is
