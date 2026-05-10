@@ -141,17 +141,49 @@
   }
 
   function extractCharacteristics(data) {
-    // Each .row.row-no-gutters has a <label> and a <div><span>...</span></div>
-    const rows = document.querySelectorAll('.PropertyCharacteristicsTable .row.row-no-gutters');
+    // Round 76ep (2026-05-09): broaden the row selector AND make label
+    // matching tolerant of trailing colons / punctuation. The original
+    // selector + exact label matching was missing fields like Floors,
+    // Parking, Metro, Submarket, MSA, Q Score, Walk Score, Transit Score,
+    // Interest, Property Type, Deed (FBI HQ Chelsea capture had `deed`
+    // null in metadata even though the page clearly shows two deed
+    // numbers). Multi-selector + label.replace(/:$/) catches both.
+    const rowSet = new Set();
+    [
+      '.PropertyCharacteristicsTable .row.row-no-gutters',
+      '.property-characteristics .row',
+      '.property-characteristics-table .row',
+      '[data-section="characteristics"] .row',
+      '[data-section="property-characteristics"] .row',
+      '#property-characteristics .row',
+    ].forEach(sel => {
+      document.querySelectorAll(sel).forEach(row => rowSet.add(row));
+    });
+    const rows = [...rowSet];
+
+    const seenLabels = [];
     rows.forEach((row) => {
       const labelEl = row.querySelector('label');
       const valueDiv = row.querySelector('div:not(label)');
       if (!labelEl || !valueDiv) return;
-      const label = textOf(labelEl).toLowerCase().trim();
+      // Strip trailing colon, normalize whitespace, lowercase. RCA emits
+      // 'Property Type:', 'Q Score:', etc. with the colon as part of the
+      // <label> text on some pages.
+      const label = textOf(labelEl)
+        .toLowerCase()
+        .replace(/[:?]+\s*$/, '')
+        .trim();
       const value = textOf(valueDiv).trim();
       if (!label || !value) return;
+      seenLabels.push(label);
       mapCharacteristic(data, label, value);
     });
+
+    // Diagnostic: which labels did we walk? Reveals (in DevTools) labels
+    // RCA uses that mapCharacteristic doesn't yet handle — useful when
+    // the user reports "Q Score not captured" etc.
+    console.log('[lcc-rca] Round 76ep: extractCharacteristics scanned',
+      rows.length, 'rows; labels seen:', seenLabels);
 
     // Round 76ai 2026-04-28: Derive a more semantic property_type by combining
     // RCA's separated property_type + features fields. RCA shows "Office" with
@@ -316,6 +348,36 @@
           if (refiMatch) {
             evt.buyer  = (refiMatch[1] || '').trim() || null;
             evt.lender = (refiMatch[2] || '').trim() || null;
+          } else if (evt.kind === 'refinance') {
+            // Round 76ep (2026-05-09): Refinance events on RCA frequently
+            // render as 'BORROWER LENDER ($Xm approx) [; SECONDARY-LENDER
+            // ($Ym approx)]' with no '↔' / 'with' / 'by' separator. The
+            // refiMatch + fromMatch paths above both fail; result is a
+            // sales_history entry with no buyer/seller/lender at all.
+            // Concrete example (US FAA, 159-02 Rockaway Blvd Queens):
+            // 'EJME Citigroup ($30.0m approx) ; Citigroup ($20.0m approx)'.
+            //
+            // Strategy: split on ';' for multi-lender (pari-passu / 2nd
+            // mortgage). For each part, match '<text> <lender> ($amt)' where
+            // the lender is 1-3 capitalized tokens immediately before the
+            // dollar parenthetical. The first part's prefix is the borrower;
+            // subsequent parts are additional lenders.
+            const refiParts = entitiesText.split(/\s*;\s*/);
+            const refiParsed = refiParts
+              .map((p, i) => parseRcaRefiPart(p.trim(), i === 0))
+              .filter(Boolean);
+            if (refiParsed.length > 0) {
+              const primary = refiParsed[0];
+              if (primary.borrower) evt.buyer = primary.borrower;
+              if (primary.lender)   evt.lender = primary.lender;
+              if (primary.loan_amount) evt.loan_amount = primary.loan_amount;
+              if (refiParsed.length > 1) {
+                evt.additional_lenders = refiParsed.slice(1).map(p => ({
+                  lender:      p.lender,
+                  loan_amount: p.loan_amount,
+                }));
+              }
+            }
           } else if (evt.kind === 'construction') {
             // Round 76em (2026-05-09): Construction events on RCA show the
             // developer as the sole entity, optionally followed by a
@@ -460,6 +522,52 @@
     };
   }
 
+  // Round 76ep (2026-05-09): parse a single Refinance entity-text part.
+  // RCA renders multi-lender refinances as ';'-separated chunks like:
+  //   'EJME Citigroup ($30.0m approx)' (first chunk: borrower + lender + amt)
+  //   'Citigroup ($20.0m approx)'      (later chunks: lender + amt only)
+  // Returns { borrower?, lender, loan_amount } when the chunk has a
+  // dollar parenthetical, else null. Lender is 1-3 capitalized tokens.
+  function parseRcaRefiPart(part, isFirst) {
+    if (!part) return null;
+    // Try with prefix: '<borrower-text> <lender> ($amt)'
+    const withPrefix = part.match(
+      /^(.+?)\s+([A-Z][A-Za-z0-9'\-&]+(?:\s+[A-Z][A-Za-z0-9'\-&]+){0,2})\s*\(\s*\$([\d,.]+)\s*([mkb]?)\s*(?:approx)?\s*\)\s*$/
+    );
+    if (withPrefix) {
+      return {
+        borrower:    withPrefix[1].trim() || null,
+        lender:      withPrefix[2].trim(),
+        loan_amount: rcaParseDollars(withPrefix[3], withPrefix[4]),
+      };
+    }
+    // Try without prefix: '<lender> ($amt)' — used by secondary chunks.
+    const noPrefix = part.match(
+      /^([A-Z][A-Za-z0-9'\-&]+(?:\s+[A-Z][A-Za-z0-9'\-&]+){0,2})\s*\(\s*\$([\d,.]+)\s*([mkb]?)\s*(?:approx)?\s*\)\s*$/
+    );
+    if (noPrefix) {
+      return {
+        borrower:    null,
+        lender:      noPrefix[1].trim(),
+        loan_amount: rcaParseDollars(noPrefix[2], noPrefix[3]),
+      };
+    }
+    return null;
+  }
+
+  // Helper used by parseRcaRefiPart and the inline lender-amt extractor.
+  // Returns an integer-rounded dollar amount.
+  function rcaParseDollars(numStr, unit) {
+    const n = parseFloat(String(numStr || '').replace(/,/g, ''));
+    if (!Number.isFinite(n)) return null;
+    const u = (unit || '').toLowerCase();
+    let dollars = n;
+    if (u === 'm') dollars *= 1e6;
+    else if (u === 'k') dollars *= 1e3;
+    else if (u === 'b') dollars *= 1e9;
+    return Math.round(dollars);
+  }
+
   // Convert RCA's abbreviated 'Feb '26' / 'May 16' style to ISO YYYY-MM-01.
   // Server-side upsertDomainSales calls parseDate which accepts YYYY-MM-DD.
   function rcaParseAbbrevDate(label) {
@@ -482,15 +590,52 @@
   }
 
   function extractFinancing(data) {
-    document.querySelectorAll('.financing').forEach((finEl, idx) => {
-      const summaryEl = finEl.querySelector('.summary');
-      const summary = summaryEl ? textOf(summaryEl) : '';
+    // Round 76ep (2026-05-09): broaden the financing-block selector. The
+    // user-reported 159-02 Rockaway Blvd capture had data.loans=null
+    // even though the page clearly shows '$30.0 m 1st Mortgage with
+    // Citigroup' under a 'Financing' header — apparently RCA's CSS class
+    // name has evolved past the bare '.financing'. Try multiple selectors
+    // and merge unique nodes. Same diagnostic log pattern as the history
+    // extractor so DevTools reveals what was found.
+    const finSet = new Set();
+    [
+      '.financing',
+      '.financing-block',
+      '.financing-detail',
+      '.loan-detail',
+      '.loan-summary',
+      '[data-section="financing"]',
+      '[data-section="loans"]',
+      '#financing > div',
+      'section.financing > div',
+    ].forEach(sel => {
+      document.querySelectorAll(sel).forEach(el => finSet.add(el));
+    });
+    const finEls = [...finSet];
+
+    finEls.forEach((finEl) => {
+      const summaryEl = finEl.querySelector('.summary, h3, h4, .loan-summary, [class*="summary"]');
+      const summary = summaryEl ? textOf(summaryEl) : textOf(finEl).split('\n')[0];
       const loan = { summary };
 
-      // Each property-detail-metric pair
-      finEl.querySelectorAll('property-detail-metric .metric').forEach((row) => {
-        const label = textOf(row.querySelector('label') || row).replace(/:$/, '').trim().toLowerCase();
-        const valueEl = row.querySelector('.col-sm-7 span') || row.querySelector('.col-sm-7');
+      // Each property-detail-metric pair (RCA's standard) plus a
+      // generic .metric / .field / [data-field] fallback for layout drift.
+      const metricRows = [
+        ...finEl.querySelectorAll('property-detail-metric .metric'),
+        ...finEl.querySelectorAll('.metric'),
+        ...finEl.querySelectorAll('.field'),
+        ...finEl.querySelectorAll('[data-field]'),
+      ];
+      const seenMetrics = new Set();
+      metricRows.forEach((row) => {
+        if (seenMetrics.has(row)) return;
+        seenMetrics.add(row);
+        const label = textOf(row.querySelector('label') || row)
+          .replace(/[:?]+\s*$/, '').trim().toLowerCase();
+        const valueEl = row.querySelector('.col-sm-7 span')
+          || row.querySelector('.col-sm-7')
+          || row.querySelector('.value')
+          || row.querySelector('[data-value]');
         const value = valueEl ? textOf(valueEl) : '';
         if (!label || !value) return;
         loan[label.replace(/\s+/g, '_')] = value;
@@ -501,6 +646,10 @@
         data.loans.push(loan);
       }
     });
+
+    console.log('[lcc-rca] Round 76ep: extractFinancing found',
+      finEls.length, 'financing block(s); captured',
+      (data.loans || []).length, 'loan(s).');
   }
 
   // ── Extract: Investor Profile (lighter pass, mostly metadata) ───────────

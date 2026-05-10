@@ -5166,10 +5166,18 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
     const loanAmount = parseCurrency(rawLoanAmount);
     if (!loanAmount) continue;
 
+    // Round 76ep (2026-05-09): fall back to sale.sale_date for the loan's
+    // origination_date when no specific date is present. RCA captures don't
+    // emit loan_origination_date — they have the event sale_date (which IS
+    // when the loan was originated for Refinance / Construction events).
+    // Without this fallback, every RCA-sourced loan was landing with
+    // origination_date=null even though the date is right there on the
+    // event row.
     const originationDatePart =
       parseDate(sale.loan_origination_date
         || sale.origination_date
-        || sale.mortgage_date)?.split('T')[0] || null;
+        || sale.mortgage_date
+        || sale.sale_date)?.split('T')[0] || null;
 
     // Defensive dedup: the same mortgage can reach us twice — once from the
     // stat-card (signing date) and once from Public Records (recordation
@@ -5240,6 +5248,11 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
       term_years:       sale.loan_term ? parseFloat(sale.loan_term) / 12 : null,
       origination_date: originationDatePart,
       maturity_date:    parseDate(sale.maturity_date)?.split('T')[0] || null,
+      // Round 76ep (2026-05-09): write the lender name into gov.loans.originator
+      // (text column added in Round 76ek.a). Previously gov loans only had
+      // lender_id (uuid FK); RCA captures don't have FK lookup so the loan
+      // landed with no human-readable lender attribution at all.
+      originator:       lenderName,
       data_source:      'costar_sidebar',
       // CMBS enrichment (Round 76cu)
       cmbs_deal_name:   cmbsValid ? cmbsDealName : null,
