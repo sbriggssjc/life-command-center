@@ -58,6 +58,7 @@
     { "source": "/api/outlook-changes", "destination": "/api/bridges?_route=ingest&_source=outlook" },
     { "source": "/api/calendar-changes", "destination": "/api/bridges?_route=ingest&_source=calendar" },
     { "source": "/api/sf-write", "destination": "/api/bridges?_route=write" },
+    { "source": "/api/cadence-tick", "destination": "/api/bridges?_route=cadence" },
     { "source": "/api/admin/bridges", "destination": "/api/bridges?_route=admin" },
     { "source": "/api/unified-contacts", "destination": "/api/entity-hub?_domain=contacts" },
     { "source": "/api/contacts", "destination": "/api/entity-hub?_domain=contacts" },
