@@ -59,6 +59,8 @@
     { "source": "/api/calendar-changes", "destination": "/api/bridges?_route=ingest&_source=calendar" },
     { "source": "/api/sf-write", "destination": "/api/bridges?_route=write" },
     { "source": "/api/cadence-tick", "destination": "/api/bridges?_route=cadence" },
+    { "source": "/api/sharepoint-extract", "destination": "/api/bridges?_route=sp_extract" },
+    { "source": "/api/sharepoint-extract-callback", "destination": "/api/bridges?_route=sp_extract&action=callback" },
     { "source": "/api/admin/bridges", "destination": "/api/bridges?_route=admin" },
     { "source": "/api/unified-contacts", "destination": "/api/entity-hub?_domain=contacts" },
     { "source": "/api/contacts", "destination": "/api/entity-hub?_domain=contacts" },
