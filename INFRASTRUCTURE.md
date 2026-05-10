@@ -8,15 +8,17 @@
 > in the `Dialysis_DB` edge function CORS configs, plus `package.json`'s
 > `start:railway` script and the existence of `server.js` on a deploy
 > branch — confirms LCC actually runs on Railway. The Railway dashboard
-> screenshot (handsome-luck project) confirms two services: `tranquil-delight`
-> (live production until trial expired 2026-05-09) and `life-command-center`
-> (dormant rename attempt with no successful deployment).
+> screenshot (handsome-luck project) confirms two services:
+> `tranquil-delight` (live production until trial expired 2026-05-09,
+> restored 2026-05-10 via Railway Hobby subscription) and
+> `life-command-center` (dormant rename attempt with no successful
+> deployment).
 
 ## Current state (as of 2026-05-10)
 
 | Concern | Where it runs | Cost |
 |---|---|---|
-| LCC Express server (consolidates 9 API handlers from `api/`) | **Railway** — `tranquil-delight` service in `handsome-luck` project, **currently offline (trial expired)** | Hobby + resources, ~$10–$15/mo when active |
+| LCC Express server (consolidates 9 API handlers from `api/`) | **Railway** — `tranquil-delight` service in `handsome-luck` project, **Hobby plan** (subscribed 2026-05-10) | $5/mo + usage above $5 of monthly credits (verified pricing screenshot 2026-05-09) |
 | LCC frontend (`index.html`, `office-addins/`) | Same Railway service via `express.static` | (included) |
 | LCC API handlers (`actions.js`, `admin.js`, `apply-change.js`, `domains.js`, `entity-hub.js`, `intake.js`, `operations.js`, `queue.js`, `sync.js`) | Loaded as Express routes by `server.js`; not Vercel serverless functions in production | (included) |
 | Edge functions (21 total across 3 projects — see `EDGE_FUNCTION_AUDIT.md`) | Supabase | Included in Pro plans |
@@ -47,6 +49,23 @@ sidestepping the 12-function cap. That server is what Railway runs.
 See `LCC_VERCEL_404_AUDIT_WORKLOG.md` for the original triage notes
 from that period.
 
+## Hosting plan: near-term Railway Hobby, long-term Render Starter
+
+This branch documents two viable hosting paths:
+
+- **Near-term (today)**: Railway Hobby at $5/mo. Service was restored
+  2026-05-10 by subscribing to Hobby — no migration work needed.
+- **Long-term trigger-based migration to Render Starter** ($7/mo,
+  ~70 min wall-clock) when any of these fires:
+  - A second team member needs deploy/admin access (Railway Hobby's
+    "single developer workspace" forces a Pro upgrade at $20/seat)
+  - Railway introduces another pricing change
+  - Railway usage starts exceeding $5/mo of monthly credits
+  - The team wants fully predictable flat-rate billing
+
+Full rationale: `LONG_TERM_HOSTING_STRATEGY.md`. Step-by-step migration:
+`RENDER_MIGRATION_PLAN.md`.
+
 ## What was decommissioned earlier in this branch
 
 - **Stale `Dockerfile`**: Deleted. Its `CMD ["node", "server.js"]`
@@ -59,15 +78,14 @@ from that period.
   This branch has since reverted it to point at the Railway URL
   until the Render cut-over (see `RENDER_MIGRATION_PLAN.md`).
 
-## What this branch proposes (and tracks separately)
+## What this branch tracks separately
 
-- **`LONG_TERM_HOSTING_STRATEGY.md`** — the full cost analysis. End
-  state: Render Starter ($7/mo) for compute, single consolidated
-  Supabase Pro project ($25/mo) for data. Total ~$32/mo flat as
-  users / subspecialties grow.
-- **`RENDER_MIGRATION_PLAN.md`** — step-by-step Render setup, env
-  var inventory, smoke tests, Power Automate repoint, Railway
-  shutdown.
+- **`LONG_TERM_HOSTING_STRATEGY.md`** — the full cost analysis and
+  Option A (Render long-term) vs Option B (Railway Hobby short-term)
+  framing.
+- **`RENDER_MIGRATION_PLAN.md`** — trigger-based step-by-step Render
+  setup, env var inventory, smoke tests, Power Automate repoint,
+  Railway shutdown.
 - **`EDGE_FUNCTION_AUDIT.md`** — 21-function inventory of edge
   functions across the three Supabase projects, with a gap register
   (Gaps A–F) and three obvious deletion candidates.
@@ -95,7 +113,7 @@ in-process queries.
 ## Where each system actually serves traffic from (today)
 
 - `tranquil-delight-production-633f.up.railway.app` — LCC frontend
-  + API + Office Add-in manifests (currently down, trial expired)
+  + API + Office Add-in manifests (Railway Hobby, $5/mo)
 - `zqzrriwuavgrquhisnoa.supabase.co` (`Dialysis_DB`) — 21 edge functions,
   most of them belonging to LCC (architectural mismatch, see
   `EDGE_FUNCTION_AUDIT.md` Gap F)
@@ -107,7 +125,7 @@ in-process queries.
 ## Where each system *should* serve traffic from (post-migration)
 
 - `lcc.teambriggs.com` (or `lcc-production.onrender.com`) — LCC
-  Express server on Render Starter
+  Express server on Render Starter (when migration is triggered)
 - `<consolidated>.supabase.co` — single Supabase Pro project hosting
   `gov`, `dia`, `lcc` schemas plus all edge functions in one
   namespace

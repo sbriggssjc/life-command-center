@@ -1,19 +1,32 @@
 # Render Migration Plan — LCC Express Server
 
-> Target: move `tranquil-delight` Railway service → Render Starter.
-> Status: planned, not yet executed.
+> **Status (2026-05-10): trigger-based, not urgent.** The team subscribed
+> to Railway Hobby ($5/mo) to restore service. Execute this plan when
+> any of these triggers fire:
+>
+> - A second team member needs deploy/admin access (Railway Hobby's
+>   single-developer-workspace ceiling forces a Pro upgrade at $20/seat)
+> - Railway introduces another pricing change or trial-throttle pattern
+> - Railway usage starts exceeding $5/mo of credits regularly
+> - You want fully predictable flat-rate billing
+>
+> See `LONG_TERM_HOSTING_STRATEGY.md` for the full Option A vs Option B
+> rationale.
+>
 > Branch: `claude/optimize-cloud-subscriptions-KJT9J`.
 
 ## Goal
 
 Replace the Railway-hosted LCC Express server with an equivalent Render
-Starter deployment, restoring production service and dropping monthly
-spend from ~$10–$15 (Railway Hobby + resources) to $7 flat. See
-`LONG_TERM_HOSTING_STRATEGY.md` for the broader cost rationale.
+Starter deployment. Trades $5/mo Railway Hobby for $7/mo Render Starter
+(+$2/mo) in exchange for: predictable flat billing, no per-seat
+admin ceiling, and exit from a platform with a recent trial-throttle
+pattern.
 
 ## Pre-flight: what we know about the current Railway deploy
 
-From `package.json`, `server.js`, and the Railway dashboard:
+From `package.json`, `server.js`, and the Railway dashboard (verified
+2026-05-09):
 
 - **Entry point**: `node server.js` (Express, ESM, port from `PORT` env
   with default 3000)
@@ -191,14 +204,14 @@ Only after 24–48 hours of stable Render operation:
 2. Same steps for the dormant `life-command-center` service.
 3. If the `handsome-luck` project is now empty, delete the project.
 4. Stop the Railway subscription (account-level billing settings).
+   This stops the $5/mo Hobby charge as well.
 
 ## Rollback plan
 
 If Render breaks something not caught in the smoke tests:
 
 1. **Don't delete Railway yet.** Step 7 is the last step for a reason.
-2. Re-enable the Railway service (Hobby plan, redeploy from the same
-   branch).
+2. The Railway service is still running (Hobby plan, $5/mo).
 3. Switch PA flows back to the Railway URL.
 4. Investigate the Render-specific failure with `LCC_ENV=development`
    on a Render preview environment, fix, retry cut-over.
@@ -221,15 +234,17 @@ If Render breaks something not caught in the smoke tests:
 ## Estimated total wall-clock time
 
 ~70 minutes one-shot, plus 24–48 hours of dual-running before Railway
-shutdown (step 7).
+shutdown (step 7). During dual-running you pay both providers
+(~$5 + $7 = $12 for a partial month).
 
 ## Cost impact
 
-- Before: ~$10–$15/mo Railway Hobby + resources
-- After: $7/mo Render Starter
-- Savings: ~$3–$8/mo on compute alone
-- Plus: predictable flat billing, no resource-multiplier surprises,
-  no trial-throttle pattern
+- Before (Railway Hobby): $5/mo + minimal usage overage
+- After (Render Starter): $7/mo flat
+- Net: +$2/mo on compute, but:
+  - No more per-admin upgrade cliff at $20/seat
+  - No more usage-overage uncertainty
+  - Off the platform with the recent trial-throttle pattern
 
 The Supabase consolidation (separate plan, see
 `LONG_TERM_HOSTING_STRATEGY.md`) is the bigger savings lever ($50/mo)
