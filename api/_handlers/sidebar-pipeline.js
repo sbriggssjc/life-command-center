@@ -2883,6 +2883,11 @@ async function upsertDomainProperty(domain, entity, metadata) {
     delete propertyData.land_area;
     delete propertyData.is_single_tenant;
     delete propertyData.building_size;
+    // gov.properties resolves owner via recorded_owner_id (uuid → recorded_owners),
+    // not raw text. The shared propertyData carries `recorded_owner_name` from
+    // ownerContact.name; sending it to gov produces a PostgREST column-not-found
+    // and surfaces as `property_upsert_failed` to the sidebar (Round 76eq).
+    delete propertyData.recorded_owner_name;
     // Rent anchor columns live on the dialysis properties table only
     delete propertyData.anchor_rent;
     delete propertyData.anchor_rent_date;
@@ -2991,6 +2996,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
   console.error(`  Address: "${address}" (normalized: "${normAddr}"), city=${entity.city}, state=${entity.state}`);
+  console.error(`  propertyData keys (${Object.keys(propertyData).length}): ${Object.keys(propertyData).sort().join(',')}`);
   console.error(`  Retry-lookup also missed; this is not a write race -- likely a real validation failure.`);
   return null;
 }
