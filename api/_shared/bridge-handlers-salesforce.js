@@ -19,6 +19,7 @@
 // ============================================================================
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
+import { resolveExternalUser } from './external-user-mappings.js';
 
 const SF_INSTANCE_URL = process.env.SF_INSTANCE_URL || '';
 
@@ -381,6 +382,23 @@ export async function handleSalesforceActivityAppend(job) {
   const category = deriveActivityCategory(p);
   const occurredAt = p.LastModifiedDate || p.ActivityDate || p.CreatedDate || new Date().toISOString();
 
+  // Resolve the SF OwnerId → LCC user_id via external_user_mappings (Phase 1.5).
+  // First call for a given OwnerId triggers an email-based auto-match; later
+  // calls hit the cached mapping. Skip for the synthetic 'unknown' fallback —
+  // there's no real user to resolve.
+  const sfOwnerId    = p.OwnerId || null;
+  const sfOwnerEmail = p.OwnerEmail || p._OwnerEmail || null;
+  const sfOwnerName  = p.OwnerName  || p._OwnerName  || null;
+  const actorUserId  = sfOwnerId
+    ? await resolveExternalUser({
+        workspaceId,
+        sourceSystem:  'salesforce',
+        externalId:    sfOwnerId,
+        externalEmail: sfOwnerEmail,
+        externalName:  sfOwnerName
+      })
+    : null;
+
   // Upsert into salesforce_activity_log on (workspace_id, sf_activity_id).
   await opsQuery('POST',
     'salesforce_activity_log?on_conflict=workspace_id,sf_activity_id',
@@ -393,9 +411,10 @@ export async function handleSalesforceActivityAppend(job) {
       sf_status:           p.Status || null,
       sf_priority:         p.Priority || null,
       sf_activity_date:    p.ActivityDate || null,
-      sf_owner_id:         p.OwnerId || 'unknown',
-      sf_owner_name:       p.OwnerName || p._OwnerName || null,
-      sf_owner_email:      p.OwnerEmail || p._OwnerEmail || null,
+      sf_owner_id:         sfOwnerId || 'unknown',
+      sf_owner_name:       sfOwnerName,
+      sf_owner_email:      sfOwnerEmail,
+      actor_user_id:       actorUserId,
       sf_who_id:           p.WhoId || null,
       sf_what_id:          p.WhatId || null,
       contact_entity_id:   contactE?.entityId || null,
