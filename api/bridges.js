@@ -18,6 +18,12 @@
 //   POST /api/sharepoint-changes?bridge=sharepoint.<name>
 //        → /api/bridges?_route=ingest&_source=sharepoint&bridge=sharepoint.<name>
 //
+//   POST /api/outlook-changes?bridge=outlook.<name>      (X-LCC-Source-User-Id required)
+//        → /api/bridges?_route=ingest&_source=outlook&bridge=outlook.<name>
+//
+//   POST /api/calendar-changes?bridge=calendar.<name>    (X-LCC-Source-User-Id required)
+//        → /api/bridges?_route=ingest&_source=calendar&bridge=calendar.<name>
+//
 //   GET  /api/admin/bridges
 //        → /api/bridges?_route=admin
 //
@@ -46,6 +52,11 @@ import {
   handleSharepointDocumentClassify
 } from './_shared/bridge-handlers-sharepoint.js';
 
+import {
+  handleOutlookMessageExtract,
+  handleCalendarEventLink
+} from './_shared/bridge-handlers-outlook.js';
+
 const STUCK_JOB_SECONDS = 300;
 
 // job_type → handler. Add an entry per source.
@@ -55,19 +66,24 @@ const HANDLERS = {
   'salesforce.opportunity.upsert': handleSalesforceOpportunityUpsert,
   'salesforce.activity.append':    handleSalesforceActivityAppend,
   'sharepoint.document.classify':  handleSharepointDocumentClassify,
-  // Phase 2.5+:
+  'outlook.message.extract':       handleOutlookMessageExtract,
+  'calendar.event.link':           handleCalendarEventLink,
+  // Phase 2.5 / future:
   // 'sharepoint.document.extract':  handleSharepointDocumentExtract,
-  // 'outlook.message.extract':      handleOutlookMessageExtract,
-  // 'calendar.event.link':          handleCalendarEventLink,
 };
 
 // Per-source bridge_key → ingest config:
-//   object   — name used to index the bridge's allowlist (allowlist[object]).
-//   idField  — which field on the source payload carries the unique id.
-//              Defaults to 'Id' (Salesforce). Graph driveItems use 'id'.
-//   jobType  — enrichment_jobs.job_type to enqueue.
-//   skipIf   — optional predicate; rows for which this returns true are
-//              dropped at ingest with reason 'skipped_by_filter'.
+//   object             — name used to index the bridge's allowlist (allowlist[object]).
+//   idField            — which field on the source payload carries the unique id.
+//                        Defaults to 'Id' (Salesforce). Graph payloads use 'id'.
+//   jobType            — enrichment_jobs.job_type to enqueue.
+//   skipIf             — optional predicate; rows for which this returns true
+//                        are dropped at ingest with reason 'skipped_by_filter'.
+//   requireSourceUser  — if true, the receiver requires X-LCC-Source-User-Id
+//                        (or body.source_user_id) and injects _source_user_id
+//                        into each enqueued payload. Used for personal-mailbox
+//                        and personal-calendar bridges where the data must
+//                        carry whose mailbox/calendar it came from.
 const INGEST_SOURCES = {
   salesforce: {
     'sf.accounts':      { object: 'Account',     idField: 'Id', jobType: 'salesforce.account.upsert' },
@@ -81,6 +97,23 @@ const INGEST_SOURCES = {
       idField: 'id',
       jobType: 'sharepoint.document.classify',
       skipIf:  (raw) => Boolean(raw.folder) // folders are traversal-only
+    }
+  },
+  outlook: {
+    'outlook.messages': {
+      object:  'Message',
+      idField: 'id',
+      jobType: 'outlook.message.extract',
+      requireSourceUser: true,
+      skipIf:  (raw) => Boolean(raw.isDraft) // drafts aren't real touches
+    }
+  },
+  calendar: {
+    'calendar.events': {
+      object:  'Event',
+      idField: 'id',
+      jobType: 'calendar.event.link',
+      requireSourceUser: true
     }
   }
 };
@@ -174,7 +207,11 @@ async function handleWorkerRoute(req, res) {
 // ===========================================================================
 
 function pickRowWatermark(raw) {
-  return raw?.LastModifiedDate || raw?.SystemModstamp || raw?.lastModifiedDateTime || null;
+  return raw?.LastModifiedDate
+      || raw?.SystemModstamp
+      || raw?.lastModifiedDateTime
+      || raw?.receivedDateTime
+      || null;
 }
 
 async function handleIngestRoute(req, res, user) {
@@ -209,6 +246,23 @@ async function handleIngestRoute(req, res, user) {
   if (!workspaceId) {
     res.status(400).json({ error: 'No workspace context' });
     return;
+  }
+
+  // Per-bridge requireSourceUser gate. Personal-mailbox and personal-calendar
+  // bridges (outlook, calendar) need to know whose data this is so the
+  // handler can enforce per-user filtering and the body-access ACL.
+  let sourceUserId = null;
+  if (config.requireSourceUser) {
+    sourceUserId = req.body?.source_user_id
+      || req.headers['x-lcc-source-user-id']
+      || null;
+    if (!sourceUserId) {
+      res.status(400).json({
+        error: `source_user_id required for bridge ${bridgeKey} ` +
+               `(supply via X-LCC-Source-User-Id header or body.source_user_id)`
+      });
+      return;
+    }
   }
 
   const bridge = await getBridgeByKey(workspaceId, bridgeKey);
@@ -259,13 +313,20 @@ async function handleIngestRoute(req, res, user) {
         const rowWm = pickRowWatermark(raw);
         if (rowWm && rowWm > (maxRowWatermark || '')) maxRowWatermark = rowWm;
 
+        // Inject _source_user_id into the payload when this bridge requires it.
+        // Underscore prefix marks it as bridge-injected metadata vs a real
+        // source field — handlers know to read it and strip it as needed.
+        const payload = sourceUserId
+          ? { ...kept, _source_user_id: sourceUserId }
+          : kept;
+
         const jobId = await enqueueEnrichmentJob({
           workspaceId,
           bridge,
           jobType:    config.jobType,
           targetKind: config.object.toLowerCase(),
           externalId: String(externalId),
-          payload:    kept
+          payload
         });
         if (jobId) report.accept();
         else       report.drop(1, 'enqueue_failed');
@@ -280,7 +341,11 @@ async function handleIngestRoute(req, res, user) {
       } else if (maxRowWatermark) {
         report.watermark({ last_modified: maxRowWatermark });
       }
-      report.metadata({ source, bridge: bridgeKey, batch_size: records.length });
+      report.metadata({
+        source, bridge: bridgeKey,
+        batch_size: records.length,
+        ...(sourceUserId ? { source_user_id: sourceUserId } : {})
+      });
     }
   );
 
