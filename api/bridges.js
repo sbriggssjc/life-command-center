@@ -4,8 +4,8 @@
 // ----------------------------------------------------------------------------
 // Consolidates the worker, ingest receiver, and admin freshness surface into
 // one Vercel function so the Hobby-plan 12-function limit isn't a bottleneck.
-// Phase 2+ adds new sources (sharepoint, outlook, calendar) as additional
-// _source values inside the same function — zero new functions.
+// New sources land as additional _source values inside this same function —
+// zero new functions needed for Phase 2+.
 //
 // Routes (via vercel.json rewrites — clients keep using the friendly URLs):
 //
@@ -14,6 +14,9 @@
 //
 //   POST /api/salesforce-changes?bridge=sf.<name>
 //        → /api/bridges?_route=ingest&_source=salesforce&bridge=sf.<name>
+//
+//   POST /api/sharepoint-changes?bridge=sharepoint.<name>
+//        → /api/bridges?_route=ingest&_source=sharepoint&bridge=sharepoint.<name>
 //
 //   GET  /api/admin/bridges
 //        → /api/bridges?_route=admin
@@ -39,24 +42,46 @@ import {
   handleSalesforceActivityAppend
 } from './_shared/bridge-handlers-salesforce.js';
 
+import {
+  handleSharepointDocumentClassify
+} from './_shared/bridge-handlers-sharepoint.js';
+
 const STUCK_JOB_SECONDS = 300;
 
-// job_type → handler. Phase 2+ adds entries here, no new functions needed.
+// job_type → handler. Add an entry per source.
 const HANDLERS = {
   'salesforce.account.upsert':     handleSalesforceAccountUpsert,
   'salesforce.contact.upsert':     handleSalesforceContactUpsert,
   'salesforce.opportunity.upsert': handleSalesforceOpportunityUpsert,
   'salesforce.activity.append':    handleSalesforceActivityAppend,
+  'sharepoint.document.classify':  handleSharepointDocumentClassify,
+  // Phase 2.5+:
+  // 'sharepoint.document.extract':  handleSharepointDocumentExtract,
+  // 'outlook.message.extract':      handleOutlookMessageExtract,
+  // 'calendar.event.link':          handleCalendarEventLink,
 };
 
-// Per-source bridge_key → SF object name + job_type for the ingest receiver.
-// Phase 2+: add 'sharepoint' → { 'sharepoint.properties': {...} }, etc.
+// Per-source bridge_key → ingest config:
+//   object   — name used to index the bridge's allowlist (allowlist[object]).
+//   idField  — which field on the source payload carries the unique id.
+//              Defaults to 'Id' (Salesforce). Graph driveItems use 'id'.
+//   jobType  — enrichment_jobs.job_type to enqueue.
+//   skipIf   — optional predicate; rows for which this returns true are
+//              dropped at ingest with reason 'skipped_by_filter'.
 const INGEST_SOURCES = {
   salesforce: {
-    'sf.accounts':      { object: 'Account',     jobType: 'salesforce.account.upsert' },
-    'sf.contacts':      { object: 'Contact',     jobType: 'salesforce.contact.upsert' },
-    'sf.opportunities': { object: 'Opportunity', jobType: 'salesforce.opportunity.upsert' },
-    'sf.activities':    { object: 'Activity',    jobType: 'salesforce.activity.append' },
+    'sf.accounts':      { object: 'Account',     idField: 'Id', jobType: 'salesforce.account.upsert' },
+    'sf.contacts':      { object: 'Contact',     idField: 'Id', jobType: 'salesforce.contact.upsert' },
+    'sf.opportunities': { object: 'Opportunity', idField: 'Id', jobType: 'salesforce.opportunity.upsert' },
+    'sf.activities':    { object: 'Activity',    idField: 'Id', jobType: 'salesforce.activity.append' }
+  },
+  sharepoint: {
+    'sharepoint.properties.index': {
+      object:  'DriveItem',
+      idField: 'id',
+      jobType: 'sharepoint.document.classify',
+      skipIf:  (raw) => Boolean(raw.folder) // folders are traversal-only
+    }
   }
 };
 
@@ -148,7 +173,7 @@ async function handleWorkerRoute(req, res) {
 // _route=ingest — receive a PA batch, allowlist-validate, enqueue
 // ===========================================================================
 
-function pickWatermark(raw) {
+function pickRowWatermark(raw) {
   return raw?.LastModifiedDate || raw?.SystemModstamp || raw?.lastModifiedDateTime || null;
 }
 
@@ -200,15 +225,17 @@ async function handleIngestRoute(req, res, user) {
 
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
   const externalRunId = req.body?.runId || req.headers['x-pa-flow-run'] || null;
+  const idField = config.idField || 'Id';
 
   const { summary } = await runBridgeIngest(
     bridge,
     { externalRunId },
     async (report) => {
-      let maxLastModified = bridge.watermark?.last_modified || null;
+      let maxRowWatermark = bridge.watermark?.last_modified || null;
 
       for (const raw of records) {
         report.in();
+
         const { kept, dropped, dropReasons } =
           applyAllowlist(bridge, config.object, raw);
 
@@ -221,24 +248,38 @@ async function handleIngestRoute(req, res, user) {
           report.metadata(counts);
         }
 
-        if (!kept.Id) { report.drop(1, 'missing_sf_id'); continue; }
+        if (typeof config.skipIf === 'function' && config.skipIf(kept)) {
+          report.drop(1, 'skipped_by_filter');
+          continue;
+        }
 
-        const lastMod = pickWatermark(raw);
-        if (lastMod && lastMod > (maxLastModified || '')) maxLastModified = lastMod;
+        const externalId = kept[idField];
+        if (!externalId) { report.drop(1, `missing_${idField.toLowerCase()}`); continue; }
+
+        const rowWm = pickRowWatermark(raw);
+        if (rowWm && rowWm > (maxRowWatermark || '')) maxRowWatermark = rowWm;
 
         const jobId = await enqueueEnrichmentJob({
           workspaceId,
           bridge,
           jobType:    config.jobType,
           targetKind: config.object.toLowerCase(),
-          externalId: kept.Id,
+          externalId: String(externalId),
           payload:    kept
         });
         if (jobId) report.accept();
         else       report.drop(1, 'enqueue_failed');
       }
 
-      if (maxLastModified) report.watermark({ last_modified: maxLastModified });
+      // Watermark precedence:
+      //   1. body.watermark — explicit batch checkpoint (e.g. Graph deltaLink).
+      //   2. derived per-row max (Salesforce LastModifiedDate path).
+      // Sources without a coherent batch token (Salesforce) just rely on (2).
+      if (req.body?.watermark && typeof req.body.watermark === 'object') {
+        report.watermark(req.body.watermark);
+      } else if (maxRowWatermark) {
+        report.watermark({ last_modified: maxRowWatermark });
+      }
       report.metadata({ source, bridge: bridgeKey, batch_size: records.length });
     }
   );
