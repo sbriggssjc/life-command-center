@@ -1,53 +1,113 @@
 # Infrastructure Topology
 
 > Last reviewed: 2026-05-10. Optimization branch: `claude/optimize-cloud-subscriptions-KJT9J`.
+>
+> **Correction note**: An earlier version of this file (committed earlier
+> in this branch) claimed LCC was "fully on Vercel." That was wrong.
+> The most recent code signal — the 2026-04-24 hostname audit comment
+> in the `Dialysis_DB` edge function CORS configs, plus `package.json`'s
+> `start:railway` script and the existence of `server.js` on a deploy
+> branch — confirms LCC actually runs on Railway. The Railway dashboard
+> screenshot (handsome-luck project) confirms two services: `tranquil-delight`
+> (live production until trial expired 2026-05-09) and `life-command-center`
+> (dormant rename attempt with no successful deployment).
 
-## Current state
+## Current state (as of 2026-05-10)
 
 | Concern | Where it runs | Cost |
 |---|---|---|
-| Frontend + serverless API (`api/admin.js`, `api/intake.js`, `api/operations.js`, `api/sync.js`, `api/queue.js`, `api/entity-hub.js`, `api/capital-markets.js`, ...) | Vercel | Free (Hobby) |
-| Edge functions (`context-broker`, `daily-briefing`, `data-query`, `availability-checker`) | Supabase project `LCC Opps` | Shared in `TeamBriggs Org` Pro plan |
-| Operational database | Supabase `LCC Opps` (us-east-1) | Pro plan |
-| Cross-domain reads/writes | Vercel functions call Supabase `government` and `Dialysis_DB` directly via the `gov-query` / `dia-query` proxies | Free |
+| LCC Express server (consolidates 9 API handlers from `api/`) | **Railway** — `tranquil-delight` service in `handsome-luck` project, **currently offline (trial expired)** | Hobby + resources, ~$10–$15/mo when active |
+| LCC frontend (`index.html`, `office-addins/`) | Same Railway service via `express.static` | (included) |
+| LCC API handlers (`actions.js`, `admin.js`, `apply-change.js`, `domains.js`, `entity-hub.js`, `intake.js`, `operations.js`, `queue.js`, `sync.js`) | Loaded as Express routes by `server.js`; not Vercel serverless functions in production | (included) |
+| Edge functions (21 total across 3 projects — see `EDGE_FUNCTION_AUDIT.md`) | Supabase | Included in Pro plans |
+| Operational database | Supabase `LCC Opps` (us-east-1) | Pro plan, $25/mo |
+| Government domain database | Supabase `government` (us-west-2) | Pro plan, $25/mo |
+| Dialysis domain database | Supabase `Dialysis_DB` (us-west-1) | Pro plan, $25/mo |
 | Workflow CI (advisor checks, drift checks, cron heartbeat) | GitHub Actions | Free |
+| Local dev | `vercel dev` against `api/` folder (the Vercel-style serverless functions are still the dev surface) | Free |
 
-## What was decommissioned
+## Why LCC moved off Vercel
 
-The repo previously had a `Dockerfile` (`CMD ["node", "server.js"]`) and a
-`LCC_BASE_URL=https://lcc-production.up.railway.app` reference suggesting a
-Railway-hosted Node service. We searched the codebase: **no `server.js` or
-any `app.listen` / `createServer` / `express()` call exists anywhere**. The
-Dockerfile entrypoint pointed at a file that wasn't in the tree — the
-container was non-functional and could not have served traffic.
+The `api/` folder has 13 `.js` files at its root, each of which Vercel
+would treat as a separate serverless function. **Vercel Hobby caps
+functions at 12.** When the count crossed 12, Vercel deployments started
+failing.
 
-This branch:
+`package.json`:
 
-- Deletes the unused `Dockerfile`.
-- Updates `.env.example` so `LCC_BASE_URL` points at the Vercel deployment
-  URL instead of the dead Railway URL.
+```json
+"check:functions": "...if(c>12){console.error('ERROR: exceeds Vercel Hobby 12-function limit');process.exit(1)}"
+```
 
-If a Railway project named `lcc-production` still exists in the Railway
-dashboard, **delete it** — it is not deployable from this repo and is
-consuming whatever resources it was last given.
+The team's response was to wrap the same handlers in a single Express
+server (`server.js` on a deploy branch). The Express server consolidates
+the 13 files into 9 canonical mounts plus aliased rewrite routes,
+sidestepping the 12-function cap. That server is what Railway runs.
 
-### Steps to fully retire the Railway service
+See `LCC_VERCEL_404_AUDIT_WORKLOG.md` for the original triage notes
+from that period.
 
-1. Open the Railway dashboard, find the `lcc-production` project.
-2. Confirm the deployment is unhealthy / failing build (`server.js not found`).
-3. Delete the service and the project. Billing stops immediately.
-4. Search Power Automate flows / Teams configs for `lcc-production.up.railway.app`
-   and re-point at the Vercel URL.
+## What was decommissioned earlier in this branch
 
-## Cross-region / cross-project note
+- **Stale `Dockerfile`**: Deleted. Its `CMD ["node", "server.js"]`
+  pointed at a file not present on the default branch. Railway's
+  nixpacks reads `package.json`'s `start` script (`node server.js`)
+  directly, so the Dockerfile was never the actual build path.
+  Deletion is harmless; nothing references it.
+- **Misleading `.env.example` comment**: An earlier commit on this
+  branch changed `LCC_BASE_URL`'s example value to a Vercel URL.
+  This branch has since reverted it to point at the Railway URL
+  until the Render cut-over (see `RENDER_MIGRATION_PLAN.md`).
 
-Today this app reads from three Supabase projects in three regions:
+## What this branch proposes (and tracks separately)
+
+- **`LONG_TERM_HOSTING_STRATEGY.md`** — the full cost analysis. End
+  state: Render Starter ($7/mo) for compute, single consolidated
+  Supabase Pro project ($25/mo) for data. Total ~$32/mo flat as
+  users / subspecialties grow.
+- **`RENDER_MIGRATION_PLAN.md`** — step-by-step Render setup, env
+  var inventory, smoke tests, Power Automate repoint, Railway
+  shutdown.
+- **`EDGE_FUNCTION_AUDIT.md`** — 21-function inventory of edge
+  functions across the three Supabase projects, with a gap register
+  (Gaps A–F) and three obvious deletion candidates.
+
+The Supabase consolidation itself is **not** in scope for this
+branch — it's higher-risk and should be its own PR. This branch
+documents the target architecture; execution is sequenced for a
+later quarter (see strategy doc).
+
+## Cross-region / cross-project notes
+
+LCC currently reads from three Supabase projects in three regions:
 
 - `LCC Opps` — us-east-1 (its own data, primary writes)
 - `government` — us-west-2 (read-through proxy via `gov-query`)
 - `Dialysis_DB` — us-west-1 (read-through proxy via `dia-query`)
 
-That cross-region traffic adds 60–120 ms per call (us-east ↔ us-west) and
-pulls Supabase egress on both sides of every cross-domain query. The
-Supabase consolidation plan in the parallel `INFRASTRUCTURE.md` files in
-the `government-lease` and `Dialysis` repos addresses this.
+Cross-region traffic adds 60–120 ms per call (us-east ↔ us-west) and
+pulls Supabase egress on both sides of every cross-domain query.
+
+After Supabase consolidation, all three become schemas in a single
+project in one region — cross-domain reads collapse to single-region
+in-process queries.
+
+## Where each system actually serves traffic from (today)
+
+- `tranquil-delight-production-633f.up.railway.app` — LCC frontend
+  + API + Office Add-in manifests (currently down, trial expired)
+- `zqzrriwuavgrquhisnoa.supabase.co` (`Dialysis_DB`) — 21 edge functions,
+  most of them belonging to LCC (architectural mismatch, see
+  `EDGE_FUNCTION_AUDIT.md` Gap F)
+- `xengecqvemvfknjvbvrq.supabase.co` (`LCC Opps`) — 4 edge functions,
+  3 of which are duplicates of the `Dialysis_DB` versions
+- `scknotsqkcheojiaewwh.supabase.co` (`government`) — 2 edge functions
+  (`bulk-import-awards`, `sam-entity-lookup`)
+
+## Where each system *should* serve traffic from (post-migration)
+
+- `lcc.teambriggs.com` (or `lcc-production.onrender.com`) — LCC
+  Express server on Render Starter
+- `<consolidated>.supabase.co` — single Supabase Pro project hosting
+  `gov`, `dia`, `lcc` schemas plus all edge functions in one
+  namespace
