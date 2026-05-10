@@ -36,6 +36,12 @@
 //        Outbound writeback. Validates payload against bridge.write_allowlist
 //        and forwards to the configured PA webhook (env var per bridge_key).
 //
+//   POST /api/cadence-tick
+//        → /api/bridges?_route=cadence
+//        Cross-data sweep over v_contact_engagement + v_competitive_touches.
+//        Inserts cadence_alerts rows + sends Teams cards for newly-emitted
+//        alerts. Idempotent within a calendar day per (subject, alert_type).
+//
 // Direct calls also work (POST /api/bridges?_route=worker etc).
 // ============================================================================
 
@@ -50,6 +56,7 @@ import {
   enqueueEnrichmentJob, claimPendingJobs, finishJob
 } from './_shared/bridges.js';
 import { backfillSalesforceActorMappings } from './_shared/external-user-mappings.js';
+import { runCadenceTick } from './_shared/cadence-alerts.js';
 
 import {
   handleSalesforceAccountUpsert,
@@ -569,6 +576,43 @@ async function handleWriteRoute(req, res, user) {
 }
 
 // ===========================================================================
+// _route=cadence — daily sweep over engagement + competitive touches
+// ===========================================================================
+
+async function handleCadenceRoute(req, res, user) {
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+  const requested =
+    req.query?.workspace ||
+    req.headers['x-lcc-workspace'] ||
+    primaryWorkspace(user)?.workspace_id;
+  if (!requested) {
+    res.status(400).json({ error: 'No workspace context' });
+    return;
+  }
+  if (!requireWorkspace(user, requested)) {
+    res.status(403).json({ error: 'Not a member of this workspace' });
+    return;
+  }
+
+  // All thresholds optional — handler defaults to sane values when absent.
+  const opts = {};
+  const intParam = (k) => {
+    const v = parseInt(req.query?.[k], 10);
+    if (Number.isFinite(v) && v > 0) opts[k] = v;
+  };
+  intParam('cold_days');
+  intParam('heat_min_touches');
+  intParam('heat_recency_days');
+  intParam('max_emit');
+
+  const result = await runCadenceTick(requested, opts);
+  res.status(result.ok ? 200 : 500).json(result);
+}
+
+// ===========================================================================
 // dispatcher
 // ===========================================================================
 
@@ -586,14 +630,15 @@ export default withErrorHandler(async (req, res) => {
   const route = req.query?._route || req.body?._route || 'worker';
 
   switch (route) {
-    case 'worker': return handleWorkerRoute(req, res, user);
-    case 'ingest': return handleIngestRoute(req, res, user);
-    case 'admin':  return handleAdminRoute(req, res, user);
-    case 'write':  return handleWriteRoute(req, res, user);
+    case 'worker':  return handleWorkerRoute(req, res, user);
+    case 'ingest':  return handleIngestRoute(req, res, user);
+    case 'admin':   return handleAdminRoute(req, res, user);
+    case 'write':   return handleWriteRoute(req, res, user);
+    case 'cadence': return handleCadenceRoute(req, res, user);
     default:
       res.status(400).json({
         error: `Unknown _route: ${route}`,
-        known: ['worker', 'ingest', 'admin', 'write']
+        known: ['worker', 'ingest', 'admin', 'write', 'cadence']
       });
   }
 });
