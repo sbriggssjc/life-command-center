@@ -54,6 +54,7 @@
     { "source": "/api/connectors", "destination": "/api/admin?_route=connectors" },
     { "source": "/api/enrichment-worker", "destination": "/api/bridges?_route=worker" },
     { "source": "/api/salesforce-changes", "destination": "/api/bridges?_route=ingest&_source=salesforce" },
+    { "source": "/api/sharepoint-changes", "destination": "/api/bridges?_route=ingest&_source=sharepoint" },
     { "source": "/api/admin/bridges", "destination": "/api/bridges?_route=admin" },
     { "source": "/api/unified-contacts", "destination": "/api/entity-hub?_domain=contacts" },
     { "source": "/api/contacts", "destination": "/api/entity-hub?_domain=contacts" },
