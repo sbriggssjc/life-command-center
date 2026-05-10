@@ -42,6 +42,17 @@
 //        Inserts cadence_alerts rows + sends Teams cards for newly-emitted
 //        alerts. Idempotent within a calendar day per (subject, alert_type).
 //
+//   POST /api/sharepoint-extract?id=<doc-uuid>[&force=1]
+//        → /api/bridges?_route=sp_extract
+//        Triggers PA to fetch a SharePoint file body and pipe it into the
+//        existing intake pipeline. Marks sharepoint_documents.extraction_status
+//        = 'queued' and returns 202.
+//
+//   POST /api/sharepoint-extract-callback
+//        → /api/bridges?_route=sp_extract&action=callback
+//        PA flow posts the extraction outcome here. Updates
+//        sharepoint_documents.extraction_status and metadata.intake_id.
+//
 // Direct calls also work (POST /api/bridges?_route=worker etc).
 // ============================================================================
 
@@ -57,6 +68,10 @@ import {
 } from './_shared/bridges.js';
 import { backfillSalesforceActorMappings } from './_shared/external-user-mappings.js';
 import { runCadenceTick } from './_shared/cadence-alerts.js';
+import {
+  triggerSharepointExtract,
+  handleSharepointExtractCallback
+} from './_shared/sharepoint-extract.js';
 
 import {
   handleSalesforceAccountUpsert,
@@ -377,7 +392,7 @@ async function handleIngestRoute(req, res, user) {
 }
 
 // ===========================================================================
-// _route=admin — freshness page + queue counts (+ backfill_mappings action)
+// _route=admin — freshness page + queue counts
 // ===========================================================================
 
 async function getQueueCounts(workspaceId) {
@@ -613,6 +628,52 @@ async function handleCadenceRoute(req, res, user) {
 }
 
 // ===========================================================================
+// _route=sp_extract — SharePoint document extract trigger + callback
+// ===========================================================================
+
+async function handleSpExtractRoute(req, res, user) {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  const action = req.query?.action || req.body?.action || 'trigger';
+  const workspaceId =
+    req.body?.workspace_id ||
+    req.body?.workspaceId ||
+    req.headers['x-lcc-workspace'] ||
+    primaryWorkspace(user)?.workspace_id;
+  if (!workspaceId) {
+    res.status(400).json({ error: 'No workspace context' });
+    return;
+  }
+
+  // Callback path is system-to-system (PA → LCC). Workspace membership
+  // check is skipped — auth via X-LCC-Key in the dispatcher is the gate.
+  if (action === 'callback') {
+    const result = await handleSharepointExtractCallback({ workspaceId, body: req.body || {} });
+    res.status(result.status || (result.ok ? 200 : 500)).json(result);
+    return;
+  }
+
+  // Trigger path — user-initiated, requires workspace membership.
+  if (!requireWorkspace(user, workspaceId)) {
+    res.status(403).json({ error: 'Not a member of this workspace' });
+    return;
+  }
+
+  const docId = req.query?.id || req.body?.doc_id;
+  if (!docId) {
+    res.status(400).json({ error: 'doc id required (?id=<uuid>)' });
+    return;
+  }
+  const force = req.query?.force === '1' || req.query?.force === 'true' || req.body?.force === true;
+
+  const result = await triggerSharepointExtract({ workspaceId, docId, user, force });
+  res.status(result.status || (result.ok ? 200 : 500)).json(result);
+}
+
+// ===========================================================================
 // dispatcher
 // ===========================================================================
 
@@ -630,15 +691,16 @@ export default withErrorHandler(async (req, res) => {
   const route = req.query?._route || req.body?._route || 'worker';
 
   switch (route) {
-    case 'worker':  return handleWorkerRoute(req, res, user);
-    case 'ingest':  return handleIngestRoute(req, res, user);
-    case 'admin':   return handleAdminRoute(req, res, user);
-    case 'write':   return handleWriteRoute(req, res, user);
-    case 'cadence': return handleCadenceRoute(req, res, user);
+    case 'worker':     return handleWorkerRoute(req, res, user);
+    case 'ingest':     return handleIngestRoute(req, res, user);
+    case 'admin':      return handleAdminRoute(req, res, user);
+    case 'write':      return handleWriteRoute(req, res, user);
+    case 'cadence':    return handleCadenceRoute(req, res, user);
+    case 'sp_extract': return handleSpExtractRoute(req, res, user);
     default:
       res.status(400).json({
         error: `Unknown _route: ${route}`,
-        known: ['worker', 'ingest', 'admin', 'write', 'cadence']
+        known: ['worker', 'ingest', 'admin', 'write', 'cadence', 'sp_extract']
       });
   }
 });
