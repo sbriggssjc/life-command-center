@@ -20,6 +20,7 @@
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { resolveExternalUser } from './external-user-mappings.js';
+import { appendActivityEvent } from './activity-events.js';
 
 const SF_INSTANCE_URL = process.env.SF_INSTANCE_URL || '';
 
@@ -264,6 +265,9 @@ export async function handleSalesforceContactUpsert(job) {
           sf_account_id:  p.AccountId || null,
           sf_last_synced: new Date().toISOString(),
           last_synced_sf: new Date().toISOString(),
+          // Phase 3.5: link to the canonical entity so timeline writers
+          // can resolve entity_id without walking external_identities.
+          entity_id:      entityId,
           // Soft-fill: only set fields that weren't manually edited; the
           // field_sources provenance map can govern this in v2. For now
           // we set conservatively — title and phone are commonly stale,
@@ -285,6 +289,7 @@ export async function handleSalesforceContactUpsert(job) {
         sf_account_id:  p.AccountId || null,
         sf_last_synced: new Date().toISOString(),
         last_synced_sf: new Date().toISOString(),
+        entity_id:      entityId,             // Phase 3.5
         match_method:   'sf_import',
         match_confidence: 1.0
       });
@@ -427,6 +432,38 @@ export async function handleSalesforceActivityAppend(job) {
     },
     { headers: { Prefer: 'resolution=merge-duplicates' } }
   );
+
+  // Phase 3.5 — write a row to the canonical activity_events timeline so
+  // the entity sidebar shows this touch alongside Outlook/Calendar/SP
+  // activity. Only when actor_user_id resolved (Phase 1.5) — activity_events
+  // requires actor_id NOT NULL → users(id), and we don't manufacture a
+  // synthetic actor for unresolved SF owners.
+  if (actorUserId) {
+    const timelineEntityId = contactE?.entityId || accountE?.entityId || null;
+    if (timelineEntityId) {
+      await appendActivityEvent({
+        workspaceId,
+        actorId:    actorUserId,
+        category,                                           // 'call' | 'email' | 'meeting' | 'task' (→note) | 'other' (→note)
+        title:      p.Subject || `(SF ${category})`,
+        body:       p.Description ? truncate(p.Description, 4000) : null,
+        entityId:   timelineEntityId,
+        sourceType: 'salesforce',
+        externalId: sfId,
+        externalUrl: deepLink(p.IsTask === false ? 'Event' : 'Task', sfId),
+        occurredAt: occurredAt,
+        metadata: {
+          sf_activity_id:   sfId,
+          sf_call_type:     p.CallType || null,
+          sf_status:        p.Status || null,
+          sf_owner_id:      sfOwnerId,
+          sf_owner_name:    sfOwnerName,
+          contact_entity_id: contactE?.entityId || null,
+          account_entity_id: accountE?.entityId || null
+        }
+      });
+    }
+  }
 
   // Refresh unified_contacts touch metrics if we can identify the contact
   // by sf_contact_id. Fields updated:

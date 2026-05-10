@@ -22,6 +22,7 @@
 // ============================================================================
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
+import { appendActivityEvent } from './activity-events.js';
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -49,8 +50,9 @@ async function findTrackedContacts(workspaceId, emails, max = 25) {
   const lowered = [...new Set(emails.map(lower).filter(Boolean))];
   if (!lowered.length) return [];
   const filter = `email=in.(${lowered.map(e => pgFilterVal(e)).join(',')})`;
+  // entity_id added by Phase 3.5 — needed for activity_events writes.
   const r = await opsQuery('GET',
-    `unified_contacts?${filter}&select=unified_id,email,full_name,sf_contact_id,total_emails_sent,total_calls&limit=${max}`,
+    `unified_contacts?${filter}&select=unified_id,entity_id,email,full_name,sf_contact_id,total_emails_sent,total_calls&limit=${max}`,
     null, { countMode: 'none' }
   );
   return (r.ok && Array.isArray(r.data)) ? r.data : [];
@@ -140,13 +142,44 @@ export async function handleOutlookMessageExtract(job) {
     );
   }
 
+  // Phase 3.5 — write to canonical activity_events timeline. One row per
+  // message, attached to the primary tracked contact's entity. Other linked
+  // contacts are recorded in metadata.linked_unified_ids so the sidebar can
+  // surface a "+N other recipients" affordance.
+  const primaryEntityId = primaryContact?.entity_id || null;
+  if (primaryEntityId) {
+    await appendActivityEvent({
+      workspaceId,
+      actorId:    sourceUserId,
+      category:   'email',
+      title:      p.subject || '(no subject)',
+      body:       p.bodyPreview || null,
+      entityId:   primaryEntityId,
+      sourceType: 'outlook',
+      externalId: msgId,
+      occurredAt: occurredAt,
+      metadata: {
+        internet_message_id: msgId,
+        conversation_id:     p.conversationId || null,
+        is_sent:             isSent,
+        from_email:          fromEmail,
+        to_emails:           toEmails,
+        cc_emails:           ccEmails,
+        has_attachments:     !!p.hasAttachments,
+        linked_unified_ids:  tracked.map(c => c.unified_id),
+        linked_entity_ids:   tracked.map(c => c.entity_id).filter(Boolean)
+      }
+    });
+  }
+
   return {
     ok: true,
     result: {
       message_id:    msgId,
       tracked_count: tracked.length,
       is_sent:       isSent,
-      primary:       primaryContact?.unified_id || null
+      primary:       primaryContact?.unified_id || null,
+      timeline_attached: !!primaryEntityId
     }
   };
 }
@@ -230,12 +263,43 @@ export async function handleCalendarEventLink(job) {
     }
   }
 
+  // Phase 3.5 — write to canonical activity_events timeline. Attach to the
+  // first tracked attendee's entity; record all linked entities in metadata
+  // so the sidebar can show every relevant participant.
+  const primaryAttendee = tracked.find(c => c.entity_id) || tracked[0];
+  const primaryEntityId = primaryAttendee?.entity_id || null;
+  if (primaryEntityId) {
+    await appendActivityEvent({
+      workspaceId,
+      actorId:    sourceUserId,
+      category:   'meeting',
+      title:      p.subject || '(untitled meeting)',
+      body:       p.bodyPreview || null,
+      entityId:   primaryEntityId,
+      sourceType: 'calendar',
+      externalId: eventId,
+      occurredAt: startsAt || new Date().toISOString(),
+      metadata: {
+        ical_uid:           p.iCalUId || null,
+        organizer_email:    organizerEmail,
+        starts_at:          startsAt,
+        ends_at:            endsAt,
+        is_online_meeting:  !!p.isOnlineMeeting,
+        location:           p.location?.displayName || null,
+        linked_unified_ids: tracked.map(c => c.unified_id),
+        linked_entity_ids:  tracked.map(c => c.entity_id).filter(Boolean),
+        attendee_count:     attendees.length
+      }
+    });
+  }
+
   return {
     ok: true,
     result: {
       event_id:      eventId,
       tracked_count: tracked.length,
-      starts_at:     startsAt
+      starts_at:     startsAt,
+      timeline_attached: !!primaryEntityId
     }
   };
 }
