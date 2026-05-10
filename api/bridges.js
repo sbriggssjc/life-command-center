@@ -26,20 +26,30 @@
 //
 //   GET  /api/admin/bridges
 //        → /api/bridges?_route=admin
+//        Admin actions:
+//          ?_route=admin&action=freshness          (default)
+//          ?_route=admin&action=backfill_mappings  (manager+ role; resolves
+//              salesforce_activity_log.actor_user_id for prior rows)
+//
+//   POST /api/sf-write?bridge=sf.touchpoint.log    (operator+ role)
+//        → /api/bridges?_route=write&bridge=sf.touchpoint.log
+//        Outbound writeback. Validates payload against bridge.write_allowlist
+//        and forwards to the configured PA webhook (env var per bridge_key).
 //
 // Direct calls also work (POST /api/bridges?_route=worker etc).
 // ============================================================================
 
 import {
-  authenticate, requireWorkspace, primaryWorkspace, handleCors
+  authenticate, requireRole, requireWorkspace, primaryWorkspace, handleCors
 } from './_shared/auth.js';
 import {
-  opsQuery, isOpsConfigured, withErrorHandler, pgFilterVal
+  opsQuery, isOpsConfigured, withErrorHandler, pgFilterVal, fetchWithTimeout
 } from './_shared/ops-db.js';
 import {
-  getBridgeByKey, applyAllowlist, runBridgeIngest, enqueueEnrichmentJob,
-  claimPendingJobs, finishJob
+  getBridgeByKey, applyAllowlist, enforceWriteAllowlist, runBridgeIngest,
+  enqueueEnrichmentJob, claimPendingJobs, finishJob
 } from './_shared/bridges.js';
+import { backfillSalesforceActorMappings } from './_shared/external-user-mappings.js';
 
 import {
   handleSalesforceAccountUpsert,
@@ -360,7 +370,7 @@ async function handleIngestRoute(req, res, user) {
 }
 
 // ===========================================================================
-// _route=admin — freshness page + queue counts
+// _route=admin — freshness page + queue counts (+ backfill_mappings action)
 // ===========================================================================
 
 async function getQueueCounts(workspaceId) {
@@ -386,10 +396,7 @@ async function getQueueCounts(workspaceId) {
 }
 
 async function handleAdminRoute(req, res, user) {
-  if (req.method !== 'GET') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
+  const action = req.query?.action || 'freshness';
   const requested =
     req.query?.workspace ||
     req.headers['x-lcc-workspace'] ||
@@ -403,6 +410,31 @@ async function handleAdminRoute(req, res, user) {
     return;
   }
 
+  if (action === 'backfill_mappings') {
+    if (req.method !== 'POST' && req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+    if (!requireRole(user, 'manager', requested)) {
+      res.status(403).json({ error: 'Manager role required' });
+      return;
+    }
+    const source = req.query?.source || 'salesforce';
+    if (source !== 'salesforce') {
+      res.status(400).json({ error: `Backfill not implemented for source=${source}` });
+      return;
+    }
+    const limit = Math.max(1, Math.min(parseInt(req.query?.limit, 10) || 200, 1000));
+    const result = await backfillSalesforceActorMappings(requested, { limit });
+    res.status(200).json({ ok: true, action, source, ...result });
+    return;
+  }
+
+  // Default: freshness page.
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
   const filter = `workspace_id=eq.${pgFilterVal(requested)}`;
   const bridgesR = await opsQuery('GET',
     `v_bridge_freshness?${filter}&order=source_system.asc,bridge_key.asc`,
@@ -415,6 +447,124 @@ async function handleAdminRoute(req, res, user) {
     workspace_id: requested,
     bridges: bridgesR.ok ? (bridgesR.data || []) : [],
     queue
+  });
+}
+
+// ===========================================================================
+// _route=write — outbound writeback to a per-bridge PA webhook
+// ===========================================================================
+
+// bridge_key → env var name carrying the PA webhook URL. Add new entries
+// here as outbound bridges come online. Keeping URLs in env (not in the
+// bridge row) means rotating a webhook never requires a DB write.
+const OUTBOUND_ENV = {
+  'sf.touchpoint.log': 'PA_SF_TOUCHPOINT_URL',
+  // Already-existing webhooks (kept here for documentary symmetry —
+  // the legacy code paths still call them directly, not via this route):
+  //   'sf.task.close':       'PA_COMPLETE_TASK_URL',
+  //   'sf.lead.notify':      'PA_NEW_LEAD_WEBHOOK_URL',
+};
+
+async function handleWriteRoute(req, res, user) {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  const workspaceId = req.body?.workspaceId
+    || req.headers['x-lcc-workspace']
+    || primaryWorkspace(user)?.workspace_id;
+  if (!workspaceId) {
+    res.status(400).json({ error: 'No workspace context' });
+    return;
+  }
+  if (!requireRole(user, 'operator', workspaceId)) {
+    res.status(403).json({ error: 'Operator role required' });
+    return;
+  }
+
+  const bridgeKey = req.query?.bridge || req.body?.bridge;
+  if (!bridgeKey) {
+    res.status(400).json({ error: 'bridge required' });
+    return;
+  }
+  const envName = OUTBOUND_ENV[bridgeKey];
+  if (!envName) {
+    res.status(400).json({
+      error: `No outbound webhook configured for bridge ${bridgeKey}`,
+      known: Object.keys(OUTBOUND_ENV)
+    });
+    return;
+  }
+  const webhookUrl = process.env[envName];
+  if (!webhookUrl) {
+    res.status(503).json({ error: `${envName} not set in environment` });
+    return;
+  }
+
+  const bridge = await getBridgeByKey(workspaceId, bridgeKey);
+  if (!bridge) {
+    res.status(404).json({ error: `Bridge not seeded: ${bridgeKey}` });
+    return;
+  }
+  if (bridge.status !== 'active') {
+    res.status(409).json({ error: `Bridge not active: ${bridgeKey} (status=${bridge.status})` });
+    return;
+  }
+  if (bridge.direction !== 'outbound' && bridge.direction !== 'bidirectional') {
+    res.status(409).json({ error: `Bridge ${bridgeKey} is not an outbound bridge` });
+    return;
+  }
+
+  // The body's payload is keyed by source object name (e.g. "Task" for
+  // sf.touchpoint.log). The caller declares which object via body.object.
+  const sourceObjectName = req.body?.object;
+  const payload          = req.body?.payload;
+  if (!sourceObjectName || !payload || typeof payload !== 'object') {
+    res.status(400).json({ error: 'object + payload required in body' });
+    return;
+  }
+
+  const guard = enforceWriteAllowlist(bridge, sourceObjectName, payload);
+  if (!guard.ok) {
+    res.status(400).json({ error: `write rejected: ${guard.reason}` });
+    return;
+  }
+
+  // Forward to PA. Wrap in runBridgeIngest so the call is recorded as a
+  // bridge_run with status=success/error and rows_in/accepted reflect a
+  // single write attempt. This makes outbound writes auditable in the
+  // same place as inbound batches.
+  const { summary } = await runBridgeIngest(bridge, { externalRunId: req.body?.runId || null }, async (report) => {
+    report.in();
+    report.metadata({ direction: 'outbound', bridge: bridgeKey, object: sourceObjectName });
+
+    const r = await fetchWithTimeout(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bridge: bridgeKey,
+        workspaceId,
+        object:  sourceObjectName,
+        payload: guard.payload,
+        actor:   { user_id: user.id, email: user.email },
+        runId:   req.body?.runId || null
+      })
+    }, 10000);
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      report.drop(1, `webhook_${r.status}`);
+      return { error: `pa_webhook_${r.status}: ${text.slice(0, 200)}` };
+    }
+    report.accept();
+    return null;
+  });
+
+  res.status(summary.ok ? 200 : 502).json({
+    ok:     summary.ok,
+    bridge: bridgeKey,
+    error:  summary.error || undefined
   });
 }
 
@@ -439,10 +589,11 @@ export default withErrorHandler(async (req, res) => {
     case 'worker': return handleWorkerRoute(req, res, user);
     case 'ingest': return handleIngestRoute(req, res, user);
     case 'admin':  return handleAdminRoute(req, res, user);
+    case 'write':  return handleWriteRoute(req, res, user);
     default:
       res.status(400).json({
         error: `Unknown _route: ${route}`,
-        known: ['worker', 'ingest', 'admin']
+        known: ['worker', 'ingest', 'admin', 'write']
       });
   }
 });
