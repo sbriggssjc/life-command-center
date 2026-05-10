@@ -1,19 +1,21 @@
-/* detail-lease-comps-fix.js — Round 76gn.i
+/* detail-lease-comps-fix.js — Round 76gn.j
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
  *
- * Round 76gn.i — additions on top of 76gn.h (data-quality + presentation):
- *   - Operator name normalization (DaVita / Fresenius / Satellite / etc.)
- *   - lease_escalations fetch wired into comps + subject (BUMPS column populated)
- *   - latest_patient_count fetched and written to PATIENTS column (column W)
- *   - USER/OWNER column writes "Yes"/"No" instead of owner-name labels
- *   - Subject owner_occupied is now computed (was hardcoded false)
- *   - _udBuildLeaseCompsWorkbook override:
- *       * Auto-fit column widths to actual data length (capped at 60)
- *       * Clear column A counter for unused pre-styled rows
- *       * fullCalcOnLoad=true so Excel recomputes the AVERAGE row on open
- *       * Re-stamp left-alignment on TENANT / OPERATOR / ADDRESS cells
+ * Round 76gn.j — addition on top of 76gn.i:
+ *   - Dialysis bbox query now filters to chain_canonical IS NOT NULL
+ *     (i.e., dialysis-related properties only). Prior round was returning
+ *     non-dialysis neighbors (medical offices, retail) ranked purely by
+ *     distance, which produced comps with blank tenant/operator/RBA/year
+ *     fields. After Migration L+U+O propagation, chain_canonical is set on
+ *     ~99.9% of dialysis-linked properties, so this filter cleanly carves
+ *     dialysis comps out of the bbox without affecting the Round 76gn.i
+ *     post-bbox detail join.
+ *
+ * Round 76gn.i: operator normalization, lease_escalations fetch, PATIENTS
+ * column W, USER/OWNER Yes/No, owner_occupied compute, auto column widths,
+ * counter clear on unused rows, fullCalcOnLoad, left-align on tenant/op/addr.
  *
  * NOTE: PATIENTS column requires the regenerated template
  * (`python scripts/build_lease_comps_template.py` produces a 23-column layout
@@ -237,12 +239,21 @@
     for (const radius of RADII_MI) {
       const dLat = radius / 69.0;
       const dLng = radius / Math.max(0.01, 69.0 * Math.abs(cosLat));
-      const bbox = 'and=(' + [
+      // Round 76gn.j: filter dialysis bbox to chain_canonical IS NOT NULL so
+      // only dialysis-related properties surface as comps. Migration L+U+O
+      // propagation makes chain_canonical reliable on ~99.9% of dialysis
+      // properties; non-dialysis neighbors (medical offices, retail, etc.)
+      // have NULL chain_canonical and are correctly excluded.
+      const bboxClauses = [
         `latitude.gte.${(lat0 - dLat).toFixed(6)}`,
         `latitude.lte.${(lat0 + dLat).toFixed(6)}`,
         `longitude.gte.${(lng0 - dLng).toFixed(6)}`,
         `longitude.lte.${(lng0 + dLng).toFixed(6)}`
-      ].join(',') + ')';
+      ];
+      if (db !== 'gov') {
+        bboxClauses.push('chain_canonical.not.is.null');
+      }
+      const bbox = 'and=(' + bboxClauses.join(',') + ')';
       const projection = db === 'gov'
         ? 'property_id,latitude,longitude,year_built,year_renovated'
         : 'property_id,latitude,longitude,tenant,operator,chain_canonical,year_built,year_renovated,latest_patient_count';
@@ -645,5 +656,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.i overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.j overrides loaded');
 })();
