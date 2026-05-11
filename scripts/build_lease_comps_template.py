@@ -3,6 +3,20 @@
 Generates the Northmarq-branded dialysis lease-comps XLSX template at
 assets/cm-templates/dialysis-lease-comps-template.xlsx.
 
+Round 76gn.n fix:
+  - Remove the "Subject" Excel table entirely. Earlier rounds wrapped
+    rows 3-4 (subject section's header + data) in a 2-row Excel Table
+    so the Subject cells would render with table styling, but every
+    revision of the table's range/header/totals attributes triggered a
+    fresh class of "Cannot read properties of undefined" or
+    "workbook opens blank, repair fails" errors in ExcelJS + Excel.
+    The Subject section is just two rows of formatted cells; it
+    doesn't need to be a table. AVERAGE formulas only reference the
+    Comps table, not Subject, so dropping the Subject Table object has
+    zero impact on output data. Visual styling (navy band, header row
+    fills, data row borders) all live on the cells themselves and are
+    unaffected.
+
 Round 76gn.m fix:
   - Post-process the saved XLSX to rewrite package-relationship Target
     paths from absolute ("/xl/tables/table1.xml") to relative
@@ -17,20 +31,10 @@ Round 76gn.m fix:
     deployed binaries also load cleanly without needing a regen.
 
 Round 76gn.i additions:
-  - New PATIENTS column at W (latest_patient_count). Subject table and Comps
-    table both extend to W. AVERAGE formula appended for column W.
-  - Subject section band extends to column W so the heading bar covers the
-    new column too.
-
-Round 76gn.l fix:
-  - Subject section's header row 3 now includes the DISTANCE TO SUBJECT
-    column (V3). The Subject Excel table is defined over B3:W4 and Excel
-    tables require every header cell in the range to have a value; if V3
-    is left blank, openpyxl emits a table column with no `name`
-    attribute, which crashes ExcelJS during round-trip serialization
-    with "Cannot read properties of undefined (reading 'name')".
-    V3 carries the "DISTANCE TO SUBJECT" label; V4 (subject data cell)
-    stays blank because distance doesn't apply to the subject row.
+  - New PATIENTS column at W (latest_patient_count). Comps table extends
+    to W. AVERAGE formula appended for column W.
+  - Section band extends to column W so the heading bar covers the new
+    column too.
 
 Prior fixes (Round 76gn.f / 76gn.h):
   - Header cell number formats corrected (date format was applied to text headers,
@@ -40,7 +44,6 @@ Prior fixes (Round 76gn.f / 76gn.h):
   - Section title bands ("Subject Property", "Lease Comps") get a navy band.
   - Body uses Open Sans / Trebuchet MS per NMQ_BRAND in detail.js.
   - Comps rows alternate warm-white / white fill.
-  - Subject table extended to B3:W4 so subject's owner/user/patient count render.
 
 Run from repo root:
     python scripts/build_lease_comps_template.py
@@ -141,12 +144,11 @@ def build():
     for col in range(2, LAST_COL_INDEX + 1):
         ws.cell(row=2, column=col).fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
 
-    # Subject header + data row — exclude column A (counter) only. DISTANCE
-    # is intentionally included in the header so V3 carries a non-empty value
-    # (Excel tables require every header cell in the table's range to have a
-    # value; an empty V3 crashes ExcelJS during round-trip serialization with
-    # "Cannot read properties of undefined (reading 'name')"). V4 (the subject
-    # data cell) stays blank because distance doesn't apply to the subject row.
+    # Subject header + data row — written as ordinary styled cells, NOT wrapped
+    # in an Excel Table object (see Round 76gn.n note in module docstring).
+    # The full set of columns (excluding counter) is included in the header so
+    # the data row's USER/OWNER, DISTANCE, PATIENTS cells render under a
+    # labeled column.
     subject_cols = [c for c in COLUMNS if c[0] != "counter"]
     _write_header_row(ws, 3, columns_subset=subject_cols)
     _write_data_row_styles(ws, 4, columns_subset=subject_cols, stripe=False)
@@ -240,14 +242,8 @@ def build():
         if cell.alignment is None or cell.alignment.horizontal is None:
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Excel tables
-    subj_tbl = Table(displayName="Subject", ref=f"B3:{LAST_COL_LETTER}4")
-    subj_tbl.tableStyleInfo = TableStyleInfo(
-        name="TableStyleLight1", showFirstColumn=False, showLastColumn=False,
-        showRowStripes=False, showColumnStripes=False
-    )
-    ws.add_table(subj_tbl)
-
+    # Excel tables — Comps only. The Subject section is intentionally NOT a
+    # table (see Round 76gn.n note in module docstring).
     comps_tbl = Table(displayName="Comps", ref=f"B7:{LAST_COL_LETTER}{COMP_TOTAL_ROW}")
     comps_tbl.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight1", showFirstColumn=False, showLastColumn=False,
