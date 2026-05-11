@@ -999,6 +999,18 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       continue;
     }
 
+    // Round 9 — Lease_Terms (PDF gov p.27). User: "Data_Lease_Terms
+    // should be a table that shows the most recent quarter in one
+    // column, the last 12 months in the next, and last five years in
+    // the final column." 3-column wide-format comparison.
+    if (chart.chart_template_id === 'lease_structures') {
+      if (!tabName) continue;
+      renderLeaseStructuresTab({
+        wb, tabName, chart, palette, fonts, subspecialty,
+      });
+      continue;
+    }
+
     // KPI tile blocks render as a small 1-row-per-tile table (label, primary,
     // primary_format, NM split, Non-NM split) for the latest period.
     if (chart.chart_type === 'kpi_block') {
@@ -1718,6 +1730,136 @@ function arrowFor(cur, prv) {
   if (c > p) return '↑';
   if (c < p) return '↓';
   return '→';
+}
+
+// ============================================================================
+// Lease_Terms 3-column comparison renderer (Round 9 — PDF gov p.27)
+// ============================================================================
+//
+// Wide-format pivot of cm_gov_lease_structures rows (long format:
+// {period_label, term_bucket, bucket_count, pct_of_total}) into a single
+// table:
+//
+//   Term Bucket          | Current Quarter | Last 12 Months | Last 5 Years
+//                        |   Count   |  %  |   Count   |  %  |   Count   |  %
+//   10, 5                |   523     | 24% |   1,538   | 26% |   ...
+//   15, 10               |   ...     | ... |   ...     | ... |   ...
+//
+// User: "Data_Lease_Terms should be a table that shows the most recent
+// quarter in one column, the last 12 months in the next, and last five
+// years in the final column."
+
+function renderLeaseStructuresTab({ wb, tabName, chart, palette, fonts, subspecialty }) {
+  const sheet = wb.addWorksheet(tabName, { views: [{ showGridLines: false }] });
+  const navy  = 'FF' + hex(palette.nm_navy);
+  const pale  = 'FF' + hex(palette.nm_pale);
+  const text  = 'FF' + hex(palette.nm_text);
+  const muted = 'FF' + hex(palette.nm_text_muted);
+
+  sheet.getCell('A1').value = chart.name;
+  sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: navy } };
+  sheet.getRow(1).height = 22;
+
+  sheet.getCell('A2').value = `Lease-structure distribution — three rolling-period windows (subspecialty=${subspecialty})`;
+  sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
+
+  // Build pivot: term_bucket → { current_quarter: {count, pct}, ttm: {...}, last_5_years: {...} }
+  const rows = chart.rows || [];
+  const buckets = new Map();
+  for (const r of rows) {
+    const tb = r.term_bucket || '?';
+    if (!buckets.has(tb)) buckets.set(tb, {});
+    buckets.get(tb)[r.period_label] = {
+      count: Number(r.bucket_count) || 0,
+      pct:   Number(r.pct_of_total) || 0,
+    };
+  }
+  // Sort by ttm count desc; fallback to last_5_years count
+  const sortedBuckets = [...buckets.entries()].sort((a, b) => {
+    const aN = (a[1].ttm?.count ?? 0) + (a[1].last_5_years?.count ?? 0);
+    const bN = (b[1].ttm?.count ?? 0) + (b[1].last_5_years?.count ?? 0);
+    return bN - aN;
+  });
+
+  // Column widths
+  sheet.getColumn(1).width = 24;
+  [2, 3, 4, 5, 6, 7].forEach((c, i) => {
+    sheet.getColumn(c).width = i % 2 === 0 ? 12 : 9;
+  });
+
+  // Group header row (4)
+  const groupHdr = sheet.getRow(4);
+  groupHdr.getCell(1).value = 'Term Bucket';
+  groupHdr.getCell(2).value = 'Current Quarter';
+  groupHdr.getCell(4).value = 'Last 12 Months';
+  groupHdr.getCell(6).value = 'Last 5 Years';
+  sheet.mergeCells('B4:C4');
+  sheet.mergeCells('D4:E4');
+  sheet.mergeCells('F4:G4');
+  for (let c = 1; c <= 7; c++) {
+    const cell = groupHdr.getCell(c);
+    cell.font = { name: fonts.title_family, size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+  }
+  groupHdr.height = 20;
+
+  // Sub-header row (5)
+  const subHdr = sheet.getRow(5);
+  const subHeaders = ['', 'Count', '%', 'Count', '%', 'Count', '%'];
+  subHeaders.forEach((h, i) => {
+    const cell = subHdr.getCell(i + 1);
+    cell.value = h;
+    cell.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: navy } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pale } };
+    cell.alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'center' };
+    cell.border = { bottom: { style: 'thin', color: { argb: navy } } };
+  });
+  subHdr.height = 18;
+
+  // Data rows
+  let rowIdx = 6;
+  for (const [tb, periods] of sortedBuckets) {
+    if (tb === 'unknown' || tb === 'unknown'.trim()) continue;  // skip 'unknown' bucket
+    const r = sheet.getRow(rowIdx);
+    r.getCell(1).value = tb;
+    r.getCell(1).font = { name: fonts.body_family, size: 10, color: { argb: text } };
+
+    const periodKeys = ['current_quarter', 'ttm', 'last_5_years'];
+    periodKeys.forEach((pk, pi) => {
+      const data = periods[pk] || { count: null, pct: null };
+      const countCell = r.getCell(2 + pi * 2);
+      const pctCell   = r.getCell(3 + pi * 2);
+      countCell.value = data.count;
+      countCell.numFmt = FMT.integer_count;
+      countCell.font = { name: fonts.body_family, size: 10, color: { argb: text } };
+      countCell.alignment = { vertical: 'middle', horizontal: 'right' };
+      pctCell.value = data.pct;
+      pctCell.numFmt = FMT.percent_one_decimal;
+      pctCell.font = { name: fonts.body_family, size: 10, color: { argb: muted } };
+      pctCell.alignment = { vertical: 'middle', horizontal: 'right' };
+    });
+
+    if (rowIdx % 2 === 0) {
+      for (let c = 1; c <= 7; c++) {
+        r.getCell(c).fill = {
+          type: 'pattern', pattern: 'solid',
+          fgColor: { argb: 'FFF7F9FC' },
+        };
+      }
+    }
+    rowIdx++;
+  }
+
+  // Footer caption
+  const footRow = rowIdx + 1;
+  sheet.getCell(`A${footRow}`).value =
+    'Lease-structure distribution by term bucket across three rolling windows (current quarter / last 12 months / last 5 years). ' +
+    'Bucket label format "X, Y" = X-year total term with Y-year firm period.';
+  sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
+  sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
+  sheet.mergeCells(`A${footRow}:G${footRow}`);
+  sheet.getRow(footRow).height = 30;
 }
 
 // ============================================================================

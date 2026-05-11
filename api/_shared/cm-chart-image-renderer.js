@@ -677,7 +677,11 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [{
-            label: 'Avg Cap Rate (TTM, weighted)',
+            // Round 9 — user feedback: "It should just be an average."
+            // Master_m mapper has emitted simple TTM avg since Round 6b
+            // (field name `ttm_weighted_cap_rate` retained for backwards
+            // compatibility, but the value is the simple mean).
+            label: 'Avg Cap Rate (TTM)',
             data: rows.map(r => r.ttm_weighted_cap_rate),
             borderColor: palette[0],
             backgroundColor: 'transparent',
@@ -1500,46 +1504,72 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'lease_renewal_rate': {
-      // Bar chart: renewed / superseding-succeeding / expired / terminated
-      // counts by quarter.
+      // Round 9 — user feedback: "I think the bars are stacked in our
+      // PDF report, double-check that." Switching to stacked.
+      // Stack matches the PDF: 4 lease-outcome buckets summed per quarter
+      // give total dispositions.
+      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
             { label: 'Renewed',           data: rows.map(r => r.renewed_leases),
-              backgroundColor: palette[0], borderRadius: 1 },
+              backgroundColor: palette[0], stack: 'leases' },
             { label: 'Succeed/Supersede', data: rows.map(r => r.succeeding_superseding_leases),
-              backgroundColor: palette[1], borderRadius: 1 },
+              backgroundColor: palette[1], stack: 'leases' },
             { label: 'Expired',           data: rows.map(r => r.expired_leases),
-              backgroundColor: palette[3], borderRadius: 1 },
+              backgroundColor: palette[3], stack: 'leases' },
             { label: 'Terminated',        data: rows.map(r => r.terminated_leases),
-              backgroundColor: palette[4], borderRadius: 1 },
+              backgroundColor: palette[4], stack: 'leases' },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+        options: opts,
       };
     }
 
     case 'lease_termination_rate': {
-      // Termination rate as % of active leases (TTM)
-      const series = rows.map(r => {
+      // Round 9 — user feedback: "looks great but is still quarterly
+      // and ... I think its missing a dataset here (chart normally
+      // shows the total number of leases outside of the firm term)."
+      //
+      // Now a dual-axis combo:
+      //   • Left (left axis %): Termination Rate TTM (sky area)
+      //   • Right (right axis count): Leases Outside Firm Term (navy line)
+      // The "outside firm term" series is from gsa_leases.latest_action
+      // ∈ ('Succeeding', 'Extension') — leases active past their
+      // original firm term.
+      const termRate = rows.map(r => {
         const total = Number(r.total_leases_active) || 0;
         const term  = Number(r.terminated_ttm) || 0;
         return total > 0 ? term / total : null;
       });
+      const outsideFirm = rows.map(r =>
+        r.leases_outside_firm_term != null ? Number(r.leases_outside_firm_term) : null
+      );
       return {
         type: 'line',
         data: {
           labels,
-          datasets: [{
-            label: 'Termination Rate (TTM)',
-            data: series,
-            borderColor: palette[0], backgroundColor: palette[3],
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-          }],
+          datasets: [
+            { type: 'line', label: 'Termination Rate (TTM)',
+              data: termRate,
+              borderColor: palette[1], backgroundColor: palette[3],
+              fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Leases Outside Firm Term',
+              data: outsideFirm,
+              borderColor: palette[0], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_PERCENT_1DP,
+          yRightFormat: AXIS_FORMAT_INTEGER,
+        }),
       };
     }
 
