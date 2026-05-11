@@ -930,11 +930,16 @@ async function exportWorkbook(req, res) {
         cap_less5: r.cap_less5_year,
         cap_outside_firm: r.cap_outside_firm,
       })),
-      dom_and_pct_of_ask: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        avg_dom: r.avg_dom,
-        pct_of_ask: r.pct_of_ask,
-      })),
+      // Round 12 — `dom_and_pct_of_ask` mapper REMOVED.
+      // The wrapper views (cm_<vertical>_dom_pct_ask_m) carry the
+      // sample-size gate (Round 10, gov) and widened DOM cap
+      // (Round 11, dia) that master_m doesn't propagate. Mapping
+      // from master_m here was bypassing both fixes — Mar 2026
+      // gov export still showed the un-gated 151.5 days outlier and
+      // dia values from before the cap widen. Let the chart fetch
+      // from the wrapper view directly via the realCharts path.
+      //
+      // (No perf concern — both wrappers run sub-200ms after Round 11.)
       bid_ask_spread: (rows) => rows.map(r => ({
         period_end: r.period_end,
         avg_bid_ask_spread: r.avg_bid_ask_spread,
@@ -1046,18 +1051,13 @@ async function exportWorkbook(req, res) {
         cap_5orless: r.cap_5orless_year,
       })),
     } : {
-      // Gov master_m carries cap-by-government-credit (federal/state/
-      // municipal) but no long-term/short-term lease split for sentiment.
-      // For seller_sentiment we use the single bid-ask-derived series
-      // (gov leases are usually long-term so the dialysis split isn't
-      // meaningful here anyway).
-      seller_sentiment: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        pct_price_change_all: r.pct_price_change_bid_ask,
-        pct_price_change_long_term: r.pct_price_change_bid_ask,
-        last_ask_cap_all: r.avg_last_ask_cap,
-        last_ask_cap_long_term: r.avg_last_ask_cap,
-      })),
+      // Round 12 — Gov `seller_sentiment` master_m mapper REMOVED.
+      // Master_m has only the all-deals fields (pct_price_change_bid_ask,
+      // avg_last_ask_cap); the mapper was aliasing the same field
+      // twice for the "_long_term" cohort. The Round 11 rebuild of
+      // cm_gov_seller_sentiment_m computes a proper 8+yr cohort split
+      // from sales_transactions + leases — let the chart fetch from
+      // that wrapper directly. ~190ms total over 303 monthly rows.
       cap_rate_by_credit: (rows) => rows.map(r => ({
         period_end: r.period_end,
         federal_cap: r.federal_cap,
