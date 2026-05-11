@@ -84,6 +84,14 @@ const DIA_READ_TABLES = new Set([
   "v_payer_mix_geo_averages",
   "property_cms_link", "property_cms_link_history",
   "ingestion_log",
+  // Lease detail tables — BUMPS / renewal options on the property detail panel
+  // AND on the lease-comps export. Round 76gn.q lease_escalations addition
+  // restores the BUMPS column in the export (was 403'd by this allowlist).
+  "lease_escalations", "lease_options",
+  // Listing verification — dashboard widgets on the property detail page
+  // (URL probe history + summary). Were spamming console with 403s on every
+  // detail-panel open.
+  "v_listing_verification_summary", "listing_verification_history",
   // Data quality triage views (Phase 2.x)
   "v_data_quality_summary",
   "v_data_quality_issues",
