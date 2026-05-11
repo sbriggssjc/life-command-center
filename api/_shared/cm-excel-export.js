@@ -502,6 +502,9 @@ const CHART_COLUMNS = {
     { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
     { key: 'total_leases_active', header: 'Total Active Leases', format: 'integer_count', width: 20 },
     { key: 'terminated_ttm', header: 'Terminated (TTM)', format: 'integer_count', width: 18 },
+    // Round 11 — was missing; Round 9 added the column to the gov view +
+    // chart renderer but the data tab didn't surface it.
+    { key: 'leases_outside_firm_term', header: 'Outside Firm Term', format: 'integer_count', width: 18 },
   ],
   rent_by_year_built: [
     { key: 'year', header: 'Year Built', format: 'integer_count', width: 11 },

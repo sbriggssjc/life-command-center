@@ -1,0 +1,64 @@
+-- =====================================================================
+-- Round 11 — Three Supabase-side fixes for the 2026-03-31 dialysis +
+-- gov export feedback.
+--
+-- Applied to:
+--   • Dialysis_DB (zqzrriwuavgrquhisnoa) — DOM cap widening
+--   • government  (scknotsqkcheojiaewwh) — sentiment cohort split,
+--                                           renewal_growth quarter avg,
+--                                           leases property_id index
+--
+-- ---------------------------------------------------------------------
+-- 1) cm_dialysis_dom_pct_ask_m  —  widen DOM cap
+-- ---------------------------------------------------------------------
+-- User: "There should be more datapoints in there for DIA DOM than just
+-- 10 sales." Investigation:
+--   • 78 dialysis sales closed in TTM-ending-2026-03 had sold_date,
+--     listing_date, and prices
+--   • Only 12 had (sold_date - listing_date) BETWEEN 0 AND 1095
+--   • 9 more sat 3-10 years before closing — culled by the strict
+--     3-year DOM cap
+-- Fix: widen cap to 3650 days (10 years). Result for Mar 2026: 10 → 17
+-- sales; avg_dom moves from 585.6 → 1099.8 days, more honestly
+-- reflecting the slow dialysis clearing.
+--
+-- ---------------------------------------------------------------------
+-- 2) cm_gov_renewal_rent_growth_m  —  add quarter-window avg
+-- ---------------------------------------------------------------------
+-- User audit found Excel cols 2 and 3 (`avg_renewal_rent_psf` and
+-- `ttm_avg_renewal_rent_psf`) had IDENTICAL 14-decimal values. The
+-- view had:
+--   SELECT ttm_avg_renewal_rent_psf AS avg_renewal_rent_psf,
+--          ttm_avg_renewal_rent_psf,    -- !!! same field twice
+-- Fix: `avg_renewal_rent_psf` now = avg over the 3-month window
+-- ending at period_end (per-quarter avg). `ttm_avg_renewal_rent_psf`
+-- stays as the rolling 12-month avg. Per-month was too sparse
+-- (Mar 2026 had 0 renewals) but quarterly has ~850.
+-- Verified Mar 2026: avg=44.49 vs ttm_avg=47.90 — now genuinely
+-- differ.
+--
+-- ---------------------------------------------------------------------
+-- 3) cm_gov_seller_sentiment_m  —  split 8+ Yr Term cohort
+-- ---------------------------------------------------------------------
+-- The wrapper was aliasing the same field twice for the "8+ Yr Term"
+-- cohort (pct_price_change_long_term, last_ask_cap_long_term). Chart
+-- rendered two identical bar series stacked on each other.
+--
+-- Fix: rebuild the wrapper to compute the cohort split directly from
+-- sales_transactions + leases via an indexed scalar subquery for
+-- firm_term_years. Long-term cohort = firm_term_years >= 8 at sale
+-- date (matches the dialysis equivalent and PDF spec).
+--
+-- Performance: ~190ms over all 303 monthly rows, safe vs the 8s API
+-- fetchWithTimeout from Round 8 hotfix.
+--
+-- ---------------------------------------------------------------------
+-- 4) idx_leases_property_id_expiration  —  speed up firm_term_years lookups
+-- ---------------------------------------------------------------------
+-- Supporting index for (3). Also benefits any other property_id-based
+-- lease history queries in master_m and ad-hoc analysis.
+--
+-- See:
+--   • GovernmentProject/sql/20260605_cm_round11_cohort_and_formula_fixes.sql
+--   • DialysisProject/supabase/migrations/20260605_cm_dialysis_dom_widen_cap_round11.sql
+-- =====================================================================
