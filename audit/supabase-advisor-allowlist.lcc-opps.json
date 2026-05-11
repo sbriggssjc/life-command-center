@@ -4,6 +4,10 @@
   "lints": [
     {
       "name": "rls_disabled_in_public",
+      "detail": "Table public.bridge_runs is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
       "detail": "Table public.cm_brand_tokens is public, but RLS has not been enabled."
     },
     {
@@ -52,6 +56,10 @@
     },
     {
       "name": "rls_disabled_in_public",
+      "detail": "Table public.connector_bridges is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
       "detail": "Table public.contact_change_log is public, but RLS has not been enabled."
     },
     {
@@ -69,6 +77,14 @@
     {
       "name": "rls_disabled_in_public",
       "detail": "Table public.domain_table_columns is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.email_bodies is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.enrichment_jobs is public, but RLS has not been enabled."
     },
     {
       "name": "rls_disabled_in_public",
@@ -96,6 +112,10 @@
     },
     {
       "name": "rls_disabled_in_public",
+      "detail": "Table public.meetings is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
       "detail": "Table public.perf_metrics is public, but RLS has not been enabled."
     },
     {
@@ -104,7 +124,15 @@
     },
     {
       "name": "rls_disabled_in_public",
+      "detail": "Table public.salesforce_activity_log is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
       "detail": "Table public.sf_sync_queue is public, but RLS has not been enabled."
+    },
+    {
+      "name": "rls_disabled_in_public",
+      "detail": "Table public.sharepoint_documents is public, but RLS has not been enabled."
     },
     {
       "name": "rls_disabled_in_public",
@@ -205,6 +233,14 @@
     {
       "name": "security_definer_view",
       "detail": "View public.slow_action_report is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_bridge_freshness is defined with the SECURITY DEFINER property"
+    },
+    {
+      "name": "security_definer_view",
+      "detail": "View public.v_competitive_touches is defined with the SECURITY DEFINER property"
     },
     {
       "name": "security_definer_view",
