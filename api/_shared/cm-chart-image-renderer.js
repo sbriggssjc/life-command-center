@@ -695,6 +695,14 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'nm_vs_market_cap': {
+      // Round 13 — `stepped: 'before'` so plateaus (3-5 consecutive
+      // months with the same TTM value) read as held-constant steps
+      // rather than smooth lines through identical points. Honest
+      // depiction of how monthly TTM-rolling behaves on sparse gov
+      // sales: the same handful of NM sales sit in the rolling window
+      // for several months as time moves forward, producing intentional
+      // plateaus. Removing `tension` because a curve through a stepped
+      // dataset looks wrong.
       return {
         type: 'line',
         data: {
@@ -702,10 +710,10 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { label: 'NM Cap Rate',     data: rows.map(r => r.nm_cap_rate),
               borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+              stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
             { label: 'Market Cap Rate', data: rows.map(r => r.market_cap_rate),
               borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              stepped: 'before', pointRadius: 0, borderWidth: 2 },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
@@ -1285,6 +1293,12 @@ function buildChartConfig(chart, brand) {
       //     so eye groups them as "the same market subset, different cut").
       const COLOR_LIGHT_BLUE = '#9DC3E6';  // upper quartile
       const COLOR_DARK_BLUE  = '#1F4E79';  // lower quartile
+      // Round 13 — `stepped: 'before'` for the same reason as
+      // nm_vs_market_cap: quartile values plateau when the TTM
+      // distribution shifts slowly (low-volume series); the chart
+      // should depict that as honest held-constant steps rather than
+      // smooth interpolation. Removes `tension` to avoid curving
+      // across the step.
       return {
         type: 'line',
         data: {
@@ -1293,20 +1307,20 @@ function buildChartConfig(chart, brand) {
             { label: 'Total Market — Upper Quartile',
               data: rows.map(r => r.upper_q_total),
               borderColor: COLOR_LIGHT_BLUE, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+              stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
             { label: 'Total Market — Lower Quartile',
               data: rows.map(r => r.lower_q_total),
               borderColor: COLOR_DARK_BLUE,  backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+              stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
             { label: '10+ Year Term — Upper Quartile',
               data: rows.map(r => r.upper_q_core),
               borderColor: COLOR_LIGHT_BLUE, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              stepped: 'before', pointRadius: 0, borderWidth: 2,
               borderDash: [5, 4] },
             { label: '10+ Year Term — Lower Quartile',
               data: rows.map(r => r.lower_q_core),
               borderColor: COLOR_DARK_BLUE,  backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2,
+              stepped: 'before', pointRadius: 0, borderWidth: 2,
               borderDash: [5, 4] },
           ],
         },

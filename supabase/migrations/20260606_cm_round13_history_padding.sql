@@ -1,0 +1,30 @@
+-- =====================================================================
+-- Round 13 — Two cosmetic followups after Round 12's mapper removal.
+--
+-- 1) Step-plot rendering on NM_vs_Market and Active_Cap_Quart line
+--    charts (`stepped: 'before'` instead of `tension: 0.3`). The
+--    plateaus that come from monthly-TTM-rolling on a sparse series
+--    now read as honest held-constant steps instead of "smooth lines
+--    through identical points" that looked like stuck/missing data.
+--    Renderer-only change — no SQL impact. See:
+--      api/_shared/cm-chart-image-renderer.js
+--      `case 'nm_vs_market_cap'` and `case 'asking_cap_quartiles_active'`.
+--
+-- 2) Historical padding extension on two wrappers so their data tabs
+--    match master_m's 303-row span (2001-01 → present). After Round 12
+--    removed the master_m bypass mapper, the wrappers' own narrower
+--    generate_series (2018+) became visible in the export; this
+--    restores the historical context rows even though pre-data months
+--    are mostly NULL.
+--
+--    • cm_gov_seller_sentiment_m (gov DB)  — applied to scknotsqkcheojiaewwh
+--    • cm_dialysis_dom_pct_ask_m (dia DB)  — applied to zqzrriwuavgrquhisnoa
+--
+--    Both wrappers switched from INNER → LEFT JOIN and dropped
+--    `HAVING count(*) > 0` so months without TTM sales are retained
+--    as NULL rows. Recent-row values are bit-identical to Round 11/12.
+--
+-- See:
+--   GovernmentProject/sql/20260606_cm_gov_sentiment_extend_history_round13.sql
+--   DialysisProject/supabase/migrations/20260606_cm_dialysis_dom_extend_history_round13.sql
+-- =====================================================================
