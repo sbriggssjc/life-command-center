@@ -122,6 +122,10 @@ interface DomainConfig {
   urlField: string;              // which row field has the listing URL
   // Field provenance target_table key for lcc_merge_field.
   provTargetTable: string;       // 'dia.available_listings' or 'gov.available_listings'
+  // Which column the provenance row tracks. gov has a `url_status` text
+  // column; dia doesn't (it flips `is_active` instead — see #710 cleanup
+  // migration 20260511120000_field_source_priority_schema_drift_710_cleanup.sql).
+  provFieldName: string;
 }
 
 interface ListingRow {
@@ -189,6 +193,9 @@ function diaConfig(): DomainConfig | null {
       "consecutive_check_failures,listing_url,url",
     urlField: "listing_url",
     provTargetTable: "dia.available_listings",
+    // dia has no url_status column; provenance lands against the boolean
+    // is_active column that lcc_record_listing_check actually flips.
+    provFieldName: "is_active",
   };
 }
 
@@ -205,6 +212,7 @@ function govConfig(): DomainConfig | null {
       "consecutive_check_failures,source_url,tracked_urls,url_status",
     urlField: "source_url",
     provTargetTable: "gov.available_listings",
+    provFieldName: "url_status",
   };
 }
 
@@ -446,9 +454,22 @@ async function recordProvenance(
   cfg: DomainConfig,
   listingId: number | string,
   newStatus: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; skipped?: boolean }> {
   if (!OPS_URL || !OPS_KEY) {
     return { ok: false, error: "ops project credentials not configured" };
+  }
+  // dia tracks the URL-probe verdict on the boolean is_active column. The
+  // RPC only flips is_active on definitive verdicts ('off_market' or
+  // 'still_available'); 'unreachable' and 'manual_review' bump the failure
+  // counter without touching is_active, so recording provenance against
+  // is_active for those would be inaccurate. gov has a dedicated url_status
+  // text column and records all four states.
+  if (
+    cfg.provFieldName === "is_active" &&
+    newStatus !== "off_market" &&
+    newStatus !== "live"
+  ) {
+    return { ok: true, skipped: true };
   }
   // PostgREST passes p_value through to the JSONB function argument as
   // its parsed JSON form — sending the bare string "off_market" turns
@@ -459,8 +480,13 @@ async function recordProvenance(
     p_target_database: cfg.domain,
     p_target_table: cfg.provTargetTable,
     p_record_pk: String(listingId),
-    p_field_name: "url_status",
-    p_value: newStatus,
+    p_field_name: cfg.provFieldName,
+    // dia tracks is_active (boolean) — by the early-return above newStatus
+    // is restricted to 'off_market' or 'live' here. gov keeps the text
+    // enum on its url_status column.
+    p_value: cfg.provFieldName === "is_active"
+      ? newStatus !== "off_market"
+      : newStatus,
     p_source: "availability_scraper",
     p_source_run_id: `availability-checker-${new Date().toISOString().slice(0, 10)}`,
     p_confidence: 0.7,
