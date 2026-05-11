@@ -9,6 +9,16 @@ Round 76gn.i additions:
   - Subject section band extends to column W so the heading bar covers the
     new column too.
 
+Round 76gn.l fix:
+  - Subject section's header row 3 now includes the DISTANCE TO SUBJECT
+    column (V3). The Subject Excel table is defined over B3:W4 and Excel
+    tables require every header cell in the range to have a value; if V3
+    is left blank, openpyxl emits a table column with no `name`
+    attribute, which crashes ExcelJS during round-trip serialization
+    with "Cannot read properties of undefined (reading 'name')".
+    V3 carries the "DISTANCE TO SUBJECT" label; V4 (subject data cell)
+    stays blank because distance doesn't apply to the subject row.
+
 Prior fixes (Round 76gn.f / 76gn.h):
   - Header cell number formats corrected (date format was applied to text headers,
     accounting/currency formats applied to year/occupancy/date columns).
@@ -108,8 +118,6 @@ def build():
         c.fill = PatternFill(fill_type="solid", fgColor=NMQ["blue"])
 
     # Subject section band — extends to W so PATIENTS column header is covered.
-    # DISTANCE column (V) intentionally left out of the subject data (not
-    # meaningful for the subject itself), but the section band still spans it.
     ws.row_dimensions[2].height = 24
     sec = ws.cell(row=2, column=2, value="Subject Property")
     sec.font = Font(name=HEADING_FONT, size=13, bold=True, color=NMQ["white"])
@@ -119,8 +127,13 @@ def build():
     for col in range(2, LAST_COL_INDEX + 1):
         ws.cell(row=2, column=col).fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
 
-    # Subject header + data row — exclude column A (counter) and DISTANCE (V).
-    subject_cols = [c for c in COLUMNS if c[0] not in ("counter", "distance")]
+    # Subject header + data row — exclude column A (counter) only. DISTANCE
+    # is intentionally included in the header so V3 carries a non-empty value
+    # (Excel tables require every header cell in the table's range to have a
+    # value; an empty V3 crashes ExcelJS during round-trip serialization with
+    # "Cannot read properties of undefined (reading 'name')"). V4 (the subject
+    # data cell) stays blank because distance doesn't apply to the subject row.
+    subject_cols = [c for c in COLUMNS if c[0] != "counter"]
     _write_header_row(ws, 3, columns_subset=subject_cols)
     _write_data_row_styles(ws, 4, columns_subset=subject_cols, stripe=False)
     ws.row_dimensions[3].height = 24
