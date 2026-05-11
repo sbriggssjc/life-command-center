@@ -14,9 +14,13 @@
   if (!process.env.OPS_SUPABASE_URL) missing.push('OPS_SUPABASE_URL');
   if (!process.env.OPS_SUPABASE_KEY) missing.push('OPS_SUPABASE_KEY');
   if (!process.env.GOV_SUPABASE_URL) missing.push('GOV_SUPABASE_URL');
-  if (!process.env.GOV_SUPABASE_KEY) missing.push('GOV_SUPABASE_KEY');
+  if (!process.env.GOV_SUPABASE_SERVICE_KEY && !process.env.GOV_SUPABASE_KEY) {
+    missing.push('GOV_SUPABASE_SERVICE_KEY|GOV_SUPABASE_KEY');
+  }
   if (!process.env.DIA_SUPABASE_URL) missing.push('DIA_SUPABASE_URL');
-  if (!process.env.DIA_SUPABASE_KEY) missing.push('DIA_SUPABASE_KEY');
+  if (!process.env.DIA_SUPABASE_SERVICE_KEY && !process.env.DIA_SUPABASE_KEY) {
+    missing.push('DIA_SUPABASE_SERVICE_KEY|DIA_SUPABASE_KEY');
+  }
   if (missing.length) {
     console.warn(`[ops-db] WARN: missing env vars on cold start: ${missing.join(', ')} — requests will 503 until these are set + redeployed`);
   }

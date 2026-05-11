@@ -38,9 +38,10 @@ const __dirname  = path.dirname(__filename);
 const OPS_URL = process.env.OPS_SUPABASE_URL;
 const OPS_KEY = process.env.OPS_SUPABASE_KEY;
 const DIA_URL = process.env.DIA_SUPABASE_URL;
-const DIA_KEY = process.env.DIA_SUPABASE_KEY;
+// Prefer service_role over anon — see GitHub issue #720.
+const DIA_KEY = process.env.DIA_SUPABASE_SERVICE_KEY || process.env.DIA_SUPABASE_KEY;
 const GOV_URL = process.env.GOV_SUPABASE_URL;
-const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+const GOV_KEY = process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV_SUPABASE_KEY;
 const WORKSPACE_ID = process.env.LCC_WORKSPACE_ID
                   || process.env.LCC_DEFAULT_WORKSPACE_ID
                   || 'a0000000-0000-0000-0000-000000000001';

@@ -28,6 +28,7 @@ import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
+import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -1327,8 +1328,8 @@ async function handleConfig(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   res.setHeader('Cache-Control', 'no-store');
   res.status(200).json({
-    gov: { connected: !!process.env.GOV_SUPABASE_KEY },
-    dia: { connected: !!process.env.DIA_SUPABASE_KEY },
+    gov: { connected: !!govSupabaseKey() },
+    dia: { connected: !!diaSupabaseKey() },
     ops: { connected: !!(process.env.OPS_SUPABASE_URL && process.env.OPS_SUPABASE_KEY) }
   });
 }
@@ -1348,9 +1349,11 @@ async function handleDiag(req, res) {
       ops_url_set:  !!process.env.OPS_SUPABASE_URL,
       ops_key_set:  !!process.env.OPS_SUPABASE_KEY,
       gov_url_set:  !!process.env.GOV_SUPABASE_URL,
-      gov_key_set:  !!process.env.GOV_SUPABASE_KEY,
+      gov_key_set:  !!govSupabaseKey(),
+      gov_key_kind: process.env.GOV_SUPABASE_SERVICE_KEY ? 'service' : (process.env.GOV_SUPABASE_KEY ? 'anon_fallback' : null),
       dia_url_set:  !!process.env.DIA_SUPABASE_URL,
-      dia_key_set:  !!process.env.DIA_SUPABASE_KEY,
+      dia_key_set:  !!diaSupabaseKey(),
+      dia_key_kind: process.env.DIA_SUPABASE_SERVICE_KEY ? 'service' : (process.env.DIA_SUPABASE_KEY ? 'anon_fallback' : null),
       lcc_api_key_set:    !!process.env.LCC_API_KEY,
       anthropic_key_set:  !!process.env.ANTHROPIC_API_KEY,
       teams_webhook_set:  !!process.env.TEAMS_INTAKE_WEBHOOK_URL,
@@ -1367,8 +1370,8 @@ async function handleDiag(req, res) {
     return res.status(403).json({ error: 'Forbidden — pass ?secret=<DIAG_SECRET>' });
   }
 
-  const govKey = process.env.GOV_SUPABASE_KEY || '';
-  const diaKey = process.env.DIA_SUPABASE_KEY || '';
+  const govKey = govSupabaseKey() || '';
+  const diaKey = diaSupabaseKey() || '';
   const govUrl = process.env.GOV_SUPABASE_URL;
   const diaUrl = process.env.DIA_SUPABASE_URL;
   const results = {};
@@ -1803,9 +1806,9 @@ function scoreAddressMatch(propAddr, candAddr, propZip, candZip) {
 
 function requireDiaEnv(res) {
   const url = process.env.DIA_SUPABASE_URL;
-  const key = process.env.DIA_SUPABASE_KEY;
+  const key = diaSupabaseKey();
   if (!url || !key) {
-    res.status(503).json({ error: 'DIA_SUPABASE_URL / DIA_SUPABASE_KEY not configured' });
+    res.status(503).json({ error: 'DIA_SUPABASE_URL / DIA_SUPABASE_SERVICE_KEY (or DIA_SUPABASE_KEY) not configured' });
     return null;
   }
   return { url, key };

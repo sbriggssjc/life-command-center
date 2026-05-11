@@ -9,11 +9,12 @@
 
 import { fetchWithTimeout, opsQuery } from './ops-db.js';
 import { sendTeamsAlert } from './teams-alert.js';
+import { diaSupabaseKey, govSupabaseKey } from './supabase-keys.js';
 
 const GOV_URL = process.env.GOV_SUPABASE_URL;
-const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+const GOV_KEY = govSupabaseKey();
 const DIA_URL = process.env.DIA_SUPABASE_URL;
-const DIA_KEY = process.env.DIA_SUPABASE_KEY;
+const DIA_KEY = diaSupabaseKey();
 
 // ---------------------------------------------------------------------------
 // deriveItemTitle

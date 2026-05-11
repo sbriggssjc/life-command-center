@@ -75,6 +75,7 @@ import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
 } from './_shared/lifecycle.js';
+import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -568,9 +569,9 @@ async function fetchPortfolioStats() {
   const stats = { gov_stats: null, dia_stats: null };
 
   const govUrl = process.env.GOV_SUPABASE_URL;
-  const govKey = process.env.GOV_SUPABASE_KEY;
+  const govKey = govSupabaseKey();
   const diaUrl = process.env.DIA_SUPABASE_URL;
-  const diaKey = process.env.DIA_SUPABASE_KEY;
+  const diaKey = diaSupabaseKey();
 
   const fetches = [];
 
@@ -1000,7 +1001,7 @@ async function createTodoTask(params, user, workspaceId) {
 // ---------------------------------------------------------------------------
 
 const GOV_URL = process.env.GOV_SUPABASE_URL;
-const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+const GOV_KEY = govSupabaseKey();
 
 async function govContactQuery(path) {
   if (!GOV_URL || !GOV_KEY) return { ok: false, data: [] };
@@ -1305,7 +1306,7 @@ async function handleListingPursuitDossier(params, user, workspaceId) {
 
   // Fetch domain-specific context if available
   const diaUrl = process.env.DIA_SUPABASE_URL;
-  const diaKey = process.env.DIA_SUPABASE_KEY;
+  const diaKey = diaSupabaseKey();
   if (diaUrl && diaKey && entityData?.domain === 'dialysis') {
     try {
       const r = await fetch(`${diaUrl}/rest/v1/v_clinic_overview?property_name=ilike.*${encodeURIComponent(entityData.name)}*&limit=3`, {
@@ -1914,7 +1915,7 @@ async function fetchOpsContext(workspaceId, userId) {
     // Fetch hot contacts from Gov DB for chat context
     let topContacts = [];
     const govUrl = process.env.GOV_SUPABASE_URL;
-    const govKey = process.env.GOV_SUPABASE_KEY;
+    const govKey = govSupabaseKey();
     if (govUrl && govKey) {
       try {
         const cRes = await fetch(
@@ -2079,9 +2080,9 @@ async function enrichDraftContext(context) {
 
       if (propId || tenant) {
         const DIA_URL = process.env.DIA_SUPABASE_URL;
-        const DIA_KEY = process.env.DIA_SUPABASE_KEY;
+        const DIA_KEY = diaSupabaseKey();
         const GOV_URL = process.env.GOV_SUPABASE_URL;
-        const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+        const GOV_KEY = govSupabaseKey();
 
         let lookupUrl, lookupKey;
         if (domain === 'dialysis' && DIA_URL && DIA_KEY) {
@@ -4233,12 +4234,14 @@ async function assemblePropertyPacket(entityId, workspaceId) {
   const govIdentity = identities.find(i => i.source_system === 'gov_db' || i.source_system === 'government');
   const diaIdentity = identities.find(i => i.source_system === 'dia_db' || i.source_system === 'dialysis');
 
-  if (govIdentity?.external_id && process.env.GOV_SUPABASE_URL && process.env.GOV_SUPABASE_KEY) {
+  const ctxGovKey = govSupabaseKey();
+  const ctxDiaKey = diaSupabaseKey();
+  if (govIdentity?.external_id && process.env.GOV_SUPABASE_URL && ctxGovKey) {
     sourcesQueried.push('gov_db');
     try {
       const govRes = await fetch(
         `${process.env.GOV_SUPABASE_URL}/rest/v1/properties?id=eq.${encodeURIComponent(govIdentity.external_id)}&select=*&limit=1`,
-        { headers: { 'apikey': process.env.GOV_SUPABASE_KEY, 'Authorization': `Bearer ${process.env.GOV_SUPABASE_KEY}` } }
+        { headers: { 'apikey': ctxGovKey, 'Authorization': `Bearer ${ctxGovKey}` } }
       );
       if (govRes.ok) {
         const govData = await govRes.json();
@@ -4248,12 +4251,12 @@ async function assemblePropertyPacket(entityId, workspaceId) {
       console.error('[context-broker] Gov DB query failed:', err.message);
       fieldsMissing.push('lease_data');
     }
-  } else if (diaIdentity?.external_id && process.env.DIA_SUPABASE_URL && process.env.DIA_SUPABASE_KEY) {
+  } else if (diaIdentity?.external_id && process.env.DIA_SUPABASE_URL && ctxDiaKey) {
     sourcesQueried.push('dia_db');
     try {
       const diaRes = await fetch(
         `${process.env.DIA_SUPABASE_URL}/rest/v1/properties?id=eq.${encodeURIComponent(diaIdentity.external_id)}&select=*&limit=1`,
-        { headers: { 'apikey': process.env.DIA_SUPABASE_KEY, 'Authorization': `Bearer ${process.env.DIA_SUPABASE_KEY}` } }
+        { headers: { 'apikey': ctxDiaKey, 'Authorization': `Bearer ${ctxDiaKey}` } }
       );
       if (diaRes.ok) {
         const diaData = await diaRes.json();

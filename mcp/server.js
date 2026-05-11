@@ -17,7 +17,8 @@ const LCC_API_KEY = process.env.LCC_API_KEY || "";
 const OPS_SUPABASE_URL = process.env.OPS_SUPABASE_URL || "";
 const OPS_SUPABASE_KEY = process.env.OPS_SUPABASE_KEY || "";
 const GOV_SUPABASE_URL = process.env.GOV_SUPABASE_URL || "";
-const GOV_SUPABASE_KEY = process.env.GOV_SUPABASE_KEY || "";
+// Prefer service_role over anon — see GitHub issue #720.
+const GOV_SUPABASE_KEY = process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV_SUPABASE_KEY || "";
 
 // ── Supabase fetch helper (mirrors api/_shared/ops-db.js pattern) ────────────
 

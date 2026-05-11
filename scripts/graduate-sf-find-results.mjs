@@ -41,7 +41,7 @@ const MIN_SCORE = (() => {
 const OPS_URL = env.OPS_SUPABASE_URL;
 const OPS_KEY = env.OPS_SUPABASE_KEY;
 const GOV_URL = env.GOV_SUPABASE_URL;
-const GOV_KEY = env.GOV_SUPABASE_KEY;
+const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
 if (!OPS_URL || !OPS_KEY || !GOV_URL || !GOV_KEY) {
   console.error('Missing OPS_* or GOV_* creds'); process.exit(1);
 }

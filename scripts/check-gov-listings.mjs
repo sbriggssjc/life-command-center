@@ -8,7 +8,7 @@ const propId = process.argv[2];
 if (!propId) { console.error('Usage: node scripts/check-gov-listings.mjs <property_id>'); process.exit(1); }
 
 const GOV_URL = env.GOV_SUPABASE_URL;
-const GOV_KEY = env.GOV_SUPABASE_KEY;
+const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
 if (!GOV_URL || !GOV_KEY) { console.error('Missing GOV creds'); process.exit(1); }
 
 async function gov(method, path) {

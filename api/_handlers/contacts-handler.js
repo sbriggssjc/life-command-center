@@ -21,9 +21,10 @@ import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, isOpsConfigured, withErrorHandler } from '../_shared/ops-db.js';
 import { lookupSalesforceIds } from '../_shared/salesforce-sync.js';
 import { isSalesforceConfigured } from '../_shared/salesforce.js';
+import { govSupabaseKey } from '../_shared/supabase-keys.js';
 
 const GOV_URL = process.env.GOV_SUPABASE_URL;
-const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+const GOV_KEY = govSupabaseKey();
 
 /** Encode a user-supplied value for safe use in PostgREST filter strings */
 function pgVal(v) { return encodeURIComponent(String(v)); }

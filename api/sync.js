@@ -35,6 +35,7 @@ import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
 // Edge function base URL (existing ai-copilot deployment)
 const EDGE_FN_URL = process.env.EDGE_FUNCTION_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
@@ -44,7 +45,7 @@ const PA_COMPLETE_TASK_URL = process.env.PA_COMPLETE_TASK_URL;
 
 // DIA Supabase (for RCM ingest)
 const DIA_SUPABASE_URL = process.env.DIA_SUPABASE_URL;
-const DIA_SUPABASE_KEY = process.env.DIA_SUPABASE_KEY;
+const DIA_SUPABASE_KEY = diaSupabaseKey();
 
 // Webhook secret for Power Automate ingestion endpoints (RCM, LoopNet, etc.)
 // Bypasses user auth — PA flows send this in X-PA-Webhook-Secret header
@@ -2674,7 +2675,7 @@ async function handleListingWebhook(req, res) {
 // ============================================================================
 
 const GOV_SUPABASE_URL = process.env.GOV_SUPABASE_URL;
-const GOV_SUPABASE_KEY = process.env.GOV_SUPABASE_KEY;
+const GOV_SUPABASE_KEY = govSupabaseKey();
 
 async function handleCrossDomainMatch(req, res) {
   if (req.method !== 'POST') {

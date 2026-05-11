@@ -62,9 +62,9 @@ const WORKSPACE_ID = env.DEFAULT_WORKSPACE_ID || null;
 const OPS_URL = env.OPS_SUPABASE_URL;
 const OPS_KEY = env.OPS_SUPABASE_KEY;
 const GOV_URL = env.GOV_SUPABASE_URL;
-const GOV_KEY = env.GOV_SUPABASE_KEY;
+const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
 const DIA_URL = env.DIA_SUPABASE_URL;
-const DIA_KEY = env.DIA_SUPABASE_KEY;
+const DIA_KEY = env.DIA_SUPABASE_SERVICE_KEY || env.DIA_SUPABASE_KEY;
 const SF_URL  = env.SF_LOOKUP_WEBHOOK_URL;
 
 // Validate env vars and print a precise, actionable diagnostic if any are
