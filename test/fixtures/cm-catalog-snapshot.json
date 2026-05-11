@@ -1,6 +1,6 @@
 {
   "_doc": "Snapshot of cm_chart_catalog from LCC Opps (xengecqvemvfknjvbvrq) for the export-bundle audit test. Filtered to chart_template_ids that ship to dialysis or gov. Refresh via `node scripts/cm-refresh-catalog-snapshot.mjs` after catalog migrations land. The audit test (test/cm-export-bundle-audit.test.js) reads this file and asserts every entry has a TAB_NAMES entry in cm-excel-export.js.",
-  "_refreshed_at": "2026-05-09",
+  "_refreshed_at": "2026-05-12",
   "_filter": "applies_to_verticals contains 'dialysis' or 'gov'",
   "templates": [
     {
@@ -68,7 +68,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "bid_ask_spread",
@@ -77,7 +78,8 @@
         "dialysis",
         "gov"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "buyer_class_pct_by_year",
@@ -103,7 +105,8 @@
       "applies_to_verticals": [
         "gov"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "cap_rate_by_lease_term",
@@ -111,7 +114,8 @@
       "applies_to_verticals": [
         "gov"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "cap_rate_top_bottom_quartile",
@@ -121,7 +125,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "cap_rate_ttm_by_quarter",
@@ -131,7 +136,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "case_for_renewal",
@@ -149,7 +155,8 @@
         "gov",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "cost_of_capital",
@@ -159,7 +166,8 @@
         "gov",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "cpi_vs_renewal_cagr",
@@ -177,7 +185,8 @@
         "dialysis",
         "gov"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "dom_price_change_active",
@@ -262,7 +271,8 @@
         "national_st",
         "gov"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "nm_buyer_distribution",
@@ -296,7 +306,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "on_market_snapshot",
@@ -365,7 +376,8 @@
         "dialysis",
         "gov"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "sources_of_capital",
@@ -404,7 +416,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "valuation_index",
@@ -453,7 +466,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     },
     {
       "chart_template_id": "whatsnew_quarter_kpis",
@@ -471,7 +485,8 @@
         "dialysis",
         "national_st"
       ],
-      "phase": 1
+      "phase": 1,
+      "cadence": "monthly"
     }
   ]
 }
