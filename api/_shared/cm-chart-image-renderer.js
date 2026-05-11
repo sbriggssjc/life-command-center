@@ -100,8 +100,39 @@ const PDF_COLORS = {
 //
 // Returns an `annotation.annotations` object plug-and-play for
 // `options.plugins.annotation = { annotations: ... }`.
+// Round 7 — JS-literal serializer for QuickChart. QuickChart's eval
+// only fires when `chart` is sent as a STRING containing JS-object
+// syntax. Plain JSON-with-function-text doesn't trigger evaluation —
+// the function strings stay as strings and the default datalabels
+// behavior kicks in instead. This serializer:
+//   • emits unquoted property keys when valid JS identifiers
+//   • preserves functions as their toString() source
+//   • escapes strings via JSON.stringify
+//   • handles arrays/numbers/booleans/null naturally
+function jsLiteral(v) {
+  if (v == null) return 'null';
+  const t = typeof v;
+  if (t === 'function') return v.toString();
+  if (t === 'string')   return JSON.stringify(v);
+  if (t === 'number' || t === 'boolean') return String(v);
+  if (Array.isArray(v)) return '[' + v.map(jsLiteral).join(',') + ']';
+  if (t === 'object') {
+    const entries = Object.entries(v).map(([k, val]) => {
+      const safeKey = /^[$_A-Za-z][$_A-Za-z0-9]*$/.test(k) ? k : JSON.stringify(k);
+      return `${safeKey}: ${jsLiteral(val)}`;
+    });
+    return '{' + entries.join(',') + '}';
+  }
+  return JSON.stringify(v);
+}
+
 function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
   if (!Array.isArray(rows) || rows.length === 0) return {};
+  // i = array index into the rendered data. Chart.js category-axis can
+  // accept either a label string or a numeric index. With monthly data
+  // there are 3 rows per "Q1 '26" label, so label-based xValue lands on
+  // the FIRST occurrence (Round 7 user feedback: "labels still floating
+  // in the middle of the chart"). Index-based positioning is unambiguous.
   const points = rows
     .map((r, i) => ({ i, x: r[xKey] || r.period_end || r.year, y: getter(r) }))
     .filter(p => p.y != null && Number.isFinite(Number(p.y)));
@@ -124,20 +155,12 @@ function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
     z: 100,  // above everything
   });
 
-  // Convert period_end (date) to a label like "Q4 '25" matching periodEndLabel
-  const xToLabel = (x) => {
-    if (!x) return null;
-    const dt = new Date(x);
-    if (Number.isNaN(dt.getTime())) return String(x);
-    const q = Math.floor(dt.getUTCMonth() / 3) + 1;
-    return `Q${q} '${String(dt.getUTCFullYear()).slice(2)}`;
-  };
-
   const out = {};
-  // Last data point — primary callout (navy)
+  // Last data point — primary callout (navy). xValue=index pins to the
+  // exact row position regardless of how many rows share the same Q label.
   out.lastVal = {
     type: 'label',
-    xValue: xToLabel(lastP.x),
+    xValue: lastP.i,
     yValue: Number(lastP.y),
     content: labelFn(Number(lastP.y)),
     yAdjust: -16,
@@ -147,7 +170,7 @@ function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
   if (maxP.i !== lastP.i) {
     out.maxVal = {
       type: 'label',
-      xValue: xToLabel(maxP.x),
+      xValue: maxP.i,
       yValue: Number(maxP.y),
       content: labelFn(Number(maxP.y)),
       yAdjust: -16,
@@ -158,7 +181,7 @@ function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
   if (minP.i !== lastP.i && minP.i !== maxP.i) {
     out.minVal = {
       type: 'label',
-      xValue: xToLabel(minP.x),
+      xValue: minP.i,
       yValue: Number(minP.y),
       content: labelFn(Number(minP.y)),
       yAdjust: 16,
@@ -344,7 +367,12 @@ const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.080 };
 // 84%–96% on the right axis. Switched to that exact range so our chart
 // matches the master deliverable visually (bars on left = DOM days,
 // line on right = % of Ask).
-const PCT_OF_ASK_RANGE = { min: 0.84, max: 0.96 };
+// Round 7 — widened 0.84–0.96 → 0.85–1.05 so the line is visible.
+// Actual dialysis data 2017+ runs 95-99% (TTM avg); 96% ceiling clipped
+// the entire line off the top of the chart. User: "% of ask is completely
+// gone now too." Range now bracketing recent values comfortably while
+// preserving the PDF-aligned tight band.
+const PCT_OF_ASK_RANGE = { min: 0.85, max: 1.05 };
 
 // ============================================================================
 // Per-template Chart.js v3 config builders
@@ -413,10 +441,31 @@ function buildChartConfig(chart, brand) {
       // Round 6a — segment label color contrast fix (user feedback
       // 2026-05-08: "label colors need to be lighter so we can see them").
       // Use chartjs-plugin-datalabels to draw the value + share % on
-      // each wedge in white, which contrasts against navy / sky / sage /
-      // gray. QuickChart's hosted service includes this plugin by default.
+      // each wedge in white. QuickChart's hosted service includes this
+      // plugin by default.
+      //
+      // Round 7 — pre-compute labels into the dataset's `dataLabels` array
+      // and reference them by index in the formatter. Earlier versions
+      // used a closure (`totalValue`, `isVolume`) inside the formatter,
+      // which got dropped when JSON-stringified to QuickChart (server
+      // didn't have those variables in scope, so the formatter silently
+      // failed and raw numbers like `136722463.88` showed instead of
+      // `$136.7M`). Embedding the labels as data means the formatter
+      // works regardless of how QuickChart serializes the callback.
       const totalValue = tenantRows.reduce(
         (sum, r) => sum + (Number(r[valueKey]) || 0), 0);
+      const preLabels = tenantRows.map((r) => {
+        const v = Number(r[valueKey]) || 0;
+        if (v === 0 || totalValue === 0) return '';
+        const share = (v / totalValue) * 100;
+        if (share < 4) return '';  // hide micro-segments
+        if (isVolume) {
+          const m = v / 1_000_000;
+          const label = m >= 1000 ? `$${(m / 1000).toFixed(1)}B` : `$${m.toFixed(1)}M`;
+          return `${label}\n${share.toFixed(1)}%`;
+        }
+        return `${v}\n${share.toFixed(1)}%`;
+      });
       return {
         type: 'doughnut',
         data: {
@@ -424,6 +473,8 @@ function buildChartConfig(chart, brand) {
           datasets: [{
             label: isVolume ? 'Volume Available' : 'Count Available',
             data: tenantRows.map(r => Number(r[valueKey]) || 0),
+            // Pre-computed display strings — read by formatter via index
+            dataLabels: preLabels,
             backgroundColor: tenantRows.map((_, i) => segmentColors[i] || segmentColors[3]),
             borderColor: '#FFFFFF',
             borderWidth: 2,
@@ -446,23 +497,16 @@ function buildChartConfig(chart, brand) {
               font: { size: 11, weight: 'bold' },
               textShadowBlur: 2,
               textShadowColor: 'rgba(0,0,0,0.45)',
-              formatter: (value) => {
-                if (value == null || totalValue === 0) return '';
-                const share = (value / totalValue) * 100;
-                if (share < 4) return ''; // hide micro-segments
-                if (isVolume) {
-                  // $X.XM (or $X.XB) plus share %
-                  const m = value / 1_000_000;
-                  const label = m >= 1000 ? `$${(m / 1000).toFixed(1)}B` : `$${m.toFixed(1)}M`;
-                  return `${label}\n${share.toFixed(1)}%`;
-                }
-                return `${value}\n${share.toFixed(1)}%`;
+              // Pure function — reads pre-computed label from the
+              // dataset's `dataLabels` array. No closure needed.
+              formatter: function (value, ctx) {
+                return (ctx.dataset.dataLabels || [])[ctx.dataIndex] || '';
               },
               anchor: 'center',
               align: 'center',
             },
           },
-          cutout: '55%',  // donut hole
+          cutout: '55%',
         },
       };
     }
@@ -479,6 +523,16 @@ function buildChartConfig(chart, brand) {
       const termLabels = termRows.map(r => r.term_bucket || '?');
       const dotPointRadius = 6;
       const dotPointStyle = 'rectRot'; // diamond marker, similar to PDF
+      // Round 7 — pre-compute price-bar labels here so the formatter
+      // can read them off ctx.dataset (closures get dropped through
+      // QuickChart's serialization).
+      const termPriceLabels = termRows.map((row) => {
+        const v = Number(row.avg_price) || 0;
+        const m = v / 1_000_000;
+        const priceLabel = m >= 1 ? `$${m.toFixed(1)}M` : `$${(v / 1000).toFixed(0)}K`;
+        const n = row.n_listings ?? 0;
+        return `${priceLabel}\n(n=${n})`;
+      });
       return {
         type: 'bar',
         data: {
@@ -486,6 +540,8 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { type: 'bar', label: 'Avg Price (left axis)',
               data: termRows.map(r => r.avg_price),
+              // Pre-computed labels for datalabels formatter
+              priceLabels: termPriceLabels,
               backgroundColor: PDF_COLORS.cap_mid, // sky
               borderColor: PDF_COLORS.cap_mid,
               borderRadius: 1,
@@ -536,21 +592,18 @@ function buildChartConfig(chart, brand) {
           // callouts so we can see the totals." datalabels plugin is shipped
           // by QuickChart hosted; the formatter shows N listings + avg price.
           opts.plugins = opts.plugins || {};
+          // Round 7 — datalabels formatter reads priceLabels[i] off the
+          // bar dataset (pre-computed above). No closure over termRows
+          // so the function survives QuickChart's JSON serialization.
           opts.plugins.datalabels = {
-            display: (ctx) => ctx.dataset.type === 'bar',
+            display: function (ctx) { return ctx.dataset.type === 'bar'; },
             color: PDF_COLORS.cap_short,
             font: { size: 11, weight: 'bold' },
             anchor: 'end',
             align: 'top',
             offset: 4,
-            formatter: (value, ctx) => {
-              const i = ctx.dataIndex;
-              const row = termRows[i];
-              if (!row) return '';
-              const m = (Number(value) || 0) / 1_000_000;
-              const priceLabel = m >= 1 ? `$${m.toFixed(1)}M` : `$${(value/1000).toFixed(0)}K`;
-              const n = row.n_listings ?? 0;
-              return `${priceLabel}\n(n=${n})`;
+            formatter: function (value, ctx) {
+              return (ctx.dataset.priceLabels || [])[ctx.dataIndex] || '';
             },
           };
           return opts;
@@ -1761,6 +1814,17 @@ async function renderToPng(config, { width, height } = {}) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), RENDER_TIMEOUT_MS);
 
+  // Round 7 — QuickChart only evaluates JavaScript functions in the
+  // chart config when `chart` is sent as a STRING containing JS-literal
+  // syntax (not a JSON object). JSON-with-function-text-strings doesn't
+  // work — they're treated as plain strings. Confirmed empirically:
+  // donut formatter outputting `$136.7M` works via string-mode but not
+  // via JSON-mode with stringified functions.
+  //
+  // Build the chart as a JS-literal expression string. Helper jsLiteral()
+  // emits objects with unquoted keys (where valid), preserves function
+  // source verbatim, handles arrays/scalars correctly.
+  const jsLiteralChart = jsLiteral(config);
   try {
     const r = await fetch(QUICKCHART_URL, {
       method: 'POST',
@@ -1769,14 +1833,13 @@ async function renderToPng(config, { width, height } = {}) {
       body: JSON.stringify({
         // Pin Chart.js v4 — required for `ticks.format` Intl.NumberFormat
         // support. v3 (the default on free tier) doesn't render currency /
-        // percent / compact-notation tick labels via the format option,
-        // and QuickChart's JSON parser doesn't evaluate JS callback strings.
+        // percent / compact-notation tick labels via the format option.
         version: '4',
         width:  width  || RENDER_DEFAULT_WIDTH,
         height: height || RENDER_DEFAULT_HEIGHT,
         format: 'png',
         backgroundColor: '#FFFFFF',
-        chart: config,
+        chart: jsLiteralChart,
       }),
     });
     if (!r.ok) {
