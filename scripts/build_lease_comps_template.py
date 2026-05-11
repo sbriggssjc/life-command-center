@@ -3,6 +3,20 @@
 Generates the Northmarq-branded dialysis lease-comps XLSX template at
 assets/cm-templates/dialysis-lease-comps-template.xlsx.
 
+Round 76gn.q fix:
+  - Abbreviate three header labels (STATE -> ST, RENOVATED -> RENO,
+    COMMENCE -> COMM) to match the existing abbreviated style of RBA /
+    EXP / TERM REM / RENT/SF / SF LEASED. The bold Trebuchet MS header
+    font renders wider than the raw character count suggests, so the
+    full-word versions wrapped mid-word in narrower columns (especially
+    column F STATE at width 7, column I RENOVATED at width 11). The
+    avg_formula reference for column I also changes from
+    Comps[RENOVATED] to Comps[RENO] since Excel Table column names
+    derive from the header row cell value, and the JS runtime hot-patch
+    (_UD_TABLE_COL_MAP in detail-lease-comps-fix.js) is updated to
+    match. Once the eventual sales-comps export reuses this scaffolding
+    it inherits the same abbreviations and visual proportions.
+
 Round 76gn.n fix:
   - Remove the "Subject" Excel table entirely. Earlier rounds wrapped
     rows 3-4 (subject section's header + data) in a 2-row Excel Table
@@ -85,22 +99,31 @@ COMP_TOTAL_ROW = 60
 LAST_COL_LETTER = "W"
 LAST_COL_INDEX = 23  # column W (1-based)
 
+# Header labels intentionally use the abbreviated style established by
+# existing columns (RBA, EXP, RENT/SF, TERM REM). Three labels were
+# shortened in Round 76gn.q so they don't wrap mid-word under the bold
+# Trebuchet header font: STATE -> ST, RENOVATED -> RENO, COMMENCE -> COMM.
+# If any of these are renamed, also update:
+#   1. avg_formulas[<letter>] below (Excel Table column refs match the
+#      header cell value)
+#   2. _UD_TABLE_COL_MAP in detail-lease-comps-fix.js (runtime rewrite
+#      from Comps[<NAME>] to cell ranges)
 COLUMNS = [
     ("counter",      "A", "",                       3.5,  "0",                         False),
     ("tenant",       "B", "TENANT",                25,    "@",                         False),
     ("operator",     "C", "OPERATOR",              22,    "@",                         False),
     ("address",      "D", "ADDRESS",               24,    "@",                         False),
     ("city",         "E", "CITY",                  14,    "@",                         False),
-    ("state",        "F", "STATE",                  7,    "@",                         True),
+    ("state",        "F", "ST",                     7,    "@",                         True),
     ("land",         "G", "LAND",                  10,    '#,##0.0" ac"',              True),
     ("built",        "H", "BUILT",                  9,    "0",                         True),
-    ("renovated",    "I", "RENOVATED",             11,    "0",                         True),
+    ("renovated",    "I", "RENO",                  11,    "0",                         True),
     ("rba",          "J", "RBA",                   11,    "#,##0",                     True),
     ("sfLeased",     "K", "SF LEASED",             12,    "#,##0",                     True),
     ("occupancy",    "L", "OCCUPANCY",             11,    "0%",                        True),
     ("rentPsf",      "M", "RENT/SF",               11,    '"$"#,##0.00',               True),
     ("current",      "N", "CURRENT RENT",          14,    '"$"#,##0',                  True),
-    ("commence",     "O", "COMMENCE",              11,    "mmm-yy",                    True),
+    ("commence",     "O", "COMM",                  11,    "mmm-yy",                    True),
     ("exp",          "P", "EXP",                   11,    "mmm-yy",                    True),
     ("initTerm",     "Q", "INITIAL TERM",          13,    '0.0" Years"',               True),
     ("termRem",      "R", "TERM REM",              13,    '0.0" Years";"EXPIRED";"-"', True),
@@ -210,10 +233,15 @@ def build():
     for col in range(2, 7):
         ws.cell(row=tr, column=col).fill = PatternFill(fill_type="solid", fgColor=NMQ["navy"])
 
+    # Comps[X] structured references — column names must exactly match the
+    # header-row cell values (Excel Tables derive column names from headers).
+    # If any of these change, update the COLUMNS labels above AND the
+    # _UD_TABLE_COL_MAP in detail-lease-comps-fix.js (the runtime hot-patch
+    # rewrites Comps[X] to cell ranges before download).
     avg_formulas = {
         "G": '=IFERROR(SUBTOTAL(101,Comps[LAND]),"")',
         "H": '=IFERROR(SUBTOTAL(101,Comps[BUILT]),"")',
-        "I": '=IFERROR(SUBTOTAL(101,Comps[RENOVATED]),"")',
+        "I": '=IFERROR(SUBTOTAL(101,Comps[RENO]),"")',
         "J": '=IFERROR(AVERAGE(Comps[RBA]),"")',
         "K": '=IFERROR(AVERAGE(Comps[SF LEASED]),"")',
         "L": '=IFERROR(SUBTOTAL(101,Comps[OCCUPANCY]),"")',
