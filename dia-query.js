@@ -6,11 +6,12 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const diaKey = process.env.DIA_SUPABASE_KEY;
+  // Prefer service_role over anon — see GitHub issue #720.
+  const diaKey = process.env.DIA_SUPABASE_SERVICE_KEY || process.env.DIA_SUPABASE_KEY;
   const diaUrl = process.env.DIA_SUPABASE_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co';
 
   if (!diaKey) {
-    return res.status(500).json({ error: 'DIA_SUPABASE_KEY not configured' });
+    return res.status(500).json({ error: 'DIA_SUPABASE_SERVICE_KEY (or DIA_SUPABASE_KEY) not configured' });
   }
 
   const { table, select, filter, filter2, order, limit, offset } = req.query;

@@ -56,11 +56,12 @@ const nominatimRateMs = parseInt(args['nominatim-rate-ms'] || '1100', 10);
 const DOMAIN_CONFIG = {
   dia: {
     url: process.env.DIA_SUPABASE_URL,
-    key: process.env.DIA_SUPABASE_KEY || process.env.DIA_SUPABASE_SERVICE_KEY
+    // Prefer service_role over anon — see GitHub issue #720.
+    key: process.env.DIA_SUPABASE_SERVICE_KEY || process.env.DIA_SUPABASE_KEY
   },
   gov: {
     url: process.env.GOV_SUPABASE_URL,
-    key: process.env.GOV_SUPABASE_KEY || process.env.GOV_SUPABASE_SERVICE_KEY
+    key: process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV_SUPABASE_KEY
   }
 };
 

@@ -8,10 +8,11 @@
 // ============================================================================
 
 import { fetchWithTimeout } from './ops-db.js';
+import { domainSupabaseKey } from './supabase-keys.js';
 
 const DOMAIN_CONFIG = {
-  dialysis: { urlEnv: 'DIA_SUPABASE_URL', keyEnv: 'DIA_SUPABASE_KEY' },
-  government: { urlEnv: 'GOV_SUPABASE_URL', keyEnv: 'GOV_SUPABASE_KEY' },
+  dialysis: { urlEnv: 'DIA_SUPABASE_URL' },
+  government: { urlEnv: 'GOV_SUPABASE_URL' },
 };
 
 /**
@@ -23,7 +24,7 @@ export function getDomainCredentials(domain) {
   const cfg = DOMAIN_CONFIG[domain];
   if (!cfg) return null;
   const url = process.env[cfg.urlEnv];
-  const key = process.env[cfg.keyEnv];
+  const key = domainSupabaseKey(domain);
   if (!url || !key) return null;
   return { url, key };
 }

@@ -50,7 +50,7 @@ if (dropFlag && keepFlag) mappings.push({ drop: dropFlag, keep: keepFlag });
 if (!mappings.length) { console.error('No mappings provided. Use --map drop:keep or --drop ID --keep ID'); process.exit(1); }
 
 const GOV_URL = env.GOV_SUPABASE_URL;
-const GOV_KEY = env.GOV_SUPABASE_KEY;
+const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
 if (!GOV_URL || !GOV_KEY) { console.error('Missing GOV creds'); process.exit(1); }
 
 async function gov(method, path, body) {

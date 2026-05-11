@@ -38,7 +38,7 @@ const STRATEGY = (() => {
 })();
 
 const GOV_URL = env.GOV_SUPABASE_URL;
-const GOV_KEY = env.GOV_SUPABASE_KEY;
+const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
 if (!GOV_URL || !GOV_KEY) { console.error('Missing GOV creds'); process.exit(1); }
 
 async function gov(method, path) {

@@ -6,11 +6,12 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const govKey = process.env.GOV_SUPABASE_KEY;
+  // Prefer service_role over anon — see GitHub issue #720.
+  const govKey = process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV_SUPABASE_KEY;
   const govUrl = process.env.GOV_SUPABASE_URL || 'https://scknotsqkcheojiaewwh.supabase.co';
 
   if (!govKey) {
-    return res.status(500).json({ error: 'GOV_SUPABASE_KEY not configured' });
+    return res.status(500).json({ error: 'GOV_SUPABASE_SERVICE_KEY (or GOV_SUPABASE_KEY) not configured' });
   }
 
   const { table, select, filter, order, limit, offset } = req.query;

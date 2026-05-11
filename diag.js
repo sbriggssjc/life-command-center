@@ -1,8 +1,9 @@
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
-  const govKey = process.env.GOV_SUPABASE_KEY || '';
-  const diaKey = process.env.DIA_SUPABASE_KEY || '';
+  // Prefer service_role over anon — see GitHub issue #720.
+  const govKey = process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV_SUPABASE_KEY || '';
+  const diaKey = process.env.DIA_SUPABASE_SERVICE_KEY || process.env.DIA_SUPABASE_KEY || '';
   const govUrl = process.env.GOV_SUPABASE_URL || 'https://scknotsqkcheojiaewwh.supabase.co';
   const diaUrl = process.env.DIA_SUPABASE_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co';
 

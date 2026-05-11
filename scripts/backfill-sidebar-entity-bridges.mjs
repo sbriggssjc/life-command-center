@@ -39,9 +39,9 @@ const LIMIT = (() => {
 const OPS_URL = env.OPS_SUPABASE_URL;
 const OPS_KEY = env.OPS_SUPABASE_KEY;
 const GOV_URL = env.GOV_SUPABASE_URL;
-const GOV_KEY = env.GOV_SUPABASE_KEY;
+const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
 const DIA_URL = env.DIA_SUPABASE_URL;
-const DIA_KEY = env.DIA_SUPABASE_KEY;
+const DIA_KEY = env.DIA_SUPABASE_SERVICE_KEY || env.DIA_SUPABASE_KEY;
 
 if (!OPS_URL || !OPS_KEY) { console.error('Missing OPS creds'); process.exit(1); }
 

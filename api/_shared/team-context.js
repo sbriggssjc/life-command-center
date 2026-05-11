@@ -13,6 +13,7 @@
 // ============================================================================
 
 import { opsQuery } from './ops-db.js';
+import { domainSupabaseKey } from './supabase-keys.js';
 
 // ============================================================================
 // DOMAIN DB QUERY — direct fetch to GOV/DIA Supabase instances
@@ -28,12 +29,11 @@ import { opsQuery } from './ops-db.js';
  */
 async function domainQuery(source, path) {
   const urlEnv = source === 'gov' ? 'GOV_SUPABASE_URL' : 'DIA_SUPABASE_URL';
-  const keyEnv = source === 'gov' ? 'GOV_SUPABASE_KEY' : 'DIA_SUPABASE_KEY';
   const baseUrl = process.env[urlEnv];
-  const apiKey = process.env[keyEnv];
+  const apiKey = domainSupabaseKey(source);
 
   if (!baseUrl || !apiKey) {
-    console.warn(`[team-context] ${source.toUpperCase()} DB not configured (${urlEnv}/${keyEnv})`);
+    console.warn(`[team-context] ${source.toUpperCase()} DB not configured (${urlEnv} or *_SUPABASE_SERVICE_KEY/*_SUPABASE_KEY)`);
     return { ok: false, data: [], count: 0 };
   }
 

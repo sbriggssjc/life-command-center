@@ -13,6 +13,7 @@ import {
 import { domainQuery } from './_shared/domain-db.js';
 import { recalculateSaleCapRates } from './_shared/rent-projection.js';
 import { recordFieldWrites } from './_shared/field-priority-guard.js';
+import { domainSupabaseKey } from './_shared/supabase-keys.js';
 
 // Fields on the dialysis `properties` table whose write implies every
 // historical sale on that property must have its calculated_cap_rate
@@ -26,8 +27,8 @@ const CAP_RATE_ANCHOR_FIELDS = new Set([
 ]);
 
 const SOURCE_CONFIG = {
-  gov: { urlEnv: 'GOV_SUPABASE_URL', keyEnv: 'GOV_SUPABASE_KEY', writeTables: GOV_WRITE_TABLES },
-  dia: { urlEnv: 'DIA_SUPABASE_URL', keyEnv: 'DIA_SUPABASE_KEY', writeTables: DIA_WRITE_TABLES }
+  gov: { urlEnv: 'GOV_SUPABASE_URL', writeTables: GOV_WRITE_TABLES },
+  dia: { urlEnv: 'DIA_SUPABASE_URL', writeTables: DIA_WRITE_TABLES }
 };
 
 export default withErrorHandler(async function handler(req, res) {
@@ -108,7 +109,7 @@ export default withErrorHandler(async function handler(req, res) {
   }
 
   const dbUrl = process.env[cfg.urlEnv];
-  const dbKey = process.env[cfg.keyEnv];
+  const dbKey = domainSupabaseKey(target_source);
   if (!dbUrl || !dbKey) {
     return res.status(503).json({ ok: false, errors: ['bridge_unavailable', 'Domain database not configured'] });
   }
