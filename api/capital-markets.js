@@ -100,7 +100,10 @@ const SYNTHETIC_COMPOSERS = {
     for (const r of termRows) {
       const k = r.period_end;
       if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
-      byPeriod.get(k).cap_10plus = r.cap_10plus;
+      // Round 7 field-name fallback: master_m mapper emits `cap_10plus`
+      // while the raw _q view exposes `cap_10plus_year`. Try both so the
+      // composer works regardless of upstream ordering.
+      byPeriod.get(k).cap_10plus = r.cap_10plus ?? r.cap_10plus_year;
     }
 
     // Sort by period_end ascending and compute MoM deltas (annualized).
@@ -748,25 +751,15 @@ async function exportWorkbook(req, res) {
   });
   const realCharts = await Promise.all(chartFetches);
 
-  const synthCharts = syntheticTemplates.map((tmpl) => {
-    const composer = syntheticRecipeFor(tmpl);
-    let rows = [];
-    try {
-      rows = composer({ vertical, subspecialty, asOf: as_of, allCharts: realCharts }) || [];
-    } catch { /* swallow — synthetic comp must not fail the workbook */ }
-    return {
-      chart_template_id: tmpl.chart_template_id,
-      name: tmpl.name,
-      chart_type: tmpl.chart_type,
-      data_shape: tmpl.data_shape,
-      metric_focus: tmpl.metric_focus,
-      cadence: tmpl.cadence,
-      view_name: tmpl.view_name_template,
-      rows,
-    };
-  });
-
-  const charts = [...realCharts, ...synthCharts];
+  // Round 7 — moved synthCharts construction below master_m mapper so
+  // synthetic composers see post-mapped (monthly) inputs. Previously
+  // pace_of_cap_rate_expansion saw quarterly cap_rate_by_lease_term rows
+  // and produced only the pace_all series (pace_core needs the master_m-
+  // mapped `cap_10plus` field name; the quarterly view has
+  // `cap_10plus_year`). The mapper loop runs against realCharts; then
+  // synthCharts is built; then both are combined into `charts`.
+  // (synthCharts construction moved further down — see "Round 7 split").
+  let charts;
 
   // 2. Fetch brand tokens
   const brandResult = await opsQuery(
@@ -904,7 +897,9 @@ async function exportWorkbook(req, res) {
         period_end: r.period_end,
         top_quartile: r.upper_quartile_cap_ttm,
         bottom_quartile: r.lower_quartile_cap_ttm,
-        median: null,
+        // Round 7 — master_m now carries a TTM median (percentile_cont(0.50)).
+        // User: "Data_Cap_Quartile looks much better but ... median is missing."
+        median: r.median_quartile_cap_ttm,
       })),
       volume_cap_quartile_combo: (rows) => rows.map(r => ({
         period_end: r.period_end,
@@ -1069,7 +1064,10 @@ async function exportWorkbook(req, res) {
 
     const monthlyMappers = { ...sharedMappers, ...verticalMappers };
     let swapped = 0;
-    for (const c of charts) {
+    // Round 7 — iterate over realCharts (not the combined `charts`)
+    // because synthCharts is built AFTER this loop (so synthetic
+    // composers see post-mapped inputs).
+    for (const c of realCharts) {
       const mapper = monthlyMappers[c.chart_template_id];
       if (mapper) {
         c.rows = mapper(masterMonthlyRows);
@@ -1079,6 +1077,36 @@ async function exportWorkbook(req, res) {
     }
     console.log(`[exportWorkbook] vertical=${vertical}: swapped ${swapped} chart_template_ids to monthly master_m data`);
   }
+
+  // Round 7 split — synthCharts construction moved here, AFTER the
+  // master_m mapper has rewritten realCharts. Synthetic composers
+  // (pace_of_cap_rate_expansion, volume_cap_quartile_combo, etc.) now
+  // read monthly-cadence data with the canonical field names the mappers
+  // emit (ttm_weighted_cap_rate, cap_10plus, volume_dollars, ...).
+  const synthCharts = syntheticTemplates.map((tmpl) => {
+    const composer = syntheticRecipeFor(tmpl);
+    let rows = [];
+    try {
+      rows = composer({ vertical, subspecialty, asOf: as_of, allCharts: realCharts }) || [];
+    } catch { /* swallow — synthetic comp must not fail the workbook */ }
+    // If any realChart this composer reads has cadence='monthly', the
+    // synth output is also monthly (composer just maps row-by-row). Tag
+    // accordingly so the renderer picks the monthly window/clipping.
+    const upstreamMonthly = realCharts.some((c) => c.cadence === 'monthly');
+    return {
+      chart_template_id: tmpl.chart_template_id,
+      name: tmpl.name,
+      chart_type: tmpl.chart_type,
+      data_shape: tmpl.data_shape,
+      metric_focus: tmpl.metric_focus,
+      cadence: tmpl.cadence === 'monthly' ? 'monthly'
+             : upstreamMonthly ? 'monthly' : tmpl.cadence,
+      view_name: tmpl.view_name_template,
+      rows,
+    };
+  });
+
+  charts = [...realCharts, ...synthCharts];
 
   // 4b. Render the chart set to PNG images via QuickChart so each Data_* tab
   //     has a chart visual at the top alongside the data table below. This
