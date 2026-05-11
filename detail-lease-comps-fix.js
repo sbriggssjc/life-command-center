@@ -1,7 +1,17 @@
-/* detail-lease-comps-fix.js — Round 76gn.o
+/* detail-lease-comps-fix.js — Round 76gn.p
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
+ *
+ * Round 76gn.p — addition on top of 76gn.o:
+ *   - Auto-fit considers HEADER text length, not just data. Columns like
+ *     V (DISTANCE TO SUBJECT, 19-char header) used to be sized only by
+ *     the 8-char distance values, which made the header wrap or clip when
+ *     Excel rendered it. Now width = max(template, data+3, header+2).
+ *   - Header rows 3 (Subject) and 7 (Comps) get explicit row height = 32
+ *     and re-stamped `wrapText: true` alignment so multi-word labels wrap
+ *     cleanly inside the taller bar instead of being clipped on a single
+ *     24-pt line.
  *
  * Round 76gn.o — addition on top of 76gn.n:
  *   - Drop the Comps Excel Table from the output workbook and rewrite the
@@ -722,9 +732,15 @@
       row.hidden = true;
     }
 
-    // Auto-fit column widths based on actual data length. Clamps to a sane
-    // max so a 70-char operator name doesn't blow out the layout. Preserves
-    // a minimum of the template width.
+    // Auto-fit column widths.
+    //
+    // Width = max(template min, longest data + 3, longest header + 2).
+    //
+    // Round 76gn.p: include the HEADER label length in the calc — without
+    // this, columns like V (DISTANCE TO SUBJECT, 19-char header but data
+    // values of ~8 chars) were sized too narrow, causing the header to
+    // wrap-and-clip when Excel rendered it. The +2 padding accounts for the
+    // small visual margin Excel adds around bold text in styled headers.
     //
     // Round 76gn.o: explicitly handle Date values. ExcelJS exposes date
     // cells as raw Date objects whose toString() is ~50 chars
@@ -738,9 +754,20 @@
     };
     const DATE_DISPLAY_LEN = 7; // "mmm-yy" plus a margin char
     const MAX_WIDTH = 60;
+    const HEADER_ROWS = [3, 7]; // Subject header + Comps header
     const dataRows = [_UD_TPL.subjectDataRow]
       .concat(comps.map((_, i) => _UD_TPL.compsFirstDataRow + i));
     for (let col = 1; col <= lastCol; col++) {
+      // Header text length — width must accommodate the longer of the two
+      // header rows so the bold label doesn't get clipped or forced-wrap.
+      let headerLen = 0;
+      for (const r of HEADER_ROWS) {
+        const v = sheet.getRow(r).getCell(col).value;
+        if (v == null) continue;
+        const s = String(v);
+        if (s.length > headerLen) headerLen = s.length;
+      }
+      // Data text length — width must accommodate the longest data cell.
       let maxLen = 0;
       for (const r of dataRows) {
         const v = sheet.getRow(r).getCell(col).value;
@@ -758,9 +785,31 @@
         if (text.length > maxLen) maxLen = text.length;
       }
       const tplWidth = TEMPLATE_WIDTHS[col] || 12;
-      const fittedWidth = Math.min(MAX_WIDTH, Math.max(tplWidth, maxLen + 3));
+      const fittedWidth = Math.min(MAX_WIDTH, Math.max(tplWidth, maxLen + 3, headerLen + 2));
       sheet.getColumn(col).width = fittedWidth;
     }
+
+    // Round 76gn.p: bump header row heights and re-stamp wrap_text so
+    // multi-word labels wrap cleanly inside a taller header bar instead of
+    // being clipped on a single 24-pt line. (The build-script template
+    // sets row 3 and row 7 to 24; ExcelJS preserves that. Increasing here
+    // to 32 gives room for two lines of wrapped header text in case any
+    // column ends up at the auto-fit minimum and the label still needs
+    // to wrap.)
+    HEADER_ROWS.forEach(r => {
+      const row = sheet.getRow(r);
+      row.height = 32;
+      for (let col = 1; col <= lastCol; col++) {
+        const cell = row.getCell(col);
+        if (cell.value == null || cell.value === '') continue;
+        const cur = cell.alignment || {};
+        cell.alignment = Object.assign({}, cur, {
+          horizontal: cur.horizontal || 'center',
+          vertical: 'middle',
+          wrapText: true
+        });
+      }
+    });
 
     // Generate workbook and post-process via JSZip to strip ExcelJS'
     // schema-violating sheetPr block AND drop the Comps Excel Table
@@ -892,5 +941,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.o overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.p overrides loaded');
 })();
