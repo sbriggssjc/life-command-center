@@ -1,0 +1,25 @@
+-- =====================================================================
+-- Round 14 — Make n_all and n_long_term use consistent denominators
+-- in cm_gov_seller_sentiment_m.
+--
+-- Audit of the post-Round-13 export found "N(all)=2, N(8+yr)=22" for
+-- Mar 2026 — nonsensical because "all" should be a superset of
+-- "8+ yr". Root cause: Round 13 narrowed n_all from `count(*)` to
+-- `count(last_cap_rate)` so pre-2018 LEFT JOIN rows would show 0
+-- instead of 1, but n_long_term was left as
+-- `count(*) FILTER (where firm_term >= 8)`. Two different filters →
+-- asymmetric counts.
+--
+-- Fix: both columns now count sales with a valid last_cap_rate
+-- (the metric of interest for this chart):
+--   • n_all        = count(last_cap_rate)
+--   • n_long_term  = count(last_cap_rate) FILTER (where firm_term >= 8)
+--
+-- Pre-data rows still show 0 (count of NULL = 0). Recent rows now
+-- show N(all) >= N(long_term) as expected. The metric column values
+-- (pct_*, last_ask_cap_*) are unchanged.
+--
+-- Applied to gov DB scknotsqkcheojiaewwh on 2026-05-12.
+--
+-- See GovernmentProject/sql for the actual view body.
+-- =====================================================================
