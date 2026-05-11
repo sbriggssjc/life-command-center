@@ -1,29 +1,29 @@
-/* detail-lease-comps-fix.js — Round 76gn.k
+/* detail-lease-comps-fix.js — Round 76gn.l
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
  *
- * Round 76gn.k — addition on top of 76gn.j:
- *   - AVERAGE bar position fix: every row between the last comp row and
- *     the totals row is now CLEARED and HIDDEN. Excel renders hidden
- *     rows at zero height, so the AVERAGE bar visually slides up to
- *     sit immediately below the last comp — no more 27-row gap on a
- *     25-comp export. SUBTOTAL(101,...) in the totals row ignores
- *     hidden rows and AVERAGE(...) ignores blanks, so both formulas
- *     still resolve over the visible data only.
- *   - Also defensively wipes any leftover `=A_+1` counter formulas in
- *     rows 41-59 that pre-Round-76gn.i cached templates carried via
- *     Excel's calculated-column propagation.
+ * Round 76gn.l — addition on top of 76gn.k:
+ *   - Defensive header-cell fix for the Subject Excel table. The
+ *     regenerated template (Round 76gn.i) defines the Subject table
+ *     over B3:W4 but leaves V3 (DISTANCE TO SUBJECT) blank — distance
+ *     doesn't apply to the subject row itself. Excel tables require
+ *     every header cell to contain a value; openpyxl writes the table
+ *     column for V with an auto-generated name, and ExcelJS crashes
+ *     during workbook serialization with "Cannot read properties of
+ *     undefined (reading 'name')" when it tries to materialize the
+ *     empty column's name attribute. We stamp the four expected header
+ *     labels (V3, W3, V7, W7) only when they're empty, so a correctly
+ *     regenerated template is left alone and a buggy one self-heals
+ *     at runtime.
  *
+ * Round 76gn.k: AVERAGE bar position fix — clear AND hide every row
+ *   between the last comp row and the totals row so the bar slides up
+ *   visually.
  * Round 76gn.j: dialysis bbox query filters to chain_canonical IS NOT NULL.
  * Round 76gn.i: operator normalization, lease_escalations fetch, PATIENTS
  * column W, USER/OWNER Yes/No, owner_occupied compute, auto column widths,
  * counter clear on unused rows, fullCalcOnLoad, left-align on tenant/op/addr.
- *
- * NOTE: PATIENTS column requires the regenerated template
- * (`python scripts/build_lease_comps_template.py` produces a 23-column layout
- * A..W with W=PATIENTS). If the deployed template still has 22 columns
- * (V=DISTANCE last), the patient_count write is silently skipped.
  *
  * Once detail.js itself is patched (`git apply scripts/lease-comps-detail-js.patch`)
  * delete this file and the corresponding <script> tag in index.html.
@@ -470,6 +470,26 @@
     const sheet = wb.worksheets[0];
     if (!sheet) throw new Error('Template has no worksheets');
 
+    // Round 76gn.l: defensive header-cell fix for the Subject Excel table.
+    // The regenerated Round 76gn.i template defines the Subject table over
+    // B3:W4 but leaves V3 (DISTANCE TO SUBJECT) blank because distance
+    // doesn't apply to the subject row itself. Excel tables require every
+    // header cell to contain a value; openpyxl writes the table column for
+    // V with an auto-generated name, and ExcelJS crashes during workbook
+    // serialization with "Cannot read properties of undefined (reading
+    // 'name')" when it tries to materialize the empty column's name.
+    //
+    // Stamping V3 here only affects the Subject section's header row; V4
+    // (the subject data cell) stays blank as intended. Same defense is
+    // applied to W3/V7/W7 in case a future template regen leaves any of
+    // them empty — only cells that are already empty get stamped, so a
+    // correctly-built template is left alone.
+    [['V3', 'DISTANCE TO SUBJECT'], ['W3', 'PATIENTS'],
+     ['V7', 'DISTANCE TO SUBJECT'], ['W7', 'PATIENTS']].forEach(([addr, label]) => {
+      const cell = sheet.getCell(addr);
+      if (cell.value == null || cell.value === '') cell.value = label;
+    });
+
     // Force a full recalculation on workbook open so Excel re-evaluates the
     // =IFERROR(AVERAGE(Comps[X])) formulas in the totals row regardless of
     // ExcelJS' cached results.
@@ -671,5 +691,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.k overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.l overrides loaded');
 })();
