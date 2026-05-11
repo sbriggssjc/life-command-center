@@ -1,7 +1,25 @@
-/* detail-lease-comps-fix.js — Round 76gn.l
+/* detail-lease-comps-fix.js — Round 76gn.m
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
+ *
+ * Round 76gn.m — addition on top of 76gn.l:
+ *   - Fix ExcelJS "Cannot read properties of undefined (reading 'name')"
+ *     during template LOAD (worksheet.js:920, inside Worksheet#model
+ *     setter's reduce over tables). Root cause: openpyxl writes
+ *     xl/worksheets/_rels/sheet1.xml.rels with absolute Target paths
+ *     ("/xl/tables/table1.xml"), but ExcelJS' loader keys its
+ *     options.tables dictionary by RELATIVE paths ("../tables/table1.xml"
+ *     — see worksheet-xform.js line 522). The lookup misses, the loaded
+ *     worksheet model gets `undefined` entries in its tables array, and
+ *     the reduce at worksheet.js:920 dies reading `.name` off undefined.
+ *
+ *     We sanitize the template ArrayBuffer with JSZip before handing it
+ *     to ExcelJS: unzip → rewrite the rels paths from absolute to
+ *     relative → rezip. This is purely defensive — once the build script
+ *     post-processing also lands (paired change in
+ *     scripts/build_lease_comps_template.py), freshly regenerated
+ *     binaries don't need the runtime fix and this no-ops.
  *
  * Round 76gn.l — addition on top of 76gn.k:
  *   - Defensive header-cell fix for the Subject Excel table. The
@@ -459,12 +477,64 @@
   }
   window._udPopulateDataRow = _udPopulateDataRow;
 
+  // Round 76gn.m: sanitize package relationships in the template
+  // ArrayBuffer before handing it to ExcelJS. openpyxl writes
+  // sheet1.xml.rels (and workbook.xml.rels) with ABSOLUTE Target paths
+  // ("/xl/tables/table1.xml"), but ExcelJS' loader keys options.tables /
+  // options.worksheets by RELATIVE paths ("../tables/table1.xml") — see
+  // worksheet-xform.js line 522: `return options.tables[rel.Target];`.
+  // The lookup misses, the worksheet model gets `undefined` entries in
+  // its tables array, and Worksheet#model's reduce at worksheet.js:920
+  // dies reading `.name` off undefined.
+  //
+  // Fix in-place via JSZip (already loaded globally from index.html):
+  //   /xl/tables/...       → ../tables/...
+  //   /xl/worksheets/...   → worksheets/...
+  //   /xl/...              → ...
+  //
+  // Best-effort: any JSZip failure falls back to the original buffer,
+  // which is no worse than the current state.
+  async function _udSanitizeTemplateRels(ab) {
+    if (typeof JSZip === 'undefined') return ab;
+    try {
+      const zip = await JSZip.loadAsync(ab);
+      const targets = [
+        'xl/worksheets/_rels/sheet1.xml.rels',
+        'xl/worksheets/_rels/sheet2.xml.rels',
+        'xl/_rels/workbook.xml.rels',
+      ];
+      let mutated = false;
+      for (const path of targets) {
+        const f = zip.file(path);
+        if (!f) continue;
+        const text = await f.async('string');
+        const fixed = text
+          .replace(/Target="\/xl\/tables\//g, 'Target="../tables/')
+          .replace(/Target="\/xl\/worksheets\//g, 'Target="worksheets/')
+          .replace(/Target="\/xl\//g, 'Target="');
+        if (fixed !== text) {
+          zip.file(path, fixed);
+          mutated = true;
+        }
+      }
+      if (!mutated) return ab;
+      return await zip.generateAsync({ type: 'arraybuffer' });
+    } catch (e) {
+      console.warn('[lease-comps] template rels sanitize failed, using original buffer', e);
+      return ab;
+    }
+  }
+  window._udSanitizeTemplateRels = _udSanitizeTemplateRels;
+
   // Workbook builder override — auto column widths, clear column A counter
   // for unused rows, force fullCalcOnLoad so the AVERAGE row recomputes.
   async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
     const resp = await fetch(_UD_LEASE_COMPS_TEMPLATE_URL);
     if (!resp.ok) throw new Error(`Template fetch failed: HTTP ${resp.status}`);
-    const ab = await resp.arrayBuffer();
+    let ab = await resp.arrayBuffer();
+    // Round 76gn.m: rewrite absolute-path rels Targets to relative before
+    // ExcelJS load — see _udSanitizeTemplateRels above.
+    ab = await _udSanitizeTemplateRels(ab);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(ab);
     const sheet = wb.worksheets[0];
@@ -691,5 +761,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.l overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.m overrides loaded');
 })();

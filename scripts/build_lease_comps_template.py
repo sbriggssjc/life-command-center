@@ -3,6 +3,19 @@
 Generates the Northmarq-branded dialysis lease-comps XLSX template at
 assets/cm-templates/dialysis-lease-comps-template.xlsx.
 
+Round 76gn.m fix:
+  - Post-process the saved XLSX to rewrite package-relationship Target
+    paths from absolute ("/xl/tables/table1.xml") to relative
+    ("../tables/table1.xml"). openpyxl writes the rels with absolute
+    paths, but ExcelJS' loader (worksheet-xform.js line 522) keys its
+    options.tables dictionary by RELATIVE paths. The mismatch makes the
+    table-part lookup return undefined, leaving holes in the loaded
+    worksheet's tables[] array; ExcelJS then crashes at worksheet.js:920
+    with "Cannot read properties of undefined (reading 'name')" inside
+    its Array.reduce. Paired with a runtime sanitize in
+    detail-lease-comps-fix.js (_udSanitizeTemplateRels) so existing
+    deployed binaries also load cleanly without needing a regen.
+
 Round 76gn.i additions:
   - New PATIENTS column at W (latest_patient_count). Subject table and Comps
     table both extend to W. AVERAGE formula appended for column W.
@@ -35,6 +48,7 @@ Run from repo root:
 from __future__ import annotations
 
 import os
+import zipfile
 from copy import copy
 from pathlib import Path
 
@@ -262,7 +276,54 @@ def build():
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     wb.save(OUT_PATH)
+    _patch_rels_paths(OUT_PATH)
     print(f"wrote {OUT_PATH} ({OUT_PATH.stat().st_size} bytes)")
+
+
+def _patch_rels_paths(xlsx_path: Path) -> None:
+    """Rewrite package-relationship Target attributes from absolute to relative.
+
+    openpyxl writes xl/worksheets/_rels/sheet1.xml.rels (and workbook.xml.rels)
+    with Target attributes pointing at absolute paths inside the package
+    ("/xl/tables/table1.xml"). ExcelJS' loader (worksheet-xform.js line 522)
+    looks those up in `options.tables` which is keyed by RELATIVE path
+    ("../tables/table1.xml"). The mismatch makes the lookup return undefined,
+    the worksheet model gets a hole in its tables[] array, and
+    Worksheet#model's reduce at worksheet.js:920 crashes with
+    "Cannot read properties of undefined (reading 'name')".
+
+    Fix: rewrite the .rels in-place so Targets are relative. This matches what
+    Excel itself emits and what ExcelJS expects.
+    """
+    rels_paths = (
+        "xl/worksheets/_rels/sheet1.xml.rels",
+        "xl/worksheets/_rels/sheet2.xml.rels",
+        "xl/_rels/workbook.xml.rels",
+    )
+    with zipfile.ZipFile(xlsx_path) as src:
+        members = {name: src.read(name) for name in src.namelist()}
+
+    mutated = False
+    for path in rels_paths:
+        if path not in members:
+            continue
+        text = members[path].decode("utf-8")
+        fixed = (
+            text
+            .replace('Target="/xl/tables/', 'Target="../tables/')
+            .replace('Target="/xl/worksheets/', 'Target="worksheets/')
+            .replace('Target="/xl/', 'Target="')
+        )
+        if fixed != text:
+            members[path] = fixed.encode("utf-8")
+            mutated = True
+
+    if not mutated:
+        return
+
+    with zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, data in members.items():
+            out.writestr(name, data)
 
 
 def _write_header_row(ws, row, *, columns_subset):
