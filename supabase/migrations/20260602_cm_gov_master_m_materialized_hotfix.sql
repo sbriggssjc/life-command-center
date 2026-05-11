@@ -1,0 +1,17 @@
+-- =====================================================================
+-- Round 8 hotfix — materialize gov master_m to fix 17s query timeout.
+--
+-- Applied to gov DB scknotsqkcheojiaewwh on 2026-05-12. No
+-- life-command-center code change needed — the API already fetches
+-- the wrapper views by name; they now read from the materialized
+-- version transparently.
+--
+-- See GovernmentProject/sql/20260602_cm_gov_master_m_materialized_hotfix.sql
+-- for the full rationale and view definitions.
+--
+-- Going forward:
+--   • Run `select public.cm_gov_refresh_master_m_mat()` from the gov
+--     DB after each significant data update (sales_transactions,
+--     leases, macro_rates).
+--   • Eventually wire to a pg_cron schedule or post-write trigger.
+-- =====================================================================
