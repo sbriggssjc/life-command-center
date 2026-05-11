@@ -1,0 +1,41 @@
+-- =====================================================================
+-- Round 10 — Min-sample gates on two charts where thin TTM samples
+-- produced misleading outliers in the 2026-03-31 dialysis export
+-- and 2026-05-11 gov export.
+--
+-- Applied to:
+--   • Dialysis_DB  (zqzrriwuavgrquhisnoa) — Avail_Mkt_Size pre-2017 gate
+--   • government   (scknotsqkcheojiaewwh) — DOM_Ask DOM/pct_of_ask gate
+--
+-- ---------------------------------------------------------------------
+-- 1) cm_dialysis_available_market_size_q  (dialysis DB)
+-- ---------------------------------------------------------------------
+-- User: "pre-2017 erratic". Investigation: 1-6 active listings per
+-- quarter through 2016, same handful staying on market quarter after
+-- quarter → flat plateaus, meaningless cap-rate averages.
+--
+-- Change: HAVING count(*) > 0  →  HAVING count(*) >= 5.
+-- Effect: chart starts at 2015-Q3 (just barely passes) rather than
+-- 2013-Q1; 2017-Q4 onward unchanged (already had ≥10 listings).
+--
+-- ---------------------------------------------------------------------
+-- 2) cm_gov_dom_pct_ask_m  (gov DB)
+-- ---------------------------------------------------------------------
+-- User: 2026-03 row dropped to avg_dom=151.5 / pct_of_ask=87.8% (vs
+-- ~200 days / 90.5% the prior 7 months). Investigation: only 2 sales
+-- in the TTM-ending-2026-03 window had valid on_market_date and
+-- last_price (vs 5 in Feb). The view was honestly averaging over the
+-- 2 samples — but the chart line plunged for what's really sampling
+-- noise.
+--
+-- Change: gate avg_dom on >=5 valid DOM samples and pct_of_ask on
+-- >=5 valid pct samples. Counts via lateral subquery on
+-- sales_transactions (~0.3ms per period; safe vs the 8s API
+-- fetchWithTimeout that prompted the Round 8 hotfix).
+--
+-- Effect: 2026-03 row now shows null for both fields (suppressed);
+-- all earlier rows where 5+ valid samples exist remain unchanged.
+--
+-- See GovernmentProject/sql/20260604_cm_round10_min_sample_gates.sql
+-- and DialysisProject sql for the actual view bodies applied.
+-- =====================================================================

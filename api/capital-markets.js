@@ -735,6 +735,9 @@ async function exportWorkbook(req, res) {
         // monthly window for charts whose underlying view is `_m` even
         // when not going through master_m mapper path.
         cadence: tmpl.cadence,
+        // Round 10 — propagate vertical so per-vertical chart styling
+        // (e.g. seller_sentiment axis ranges) can branch in the renderer.
+        vertical,
         view_name,
         rows: result.ok !== false ? (result.data || []) : [],
       };
@@ -744,6 +747,7 @@ async function exportWorkbook(req, res) {
         name: tmpl.name,
         chart_type: tmpl.chart_type,
         cadence: tmpl.cadence,
+        vertical,
         view_name,
         rows: [],
       };
@@ -1101,6 +1105,8 @@ async function exportWorkbook(req, res) {
       metric_focus: tmpl.metric_focus,
       cadence: tmpl.cadence === 'monthly' ? 'monthly'
              : upstreamMonthly ? 'monthly' : tmpl.cadence,
+      // Round 10 — propagate vertical (see realCharts construction above).
+      vertical,
       view_name: tmpl.view_name_template,
       rows,
     };

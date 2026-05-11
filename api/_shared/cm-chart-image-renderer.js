@@ -978,23 +978,30 @@ function buildChartConfig(chart, brand) {
 
     case 'seller_sentiment':
     case 'seller_sentiment_monthly': {
-      // Round 1 — PDF p.35 styling:
-      //   • Sage green bars: Price Change (TTM)
-      //   • Light purple bars: 8+ Yr Price Change (TTM)
-      //   • Dark navy line: Last Ask (TTM)
-      //   • Sky blue line: 8+ Yr Last Ask (TTM)
-      //   • Left axis 0%–70% (price change %, allows for the wide bar
-      //     range — was 0%–30% which clipped >30% values)
-      //   • Right axis 4.75%–7.25% (cap rate, tighter than BID_ASK
-      //     range to match PDF visual emphasis on movement)
+      // Round 10 — PDF spec parity (dialysis p.35 / gov p.22):
+      //   • LEFT axis  = cap rate (lines)         — dialysis 4.75–7.25%, gov 5.0–8.5%
+      //   • RIGHT axis = price change % (bars)    — dialysis 0–70%,      gov 0–14%
+      //   (Round 1 had these flipped — bars-left/lines-right — which
+      //   matched the data but not the PDF axis layout.)
+      //
+      // Colors retained from Round 1 (sage green / light purple / navy /
+      // sky) — already PDF-matched per docs/cm-pdf-vs-export-chart-deltas.md.
+      const govLike = chart.vertical === 'gov'
+                   || chart.vertical === 'government_leased';
+      const yLeftRange  = govLike
+        ? { min: 0.05, max: 0.085 }       // gov cap rate window
+        : { min: 0.0475, max: 0.0725 };   // dialysis cap rate window
+      const yRightRange = govLike
+        ? { min: 0, max: 0.14 }           // gov price change %
+        : { min: 0, max: 0.70 };          // dialysis price change %
       const annotations = buildAnnotations(
         rows, r => r.last_ask_cap_all, fmtPct2
       );
       const opts = comboOpts({
-        yLeftFormat:  AXIS_FORMAT_PERCENT_0DP,
-        yLeftRange:   { min: 0, max: 0.70 },
-        yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-        yRightRange:  { min: 0.0475, max: 0.0725 },
+        yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
+        yLeftRange,
+        yRightFormat: AXIS_FORMAT_PERCENT_0DP,
+        yRightRange,
       });
       if (Object.keys(annotations).length) {
         opts.plugins.annotation = { annotations };
@@ -1004,25 +1011,26 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            // order=2 on bars pushes them behind the cap lines.
+            // Bars (price change) on the RIGHT axis, order=2 → drawn behind lines.
             { type: 'bar',  label: 'Price Change %',
               data: rows.map(r => r.pct_price_change_all),
               backgroundColor: PDF_COLORS.sentiment_bar_all, borderRadius: 1,
-              yAxisID: 'y', order: 2 },
+              yAxisID: 'y1', order: 2 },
             { type: 'bar',  label: '8+ Yr Term Price Change %',
               data: rows.map(r => r.pct_price_change_long_term),
               backgroundColor: PDF_COLORS.sentiment_bar_long, borderRadius: 1,
-              yAxisID: 'y', order: 2 },
+              yAxisID: 'y1', order: 2 },
+            // Lines (cap rate) on the LEFT axis, order=0 → drawn on top.
             { type: 'line', label: 'Last Asking Cap (all)',
               data: rows.map(r => r.last_ask_cap_all),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-              yAxisID: 'y1', order: 0 },
+              yAxisID: 'y', order: 0 },
             { type: 'line', label: 'Last Asking Cap (8+ yr)',
               data: rows.map(r => r.last_ask_cap_long_term),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2,
-              yAxisID: 'y1', order: 0 },
+              yAxisID: 'y', order: 0 },
           ],
         },
         options: opts,
@@ -1635,27 +1643,59 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'renewal_rent_growth': {
-      // Avg renewal rent PSF + upper/lower quartile band over time
+      // Round 10 — PDF gov p.32 left-chart styling:
+      //   • Light-blue bars: Avg Renewal Rent / SF (left $ axis)
+      //   • Dark-navy whisker bars: Upper/Lower Quartile range (left $ axis)
+      //     Implemented as a floating-bar dataset (data: [low, high] pairs),
+      //     narrow categoryPercentage so it reads as a vertical whisker on
+      //     top of the wider light-blue bar.
+      //   • Dark-navy dots: 5-Year Renewal Rent CAGR (right % axis)
+      //     Scatter points at the bar center with no connecting line.
+      //
+      // Prior Round 1-9 layout was 4 stacked lines (avg / TTM / U-quartile
+      // dashed / L-quartile dashed) — the PDF style was always the goal.
+      const opts = comboOpts({
+        yLeftFormat:  AXIS_FORMAT_CURRENCY,
+        yLeftRange:   { min: 0, max: 45 },         // PDF $0–$45 left axis
+        yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+        yRightRange:  { min: -0.04, max: 0.08 },   // PDF -4%–8% right axis
+      });
       return {
-        type: 'line',
+        type: 'bar',
         data: {
           labels,
           datasets: [
-            { label: 'Avg Renewal Rent PSF',  data: rows.map(r => r.avg_renewal_rent_psf),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'TTM Avg',               data: rows.map(r => r.ttm_avg_renewal_rent_psf),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
-            { label: 'Upper Quartile',        data: rows.map(r => r.upper_quartile_rpsf),
-              borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
-            { label: 'Lower Quartile',        data: rows.map(r => r.lower_quartile_rpsf),
-              borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [3, 3] },
+            // Wide light-blue bar — quarterly avg renewal rent PSF
+            { type: 'bar', label: 'Avg Renewal Rent / SF',
+              data: rows.map(r => r.avg_renewal_rent_psf),
+              backgroundColor: PDF_COLORS.cap_mid, // sky #62B5E5
+              borderRadius: 1,
+              barPercentage: 0.85, categoryPercentage: 0.9,
+              yAxisID: 'y', order: 3 },
+            // Narrow navy floating-bar — quartile range (low→high pairs)
+            { type: 'bar', label: 'Upper/Lower Quartile',
+              data: rows.map(r => {
+                const lo = r.lower_quartile_rpsf;
+                const hi = r.upper_quartile_rpsf;
+                return (lo != null && hi != null) ? [Number(lo), Number(hi)] : null;
+              }),
+              backgroundColor: PDF_COLORS.cap_short,  // navy
+              borderColor: PDF_COLORS.cap_short,
+              borderRadius: 0,
+              barPercentage: 0.20,  categoryPercentage: 0.6,
+              yAxisID: 'y', order: 1 },
+            // Navy dots — 5-yr renewal CAGR on right axis. Scatter via
+            // line type with showLine:false + visible point markers.
+            { type: 'line', label: '5-Yr Renewal Rent CAGR',
+              data: rows.map(r => r.cagr_5yr),
+              borderColor: PDF_COLORS.cap_short, backgroundColor: PDF_COLORS.cap_short,
+              showLine: false,
+              pointRadius: 4, pointHoverRadius: 5,
+              pointStyle: 'circle',
+              yAxisID: 'y1', order: 0 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY }),
+        options: opts,
       };
     }
 
