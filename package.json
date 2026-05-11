@@ -20,7 +20,7 @@
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
     "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs",
-    "check:functions": "node -e \"const c=require('fs').readdirSync('api').filter(f=>f.endsWith('.js')).length; console.log(c+'/12 serverless functions'); if(c>12){console.error('ERROR: exceeds Vercel Hobby 12-function limit');process.exit(1)}\""
+    "check:functions": "node -e \"const fs=require('fs'),path=require('path');function walk(d){let n=0;for(const f of fs.readdirSync(d)){if(f.startsWith('_'))continue;const p=path.join(d,f);const s=fs.statSync(p);if(s.isDirectory())n+=walk(p);else if(f.endsWith('.js')||f.endsWith('.ts'))n++;}return n;}const c=walk('api');console.log(c+'/12 serverless functions');if(c>12){console.error('ERROR: exceeds Vercel Hobby 12-function limit');process.exit(1)}else if(c===12){console.warn('WARN: at Vercel Hobby cap; next addition will fail to deploy');}\""
   },
   "engines": {
     "node": ">=20.0.0"
