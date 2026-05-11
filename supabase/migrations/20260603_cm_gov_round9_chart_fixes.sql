@@ -1,0 +1,20 @@
+-- =====================================================================
+-- Round 9 — Gov chart data fixes for the 2026-05-11 Excel export.
+--
+-- Applied to gov DB scknotsqkcheojiaewwh on 2026-05-12. No
+-- life-command-center code change beyond the renderer dispatch; the
+-- API already fetches the wrapper views by name and the new columns
+-- and periods are picked up transparently.
+--
+-- Three fixes:
+--   • cm_gov_rent_by_year_built — drop the /avg_rba division (values
+--     were ~0.0009 and invisible in the chart).
+--   • cm_gov_lease_termination_rate_q — add leases_outside_firm_term
+--     count for the second chart dataset.
+--   • cm_gov_lease_structures — add 'current_quarter' period_label
+--     alongside the existing 'ttm' and 'last_5_years' for the new
+--     3-column comparison table in Excel.
+--
+-- See GovernmentProject/sql/20260603_cm_gov_round9_chart_fixes.sql for
+-- the full rationale.
+-- =====================================================================
