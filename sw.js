@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v286';
+const CACHE_NAME = 'lcc-v287';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -71,14 +71,18 @@ self.addEventListener('fetch', event => {
   // For JS files we DO NOT cache the response — silently shadowing a
   // post-deploy code change with a stale cache hit (which we hit the
   // hard way in May 2026) is more painful than the modest benefit of
-  // an offline JS fallback. CSS/HTML/icons still cache for offline.
+  // an offline JS fallback. Same rule applies to the lease-comps XLSX
+  // template — a stale cached template silently strips the latest
+  // headers/formulas from every export until the cache name bumps.
+  // CSS/HTML/icons still cache for offline.
   if (url.origin === self.location.origin) {
     var isAppCode = /\.(js|css|html)$/.test(url.pathname) || url.pathname === '/' || url.pathname === './';
     var isJs = /\.js$/.test(url.pathname);
+    var isXlsxTemplate = /\/cm-templates\/.*\.xlsx$/i.test(url.pathname);
     event.respondWith(
-      fetchWithTimeout(event.request, 4000, isAppCode)
+      fetchWithTimeout(event.request, 4000, isAppCode || isXlsxTemplate)
         .then(response => {
-          if (response.ok && !isJs) {
+          if (response.ok && !isJs && !isXlsxTemplate) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
           }
@@ -89,6 +93,9 @@ self.addEventListener('fetch', event => {
           // user sees a real load error rather than silently running
           // last week's code.
           if (isJs) return new Response('// network error — refresh to retry', { status: 504, headers: { 'Content-Type': 'application/javascript' } });
+          // XLSX templates also fail loudly: a stale cached template
+          // would silently produce a wrong-looking export.
+          if (isXlsxTemplate) return new Response('', { status: 504 });
           return caches.match(event.request).then(cached => {
             if (cached) return cached;
             if (event.request.mode === 'navigate') return caches.match('./offline.html');

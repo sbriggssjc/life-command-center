@@ -1,18 +1,21 @@
-/* detail-lease-comps-fix.js — Round 76gn.j
+/* detail-lease-comps-fix.js — Round 76gn.k
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
  *
- * Round 76gn.j — addition on top of 76gn.i:
- *   - Dialysis bbox query now filters to chain_canonical IS NOT NULL
- *     (i.e., dialysis-related properties only). Prior round was returning
- *     non-dialysis neighbors (medical offices, retail) ranked purely by
- *     distance, which produced comps with blank tenant/operator/RBA/year
- *     fields. After Migration L+U+O propagation, chain_canonical is set on
- *     ~99.9% of dialysis-linked properties, so this filter cleanly carves
- *     dialysis comps out of the bbox without affecting the Round 76gn.i
- *     post-bbox detail join.
+ * Round 76gn.k — addition on top of 76gn.j:
+ *   - AVERAGE bar position fix: every row between the last comp row and
+ *     the totals row is now CLEARED and HIDDEN. Excel renders hidden
+ *     rows at zero height, so the AVERAGE bar visually slides up to
+ *     sit immediately below the last comp — no more 27-row gap on a
+ *     25-comp export. SUBTOTAL(101,...) in the totals row ignores
+ *     hidden rows and AVERAGE(...) ignores blanks, so both formulas
+ *     still resolve over the visible data only.
+ *   - Also defensively wipes any leftover `=A_+1` counter formulas in
+ *     rows 41-59 that pre-Round-76gn.i cached templates carried via
+ *     Excel's calculated-column propagation.
  *
+ * Round 76gn.j: dialysis bbox query filters to chain_canonical IS NOT NULL.
  * Round 76gn.i: operator normalization, lease_escalations fetch, PATIENTS
  * column W, USER/OWNER Yes/No, owner_occupied compute, auto column widths,
  * counter clear on unused rows, fullCalcOnLoad, left-align on tenant/op/addr.
@@ -492,17 +495,29 @@
       _udPopulateDataRow(sheet, db, rowIdx, c, { subject: false });
     });
 
-    // Clear unused pre-styled rows: counter (col A) AND data cells (B..lastCol).
-    // The 76gn.h round only blanked B..V, leaving column A's counter formula
-    // running up to row 40 (= 33 even when only 25 comps were exported).
-    if (comps.length < (lastTpl - _UD_TPL.compsFirstDataRow + 1)) {
-      for (let r = _UD_TPL.compsFirstDataRow + comps.length; r <= lastTpl; r++) {
-        const row = sheet.getRow(r);
-        row.getCell(_UD_TPL.cols.counter).value = null;
-        for (let c = _UD_TPL.cols.tenant; c <= lastCol; c++) {
-          row.getCell(c).value = null;
-        }
-      }
+    // Round 76gn.k: collapse the gap between the last comp row and the
+    // AVERAGE row by clearing AND hiding every cell in that range.
+    //
+    // Two problems addressed in one pass:
+    //   (a) Visual gap. The template reserves rows 8-59 for comp data with
+    //       the AVERAGE bar fixed at row 60. On a 25-comp export that
+    //       leaves 27 visible empty rows between the last data row and the
+    //       totals bar — users read it as "the average bar is off".
+    //   (b) Spurious counters. Pre-Round-76gn.i cached templates carried
+    //       Excel's calculated-column propagation of `=A_+1` all the way
+    //       to row 59, so even after writing N<33 comps the gap rows
+    //       still rendered "26, 27, ... 52" in column A.
+    //
+    // Clearing every cell value covers (b) defensively even on a stale
+    // cached template; setting row.hidden=true makes the AVERAGE bar slide
+    // up to sit immediately below the last comp row visually. SUBTOTAL(101,...)
+    // in the totals row ignores hidden rows and AVERAGE(...) ignores blanks,
+    // so the formulas still resolve over the visible data only.
+    const TOTAL_ROW = _UD_TPL.compsTotalRow || 60;
+    for (let r = lastDataRow + 1; r < TOTAL_ROW; r++) {
+      const row = sheet.getRow(r);
+      for (let c = 1; c <= lastCol; c++) row.getCell(c).value = null;
+      row.hidden = true;
     }
 
     // Auto-fit column widths based on actual data length. Clamps to a sane
@@ -656,5 +671,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.j overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.k overrides loaded');
 })();
