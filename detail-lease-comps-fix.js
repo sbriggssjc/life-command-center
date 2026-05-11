@@ -1,7 +1,18 @@
-/* detail-lease-comps-fix.js — Round 76gn.m
+/* detail-lease-comps-fix.js — Round 76gn.n
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
+ *
+ * Round 76gn.n — addition on top of 76gn.m:
+ *   - Strip <sheetPr> from the ExcelJS writeBuffer output before download.
+ *     ExcelJS serializes sheetPr children in the WRONG schema order
+ *     (tabColor → pageSetUpPr → outlinePr instead of the spec-mandated
+ *     tabColor → outlinePr → pageSetUpPr). Excel's strict OOXML parser
+ *     rejects the worksheet with "XML error. Load error. Line 2, column 0",
+ *     strips the entire sheet content during repair, and shows a blank
+ *     workbook. Removing the sheetPr block entirely is fine — it just
+ *     holds optional tab-color and outline metadata, neither of which is
+ *     critical for our export. Excel re-applies its own defaults on open.
  *
  * Round 76gn.m — addition on top of 76gn.l:
  *   - Fix ExcelJS "Cannot read properties of undefined (reading 'name')"
@@ -526,6 +537,39 @@
   }
   window._udSanitizeTemplateRels = _udSanitizeTemplateRels;
 
+  // Round 76gn.n: strip <sheetPr> from the workbook bytes ExcelJS produces.
+  // ExcelJS serializes sheetPr's children in the wrong schema order
+  // (tabColor → pageSetUpPr → outlinePr instead of the spec-mandated
+  // tabColor → outlinePr → pageSetUpPr). Excel's strict OOXML parser rejects
+  // the worksheet with "XML error. Load error. Line 2, column 0", strips
+  // the entire sheet during repair, and shows a blank workbook.
+  //
+  // sheetPr is optional metadata (tab color, outline summary direction,
+  // page-setup fit-to-page toggle). Removing it costs no data; Excel falls
+  // back to defaults when opening. This is the same shape as our
+  // pre-Round-76gn.n known-good exports, which never emitted sheetPr.
+  //
+  // Best-effort: any JSZip failure falls back to the unmodified buffer.
+  async function _udSanitizeWorkbookOutput(buf) {
+    if (typeof JSZip === 'undefined') return buf;
+    try {
+      const zip = await JSZip.loadAsync(buf);
+      const sheetPath = 'xl/worksheets/sheet1.xml';
+      const f = zip.file(sheetPath);
+      if (!f) return buf;
+      const text = await f.async('string');
+      const fixed = text.replace(/<sheetPr\b[\s\S]*?<\/sheetPr>/g, '')
+                        .replace(/<sheetPr\b[^/]*\/>/g, '');
+      if (fixed === text) return buf;
+      zip.file(sheetPath, fixed);
+      return await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+    } catch (e) {
+      console.warn('[lease-comps] workbook output sanitize failed, using original buffer', e);
+      return buf;
+    }
+  }
+  window._udSanitizeWorkbookOutput = _udSanitizeWorkbookOutput;
+
   // Workbook builder override — auto column widths, clear column A counter
   // for unused rows, force fullCalcOnLoad so the AVERAGE row recomputes.
   async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
@@ -637,7 +681,10 @@
     }
 
     // Generate workbook and trigger browser download.
-    const buf = await wb.xlsx.writeBuffer();
+    let buf = await wb.xlsx.writeBuffer();
+    // Round 76gn.n: strip <sheetPr> from the output (ExcelJS emits its
+    // children in wrong schema order, which Excel's parser rejects).
+    buf = await _udSanitizeWorkbookOutput(buf);
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const today = new Date().toISOString().slice(0, 10);
     const slug = String(subject.address || subject.property_id || 'subject')
@@ -761,5 +808,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.m overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.n overrides loaded');
 })();
