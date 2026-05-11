@@ -1,7 +1,18 @@
-/* detail-lease-comps-fix.js — Round 76gn.p
+/* detail-lease-comps-fix.js — Round 76gn.q
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
+ *
+ * Round 76gn.q — addition on top of 76gn.p:
+ *   - Header label "RENOVATED" abbreviated to "RENO" in the build-script
+ *     template (paired commit). Excel Tables derive column names from
+ *     header cell values, so the AVERAGE formula in column I now reads
+ *     Comps[RENO] instead of Comps[RENOVATED]. The runtime hot-patch
+ *     rewrites Comps[X] structured refs to cell ranges before download
+ *     (see _UD_TABLE_COL_MAP below), so its key for column I matches the
+ *     new header text. STATE and COMMENCE are also abbreviated (ST, COMM)
+ *     in the build script but they aren't in the AVERAGE row, so no
+ *     map change needed.
  *
  * Round 76gn.p — addition on top of 76gn.o:
  *   - Auto-fit considers HEADER text length, not just data. Columns like
@@ -584,8 +595,15 @@
   //    and keeps formulas working.
   //
   // Best-effort: any JSZip failure falls back to the unmodified buffer.
+  //
+  // The structured-ref keys here must exactly match the Excel Table column
+  // names — which derive from the header row cell value in the template.
+  // Round 76gn.q: header "RENOVATED" abbreviated to "RENO" in build_lease_
+  // comps_template.py, so the map key for column I is "RENO" (was
+  // "RENOVATED"). STATE and COMMENCE also abbreviated (ST, COMM) but
+  // they're not in the AVERAGE row so no map entry needed.
   const _UD_TABLE_COL_MAP = {
-    'LAND': 'G', 'BUILT': 'H', 'RENOVATED': 'I', 'RBA': 'J', 'SF LEASED': 'K',
+    'LAND': 'G', 'BUILT': 'H', 'RENO': 'I', 'RBA': 'J', 'SF LEASED': 'K',
     'OCCUPANCY': 'L', 'RENT/SF': 'M', 'CURRENT RENT': 'N',
     'INITIAL TERM': 'Q', 'TERM REM': 'R',
     'DISTANCE TO SUBJECT': 'V', 'PATIENTS': 'W'
@@ -941,5 +959,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.p overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.q overrides loaded');
 })();
