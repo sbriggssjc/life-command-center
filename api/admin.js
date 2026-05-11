@@ -648,10 +648,11 @@ async function handleAvailabilityPromotionSweep(req, res) {
     const select = 'listing_id,property_id,listing_date,off_market_date,off_market_reason';
     const path =
       `available_listings?off_market_reason=eq.unverified_assumed_off` +
+      `&listing_date=not.is.null` +
       `&off_market_date=gte.${encodeURIComponent(offMarketCutoff)}` +
       excludeFilter +
       `&select=${select}` +
-      `&order=off_market_date.desc&limit=${limit}`;
+      `&order=off_market_date.desc,listing_id.asc&limit=${limit}`;
 
     const listingsRes = await domainQuery(dom, 'GET', path);
     if (!listingsRes.ok) {
