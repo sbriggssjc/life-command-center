@@ -1,7 +1,25 @@
-/* detail-lease-comps-fix.js — Round 76gn.n
+/* detail-lease-comps-fix.js — Round 76gn.o
  *
  * Hot-patch overrides for the lease-comps export pipeline. Loads after
  * detail.js (see index.html) and reassigns the affected functions in place.
+ *
+ * Round 76gn.o — addition on top of 76gn.n:
+ *   - Drop the Comps Excel Table from the output workbook and rewrite the
+ *     totals-row Comps[X] structured references to plain cell ranges
+ *     (Comps[CURRENT RENT] -> N8:N59, etc.). Reasoning: ExcelJS' table
+ *     writer produces a structure that Excel's strict parser rejects
+ *     during open, triggering a repair prompt that strips the table —
+ *     which in turn breaks every Comps[X] reference in the AVERAGE row.
+ *     Removing the table proactively eliminates the repair prompt and
+ *     keeps the AVERAGE formulas working (since they no longer depend on
+ *     the table existing). No data loss: rows 8-59 are still data,
+ *     formulas now use those ranges directly.
+ *   - Auto-fit column-width fix: ExcelJS exposes date cell values as raw
+ *     Date objects whose toString() is ~50 chars ("Sat Dec 14 2017
+ *     00:00:00 GMT-0800 (Pacific Standard Time)"), blowing the COMMENCE /
+ *     EXP column widths out to ~60. Treat Date values as their formatted
+ *     display length (~7 chars for "mmm-yy") so dates don't dominate
+ *     auto-fit sizing.
  *
  * Round 76gn.n — addition on top of 76gn.m:
  *   - Strip <sheetPr> from the ExcelJS writeBuffer output before download.
@@ -537,31 +555,81 @@
   }
   window._udSanitizeTemplateRels = _udSanitizeTemplateRels;
 
-  // Round 76gn.n: strip <sheetPr> from the workbook bytes ExcelJS produces.
-  // ExcelJS serializes sheetPr's children in the wrong schema order
-  // (tabColor → pageSetUpPr → outlinePr instead of the spec-mandated
-  // tabColor → outlinePr → pageSetUpPr). Excel's strict OOXML parser rejects
-  // the worksheet with "XML error. Load error. Line 2, column 0", strips
-  // the entire sheet during repair, and shows a blank workbook.
+  // Round 76gn.o: post-process the workbook bytes ExcelJS produces.
+  // Two issues to clean up, both rooted in ExcelJS' serializer:
   //
-  // sheetPr is optional metadata (tab color, outline summary direction,
-  // page-setup fit-to-page toggle). Removing it costs no data; Excel falls
-  // back to defaults when opening. This is the same shape as our
-  // pre-Round-76gn.n known-good exports, which never emitted sheetPr.
+  // 1. <sheetPr> child elements are emitted in wrong OOXML schema order
+  //    (tabColor → pageSetUpPr → outlinePr instead of tabColor → outlinePr
+  //    → pageSetUpPr). Excel's strict parser rejects out-of-order schema
+  //    elements with "XML error. Load error. Line 2, column 0", strips
+  //    the sheet during repair, and shows a blank workbook. Removing
+  //    sheetPr entirely costs only optional tab-color/outline metadata.
+  //
+  // 2. The Comps Excel Table's metadata produces a repair prompt on open
+  //    ("Removed Feature: AutoFilter / Table from .../table1.xml part"),
+  //    which strips the table. The Comps[X] structured references in the
+  //    AVERAGE row break once the table is gone, so the totals stay blank.
+  //    Pre-emptively dropping the table AND rewriting Comps[X] to plain
+  //    cell ranges (Comps[CURRENT RENT] -> N8:N59) sidesteps the prompt
+  //    and keeps formulas working.
   //
   // Best-effort: any JSZip failure falls back to the unmodified buffer.
+  const _UD_TABLE_COL_MAP = {
+    'LAND': 'G', 'BUILT': 'H', 'RENOVATED': 'I', 'RBA': 'J', 'SF LEASED': 'K',
+    'OCCUPANCY': 'L', 'RENT/SF': 'M', 'CURRENT RENT': 'N',
+    'INITIAL TERM': 'Q', 'TERM REM': 'R',
+    'DISTANCE TO SUBJECT': 'V', 'PATIENTS': 'W'
+  };
+  function _udEscRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
   async function _udSanitizeWorkbookOutput(buf) {
     if (typeof JSZip === 'undefined') return buf;
     try {
       const zip = await JSZip.loadAsync(buf);
       const sheetPath = 'xl/worksheets/sheet1.xml';
-      const f = zip.file(sheetPath);
-      if (!f) return buf;
-      const text = await f.async('string');
-      const fixed = text.replace(/<sheetPr\b[\s\S]*?<\/sheetPr>/g, '')
-                        .replace(/<sheetPr\b[^/]*\/>/g, '');
-      if (fixed === text) return buf;
-      zip.file(sheetPath, fixed);
+      const sheetFile = zip.file(sheetPath);
+      if (!sheetFile) return buf;
+      let s = await sheetFile.async('string');
+
+      // (1) strip sheetPr
+      s = s.replace(/<sheetPr\b[\s\S]*?<\/sheetPr>/g, '')
+           .replace(/<sheetPr\b[^/]*\/>/g, '');
+
+      // (2a) rewrite Comps[X] structured refs to cell ranges
+      for (const [name, letter] of Object.entries(_UD_TABLE_COL_MAP)) {
+        const re = new RegExp('Comps\\[' + _udEscRegex(name) + '\\]', 'g');
+        s = s.replace(re, `${letter}8:${letter}59`);
+      }
+
+      // (2b) drop the <tableParts> declaration on the sheet
+      s = s.replace(/<tableParts\b[\s\S]*?<\/tableParts>/g, '');
+
+      zip.file(sheetPath, s);
+
+      // (2c) delete the table XML files
+      const tablesToDrop = Object.keys(zip.files).filter(
+        n => /^xl\/tables\/table\d+\.xml$/.test(n)
+      );
+      tablesToDrop.forEach(n => zip.remove(n));
+
+      // (2d) clean up sheet1's rels (drop table relationships)
+      const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels';
+      const relsFile = zip.file(relsPath);
+      if (relsFile) {
+        let r = await relsFile.async('string');
+        r = r.replace(/<Relationship\b[^/]*table\d+\.xml[^/]*\/>/g, '');
+        zip.file(relsPath, r);
+      }
+
+      // (2e) clean up [Content_Types].xml (drop table overrides)
+      const ctPath = '[Content_Types].xml';
+      const ctFile = zip.file(ctPath);
+      if (ctFile) {
+        let ct = await ctFile.async('string');
+        ct = ct.replace(/<Override\b[^/]*\/xl\/tables\/table\d+\.xml[^/]*\/>/g, '');
+        zip.file(ctPath, ct);
+      }
+
       return await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
     } catch (e) {
       console.warn('[lease-comps] workbook output sanitize failed, using original buffer', e);
@@ -657,11 +725,18 @@
     // Auto-fit column widths based on actual data length. Clamps to a sane
     // max so a 70-char operator name doesn't blow out the layout. Preserves
     // a minimum of the template width.
+    //
+    // Round 76gn.o: explicitly handle Date values. ExcelJS exposes date
+    // cells as raw Date objects whose toString() is ~50 chars
+    // ("Sat Dec 14 2017 00:00:00 GMT-0800 (Pacific Standard Time)"),
+    // which made COMMENCE/EXP columns auto-fit to ~60 wide. The cells
+    // actually display as "mmm-yy" (6-7 chars), so use a fixed length.
     const TEMPLATE_WIDTHS = {
       1: 3.5, 2: 25, 3: 22, 4: 24, 5: 14, 6: 7, 7: 10, 8: 9, 9: 11, 10: 11,
       11: 12, 12: 11, 13: 11, 14: 14, 15: 11, 16: 11, 17: 13, 18: 13, 19: 13,
       20: 14, 21: 22, 22: 16, 23: 12
     };
+    const DATE_DISPLAY_LEN = 7; // "mmm-yy" plus a margin char
     const MAX_WIDTH = 60;
     const dataRows = [_UD_TPL.subjectDataRow]
       .concat(comps.map((_, i) => _UD_TPL.compsFirstDataRow + i));
@@ -670,9 +745,16 @@
       for (const r of dataRows) {
         const v = sheet.getRow(r).getCell(col).value;
         if (v == null) continue;
-        // Formulas store `{ formula, result }`; measure the result string.
-        const display = (typeof v === 'object' && v && 'result' in v) ? v.result : v;
-        const text = String(display ?? '');
+        let text;
+        if (v instanceof Date) {
+          text = ' '.repeat(DATE_DISPLAY_LEN);
+        } else if (typeof v === 'object' && v && 'result' in v) {
+          // Formulas store `{ formula, result }`; measure the result string.
+          const display = v.result;
+          text = display instanceof Date ? ' '.repeat(DATE_DISPLAY_LEN) : String(display ?? '');
+        } else {
+          text = String(v);
+        }
         if (text.length > maxLen) maxLen = text.length;
       }
       const tplWidth = TEMPLATE_WIDTHS[col] || 12;
@@ -680,10 +762,12 @@
       sheet.getColumn(col).width = fittedWidth;
     }
 
-    // Generate workbook and trigger browser download.
+    // Generate workbook and post-process via JSZip to strip ExcelJS'
+    // schema-violating sheetPr block AND drop the Comps Excel Table
+    // (rewriting its Comps[X] structured refs in the totals row to plain
+    // cell ranges so AVERAGE/SUBTOTAL still resolve). See
+    // _udSanitizeWorkbookOutput above for the full rationale.
     let buf = await wb.xlsx.writeBuffer();
-    // Round 76gn.n: strip <sheetPr> from the output (ExcelJS emits its
-    // children in wrong schema order, which Excel's parser rejects).
     buf = await _udSanitizeWorkbookOutput(buf);
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const today = new Date().toISOString().slice(0, 10);
@@ -808,5 +892,5 @@
   }
   window._udExportLeaseComps = _udExportLeaseComps;
 
-  console.info('[lease-comps-fix] Round 76gn.n overrides loaded');
+  console.info('[lease-comps-fix] Round 76gn.o overrides loaded');
 })();
