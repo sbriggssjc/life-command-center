@@ -1900,6 +1900,184 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Round 18 — 5 NEW charts
+    // ─────────────────────────────────────────────────────────────────
+
+    case 'core_cap_rate_dot_plot': {
+      // Per-sale cap-rate dot plot for "core" deals.
+      //   • Gov core  = firm_term_years >= 6
+      //   • Dia core  = firm_term_years >= 10
+      // x = sale_date (numeric ms), y = cap_rate. NM-brokered sales
+      // get a distinct color so the user can spot them on the plot.
+      const scatterAll = rows
+        .filter(r => !r.is_northmarq && r.cap_rate != null && r.period_end != null)
+        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }));
+      const scatterNM  = rows
+        .filter(r => r.is_northmarq && r.cap_rate != null && r.period_end != null)
+        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }));
+      return {
+        type: 'scatter',
+        data: {
+          datasets: [
+            { label: 'Market sales',
+              data: scatterAll,
+              backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
+              borderColor: PDF_COLORS.cap_mid,
+              pointRadius: 3,
+              pointStyle: 'circle' },
+            { label: 'NM-brokered sales',
+              data: scatterNM,
+              backgroundColor: PDF_COLORS.cap_short,    // navy
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: 4,
+              pointStyle: 'rectRot' },                  // diamond
+          ],
+        },
+        options: (() => {
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.04, max: 0.12 } });
+          o.scales.x = {
+            type: 'time',
+            time: { unit: 'year' },
+            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            grid: { display: false },
+          };
+          return o;
+        })(),
+      };
+    }
+
+    case 'available_cap_rate_dot_plot': {
+      // Snapshot dot plot of currently active listings.
+      //   x = firm_term_years; y = current asking cap rate.
+      // NM-brokered listings get a distinct color.
+      const allDots = rows
+        .filter(r => r.cap_rate != null && r.firm_term_years != null)
+        .map(r => ({
+          x: Number(r.firm_term_years),
+          y: Number(r.cap_rate),
+          nm: !!r.is_northmarq,
+        }));
+      const scatterAll = allDots.filter(d => !d.nm);
+      const scatterNM  = allDots.filter(d =>  d.nm);
+      return {
+        type: 'scatter',
+        data: {
+          datasets: [
+            { label: 'Market listings',
+              data: scatterAll,
+              backgroundColor: 'rgba(98,181,229,0.55)',
+              borderColor: PDF_COLORS.cap_mid,
+              pointRadius: 4, pointStyle: 'circle' },
+            { label: 'NM-brokered listings',
+              data: scatterNM,
+              backgroundColor: PDF_COLORS.cap_short,
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: 5, pointStyle: 'rectRot' },
+          ],
+        },
+        options: (() => {
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.04, max: 0.12 } });
+          o.scales.x = {
+            type: 'linear',
+            position: 'bottom',
+            min: 0,
+            max: 30,
+            title: { display: true, text: 'Firm Lease Term (Years)', color: '#6A748C', font: { family: 'Calibri', size: 10 } },
+            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            grid: { color: 'rgba(0,0,0,0.05)' },
+          };
+          return o;
+        })(),
+      };
+    }
+
+    case 'available_by_firm_term_summary': {
+      // Gov equivalent of available_by_term_summary (dialysis p.30 bottom).
+      // 4 grouped sky-blue bars (Avg Price, left axis) + 4 dot/line
+      // series (Avg Cap, Upper Q, Lower Q, Median) on right axis.
+      // Cohorts: Sub 5 / 5-8 / 8-12 / 12+ firm lease years.
+      const termRows = rows || [];
+      const termLabels = termRows.map(r => r.term_bucket || '?');
+      const dotPointRadius = 6;
+      const dotPointStyle = 'rectRot';
+      const termPriceLabels = termRows.map((row) => {
+        const v = Number(row.avg_price) || 0;
+        const m = v / 1_000_000;
+        const priceLabel = m >= 1 ? `$${m.toFixed(1)}M` : `$${(v / 1000).toFixed(0)}K`;
+        const n = row.n_listings ?? 0;
+        return `${priceLabel}\n(n=${n})`;
+      });
+      return {
+        type: 'bar',
+        data: {
+          labels: termLabels,
+          datasets: [
+            { type: 'bar', label: 'Avg Price (left axis)',
+              data: termRows.map(r => r.avg_price),
+              priceLabels: termPriceLabels,
+              backgroundColor: PDF_COLORS.cap_mid,
+              borderColor: PDF_COLORS.cap_mid,
+              borderRadius: 1,
+              barPercentage: 0.6, categoryPercentage: 0.85,
+              yAxisID: 'y', order: 5 },
+            { type: 'scatter', label: 'Avg Cap',
+              data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
+              backgroundColor: PDF_COLORS.cap_short,
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 1 },
+            { type: 'scatter', label: 'Upper Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_long_term,
+              borderColor: PDF_COLORS.cap_long_term,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 2 },
+            { type: 'scatter', label: 'Lower Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_outside_firm,
+              borderColor: PDF_COLORS.cap_outside_firm,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 3 },
+            { type: 'scatter', label: 'Median',
+              data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
+              backgroundColor: PDF_COLORS.cap_mid_long,
+              borderColor: PDF_COLORS.cap_mid_long,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 4 },
+          ],
+        },
+        options: (() => {
+          const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT });
+          opts.scales = opts.scales || {};
+          opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
+          opts.scales.y1 = {
+            type: 'linear',
+            position: 'right',
+            min: 0.04, max: 0.10,
+            grid: { drawOnChartArea: false },
+            ticks: {
+              callback: function (v) { return (v * 100).toFixed(1) + '%'; },
+              font: { size: 11 },
+            },
+          };
+          opts.plugins = opts.plugins || {};
+          opts.plugins.datalabels = {
+            display: function (ctx) { return ctx.dataset.type === 'bar'; },
+            color: PDF_COLORS.cap_short,
+            font: { size: 11, weight: 'bold' },
+            anchor: 'end',
+            align: 'top',
+            offset: 4,
+            formatter: function (value, ctx) {
+              return (ctx.dataset.priceLabels || [])[ctx.dataIndex] || '';
+            },
+          };
+          return opts;
+        })(),
+      };
+    }
+
     default:
       return null;
   }

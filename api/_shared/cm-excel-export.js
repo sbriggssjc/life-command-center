@@ -333,6 +333,31 @@ const CHART_COLUMNS = {
     { key: 'lower_quartile_cap',  header: 'Lower Q Cap',     format: 'percent_basis_points', width: 14 },
     { key: 'period_end',          header: 'As of',           format: 'date_short',          width: 13 },
   ],
+  // Round 18 — 3 new charts
+  core_cap_rate_dot_plot: [
+    { key: 'period_end',       header: 'Sale Date',           format: 'date_short',          width: 13 },
+    { key: 'cap_rate',         header: 'Cap Rate',            format: 'percent_basis_points', width: 13 },
+    { key: 'firm_term_years',  header: 'Firm Term (yrs)',     format: 'number_one_decimal',  width: 16 },
+    { key: 'is_northmarq',     header: 'NM-Brokered',         width: 14 },
+    { key: 'sold_price',       header: 'Sold Price ($)',      format: 'currency_dollars',    width: 18 },
+  ],
+  available_cap_rate_dot_plot: [
+    { key: 'period_end',       header: 'As of',               format: 'date_short',          width: 13 },
+    { key: 'cap_rate',         header: 'Asking Cap',          format: 'percent_basis_points', width: 14 },
+    { key: 'firm_term_years',  header: 'Firm Term (yrs)',     format: 'number_one_decimal',  width: 16 },
+    { key: 'is_northmarq',     header: 'NM-Listed',           width: 12 },
+    { key: 'last_price',       header: 'Asking Price ($)',    format: 'currency_dollars',    width: 18 },
+  ],
+  available_by_firm_term_summary: [
+    { key: 'term_bucket',         header: 'Firm Term Bucket',  width: 18 },
+    { key: 'n_listings',          header: 'Listings',          format: 'integer_count',       width: 12 },
+    { key: 'avg_price',           header: 'Avg Price ($)',     format: 'currency_dollars',    width: 18 },
+    { key: 'avg_cap',             header: 'Avg Cap',           format: 'percent_basis_points', width: 13 },
+    { key: 'upper_quartile_cap',  header: 'Upper Q Cap',       format: 'percent_basis_points', width: 14 },
+    { key: 'median_cap',          header: 'Median Cap',        format: 'percent_basis_points', width: 14 },
+    { key: 'lower_quartile_cap',  header: 'Lower Q Cap',       format: 'percent_basis_points', width: 14 },
+    { key: 'period_end',          header: 'As of',             format: 'date_short',          width: 13 },
+  ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
@@ -687,6 +712,10 @@ const TAB_NAMES = {
   // Phase 2b additions
   yoy_volume_change:            'Data_YoY_Change',
   buyer_class_pct_by_year:      'Data_Buyer_Pool',
+  // Round 18 — 3 new charts (one applies to both verticals, one is gov-only)
+  core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
+  available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',
+  available_by_firm_term_summary:   'Data_Avail_by_Firm_Term',
   dom_and_pct_of_ask:           'Data_DOM_Ask',
   bid_ask_spread:               'Data_Bid_Ask',
   // Phase 2c additions
