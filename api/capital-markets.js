@@ -269,6 +269,31 @@ const SYNTHETIC_COMPOSERS = {
       String(a.period_end) < String(b.period_end) ? -1 : 1
     );
   },
+
+  // Round 20 — Trans Count + Avg Deal Size combo (master deck p.8/p.17).
+  // Synth composer joins transaction_count_ttm and avg_deal_size charts
+  // by period_end so the renderer can build a single combo (bars + line).
+  'txn_count_avg_deal_combo': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const txnRows = find('transaction_count_ttm');
+    const avgRows = find('avg_deal_size');
+    if (txnRows.length === 0 && avgRows.length === 0) return [];
+    const byPeriod = new Map();
+    for (const r of txnRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      // master_m mapper emits `ttm_count`; raw _q view emits `transaction_count_ttm`
+      byPeriod.get(k).ttm_count = r.ttm_count ?? r.transaction_count_ttm;
+    }
+    for (const r of avgRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      byPeriod.get(k).avg_deal_size = r.avg_deal_size;
+    }
+    return [...byPeriod.values()].sort((a, b) =>
+      String(a.period_end) < String(b.period_end) ? -1 : 1
+    );
+  },
 };
 
 function syntheticRecipeFor(template) {

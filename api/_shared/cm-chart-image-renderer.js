@@ -1054,26 +1054,46 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'valuation_index': {
-      const annotations = buildAnnotations(
-        rows, r => r.valuation_index, fmtIndex
-      );
-      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+      // Round 20 — Combo: navy line for Valuation Index (left axis) +
+      // sky-blue YoY% bars (right axis), matching master deck p.17.
+      // YoY field name coalesces: gov view uses `yoy_change`, dialysis
+      // uses `yoy_change_pct`.
+      const yoyValues = rows.map(r => r.yoy_change_pct ?? r.yoy_change ?? null);
+      const opts = comboOpts({
+        yLeftFormat:  AXIS_FORMAT_INTEGER,
+        yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+        // Right-axis range centered on zero so positive/negative YoY
+        // bars read symmetrically; ±25% is comfortable for both
+        // verticals' typical range.
+        yRightRange:  { min: -0.25, max: 0.25 },
+      });
+      // Annotations on the navy Valuation Index line (peak/trough/last).
+      const annotations = buildAnnotations(rows, r => r.valuation_index, fmtIndex);
+      for (const k of Object.keys(annotations)) annotations[k].yAdjust = -14;
       if (Object.keys(annotations).length) {
         opts.plugins.annotation = { annotations };
       }
       return {
-        type: 'line',
+        type: 'bar',
         data: {
           labels,
-          datasets: [{
-            label: 'Valuation Index',
-            data: rows.map(r => r.valuation_index),
-            borderColor: palette[0],
-            backgroundColor: 'transparent',
-            tension: 0.3,
-            pointRadius: 0,
-            borderWidth: 2.5,
-          }],
+          datasets: [
+            // Bars BEHIND the line (order: 2 = drawn first)
+            { type: 'bar', label: 'YoY % Change',
+              data: yoyValues,
+              backgroundColor: rows.map((r, i) => (yoyValues[i] != null && yoyValues[i] < 0)
+                ? 'rgba(217,119,6,0.55)'        // amber for declines
+                : 'rgba(98,181,229,0.55)'),     // sky for gains
+              borderRadius: 1,
+              yAxisID: 'y1', order: 2 },
+            // Index line on top (order: 0 = drawn last)
+            { type: 'line', label: 'Valuation Index',
+              data: rows.map(r => r.valuation_index),
+              borderColor: palette[0],          // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y', order: 0 },
+          ],
         },
         options: opts,
       };
@@ -2157,6 +2177,90 @@ function buildChartConfig(chart, brand) {
           const ann = buildAnnotations(rows, r => r.months_of_supply, function (v) {
             return Number(v).toFixed(1) + ' mo';
           });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Round 20 — PDF parity charts
+    // ─────────────────────────────────────────────────────────────────
+
+    case 'txn_count_avg_deal_combo': {
+      // Master deck p.8 (dia) / p.17 (gov): bars = TTM transaction count
+      // (left axis, integer); line = avg deal size (right axis, currency).
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'TTM Transactions',
+              data: rows.map(r => Number(r.ttm_count) || 0),
+              backgroundColor: palette[3],          // pale fill
+              borderColor: palette[1],              // sky border
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Deal Size',
+              data: rows.map(r => r.avg_deal_size != null ? Number(r.avg_deal_size) : null),
+              borderColor: palette[0],              // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_INTEGER,
+            yRightFormat: AXIS_FORMAT_CURRENCY_COMPACT,
+          });
+          // Annotate the navy avg-deal-size line.
+          const ann = buildAnnotations(rows, r => r.avg_deal_size,
+            function (v) { return '$' + (Number(v) / 1_000_000).toFixed(1) + 'M'; });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
+    case 'rent_and_price_psf': {
+      // Master deck p.9 (gov): bars = rent PSF (left $), line = price PSF
+      // (right $). Both TTM-rolling.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Avg Rent / SF (TTM)',
+              data: rows.map(r => r.rent_psf != null ? Number(r.rent_psf) : null),
+              backgroundColor: PDF_COLORS.cap_mid,   // sky #62B5E5
+              borderColor: PDF_COLORS.cap_mid,
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Sale Price / SF (TTM)',
+              data: rows.map(r => r.price_psf != null ? Number(r.price_psf) : null),
+              borderColor: palette[0],               // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_CURRENCY,    // $XX (rent PSF)
+            yRightFormat: AXIS_FORMAT_CURRENCY,    // $XXX (price PSF)
+            yLeftRange:   { min: 0, max: 50 },     // rent $0-$50/SF
+          });
+          const ann = buildAnnotations(rows, r => r.price_psf,
+            function (v) { return '$' + Math.round(v); });
           for (const k of Object.keys(ann)) {
             ann[k].yScaleID = 'y1';
             ann[k].yAdjust  = -14;
