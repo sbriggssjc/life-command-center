@@ -1011,8 +1011,13 @@ function buildChartConfig(chart, brand) {
       // sky) — already PDF-matched per docs/cm-pdf-vs-export-chart-deltas.md.
       const govLike = chart.vertical === 'gov'
                    || chart.vertical === 'government_leased';
+      // Round 26 — gov cap window widened 5.0–8.5% → 5.0–9.0%. Gov
+      // last_ask_cap_all hits 8.78%, clipping the prior 8.5% ceiling.
+      // User: "the asking cap rates for anything before 2010 appear
+      // to be very lacking or gaps… needs an adjustment to the Y-axis
+      // so that we can see the data."
       const yLeftRange  = govLike
-        ? { min: 0.05, max: 0.085 }       // gov cap rate window
+        ? { min: 0.05, max: 0.090 }       // gov cap rate window
         : { min: 0.0475, max: 0.0725 };   // dialysis cap rate window
       // Round 17 — tightened gov price-change axis 0.14 → 0.08. Actual
       // gov data tops at ~7% TTM (was specced 0-14% from the dialysis
@@ -1719,11 +1724,17 @@ function buildChartConfig(chart, brand) {
       //
       // Prior Round 1-9 layout was 4 stacked lines (avg / TTM / U-quartile
       // dashed / L-quartile dashed) — the PDF style was always the goal.
+      // Round 26 — widened axes to fit gov data:
+      //   left axis $0–$45 → $0–$70 (gov avg_renewal_rent_psf hits $65.49)
+      //   right axis -4%–8% → -5%–12% (gov cagr_5yr hits 10.68%)
+      // User: "we need to adjust the y-axis so we can see all the data.
+      // Also, we're missing a good amount of the data for the renewal
+      // rate CAGR."
       const opts = comboOpts({
         yLeftFormat:  AXIS_FORMAT_CURRENCY,
-        yLeftRange:   { min: 0, max: 45 },         // PDF $0–$45 left axis
+        yLeftRange:   { min: 0, max: 70 },
         yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-        yRightRange:  { min: -0.04, max: 0.08 },   // PDF -4%–8% right axis
+        yRightRange:  { min: -0.05, max: 0.12 },
       });
       return {
         type: 'bar',

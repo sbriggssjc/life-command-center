@@ -1,0 +1,43 @@
+-- =====================================================================
+-- Round 26 — Three fixes from deferred items in Round 25's PR.
+--
+-- 1) cm_gov_cap_by_term_m cohort gates (gov DB)
+--    User: "The less than five year term data set is clearly having
+--    a pull problem… data movements look very boxy and not as smooth."
+--    Each cohort (10+, 6-10/5-10, <5, outside firm) now gated via
+--    per-period lateral subquery: hides values when n < 10 valid
+--    sales of that cohort in the TTM window.
+--    Pre-2011 cap_less5 + cap_5to10 + cap_outside_firm now all null
+--    (no qualifying samples). 2015 has 10+ + 5-10 + outside firm
+--    populated but cap_less5 still gated (only 16 has_cap that year
+--    across all cohorts; <5yr cohort thin).
+--
+-- LCC code (api/_shared/cm-chart-image-renderer.js):
+--
+-- 2) seller_sentiment gov left axis 5.0–8.5% → 5.0–9.0%
+--    User: "asking cap rates for anything before 2010 appear to be
+--    very lacking or gaps… needs an adjustment to the Y-axis so we
+--    can see the data." Gov last_ask_cap_all hits 8.78%, clipping
+--    the prior 8.5% ceiling.
+--
+-- 3) renewal_rent_growth axes widened
+--    left $0–$45 → $0–$70 (gov avg_renewal_rent_psf hits $65.49)
+--    right -4–8% → -5–12% (gov cagr_5yr hits 10.68%)
+--    User: "we need to adjust the y-axis so we can see all the data.
+--    Also, we're missing a good amount of the data for the renewal
+--    rate CAGR."
+--
+-- Investigated but deferred:
+--   - Dia Rent & Price PSF chart: dialysis sales_transactions has
+--     no sf_leased / gross_rent_psf / price_psf columns. Dia
+--     properties are measured by CHAIR count, not square footage —
+--     PSF chart doesn't translate cleanly. Existing
+--     cm_dialysis_rent_box_q (Data_Rent_PSF_Box) covers what rent
+--     data exists.
+--
+-- Round 27 candidate scope:
+--   - Avail_by_Firm_Term style match vs dia equivalent
+--   - Cap Rate Comparison by Lease Term Remaining (NEW chart per user)
+--   - Lease Renewal chart format match
+--   - In-app sync of Round 24+25+26 renderer changes
+-- =====================================================================
