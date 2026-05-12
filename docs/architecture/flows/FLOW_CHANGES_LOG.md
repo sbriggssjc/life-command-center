@@ -116,6 +116,84 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   - Documentation-only change, revert added/edited markdown files if needed.
 - Owner: LCC architecture/audit track.
 
+### 2026-05-12 — Export Round 4 Documentation Ingestion
+- Flow name:
+  - `OutlookCalendar-LifeCommandCenterSync`
+  - `LCC-PersonalCalendarSync`
+  - `SyncSFTaskstoSupabase`
+  - `SyncSFActivitiestoSupabase`
+- Flow version/export artifact:
+  - `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip`
+  - `LCC-PersonalCalendarSync_20260512134721.zip`
+  - `SyncSFTaskstoSupabase_20260512134655.zip`
+  - `SyncSFActivitiestoSupabase_20260512134632.zip`
+- Risk tier: `P0` (credential exposure), `P1` (sync reliability), `P2` (schedule governance)
+- Change summary:
+  - Added 4 new per-flow detail docs.
+  - Updated master registry with calendar and Salesforce->Supabase sync flows.
+  - Logged new P0 credential-exposure finding for 2 Salesforce sync exports.
+- Exact steps changed:
+  - Created markdown docs under `docs/architecture/flows/`.
+  - Updated `power-automate-flow-audit.md` inventory, dependencies, and gap matrix.
+- Affected endpoints/tables/connectors:
+  - `/functions/v1/ai-copilot/sync/calendar-events`
+  - `/functions/v1/ai-copilot/sync/sf-tasks`
+  - `/functions/v1/ai-copilot/sync/activities`
+  - connectors: `shared_office365`, `shared_outlook`, `shared_onedriveforbusiness`, `shared_salesforce`
+- Security impact:
+  - Plaintext credential signals detected in:
+    - `SyncSFTaskstoSupabase_20260512134655.zip`
+    - `SyncSFActivitiestoSupabase_20260512134632.zip`
+  - Immediate key rotation and secure-reference refactor required.
+- Validation evidence:
+  - Evidence source: parsed exported `definition.json`, `connectionsMap.json`, `apisMap.json`.
+  - Credential scan flags:
+    - SyncSFTaskstoSupabase: `hasBearer=true`, `hasJwt=true`, `hasApiKey=true`
+    - SyncSFActivitiestoSupabase: `hasBearer=true`, `hasJwt=true`, `hasApiKey=true`
+  - Runtime run IDs: `TBD`
+- Rollback action:
+  - Documentation-only change, revert added/edited markdown files if needed.
+- Owner: LCC architecture/audit track.
+
+### 2026-05-12 — Export Round 5 Documentation Ingestion
+- Flow name:
+  - `SyncFlaggedEmailstoSupabase` (Graph Pull Variant)
+  - `SyncFlaggedEmailstoSupabase` (Supabase Push Variant)
+  - `UnflagCompletedEmailTasks`
+  - `Recovery-ReflagCompletedEmails`
+- Flow version/export artifact:
+  - `SyncFlaggedEmailstoSupabase_20260512135251.zip`
+  - `SyncFlaggedEmailstoSupabase_20260512135136.zip`
+  - `UnflagCompletedEmailTasks_20260512135227.zip`
+  - `Recovery-ReflagCompletedEmails_20260512135202.zip`
+- Risk tier: `P0` (credential exposure), `P1` (state sync semantics), `P2` (variant drift)
+- Change summary:
+  - Added 3 new detail docs (including split-variant analysis for SyncFlaggedEmailstoSupabase).
+  - Updated master registry with flagged-email sync and flag-state maintenance flows.
+  - Logged new P0 credential exposure on the flagged-email Supabase push variant.
+- Exact steps changed:
+  - Created markdown docs under `docs/architecture/flows/`.
+  - Updated `power-automate-flow-audit.md` inventory, dependencies, and gap matrix.
+- Affected endpoints/tables/connectors:
+  - `/functions/v1/ai-copilot/sync/flagged-emails`
+  - connectors: `shared_office365`, `shared_todo`
+  - operations: `GetEmailsV3`, `ListToDosByFolderV2`, `Flag_email_(V2)`
+- Security impact:
+  - Plaintext credential signals detected in:
+    - `SyncFlaggedEmailstoSupabase_20260512135136.zip`
+  - Immediate key rotation and secure-reference refactor required.
+- Validation evidence:
+  - Evidence source: parsed exported `definition.json`, `connectionsMap.json`, `apisMap.json`.
+  - Definition hashes:
+    - `SyncFlaggedEmailstoSupabase_20260512135251`: `f4d2b5e379797fe3431df0aacb7cc48bb8ce244895fabcbba81f3b813a03e9b2`
+    - `SyncFlaggedEmailstoSupabase_20260512135136`: `736d1f8ae409770557af0f6c5d9d29244d8680c4458cdd00a67420ac199b33e3`
+    - `UnflagCompletedEmailTasks_20260512135227`: `7e3dbfcc95126e128ea22bb7ba0bad7c5602699d10090c7bd6d6c588aa9fdcf6`
+    - `Recovery-ReflagCompletedEmails_20260512135202`: `eef758da708a5ab8f33337d7d1a613bc95628271e2d612cf4c0d85359b6b6059`
+  - Runtime run IDs: `TBD`
+- Rollback action:
+  - Documentation-only change, revert added/edited markdown files if needed.
+- Owner: LCC architecture/audit track.
+
 ## Open Action Items
 1. Rotate exposed keys and confirm rotation completion here.
 2. Re-export affected flows and verify no embedded credentials appear.
