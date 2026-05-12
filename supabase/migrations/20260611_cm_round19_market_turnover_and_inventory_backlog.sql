@@ -1,0 +1,43 @@
+-- =====================================================================
+-- Round 19 — 2 NEW chart templates + 4 supabase views (market activity).
+--
+-- User: "Let's add a market turnover chart like what we have in
+-- dialysis to government as well. Let's also add the chart for
+-- market turnover and inventory backlog."
+--
+-- 4 NEW VIEWS:
+--   • cm_gov_market_turnover_m          (gov DB, since 2013)
+--   • cm_dialysis_market_turnover_m     (dialysis DB, since 2018)
+--   • cm_gov_inventory_backlog_m        (gov DB, since 2018)
+--   • cm_dialysis_inventory_backlog_m   (dialysis DB, since 2018)
+--
+-- Market Turnover:
+--   turnover_rate = TTM closed sales / active market universe
+--     • Gov universe = active gsa_leases as of period_end
+--     • Dia universe = active available_listings as of period_end
+--   Typical ranges: gov 1-3%, dia 23-27%.
+--
+-- Inventory Backlog:
+--   active_count    = listings ON market at period_end
+--   months_of_supply = (active_count × 12) / TTM_sales
+--   Gov historical bars are sparse pre-2024 (listing-tracker maturity);
+--   recent (2024+) is the meaningful signal. Dia is robust 2018+.
+--
+-- 2 NEW CHART TEMPLATES (LCC Opps cm_chart_catalog):
+--   • market_turnover     (LineChart, monthly cadence, both verticals)
+--   • inventory_backlog   (ComboBarLine, monthly cadence, both verticals)
+--
+-- RENDERER (api/_shared/cm-chart-image-renderer.js):
+--   2 new cases. market_turnover: single area-filled line with
+--   adaptive y-max (0-5% for gov, scales up to dia's 27%).
+--   inventory_backlog: pale-fill bars (active count) + navy line
+--   (months of supply) on dual axes; right-axis tick suffix " mo".
+--
+-- EXCEL (api/_shared/cm-excel-export.js):
+--   2 new TAB_NAMES (Data_Market_Turnover, Data_Inventory_Backlog).
+--   2 new CHART_COLUMNS specs.
+--
+-- Applied to gov DB (scknotsqkcheojiaewwh), Dialysis_DB
+-- (zqzrriwuavgrquhisnoa), and LCC Opps (xengecqvemvfknjvbvrq) on
+-- 2026-05-12.
+-- =====================================================================

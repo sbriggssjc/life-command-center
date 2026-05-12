@@ -2084,6 +2084,89 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Round 19 — Market Turnover + Inventory Backlog
+    // ─────────────────────────────────────────────────────────────────
+
+    case 'market_turnover': {
+      // Single-line time series — turnover_rate (TTM sales / market universe).
+      // Y-axis range adapts: gov data lands 1-3%, dia 20-30%, so use
+      // auto-scaling with a friendly minimum.
+      const data = rows.map(r => Number(r.turnover_rate));
+      const finiteData = data.filter(v => Number.isFinite(v));
+      const dataMax = finiteData.length ? Math.max(...finiteData) : 0.05;
+      const yMax = dataMax > 0.10 ? Math.ceil(dataMax * 20) / 20 : 0.05;
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Turnover Rate (TTM)',
+            data,
+            borderColor: palette[0],
+            backgroundColor: palette[3],
+            fill: true,
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+          }],
+        },
+        options: (() => {
+          const o = commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
+            yAxisRange: { min: 0, max: yMax },
+          });
+          const ann = buildAnnotations(rows, r => r.turnover_rate, fmtPct1);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
+    case 'inventory_backlog': {
+      // Combo: bars = active listings (left axis), line = months of supply
+      // (right axis). For gov, historical bars are sparse until ~2024
+      // when listing tracking became reliable; recent values are the
+      // meaningful signal. For dia, both series are robust 2018+.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Active Listings',
+              data: rows.map(r => Number(r.active_count) || 0),
+              backgroundColor: palette[3],         // pale fill
+              borderColor: palette[1],             // sky border
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Months of Supply',
+              data: rows.map(r => r.months_of_supply != null ? Number(r.months_of_supply) : null),
+              borderColor: palette[0],             // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_INTEGER,
+            yRightFormat: AXIS_FORMAT_INTEGER,
+          });
+          // Right-axis tick suffix — months.
+          o.scales.y1.ticks = o.scales.y1.ticks || {};
+          o.scales.y1.ticks.callback = function (v) { return v + ' mo'; };
+          // Annotate months-of-supply (the more interesting line).
+          const ann = buildAnnotations(rows, r => r.months_of_supply, function (v) {
+            return Number(v).toFixed(1) + ' mo';
+          });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
     default:
       return null;
   }

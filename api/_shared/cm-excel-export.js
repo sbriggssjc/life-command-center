@@ -358,6 +358,21 @@ const CHART_COLUMNS = {
     { key: 'lower_quartile_cap',  header: 'Lower Q Cap',       format: 'percent_basis_points', width: 14 },
     { key: 'period_end',          header: 'As of',             format: 'date_short',          width: 13 },
   ],
+  // Round 19 — Market activity
+  market_turnover: [
+    { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',      width: 14 },
+    { key: 'ttm_sales_count',    header: 'TTM Sales',         format: 'integer_count',       width: 13 },
+    { key: 'market_universe',    header: 'Market Universe',   format: 'integer_count',       width: 16 },
+    { key: 'turnover_rate',      header: 'Turnover Rate',     format: 'percent_one_decimal', width: 14 },
+  ],
+  inventory_backlog: [
+    { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',      width: 14 },
+    { key: 'active_count',       header: 'Active Listings',   format: 'integer_count',       width: 16 },
+    { key: 'ttm_sales',          header: 'TTM Sales',         format: 'integer_count',       width: 13 },
+    { key: 'months_of_supply',   header: 'Months of Supply',  format: 'number_one_decimal',  width: 17 },
+  ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
@@ -722,6 +737,9 @@ const TAB_NAMES = {
   core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
   available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',
   available_by_firm_term_summary:   'Data_Avail_by_Firm_Term',
+  // Round 19 — market-activity charts (both verticals)
+  market_turnover:                  'Data_Market_Turnover',
+  inventory_backlog:                'Data_Inventory_Backlog',
   dom_and_pct_of_ask:           'Data_DOM_Ask',
   bid_ask_spread:               'Data_Bid_Ask',
   // Phase 2c additions
