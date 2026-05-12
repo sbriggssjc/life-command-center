@@ -1,0 +1,66 @@
+-- =====================================================================
+-- Round 24 — Batch of feedback fixes from the latest dialysis export
+-- audit. Covers DB-side gate + renderer-side polish.
+--
+-- DB views applied to Dialysis_DB (zqzrriwuavgrquhisnoa) + gov DB
+-- (scknotsqkcheojiaewwh) on 2026-05-12:
+--
+-- 1) cm_{gov,dialysis}_core_cap_dot_q — cohort cutoff changed
+--    firm_term_years >= 6 (gov) / 10 (dia) → 8 (both verticals).
+--    Generate_series start extended 2010 → 2001 to "go back in
+--    time as far as data reasonably allows."
+--    User: "Let's only show the sales with 8+ years of lease term
+--    remaining at close and we do not need to differentiate NM sales
+--    and the balance. Just one dataset and also add a trendline."
+--
+-- 2) cm_dialysis_bid_ask_spread_m — added min-sample gates.
+--    avg_bid_ask_spread shown only when n_with_spread >= 10
+--    avg_last_ask_cap shown only when n_with_last_cap >= 10
+--    pct_price_change shown only when n_with_pricing >= 10
+--    User: "Data_Bid_Ask: data from mid-2014 and earlier is very
+--    sporadic… suggesting we are missing a good amount of the data."
+--    Investigation: bid-ask inputs ARE present pre-2014 but with
+--    only 2-9 valid samples per TTM. Gates hide the noise.
+--
+-- LCC code (api/ + capital-markets.js):
+--
+-- 3) Plumb masterMonthlyRows into synth composers
+--    Round 15 fix for buyer_pool_monthly_count referenced a
+--    chart_template_id `buyer_pool_breakdown` that doesn't exist
+--    in the catalog → composer always returned []. Fixed.
+--    Same root-cause fix for quarterly_volume_bars (volume_ttm_by_quarter
+--    wrapper view doesn't carry quarterly_volume column).
+--    User: "Data_Buyer_Pool_M is missing all data. So is
+--    Data_Volume_Quarterly."
+--
+-- 4) Renderer fixes:
+--    a. core_cap_rate_dot_plot rewritten — single sky-dot series +
+--       12-month rolling-average navy trendline.
+--    b. available_cap_rate_dot_plot — added linear-regression
+--       trendline; x-axis auto-centers on data range ±10% padding.
+--    c. volume_cap_quartile_combo — annotations now pin to
+--       yScaleID='y1' (right-axis %). Previously default 'y' (left $
+--       axis), placing labels at the chart bottom because 0.0762 on
+--       a $0-$3B axis sits at the floor.
+--       User: "let's just adjust the labels to call out the data
+--       point and not just floating at the bottom."
+--    d. pace_of_cap_rate_expansion — explicit max/min/last labels
+--       always emitted (was conditional via buildAnnotations which
+--       skipped max if max==last). User: "We're missing the high
+--       label callout."
+--    e. valuation_index — right-axis YoY% range now auto-fits data
+--       ±10% padding (was fixed ±25%; clipped DIA Mar 2026 = 27%).
+--       User: "y-axis needs to be adjusted to show the YOY change in
+--       view for the entire chart."
+--
+-- Findings noted but not changed (real data limitations):
+--   • DIA DOM_Ask pre-2013: listing_date column not populated.
+--     Cannot compute DOM. Need external data backfill.
+--   • DIA Sentiment pre-2014: last_cap_rate column sparse (0-7/yr).
+--   • DIA NM_vs_Market: 231 of 2686 sales (8.6%) tagged
+--     is_northmarq; ZERO untagged sales with "northmarq" in
+--     listing_broker / procuring_broker. Real NM market share.
+--   • DIA Cap_Quartile: upper/lower NOT equidistant from median
+--     (e.g. 2024-06: upper-med=149bps, med-lower=70bps). Math is
+--     correct; user perception was visual.
+-- =====================================================================
