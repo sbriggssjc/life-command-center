@@ -22,6 +22,10 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | HTTP-ParseJSON | `HTTP-ParseJSON_20260511215138.zip` | HTTP Request (`manual`) | Parse input JSON, call LCC property lookup, and send email output | `flows/http-parsejson-property-email.md` | Active |
 | LCC Daily Briefing | `LCCDailyBriefing_20260511215104.zip` | `Recurrence` (weekday) | Pull daily snapshot from LCC and post to Teams channel | `flows/lcc-daily-briefing.md` | Active |
 | ToDo-LCCSync | `ToDo-LCCSync_20260511215037.zip` | `Recurrence` (hourly) | Aggregate multiple To Do folders and update OneDrive sync artifact | `flows/todo-lcc-sync.md` | Active |
+| OutlookCalendar-LifeCommandCenterSync | `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip` | `Recurrence` (hourly) | Merge multi-calendar events and sync consolidated payload to Supabase edge endpoint | `flows/outlookcalendar-lcc-sync.md` | Active |
+| LCC-PersonalCalendarSync | `LCC-PersonalCalendarSync_20260512134721.zip` | `Recurrence` (hourly) | Pull personal calendar events and sync to Supabase edge endpoint | `flows/lcc-personal-calendar-sync.md` | Active |
+| SyncSFTaskstoSupabase | `SyncSFTaskstoSupabase_20260512134655.zip` | `Recurrence` (every 6 hours) | Query Salesforce tasks and push to Supabase sync endpoint | `flows/sync-sf-tasks-to-supabase.md` | Active |
+| SyncSFActivitiestoSupabase | `SyncSFActivitiestoSupabase_20260512134632.zip` | `Recurrence` (every 4 hours) | Query Salesforce activities and push normalized payload to Supabase sync endpoint | `flows/sync-sf-activities-to-supabase.md` | Active |
 | CompleteSFTask | `CompleteSFTask_20260512134535.zip` | HTTP Request (`manual`) | Find open Salesforce Tasks and conditionally complete/update by action | `flows/complete-sf-task.md` | Active |
 | GovLeaseLeadSync | `GovLeaseLeadSync_20260512134512.zip` | HTTP Request (`manual`) | Upsert Salesforce Lead records based on incoming agency payload | `flows/govlease-lead-sync.md` | Active |
 | HTTP-Postmessagechat | `HTTP-Postmessagechat_20260512134401.zip` | HTTP Request (`manual`) | Post arbitrary request body as Teams chat/channel message | `flows/http-postmessagechat.md` | Active |
@@ -46,6 +50,8 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | LCC API | `/api/loopnet-ingest`, `/api/rcm-ingest` | Used by LoopNet/RCM email ingestion flows. |
 | LCC API | `/api/briefing-email`, `/api/daily-briefing?action=snapshot&role_view=broker` | Used by scheduled briefing flows. |
 | LCC API | `/api/property?address=...` | Used by HTTP-ParseJSON flow. |
+| Supabase Edge | `/functions/v1/ai-copilot/sync/calendar-events` | Used by calendar sync flows. |
+| Supabase Edge | `/functions/v1/ai-copilot/sync/sf-tasks`, `/functions/v1/ai-copilot/sync/activities` | Used by Salesforce-to-Supabase sync flows. |
 | Supabase Edge | `/functions/v1/ai-copilot/sync/flagged-emails` | Used by flagged-email sync push variant. |
 | Salesforce | `shared_salesforce` connector | Used in HTTP-Switch and LCCSFFlow1. |
 | Office 365 | `shared_office365` connector | Used in flagged email trigger path. |
@@ -55,8 +61,11 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | Conversion Service | `shared_conversionservice` connector | Used in LoopNet/RCM html-to-text conversion flows. |
 | Microsoft To Do | `shared_todo` connector | Used by ToDo-LCCSync for multi-folder task pulls. |
 | OneDrive for Business | `shared_onedriveforbusiness_1` connector | Used by ToDo-LCCSync for sync-file read/update. |
+| Outlook.com | `shared_outlook` connector | Used by personal/calendar sync flows (calendar reads). |
 | Supabase (LCC Opps) | `sf_sync_queue` table | Source queue for LCCSFFlow1. |
 | Supabase (Domain DB) | `contacts`, `true_owners` tables | Updated by `link_*` branches in LCCSFFlow1. |
+| Salesforce Objects | `Task`, `Activity` (and related objects) | Queried and forwarded by Salesforce sync flows. |
+| Microsoft To Do + Outlook Flags | `ListToDosByFolderV2`, `Flag_email_(V2)` | Used by unflag/recovery flows to synchronize task completion with email flag state. |
 | Salesforce Objects | `Task`, `Lead` | Queried/updated by CompleteSFTask and GovLeaseLeadSync flows. |
 | Microsoft To Do + Outlook Flags | `ListToDosByFolderV2`, `Flag_email_(V2)` | Used by unflag/recovery flows to synchronize task completion with email flag state. |
 | Microsoft To Do Create | `CreateToDoV3`, `CreateToDo` | Used by flagged-email-to-ToDo flows (work + personal variants). |
@@ -72,6 +81,8 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | P2 | Observability | Incomplete standardized telemetry mapping across flow run -> queue row -> endpoint response -> final state. | Add correlation logging fields and runbook queries for traceability. | LCC + Flow Owner | Open |
 | P2 | Portfolio Hygiene | Overlapping intake patterns exist across multiple flagged/new-email flows and endpoints. | Consolidate or formally version parallel flow patterns to reduce drift. | LCC + Flow Owners | Open |
 | P2 | Scheduling Governance | Multiple recurrence flows run on differing weekly/hourly cadences without unified schedule register. | Create centralized cadence registry and owner-runbook per scheduled flow. | LCC + Flow Owners | Open |
+| P0 | Security | Plaintext Supabase `Authorization`/`apikey` material detected in exported definitions for Salesforce sync-to-Supabase flows (`SyncSFTaskstoSupabase`, `SyncSFActivitiestoSupabase`). | Rotate exposed keys immediately, move to secure references, re-export and verify credential-free definitions. | Platform + Flow Owners | Open |
+| P0 | Security | Plaintext Supabase `Authorization`/`apikey` material detected in flagged-email sync push variant (`SyncFlaggedEmailstoSupabase_20260512135136.zip`). | Rotate exposed keys immediately, move to secure references, re-export and verify credential-free definitions. | Platform + Flow Owners | Open |
 | P1 | Write Governance | Manual HTTP-triggered Salesforce update/upsert flows can mutate CRM directly without explicit orchestration-tier approval semantics. | Add explicit request auth, action allowlist, and audit/correlation requirements for manual mutation flows. | LCC + Flow Owners | Open |
 | P0 | Security | Plaintext Supabase `Authorization`/`apikey` material detected in flagged-email sync push variant (`SyncFlaggedEmailstoSupabase_20260512135136.zip`). | Rotate exposed keys immediately, move to secure references, re-export and verify credential-free definitions. | Platform + Flow Owners | Open |
 | P1 | Portfolio Hygiene | Multiple flagged-email-to-ToDo flows exist (`FlaggedEmailtoToDo`, `FlaggedEmailtoToDoTask`) with overlapping triggers but different payload semantics. | Consolidate to one canonical flow or document strict split-purpose and lifecycle ownership. | Flow Owners | Open |

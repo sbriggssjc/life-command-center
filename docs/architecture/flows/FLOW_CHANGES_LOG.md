@@ -118,6 +118,20 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
 
 ### 2026-05-12 — Export Round 4 Documentation Ingestion
 - Flow name:
+  - `OutlookCalendar-LifeCommandCenterSync`
+  - `LCC-PersonalCalendarSync`
+  - `SyncSFTaskstoSupabase`
+  - `SyncSFActivitiestoSupabase`
+- Flow version/export artifact:
+  - `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip`
+  - `LCC-PersonalCalendarSync_20260512134721.zip`
+  - `SyncSFTaskstoSupabase_20260512134655.zip`
+  - `SyncSFActivitiestoSupabase_20260512134632.zip`
+- Risk tier: `P0` (credential exposure), `P1` (sync reliability), `P2` (schedule governance)
+- Change summary:
+  - Added 4 new per-flow detail docs.
+  - Updated master registry with calendar and Salesforce->Supabase sync flows.
+  - Logged new P0 credential-exposure finding for 2 Salesforce sync exports.
   - `CompleteSFTask`
   - `GovLeaseLeadSync`
   - `HTTP-Postmessagechat`
@@ -136,6 +150,20 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   - Created markdown docs under `docs/architecture/flows/`.
   - Updated `power-automate-flow-audit.md` inventory, dependencies, and gap matrix.
 - Affected endpoints/tables/connectors:
+  - `/functions/v1/ai-copilot/sync/calendar-events`
+  - `/functions/v1/ai-copilot/sync/sf-tasks`
+  - `/functions/v1/ai-copilot/sync/activities`
+  - connectors: `shared_office365`, `shared_outlook`, `shared_onedriveforbusiness`, `shared_salesforce`
+- Security impact:
+  - Plaintext credential signals detected in:
+    - `SyncSFTaskstoSupabase_20260512134655.zip`
+    - `SyncSFActivitiestoSupabase_20260512134632.zip`
+  - Immediate key rotation and secure-reference refactor required.
+- Validation evidence:
+  - Evidence source: parsed exported `definition.json`, `connectionsMap.json`, `apisMap.json`.
+  - Credential scan flags:
+    - SyncSFTaskstoSupabase: `hasBearer=true`, `hasJwt=true`, `hasApiKey=true`
+    - SyncSFActivitiestoSupabase: `hasBearer=true`, `hasJwt=true`, `hasApiKey=true`
   - Salesforce objects: `Task`, `Lead`
   - Teams connector message-post paths
   - connectors: `shared_salesforce`, `shared_teams`
