@@ -178,7 +178,7 @@ const CHART_FOOTER_CAPTIONS = {
   ppsf_box_quarterly:
     'Quarterly price / SF distribution: IQR (bars), median (line), min/max (whiskers).',
   cap_rate_by_credit:
-    'Federal vs. State vs. Municipal TTM average cap rates. Federal carries credit and tenant-stability premiums; state and municipal tend to trade wider.',
+    'Federal vs. State vs. Municipal TTM average cap rates. NOTE (Round 21): current gov dataset has 0 state and ~5 municipal sales with valid cap rates — state and municipal series will read empty until external state/muni lease records are imported. Federal carries credit and tenant-stability premiums; state and municipal tend to trade wider.',
   cpi_vs_renewal_cagr:
     'CPI YoY change vs. GSA renewal CAGR. Persistent gaps highlight whether GSA renewals are tracking inflation.',
   fed_funds_vs_treasury:

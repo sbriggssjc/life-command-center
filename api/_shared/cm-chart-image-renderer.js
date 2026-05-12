@@ -825,37 +825,48 @@ function buildChartConfig(chart, brand) {
         r.cap_12plus != null || r.cap_8to12 != null ||
         r.cap_6to8 != null  || r.cap_5orless != null
       );
+      // Round 21 — stepped: 'before' replaces tension to match the
+      // step-plot pattern used on NM_vs_Market and Active_Cap_Quart
+      // since Round 13. Cohort cap rates plateau when their TTM
+      // distribution shifts slowly (gov cohorts have thin samples);
+      // the step display reads as honest held-constant rather than
+      // sporadic smooth lines.
       const datasets = hasDialysisCohorts ? [
         { label: '12+ Year',     data: rows.map(r => r.cap_12plus),
           borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
         { label: '8-12 Year',    data: rows.map(r => r.cap_8to12),
           borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
         { label: '6-8 Year',     data: rows.map(r => r.cap_6to8),
           borderColor: PDF_COLORS.cap_mid, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
         { label: '≤5 Year',      data: rows.map(r => r.cap_5orless),
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
       ] : [
         { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
           borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
         { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
           borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
         { label: '< 5 Year',       data: rows.map(r => r.cap_less5),
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
         { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
           borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
-          tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
+          stepped: 'before', pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
       ];
       return {
         type: 'line',
         data: { labels, datasets },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
+        // Round 21 — y range widened 5-10% → 4-11% (gov cap_less5
+        // tops at 10.06%, occasionally clipping at the prior 10% cap).
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisRange:  { min: 0.04, max: 0.11 },
+        }),
       };
     }
 
@@ -1753,28 +1764,60 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'rent_by_year_built': {
-      // Bar: median rent PSF by build-year decade with whisker dashes
+      // Round 21 — Refactor from bar+dashed lines to scatter + whiskers
+      // to match master deck p.30. One vertical whisker per year-built
+      // bucket spanning lower-quartile → upper-quartile rent PSF, with
+      // a median dot in the middle. Average dot in navy for emphasis.
+      //
+      // Whiskers: implemented as a thin floating-bar dataset (data:
+      // [lower, upper] pairs) with categoryPercentage tight enough to
+      // read as a vertical line.
+      // Dots: separate scatter datasets for median (sky), avg (navy).
+      const yearLabels = rows.map(r => String(r.year));
       return {
         type: 'bar',
         data: {
-          labels: rows.map(r => String(r.year)),
+          labels: yearLabels,
           datasets: [
-            { type: 'bar',  label: 'Median Rent PSF',
-              data: rows.map(r => r.median_rpsf),
-              backgroundColor: palette[0], borderRadius: 2, order: 2 },
-            { type: 'line', label: 'Upper Quartile',
-              data: rows.map(r => r.upper_quartile_rpsf),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0, pointRadius: 0, borderWidth: 1,
-              borderDash: [4, 4], order: 0 },
-            { type: 'line', label: 'Lower Quartile',
-              data: rows.map(r => r.lower_quartile_rpsf),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0, pointRadius: 0, borderWidth: 1,
-              borderDash: [4, 4], order: 0 },
+            // Whisker bar (lower-Q → upper-Q range)
+            { type: 'bar', label: 'Q1–Q3 Range',
+              data: rows.map(r => {
+                const lo = r.lower_quartile_rpsf, hi = r.upper_quartile_rpsf;
+                return (lo != null && hi != null) ? [Number(lo), Number(hi)] : null;
+              }),
+              backgroundColor: 'rgba(98,181,229,0.25)',  // pale sky fill
+              borderColor: PDF_COLORS.cap_mid,           // sky border
+              borderWidth: 1,
+              borderSkipped: false,
+              barPercentage: 0.18,                       // narrow → reads as whisker
+              categoryPercentage: 0.6,
+              order: 3 },
+            // Median dot (sky)
+            { type: 'scatter', label: 'Median Rent / SF',
+              data: rows.map((r, i) => ({ x: i, y: r.median_rpsf })),
+              backgroundColor: PDF_COLORS.cap_mid,
+              borderColor: PDF_COLORS.cap_mid,
+              pointRadius: 5, pointStyle: 'circle',
+              showLine: false, order: 1 },
+            // Avg dot (navy — primary marker)
+            { type: 'scatter', label: 'Avg Rent / SF',
+              data: rows.map((r, i) => ({ x: i, y: r.avg_rpsf })),
+              backgroundColor: PDF_COLORS.cap_short,    // navy
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: 6, pointStyle: 'rectRot',    // diamond
+              showLine: false, order: 0 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY }),
+        options: (() => {
+          const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY });
+          opts.scales = opts.scales || {};
+          opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
+          // Pin a sensible y range — rent PSF typically $5-$50 for
+          // gov leased buildings.
+          opts.scales.y.min = 0;
+          opts.scales.y.max = 50;
+          return opts;
+        })(),
       };
     }
 
