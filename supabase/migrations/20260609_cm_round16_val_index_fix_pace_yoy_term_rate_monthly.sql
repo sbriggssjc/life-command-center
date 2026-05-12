@@ -1,0 +1,30 @@
+-- =====================================================================
+-- Round 16 — Three high-impact fixes for the 2026-03-31 gov export.
+--
+-- 1) cm_gov_valuation_index_q — Val_Index 2020-Q4 to 2021-Q3 spike
+--    (53,000+ vs normal 200-250) was caused by a single sale record
+--    with sf_leased=1 and noi=$378,489 producing noi_psf=$378,488/SF.
+--    A second sale with sold_cap_rate=0.0067 (0.67%, almost certainly
+--    6.7% miskeyed) also helped pull the quarterly cap-rate avg
+--    toward zero. Fix: require sf_leased >= 500 + band cap_rate to
+--    0.04-0.12 + band noi_psf to 1-150 + band gross_rent_psf to 5-200.
+--    Verified post-fix: Q4 2020 = 229.7, Q1 2021 = 241.3 (was 53k+).
+--
+-- 2) cm_gov_lease_termination_rate_m — NEW monthly TTM view.
+--    User: "Data_Term_Rate is still quarterly and we want TTM rolling
+--    monthly." LCC catalog re-pointed from _q → _m.
+--
+-- 3) api/capital-markets.js — Pace_Cap_Expand composer + renderer
+--    reworked per user spec: "It should just be the nominal year over
+--    year change of cap rates and cost of capital (7% cap a year ago,
+--    6.5% cap today should show a 50 basis point compression)."
+--    Was annualized MoM Δ × 12; now lag(12)-based YoY Δ. Added
+--    `pace_cost` series (cost-of-capital YoY Δ from mortgage_30y_rate)
+--    as the third overlay per PDF deck.
+--
+-- LCC catalog change (xengecqvemvfknjvbvrq):
+--   - lease_termination_rate.view_name_template → cm_{vertical}_lease_termination_rate_m
+--   - lease_termination_rate.cadence → monthly
+--
+-- Applied to gov DB (scknotsqkcheojiaewwh) + LCC Opps on 2026-05-12.
+-- =====================================================================

@@ -1827,41 +1827,45 @@ function buildChartConfig(chart, brand) {
     // Round 2b — Pace of Cap Rate Expansion (dialysis PDF p.24, gov ~)
     // ──────────────────────────────────────────────────────────────────
     case 'pace_of_cap_rate_expansion': {
-      // Two overlapping bar series: pace_all (all-cohort MoM cap-rate
-      // delta, annualized × 12) + pace_core (10+ Year cohort delta).
-      // PDF visual:
-      //   • Dark navy bars: Cap Expansion/Compression Pace (all)
-      //   • Light blue bars (overlapping): Trend (Core 10+)
-      //   • [Treasury delta line deferred — needs monthly treasury data]
-      // Y-axis -1.50% to 2.50% per PDF.
+      // Round 16 — Composer switched to nominal YoY cap-rate change
+      // (per user: "7% cap a year ago, 6.5% cap today should show
+      //  50bps compression for the current month"). Renderer plots:
+      //   • Dark navy bars: Cap Rate YoY Δ (All)
+      //   • Light blue bars (overlapping): Cap Rate YoY Δ (Core 10+)
+      //   • Orange line: Cost of Capital YoY Δ (mortgage_30y_rate)
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'Cap Expansion/Compression Pace (all)',
+            { type: 'bar', label: 'Cap Rate YoY Δ (All)',
               data: rows.map(r => r.pace_all),
               backgroundColor: palette[0],  // dark navy
               borderRadius: 1,
               barPercentage: 0.7,
               categoryPercentage: 0.85,
-              order: 1 },
-            { type: 'bar', label: 'Cap Expansion/Compression Trend (Core 10+)',
+              order: 2 },
+            { type: 'bar', label: 'Cap Rate YoY Δ (Core 10+)',
               data: rows.map(r => r.pace_core),
-              backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha so overlap is visible
+              backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
               borderRadius: 1,
               barPercentage: 0.5,
               categoryPercentage: 0.85,
+              order: 1 },
+            { type: 'line', label: 'Cost of Capital YoY Δ',
+              data: rows.map(r => r.pace_cost),
+              borderColor: '#D97706',  // amber/orange
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               order: 0 },
           ],
         },
         options: (() => {
           const o = commonOpts({
             yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            yAxisRange: { min: -0.015, max: 0.025 },
+            yAxisRange: { min: -0.025, max: 0.035 },
           });
-          // Round 6c — most-recent + high + low labels on pace_all
-          // (primary navy bar series).
+          // Annotate most-recent + extrema on the primary navy bar series.
           const ann = buildAnnotations(rows, r => r.pace_all, fmtPct2);
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
