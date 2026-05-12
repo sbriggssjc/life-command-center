@@ -1,0 +1,41 @@
+-- =====================================================================
+-- Round 22 HOTFIX — Three issues caught in the audit of the Round 21
+-- export:
+--
+-- 1) cm_chart_catalog vertical-id mismatch (LCC Opps)
+--    Rounds 18/19/20 registered 7 new chart_template_ids with
+--    applies_to_verticals = 'government_leased', but the gov export
+--    endpoint queries with vertical_id = 'gov'. Result: ALL 7 new
+--    chart tabs (Data_Core_Cap_Dot, Data_Avail_Cap_Dot,
+--    Data_Avail_by_Firm_Term, Data_Market_Turnover, Data_Inventory_Backlog,
+--    Data_Txn_AvgDeal_Combo, Data_Rent_Price_PSF) were silently
+--    skipped on gov. Dialysis was unaffected.
+--    Fix: array_replace 'government_leased' → 'gov'.
+--
+-- 2) cm_dialysis_market_turnover_m formula bug
+--    Round 19 used universe = count(active_listings at period_end),
+--    which understates the true market pool — it omits listings that
+--    already sold during the TTM. Result: 2018 Jan turnover read
+--    107.2% (mathematically impossible).
+--    Fix: universe = active_at_period_end + ttm_sales (disjoint sets).
+--    Verified: 2018-01 now 51.9% (was 107%), 2024 17.6%, 2026 21%.
+--    Also added off_market_date filter so withdrawn listings stop
+--    inflating the active_count.
+--
+-- 3) cm_gov_market_turnover_m semantic consistency
+--    For gov, universe is gsa_leases (not available_listings) so
+--    the >100% problem doesn't manifest. View body refactored to
+--    match the dia structure for maintainability; numeric output
+--    unchanged.
+--
+-- LCC code (api/_shared/cm-excel-export.js):
+--   - valuation_index CHART_COLUMNS spec gains a `yoy_change` column
+--     (Round 20 added the field to the view + chart renderer but
+--     never to the data tab spec).
+--   - Data writer now supports optional `fieldKeys` coalesce list on
+--     CHART_COLUMNS entries (mirrors period-summary pattern). Used so
+--     `yoy_change` can read from gov's `yoy_change` OR dialysis's
+--     `yoy_change_pct`.
+--
+-- Applied to LCC Opps + gov DB + Dialysis_DB on 2026-05-12.
+-- =====================================================================
