@@ -348,6 +348,13 @@ const CHART_COLUMNS = {
     { key: 'is_northmarq',     header: 'NM-Listed',           width: 12 },
     { key: 'last_price',       header: 'Asking Price ($)',    format: 'currency_dollars',    width: 18 },
   ],
+  sold_cap_by_term_dot_plot: [
+    { key: 'period_end',       header: 'Sale Date',           format: 'date_short',          width: 13 },
+    { key: 'cap_rate',         header: 'Sold Cap',            format: 'percent_basis_points', width: 13 },
+    { key: 'firm_term_years',  header: 'Firm Term (yrs)',     format: 'number_one_decimal',  width: 16 },
+    { key: 'is_northmarq',     header: 'NM-Brokered',         width: 14 },
+    { key: 'sold_price',       header: 'Sold Price ($)',      format: 'currency_dollars',    width: 18 },
+  ],
   available_by_firm_term_summary: [
     { key: 'term_bucket',         header: 'Firm Term Bucket',  width: 18 },
     { key: 'n_listings',          header: 'Listings',          format: 'integer_count',       width: 12 },
@@ -757,6 +764,8 @@ const TAB_NAMES = {
   core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
   available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',
   available_by_firm_term_summary:   'Data_Avail_by_Firm_Term',
+  // Round 28 — Cap Rate Comparison by Lease Term Remaining (closed sales)
+  sold_cap_by_term_dot_plot:        'Data_Sold_Cap_by_Term',
   // Round 19 — market-activity charts (both verticals)
   market_turnover:                  'Data_Market_Turnover',
   inventory_backlog:                'Data_Inventory_Backlog',
