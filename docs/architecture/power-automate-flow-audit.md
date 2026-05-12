@@ -22,6 +22,10 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | HTTP-ParseJSON | `HTTP-ParseJSON_20260511215138.zip` | HTTP Request (`manual`) | Parse input JSON, call LCC property lookup, and send email output | `flows/http-parsejson-property-email.md` | Active |
 | LCC Daily Briefing | `LCCDailyBriefing_20260511215104.zip` | `Recurrence` (weekday) | Pull daily snapshot from LCC and post to Teams channel | `flows/lcc-daily-briefing.md` | Active |
 | ToDo-LCCSync | `ToDo-LCCSync_20260511215037.zip` | `Recurrence` (hourly) | Aggregate multiple To Do folders and update OneDrive sync artifact | `flows/todo-lcc-sync.md` | Active |
+| CompleteSFTask | `CompleteSFTask_20260512134535.zip` | HTTP Request (`manual`) | Find open Salesforce Tasks and conditionally complete/update by action | `flows/complete-sf-task.md` | Active |
+| GovLeaseLeadSync | `GovLeaseLeadSync_20260512134512.zip` | HTTP Request (`manual`) | Upsert Salesforce Lead records based on incoming agency payload | `flows/govlease-lead-sync.md` | Active |
+| HTTP-Postmessagechat | `HTTP-Postmessagechat_20260512134401.zip` | HTTP Request (`manual`) | Post arbitrary request body as Teams chat/channel message | `flows/http-postmessagechat.md` | Active |
+| HTTP-Postmessagechat2 | `HTTP-Postmessagechat2_20260512134447.zip` | HTTP Request (`manual`) | Format and post GovLease intake ops alert message to Teams | `flows/http-postmessagechat2.md` | Active |
 
 ## Dependency Map
 | Domain | Dependency | Notes |
@@ -41,6 +45,7 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | OneDrive for Business | `shared_onedriveforbusiness_1` connector | Used by ToDo-LCCSync for sync-file read/update. |
 | Supabase (LCC Opps) | `sf_sync_queue` table | Source queue for LCCSFFlow1. |
 | Supabase (Domain DB) | `contacts`, `true_owners` tables | Updated by `link_*` branches in LCCSFFlow1. |
+| Salesforce Objects | `Task`, `Lead` | Queried/updated by CompleteSFTask and GovLeaseLeadSync flows. |
 
 ## Initial Gap Matrix
 | Priority | Category | Gap | Required Action | Owner | Status |
@@ -51,6 +56,7 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | P2 | Observability | Incomplete standardized telemetry mapping across flow run -> queue row -> endpoint response -> final state. | Add correlation logging fields and runbook queries for traceability. | LCC + Flow Owner | Open |
 | P2 | Portfolio Hygiene | Overlapping intake patterns exist across multiple flagged/new-email flows and endpoints. | Consolidate or formally version parallel flow patterns to reduce drift. | LCC + Flow Owners | Open |
 | P2 | Scheduling Governance | Multiple recurrence flows run on differing weekly/hourly cadences without unified schedule register. | Create centralized cadence registry and owner-runbook per scheduled flow. | LCC + Flow Owners | Open |
+| P1 | Write Governance | Manual HTTP-triggered Salesforce update/upsert flows can mutate CRM directly without explicit orchestration-tier approval semantics. | Add explicit request auth, action allowlist, and audit/correlation requirements for manual mutation flows. | LCC + Flow Owners | Open |
 
 ## Change-Control Standard
 1. Capture current flow snapshot hash and export artifact.

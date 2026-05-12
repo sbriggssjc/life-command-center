@@ -116,6 +116,39 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   - Documentation-only change, revert added/edited markdown files if needed.
 - Owner: LCC architecture/audit track.
 
+### 2026-05-12 — Export Round 4 Documentation Ingestion
+- Flow name:
+  - `CompleteSFTask`
+  - `GovLeaseLeadSync`
+  - `HTTP-Postmessagechat`
+  - `HTTP-Postmessagechat2`
+- Flow version/export artifact:
+  - `CompleteSFTask_20260512134535.zip`
+  - `GovLeaseLeadSync_20260512134512.zip`
+  - `HTTP-Postmessagechat_20260512134401.zip`
+  - `HTTP-Postmessagechat2_20260512134447.zip`
+- Risk tier: `P1` (write governance), `P2` (payload/schema hygiene)
+- Change summary:
+  - Added 4 new per-flow detail docs.
+  - Updated master registry with Salesforce mutation and Teams message-post flows.
+  - Logged governance risks for manual-trigger CRM mutation patterns.
+- Exact steps changed:
+  - Created markdown docs under `docs/architecture/flows/`.
+  - Updated `power-automate-flow-audit.md` inventory, dependencies, and gap matrix.
+- Affected endpoints/tables/connectors:
+  - Salesforce objects: `Task`, `Lead`
+  - Teams connector message-post paths
+  - connectors: `shared_salesforce`, `shared_teams`
+- Security impact:
+  - No plaintext bearer/service-role token strings detected in this batch's `definition.json` files.
+  - Manual trigger + mutation flows still require stronger request-auth/audit controls.
+- Validation evidence:
+  - Evidence source: parsed exported `definition.json`, `connectionsMap.json`, `apisMap.json`.
+  - Runtime run IDs: `TBD`
+- Rollback action:
+  - Documentation-only change, revert added/edited markdown files if needed.
+- Owner: LCC architecture/audit track.
+
 ## Open Action Items
 1. Rotate exposed keys and confirm rotation completion here.
 2. Re-export affected flows and verify no embedded credentials appear.
