@@ -404,10 +404,16 @@ const CHART_COLUMNS = {
     { key: 'institutional_pct',     header: 'Institutional %',     format: 'percent_zero_decimal', width: 16 },
   ],
   dom_and_pct_of_ask: [
-    { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
-    { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    { key: 'avg_dom',          header: 'Avg DOM (days)',      format: 'integer_count',       width: 14 },
-    { key: 'pct_of_ask',       header: '% of Ask Price',      format: 'percent_one_decimal', width: 16 },
+    { key: 'period_end',          header: 'Quarter End',           format: 'date_short',          width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',          width: 14 },
+    { key: 'avg_dom',             header: 'Avg DOM (days)',        format: 'integer_count',       width: 14 },
+    // Round 15 — median surfaced alongside avg as a sanity check. Long-DOM
+    // stale listings (8-9yr clearings) drag avg up while median reflects
+    // the typical fresh-listing experience. See dia DOM view for full
+    // calc + 0-3650 day cap.
+    { key: 'median_dom',          header: 'Median DOM (days)',     format: 'integer_count',       width: 17 },
+    { key: 'pct_of_ask',          header: '% of Ask Price',        format: 'percent_one_decimal', width: 16 },
+    { key: 'median_pct_of_ask',   header: 'Median % of Ask',       format: 'percent_one_decimal', width: 17 },
   ],
   bid_ask_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },

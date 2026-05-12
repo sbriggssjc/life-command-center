@@ -1189,18 +1189,28 @@ function buildChartConfig(chart, brand) {
       opts.scales.y.stacked = true;
       opts.scales.y.max = 1.0;
       // Round 6a — per-segment % labels per user feedback "we usually
-      // label the data over each bar in percentage terms." datalabels
-      // draws the share inside each segment with white text; segments
-      // <4% get hidden to avoid overlap.
+      // label the data over each bar in percentage terms."
+      // Round 15 — per-dataset text color based on bar background luminance
+      // so labels on lighter bars (Cross-Border sky, Institutional pale)
+      // get DARK text and labels on darker bars (Private navy, Public REIT
+      // mid-blue) get WHITE text. User feedback: "labels on the lighter
+      // colored bars need to be in a darker text color so its readable."
+      // Index map matches dataset order below.
+      const labelColorByDatasetIndex = [
+        '#FFFFFF', // 0 Private — navy bg, white text
+        '#FFFFFF', // 1 Public REITs — mid-blue bg, white text
+        '#191919', // 2 Cross-Border — sky bg, dark text
+        '#191919', // 3 Institutional — pale bg, dark text
+      ];
       opts.plugins = opts.plugins || {};
       opts.plugins.datalabels = {
-        color: '#FFFFFF',
+        color: function (ctx) {
+          return labelColorByDatasetIndex[ctx.datasetIndex] || '#191919';
+        },
         font: { size: 10, weight: 'bold' },
-        textShadowBlur: 2,
-        textShadowColor: 'rgba(0,0,0,0.45)',
-        formatter: (value) => {
-          if (value == null || value < 0.04) return ''; // hide micro-segments
-          return `${(value * 100).toFixed(0)}%`;
+        formatter: function (value) {
+          if (value == null || value < 0.04) return '';
+          return (value * 100).toFixed(0) + '%';
         },
         anchor: 'center',
         align: 'center',
