@@ -1,0 +1,48 @@
+-- =====================================================================
+-- Round 18 — 3 NEW chart templates + 5 new database views.
+--
+-- User: "Let's also add a dot plot chart for Core Government deals
+-- like what we have in dialysis and call core anything with more
+-- than 6 years of firm lease term. Let's also add a dot plot of
+-- all available deals for both categories with the x-axis being
+-- lease term (firm for government) and the y-axis being the current
+-- asking cap rate. Let's also add a market turnover chart… Let's
+-- also add a Price and Cap Rate Ranges bar chart for government
+-- like we have in dialysis. Use firm lease term."
+--
+-- (Market turnover + inventory backlog are scoped for Round 19.)
+--
+-- 5 NEW SUPABASE VIEWS:
+--   • cm_gov_core_cap_dot_q      (727 dots; gov core = firm_term >= 6yr)
+--   • cm_dialysis_core_cap_dot_q (653 dots; dia core = firm_term >= 10yr)
+--   • cm_gov_available_cap_dot   (76 dots; current active gov listings)
+--   • cm_dialysis_available_cap_dot (63 dots; current active dia listings)
+--   • cm_gov_available_by_term_summary (4 firm-term cohorts; price + cap stats)
+--
+-- 3 NEW CHART TEMPLATES (cm_chart_catalog, LCC Opps):
+--   • core_cap_rate_dot_plot
+--       view_name_template: cm_{vertical}_core_cap_dot_q
+--       chart_type: ScatterChart
+--       applies_to: gov + dialysis
+--   • available_cap_rate_dot_plot
+--       view_name_template: cm_{vertical}_available_cap_dot
+--       chart_type: ScatterChart
+--       applies_to: gov + dialysis
+--   • available_by_firm_term_summary
+--       view_name_template: cm_{vertical}_available_by_term_summary
+--       chart_type: ComboBarDotChart
+--       applies_to: gov only (dia already has the equivalent)
+--
+-- RENDERER (api/_shared/cm-chart-image-renderer.js):
+--   • 3 new cases at the end of buildChartConfig: core_cap_rate_dot_plot,
+--     available_cap_rate_dot_plot, available_by_firm_term_summary.
+--   • All vertical-agnostic — color/range/x-axis logic works for both
+--     gov and dialysis automatically.
+--
+-- EXCEL (api/_shared/cm-excel-export.js):
+--   • 3 new TAB_NAMES (Data_Core_Cap_Dot, Data_Avail_Cap_Dot, Data_Avail_by_Firm_Term).
+--   • 3 new CHART_COLUMNS specs.
+--
+-- Applied to gov DB (scknotsqkcheojiaewwh), Dialysis_DB (zqzrriwuavgrquhisnoa),
+-- and LCC Opps (xengecqvemvfknjvbvrq) on 2026-05-12.
+-- =====================================================================

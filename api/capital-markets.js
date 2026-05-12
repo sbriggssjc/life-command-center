@@ -83,53 +83,68 @@ const SYNTHETIC_COMPOSERS = {
   //   cap_rate_ttm_by_quarter  → ttm_weighted_cap_rate (avg cap, TTM)
   //   cap_rate_by_lease_term   → cap_10plus           (10+ cap cohort, TTM)
   'pace_of_cap_rate_expansion': ({ allCharts }) => {
+    // Round 16 — formula reworked per user spec:
+    //   "It should just be the nominal year over year change of cap rates
+    //    and cost of capital (7.00% cap a year ago, 6.50% cap today
+    //    should show a 50 basis point compression for the current month)."
+    //
+    // Old formula computed annualized MoM deltas (curr - prev_month) × 12,
+    // which over-amplified short-term wobble and didn't match the PDF
+    // deck. New formula is curr - lag(12), the nominal YoY bps movement.
+    //
+    // Added a third series: cost-of-capital YoY change (using
+    // mortgage_30y_rate from master_m's macro join).
     const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
     const capRows = find('cap_rate_ttm_by_quarter');
     const termRows = find('cap_rate_by_lease_term');
+    const costRows = find('cost_of_capital');
     if (capRows.length === 0 && termRows.length === 0) return [];
 
-    // Index by period_end, merging both sources
     const byPeriod = new Map();
     for (const r of capRows) {
       const k = r.period_end;
       if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
-      // Field name varies by mapper: monthly mapper emits ttm_weighted_cap_rate,
-      // quarterly view emits avg_cap_rate. Coalesce.
       byPeriod.get(k).avg_cap = r.ttm_weighted_cap_rate ?? r.avg_cap_rate;
     }
     for (const r of termRows) {
       const k = r.period_end;
       if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
-      // Round 7 field-name fallback: master_m mapper emits `cap_10plus`
-      // while the raw _q view exposes `cap_10plus_year`. Try both so the
-      // composer works regardless of upstream ordering.
       byPeriod.get(k).cap_10plus = r.cap_10plus ?? r.cap_10plus_year;
     }
+    for (const r of costRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      // cost_of_capital mapper emits treasury_10y_yield + avg_cap_rate;
+      // we want the cost-of-capital indicator (mortgage rate) for the
+      // YoY-change series. Fall back to treasury_10y_yield if mortgage
+      // not present.
+      byPeriod.get(k).cost_capital = r.mortgage_30y_rate ?? r.treasury_10y_yield;
+    }
 
-    // Sort by period_end ascending and compute MoM deltas (annualized).
-    // For monthly cadence, multiply by 12; quarterly, multiply by 4.
     const sorted = [...byPeriod.values()].sort((a, b) =>
       String(a.period_end) < String(b.period_end) ? -1 : 1
     );
-    if (sorted.length < 2) return [];
+    if (sorted.length < 13) return [];
 
-    // Detect cadence: if successive period_ends are ~30 days apart, monthly;
-    // if ~90 days, quarterly.
+    // Detect cadence: monthly (≈30 days apart) → lag 12; quarterly (≈90) → lag 4.
     const t0 = new Date(sorted[0].period_end).getTime();
     const t1 = new Date(sorted[1].period_end).getTime();
     const diffDays = Math.abs(t1 - t0) / 86400000;
-    const annualMultiplier = diffDays < 60 ? 12 : 4;
+    const yoyLag = diffDays < 60 ? 12 : 4;
 
     const out = [];
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = sorted[i - 1], curr = sorted[i];
+    for (let i = yoyLag; i < sorted.length; i++) {
+      const prev = sorted[i - yoyLag], curr = sorted[i];
       const pace_all = (curr.avg_cap != null && prev.avg_cap != null)
-        ? (Number(curr.avg_cap) - Number(prev.avg_cap)) * annualMultiplier
+        ? Number(curr.avg_cap) - Number(prev.avg_cap)
         : null;
       const pace_core = (curr.cap_10plus != null && prev.cap_10plus != null)
-        ? (Number(curr.cap_10plus) - Number(prev.cap_10plus)) * annualMultiplier
+        ? Number(curr.cap_10plus) - Number(prev.cap_10plus)
         : null;
-      out.push({ period_end: curr.period_end, pace_all, pace_core });
+      const pace_cost = (curr.cost_capital != null && prev.cost_capital != null)
+        ? Number(curr.cost_capital) - Number(prev.cost_capital)
+        : null;
+      out.push({ period_end: curr.period_end, pace_all, pace_core, pace_cost });
     }
     return out;
   },

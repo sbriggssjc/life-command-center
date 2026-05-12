@@ -357,11 +357,13 @@ const CAP_RATE_RANGE = { min: 0.05, max: 0.10 };
 // last-ask cap, Vol-Cap quartile band).
 const CAP_RATE_TIGHT_RANGE = { min: 0.05, max: 0.08 };
 
-// Even tighter range for Bid-Ask Last Ask Cap and Avail Mkt Size avg cap —
-// real data lives 5.8-7.5%. User feedback (2026-05-07): "the line is
-// behind and below the other data… want a tighter range… so we can see
-// the up and down movement".
-const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.080 };
+// Even tighter range for Bid-Ask Last Ask Cap and Avail Mkt Size avg cap.
+// Round 17 — widened 0.055-0.080 → 0.055-0.100 because gov data shows
+// floating bars topping at ~9.6% (avg_last_ask 8.51% + spread 1.09%);
+// the prior 8.0% ceiling was clipping the bar tops. User: "Data_Bid_Ask
+// needs the y-axis adjusted so we can view all the data in range."
+// Dialysis bars stay well within the band (top ~8.4%).
+const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.100 };
 
 // % of Ask Price axis range. PDF dialysis p.33 + gov p.20 both pin
 // 84%–96% on the right axis. Switched to that exact range so our chart
@@ -885,8 +887,18 @@ function buildChartConfig(chart, brand) {
             // PDF p.33 + gov PDF p.20 right-axis labels).
             yRightRange:  PCT_OF_ASK_RANGE,
           });
-          // Annotations: peak/trough/last on % of Ask line
+          // Annotations: peak/trough/last on % of Ask line.
+          // Round 17 — pin annotations to the right-axis ('y1') so
+          // they sit on the line they describe, and nudge them above
+          // by 14px so they don't sit ON the line marker. Previously
+          // labels were "floating" (the user's word) because the
+          // default y-axis assignment landed them on the LEFT axis
+          // (DOM days) numerical space, far above the actual % line.
           const ann = buildAnnotations(rows, r => r.pct_of_ask, fmtPct1);
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),
@@ -991,8 +1003,12 @@ function buildChartConfig(chart, brand) {
       const yLeftRange  = govLike
         ? { min: 0.05, max: 0.085 }       // gov cap rate window
         : { min: 0.0475, max: 0.0725 };   // dialysis cap rate window
+      // Round 17 — tightened gov price-change axis 0.14 → 0.08. Actual
+      // gov data tops at ~7% TTM (was specced 0-14% from the dialysis
+      // p.35 deck assumption). User: "Sentiment needs the y-axis
+      // adjusted to show the movement in the price change categories."
       const yRightRange = govLike
-        ? { min: 0, max: 0.14 }           // gov price change %
+        ? { min: 0, max: 0.08 }           // gov price change %
         : { min: 0, max: 0.70 };          // dialysis price change %
       const annotations = buildAnnotations(
         rows, r => r.last_ask_cap_all, fmtPct2
@@ -1196,6 +1212,11 @@ function buildChartConfig(chart, brand) {
       // mid-blue) get WHITE text. User feedback: "labels on the lighter
       // colored bars need to be in a darker text color so its readable."
       // Index map matches dataset order below.
+      // Round 17 (re-apply) — per-dataset text color based on bar
+      // background luminance: lighter bars get DARK text, darker bars
+      // get WHITE text. User feedback (dialysis + gov): "labels on the
+      // lighter colored bars need to be in a darker text color so its
+      // readable." Index map matches dataset order below.
       const labelColorByDatasetIndex = [
         '#FFFFFF', // 0 Private — navy bg, white text
         '#FFFFFF', // 1 Public REITs — mid-blue bg, white text
@@ -1414,17 +1435,19 @@ function buildChartConfig(chart, brand) {
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
             yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            // Round 6a — widened from 5.5%–8.5% to 5.0%–9.0% per user
-            // feedback "we need to adjust the Y-axis for the cap rates
-            // because we have data outside the range." Real data 2017+
-            // shows upper Q hits 8.58% and lower Q drops to 5.24%, both
-            // outside the prior tight band. PDF reference is also softer
-            // here than the gov 5.5–8.5 — gives breathing room without
-            // losing the quartile-band tightness.
-            yRightRange:  { min: 0.050, max: 0.090 },
+            // Round 17 — widened from 5.0–9.0% to 5.0–10.5%. Gov
+            // upper-quartile hits 10.08% and dialysis upper hits
+            // ~9.5%; the prior 9.0% cap was clipping the top of the
+            // Q1–Q3 floating bars off the chart. User: "needs to
+            // have the y-axis looked at and adjusted so all the data
+            // in cap rates are visible."
+            yRightRange:  { min: 0.050, max: 0.105 },
           });
-          // Annotations on Avg Cap Rate (the primary line — peak/trough/last)
+          // Annotations on Avg Cap Rate (the primary line — peak/trough/last).
+          // Round 17 — yAdjust=-18 nudges labels above the dot so they
+          // don't overlap the cap-rate marker.
           const ann = buildAnnotations(rows, r => r.cap_rate, fmtPct2);
+          for (const k of Object.keys(ann)) ann[k].yAdjust = -18;
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),
@@ -1837,44 +1860,226 @@ function buildChartConfig(chart, brand) {
     // Round 2b — Pace of Cap Rate Expansion (dialysis PDF p.24, gov ~)
     // ──────────────────────────────────────────────────────────────────
     case 'pace_of_cap_rate_expansion': {
-      // Two overlapping bar series: pace_all (all-cohort MoM cap-rate
-      // delta, annualized × 12) + pace_core (10+ Year cohort delta).
-      // PDF visual:
-      //   • Dark navy bars: Cap Expansion/Compression Pace (all)
-      //   • Light blue bars (overlapping): Trend (Core 10+)
-      //   • [Treasury delta line deferred — needs monthly treasury data]
-      // Y-axis -1.50% to 2.50% per PDF.
+      // Round 16 — Composer switched to nominal YoY cap-rate change
+      // (per user: "7% cap a year ago, 6.5% cap today should show
+      //  50bps compression for the current month"). Renderer plots:
+      //   • Dark navy bars: Cap Rate YoY Δ (All)
+      //   • Light blue bars (overlapping): Cap Rate YoY Δ (Core 10+)
+      //   • Orange line: Cost of Capital YoY Δ (mortgage_30y_rate)
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'Cap Expansion/Compression Pace (all)',
+            { type: 'bar', label: 'Cap Rate YoY Δ (All)',
               data: rows.map(r => r.pace_all),
               backgroundColor: palette[0],  // dark navy
               borderRadius: 1,
               barPercentage: 0.7,
               categoryPercentage: 0.85,
-              order: 1 },
-            { type: 'bar', label: 'Cap Expansion/Compression Trend (Core 10+)',
+              order: 2 },
+            { type: 'bar', label: 'Cap Rate YoY Δ (Core 10+)',
               data: rows.map(r => r.pace_core),
-              backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha so overlap is visible
+              backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
               borderRadius: 1,
               barPercentage: 0.5,
               categoryPercentage: 0.85,
+              order: 1 },
+            { type: 'line', label: 'Cost of Capital YoY Δ',
+              data: rows.map(r => r.pace_cost),
+              borderColor: '#D97706',  // amber/orange
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               order: 0 },
           ],
         },
         options: (() => {
           const o = commonOpts({
             yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            yAxisRange: { min: -0.015, max: 0.025 },
+            yAxisRange: { min: -0.025, max: 0.035 },
           });
-          // Round 6c — most-recent + high + low labels on pace_all
-          // (primary navy bar series).
+          // Annotate most-recent + extrema on the primary navy bar series.
           const ann = buildAnnotations(rows, r => r.pace_all, fmtPct2);
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
+        })(),
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Round 18 — 5 NEW charts
+    // ─────────────────────────────────────────────────────────────────
+
+    case 'core_cap_rate_dot_plot': {
+      // Per-sale cap-rate dot plot for "core" deals.
+      //   • Gov core  = firm_term_years >= 6
+      //   • Dia core  = firm_term_years >= 10
+      // x = sale_date (numeric ms), y = cap_rate. NM-brokered sales
+      // get a distinct color so the user can spot them on the plot.
+      const scatterAll = rows
+        .filter(r => !r.is_northmarq && r.cap_rate != null && r.period_end != null)
+        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }));
+      const scatterNM  = rows
+        .filter(r => r.is_northmarq && r.cap_rate != null && r.period_end != null)
+        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }));
+      return {
+        type: 'scatter',
+        data: {
+          datasets: [
+            { label: 'Market sales',
+              data: scatterAll,
+              backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
+              borderColor: PDF_COLORS.cap_mid,
+              pointRadius: 3,
+              pointStyle: 'circle' },
+            { label: 'NM-brokered sales',
+              data: scatterNM,
+              backgroundColor: PDF_COLORS.cap_short,    // navy
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: 4,
+              pointStyle: 'rectRot' },                  // diamond
+          ],
+        },
+        options: (() => {
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.04, max: 0.12 } });
+          o.scales.x = {
+            type: 'time',
+            time: { unit: 'year' },
+            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            grid: { display: false },
+          };
+          return o;
+        })(),
+      };
+    }
+
+    case 'available_cap_rate_dot_plot': {
+      // Snapshot dot plot of currently active listings.
+      //   x = firm_term_years; y = current asking cap rate.
+      // NM-brokered listings get a distinct color.
+      const allDots = rows
+        .filter(r => r.cap_rate != null && r.firm_term_years != null)
+        .map(r => ({
+          x: Number(r.firm_term_years),
+          y: Number(r.cap_rate),
+          nm: !!r.is_northmarq,
+        }));
+      const scatterAll = allDots.filter(d => !d.nm);
+      const scatterNM  = allDots.filter(d =>  d.nm);
+      return {
+        type: 'scatter',
+        data: {
+          datasets: [
+            { label: 'Market listings',
+              data: scatterAll,
+              backgroundColor: 'rgba(98,181,229,0.55)',
+              borderColor: PDF_COLORS.cap_mid,
+              pointRadius: 4, pointStyle: 'circle' },
+            { label: 'NM-brokered listings',
+              data: scatterNM,
+              backgroundColor: PDF_COLORS.cap_short,
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: 5, pointStyle: 'rectRot' },
+          ],
+        },
+        options: (() => {
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.04, max: 0.12 } });
+          o.scales.x = {
+            type: 'linear',
+            position: 'bottom',
+            min: 0,
+            max: 30,
+            title: { display: true, text: 'Firm Lease Term (Years)', color: '#6A748C', font: { family: 'Calibri', size: 10 } },
+            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            grid: { color: 'rgba(0,0,0,0.05)' },
+          };
+          return o;
+        })(),
+      };
+    }
+
+    case 'available_by_firm_term_summary': {
+      // Gov equivalent of available_by_term_summary (dialysis p.30 bottom).
+      // 4 grouped sky-blue bars (Avg Price, left axis) + 4 dot/line
+      // series (Avg Cap, Upper Q, Lower Q, Median) on right axis.
+      // Cohorts: Sub 5 / 5-8 / 8-12 / 12+ firm lease years.
+      const termRows = rows || [];
+      const termLabels = termRows.map(r => r.term_bucket || '?');
+      const dotPointRadius = 6;
+      const dotPointStyle = 'rectRot';
+      const termPriceLabels = termRows.map((row) => {
+        const v = Number(row.avg_price) || 0;
+        const m = v / 1_000_000;
+        const priceLabel = m >= 1 ? `$${m.toFixed(1)}M` : `$${(v / 1000).toFixed(0)}K`;
+        const n = row.n_listings ?? 0;
+        return `${priceLabel}\n(n=${n})`;
+      });
+      return {
+        type: 'bar',
+        data: {
+          labels: termLabels,
+          datasets: [
+            { type: 'bar', label: 'Avg Price (left axis)',
+              data: termRows.map(r => r.avg_price),
+              priceLabels: termPriceLabels,
+              backgroundColor: PDF_COLORS.cap_mid,
+              borderColor: PDF_COLORS.cap_mid,
+              borderRadius: 1,
+              barPercentage: 0.6, categoryPercentage: 0.85,
+              yAxisID: 'y', order: 5 },
+            { type: 'scatter', label: 'Avg Cap',
+              data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
+              backgroundColor: PDF_COLORS.cap_short,
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 1 },
+            { type: 'scatter', label: 'Upper Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_long_term,
+              borderColor: PDF_COLORS.cap_long_term,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 2 },
+            { type: 'scatter', label: 'Lower Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_outside_firm,
+              borderColor: PDF_COLORS.cap_outside_firm,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 3 },
+            { type: 'scatter', label: 'Median',
+              data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
+              backgroundColor: PDF_COLORS.cap_mid_long,
+              borderColor: PDF_COLORS.cap_mid_long,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, yAxisID: 'y1', order: 4 },
+          ],
+        },
+        options: (() => {
+          const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT });
+          opts.scales = opts.scales || {};
+          opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
+          opts.scales.y1 = {
+            type: 'linear',
+            position: 'right',
+            min: 0.04, max: 0.10,
+            grid: { drawOnChartArea: false },
+            ticks: {
+              callback: function (v) { return (v * 100).toFixed(1) + '%'; },
+              font: { size: 11 },
+            },
+          };
+          opts.plugins = opts.plugins || {};
+          opts.plugins.datalabels = {
+            display: function (ctx) { return ctx.dataset.type === 'bar'; },
+            color: PDF_COLORS.cap_short,
+            font: { size: 11, weight: 'bold' },
+            anchor: 'end',
+            align: 'top',
+            offset: 4,
+            formatter: function (value, ctx) {
+              return (ctx.dataset.priceLabels || [])[ctx.dataIndex] || '';
+            },
+          };
+          return opts;
         })(),
       };
     }
