@@ -688,20 +688,28 @@
 
       // ===== Phase 2c.4: Section 2 Leasing Trends ===================================
       case 'lease_renewal_rate': {
+        // Round 29 — sync to server: stacked + improved colors so
+        // outcome buckets are visually distinguishable.
+        const navy = brandColor('nm_navy', '#003DA5');
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const midBlue = brandColor('nm_blue_mid', '#265AB2');
         datasets = [
+          // first_generation_commencements is in-app only (not in server view)
           { type: 'bar', label: 'New Leases',           data: chart.rows.map(r => r.first_generation_commencements),
-            backgroundColor: palette[3], borderRadius: 1 },
+            backgroundColor: palette[3], borderRadius: 1, stack: 'leases' },
           { type: 'bar', label: 'Renewed',              data: chart.rows.map(r => r.renewed_leases),
-            backgroundColor: palette[1], borderRadius: 1 },
+            backgroundColor: navy, borderRadius: 1, stack: 'leases' },
           { type: 'bar', label: 'Succeeding/Superseding', data: chart.rows.map(r => r.succeeding_superseding_leases),
-            backgroundColor: palette[2], borderRadius: 1 },
+            backgroundColor: midBlue, borderRadius: 1, stack: 'leases' },
           { type: 'bar', label: 'Expired',              data: chart.rows.map(r => r.expired_leases),
-            backgroundColor: palette[4], borderRadius: 1 },
+            backgroundColor: sky, borderRadius: 1, stack: 'leases' },
           { type: 'bar', label: 'Terminated',           data: chart.rows.map(r => r.terminated_leases),
-            backgroundColor: palette[0], borderRadius: 1 },
+            backgroundColor: '#D97706', borderRadius: 1, stack: 'leases' },  // amber — negative
         ];
-        return new Chart(canvas, { type: 'bar', data: { labels, datasets },
-          options: commonChartOptions('integer_count') });
+        const opts = commonChartOptions('integer_count');
+        opts.scales.x.stacked = true;
+        opts.scales.y.stacked = true;
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
       case 'lease_termination_rate': {
         const opts = commonChartOptions('integer_count');
