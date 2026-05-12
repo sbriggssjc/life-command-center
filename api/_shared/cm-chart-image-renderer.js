@@ -1206,6 +1206,12 @@ function buildChartConfig(chart, brand) {
       opts.scales.y.max = 1.0;
       // Round 6a — per-segment % labels per user feedback "we usually
       // label the data over each bar in percentage terms."
+      // Round 15 — per-dataset text color based on bar background luminance
+      // so labels on lighter bars (Cross-Border sky, Institutional pale)
+      // get DARK text and labels on darker bars (Private navy, Public REIT
+      // mid-blue) get WHITE text. User feedback: "labels on the lighter
+      // colored bars need to be in a darker text color so its readable."
+      // Index map matches dataset order below.
       // Round 17 (re-apply) — per-dataset text color based on bar
       // background luminance: lighter bars get DARK text, darker bars
       // get WHITE text. User feedback (dialysis + gov): "labels on the
