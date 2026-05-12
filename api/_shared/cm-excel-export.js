@@ -520,6 +520,12 @@ const CHART_COLUMNS = {
     { key: 'avg_noi_psf',        header: 'NOI PSF (TTM)',        format: 'currency_per_sf',     width: 17 },
     { key: 'avg_cap_rate',       header: 'Avg Cap Rate (TTM)',   format: 'percent_basis_points', width: 18 },
     { key: 'valuation_index',    header: 'Valuation Index ($/SF)',format: 'currency_per_sf',    width: 22 },
+    // Round 22 — surface the Round 20 yoy_change column in the data tab
+    // (renderer chart already uses it). gov view emits `yoy_change`,
+    // dialysis view emits `yoy_change_pct`; coalesce via the spec's
+    // fieldKeys.
+    { key: 'yoy_change',         fieldKeys: ['yoy_change', 'yoy_change_pct'],
+                                 header: 'YoY % Change',         format: 'percent_one_decimal', width: 14 },
     { key: 'n_sales',            header: 'N Sales (Q)',          format: 'integer_count',       width: 12 },
   ],
 
@@ -1270,7 +1276,17 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     for (const row of chart.rows || []) {
       const r = sheet.getRow(dataRowIdx);
       cols.forEach((c, i) => {
+        // Round 22 — support optional `fieldKeys` coalesce list on
+        // CHART_COLUMNS entries (mirrors the period-summary block
+        // pattern). Falls back to the primary `key` if fieldKeys
+        // isn't set. Used so e.g. `valuation_index.yoy_change` can
+        // read from gov's `yoy_change` OR dialysis's `yoy_change_pct`.
         let v = row[c.key];
+        if (v == null && Array.isArray(c.fieldKeys)) {
+          for (const fk of c.fieldKeys) {
+            if (row[fk] != null) { v = row[fk]; break; }
+          }
+        }
         if (c.format === 'date_short' && typeof v === 'string') {
           // Convert ISO date string to Date object for proper Excel date type
           const d = new Date(v);
