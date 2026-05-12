@@ -925,6 +925,198 @@
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // Round 23 — In-app parity for the 7 charts added in Rounds 18-20.
+      // (Server export had these for weeks; in-app display showed empty
+      // panels. Re-implements each on Chart.js v4 to match the server
+      // renderer behavior.)
+      // ─────────────────────────────────────────────────────────────
+
+      case 'core_cap_rate_dot_plot': {
+        // Per-sale dots; x = sale_date (time scale), y = cap_rate.
+        // Gov core = firm_term_years >= 6yr; Dia core = >= 10yr.
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const navy = brandColor('nm_navy', '#003DA5');
+        const ds = [
+          { label: 'Market sales',
+            data: (chart.rows || []).filter(r => !r.is_northmarq && r.cap_rate != null)
+              .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) })),
+            backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
+            pointRadius: 3, pointStyle: 'circle' },
+          { label: 'NM-brokered',
+            data: (chart.rows || []).filter(r => r.is_northmarq && r.cap_rate != null)
+              .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) })),
+            backgroundColor: navy, borderColor: navy,
+            pointRadius: 4, pointStyle: 'rectRot' },
+        ];
+        const opts = commonChartOptions('percent_basis_points');
+        opts.scales.x = { type: 'time', time: { unit: 'year' },
+          ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 } },
+          grid: { display: false } };
+        opts.scales.y.min = 0.04; opts.scales.y.max = 0.12;
+        return new Chart(canvas, { type: 'scatter', data: { datasets: ds }, options: opts });
+      }
+
+      case 'available_cap_rate_dot_plot': {
+        // Snapshot scatter; x = firm_term_years (linear), y = asking cap.
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const navy = brandColor('nm_navy', '#003DA5');
+        const dots = (chart.rows || []).filter(r => r.cap_rate != null && r.firm_term_years != null)
+          .map(r => ({ x: Number(r.firm_term_years), y: Number(r.cap_rate), nm: !!r.is_northmarq }));
+        const ds = [
+          { label: 'Market listings',
+            data: dots.filter(d => !d.nm),
+            backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
+            pointRadius: 4, pointStyle: 'circle' },
+          { label: 'NM-listed',
+            data: dots.filter(d => d.nm),
+            backgroundColor: navy, borderColor: navy,
+            pointRadius: 5, pointStyle: 'rectRot' },
+        ];
+        const opts = commonChartOptions('percent_basis_points');
+        opts.scales.x = { type: 'linear', position: 'bottom', min: 0, max: 30,
+          title: { display: true, text: 'Firm Lease Term (Years)',
+            color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 10 } },
+          ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 } },
+          grid: { color: 'rgba(0,0,0,0.05)' } };
+        opts.scales.y.min = 0.04; opts.scales.y.max = 0.12;
+        return new Chart(canvas, { type: 'scatter', data: { datasets: ds }, options: opts });
+      }
+
+      case 'available_by_firm_term_summary': {
+        // Gov-only. Combo: avg_price bars + 4 cohort dots (avg/upper-Q/median/lower-Q cap)
+        // on a right axis. Categories: Sub 5 / 5-8 / 8-12 / 12+.
+        const navy   = brandColor('nm_navy',     '#003DA5');
+        const sky    = brandColor('nm_sky',      '#62B5E5');
+        const purple = '#7E6BAD';
+        const sage   = '#4CB582';
+        const gray   = '#6A748C';
+        const termRows = chart.rows || [];
+        const termLabels = termRows.map(r => r.term_bucket || '?');
+        datasets = [
+          { type: 'bar', label: 'Avg Price',
+            data: termRows.map(r => r.avg_price),
+            backgroundColor: sky, borderColor: sky,
+            borderRadius: 1, barPercentage: 0.6, categoryPercentage: 0.85,
+            yAxisID: 'y', order: 5 },
+          { type: 'scatter', label: 'Avg Cap',
+            data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
+            backgroundColor: navy, borderColor: navy,
+            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 1 },
+          { type: 'scatter', label: 'Upper Q',
+            data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
+            backgroundColor: purple, borderColor: purple,
+            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 2 },
+          { type: 'scatter', label: 'Lower Q',
+            data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
+            backgroundColor: gray, borderColor: gray,
+            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 3 },
+          { type: 'scatter', label: 'Median',
+            data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
+            backgroundColor: sage, borderColor: sage,
+            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 4 },
+        ];
+        const opts = commonChartOptions('currency_millions');
+        opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
+        opts.scales.y1 = { type: 'linear', position: 'right', min: 0.04, max: 0.10,
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => (v * 100).toFixed(1) + '%', font: { size: 11 } } };
+        return new Chart(canvas, { type: 'bar', data: { labels: termLabels, datasets }, options: opts });
+      }
+
+      case 'market_turnover': {
+        // Area-filled navy line of TTM turnover rate.
+        const navy = brandColor('nm_navy', '#003DA5');
+        const pale = brandColor('nm_pale', '#E0E8F4');
+        datasets = [{
+          label: 'Turnover Rate (TTM)',
+          data: chart.rows.map(r => r.turnover_rate),
+          borderColor: navy, backgroundColor: pale, fill: true,
+          tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+        }];
+        const opts = commonChartOptions('percent_one_decimal');
+        // Adaptive y-max: gov sits 1-3%, dia 20-30%.
+        const vals = chart.rows.map(r => Number(r.turnover_rate)).filter(v => Number.isFinite(v));
+        const maxV = vals.length ? Math.max(...vals) : 0.05;
+        opts.scales.y.min = 0;
+        opts.scales.y.max = maxV > 0.10 ? Math.ceil(maxV * 20) / 20 : 0.05;
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
+      }
+
+      case 'inventory_backlog': {
+        // Combo: active-listings bars (left axis) + months-of-supply line (right axis).
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const pale = brandColor('nm_pale', '#E0E8F4');
+        const navy = brandColor('nm_navy', '#003DA5');
+        datasets = [
+          { type: 'bar', label: 'Active Listings',
+            data: chart.rows.map(r => Number(r.active_count) || 0),
+            backgroundColor: pale, borderColor: sky, borderRadius: 1,
+            yAxisID: 'y', order: 2 },
+          { type: 'line', label: 'Months of Supply',
+            data: chart.rows.map(r => r.months_of_supply != null ? Number(r.months_of_supply) : null),
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+            yAxisID: 'y1', order: 0 },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = { type: 'linear', position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => v + ' mo', color: brandColor('nm_axis','#6A748C'),
+                   font: { family: 'Calibri', size: 9 } } };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
+      case 'txn_count_avg_deal_combo': {
+        // PDF deck p.8 dia / p.17 gov: pale bars (TTM count) + navy line (avg deal $).
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const pale = brandColor('nm_pale', '#E0E8F4');
+        const navy = brandColor('nm_navy', '#003DA5');
+        datasets = [
+          { type: 'bar', label: 'TTM Transactions',
+            data: chart.rows.map(r => Number(r.ttm_count) || 0),
+            backgroundColor: pale, borderColor: sky, borderRadius: 1,
+            yAxisID: 'y', order: 2 },
+          { type: 'line', label: 'Avg Deal Size',
+            data: chart.rows.map(r => r.avg_deal_size != null ? Number(r.avg_deal_size) : null),
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+            yAxisID: 'y1', order: 0 },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y1 = { type: 'linear', position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => '$' + (v / 1_000_000).toFixed(1) + 'M',
+                   color: brandColor('nm_axis','#6A748C'),
+                   font: { family: 'Calibri', size: 9 } } };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
+      case 'rent_and_price_psf': {
+        // PDF deck p.9 gov: sky bars (rent PSF) + navy line (price PSF).
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const navy = brandColor('nm_navy', '#003DA5');
+        datasets = [
+          { type: 'bar', label: 'Avg Rent / SF',
+            data: chart.rows.map(r => r.rent_psf),
+            backgroundColor: sky, borderColor: sky,
+            borderRadius: 1, yAxisID: 'y', order: 2 },
+          { type: 'line', label: 'Avg Sale Price / SF',
+            data: chart.rows.map(r => r.price_psf),
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+            yAxisID: 'y1', order: 0 },
+        ];
+        const opts = commonChartOptions('currency_per_sf');
+        opts.scales.y.min = 0; opts.scales.y.max = 50;
+        opts.scales.y1 = { type: 'linear', position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => '$' + Math.round(v),
+                   color: brandColor('nm_axis','#6A748C'),
+                   font: { family: 'Calibri', size: 9 } } };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
       // DataTable types — rendered by renderDataTable() instead
       case 'leasing_summary':
       case 'lease_structures':
