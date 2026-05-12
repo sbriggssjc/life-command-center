@@ -1,0 +1,26 @@
+-- =====================================================================
+-- Round 28 — NEW chart: Cap Rate Comparison by Lease Term Remaining
+-- (per user, deferred since Round 24 dia feedback batch).
+--
+-- Per-CLOSED-SALE dots; x = firm_term_years at sale (linear axis),
+-- y = sold cap rate. Snapshot of last 5 years of sales — the
+-- closed counterpart to available_cap_rate_dot_plot (active listings).
+--
+-- 2 new views (applied to gov + dia DBs on 2026-05-12):
+--   cm_gov_sold_cap_by_term_dot
+--   cm_dialysis_sold_cap_by_term_dot
+--
+-- 1 new chart_template_id (LCC Opps cm_chart_catalog):
+--   sold_cap_by_term_dot_plot — applies to both verticals
+--
+-- Renderer + in-app cases follow the available_cap_rate_dot_plot
+-- pattern: linear-regression dashed trendline, x-axis auto-centers
+-- on data ±10% padding.
+--
+-- Data: gov 194 dots from last 5 years; dia similar.
+--
+-- Round 29 candidate scope:
+--   - Avail_by_Firm_Term style match vs dia equivalent
+--   - Lease Renewal chart format match
+--   - Vol_Cap_Combo in-app annotation y1 pinning audit
+-- =====================================================================

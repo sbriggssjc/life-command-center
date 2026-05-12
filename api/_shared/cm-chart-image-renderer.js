@@ -2411,6 +2411,66 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'sold_cap_by_term_dot_plot': {
+      // Round 28 — NEW: closed-sale counterpart to available_cap_rate_dot_plot.
+      // x = firm_term_years (linear, auto-centered), y = sold cap rate.
+      // Last-5-year window. Linear-regression trendline.
+      const allDots = rows
+        .filter(r => r.cap_rate != null && r.firm_term_years != null)
+        .map(r => ({
+          x: Number(r.firm_term_years),
+          y: Number(r.cap_rate),
+          nm: !!r.is_northmarq,
+        }));
+      const xs = allDots.map(d => d.x);
+      const xMinData = xs.length ? Math.min(...xs) : 0;
+      const xMaxData = xs.length ? Math.max(...xs) : 20;
+      const pad = Math.max(1, (xMaxData - xMinData) * 0.10);
+      const xMin = Math.max(0, Math.floor(xMinData - pad));
+      const xMax = Math.min(30, Math.ceil(xMaxData + pad));
+      // Least-squares regression
+      const n = allDots.length;
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (const d of allDots) { sx += d.x; sy += d.y; sxx += d.x * d.x; sxy += d.x * d.y; }
+      const denom = (n * sxx - sx * sx);
+      const m = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
+      const b = (sy - m * sx) / Math.max(n, 1);
+      const trendData = [
+        { x: xMin, y: m * xMin + b },
+        { x: xMax, y: m * xMax + b },
+      ];
+      return {
+        type: 'scatter',
+        data: {
+          datasets: [
+            { label: 'Closed sales (last 5 yr)',
+              data: allDots,
+              backgroundColor: 'rgba(98,181,229,0.55)',
+              borderColor: PDF_COLORS.cap_mid,
+              pointRadius: 4, pointStyle: 'circle',
+              showLine: false, order: 1 },
+            { label: 'Linear Trendline',
+              data: trendData, type: 'line',
+              borderColor: PDF_COLORS.cap_short,
+              backgroundColor: 'transparent',
+              borderDash: [6, 4], borderWidth: 2, pointRadius: 0,
+              showLine: true, order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.04, max: 0.12 } });
+          o.scales.x = {
+            type: 'linear', position: 'bottom', min: xMin, max: xMax,
+            title: { display: true, text: 'Firm Lease Term Remaining at Sale (Years)',
+                     color: '#6A748C', font: { family: 'Calibri', size: 10 } },
+            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            grid: { color: 'rgba(0,0,0,0.05)' },
+          };
+          return o;
+        })(),
+      };
+    }
+
     default:
       return null;
   }
