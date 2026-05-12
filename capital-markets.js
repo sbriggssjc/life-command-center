@@ -231,21 +231,36 @@
 
     switch (chart.chart_template_id) {
       case 'valuation_index': {
-        // Deliverable p.10: TTM NOI PSF / TTM Cap Rate = $ per SF
-        datasets = [{
-          label: 'Valuation Index ($/SF)',
-          data: chart.rows.map(r => r.valuation_index),
-          borderColor: palette[0],
-          backgroundColor: 'transparent',
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2.5,
-        }];
-        const opts = commonChartOptions('currency_per_sf');
+        // Round 27 — mirrors Round 20+24 server combo: sky/amber YoY%
+        // bars on right axis + navy index line on left. Round 24
+        // auto-fit right-axis range ±max(yoy_change)+10% padding.
+        const navy = brandColor('nm_navy', '#003DA5');
+        const yoyValues = chart.rows.map(r => r.yoy_change_pct ?? r.yoy_change ?? null);
+        const yoyMag = yoyValues
+          .map(v => v == null ? 0 : Math.abs(Number(v)))
+          .reduce((a, b) => Math.max(a, b), 0);
+        const yoyMax = Math.max(0.05, Math.ceil(yoyMag * 11) / 10);
+        datasets = [
+          { type: 'bar', label: 'YoY % Change',
+            data: yoyValues,
+            backgroundColor: yoyValues.map((v) =>
+              (v != null && v < 0) ? 'rgba(217,119,6,0.55)' : 'rgba(98,181,229,0.55)'),
+            borderRadius: 1, yAxisID: 'y1', order: 2 },
+          { type: 'line', label: 'Valuation Index',
+            data: chart.rows.map(r => r.valuation_index),
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+            yAxisID: 'y', order: 0 },
+        ];
+        const opts = commonChartOptions('integer_count');
         opts.scales.y.ticks.callback = (v) => '$' + Number(v).toFixed(0);
-        opts.plugins.tooltip.callbacks.label = (ctx) =>
-          `${ctx.dataset.label}: $${Number(ctx.parsed.y).toFixed(2)}/SF`;
-        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
+        opts.scales.y1 = { type: 'linear', position: 'right',
+          min: -yoyMax, max: yoyMax,
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => (v * 100).toFixed(1) + '%',
+                   color: brandColor('nm_axis','#6A748C'),
+                   font: { family: 'Calibri', size: 9 } } };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
       case 'volume_ttm_by_quarter': {
         datasets = [{
@@ -606,26 +621,37 @@
       }
       case 'seller_sentiment':
       case 'seller_sentiment_monthly': {
-        // Deliverable p.22 (quarterly) / p.35 (monthly): dual bar chart with cap rate lines on right axis
-        const opts = commonChartOptions('percent_one_decimal');
+        // Round 27 — mirrors Round 10/17/26 server config. Cap lines on
+        // LEFT axis with per-vertical range; price-change bars on RIGHT.
+        //   Gov:   cap 5.0–9.0% / price 0–8%
+        //   Dia:   cap 4.75–7.25% / price 0–70%
+        const govLike = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+        const capMin = govLike ? 0.05  : 0.0475;
+        const capMax = govLike ? 0.09  : 0.0725;
+        const pcMin  = 0;
+        const pcMax  = govLike ? 0.08  : 0.70;
+        const opts = commonChartOptions('percent_basis_points');
+        opts.scales.y.min = capMin; opts.scales.y.max = capMax;
+        opts.scales.y.ticks = opts.scales.y.ticks || {};
+        opts.scales.y.ticks.callback = tickFormatterFor('percent_basis_points');
         opts.scales.y1 = {
-          position: 'right',
+          position: 'right', min: pcMin, max: pcMax,
           ticks: { color: brandColor('nm_axis', '#6A748C'),
                    font: { family: 'Calibri, sans-serif', size: 9 },
-                   callback: tickFormatterFor('percent_basis_points') },
+                   callback: tickFormatterFor('percent_zero_decimal') },
           grid: { display: false },
         };
         datasets = [
           { type: 'bar',  label: 'Price Change %',          data: chart.rows.map(r => r.pct_price_change_all),
-            backgroundColor: palette[0], borderRadius: 1, yAxisID: 'y' },
+            backgroundColor: 'rgba(166,217,201,0.75)', borderRadius: 1, yAxisID: 'y1', order: 2 },
           { type: 'bar',  label: '8+ Yr Term Price Change %', data: chart.rows.map(r => r.pct_price_change_long_term),
-            backgroundColor: palette[1], borderRadius: 1, yAxisID: 'y' },
+            backgroundColor: 'rgba(200,182,226,0.75)', borderRadius: 1, yAxisID: 'y1', order: 2 },
           { type: 'line', label: 'Last Asking Cap (all)',   data: chart.rows.map(r => r.last_ask_cap_all),
-            borderColor: palette[4], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y', order: 0 },
           { type: 'line', label: 'Last Asking Cap (8+ yr)', data: chart.rows.map(r => r.last_ask_cap_long_term),
-            borderColor: palette[2], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' },
+            borderColor: palette[1], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y', order: 0 },
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
@@ -764,9 +790,13 @@
         return new Chart(canvas, { type: 'bar', data: { labels: yearLabels, datasets }, options: opts });
       }
       case 'renewal_rent_growth': {
+        // Round 27 — mirrors Round 26 axis widening. left $0–$70 to fit
+        // gov avg_renewal_rent_psf max $65.49; right -5%–12% to fit
+        // gov cagr_5yr max 10.68%.
         const opts = commonChartOptions('currency_per_sf');
+        opts.scales.y.min = 0; opts.scales.y.max = 70;
         opts.scales.y1 = {
-          position: 'right',
+          position: 'right', min: -0.05, max: 0.12,
           ticks: { color: brandColor('nm_axis', '#6A748C'),
                    font: { family: 'Calibri, sans-serif', size: 9 },
                    callback: tickFormatterFor('percent_one_decimal') },
@@ -787,6 +817,32 @@
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
+      case 'pace_of_cap_rate_expansion': {
+        // Round 27 — mirrors Round 16/24 server config. Nominal YoY Δ
+        // (curr - lag(12)) for cap rates + cost of capital. Navy bars
+        // (all-cohort), sky bars (Core 10+ overlay), orange line
+        // (Cost of Capital YoY).
+        const navy = brandColor('nm_navy', '#003DA5');
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const opts = commonChartOptions('percent_basis_points');
+        opts.scales.y.min = -0.025; opts.scales.y.max = 0.035;
+        datasets = [
+          { type: 'bar', label: 'Cap Rate YoY Δ (All)',
+            data: chart.rows.map(r => r.pace_all),
+            backgroundColor: navy, borderRadius: 1,
+            barPercentage: 0.7, categoryPercentage: 0.85, order: 2 },
+          { type: 'bar', label: 'Cap Rate YoY Δ (Core 10+)',
+            data: chart.rows.map(r => r.pace_core),
+            backgroundColor: 'rgba(98,181,229,0.55)', borderRadius: 1,
+            barPercentage: 0.5, categoryPercentage: 0.85, order: 1 },
+          { type: 'line', label: 'Cost of Capital YoY Δ',
+            data: chart.rows.map(r => r.pace_cost),
+            borderColor: '#D97706', backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, order: 0 },
+        ];
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
       case 'cpi_vs_renewal_cagr': {
         datasets = [
           { label: 'CPI YoY Change',     data: chart.rows.map(r => r.cpi_change),
@@ -933,21 +989,32 @@
       // ─────────────────────────────────────────────────────────────
 
       case 'core_cap_rate_dot_plot': {
-        // Per-sale dots; x = sale_date (time scale), y = cap_rate.
-        // Gov core = firm_term_years >= 6yr; Dia core = >= 10yr.
+        // Round 27 — mirrors Round 24 server rework. Single sky-dot series
+        // (no NM split per user) + 12-month rolling-average navy trendline.
+        // Cohort: firm_term_years >= 8yr (both verticals).
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
+        const dots = (chart.rows || [])
+          .filter(r => r.cap_rate != null && r.period_end != null)
+          .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }))
+          .sort((a, b) => a.x - b.x);
+        const SIX_MO_MS = 1000 * 60 * 60 * 24 * 182;
+        const trend = dots.map(d => {
+          let sum = 0, n = 0;
+          for (const o of dots) {
+            if (o.x >= d.x - SIX_MO_MS && o.x <= d.x + SIX_MO_MS) { sum += o.y; n++; }
+          }
+          return { x: d.x, y: n > 0 ? sum / n : null };
+        });
         const ds = [
-          { label: 'Market sales',
-            data: (chart.rows || []).filter(r => !r.is_northmarq && r.cap_rate != null)
-              .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) })),
+          { label: 'Core sales (firm term ≥ 8 yr)',
+            data: dots,
             backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
-            pointRadius: 3, pointStyle: 'circle' },
-          { label: 'NM-brokered',
-            data: (chart.rows || []).filter(r => r.is_northmarq && r.cap_rate != null)
-              .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) })),
-            backgroundColor: navy, borderColor: navy,
-            pointRadius: 4, pointStyle: 'rectRot' },
+            pointRadius: 3, pointStyle: 'circle', showLine: false, order: 2 },
+          { label: '12-mo Rolling Avg',
+            data: trend, type: 'line',
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5, showLine: true, order: 0 },
         ];
         const opts = commonChartOptions('percent_basis_points');
         opts.scales.x = { type: 'time', time: { unit: 'year' },
@@ -958,23 +1025,47 @@
       }
 
       case 'available_cap_rate_dot_plot': {
-        // Snapshot scatter; x = firm_term_years (linear), y = asking cap.
+        // Round 27 — mirrors Round 24 server rework. Added linear-regression
+        // trendline + x-axis auto-center on data ±10% padding (capped 0-30y).
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
-        const dots = (chart.rows || []).filter(r => r.cap_rate != null && r.firm_term_years != null)
+        const allDots = (chart.rows || [])
+          .filter(r => r.cap_rate != null && r.firm_term_years != null)
           .map(r => ({ x: Number(r.firm_term_years), y: Number(r.cap_rate), nm: !!r.is_northmarq }));
+        const xs = allDots.map(d => d.x);
+        const xMinData = xs.length ? Math.min(...xs) : 0;
+        const xMaxData = xs.length ? Math.max(...xs) : 30;
+        const pad = Math.max(1, (xMaxData - xMinData) * 0.10);
+        const xMin = Math.max(0, Math.floor(xMinData - pad));
+        const xMax = Math.min(30, Math.ceil(xMaxData + pad));
+        // Least-squares linear regression through ALL points
+        const n = allDots.length;
+        let sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (const d of allDots) { sx += d.x; sy += d.y; sxx += d.x * d.x; sxy += d.x * d.y; }
+        const denom = (n * sxx - sx * sx);
+        const m = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
+        const b = (sy - m * sx) / Math.max(n, 1);
+        const trendData = [
+          { x: xMin, y: m * xMin + b },
+          { x: xMax, y: m * xMax + b },
+        ];
         const ds = [
           { label: 'Market listings',
-            data: dots.filter(d => !d.nm),
+            data: allDots.filter(d => !d.nm),
             backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
-            pointRadius: 4, pointStyle: 'circle' },
+            pointRadius: 4, pointStyle: 'circle', showLine: false, order: 2 },
           { label: 'NM-listed',
-            data: dots.filter(d => d.nm),
+            data: allDots.filter(d => d.nm),
             backgroundColor: navy, borderColor: navy,
-            pointRadius: 5, pointStyle: 'rectRot' },
+            pointRadius: 5, pointStyle: 'rectRot', showLine: false, order: 1 },
+          { label: 'Linear Trendline',
+            data: trendData, type: 'line',
+            borderColor: navy, backgroundColor: 'transparent',
+            borderDash: [6, 4], borderWidth: 2, pointRadius: 0,
+            showLine: true, order: 0 },
         ];
         const opts = commonChartOptions('percent_basis_points');
-        opts.scales.x = { type: 'linear', position: 'bottom', min: 0, max: 30,
+        opts.scales.x = { type: 'linear', position: 'bottom', min: xMin, max: xMax,
           title: { display: true, text: 'Firm Lease Term (Years)',
             color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 10 } },
           ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 } },
