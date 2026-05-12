@@ -1778,11 +1778,35 @@ function renderLeaseStructuresTab({ wb, tabName, chart, palette, fonts, subspeci
     };
   }
   // Sort by ttm count desc; fallback to last_5_years count
-  const sortedBuckets = [...buckets.entries()].sort((a, b) => {
+  const allSortedBuckets = [...buckets.entries()].sort((a, b) => {
     const aN = (a[1].ttm?.count ?? 0) + (a[1].last_5_years?.count ?? 0);
     const bN = (b[1].ttm?.count ?? 0) + (b[1].last_5_years?.count ?? 0);
     return bN - aN;
   });
+  // Round 17 — consolidate to top 13 by combined count + an "Other"
+  // aggregate row. User: "Can we consolidate these down to maybe
+  // some ranges so we show maybe the top 12-15 total lease type
+  // categories?" Excludes "unknown" entirely (data-quality noise).
+  const TOP_N = 13;
+  const filtered = allSortedBuckets.filter(([tb]) => tb !== 'unknown' && tb !== '?');
+  const topBuckets = filtered.slice(0, TOP_N);
+  const tailBuckets = filtered.slice(TOP_N);
+  let sortedBuckets = topBuckets;
+  if (tailBuckets.length > 0) {
+    // Aggregate the tail into an "Other" row, summing counts per period
+    // and computing weighted pct. (pct is over total; sum the bucket_count
+    // shares per period.)
+    const otherRow = { current_quarter: { count: 0, pct: 0 }, ttm: { count: 0, pct: 0 }, last_5_years: { count: 0, pct: 0 } };
+    for (const [, periods] of tailBuckets) {
+      for (const pk of ['current_quarter', 'ttm', 'last_5_years']) {
+        if (periods[pk]) {
+          otherRow[pk].count += periods[pk].count || 0;
+          otherRow[pk].pct   += periods[pk].pct   || 0;
+        }
+      }
+    }
+    sortedBuckets = [...topBuckets, [`Other (${tailBuckets.length} buckets)`, otherRow]];
+  }
 
   // Column widths
   sheet.getColumn(1).width = 24;

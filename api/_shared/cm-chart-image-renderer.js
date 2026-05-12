@@ -357,11 +357,13 @@ const CAP_RATE_RANGE = { min: 0.05, max: 0.10 };
 // last-ask cap, Vol-Cap quartile band).
 const CAP_RATE_TIGHT_RANGE = { min: 0.05, max: 0.08 };
 
-// Even tighter range for Bid-Ask Last Ask Cap and Avail Mkt Size avg cap —
-// real data lives 5.8-7.5%. User feedback (2026-05-07): "the line is
-// behind and below the other data… want a tighter range… so we can see
-// the up and down movement".
-const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.080 };
+// Even tighter range for Bid-Ask Last Ask Cap and Avail Mkt Size avg cap.
+// Round 17 — widened 0.055-0.080 → 0.055-0.100 because gov data shows
+// floating bars topping at ~9.6% (avg_last_ask 8.51% + spread 1.09%);
+// the prior 8.0% ceiling was clipping the bar tops. User: "Data_Bid_Ask
+// needs the y-axis adjusted so we can view all the data in range."
+// Dialysis bars stay well within the band (top ~8.4%).
+const CAP_RATE_BID_ASK_RANGE = { min: 0.055, max: 0.100 };
 
 // % of Ask Price axis range. PDF dialysis p.33 + gov p.20 both pin
 // 84%–96% on the right axis. Switched to that exact range so our chart
@@ -885,8 +887,18 @@ function buildChartConfig(chart, brand) {
             // PDF p.33 + gov PDF p.20 right-axis labels).
             yRightRange:  PCT_OF_ASK_RANGE,
           });
-          // Annotations: peak/trough/last on % of Ask line
+          // Annotations: peak/trough/last on % of Ask line.
+          // Round 17 — pin annotations to the right-axis ('y1') so
+          // they sit on the line they describe, and nudge them above
+          // by 14px so they don't sit ON the line marker. Previously
+          // labels were "floating" (the user's word) because the
+          // default y-axis assignment landed them on the LEFT axis
+          // (DOM days) numerical space, far above the actual % line.
           const ann = buildAnnotations(rows, r => r.pct_of_ask, fmtPct1);
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),
@@ -991,8 +1003,12 @@ function buildChartConfig(chart, brand) {
       const yLeftRange  = govLike
         ? { min: 0.05, max: 0.085 }       // gov cap rate window
         : { min: 0.0475, max: 0.0725 };   // dialysis cap rate window
+      // Round 17 — tightened gov price-change axis 0.14 → 0.08. Actual
+      // gov data tops at ~7% TTM (was specced 0-14% from the dialysis
+      // p.35 deck assumption). User: "Sentiment needs the y-axis
+      // adjusted to show the movement in the price change categories."
       const yRightRange = govLike
-        ? { min: 0, max: 0.14 }           // gov price change %
+        ? { min: 0, max: 0.08 }           // gov price change %
         : { min: 0, max: 0.70 };          // dialysis price change %
       const annotations = buildAnnotations(
         rows, r => r.last_ask_cap_all, fmtPct2
@@ -1189,18 +1205,27 @@ function buildChartConfig(chart, brand) {
       opts.scales.y.stacked = true;
       opts.scales.y.max = 1.0;
       // Round 6a — per-segment % labels per user feedback "we usually
-      // label the data over each bar in percentage terms." datalabels
-      // draws the share inside each segment with white text; segments
-      // <4% get hidden to avoid overlap.
+      // label the data over each bar in percentage terms."
+      // Round 17 (re-apply) — per-dataset text color based on bar
+      // background luminance: lighter bars get DARK text, darker bars
+      // get WHITE text. User feedback (dialysis + gov): "labels on the
+      // lighter colored bars need to be in a darker text color so its
+      // readable." Index map matches dataset order below.
+      const labelColorByDatasetIndex = [
+        '#FFFFFF', // 0 Private — navy bg, white text
+        '#FFFFFF', // 1 Public REITs — mid-blue bg, white text
+        '#191919', // 2 Cross-Border — sky bg, dark text
+        '#191919', // 3 Institutional — pale bg, dark text
+      ];
       opts.plugins = opts.plugins || {};
       opts.plugins.datalabels = {
-        color: '#FFFFFF',
+        color: function (ctx) {
+          return labelColorByDatasetIndex[ctx.datasetIndex] || '#191919';
+        },
         font: { size: 10, weight: 'bold' },
-        textShadowBlur: 2,
-        textShadowColor: 'rgba(0,0,0,0.45)',
-        formatter: (value) => {
-          if (value == null || value < 0.04) return ''; // hide micro-segments
-          return `${(value * 100).toFixed(0)}%`;
+        formatter: function (value) {
+          if (value == null || value < 0.04) return '';
+          return (value * 100).toFixed(0) + '%';
         },
         anchor: 'center',
         align: 'center',
@@ -1404,17 +1429,19 @@ function buildChartConfig(chart, brand) {
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
             yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            // Round 6a — widened from 5.5%–8.5% to 5.0%–9.0% per user
-            // feedback "we need to adjust the Y-axis for the cap rates
-            // because we have data outside the range." Real data 2017+
-            // shows upper Q hits 8.58% and lower Q drops to 5.24%, both
-            // outside the prior tight band. PDF reference is also softer
-            // here than the gov 5.5–8.5 — gives breathing room without
-            // losing the quartile-band tightness.
-            yRightRange:  { min: 0.050, max: 0.090 },
+            // Round 17 — widened from 5.0–9.0% to 5.0–10.5%. Gov
+            // upper-quartile hits 10.08% and dialysis upper hits
+            // ~9.5%; the prior 9.0% cap was clipping the top of the
+            // Q1–Q3 floating bars off the chart. User: "needs to
+            // have the y-axis looked at and adjusted so all the data
+            // in cap rates are visible."
+            yRightRange:  { min: 0.050, max: 0.105 },
           });
-          // Annotations on Avg Cap Rate (the primary line — peak/trough/last)
+          // Annotations on Avg Cap Rate (the primary line — peak/trough/last).
+          // Round 17 — yAdjust=-18 nudges labels above the dot so they
+          // don't overlap the cap-rate marker.
           const ann = buildAnnotations(rows, r => r.cap_rate, fmtPct2);
+          for (const k of Object.keys(ann)) ann[k].yAdjust = -18;
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),
