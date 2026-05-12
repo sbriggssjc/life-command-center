@@ -488,13 +488,18 @@ export async function fetchHotContacts(limit = 15): Promise<any[]> {
 
 async function fetchDomainTransactionCounts(): Promise<any> {
   const ttmDate = new Date(Date.now() - 365 * 86400000).toISOString().split("T")[0];
+  // Match v_sales_comps semantics: real sales only. Excludes ownership_change
+  // stubs (sold_price=0, exclude_from_market_metrics=true) so the home page
+  // count agrees with the Government pipeline Sales Comps panel.
+  // Without these filters, gov returned 491 (~366 placeholder stubs) vs 74 real.
+  const restFilters = "&exclude_from_market_metrics=not.eq.true&sold_price=gt.0";
   const queryDomain = async (url: string | undefined, key: string | undefined, label: string) => {
     if (!url || !key) return { count: 0, label };
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
       try {
-        const res = await fetch(`${url}/rest/v1/sales_transactions?select=sale_id&sale_date=gte.${ttmDate}`, {
+        const res = await fetch(`${url}/rest/v1/sales_transactions?select=sale_id&sale_date=gte.${ttmDate}${restFilters}`, {
           headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: "count=exact" },
           signal: controller.signal,
         });
