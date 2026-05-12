@@ -1070,13 +1070,19 @@ function buildChartConfig(chart, brand) {
       // YoY field name coalesces: gov view uses `yoy_change`, dialysis
       // uses `yoy_change_pct`.
       const yoyValues = rows.map(r => r.yoy_change_pct ?? r.yoy_change ?? null);
+      // Round 24 — auto-fit right-axis range to data ±10% padding,
+      // centered on zero. User: "the y-axis needs to be adjusted to
+      // show the YOY change in view for the entire chart." Prior
+      // ±25% clipped DIA Mar 2026 (27% YoY) — and didn't expand
+      // when extremes drifted further.
+      const yoyMag = yoyValues
+        .map(v => v == null ? 0 : Math.abs(Number(v)))
+        .reduce((a, b) => Math.max(a, b), 0);
+      const yoyMax = Math.max(0.05, Math.ceil(yoyMag * 11) / 10);  // round up to nearest 10%
       const opts = comboOpts({
         yLeftFormat:  AXIS_FORMAT_INTEGER,
         yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-        // Right-axis range centered on zero so positive/negative YoY
-        // bars read symmetrically; ±25% is comfortable for both
-        // verticals' typical range.
-        yRightRange:  { min: -0.25, max: 0.25 },
+        yRightRange:  { min: -yoyMax, max: yoyMax },
       });
       // Annotations on the navy Valuation Index line (peak/trough/last).
       const annotations = buildAnnotations(rows, r => r.valuation_index, fmtIndex);
@@ -1475,10 +1481,16 @@ function buildChartConfig(chart, brand) {
             yRightRange:  { min: 0.050, max: 0.105 },
           });
           // Annotations on Avg Cap Rate (the primary line — peak/trough/last).
-          // Round 17 — yAdjust=-18 nudges labels above the dot so they
-          // don't overlap the cap-rate marker.
+          // Round 24 — pin to right axis ('y1' = % axis). Default was 'y'
+          // (left = volume $ axis), causing labels to sit at the very
+          // bottom of the chart because 0.0762 on a $0-$3B axis = ~$76K.
+          // User: "let's just adjust the labels to call out the data
+          // point and not just floating at the bottom."
           const ann = buildAnnotations(rows, r => r.cap_rate, fmtPct2);
-          for (const k of Object.keys(ann)) ann[k].yAdjust = -18;
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -18;
+          }
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),
@@ -1961,9 +1973,43 @@ function buildChartConfig(chart, brand) {
             yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
             yAxisRange: { min: -0.025, max: 0.035 },
           });
-          // Annotate most-recent + extrema on the primary navy bar series.
-          const ann = buildAnnotations(rows, r => r.pace_all, fmtPct2);
-          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          // Round 24 — user: "We're missing the high label callout."
+          // The default buildAnnotations skips max/min when they
+          // coincide with the most-recent point. For Pace_Cap_Expand
+          // we always want all three: high (sky), low (sky), latest
+          // (navy). Compose them explicitly here.
+          const points = rows
+            .map((r, i) => ({ i, x: r.period_end, y: r.pace_all }))
+            .filter(p => p.y != null && Number.isFinite(Number(p.y)));
+          if (points.length >= 2) {
+            let maxP = points[0], minP = points[0];
+            for (const p of points) {
+              if (Number(p.y) > Number(maxP.y)) maxP = p;
+              if (Number(p.y) < Number(minP.y)) minP = p;
+            }
+            const lastP = points[points.length - 1];
+            const labelStyle = (bg) => ({
+              type: 'label',
+              backgroundColor: bg,
+              color: PDF_COLORS.annotation_text,
+              font: { size: 10, family: 'Calibri', weight: 'bold' },
+              padding: { top: 2, bottom: 2, left: 5, right: 5 },
+              borderRadius: 3,
+              z: 100,
+            });
+            o.plugins.annotation = { annotations: {
+              highVal: { ...labelStyle(PDF_COLORS.annotation_sky_bg),
+                xValue: maxP.i, yValue: Number(maxP.y),
+                content: fmtPct2(Number(maxP.y)), yAdjust: -16 },
+              lowVal:  { ...labelStyle(PDF_COLORS.annotation_sky_bg),
+                xValue: minP.i, yValue: Number(minP.y),
+                content: fmtPct2(Number(minP.y)), yAdjust: 16 },
+              lastVal: { ...labelStyle(PDF_COLORS.annotation_navy_bg),
+                xValue: lastP.i, yValue: Number(lastP.y),
+                content: fmtPct2(Number(lastP.y)),
+                yAdjust: Number(lastP.y) >= 0 ? -16 : 16 },
+            }};
+          }
           return o;
         })(),
       };
@@ -1974,33 +2020,49 @@ function buildChartConfig(chart, brand) {
     // ─────────────────────────────────────────────────────────────────
 
     case 'core_cap_rate_dot_plot': {
-      // Per-sale cap-rate dot plot for "core" deals.
-      //   • Gov core  = firm_term_years >= 6
-      //   • Dia core  = firm_term_years >= 10
-      // x = sale_date (numeric ms), y = cap_rate. NM-brokered sales
-      // get a distinct color so the user can spot them on the plot.
-      const scatterAll = rows
-        .filter(r => !r.is_northmarq && r.cap_rate != null && r.period_end != null)
-        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }));
-      const scatterNM  = rows
-        .filter(r => r.is_northmarq && r.cap_rate != null && r.period_end != null)
-        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }));
+      // Round 24 — User: "only show the sales with 8+ years of lease
+      // term remaining at close and we do not need to differentiate
+      // NM sales and the balance. Just one dataset and also add a
+      // trendline that moves over time."
+      //   • Gov + Dia core  = firm_term_years >= 8  (view applies filter)
+      // x = sale_date (numeric ms), y = cap_rate.
+      // Single sky-blue dot series + a 12-month rolling-avg trendline
+      // computed in JS (sorted by date, sliding-window mean over ±6mo).
+      const dots = rows
+        .filter(r => r.cap_rate != null && r.period_end != null)
+        .map(r => ({ x: new Date(r.period_end).getTime(), y: Number(r.cap_rate) }))
+        .sort((a, b) => a.x - b.x);
+
+      // 12-month rolling average trendline. For each dot, average y of
+      // all dots with x in [center - 6mo, center + 6mo].
+      const SIX_MO_MS = 1000 * 60 * 60 * 24 * 182;
+      const trend = dots.map((d) => {
+        let sum = 0, n = 0;
+        for (const o of dots) {
+          if (o.x >= d.x - SIX_MO_MS && o.x <= d.x + SIX_MO_MS) {
+            sum += o.y; n++;
+          }
+        }
+        return { x: d.x, y: n > 0 ? sum / n : null };
+      });
+
       return {
         type: 'scatter',
         data: {
           datasets: [
-            { label: 'Market sales',
-              data: scatterAll,
+            { label: 'Core sales (firm term ≥ 8 yr)',
+              data: dots,
               backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
               borderColor: PDF_COLORS.cap_mid,
-              pointRadius: 3,
-              pointStyle: 'circle' },
-            { label: 'NM-brokered sales',
-              data: scatterNM,
-              backgroundColor: PDF_COLORS.cap_short,    // navy
-              borderColor: PDF_COLORS.cap_short,
-              pointRadius: 4,
-              pointStyle: 'rectRot' },                  // diamond
+              pointRadius: 3, pointStyle: 'circle',
+              showLine: false, order: 2 },
+            { label: '12-mo Rolling Avg',
+              data: trend,
+              type: 'line',
+              borderColor: PDF_COLORS.cap_short,         // navy line
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              showLine: true, order: 0 },
           ],
         },
         options: (() => {
@@ -2017,9 +2079,11 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'available_cap_rate_dot_plot': {
-      // Snapshot dot plot of currently active listings.
-      //   x = firm_term_years; y = current asking cap rate.
-      // NM-brokered listings get a distinct color.
+      // Round 24 — User: "let's adjust the X-axis to show the data at
+      // center of view. Let's also add a trendline to the data."
+      // x = firm_term_years; y = current asking cap rate.
+      // NM-brokered listings retain a distinct color (snapshot chart;
+      // keeps NM-vs-market split for the available-inventory view).
       const allDots = rows
         .filter(r => r.cap_rate != null && r.firm_term_years != null)
         .map(r => ({
@@ -2029,6 +2093,28 @@ function buildChartConfig(chart, brand) {
         }));
       const scatterAll = allDots.filter(d => !d.nm);
       const scatterNM  = allDots.filter(d =>  d.nm);
+
+      // Auto-center x-axis around data ±10% padding, capped to [0, 30]
+      const xs = allDots.map(d => d.x);
+      const xMinData = xs.length ? Math.min(...xs) : 0;
+      const xMaxData = xs.length ? Math.max(...xs) : 30;
+      const pad = Math.max(1, (xMaxData - xMinData) * 0.10);
+      const xMin = Math.max(0, Math.floor(xMinData - pad));
+      const xMax = Math.min(30, Math.ceil(xMaxData + pad));
+
+      // Linear-regression trendline through ALL points (combined)
+      // y = mx + b; compute by least-squares.
+      const n = allDots.length;
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (const d of allDots) { sx += d.x; sy += d.y; sxx += d.x * d.x; sxy += d.x * d.y; }
+      const denom = (n * sxx - sx * sx);
+      const m = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
+      const b = (sy - m * sx) / Math.max(n, 1);
+      const trendData = [
+        { x: xMin, y: m * xMin + b },
+        { x: xMax, y: m * xMax + b },
+      ];
+
       return {
         type: 'scatter',
         data: {
@@ -2037,12 +2123,23 @@ function buildChartConfig(chart, brand) {
               data: scatterAll,
               backgroundColor: 'rgba(98,181,229,0.55)',
               borderColor: PDF_COLORS.cap_mid,
-              pointRadius: 4, pointStyle: 'circle' },
+              pointRadius: 4, pointStyle: 'circle',
+              showLine: false, order: 2 },
             { label: 'NM-brokered listings',
               data: scatterNM,
               backgroundColor: PDF_COLORS.cap_short,
               borderColor: PDF_COLORS.cap_short,
-              pointRadius: 5, pointStyle: 'rectRot' },
+              pointRadius: 5, pointStyle: 'rectRot',
+              showLine: false, order: 1 },
+            { label: 'Linear Trendline',
+              data: trendData,
+              type: 'line',
+              borderColor: PDF_COLORS.cap_short,
+              backgroundColor: 'transparent',
+              borderDash: [6, 4],
+              borderWidth: 2,
+              pointRadius: 0,
+              showLine: true, order: 0 },
           ],
         },
         options: (() => {
@@ -2050,8 +2147,8 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'linear',
             position: 'bottom',
-            min: 0,
-            max: 30,
+            min: xMin,
+            max: xMax,
             title: { display: true, text: 'Firm Lease Term (Years)', color: '#6A748C', font: { family: 'Calibri', size: 10 } },
             ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
             grid: { color: 'rgba(0,0,0,0.05)' },

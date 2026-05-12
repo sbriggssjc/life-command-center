@@ -150,18 +150,17 @@ const SYNTHETIC_COMPOSERS = {
   },
 
   // Round 3c — Buyer_Pool_Monthly_Count (PDF dialysis p.27). Stacked
-  // monthly bars with Private/Institutional-Fund/REIT counts. Distinct
-  // from buyer_class_pct_by_year (annual %-stacked) used by gov p.18.
+  // monthly bars with Private/Institutional-Fund/REIT counts.
   //
-  // Round 15 — was `() => []` "no-op fallback" expecting the master_m
-  // mapper to fill rows, but the mapper only iterates over realCharts
-  // (synthetic templates were never reached). User flagged the tab
-  // as blank. Composer now pulls from buyer_pool_breakdown's rows
-  // (which the master_m mapper DOES fill with the same count columns).
-  'buyer_pool_monthly_count': ({ allCharts }) => {
-    const src = allCharts.find((c) => c.chart_template_id === 'buyer_pool_breakdown')?.rows;
-    if (!Array.isArray(src) || !src.length) return [];
-    return src.map((r) => ({
+  // Round 24 — Round 15 fix referenced `buyer_pool_breakdown` which
+  // doesn't exist as a chart_template_id in the catalog (the master_m
+  // mapper writes those fields but only when a chart with that ID is
+  // built — and one never is). Read directly from masterMonthlyRows
+  // instead, which already has private_count / institutional_count /
+  // reit_count / cross_border_count columns.
+  'buyer_pool_monthly_count': ({ masterMonthlyRows }) => {
+    if (!Array.isArray(masterMonthlyRows) || !masterMonthlyRows.length) return [];
+    return masterMonthlyRows.map((r) => ({
       period_end: r.period_end,
       private_count:        r.private_count != null        ? Number(r.private_count)        : 0,
       institutional_count:  r.institutional_count != null  ? Number(r.institutional_count)  : 0,
@@ -247,23 +246,37 @@ const SYNTHETIC_COMPOSERS = {
   // already computes quarterly_volume + quarterly_count). We pull from the
   // existing volume_ttm_by_quarter chart's row stream because it carries
   // both ttm and per-quarter fields after Round GD1 fixes.
-  'quarterly_volume_bars': ({ allCharts }) => {
-    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
-    const volRows = find('volume_ttm_by_quarter');
-    if (!volRows.length) return [];
-    // Strip TTM-only entries (period_end with no quarterly_volume) and
-    // dedupe to one row per period_end.
+  'quarterly_volume_bars': ({ allCharts, masterMonthlyRows }) => {
+    // Round 24 — Read from masterMonthlyRows first (has quarterly_volume
+    // + quarterly_count on every row). Fall back to volume_ttm_by_quarter
+    // when master_m isn't loaded. User reported the tab as blank again
+    // — root cause was that volume_ttm_by_quarter wrapper view returns
+    // only ttm columns (no quarterly_*), so the old find() never matched.
     const byPeriod = new Map();
-    for (const r of volRows) {
-      const k = r.period_end;
-      const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
-                  ?? r.volume_dollars_quarterly;
-      if (qv == null) continue;
-      byPeriod.set(k, {
-        period_end: k,
-        quarterly_volume: Number(qv),
-        quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
-      });
+    if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length) {
+      for (const r of masterMonthlyRows) {
+        const qv = r.quarterly_volume ?? r.volume_quarter ?? r.volume_dollars_quarterly;
+        if (qv == null) continue;
+        byPeriod.set(r.period_end, {
+          period_end: r.period_end,
+          quarterly_volume: Number(qv),
+          quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+        });
+      }
+    }
+    if (byPeriod.size === 0) {
+      const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+      const volRows = find('volume_ttm_by_quarter');
+      for (const r of volRows) {
+        const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
+                    ?? r.volume_dollars_quarterly;
+        if (qv == null) continue;
+        byPeriod.set(r.period_end, {
+          period_end: r.period_end,
+          quarterly_volume: Number(qv),
+          quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+        });
+      }
     }
     return [...byPeriod.values()].sort((a, b) =>
       String(a.period_end) < String(b.period_end) ? -1 : 1
@@ -1146,7 +1159,16 @@ async function exportWorkbook(req, res) {
     const composer = syntheticRecipeFor(tmpl);
     let rows = [];
     try {
-      rows = composer({ vertical, subspecialty, asOf: as_of, allCharts: realCharts }) || [];
+      // Round 24 — also pass masterMonthlyRows so synth composers that
+      // need monthly buyer-class or quarterly-volume data can read it
+      // directly. Round 15 fix for buyer_pool_monthly_count referenced
+      // a non-existent `buyer_pool_breakdown` chart_template_id; this
+      // gives the composer the master_m rows it really needs.
+      rows = composer({
+        vertical, subspecialty, asOf: as_of,
+        allCharts: realCharts,
+        masterMonthlyRows,
+      }) || [];
     } catch { /* swallow — synthetic comp must not fail the workbook */ }
     // If any realChart this composer reads has cadence='monthly', the
     // synth output is also monthly (composer just maps row-by-row). Tag
