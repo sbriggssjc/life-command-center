@@ -1110,19 +1110,38 @@ function govOwnershipAnnotate(rec) {
   const hasTrueOwner = !!(rec.true_owner_name && String(rec.true_owner_name).trim());
   const ownerCount = (hasRecordedOwner ? 1 : 0) + (hasTrueOwner ? 1 : 0);
 
-  // Comp-on-file detection: a sales_transactions row with the same
-  // lease_number whose sale_date sits within ±90d of the transfer_date.
+  // Comp-on-file detection — mirrors gov_auto_resolve_ownership so the
+  // queue ranks rows the sweep would auto-resolve at the bottom even
+  // before the sweep runs. Three match tiers:
+  //   strict   — same lease_number + sale_date within ±90d of transfer_date
+  //   loose    — same lease_number, ±365d window OR either date null
+  //   property — same property_id + sale_date within ±90d of transfer_date
   let compMatch = null;
-  if (rec.lease_number && Array.isArray(govData.salesComps)) {
+  let compMatchTier = null;
+  if (Array.isArray(govData.salesComps)) {
     const transferTs = rec.transfer_date ? new Date(rec.transfer_date).getTime() : null;
-    const window = 90 * 86400 * 1000;
-    const ln = norm(rec.lease_number);
+    const strictWin = 90 * 86400 * 1000;
+    const looseWin = 365 * 86400 * 1000;
+    const ln = rec.lease_number ? norm(rec.lease_number) : null;
+    const pid = rec.property_id != null ? rec.property_id : null;
+    let strict = null, loose = null, property = null;
     for (const c of govData.salesComps) {
-      if (norm(c.lease_number) !== ln) continue;
-      if (!transferTs) { compMatch = c; break; }
       const ct = c.sale_date ? new Date(c.sale_date).getTime() : null;
-      if (ct && Math.abs(ct - transferTs) <= window) { compMatch = c; break; }
+      const cln = c.lease_number ? norm(c.lease_number) : null;
+      const leaseMatch = ln && cln && cln === ln;
+      const propertyMatch = pid != null && c.property_id != null && c.property_id === pid;
+      if (leaseMatch) {
+        if (transferTs && ct && Math.abs(ct - transferTs) <= strictWin) { strict = strict || c; }
+        else if (!transferTs || !ct || Math.abs(ct - transferTs) <= looseWin) { loose = loose || c; }
+      }
+      if (!strict && propertyMatch && transferTs && ct && Math.abs(ct - transferTs) <= strictWin) {
+        property = property || c;
+      }
+      if (strict) break;
     }
+    if (strict)        { compMatch = strict;   compMatchTier = 'strict'; }
+    else if (loose)    { compMatch = loose;    compMatchTier = 'loose'; }
+    else if (property) { compMatch = property; compMatchTier = 'property'; }
   }
 
   const missing = [];
@@ -1140,6 +1159,7 @@ function govOwnershipAnnotate(rec) {
   else priority = 1;
 
   rec._compOnFile = !!compMatch;
+  rec._compMatchTier = compMatchTier;
   rec._matchedComp = compMatch;
   rec._missingFields = missing;
   rec._priority = priority;
@@ -1182,10 +1202,12 @@ window.govOwnershipSweepPreview = async function() {
       return;
     }
     const labels = {
-      empty_shell:  'Empty shells (only true_owner_name)',
-      placeholder:  'Boilerplate prior_owner ("Unknown" / "Previous Owner")',
-      comp_on_file: 'Comp already in sales_transactions (±90d match)',
-      exact_dup:    'Exact-duplicate event rows (same lease + date + new_owner)'
+      empty_shell:           'Empty shells (only true_owner_name)',
+      placeholder:           'Boilerplate prior_owner ("Unknown" / "Previous Owner")',
+      comp_on_file:          'Comp already in sales_transactions (±90d match)',
+      comp_on_file_loose:    'Comp already in sales_transactions (same lease, ±365d or null date)',
+      comp_on_file_property: 'Comp already in sales_transactions (property_id + ±90d match)',
+      exact_dup:             'Exact-duplicate event rows (same lease + date + new_owner)'
     };
     const lines = buckets
       .filter(b => Number(b.matched) > 0)
@@ -1195,7 +1217,7 @@ window.govOwnershipSweepPreview = async function() {
       'Auto-resolve ' + total + ' ownership_history row' + (total === 1 ? '' : 's') + '?\n\n' + lines + '\n\n' +
       'Empty shells → research_status="junk_no_data"\n' +
       'Placeholder rows → research_status="junk_placeholder"\n' +
-      'Comp-on-file → research_status="comp_on_file"\n' +
+      'Comp-on-file (all three buckets) → research_status="comp_on_file", matched_sale_id linked\n' +
       'Exact-dup events → research_status="duplicate_of_event" (oldest row kept)\n\n' +
       'You can re-run this sweep any time.',
       'Apply sweep'
@@ -1712,11 +1734,16 @@ function renderOwnershipResearchCard(rec) {
   if (rec._compOnFile && rec._matchedComp) {
     const c = rec._matchedComp;
     const sd = c.sale_date ? String(c.sale_date).substring(0, 10) : '—';
+    const tierLabel = rec._compMatchTier === 'loose'
+      ? 'lease match · wider date window'
+      : rec._compMatchTier === 'property'
+        ? 'property match · ±90d'
+        : 'lease match · ±90d';
     html += '<div class="own-comp-banner">';
     html += '<div class="own-comp-banner-row">';
     html += '<span class="own-comp-banner-icon">✓</span>';
     html += '<span class="own-comp-banner-label">Comp already on file</span>';
-    html += `<span class="own-comp-banner-meta">${esc(sd)} · ${c.sold_price ? fmt(c.sold_price) : 'price unknown'}${c.sold_cap_rate ? ' · ' + (Number(c.sold_cap_rate) * 100).toFixed(2) + '%' : ''}</span>`;
+    html += `<span class="own-comp-banner-meta">${esc(sd)} · ${c.sold_price ? fmt(c.sold_price) : 'price unknown'}${c.sold_cap_rate ? ' · ' + (Number(c.sold_cap_rate) * 100).toFixed(2) + '%' : ''} · ${esc(tierLabel)}</span>`;
     html += '</div>';
     html += '<div class="own-comp-banner-sub">This ownership row duplicates a sales_transactions record — clear it with <strong>Already on file</strong> below.</div>';
     html += '</div>';
