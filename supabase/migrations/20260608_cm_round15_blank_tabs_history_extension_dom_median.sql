@@ -1,0 +1,31 @@
+-- =====================================================================
+-- Round 15 — Multi-issue cleanup batch from the 2026-03-31 dialysis
+-- export feedback.
+--
+-- Applied to Dialysis_DB (zqzrriwuavgrquhisnoa) and gov DB
+-- (scknotsqkcheojiaewwh) on 2026-05-12.
+--
+-- 1) cm_dialysis_bid_ask_spread_m   — extend to 2001 (was 2018+)
+-- 2) cm_dialysis_seller_sentiment_m — extend to 2001 (was 2018+)
+-- 3) cm_dialysis_volume_ttm_m       — expose quarterly_volume + count
+--                                      (fixes blank Data_Volume_Quarterly
+--                                       and Quarterly_Volume_Bars tabs)
+-- 4) cm_gov_volume_ttm_m            — same fix as (3) for gov parity
+-- 5) cm_dialysis_dom_pct_ask_m      — add median_dom + median_pct_of_ask
+--                                      as sanity-check columns. Long-DOM
+--                                      tail (stale 8-9yr listings finally
+--                                      clearing) drives avg up to ~1000d;
+--                                      median tells the typical-listing
+--                                      story (~280-600 days).
+--
+-- LCC-side companions:
+--   • api/capital-markets.js — buyer_pool_monthly_count synth composer
+--     rewritten to pull from buyer_pool_breakdown (was no-op fallback
+--     waiting for master_m mapper that never reached synth charts).
+--   • api/_shared/cm-chart-image-renderer.js — Data_Buyer_Pool stacked-bar
+--     datalabel color per-dataset (dark text on lighter bars).
+--   • api/_shared/cm-excel-export.js — DOM data tab adds median columns.
+--
+-- See:
+--   - DialysisProject/supabase/migrations for the actual view bodies
+-- =====================================================================

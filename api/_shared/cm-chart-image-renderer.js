@@ -1054,26 +1054,46 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'valuation_index': {
-      const annotations = buildAnnotations(
-        rows, r => r.valuation_index, fmtIndex
-      );
-      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+      // Round 20 — Combo: navy line for Valuation Index (left axis) +
+      // sky-blue YoY% bars (right axis), matching master deck p.17.
+      // YoY field name coalesces: gov view uses `yoy_change`, dialysis
+      // uses `yoy_change_pct`.
+      const yoyValues = rows.map(r => r.yoy_change_pct ?? r.yoy_change ?? null);
+      const opts = comboOpts({
+        yLeftFormat:  AXIS_FORMAT_INTEGER,
+        yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+        // Right-axis range centered on zero so positive/negative YoY
+        // bars read symmetrically; ±25% is comfortable for both
+        // verticals' typical range.
+        yRightRange:  { min: -0.25, max: 0.25 },
+      });
+      // Annotations on the navy Valuation Index line (peak/trough/last).
+      const annotations = buildAnnotations(rows, r => r.valuation_index, fmtIndex);
+      for (const k of Object.keys(annotations)) annotations[k].yAdjust = -14;
       if (Object.keys(annotations).length) {
         opts.plugins.annotation = { annotations };
       }
       return {
-        type: 'line',
+        type: 'bar',
         data: {
           labels,
-          datasets: [{
-            label: 'Valuation Index',
-            data: rows.map(r => r.valuation_index),
-            borderColor: palette[0],
-            backgroundColor: 'transparent',
-            tension: 0.3,
-            pointRadius: 0,
-            borderWidth: 2.5,
-          }],
+          datasets: [
+            // Bars BEHIND the line (order: 2 = drawn first)
+            { type: 'bar', label: 'YoY % Change',
+              data: yoyValues,
+              backgroundColor: rows.map((r, i) => (yoyValues[i] != null && yoyValues[i] < 0)
+                ? 'rgba(217,119,6,0.55)'        // amber for declines
+                : 'rgba(98,181,229,0.55)'),     // sky for gains
+              borderRadius: 1,
+              yAxisID: 'y1', order: 2 },
+            // Index line on top (order: 0 = drawn last)
+            { type: 'line', label: 'Valuation Index',
+              data: rows.map(r => r.valuation_index),
+              borderColor: palette[0],          // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y', order: 0 },
+          ],
         },
         options: opts,
       };
@@ -1206,6 +1226,12 @@ function buildChartConfig(chart, brand) {
       opts.scales.y.max = 1.0;
       // Round 6a — per-segment % labels per user feedback "we usually
       // label the data over each bar in percentage terms."
+      // Round 15 — per-dataset text color based on bar background luminance
+      // so labels on lighter bars (Cross-Border sky, Institutional pale)
+      // get DARK text and labels on darker bars (Private navy, Public REIT
+      // mid-blue) get WHITE text. User feedback: "labels on the lighter
+      // colored bars need to be in a darker text color so its readable."
+      // Index map matches dataset order below.
       // Round 17 (re-apply) — per-dataset text color based on bar
       // background luminance: lighter bars get DARK text, darker bars
       // get WHITE text. User feedback (dialysis + gov): "labels on the
@@ -2074,6 +2100,173 @@ function buildChartConfig(chart, brand) {
             },
           };
           return opts;
+        })(),
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Round 19 — Market Turnover + Inventory Backlog
+    // ─────────────────────────────────────────────────────────────────
+
+    case 'market_turnover': {
+      // Single-line time series — turnover_rate (TTM sales / market universe).
+      // Y-axis range adapts: gov data lands 1-3%, dia 20-30%, so use
+      // auto-scaling with a friendly minimum.
+      const data = rows.map(r => Number(r.turnover_rate));
+      const finiteData = data.filter(v => Number.isFinite(v));
+      const dataMax = finiteData.length ? Math.max(...finiteData) : 0.05;
+      const yMax = dataMax > 0.10 ? Math.ceil(dataMax * 20) / 20 : 0.05;
+      return {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Turnover Rate (TTM)',
+            data,
+            borderColor: palette[0],
+            backgroundColor: palette[3],
+            fill: true,
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+          }],
+        },
+        options: (() => {
+          const o = commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
+            yAxisRange: { min: 0, max: yMax },
+          });
+          const ann = buildAnnotations(rows, r => r.turnover_rate, fmtPct1);
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
+    case 'inventory_backlog': {
+      // Combo: bars = active listings (left axis), line = months of supply
+      // (right axis). For gov, historical bars are sparse until ~2024
+      // when listing tracking became reliable; recent values are the
+      // meaningful signal. For dia, both series are robust 2018+.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Active Listings',
+              data: rows.map(r => Number(r.active_count) || 0),
+              backgroundColor: palette[3],         // pale fill
+              borderColor: palette[1],             // sky border
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Months of Supply',
+              data: rows.map(r => r.months_of_supply != null ? Number(r.months_of_supply) : null),
+              borderColor: palette[0],             // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_INTEGER,
+            yRightFormat: AXIS_FORMAT_INTEGER,
+          });
+          // Right-axis tick suffix — months.
+          o.scales.y1.ticks = o.scales.y1.ticks || {};
+          o.scales.y1.ticks.callback = function (v) { return v + ' mo'; };
+          // Annotate months-of-supply (the more interesting line).
+          const ann = buildAnnotations(rows, r => r.months_of_supply, function (v) {
+            return Number(v).toFixed(1) + ' mo';
+          });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Round 20 — PDF parity charts
+    // ─────────────────────────────────────────────────────────────────
+
+    case 'txn_count_avg_deal_combo': {
+      // Master deck p.8 (dia) / p.17 (gov): bars = TTM transaction count
+      // (left axis, integer); line = avg deal size (right axis, currency).
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'TTM Transactions',
+              data: rows.map(r => Number(r.ttm_count) || 0),
+              backgroundColor: palette[3],          // pale fill
+              borderColor: palette[1],              // sky border
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Deal Size',
+              data: rows.map(r => r.avg_deal_size != null ? Number(r.avg_deal_size) : null),
+              borderColor: palette[0],              // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_INTEGER,
+            yRightFormat: AXIS_FORMAT_CURRENCY_COMPACT,
+          });
+          // Annotate the navy avg-deal-size line.
+          const ann = buildAnnotations(rows, r => r.avg_deal_size,
+            function (v) { return '$' + (Number(v) / 1_000_000).toFixed(1) + 'M'; });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
+    case 'rent_and_price_psf': {
+      // Master deck p.9 (gov): bars = rent PSF (left $), line = price PSF
+      // (right $). Both TTM-rolling.
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Avg Rent / SF (TTM)',
+              data: rows.map(r => r.rent_psf != null ? Number(r.rent_psf) : null),
+              backgroundColor: PDF_COLORS.cap_mid,   // sky #62B5E5
+              borderColor: PDF_COLORS.cap_mid,
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Sale Price / SF (TTM)',
+              data: rows.map(r => r.price_psf != null ? Number(r.price_psf) : null),
+              borderColor: palette[0],               // navy
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_CURRENCY,    // $XX (rent PSF)
+            yRightFormat: AXIS_FORMAT_CURRENCY,    // $XXX (price PSF)
+            yLeftRange:   { min: 0, max: 50 },     // rent $0-$50/SF
+          });
+          const ann = buildAnnotations(rows, r => r.price_psf,
+            function (v) { return '$' + Math.round(v); });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
         })(),
       };
     }

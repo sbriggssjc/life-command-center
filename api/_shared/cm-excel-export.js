@@ -358,6 +358,35 @@ const CHART_COLUMNS = {
     { key: 'lower_quartile_cap',  header: 'Lower Q Cap',       format: 'percent_basis_points', width: 14 },
     { key: 'period_end',          header: 'As of',             format: 'date_short',          width: 13 },
   ],
+  // Round 19 — Market activity
+  market_turnover: [
+    { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',      width: 14 },
+    { key: 'ttm_sales_count',    header: 'TTM Sales',         format: 'integer_count',       width: 13 },
+    { key: 'market_universe',    header: 'Market Universe',   format: 'integer_count',       width: 16 },
+    { key: 'turnover_rate',      header: 'Turnover Rate',     format: 'percent_one_decimal', width: 14 },
+  ],
+  inventory_backlog: [
+    { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',      width: 14 },
+    { key: 'active_count',       header: 'Active Listings',   format: 'integer_count',       width: 16 },
+    { key: 'ttm_sales',          header: 'TTM Sales',         format: 'integer_count',       width: 13 },
+    { key: 'months_of_supply',   header: 'Months of Supply',  format: 'number_one_decimal',  width: 17 },
+  ],
+  // Round 20 — PDF-parity combos
+  txn_count_avg_deal_combo: [
+    { key: 'period_end',         header: 'Period End',        format: 'date_short',          width: 13 },
+    { key: 'ttm_count',          header: 'TTM Transactions',  format: 'integer_count',       width: 17 },
+    { key: 'avg_deal_size',      header: 'Avg Deal Size ($)', format: 'currency_dollars',    width: 19 },
+  ],
+  rent_and_price_psf: [
+    { key: 'period_end',         header: 'Quarter End',           format: 'date_short',       width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',          width: 14 },
+    { key: 'rent_psf',           header: 'Avg Rent / SF (TTM)',   format: 'currency_per_sf',  width: 20 },
+    { key: 'price_psf',          header: 'Avg Sale Price / SF',   format: 'currency_per_sf',  width: 22 },
+    { key: 'n_with_rent_ttm',    header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
+    { key: 'n_with_price_ttm',   header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
+  ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
@@ -429,10 +458,16 @@ const CHART_COLUMNS = {
     { key: 'institutional_pct',     header: 'Institutional %',     format: 'percent_zero_decimal', width: 16 },
   ],
   dom_and_pct_of_ask: [
-    { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
-    { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    { key: 'avg_dom',          header: 'Avg DOM (days)',      format: 'integer_count',       width: 14 },
-    { key: 'pct_of_ask',       header: '% of Ask Price',      format: 'percent_one_decimal', width: 16 },
+    { key: 'period_end',          header: 'Quarter End',           format: 'date_short',          width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',          width: 14 },
+    { key: 'avg_dom',             header: 'Avg DOM (days)',        format: 'integer_count',       width: 14 },
+    // Round 15 — median surfaced alongside avg as a sanity check. Long-DOM
+    // stale listings (8-9yr clearings) drag avg up while median reflects
+    // the typical fresh-listing experience. See dia DOM view for full
+    // calc + 0-3650 day cap.
+    { key: 'median_dom',          header: 'Median DOM (days)',     format: 'integer_count',       width: 17 },
+    { key: 'pct_of_ask',          header: '% of Ask Price',        format: 'percent_one_decimal', width: 16 },
+    { key: 'median_pct_of_ask',   header: 'Median % of Ask',       format: 'percent_one_decimal', width: 17 },
   ],
   bid_ask_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -716,6 +751,12 @@ const TAB_NAMES = {
   core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
   available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',
   available_by_firm_term_summary:   'Data_Avail_by_Firm_Term',
+  // Round 19 — market-activity charts (both verticals)
+  market_turnover:                  'Data_Market_Turnover',
+  inventory_backlog:                'Data_Inventory_Backlog',
+  // Round 20 — PDF-parity combos
+  txn_count_avg_deal_combo:         'Data_Txn_AvgDeal_Combo',
+  rent_and_price_psf:               'Data_Rent_Price_PSF',
   dom_and_pct_of_ask:           'Data_DOM_Ask',
   bid_ask_spread:               'Data_Bid_Ask',
   // Phase 2c additions

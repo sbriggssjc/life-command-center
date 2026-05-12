@@ -152,8 +152,23 @@ const SYNTHETIC_COMPOSERS = {
   // Round 3c — Buyer_Pool_Monthly_Count (PDF dialysis p.27). Stacked
   // monthly bars with Private/Institutional-Fund/REIT counts. Distinct
   // from buyer_class_pct_by_year (annual %-stacked) used by gov p.18.
-  // No-op fallback; the master_m mapper fills rows.
-  'buyer_pool_monthly_count': () => [],
+  //
+  // Round 15 — was `() => []` "no-op fallback" expecting the master_m
+  // mapper to fill rows, but the mapper only iterates over realCharts
+  // (synthetic templates were never reached). User flagged the tab
+  // as blank. Composer now pulls from buyer_pool_breakdown's rows
+  // (which the master_m mapper DOES fill with the same count columns).
+  'buyer_pool_monthly_count': ({ allCharts }) => {
+    const src = allCharts.find((c) => c.chart_template_id === 'buyer_pool_breakdown')?.rows;
+    if (!Array.isArray(src) || !src.length) return [];
+    return src.map((r) => ({
+      period_end: r.period_end,
+      private_count:        r.private_count != null        ? Number(r.private_count)        : 0,
+      institutional_count:  r.institutional_count != null  ? Number(r.institutional_count)  : 0,
+      reit_count:           r.reit_count != null           ? Number(r.reit_count)           : 0,
+      cross_border_count:   r.cross_border_count != null   ? Number(r.cross_border_count)   : 0,
+    }));
+  },
 
   // Round 4b — Available_by_Tenant donuts (PDF dialysis p.32). Both
   // donuts source from cm_dialysis_available_by_tenant for the LATEST
@@ -249,6 +264,31 @@ const SYNTHETIC_COMPOSERS = {
         quarterly_volume: Number(qv),
         quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
       });
+    }
+    return [...byPeriod.values()].sort((a, b) =>
+      String(a.period_end) < String(b.period_end) ? -1 : 1
+    );
+  },
+
+  // Round 20 — Trans Count + Avg Deal Size combo (master deck p.8/p.17).
+  // Synth composer joins transaction_count_ttm and avg_deal_size charts
+  // by period_end so the renderer can build a single combo (bars + line).
+  'txn_count_avg_deal_combo': ({ allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const txnRows = find('transaction_count_ttm');
+    const avgRows = find('avg_deal_size');
+    if (txnRows.length === 0 && avgRows.length === 0) return [];
+    const byPeriod = new Map();
+    for (const r of txnRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      // master_m mapper emits `ttm_count`; raw _q view emits `transaction_count_ttm`
+      byPeriod.get(k).ttm_count = r.ttm_count ?? r.transaction_count_ttm;
+    }
+    for (const r of avgRows) {
+      const k = r.period_end;
+      if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
+      byPeriod.get(k).avg_deal_size = r.avg_deal_size;
     }
     return [...byPeriod.values()].sort((a, b) =>
       String(a.period_end) < String(b.period_end) ? -1 : 1
