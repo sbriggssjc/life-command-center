@@ -1,0 +1,36 @@
+-- =====================================================================
+-- Round 20 — 3 PDF-parity items shipped (first batch of 8 deferred
+-- from Round 16):
+--
+-- 1) Val Index YOY% overlay (master deck p.17)
+--    • Gov: added `yoy_change` column to cm_gov_valuation_index_q.
+--    • Dia: already had `yoy_change_pct`; renderer coalesces both.
+--    • Renderer rebuilds the chart as a combo (sky/amber YoY bars +
+--      navy index line). Negative-YoY bars use amber, positive use
+--      sky-blue.
+--
+-- 2) Trans Count + Avg Deal Size combo (master deck p.8/p.17)
+--    • NEW chart_template_id `txn_count_avg_deal_combo`.
+--    • Synthetic composer joins transaction_count_ttm and avg_deal_size
+--      rows by period_end.
+--    • Renderer: pale bars (TTM count, left axis int) + navy line
+--      (avg deal $, right axis compact currency).
+--
+-- 3) Rent & Price PSF combo (master deck p.9, gov only)
+--    • NEW view `cm_gov_rent_price_psf_q` (4-quarter TTM rolling
+--      avg of gross_rent_psf and price_psf with the same outlier
+--      bands as cm_gov_valuation_index_q).
+--    • NEW chart_template_id `rent_and_price_psf` (gov only —
+--      dialysis equivalent already exists via rent_psf_box).
+--    • Renderer: sky bars (rent PSF, left $0-$50/SF) + navy line
+--      (price PSF, right axis).
+--
+-- Deferred to follow-up rounds (need explicit PDF reference compare):
+--   • Renewal Rent + Growth Rate Over Time chart refinement
+--   • Lease Renewal + Termination chart formatting
+--   • Cap Rate Comparison match (cap_rate_by_lease_term)
+--   • DOM + % of Ask layout match
+--   • Rent by Year Built scatter + whiskers
+--
+-- Applied to gov DB (scknotsqkcheojiaewwh) + LCC Opps on 2026-05-12.
+-- =====================================================================

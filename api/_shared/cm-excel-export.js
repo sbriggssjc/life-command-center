@@ -373,6 +373,20 @@ const CHART_COLUMNS = {
     { key: 'ttm_sales',          header: 'TTM Sales',         format: 'integer_count',       width: 13 },
     { key: 'months_of_supply',   header: 'Months of Supply',  format: 'number_one_decimal',  width: 17 },
   ],
+  // Round 20 — PDF-parity combos
+  txn_count_avg_deal_combo: [
+    { key: 'period_end',         header: 'Period End',        format: 'date_short',          width: 13 },
+    { key: 'ttm_count',          header: 'TTM Transactions',  format: 'integer_count',       width: 17 },
+    { key: 'avg_deal_size',      header: 'Avg Deal Size ($)', format: 'currency_dollars',    width: 19 },
+  ],
+  rent_and_price_psf: [
+    { key: 'period_end',         header: 'Quarter End',           format: 'date_short',       width: 13 },
+    { key: 'subspecialty',       header: 'Subspecialty',          width: 14 },
+    { key: 'rent_psf',           header: 'Avg Rent / SF (TTM)',   format: 'currency_per_sf',  width: 20 },
+    { key: 'price_psf',          header: 'Avg Sale Price / SF',   format: 'currency_per_sf',  width: 22 },
+    { key: 'n_with_rent_ttm',    header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
+    { key: 'n_with_price_ttm',   header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
+  ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
@@ -740,6 +754,9 @@ const TAB_NAMES = {
   // Round 19 — market-activity charts (both verticals)
   market_turnover:                  'Data_Market_Turnover',
   inventory_backlog:                'Data_Inventory_Backlog',
+  // Round 20 — PDF-parity combos
+  txn_count_avg_deal_combo:         'Data_Txn_AvgDeal_Combo',
+  rent_and_price_psf:               'Data_Rent_Price_PSF',
   dom_and_pct_of_ask:           'Data_DOM_Ask',
   bid_ask_spread:               'Data_Bid_Ask',
   // Phase 2c additions
