@@ -149,6 +149,87 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   - Documentation-only change, revert added/edited markdown files if needed.
 - Owner: LCC architecture/audit track.
 
+### 2026-05-12 — Export Round 5 Documentation Ingestion
+- Flow name:
+  - `SyncFlaggedEmailstoSupabase` (Graph Pull Variant)
+  - `SyncFlaggedEmailstoSupabase` (Supabase Push Variant)
+  - `UnflagCompletedEmailTasks`
+  - `Recovery-ReflagCompletedEmails`
+- Flow version/export artifact:
+  - `SyncFlaggedEmailstoSupabase_20260512135251.zip`
+  - `SyncFlaggedEmailstoSupabase_20260512135136.zip`
+  - `UnflagCompletedEmailTasks_20260512135227.zip`
+  - `Recovery-ReflagCompletedEmails_20260512135202.zip`
+- Risk tier: `P0` (credential exposure), `P1` (state sync semantics), `P2` (variant drift)
+- Change summary:
+  - Added 3 new detail docs (including split-variant analysis for SyncFlaggedEmailstoSupabase).
+  - Updated master registry with flagged-email sync and flag-state maintenance flows.
+  - Logged new P0 credential exposure on the flagged-email Supabase push variant.
+- Exact steps changed:
+  - Created markdown docs under `docs/architecture/flows/`.
+  - Updated `power-automate-flow-audit.md` inventory, dependencies, and gap matrix.
+- Affected endpoints/tables/connectors:
+  - `/functions/v1/ai-copilot/sync/flagged-emails`
+  - connectors: `shared_office365`, `shared_todo`
+  - operations: `GetEmailsV3`, `ListToDosByFolderV2`, `Flag_email_(V2)`
+- Security impact:
+  - Plaintext credential signals detected in:
+    - `SyncFlaggedEmailstoSupabase_20260512135136.zip`
+  - Immediate key rotation and secure-reference refactor required.
+- Validation evidence:
+  - Evidence source: parsed exported `definition.json`, `connectionsMap.json`, `apisMap.json`.
+  - Definition hashes:
+    - `SyncFlaggedEmailstoSupabase_20260512135251`: `f4d2b5e379797fe3431df0aacb7cc48bb8ce244895fabcbba81f3b813a03e9b2`
+    - `SyncFlaggedEmailstoSupabase_20260512135136`: `736d1f8ae409770557af0f6c5d9d29244d8680c4458cdd00a67420ac199b33e3`
+    - `UnflagCompletedEmailTasks_20260512135227`: `7e3dbfcc95126e128ea22bb7ba0bad7c5602699d10090c7bd6d6c588aa9fdcf6`
+    - `Recovery-ReflagCompletedEmails_20260512135202`: `eef758da708a5ab8f33337d7d1a613bc95628271e2d612cf4c0d85359b6b6059`
+  - Runtime run IDs: `TBD`
+- Rollback action:
+  - Documentation-only change, revert added/edited markdown files if needed.
+- Owner: LCC architecture/audit track.
+
+### 2026-05-12 — Export Round 6 Documentation Ingestion (Final Batch)
+- Flow name:
+  - `Button-SendanHTTPrequest`
+  - `FlaggedEmailtoToDo`
+  - `FlaggedPersonalEmailtoToDo`
+  - `FlaggedEmailtoToDoTask`
+  - `LogActivitytoSFfromLCC`
+- Flow version/export artifact:
+  - `Button-SendanHTTPrequest_20260512135816.zip`
+  - `FlaggedEmailtoToDo_20260512135754.zip`
+  - `FlaggedPersonalEmailtoToDo_20260512135719.zip`
+  - `FlaggedEmailtoToDoTask_20260512135651.zip`
+  - `LogActivitytoSFfromLCC_20260512135623.zip`
+- Risk tier: `P1` (manual mutation/control), `P1` (variant drift), `P1` (secret handling governance)
+- Change summary:
+  - Added 5 new per-flow detail docs.
+  - Updated master registry with ToDo creation variants, SF activity logger, and Azure button flow.
+  - Added governance gaps for duplicated flagged-email-to-todo patterns and subscription-key handling.
+- Exact steps changed:
+  - Created markdown docs under `docs/architecture/flows/`.
+  - Updated `power-automate-flow-audit.md` inventory, dependencies, and gap matrix.
+- Affected endpoints/tables/connectors:
+  - Azure endpoint: `propertyaiextractor.cognitiveservices.azure.com`
+  - Salesforce `Task` create path (`PostItem_V2`)
+  - ToDo create operations (`CreateToDoV3`, `CreateToDo`)
+  - connectors: `shared_office365`, `shared_todo`, `shared_outlook`, `shared_todoconsumer`, `shared_salesforce`
+- Security impact:
+  - No plaintext bearer/service-role token strings detected in this batch.
+  - Subscription-key pattern in manual Azure flow requires secure reference + rotation controls.
+- Validation evidence:
+  - Evidence source: parsed exported `definition.json`, `connectionsMap.json`, `apisMap.json`.
+  - Definition hashes:
+    - `Button-SendanHTTPrequest_20260512135816`: `32cfe1a3e83b9fddbad17bec442306ca438db0cf0b715a25248de92973515b3c`
+    - `FlaggedEmailtoToDo_20260512135754`: `d4d3561b7c21cf824c4bd5beb4be167c3ff31537bad5bd6ab79ed2306e39295f`
+    - `FlaggedPersonalEmailtoToDo_20260512135719`: `c713172d1b338064d099bfb5b55109ef337956844b75b981e60048f5b0bfd0be`
+    - `FlaggedEmailtoToDoTask_20260512135651`: `8a6aacfc6e86ec528663f7e67da1041452c2eaeed4a5d827d94e57d83c6ff70e`
+    - `LogActivitytoSFfromLCC_20260512135623`: `f4d557944514ce22d9c320f82480dd8f412ee34ed98047b7e0295ba147386efc`
+  - Runtime run IDs: `TBD`
+- Rollback action:
+  - Documentation-only change, revert added/edited markdown files if needed.
+- Owner: LCC architecture/audit track.
+
 ## Open Action Items
 1. Rotate exposed keys and confirm rotation completion here.
 2. Re-export affected flows and verify no embedded credentials appear.

@@ -1,6 +1,6 @@
 # Power Automate Flow Audit Registry (LCC + Salesforce + Microsoft 365)
 
-Last updated: 2026-05-11
+Last updated: 2026-05-12
 Owner: LCC Control Plane
 Scope: Power Automate flows that integrate Outlook, Teams, Salesforce, and LCC/domain endpoints.
 
@@ -26,6 +26,15 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | GovLeaseLeadSync | `GovLeaseLeadSync_20260512134512.zip` | HTTP Request (`manual`) | Upsert Salesforce Lead records based on incoming agency payload | `flows/govlease-lead-sync.md` | Active |
 | HTTP-Postmessagechat | `HTTP-Postmessagechat_20260512134401.zip` | HTTP Request (`manual`) | Post arbitrary request body as Teams chat/channel message | `flows/http-postmessagechat.md` | Active |
 | HTTP-Postmessagechat2 | `HTTP-Postmessagechat2_20260512134447.zip` | HTTP Request (`manual`) | Format and post GovLease intake ops alert message to Teams | `flows/http-postmessagechat2.md` | Active |
+| SyncFlaggedEmailstoSupabase (Graph Pull Variant) | `SyncFlaggedEmailstoSupabase_20260512135251.zip` | `Recurrence` (daily) | Pull inbox emails via Office connector (GetEmailsV3) for flagged-email sync pipeline | `flows/sync-flagged-emails-to-supabase.md` | Active |
+| SyncFlaggedEmailstoSupabase (Supabase Push Variant) | `SyncFlaggedEmailstoSupabase_20260512135136.zip` | `Recurrence` (daily) | Push flagged-email sync payload to Supabase edge flagged-email endpoint | `flows/sync-flagged-emails-to-supabase.md` | Active |
+| UnflagCompletedEmailTasks | `UnflagCompletedEmailTasks_20260512135227.zip` | `Recurrence` (every 15 min) | Unflag linked emails when To Do tasks with EmailID markers are completed | `flows/unflag-completed-email-tasks.md` | Active |
+| Recovery-ReflagCompletedEmails | `Recovery-ReflagCompletedEmails_20260512135202.zip` | HTTP Request (`manual`) | Recovery flow to re-flag emails based on To Do EmailID markers | `flows/recovery-reflag-completed-emails.md` | Active |
+| FlaggedEmailtoToDo | `FlaggedEmailtoToDo_20260512135754.zip` | `When_an_email_is_flagged_(V3)` | Create To Do task from flagged work email with due/status/importance fields | `flows/flagged-email-to-todo.md` | Active |
+| FlaggedEmailtoToDoTask | `FlaggedEmailtoToDoTask_20260512135651.zip` | `When_an_email_is_flagged_(V3)` | Create To Do task from flagged work email (lean payload variant) | `flows/flagged-email-to-todo-task.md` | Active |
+| FlaggedPersonalEmailtoToDo | `FlaggedPersonalEmailtoToDo_20260512135719.zip` | `When_an_email_is_flagged_(V2)` | Create To Do task from flagged personal email | `flows/flagged-personal-email-to-todo.md` | Active |
+| LogActivitytoSFfromLCC | `LogActivitytoSFfromLCC_20260512135623.zip` | HTTP Request (`manual`) | Create Salesforce Task activity record from LCC-triggered payload | `flows/log-activity-to-sf-from-lcc.md` | Active |
+| Button-SendanHTTPrequest | `Button-SendanHTTPrequest_20260512135816.zip` | HTTP Request (`manual`) | Send manual HTTP request to Azure cognitive endpoint | `flows/button-send-http-request.md` | Active |
 
 ## Dependency Map
 | Domain | Dependency | Notes |
@@ -37,8 +46,11 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | LCC API | `/api/loopnet-ingest`, `/api/rcm-ingest` | Used by LoopNet/RCM email ingestion flows. |
 | LCC API | `/api/briefing-email`, `/api/daily-briefing?action=snapshot&role_view=broker` | Used by scheduled briefing flows. |
 | LCC API | `/api/property?address=...` | Used by HTTP-ParseJSON flow. |
+| Supabase Edge | `/functions/v1/ai-copilot/sync/flagged-emails` | Used by flagged-email sync push variant. |
 | Salesforce | `shared_salesforce` connector | Used in HTTP-Switch and LCCSFFlow1. |
 | Office 365 | `shared_office365` connector | Used in flagged email trigger path. |
+| Outlook.com (Personal) | `shared_outlook` connector | Used by personal flagged-email -> ToDo flow. |
+| ToDo Consumer | `shared_todoconsumer` connector | Used by personal flagged-email -> ToDo flow. |
 | Teams | `shared_teams` connector | Used in manual attachment foreach posting flow. |
 | Conversion Service | `shared_conversionservice` connector | Used in LoopNet/RCM html-to-text conversion flows. |
 | Microsoft To Do | `shared_todo` connector | Used by ToDo-LCCSync for multi-folder task pulls. |
@@ -46,6 +58,10 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | Supabase (LCC Opps) | `sf_sync_queue` table | Source queue for LCCSFFlow1. |
 | Supabase (Domain DB) | `contacts`, `true_owners` tables | Updated by `link_*` branches in LCCSFFlow1. |
 | Salesforce Objects | `Task`, `Lead` | Queried/updated by CompleteSFTask and GovLeaseLeadSync flows. |
+| Microsoft To Do + Outlook Flags | `ListToDosByFolderV2`, `Flag_email_(V2)` | Used by unflag/recovery flows to synchronize task completion with email flag state. |
+| Microsoft To Do Create | `CreateToDoV3`, `CreateToDo` | Used by flagged-email-to-ToDo flows (work + personal variants). |
+| Salesforce Task Create | `PostItem_V2` on `Task` | Used by LogActivitytoSFfromLCC manual activity logger. |
+| Azure Cognitive Endpoint | `propertyaiextractor.cognitiveservices.azure.com` | Used by manual button flow with subscription key header. |
 
 ## Initial Gap Matrix
 | Priority | Category | Gap | Required Action | Owner | Status |
@@ -57,6 +73,9 @@ This file is the authoritative portfolio registry for flow architecture, risk po
 | P2 | Portfolio Hygiene | Overlapping intake patterns exist across multiple flagged/new-email flows and endpoints. | Consolidate or formally version parallel flow patterns to reduce drift. | LCC + Flow Owners | Open |
 | P2 | Scheduling Governance | Multiple recurrence flows run on differing weekly/hourly cadences without unified schedule register. | Create centralized cadence registry and owner-runbook per scheduled flow. | LCC + Flow Owners | Open |
 | P1 | Write Governance | Manual HTTP-triggered Salesforce update/upsert flows can mutate CRM directly without explicit orchestration-tier approval semantics. | Add explicit request auth, action allowlist, and audit/correlation requirements for manual mutation flows. | LCC + Flow Owners | Open |
+| P0 | Security | Plaintext Supabase `Authorization`/`apikey` material detected in flagged-email sync push variant (`SyncFlaggedEmailstoSupabase_20260512135136.zip`). | Rotate exposed keys immediately, move to secure references, re-export and verify credential-free definitions. | Platform + Flow Owners | Open |
+| P1 | Portfolio Hygiene | Multiple flagged-email-to-ToDo flows exist (`FlaggedEmailtoToDo`, `FlaggedEmailtoToDoTask`) with overlapping triggers but different payload semantics. | Consolidate to one canonical flow or document strict split-purpose and lifecycle ownership. | Flow Owners | Open |
+| P1 | Secret Handling | Manual Azure HTTP button flow uses subscription key header and requires controlled secret storage/rotation governance. | Move secret to managed reference and add rotation audit entry. | Platform + Flow Owner | Open |
 
 ## Change-Control Standard
 1. Capture current flow snapshot hash and export artifact.
