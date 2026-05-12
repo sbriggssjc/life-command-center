@@ -1,0 +1,38 @@
+-- =====================================================================
+-- Round 25 — Three high-impact gov fixes from latest export audit.
+--
+-- 1) cm_gov_valuation_index_m — Round 16 fixed Q view but missed the
+--    MONTHLY view feeding the actual chart. The same sf_leased=1 +
+--    noi=$378k outlier produced VI = 100,200 for Dec 2020 → Nov 2021.
+--    Apply the same filters: sf_leased>=500, cap_rate 0.04-0.12,
+--    noi_psf 1-150, gross_rent_psf 5-200.
+--    Verified post-fix: Mar 2021 VI = 237 (was 100,200).
+--
+-- 2) cm_gov_bid_ask_spread_m — Min-sample gate (mirrors dia Round 24).
+--    Pre-2010 gov had 0-10 valid samples per TTM → sporadic chart.
+--    Gates avg_bid_ask_spread, pct_price_change, avg_last_ask_cap on
+--    >=10 valid samples each via per-period lateral subqueries on
+--    sales_transactions (~0.3ms/period, safe under 8s API timeout).
+--
+-- LCC code (api/_shared/cm-chart-image-renderer.js):
+--
+-- 3) Buyer_Pool (buyer_class_pct_by_year) chart image was missing
+--    from gov exports. Round 17 per-dataset label color used a
+--    closure variable (labelColorByDatasetIndex) that was lost when
+--    QuickChart serialized the config to JS-literal — the entire
+--    chart render failed silently, so the tab degraded to data-only
+--    layout (no chart image).
+--    Fix: move color into each dataset's `datalabels.color` field.
+--    Per-dataset overrides plugin-level color cleanly with no closure.
+--
+-- Deferred to next round:
+--   - Cap_by_Term <5yr cohort min-sample gate (smoothness)
+--   - Gov Sentiment y-axis for cap rates off top
+--   - Gov Renewal_Growth y-axis adjustment + CAGR pre-2018 source check
+--   - Gov DOM_Ask pre-2010 gate extension
+--   - Avail_by_Firm_Term style match (dia equivalent already exists)
+--   - Dia Rent & Price PSF chart (currently gov-only)
+--   - Cap Rate Comparison by Lease Term Remaining (NEW chart per user)
+--   - Lease Renewal chart format match
+--   - In-app sync of Round 24 + 25 renderer changes
+-- =====================================================================

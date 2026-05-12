@@ -1241,30 +1241,15 @@ function buildChartConfig(chart, brand) {
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
       opts.scales.y.max = 1.0;
-      // Round 6a — per-segment % labels per user feedback "we usually
-      // label the data over each bar in percentage terms."
-      // Round 15 — per-dataset text color based on bar background luminance
-      // so labels on lighter bars (Cross-Border sky, Institutional pale)
-      // get DARK text and labels on darker bars (Private navy, Public REIT
-      // mid-blue) get WHITE text. User feedback: "labels on the lighter
-      // colored bars need to be in a darker text color so its readable."
-      // Index map matches dataset order below.
-      // Round 17 (re-apply) — per-dataset text color based on bar
-      // background luminance: lighter bars get DARK text, darker bars
-      // get WHITE text. User feedback (dialysis + gov): "labels on the
-      // lighter colored bars need to be in a darker text color so its
-      // readable." Index map matches dataset order below.
-      const labelColorByDatasetIndex = [
-        '#FFFFFF', // 0 Private — navy bg, white text
-        '#FFFFFF', // 1 Public REITs — mid-blue bg, white text
-        '#191919', // 2 Cross-Border — sky bg, dark text
-        '#191919', // 3 Institutional — pale bg, dark text
-      ];
+      // Round 25 — Per-dataset label color now lives on EACH dataset
+      // via `datalabels.color`, not in opts.plugins.datalabels.color
+      // as a closure-using function. The Round 17 closure
+      // `labelColorByDatasetIndex` was lost in QuickChart's JS-string
+      // serialization, causing the chart render to fail entirely (the
+      // entire Data_Buyer_Pool tab dropped its image). Per-dataset
+      // datalabels override the plugin-level color cleanly.
       opts.plugins = opts.plugins || {};
       opts.plugins.datalabels = {
-        color: function (ctx) {
-          return labelColorByDatasetIndex[ctx.datasetIndex] || '#191919';
-        },
         font: { size: 10, weight: 'bold' },
         formatter: function (value) {
           if (value == null || value < 0.04) return '';
@@ -1279,13 +1264,17 @@ function buildChartConfig(chart, brand) {
           labels: yearLabels,
           datasets: [
             { label: 'Private',       data: rows.map(r => r.private_pct),
-              backgroundColor: palette[0], stack: 'pool' },
+              backgroundColor: palette[0], stack: 'pool',
+              datalabels: { color: '#FFFFFF' } },           // navy bg → white
             { label: 'Public REITs',  data: rows.map(r => r.reit_pct),
-              backgroundColor: palette[2], stack: 'pool' },
+              backgroundColor: palette[2], stack: 'pool',
+              datalabels: { color: '#FFFFFF' } },           // mid-blue bg → white
             { label: 'Cross-Border',  data: rows.map(r => r.cross_border_pct),
-              backgroundColor: palette[1], stack: 'pool' },
+              backgroundColor: palette[1], stack: 'pool',
+              datalabels: { color: '#191919' } },           // sky bg → dark
             { label: 'Institutional', data: rows.map(r => r.institutional_pct),
-              backgroundColor: palette[3], stack: 'pool' },
+              backgroundColor: palette[3], stack: 'pool',
+              datalabels: { color: '#191919' } },           // pale bg → dark
           ],
         },
         options: opts,
