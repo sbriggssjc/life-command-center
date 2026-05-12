@@ -1,6 +1,6 @@
 # Power Automate Flow Changes Log
 
-Last updated: 2026-05-11
+Last updated: 2026-05-12
 Purpose: authoritative ledger of flow changes, risks, validation evidence, and rollback notes.
 
 ## Required Entry Fields
@@ -177,6 +177,42 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   - Documentation-only change, revert added/edited markdown files if needed.
 - Owner: LCC architecture/audit track.
 
+### 2026-05-12 — Incident Alert Ingestion + Remediation Plan Initialization
+- Flow name:
+  - `To Do - Life Command Center Sync`
+  - `LCC Flagged Email Intake`
+  - `Flagged Email to To Do Task`
+  - `Flagged Email to To Do`
+  - `HTTP -> Switch...`
+  - `LCC Morning Briefing Email`
+  - `HTTP Init LLC` (disabled flow alert)
+- Flow version/export artifact:
+  - Failure alert source: `C:\Users\scott\Downloads\6 of your flow(s) have failed.eml`
+  - Disabled alert source: `C:\Users\scott\Downloads\Alert! We've disabled one of your flows.eml`
+- Risk tier: `P0` (production stability + disabled flow), `P1` (flow overlap and contract hardening)
+- Change summary:
+  - Parsed and documented incident email alerts.
+  - Added incident snapshot and remediation waves to master registry.
+  - Added dedicated remediation architecture plan.
+  - Added per-flow documentation sheets for two failing flagged-email-to-ToDo flows.
+- Exact steps changed:
+  - Updated `power-automate-flow-audit.md` with incident table and recovery waves.
+  - Added `power-automate-remediation-plan.md`.
+  - Added `flagged-email-to-todo-task.md` and `flagged-email-to-todo.md`.
+  - Added project continuity worklog `power-automate-audit-worklog.md`.
+- Affected endpoints/tables/connectors:
+  - Microsoft To Do (`shared_todo`)
+  - Outlook trigger paths (`shared_office365`)
+  - HTTP-trigger flow paths including `http-initLLC` orchestration
+  - Planned: Supabase `integration_dead_letter` and telemetry tables
+- Security impact:
+  - No new plaintext key found in emails, but prior P0 key-rotation item remains open.
+  - Incident indicates elevated operational risk from disabled production flow.
+- Validation evidence:
+  - Extracted and decoded email payloads from both `.eml` files.
+  - Confirmed failing flow IDs/counts and disabled flow ID/timestamp from decoded message bodies.
+- Rollback action:
+  - Documentation-only updates; revert markdown files if required.
 ### 2026-05-12 — Export Round 5 Documentation Ingestion
 - Flow name:
   - `SyncFlaggedEmailstoSupabase` (Graph Pull Variant)
@@ -263,3 +299,45 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
 2. Re-export affected flows and verify no embedded credentials appear.
 3. Add schema version and strict validation branch documentation for HTTP-Switch.
 4. Add retry/dead-letter/idempotency policy record per `kind` for LCCSFFlow1.
+
+### 2026-05-12 — Full ZIP Coverage Completion (All Provided Exports)
+- Flow name:
+  - `Outlook Calendar - Life Command Center Sync`
+  - `LCC - Personal Calendar Sync`
+  - `Sync SF Tasks to Supabase`
+  - `Sync SF Activities to Supabase`
+  - `Sync Flagged Emails to Supabase` (two export variants)
+  - `Unflag Completed Email Tasks`
+  - `Recovery - Reflag Completed Emails`
+  - `Button -> Send an HTTP request`
+  - `Flagged Personal Email to To Do`
+  - `Log Activity to SF from LCC`
+- Flow version/export artifact:
+  - `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip`
+  - `LCC-PersonalCalendarSync_20260512134721.zip`
+  - `SyncSFTaskstoSupabase_20260512134655.zip`
+  - `SyncSFActivitiestoSupabase_20260512134632.zip`
+  - `SyncFlaggedEmailstoSupabase_20260512135136.zip`
+  - `SyncFlaggedEmailstoSupabase_20260512135251.zip`
+  - `UnflagCompletedEmailTasks_20260512135227.zip`
+  - `Recovery-ReflagCompletedEmails_20260512135202.zip`
+  - `Button-SendanHTTPrequest_20260512135816.zip`
+  - `FlaggedPersonalEmailtoToDo_20260512135719.zip`
+  - `LogActivitytoSFfromLCC_20260512135623.zip`
+- Risk tier: `P1` (duplicate variant drift, write governance), `P2` (documentation completeness)
+- Change summary:
+  - Completed per-flow documentation coverage for all ZIP exports provided in this thread.
+  - Expanded master registry inventory/dependencies and added one-by-one execution order.
+- Exact steps changed:
+  - Added 10 new per-flow markdown sheets.
+  - Updated `power-automate-flow-audit.md` with remaining flow entries and gap updates.
+- Affected endpoints/tables/connectors:
+  - Connectors: `shared_outlook`, `shared_todoconsumer`, `shared_salesforce`, `shared_todo`, `shared_office365`, `shared_onedriveforbusiness`
+  - Planned governance target: Supabase integration observability/dead-letter tables
+- Security impact:
+  - No new secret extraction performed in this pass beyond prior findings; P0 secret rotation remains open.
+- Validation evidence:
+  - Parsed each provided ZIP `definition.json` for display name, trigger, action count, and connector usage.
+- Rollback action:
+  - Documentation-only change, revert markdown files if needed.
+- Owner: LCC architecture/audit track.
