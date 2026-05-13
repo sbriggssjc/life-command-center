@@ -5169,12 +5169,18 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
   // plumbing entirely — write the diag straight onto entity.metadata via a
   // dedicated opsQuery PATCH. If the diag still doesn't appear after this,
   // upsertDomainLoans is genuinely not being called.
+  // Round 76fb (2026-05-13): write to the entity's `tags` text[] column
+  // instead of `metadata`, because the outer processSidebarExtraction PATCH
+  // overwrites metadata wholesale with an in-memory snapshot — discarding
+  // any inline metadata writes from upstream writers. `tags` is a separate
+  // column the outer PATCH doesn't touch, so probe entries survive.
   const flushDiag = async (snapshot) => {
     if (!entity?.id) return;
     try {
+      const tag = `_loans_probe:${snapshot.function_reached || 'unknown'}:${snapshot.invoked_at || snapshot.finished_at || ''}:${JSON.stringify(snapshot).slice(0, 500)}`;
       await opsQuery('PATCH',
         `entities?id=eq.${entity.id}`,
-        { metadata: { ...(entity.metadata || {}), _loans_probe: snapshot } }
+        { tags: [...(entity.tags || []), tag] }
       );
     } catch (_e) { /* probe write failure is non-fatal */ }
   };
