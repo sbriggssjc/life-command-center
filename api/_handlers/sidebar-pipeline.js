@@ -5701,7 +5701,11 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
   if (resultsRecords) resultsRecords.loans_diag = _loansDiag;
   // Round 76fa: direct DB-write probe at end of function.
   await flushDiag(_loansDiag);
-  return count;
+  // Round 76fc (2026-05-13): smoking-gun sentinel. If records.loans appears
+  // as 9999 in _pipeline_summary, this exact code path IS deployed and
+  // running. If it stays 0, the deployed bundle doesn't have these changes
+  // (Vercel build cache, alias drift, or stale lambda).
+  return 9999;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
