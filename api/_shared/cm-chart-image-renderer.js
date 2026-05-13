@@ -2185,7 +2185,14 @@ function buildChartConfig(chart, brand) {
       // Gov equivalent of available_by_term_summary (dialysis p.30 bottom).
       // 4 grouped sky-blue bars (Avg Price, left axis) + 4 dot/line
       // series (Avg Cap, Upper Q, Lower Q, Median) on right axis.
-      // Cohorts: Sub 5 / 5-8 / 8-12 / 12+ firm lease years.
+      // Cohorts: Sub 5 Year Term / 5-8 Year Term / 8-12 Year Term /
+      // 12+ Year Term firm lease years.
+      // Round 31 Tier 2c — Term-bucket labels in the source view
+      // (cm_gov_available_by_term_summary) aligned with dia's verbose
+      // labels per user note "Review this chart's formatting in the
+      // dialysis version and update to match". Right-axis range
+      // tightened from 4-10% to 4-9% to fit gov data span (caps live
+      // 6.5-8.5%) and visually align with dia's tight-fit approach.
       const termRows = rows || [];
       const termLabels = termRows.map(r => r.term_bucket || '?');
       const dotPointRadius = 6;
@@ -2243,7 +2250,7 @@ function buildChartConfig(chart, brand) {
           opts.scales.y1 = {
             type: 'linear',
             position: 'right',
-            min: 0.04, max: 0.10,
+            min: 0.04, max: 0.09,  // R31 T2c: tightened to fit gov data (6.5-8.5%)
             grid: { drawOnChartArea: false },
             ticks: {
               callback: function (v) { return (v * 100).toFixed(1) + '%'; },
