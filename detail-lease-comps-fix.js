@@ -199,9 +199,13 @@
     // 20260513_dia_purge_cms_operator_owner_pollution). The deed-holder
     // recorded_owner is the right name for lease-comp exports going to
     // clients — never the chain operator who's the tenant.
+    // Prefer canonical names (Layer H.2.a) so all 11 SMBC variants
+    // export as "SMBC Leasing & Finance Inc" instead of 11 different
+    // strings — keeps client-facing comp packages consistent.
     const _trueOwnerOk = own.true_owner && !own.true_owner_is_operator;
     const owner = _udSanitizeOwner(
-      (_trueOwnerOk ? own.true_owner : null)
+      (_trueOwnerOk ? (own.true_owner_canonical || own.true_owner) : null)
+      || own.recorded_owner_canonical
       || own.recorded_owner
       || (!own.true_owner_is_operator ? own.true_owner_name : null)
       || own.recorded_owner_name
@@ -236,8 +240,8 @@
       lease_bump_pct: null,
       lease_bump_interval_mo: null,
       patient_count: _udNumOrNull(p.latest_patient_count || p.total_patients),
-      recorded_owner: _udSanitizeOwner(own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || ''),
-      true_owner: _udSanitizeOwner(_trueOwnerOk ? (own.true_owner || own.true_owner_name || '') : ''),
+      recorded_owner: _udSanitizeOwner(own.recorded_owner_canonical || own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || ''),
+      true_owner: _udSanitizeOwner(_trueOwnerOk ? (own.true_owner_canonical || own.true_owner || own.true_owner_name || '') : ''),
       owner,
       owner_occupied: _udIsOwnerOccupied(tenant, owner) || _udIsOwnerOccupied(operator, owner)
     };

@@ -492,7 +492,8 @@ function _udKeyFields(db, prop, own) {
     if (prop.agency_short || prop.agency_full) html += `<div><span style="color:var(--text3)">Agency:</span> <span style="color:var(--text)">${esc(prop.agency_short || prop.agency_full)}</span></div>`;
   }
   if (own) {
-    const ownerName = own.true_owner || own.recorded_owner || '';
+    // Prefer canonical names (Layer H.2.a) so casing/SPE variants collapse to one consistent label.
+    const ownerName = own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner || '';
     if (ownerName) html += `<div><span style="color:var(--text3)">Owner:</span> <span style="color:var(--text)">${esc(ownerName)}</span></div>`;
   }
   if (prop.estimated_value) html += `<div><span style="color:var(--text3)">Est. Value:</span> <span style="color:var(--green);font-weight:600">${fmt(prop.estimated_value)}</span></div>`;
@@ -4947,7 +4948,8 @@ function _udResolveGap(action) {
     // If we find a match, open that account directly. Otherwise fall back to
     // the SF global search.
     const own = _udCache && _udCache.ownership;
-    const name = (own && (own.true_owner || own.recorded_owner)) || '';
+    // Prefer canonical names so SF search hits the parent entity, not a casing variant.
+    const name = (own && (own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner)) || '';
     if (!name) { showToast('Enter the owner name first', 'info'); return; }
     (async function () {
       try {
@@ -5133,8 +5135,20 @@ function _udTabOwnership() {
     // stamped as decision-maker by a stale ingest. Belt-and-suspenders alongside
     // the data cleanup so any future re-introduction of the bug doesn't slip
     // through to the CRM.
-    const _hasTrueOwner = own.true_owner
-                       && own.true_owner !== own.recorded_owner
+    //
+    // recorded_owner_canonical / true_owner_canonical come from
+    // 20260513150000_dia_layer_h2a_canonical_owner_name_mapping. They
+    // collapse casing / suffix / SPE variants of the same entity to a
+    // single display string (e.g. "Smfg" + "Sumitomo Bank Leasing And
+    // Finance Inc" + 9 other SMBC variants -> "SMBC Leasing & Finance
+    // Inc"). Prefer canonical in display contexts; the Resolve Ownership
+    // form below keeps the raw deed text so edits preserve verbatim names.
+    const _recDisplay  = own.recorded_owner_canonical || own.recorded_owner;
+    const _trueDisplay = own.true_owner_canonical     || own.true_owner;
+    // Equality check uses canonical so casing-only dups don't flip
+    // _hasTrueOwner to true and render two identical cards.
+    const _hasTrueOwner = _trueDisplay
+                       && _trueDisplay !== _recDisplay
                        && !own.true_owner_is_operator;
     html += '</div></div>'; // close detail-grid opened above — we'll use cards instead
     html += '<div style="display:grid;grid-template-columns:' + (_hasTrueOwner ? '1fr 1fr' : '1fr') + ';gap:12px;margin-bottom:12px">';
@@ -5142,7 +5156,7 @@ function _udTabOwnership() {
     // Recorded Owner card
     html += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
     html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">Recorded Owner</div>';
-    html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + (own.recorded_owner ? _ownerLink(own.recorded_owner, _ownerCtxFromCurrent(own, db, 'recorded')) : '<span style="color:var(--text3)">\u2014</span>') + '</div>';
+    html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + (_recDisplay ? _ownerLink(_recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) : '<span style="color:var(--text3)">\u2014</span>') + '</div>';
     if (own.recorded_owner_type || own.owner_type) html += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
     if (own.recorded_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.recorded_owner_state) + '</div>';
     if (own.recorded_owner_address) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.recorded_owner_address) + (own.recorded_owner_city ? ', ' + esc(own.recorded_owner_city) : '') + '</div>';
@@ -5154,7 +5168,7 @@ function _udTabOwnership() {
     if (_hasTrueOwner) {
       html += '<div style="background:linear-gradient(135deg,rgba(165,94,234,0.08),rgba(165,94,234,0.04));border:1px solid rgba(165,94,234,0.3);border-radius:10px;padding:14px 16px">';
       html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--purple);margin-bottom:6px">True Owner / Decision Maker</div>';
-      html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(own.true_owner, _ownerCtxFromCurrent(own, db, 'true')) + '</div>';
+      html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(_trueDisplay, _ownerCtxFromCurrent(own, db, 'true')) + '</div>';
       if (own.true_owner_type) html += '<div style="font-size:11px;color:var(--text2)">' + esc(own.true_owner_type) + '</div>';
       if (own.true_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.true_owner_state) + '</div>';
       if (own.true_owner_city) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.true_owner_city) + '</div>';
@@ -5389,7 +5403,7 @@ function _udTabOwnership() {
 
   const sfCid = own?.salesforce_id || own?.sf_contact_id || '';
   const sfCoId = own?.sf_company_id || '';
-  const ownerName = own?.true_owner || own?.recorded_owner || own?.contact_1_name || '';
+  const ownerName = own?.true_owner_canonical || own?.true_owner || own?.recorded_owner_canonical || own?.recorded_owner || own?.contact_1_name || '';
 
   html += '<div class="detail-form" id="udLogCallForm">';
   html += `<div style="font-size:12px;color:var(--text2);margin-bottom:8px">Logging for: <strong>${esc(ownerName || 'Unknown')}</strong></div>`;
@@ -5604,7 +5618,8 @@ async function _loadActivityFeed(own) {
         recorded_owner_id: own.recorded_owner_id || null,
         true_owner_name:   own.true_owner        || null,
         recorded_owner_name: own.recorded_owner  || null,
-        name:              own.true_owner || own.recorded_owner || null
+        // Search SF using canonical form so SMBC variants all resolve to one Account.
+        name:              own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner || null
       });
       if (resolved) {
         resolvedAccountId = resolved.sf_account_id;
@@ -5695,7 +5710,9 @@ async function _loadActivityFeed(own) {
 /** Empty-state action: open the SF "New Account" form prefilled with the current owner. */
 function _udFeedCreateSfAccount() {
   const own = _udCache && _udCache.ownership;
-  const name = (own && (own.true_owner || own.recorded_owner)) || '';
+  // Prefill the new SF Account with the canonical entity name (Layer H.2.a) —
+  // we want one SF Account per entity, not one per casing variant.
+  const name = (own && (own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner)) || '';
   const url = _SF_BASE + '/lightning/o/Account/new?defaultFieldValues=Name=' + encodeURIComponent(name);
   window.open(url, '_blank', 'noopener');
   showToast('Opening Salesforce \u2014 New Account (' + (name || 'Owner') + ')', 'info');
@@ -7148,8 +7165,8 @@ function _udBuildAssistantPrompt(mode) {
       `Property: ${p.page_title || p.facility_name || p.address || 'Unknown property'}`,
       `Address: ${p.address || 'N/A'}, ${p.city || 'N/A'}, ${p.state || 'N/A'}`,
       `County: ${p.county || 'Unknown'}`,
-      `Recorded owner: ${own.recorded_owner || fallback.recorded_owner || 'Unknown'}`,
-      `True owner: ${own.true_owner || fallback.true_owner || 'Unknown'}`,
+      `Recorded owner: ${own.recorded_owner_canonical || own.recorded_owner || fallback.recorded_owner || 'Unknown'}`,
+      `True owner: ${own.true_owner_canonical || own.true_owner || fallback.true_owner || 'Unknown'}`,
       `Owner type: ${own.owner_type || fallback.owner_type || 'Unknown'}`,
       `Contact name: ${own.contact_1_name || own.contact_name || 'Unknown'}`,
       `Contact email: ${own.contact_email || 'Unknown'}`,
@@ -7913,7 +7930,8 @@ function _udResearchLinks() {
   }
 
   // ── OWNER WEBSITE / GOOGLE LOOKUP ──
-  const ownerName = own?.true_owner || own?.recorded_owner || '';
+  // Canonical names produce better Google hits than casing variants.
+  const ownerName = own?.true_owner_canonical || own?.true_owner || own?.recorded_owner_canonical || own?.recorded_owner || '';
   if (ownerName) {
     html += _qlBtn(
       'Owner Search',
@@ -7950,8 +7968,8 @@ function buildResearchAssistantPrompt(provider = 'chatgpt') {
     `- Lease Number: ${p.lease_number || fallback.lease_number || 'N/A'}`,
     '',
     'Ownership Context',
-    `- Recorded owner: ${own.recorded_owner || fallback.recorded_owner || 'Unknown'}`,
-    `- True owner: ${own.true_owner || fallback.true_owner || 'Unknown'}`,
+    `- Recorded owner: ${own.recorded_owner_canonical || own.recorded_owner || fallback.recorded_owner || 'Unknown'}`,
+    `- True owner: ${own.true_owner_canonical || own.true_owner || fallback.true_owner || 'Unknown'}`,
     `- Owner type: ${own.recorded_owner_type || own.owner_type || fallback.owner_type || 'Unknown'}`,
     `- State of incorporation: ${fallback.state_of_incorporation || own.true_owner_state || own.recorded_owner_state || 'Unknown'}`,
     '',
@@ -8520,7 +8538,7 @@ function _udMergeFields(tmpl) {
   const own = _udCache?.ownership || {};
 
   // Escape field values before merging into HTML templates to prevent XSS
-  const contactName = esc(own.contact_1_name || own.contact_name || own.true_owner || own.recorded_owner || 'there');
+  const contactName = esc(own.contact_1_name || own.contact_name || own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner || 'there');
   const propertyName = esc(prop.page_title || prop.address || 'the property');
   const cityState = esc((prop.city || '') + (prop.state ? ', ' + prop.state : ''));
   const annualRent = prop.annual_rent ? esc(fmt(prop.annual_rent)) : '';
