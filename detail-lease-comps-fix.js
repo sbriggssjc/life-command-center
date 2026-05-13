@@ -195,7 +195,19 @@
     const buildingSf = _udNumOrNull(p.building_sf || p.building_size || p.rba || fb.building_sf);
     const leasedArea = _udNumOrNull(lease.leased_area || p.leased_area) || buildingSf;
     const { tenant, operator } = _udExtractTenantOperator(db || c.db, p, fb, lease);
-    const owner = _udSanitizeOwner(own.true_owner || own.recorded_owner || own.true_owner_name || own.recorded_owner_name || p.recorded_owner_name || '');
+    // Skip true_owner when it's an operator-flagged shell (see
+    // 20260513_dia_purge_cms_operator_owner_pollution). The deed-holder
+    // recorded_owner is the right name for lease-comp exports going to
+    // clients — never the chain operator who's the tenant.
+    const _trueOwnerOk = own.true_owner && !own.true_owner_is_operator;
+    const owner = _udSanitizeOwner(
+      (_trueOwnerOk ? own.true_owner : null)
+      || own.recorded_owner
+      || (!own.true_owner_is_operator ? own.true_owner_name : null)
+      || own.recorded_owner_name
+      || p.recorded_owner_name
+      || ''
+    );
     return {
       property_id: c.ids?.property_id || p.property_id || null,
       lease_number: p.lease_number || c.ids?.lease_number || null,

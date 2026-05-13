@@ -5069,7 +5069,11 @@ function _udTabOwnership() {
   const gaps = [];
   if (!own) gaps.push({ label: 'ownership record', action: 'focus:udOwnRecorded' });
   else {
-    if (!own.true_owner && !own.recorded_owner) gaps.push({ label: 'owner name', action: 'focus:udOwnRecorded' });
+    // Treat operator-flagged true_owner as missing for gap-detection: a
+    // chain-operator masquerading as owner is worse than a NULL because it
+    // gives false confidence that the row is researched.
+    const _trueOwnerTrusted = own.true_owner && !own.true_owner_is_operator;
+    if (!_trueOwnerTrusted && !own.recorded_owner) gaps.push({ label: 'owner name', action: 'focus:udOwnRecorded' });
     // Contact fields: offer one-click Add Contact inline (writes to
     // unified_contacts scoped to this owner) instead of just focusing a
     // form field that's downstream of the Resolve Ownership flow.
@@ -5081,7 +5085,7 @@ function _udTabOwnership() {
     if (!own.sf_contact_id && !own.salesforce_id && !own.sf_account_id && !own.sf_company_id) {
       gaps.push({ label: 'Salesforce link', action: 'sf-lookup' });
     }
-    if (db === 'gov' && !own.true_owner) gaps.push({ label: 'true owner (behind LLC)', action: 'focus:udOwnTrue' });
+    if (db === 'gov' && !_trueOwnerTrusted) gaps.push({ label: 'true owner (behind LLC)', action: 'focus:udOwnTrue' });
     if (db === 'gov' && !own.true_owner_state) gaps.push({ label: 'true owner state', action: 'focus:udOwnState' });
   }
   if (chain.length === 0) gaps.push({ label: 'ownership history', action: 'research-history' });
@@ -5117,7 +5121,15 @@ function _udTabOwnership() {
     html += '<div class="detail-grid">';
 
     // ── SIDE-BY-SIDE OWNER CARDS ──────────────────────────────────────
-    const _hasTrueOwner = own.true_owner && own.true_owner !== own.recorded_owner;
+    // true_owner_is_operator is set by 20260513_dia_purge_cms_operator_owner_pollution
+    // and exposed via v_ownership_current. Hide the True Owner card when set:
+    // the true_owner is a chain operator (DaVita, Fresenius, ...) wrongly
+    // stamped as decision-maker by a stale ingest. Belt-and-suspenders alongside
+    // the data cleanup so any future re-introduction of the bug doesn't slip
+    // through to the CRM.
+    const _hasTrueOwner = own.true_owner
+                       && own.true_owner !== own.recorded_owner
+                       && !own.true_owner_is_operator;
     html += '</div></div>'; // close detail-grid opened above — we'll use cards instead
     html += '<div style="display:grid;grid-template-columns:' + (_hasTrueOwner ? '1fr 1fr' : '1fr') + ';gap:12px;margin-bottom:12px">';
 
