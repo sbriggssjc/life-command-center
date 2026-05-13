@@ -401,8 +401,9 @@ const CHART_COLUMNS = {
   inventory_backlog: [
     { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',       header: 'Subspecialty',      width: 14 },
+    { key: 'added_ttm',          header: 'No. Added (TTM)',   format: 'integer_count',       width: 17 },
+    { key: 'sold_ttm',           header: 'No. Sold (TTM)',    format: 'integer_count',       width: 16 },
     { key: 'active_count',       header: 'Active Listings',   format: 'integer_count',       width: 16 },
-    { key: 'ttm_sales',          header: 'TTM Sales',         format: 'integer_count',       width: 13 },
     { key: 'months_of_supply',   header: 'Months of Supply',  format: 'number_one_decimal',  width: 17 },
   ],
   // Round 20 — PDF-parity combos
