@@ -237,7 +237,7 @@
       lease_bump_interval_mo: null,
       patient_count: _udNumOrNull(p.latest_patient_count || p.total_patients),
       recorded_owner: _udSanitizeOwner(own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || ''),
-      true_owner: _udSanitizeOwner(own.true_owner || own.true_owner_name || ''),
+      true_owner: _udSanitizeOwner(_trueOwnerOk ? (own.true_owner || own.true_owner_name || '') : ''),
       owner,
       owner_occupied: _udIsOwnerOccupied(tenant, owner) || _udIsOwnerOccupied(operator, owner)
     };
