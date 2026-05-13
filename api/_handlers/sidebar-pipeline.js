@@ -5312,6 +5312,10 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
         if (inserted?.loan_id) {
           pushProvenance(provCollect, 'loans', inserted.loan_id, loanData);
         }
+      } else {
+        // Round 76er: surface silent failures (was a 5-month bug where the
+        // dia.loans data_source column-not-found error went unlogged).
+        console.warn(`[upsertDomainLoans] POST failed status=${result.status}: ${JSON.stringify(result.data)}; payload keys=${Object.keys(loanData).join(',')}`);
       }
     }
   }
@@ -5399,6 +5403,182 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
         if (inserted?.loan_id) {
           pushProvenance(provCollect, 'loans', inserted.loan_id, loanData);
         }
+      }
+    }
+  }
+
+  // ── Round 76er.c (2026-05-13): RCA Financing section ingestion ──
+  // RCA pages carry a dedicated Financing block with 16 label/value pairs:
+  //   Loan Status, Loan Type, Loan Amount, Interest Rate, Debt Yield,
+  //   Total Reserves, Term, Deal Appraisal, Originator, Lender Name,
+  //   Lender Group, Special Servicer, Original LTV, Origination,
+  //   Defeasance Date, Prepayment Date, Original Maturity
+  // extension/content/rca.js::extractFinancing parses these into
+  // `data.loans[]` and the rca.js normalizer (Round 76er.b) types them into
+  // ISO dates / dollar integers / numeric percents. The first two loops
+  // above only consume `metadata.sales_history[].lender` + `loan_amount`,
+  // dropping the rich detail (originator, special_servicer, ltv, term,
+  // maturity_date, is_cmbs, origination_appraisal). This loop reads
+  // `metadata.loans[]`, dedups against rows already written above (±5%
+  // amount band), then PATCHes the existing row with the rich payload or
+  // INSERTs a new row when no match is found.
+  const financingLoans = Array.isArray(metadata.loans) ? metadata.loans : [];
+  for (const fin of financingLoans) {
+    const amount = Number(fin.loan_amount_dollars);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const lenderName = fin.lender_name || null;
+    const originator = fin.originator || null;
+    const origDate   = fin.origination_date_iso || null;
+    const matDate    = fin.maturity_date_iso || null;
+    const ltv        = Number.isFinite(fin.ltv_pct) ? fin.ltv_pct : null;
+    const rate       = Number.isFinite(fin.interest_rate_pct) ? fin.interest_rate_pct : null;
+    const termMo     = Number.isFinite(fin.term_months) ? fin.term_months : null;
+    const termYr     = Number.isFinite(fin.term_years)  ? fin.term_years  : null;
+    const appraisal  = Number.isFinite(fin.origination_appraisal_dollars)
+      ? fin.origination_appraisal_dollars : null;
+    const reserves   = Number.isFinite(fin.total_reserves_dollars)
+      ? fin.total_reserves_dollars : null;
+    const debtYield  = Number.isFinite(fin.debt_yield_pct) ? fin.debt_yield_pct : null;
+    const status     = fin.loan_status || null;
+    const isCmbs     = fin.is_cmbs === true || null;
+    // mapLoanType('1st Mortgage') → null (no direct keyword match), but the
+    // dia.loans CHECK constraint requires Refinance | Acquisition. Cross-
+    // reference the matching sales_history event to infer: a loan whose
+    // origination_date lands within ±60 days of a Sale/Construction event
+    // is an Acquisition; one matching a Refinance event is a Refinance.
+    let loanType = mapLoanType(fin.loan_type);
+    if (!loanType && origDate && Array.isArray(metadata.sales_history)) {
+      const origTs = new Date(origDate).getTime();
+      for (const s of metadata.sales_history) {
+        const sDate = parseDate(s.sale_date)?.split('T')[0];
+        if (!sDate) continue;
+        const days = Math.abs(new Date(sDate).getTime() - origTs) / 86400000;
+        if (days > 60) continue;
+        const kind = String(s.kind || s.event_type || '').toLowerCase();
+        if (kind.includes('refinanc')) { loanType = 'Refinance'; break; }
+        if (kind.includes('sale') || kind.includes('construction') || kind.includes('acquisition')) {
+          loanType = 'Acquisition';
+          break;
+        }
+      }
+    }
+    const specialSrv = fin.special_servicer || null;
+    // Round 76cu: lender_name like 'BMARK 2021-B26' is a CMBS deal name.
+    // The existing CMBS-deal-name regex on sales_history runs upstream; here
+    // we trust the rca.js flag (is_cmbs from "Lender Group: CMBS"). When the
+    // lender_name matches a CMBS deal naming pattern, also set cmbs_deal_name.
+    const cmbsDealName = (isCmbs && lenderName) ? lenderName : null;
+
+    // Dedup against existing rows on this property within ±5% of the amount.
+    const amtLo = Math.floor(amount * 0.95);
+    const amtHi = Math.ceil(amount * 1.05);
+    const dupLookup = await domainQuery(domain, 'GET',
+      `loans?property_id=eq.${propertyId}` +
+      `&loan_amount=gte.${amtLo}&loan_amount=lte.${amtHi}` +
+      `&select=loan_id,origination_date&limit=5`);
+    let existingLoanId = null;
+    if (dupLookup.ok && Array.isArray(dupLookup.data)) {
+      for (const row of dupLookup.data) {
+        if (!origDate || !row.origination_date) {
+          existingLoanId = row.loan_id;
+          break;
+        }
+        const days = Math.abs(
+          new Date(String(row.origination_date).split('T')[0]).getTime() -
+          new Date(origDate).getTime()
+        ) / 86400000;
+        if (days <= 31) { existingLoanId = row.loan_id; break; }
+      }
+    }
+
+    // Domain-specific payload. dia.loans uses loan_to_value/loan_term/
+    // interest_rate_percent; gov.loans uses ltv/term_years/interest_rate.
+    // Both schemas share originator/special_servicer/sponsor/is_cmbs/
+    // origination_appraisal/cmbs_deal_name (added in Round 76ek.a).
+    // Stash debt_yield/total_reserves/status in the notes JSON since
+    // neither column exists on either domain (Round 76er future-proofs
+    // these as a structured note rather than dropping the data).
+    const notesObj = stripNulls({
+      debt_yield_pct:        debtYield,
+      total_reserves_dollars: reserves,
+      loan_status:           status,
+      defeasance_date:       fin.defeasance_date_iso || null,
+      prepayment_date:       fin.prepayment_date_iso || null,
+    });
+    const notesStr = Object.keys(notesObj).length
+      ? JSON.stringify(notesObj)
+      : null;
+
+    // NOTE: is_cmbs is a generated column on both gov.loans and dia.loans
+    // (`is_cmbs = (cmbs_deal_name IS NOT NULL)`) — do NOT include it in the
+    // payload or PostgREST rejects with "cannot insert a non-DEFAULT value
+    // into generated column". Setting cmbs_deal_name = lenderName above
+    // already drives is_cmbs to true on the row.
+    const loanData = domain === 'government' ? stripNulls({
+      property_id:           propertyId,
+      loan_type:             loanType,
+      loan_amount:           amount,
+      interest_rate:         rate,
+      term_years:            termYr,
+      origination_date:      origDate,
+      maturity_date:         matDate,
+      ltv:                   ltv,
+      originator:            originator || lenderName,
+      special_servicer:      specialSrv,
+      origination_appraisal: appraisal,
+      cmbs_deal_name:        cmbsDealName,
+      status:                status,
+      notes:                 notesStr,
+      data_source:           'costar_sidebar',
+    }) : stripNulls({
+      property_id:           propertyId,
+      lender_name:           lenderName || originator,
+      loan_type:             loanType,
+      loan_amount:           amount,
+      interest_rate_percent: rate,
+      loan_term:             termMo,
+      origination_date:      origDate,
+      maturity_date:         matDate,
+      loan_to_value:         ltv,
+      originator:            originator,
+      special_servicer:      specialSrv,
+      origination_appraisal: appraisal,
+      cmbs_deal_name:        cmbsDealName,
+      notes:                 notesStr,
+      data_source:           'costar_sidebar',
+    });
+
+    if (existingLoanId != null) {
+      const nowIso = new Date().toISOString();
+      const filteredPatch = await filterByFieldPriority({
+        targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+        targetTable: domain === 'dialysis' ? 'dia.loans' : 'gov.loans',
+        recordPk:    existingLoanId,
+        source:      'costar_sidebar',
+        confidence:  0.6,
+        fields:      { ...loanData, updated_at: nowIso },
+      }).catch(err => {
+        console.warn('[upsertDomainLoans:financing] field-priority filter failed:', err?.message);
+        return { ...loanData, updated_at: nowIso };
+      });
+      await domainPatch(domain,
+        `loans?loan_id=eq.${existingLoanId}`,
+        filteredPatch,
+        'upsertDomainLoans:financing');
+      pushProvenance(provCollect, 'loans', existingLoanId, loanData);
+    } else {
+      const result = await domainQuery(domain, 'POST', 'loans', loanData);
+      if (result.ok) {
+        count++;
+        const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
+        if (inserted?.loan_id) {
+          pushProvenance(provCollect, 'loans', inserted.loan_id, loanData);
+        }
+        console.log(`[upsertDomainLoans:financing] inserted loan for ` +
+          `lender="${lenderName || originator}" amount=$${amount} ` +
+          `property=${propertyId} cmbs=${isCmbs ? 'yes' : 'no'}`);
+      } else {
+        console.warn(`[upsertDomainLoans:financing] POST failed status=${result.status}: ${JSON.stringify(result.data)}`);
       }
     }
   }
