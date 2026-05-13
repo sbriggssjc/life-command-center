@@ -1,6 +1,15 @@
 // ============================================================================
 // Entity Hub API — Consolidated router for contacts.js + entities.js
-// Life Command Center  (cache-bust-v2: 2026-04-20 force full rebuild)
+// Life Command Center  (cache-bust-v3: 2026-05-13 force full rebuild — Round 76fd)
+// Round 76fd (2026-05-13): bumped to force Vercel to rebuild the lambda bundle.
+// All my recent diagnostic changes to api/_handlers/sidebar-pipeline.js
+// (Rounds 76ex through 76fc) were verified present at main HEAD via the
+// GitHub raw API but produced ZERO observable effects in production —
+// records.loans stayed 0 instead of returning the Round 76fc sentinel
+// 9999, and tags stayed [] instead of getting flushDiag entries.
+// The "cache-bust-v2" comment from 2026-04-20 in this same file confirms
+// this lambda has historically had stale-bundle issues. Bumping to v3
+// to invalidate Vercel's incremental build cache.
 //
 // Routes:
 //   /api/entity-hub?_domain=contacts&...  → Unified Contact Hub (contacts-handler.js)
