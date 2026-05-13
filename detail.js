@@ -6848,8 +6848,12 @@ async function _udRenderActivityLogAsync(bodyEl) {
     }
   });
 
-  // 2. Ownership chain
-  (_udCache.chain || []).forEach(h => {
+  // 2. Ownership chain — pass through _udDedupChain so the timeline matches
+  // what the Ownership/CRM and Deal History tabs show (operator-chain shims
+  // dropped, shell-LLC duplicates collapsed). Layer D (20260513120000)
+  // already filters operator rows at the view; this is belt-and-suspenders
+  // for the dedup of repeat-owner rows.
+  _udDedupChain(_udCache.chain || [], _udCache.ownership).forEach(h => {
     events.push({
       kind: 'ownership',
       date: h.transfer_date,
