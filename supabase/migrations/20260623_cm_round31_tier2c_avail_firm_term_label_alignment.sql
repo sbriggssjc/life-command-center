@@ -1,0 +1,63 @@
+-- =====================================================================
+-- Round 31 Tier 2c — Avail_by_Firm_Term gov label alignment with dia
+-- + y-axis tightening. Final R31 batch.
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-13)
+-- ---------------------------------------------------------------------
+-- 1) cm_gov_available_by_term_summary  (gov DB) — term_bucket labels
+--    aligned with dia: "Sub 5" → "Sub 5 Year Term", "5-8" → "5-8 Year
+--    Term", "8-12" → "8-12 Year Term", "12+" → "12+ Year Term".
+--    User: "Data_Avail_by_Firm_Term - Review this chart's formatting
+--    in the dialysis version and update to match".
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js)
+-- ---------------------------------------------------------------------
+-- 2) available_by_firm_term_summary renderer — right-axis range
+--    tightened 4-10% → 4-9% to fit gov data span (caps live 6.5-8.5%)
+--    and visually align with dia's tight-fit approach (which uses
+--    3.5-8% for dia data living 6.0-7.97%).
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED — future deliverable
+-- ---------------------------------------------------------------------
+-- Dia master Excel `Dialysis Comp Work MASTER.xlsx` > 'Market Size'
+-- sheet shows the same Avail-by-Term info split across 4 SEPARATE
+-- charts:
+--   Chart 0: Avg Price bar (single-series, 4 firm-term cohorts)
+--   Chart 1: # Available (2-bar: Total Market vs 10+ Year Term)
+--   Chart 2: Cap Quartiles (4-line: Total Upper/Lower Q + 10+ Upper/
+--            Lower Q)
+--   Chart 3: DOM (2-bar: Total Market vs 10+ Year Term)
+--
+-- Our current `available_by_term_summary` packs avg_price + 4 cap
+-- stats (avg/upper-q/lower-q/median) into a single 5-series combo
+-- with bars and dots. This presentation is denser and includes the
+-- same data — visually serviceable, structurally different from the
+-- master.
+--
+-- Full breakout would require:
+--   • 4 new chart_template_ids in cm_chart_catalog
+--   • 4 new Excel tabs in the export bundle
+--   • 4 new renderer cases
+--   • Possibly new Supabase views for the 2-cohort (Total vs 10+)
+--     variants if not derivable from existing columns
+--
+-- Tracked as a future deliverable, separate from the R31 closeout.
+--
+-- ---------------------------------------------------------------------
+-- ROUND 31 — FINAL STATUS
+-- ---------------------------------------------------------------------
+--   Tier 1  (88e704a / merged):    Investigations + new charts
+--   Tier 2a (PR #793 / merged):    Term_Rate + NM_vs_Market +
+--                                  Renewal_Rate format match
+--   Tier 2b (PR #795 / merged):    NL_Spread + Inventory_Backlog +
+--                                  Market_Turnover format match +
+--                                  pre-2018 extension
+--   Tier 2c (this PR):             Avail_by_Firm_Term gov label
+--                                  alignment with dia (the multi-
+--                                  chart breakout deferred as a
+--                                  separate future deliverable)
+--   Tier 3  (PR #799 / merged):    Data-quality investigations
+-- =====================================================================
