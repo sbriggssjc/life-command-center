@@ -102,6 +102,10 @@ async function govQuery(table, select, params = {}) {
   url.searchParams.set('table', table);
   url.searchParams.set('select', select);
   if (params.filter) url.searchParams.set('filter', params.filter);
+  // Gov-query proxy supports a second column filter; mirror diaQuery so
+  // callers can pass an extra condition (e.g. exclude_from_market_metrics)
+  // without bypassing the proxy.
+  if (params.filter2) url.searchParams.set('filter2', params.filter2);
   if (params.order) url.searchParams.set('order', params.order);
   if (params.limit !== undefined) url.searchParams.set('limit', params.limit);
   if (params.offset !== undefined) url.searchParams.set('offset', params.offset);

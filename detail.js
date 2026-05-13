@@ -4830,6 +4830,25 @@ function _rankingBar(label, rank, total, context) {
 function _udDedupChain(chain, currentOwn) {
   if (!Array.isArray(chain) || chain.length === 0) return [];
 
+  // Belt-and-suspenders alongside the dia_purge_operator_owner_links() purge
+  // and v_ownership_current.true_owner_is_operator: drop CMS chain-org rows
+  // tagged as operators (DaVita, Fresenius, …) by migration 20260428030000
+  // (Round 76aj). These rows have all owner FKs NULL and were never real
+  // ownership transfers — they shouldn't appear on the Ownership History
+  // timeline alongside actual deed records. If a future ingest somehow
+  // stamps the flag onto a row that does have a valid owner FK, the FK is
+  // trusted and the row is kept.
+  chain = chain.filter((h) => {
+    if (!h) return false;
+    const src = String(h.ownership_source || '').toLowerCase();
+    const isOperatorSource = src === 'cms_operator_chain';
+    const isOperatorType   = String(h.owner_type || '').toLowerCase() === 'operator';
+    const hasOwnerFk = !!(h.recorded_owner_id || h.true_owner_id || h.owner_entity_id || h.owner_id);
+    if ((isOperatorSource || isOperatorType) && !hasOwnerFk) return false;
+    return true;
+  });
+  if (chain.length === 0) return [];
+
   // Normalize a name so "Mds Dv Victorville, LLC." == "mds dv victorville llc"
   const _normName = (s) => {
     if (!s) return '';
@@ -6474,16 +6493,46 @@ async function _udRenderDealHistoryAsync(bodyEl) {
 
 function _udTabDealHistory() {
   const txns = _salesCache ? (_salesCache.transactions || []) : [];
-  const listings = _salesCache ? (_salesCache.listings || []) : [];
+  const rawListings = _salesCache ? (_salesCache.listings || []) : [];
   const chain = _udCache?.chain || [];
   const db = _udCache?.db;
   const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
 
+  // Honor the same consolidation filters as the Sales tab: drop listings the
+  // 76eg consolidation function retired (exclude_from_market_metrics=true or
+  // status='superseded') so re-ingestion dupes don't pad the timeline.
+  const listings = rawListings.filter((l) => {
+    if (!l) return false;
+    if (l.exclude_from_market_metrics === true) return false;
+    return String(l.status || '').toLowerCase() !== 'superseded';
+  });
+
+  // Apply the same dedup as the Ownership/CRM tab so chain-operator relics
+  // (Fresenius/DaVita CMS-chain rows tagged ownership_source='cms_operator_chain')
+  // and shell-LLC duplicates collapse here too. Flag the most-recent entry as
+  // currently open using the 90-day-or-NULL rule that mirrors
+  // _isChainEntryCurrent on the Ownership/CRM timeline.
+  const dedupedChain = _udDedupChain(chain, _udCache?.ownership);
+  const _DH_NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+  const _dhNowMs = Date.now();
+  const _dhIsOpen = (entry, isMostRecent) => {
+    if (!isMostRecent) return false;
+    if (!entry.ownership_end) return true;
+    const endMs = new Date(entry.ownership_end).getTime();
+    if (isNaN(endMs)) return true;
+    return Math.abs(_dhNowMs - endMs) <= _DH_NINETY_DAYS_MS;
+  };
+
   // Build unified timeline
-  const saleEvents = _salesBuildTimeline(listings, txns).map(ev => Object.assign({}, ev, { kind: 'sale', date: ev.sortKey }));
-  const ownerEvents = (chain || []).map(h => ({
+  const saleEvents = _salesBuildTimeline(listings, txns)
+    .filter(ev => !(ev.sale && ev.sale.exclude_from_market_metrics === true)
+              && !(ev.listing && (ev.listing.exclude_from_market_metrics === true ||
+                                  String(ev.listing.status || '').toLowerCase() === 'superseded')))
+    .map(ev => Object.assign({}, ev, { kind: 'sale', date: ev.sortKey }));
+  const ownerEvents = dedupedChain.map((h, idx) => ({
     kind: 'ownership',
     chain: h,
+    isCurrent: _dhIsOpen(h, idx === 0),
     date: _salesParseDate(h.transfer_date) || _salesParseDate(h.recording_date) || _salesParseDate(h.ownership_start) || 0,
   }));
 
@@ -6594,7 +6643,7 @@ function _udTabDealHistory() {
       else if (ev.sale) html += _udDealRenderSale(ev.sale);
       else if (ev.listing) html += _udDealRenderListing(ev.listing);
     } else {
-      html += _udDealRenderOwnership(ev.chain, db);
+      html += _udDealRenderOwnership(ev.chain, db, ev.isCurrent === true);
     }
 
     html += '</div></div>';
@@ -6693,10 +6742,22 @@ function _udDealRenderCombined(l, s) {
   return html;
 }
 
-function _udDealRenderOwnership(h, db) {
+function _udDealRenderOwnership(h, db, isCurrent) {
   const ownerName = h.recorded_owner_name || h.true_owner_name || h.to_owner || h.new_owner || h.owner_name || h.buyer || '—';
-  const transferDate = _fmtDate(h.transfer_date);
-  const endDate = h.ownership_end ? _fmtDate(h.ownership_end) : 'Present';
+  const transferDate = _fmtDate(h.transfer_date) || '—';
+  // Only show "Present" when this row is genuinely the current owner. A NULL
+  // ownership_end on a non-current row is unknown data, not an open tenancy —
+  // rendering it as "Present" makes operator-chain relics or stale rows look
+  // like the current owner. Mirrors _isChainEntryCurrent on the Ownership/CRM
+  // timeline.
+  let endDate;
+  if (isCurrent) {
+    endDate = 'Present';
+  } else if (h.ownership_end) {
+    endDate = _fmtDate(h.ownership_end) || 'Unknown';
+  } else {
+    endDate = 'Unknown';
+  }
   let html = '';
 
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
@@ -9512,10 +9573,48 @@ async function _intelRenderPriorSaleSummaryAsync() {
     console.warn('Prior sale summary fetch error:', e);
   }
 
-  // If property_sale_events is empty, fall back to ownership chain sale data
+  // Fall back to legacy sales_transactions when property_sale_events is empty.
+  // Otherwise the Prior Sale banner reads "No sale recorded for this property
+  // yet." while the Deal History timeline directly below it shows SALE cards
+  // sourced from sales_transactions. Skip rows marked
+  // exclude_from_market_metrics so consolidation-retired sales don't surface.
+  if (!latest) {
+    try {
+      // exclude_from_market_metrics is nullable; downstream views treat NULL
+      // as not-excluded (COALESCE(...,FALSE)=FALSE). `not.is.true` matches
+      // FALSE OR NULL, mirroring that semantic. The query proxy parses one
+      // condition per param, so the second filter goes through `filter2`.
+      const stRes = await qFn('sales_transactions', '*', {
+        filter: `property_id=eq.${propId}`,
+        filter2: 'exclude_from_market_metrics=not.is.true',
+        order: 'sale_date.desc.nullslast',
+        limit: 1,
+      }).catch(() => null);
+      const stRows = Array.isArray(stRes) ? stRes : (stRes?.data || []);
+      const st = stRows[0];
+      if (st) {
+        latest = {
+          sale_date: st.sale_date,
+          price: st.sold_price != null ? st.sold_price : st.price,
+          cap_rate: st.cap_rate || null,
+          buyer_name: st.buyer_name || st.buyer || null,
+          seller_name: st.seller_name || st.seller || null,
+          broker_name: st.broker_name || st.listing_broker || null,
+          source: 'sales_transactions',
+          notes: st.notes || null,
+        };
+      }
+    } catch (e) {
+      console.warn('Prior sale fallback (sales_transactions) error:', e);
+    }
+  }
+
+  // Final fallback: ownership chain sale data (only for entries with a
+  // populated sale_price; skip operator-chain relics which never carry one).
   if (!latest) {
     const chain = _udCache?.chain || [];
-    const chainSale = chain.find(h => h.sale_price && h.sale_price > 0);
+    const chainSale = chain.find(h => h.sale_price && h.sale_price > 0 &&
+      String(h.ownership_source || '').toLowerCase() !== 'cms_operator_chain');
     if (chainSale) {
       latest = {
         sale_date: chainSale.transfer_date,
