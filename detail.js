@@ -4832,19 +4832,21 @@ function _udDedupChain(chain, currentOwn) {
 
   // Belt-and-suspenders alongside the dia_purge_operator_owner_links() purge
   // and v_ownership_current.true_owner_is_operator: drop CMS chain-org rows
-  // tagged as operators (DaVita, Fresenius, …) by migration 20260428030000
-  // (Round 76aj). These rows have all owner FKs NULL and were never real
-  // ownership transfers — they shouldn't appear on the Ownership History
-  // timeline alongside actual deed records. If a future ingest somehow
-  // stamps the flag onto a row that does have a valid owner FK, the FK is
-  // trusted and the row is kept.
+  // tagged ownership_source='cms_operator_chain' by Round 76aj
+  // (20260428030000). That tag is reserved for synthetic operator-presence
+  // shims from CMS ingestion (DaVita / Fresenius / etc.) — they are not
+  // ownership transfers and don't belong on the timeline. Note we drop
+  // unconditionally on the source tag: Round 76aj Step 2 inherited a
+  // recorded_owner_id from any linked sale, and prior CMS-chain ingestion
+  // may have left a synthetic true_owner_id pointing at the chain
+  // operator's entity in true_owners (e.g. 10505 Jones Rd, Houston shows
+  // ✓Salesforce on its Fresenius shim despite having no real deed). The
+  // FK is itself synthetic when the source is cms_operator_chain — trust
+  // the source tag.
   chain = chain.filter((h) => {
     if (!h) return false;
     const src = String(h.ownership_source || '').toLowerCase();
-    const isOperatorSource = src === 'cms_operator_chain';
-    const isOperatorType   = String(h.owner_type || '').toLowerCase() === 'operator';
-    const hasOwnerFk = !!(h.recorded_owner_id || h.true_owner_id || h.owner_entity_id || h.owner_id);
-    if ((isOperatorSource || isOperatorType) && !hasOwnerFk) return false;
+    if (src === 'cms_operator_chain') return false;
     return true;
   });
   if (chain.length === 0) return [];
