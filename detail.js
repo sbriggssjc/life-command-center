@@ -6091,6 +6091,56 @@ function _salesListingIsActive(l) {
   return !l.off_market_date;
 }
 
+// Tier 6: notes-dedup state for the Deal History timeline. WeakMap keyed by
+// the sale/listing row object (so we don't mutate the source row); value is
+// the human label of the FIRST event that carried this notes blob. Reset on
+// every _udTabDealHistory() call. Renderers consult _dhNotesDupLabel(obj).
+let _dhNotesDup = new WeakMap();
+function _dhNormalizeNotes(s) {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function _dhEventLabelForNotes(ev) {
+  if (ev.kind === 'sale') {
+    if (ev.sale && ev.sale.sale_date) return _fmtDate(ev.sale.sale_date) + ' sale';
+    if (ev.listing && ev.listing.listing_date) return _fmtDate(ev.listing.listing_date) + ' listing';
+  }
+  return 'earlier event';
+}
+function _dhNotesDupLabel(obj) {
+  if (!obj || !_dhNotesDup) return null;
+  return _dhNotesDup.get(obj) || null;
+}
+function _dhRenderNotesOrDup(obj) {
+  if (!obj || !obj.notes) return '';
+  const dup = _dhNotesDupLabel(obj);
+  if (dup) {
+    return `<div style="font-size:11px;color:var(--text3);margin-top:4px;border-top:1px solid var(--border);padding-top:6px;font-style:italic">Same notes as ${esc(dup)} — collapsed</div>`;
+  }
+  return `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(obj.notes)}</div>`;
+}
+
+// Tier 5: detect listings that the 76eg auto-close trigger
+// (fn_listing_close_if_sold) closed against a pre-existing sale. The trigger
+// appends a signature to listing.notes and stamps off_market_date to the
+// sale_date — which, when sale_date < listing_date, makes the card read
+// "Listed May 6 → Sold May 5" (off_market preceded listing). Detect via either
+// the notes signature or the date inversion so we can re-label honestly.
+const _DH_AUTOCLOSE_SIGNATURE = /\[(?:fn_listing_close_if_sold|Round 76eg backfill)\b/i;
+function _salesListingAutoClosedAgainstPriorSale(l) {
+  if (!l) return false;
+  const notes = String(l.notes || '');
+  if (_DH_AUTOCLOSE_SIGNATURE.test(notes)) return true;
+  // Fallback: off_market_date strictly before listing_date is otherwise
+  // nonsensical and only happens when the trigger back-stamps an earlier
+  // sale_date onto a re-ingested listing.
+  if (l.listing_date && l.off_market_date) {
+    const lm = new Date(l.listing_date).getTime();
+    const om = new Date(l.off_market_date).getTime();
+    if (!isNaN(lm) && !isNaN(om) && om < lm) return true;
+  }
+  return false;
+}
+
 function _salesListingStatus(l, matchedSale) {
   const raw = (l && l.status ? String(l.status) : '').toLowerCase();
   if (matchedSale || raw === 'sold') return { label: 'Sold',      color: 'var(--green)' };
@@ -6181,17 +6231,27 @@ function _salesBuildTimeline(listings, txns) {
 
 function _salesRenderListing(l) {
   const status = _salesListingStatus(l, null);
+  const autoClosed = _salesListingAutoClosedAgainstPriorSale(l);
   let html = '';
 
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
   html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${status.color};padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid ${status.color}">${esc(status.label)}</span>`;
-  html += `<span style="font-size:11px;color:var(--text3)">Listing</span>`;
+  html += `<span style="font-size:11px;color:var(--text3)">Listing${autoClosed ? ' · auto-matched to prior sale' : ''}</span>`;
   html += '</div>';
 
-  // Dates row
+  // Dates row. For auto-closed listings, off_market_date is a back-stamp of the
+  // pre-existing sale_date and renders as "Listed May 6 / Off Market May 5"
+  // (date inversion), so label that field explicitly as the matched-sale date
+  // rather than the listing's own off-market event.
   const dateBits = [];
   if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
-  if (l.off_market_date) dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+  if (l.off_market_date) {
+    if (autoClosed) {
+      dateBits.push(`<span style="color:var(--text3)">Matched sale on:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+    } else {
+      dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+    }
+  }
   if (dateBits.length) {
     html += `<div style="font-size:12px;margin-bottom:8px;display:flex;gap:14px;flex-wrap:wrap">${dateBits.join('')}</div>`;
   }
@@ -6229,6 +6289,10 @@ function _salesRenderListing(l) {
     });
     html += '</div>';
   }
+
+  // Notes (Tier 6 dedup applies for the Deal History timeline; harmless
+  // pass-through on the Sales tab where _dhNotesDup is empty).
+  html += _dhRenderNotesOrDup(l);
 
   return html;
 }
@@ -6275,9 +6339,7 @@ function _salesRenderSale(s) {
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
-  if (s.notes) {
-    html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(s.notes)}</div>`;
-  }
+  html += _dhRenderNotesOrDup(s);
 
   return html;
 }
@@ -6288,6 +6350,7 @@ function _salesRenderCombined(l, s) {
   const soldPrice = s.price != null ? s.price : (s.sold_price != null ? s.sold_price : s.sale_price);
   const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
   const isExcluded = s.exclude_from_market_metrics === true;
+  const autoClosed = _salesListingAutoClosedAgainstPriorSale(l);
 
   let html = '';
 
@@ -6301,34 +6364,53 @@ function _salesRenderCombined(l, s) {
   if (isExcluded) {
     html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--text3)">Excluded</span>`;
   }
+  if (autoClosed) {
+    html += `<span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--yellow);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--yellow)" title="The 76eg trigger auto-closed this listing against a sale that was already recorded. The listing was created after the sale closed (re-ingestion artifact).">Auto-matched</span>`;
+  }
   html += '</div>';
   if (s.sale_date) {
     html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(s.sale_date))}</span>`;
   }
   html += '</div>';
 
-  // Narrative line: "Listed → [price] → Sold [date] at [price]/[cap rate]"
-  const parts = [];
-  if (l.listing_date) {
-    parts.push(`<span style="color:var(--text2)">Listed ${esc(_fmtDate(l.listing_date))}</span>`);
-  } else {
-    parts.push(`<span style="color:var(--text2)">Listed</span>`);
-  }
-  if (initial != null) {
-    parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(initial)}</span>`);
-  }
-  if (last != null && Number(last) !== Number(initial) && (soldPrice == null || Math.abs(Number(last) - Number(soldPrice)) > 1)) {
-    parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(last)}</span>`);
-  }
-  const soldBits = ['Sold'];
-  if (s.sale_date) soldBits.push(esc(_fmtDate(s.sale_date)));
-  let soldTail = soldBits.join(' ');
+  // Narrative line. For auto-closed listings (sale predates listing — created
+  // by the 76eg trigger when a re-ingested listing matched a pre-existing
+  // sale), the "Listed X → Sold Y" arrow reads backwards. Render an honest
+  // line instead.
   const _bestCap2 = s.stated_cap_rate || s.calculated_cap_rate || s.cap_rate || null;
-  if (soldPrice != null) soldTail += ` at ${fmt(soldPrice)}`;
-  if (_bestCap2 != null) soldTail += ` / ${_fmtCapRate(_bestCap2)} Cap`;
-  parts.push(`<span style="color:var(--green);font-weight:600">${soldTail}</span>`);
+  if (autoClosed) {
+    let line = '<span style="color:var(--text2)">Sale recorded';
+    if (s.sale_date) line += ` ${esc(_fmtDate(s.sale_date))}`;
+    if (soldPrice != null) line += ` at <span style="color:var(--green);font-weight:600">${fmt(soldPrice)}</span>`;
+    if (_bestCap2 != null) line += ` <span style="color:var(--text3)">/</span> <span style="color:var(--green);font-weight:600">${_fmtCapRate(_bestCap2)} Cap</span>`;
+    line += '</span>';
+    html += `<div style="font-size:13px;margin-bottom:6px;line-height:1.7">${line}</div>`;
+    if (l.listing_date) {
+      html += `<div style="font-size:11px;color:var(--text3);margin-bottom:10px;font-style:italic">Listing record arrived later (${esc(_fmtDate(l.listing_date))}) and was auto-matched to this sale.</div>`;
+    }
+  } else {
+    // Normal "Listed → [price] → Sold [date] at [price]/[cap rate]"
+    const parts = [];
+    if (l.listing_date) {
+      parts.push(`<span style="color:var(--text2)">Listed ${esc(_fmtDate(l.listing_date))}</span>`);
+    } else {
+      parts.push(`<span style="color:var(--text2)">Listed</span>`);
+    }
+    if (initial != null) {
+      parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(initial)}</span>`);
+    }
+    if (last != null && Number(last) !== Number(initial) && (soldPrice == null || Math.abs(Number(last) - Number(soldPrice)) > 1)) {
+      parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(last)}</span>`);
+    }
+    const soldBits = ['Sold'];
+    if (s.sale_date) soldBits.push(esc(_fmtDate(s.sale_date)));
+    let soldTail = soldBits.join(' ');
+    if (soldPrice != null) soldTail += ` at ${fmt(soldPrice)}`;
+    if (_bestCap2 != null) soldTail += ` / ${_fmtCapRate(_bestCap2)} Cap`;
+    parts.push(`<span style="color:var(--green);font-weight:600">${soldTail}</span>`);
 
-  html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
+    html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
+  }
 
   // Price grid — suppress "Final Ask" if it equals sold price (CoStar last_price = sold price, not last asking)
   const showFinalAsk = last != null && Number(last) !== Number(initial) && (soldPrice == null || Math.abs(Number(last) - Number(soldPrice)) > 1);
@@ -6348,12 +6430,18 @@ function _salesRenderCombined(l, s) {
   }
   html += '</div>';
 
-  // Dates row (on/off market)
-  const dateBits = [];
-  if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
-  if (l.off_market_date) dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
-  if (dateBits.length) {
-    html += `<div style="font-size:12px;margin-bottom:6px;display:flex;gap:14px;flex-wrap:wrap">${dateBits.join('')}</div>`;
+  // Dates row (on/off market). Suppress entirely for auto-closed listings —
+  // off_market_date is just a back-stamp of sale_date (already in the header)
+  // and listing_date is already shown in the italic "arrived later" line, so
+  // re-rendering both produces the misleading "Listed May 6 / Off Market May 5"
+  // inversion the trigger creates.
+  if (!autoClosed) {
+    const dateBits = [];
+    if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
+    if (l.off_market_date) dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+    if (dateBits.length) {
+      html += `<div style="font-size:12px;margin-bottom:6px;display:flex;gap:14px;flex-wrap:wrap">${dateBits.join('')}</div>`;
+    }
   }
 
   // Parties
@@ -6379,8 +6467,12 @@ function _salesRenderCombined(l, s) {
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
+  // Render sale notes (Tier 6 dedup applies). When the sale has no notes but
+  // the listing does (rare on combined cards), surface those instead.
   if (s.notes) {
-    html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(s.notes)}</div>`;
+    html += _dhRenderNotesOrDup(s);
+  } else if (l && l.notes) {
+    html += _dhRenderNotesOrDup(l);
   }
 
   return html;
@@ -6560,6 +6652,36 @@ function _udTabDealHistory() {
 
   // Sort chronologically oldest-first (timeline reads top-to-bottom as history)
   const events = [...mergedSaleEvents, ...dedupedOwnerEvents].sort((a, b) => (a.date || 0) - (b.date || 0));
+
+  // Tier 6: dedup duplicate sale-notes blobs across the timeline. The same
+  // listing memo (EDGE Realty / Avison Young / Cushman copy-paste) often
+  // appears verbatim on multiple sale or listing cards from re-ingestion.
+  // Walk events oldest-first; first occurrence renders the full notes, later
+  // occurrences render a "Same notes as <origin> — collapsed" pointer.
+  // _dhNotesDup is a WeakMap keyed by the sale/listing OBJECT so we don't
+  // mutate the source row. Renderers read it via _dhNotesDupLabel().
+  _dhNotesDup = new WeakMap();
+  {
+    const seen = new Map(); // normalized notes hash -> origin label string
+    for (const ev of events) {
+      if (ev.kind !== 'sale') continue;
+      // Check the sale row first (combined cards prefer sale notes), then the
+      // listing row. Either may carry the duplicate blob.
+      for (const candidate of [ev.sale, ev.listing]) {
+        if (!candidate || !candidate.notes) continue;
+        const norm = _dhNormalizeNotes(candidate.notes);
+        // Skip short notes (single-line annotations are often legitimately
+        // repeated, e.g. "Refi @ 5.5%"). Threshold tuned to catch listing
+        // memos, which run hundreds of characters.
+        if (norm.length < 120) continue;
+        if (seen.has(norm)) {
+          _dhNotesDup.set(candidate, seen.get(norm));
+        } else {
+          seen.set(norm, _dhEventLabelForNotes(ev));
+        }
+      }
+    }
+  }
 
   let html = '';
 
