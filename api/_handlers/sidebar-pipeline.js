@@ -2137,7 +2137,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   }
 
   // Step 5c: Upsert loans
-  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect, results.records);
+  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect, results.records, entity);
 
   // Step 5c2: Upsert CMBS loan records (Round 76ek.b).
   // metadata.loan_records[] arrives from extension/content/costar.js when the
@@ -5153,7 +5153,7 @@ function mapLoanType(rawType) {
  * Upsert loan records in the domain database.
  * Created from sales_history entries that have lender/loan_amount data.
  */
-async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resultsRecords = null) {
+async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resultsRecords = null, entity = null) {
   // Round 76ez (2026-05-13): stamp early-exit diag onto resultsRecords so
   // even an empty-sales-history return can be observed via SQL.
   const earlyDiag = {
@@ -5162,14 +5162,30 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
     sales_history_len:  Array.isArray(metadata.sales_history) ? metadata.sales_history.length : null,
     metadata_loans_len: Array.isArray(metadata.loans) ? metadata.loans.length : null,
     function_reached:   'entry',
+    invoked_at:         new Date().toISOString(),
   };
   if (resultsRecords) resultsRecords.loans_diag = earlyDiag;
+  // Round 76fa (2026-05-13): direct DB-write probe. Bypass the records-spread
+  // plumbing entirely — write the diag straight onto entity.metadata via a
+  // dedicated opsQuery PATCH. If the diag still doesn't appear after this,
+  // upsertDomainLoans is genuinely not being called.
+  const flushDiag = async (snapshot) => {
+    if (!entity?.id) return;
+    try {
+      await opsQuery('PATCH',
+        `entities?id=eq.${entity.id}`,
+        { metadata: { ...(entity.metadata || {}), _loans_probe: snapshot } }
+      );
+    } catch (_e) { /* probe write failure is non-fatal */ }
+  };
+  await flushDiag(earlyDiag);
   // Round 76ex: reset diag at function entry so cross-run leakage can't
   // make one entity's loans-debug appear on a different entity's summary.
   _lastLoansDiag = null;
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) {
     earlyDiag.function_reached = 'early_return_no_sales';
+    await flushDiag(earlyDiag);
     return 0;
   }
 
@@ -5675,7 +5691,10 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
   // entity.metadata._pipeline_summary.domain_records.loans_diag. This is
   // the most reliable plumbing (no module state, no spread-order quirks).
   _loansDiag.function_reached = 'final_assignment';
+  _loansDiag.finished_at      = new Date().toISOString();
   if (resultsRecords) resultsRecords.loans_diag = _loansDiag;
+  // Round 76fa: direct DB-write probe at end of function.
+  await flushDiag(_loansDiag);
   return count;
 }
 
