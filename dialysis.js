@@ -10225,8 +10225,12 @@ async function renderSaleOwnershipTab(record) {
 
   let owners = [];
   try {
+    // Filter out cms_operator_chain shim rows so this sub-tab doesn't render
+    // synthetic operator-presence rows (Fresenius / DaVita / etc.) alongside
+    // real deed ownership records. See Layer D migration 20260513120000.
     owners = await diaQuery('ownership_history', '*', {
       filter: `property_id=eq.${record.property_id}`,
+      filter2: 'ownership_source=not.eq.cms_operator_chain',
       order: 'start_date.desc',
       limit: 50
     }) || [];
