@@ -1,0 +1,74 @@
+-- =====================================================================
+-- Round 32 — Avail_by_Term_Summary chart breakout per master Excel
+-- "Market Size" sheet's single-stat-per-chart layout. Final R31
+-- backlog deliverable: split the over-packed combo chart into a price
+-- chart + a cap-dispersion chart.
+--
+-- ---------------------------------------------------------------------
+-- LCC CHART CATALOG (LCC Opps DB)
+-- ---------------------------------------------------------------------
+-- 1) cm_chart_catalog — NEW chart_template_id:
+--      • available_cap_dispersion_by_term
+--        type=scatter, applies_to=['dialysis','gov']
+--        view_name_template=__synthetic__:available_cap_dispersion_by_term
+--
+-- 2) Existing rows updated:
+--      • available_by_term_summary  (dia) — name + chart_type updated.
+--        Was "Available by Term — Price + Cap Dispersion" / bar.
+--        Now  "Available — Avg Price by Term Bucket" / bar.
+--      • available_by_firm_term_summary (gov) — same pattern.
+--        Was "Available Market — Price & Cap Rate Ranges (by Firm Term)"
+--        / ComboBarDotChart.
+--        Now  "Available — Avg Price by Firm Term Bucket" / bar.
+--
+-- No Supabase data view changes — the underlying
+-- cm_dialysis_available_by_term_bucket / cm_gov_available_by_term_summary
+-- views remain unchanged. Both charts share the same source rows.
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js,
+-- api/capital-markets.js, api/_shared/cm-excel-export.js)
+-- ---------------------------------------------------------------------
+-- 3) cm-chart-image-renderer.js:
+--      • case 'available_by_term_summary' — stripped to single bar
+--        series (Avg Price). Master 'Market Size' chart 0 style.
+--        Removed the 4 cap-stat scatter overlays, removed y1 (right
+--        cap-rate axis), kept datalabels with N + avg-price callout.
+--      • case 'available_by_firm_term_summary' (gov) — same single-
+--        bar simplification.
+--      • case 'available_cap_dispersion_by_term' — NEW.
+--        4 scatter series (Avg / Upper Q / Median / Lower Q cap) on a
+--        single percent y-axis (4-9%) with categorical x-axis (4 firm-
+--        term cohorts). Diamond markers. PDF-aligned color palette.
+--
+-- 4) api/capital-markets.js synth composers:
+--      • 'available_by_term_summary' — unchanged composer output
+--        (still projects all columns; just the renderer ignores caps).
+--        Kept full projection so the Data tab still surfaces all
+--        stats for analyst inspection.
+--      • 'available_cap_dispersion_by_term' — NEW composer. Reads
+--        from cm_<vertical>_available_by_term_bucket (dia) or from
+--        available_by_firm_term_summary chart rows (gov). Projects
+--        the 4 cap stats + term_bucket + n_listings.
+--
+-- 5) api/_shared/cm-excel-export.js:
+--      • TAB_NAMES: added 'available_cap_dispersion_by_term' →
+--        'Data_Avail_Cap_Dispersion'.
+--      • CHART_COLUMNS: added matching column shape (term_bucket +
+--        4 cap stats + n_listings + period_end).
+--
+-- ---------------------------------------------------------------------
+-- USER REQUEST CONTEXT
+-- ---------------------------------------------------------------------
+-- From "Capital Markets Exports - Notes.docx":
+--   "Data_Avail_by_Term_Summary - Still doesn't match the format from
+--    our Excel/PDF deliverables."
+--   "Data_Avail_by_Firm_Term - Review this chart's formatting in the
+--    dialysis version and update to match."
+--
+-- The master 'Dialysis Comp Work MASTER.xlsx' > 'Market Size' sheet
+-- shows separate charts per stat (Avg Price | # Available | Cap
+-- Quartiles | DOM), not a single combined combo. R31 Tier 2c aligned
+-- the gov term-bucket labels with dia; this PR completes the visual
+-- breakout for both verticals.
+-- =====================================================================

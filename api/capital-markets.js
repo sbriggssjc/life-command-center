@@ -211,10 +211,15 @@ const SYNTHETIC_COMPOSERS = {
     }));
   },
 
-  // Round 4c — Available_by_Term Summary (PDF dialysis p.30 bottom).
-  // 4 grouped bars (Avg Price) + 4 dot series (Avg/Upper Q/Median/Lower Q
-  // cap) by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Pulls existing
-  // available_by_term_bucket chart rows for the LATEST period_end.
+  // Round 4c / Round 32 — Available_by_Term Summary (PDF dialysis p.30
+  // bottom). Originally a Round 4c combo (Avg Price bars + 4 cap-stat
+  // dots). Round 32: split per master Excel "Market Size" sheet's
+  // single-stat-per-chart layout. The 'available_by_term_summary'
+  // chart now produces only the Avg Price bar (master Chart 0 style).
+  // The 4 cap-stat dots moved to the new
+  // 'available_cap_dispersion_by_term' chart below.
+  // Both composers read the same source rows from
+  // available_by_term_bucket (dia) and project the relevant columns.
   'available_by_term_summary': ({ allCharts }) => {
     const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
     const termRows = find('available_by_term_bucket');
@@ -231,6 +236,39 @@ const SYNTHETIC_COMPOSERS = {
       term_bucket: r.term_bucket,
       n_listings: Number(r.n_listings) || 0,
       avg_price: r.avg_price != null ? Number(r.avg_price) : null,
+      avg_cap: r.avg_cap != null ? Number(r.avg_cap) : null,
+      upper_quartile_cap: r.upper_quartile_cap != null ? Number(r.upper_quartile_cap) : null,
+      median_cap: r.median_cap != null ? Number(r.median_cap) : null,
+      lower_quartile_cap: r.lower_quartile_cap != null ? Number(r.lower_quartile_cap) : null,
+      period_end: r.period_end,
+    }));
+  },
+
+  // Round 32 — Cap rate dispersion by term bucket. New chart split
+  // from available_by_term_summary. Sister chart to the Avg Price bar:
+  // shows the 4 cap stats (Avg + Upper Q + Median + Lower Q) per
+  // firm-term cohort. Reuses the same source row set (single source
+  // of truth keeps the two charts mathematically consistent).
+  // Dia reads from available_by_term_bucket; gov reads from
+  // available_by_firm_term_summary (its own real view, no synth).
+  'available_cap_dispersion_by_term': ({ vertical, allCharts }) => {
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    const sourceId = vertical === 'gov' || vertical === 'government_leased'
+      ? 'available_by_firm_term_summary'
+      : 'available_by_term_bucket';
+    const sourceRows = find(sourceId);
+    if (!sourceRows.length) return [];
+    const latestPeriod = sourceRows
+      .map(r => r.period_end)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0];
+    const latest = sourceRows
+      .filter(r => r.period_end === latestPeriod)
+      .sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99));
+    return latest.map(r => ({
+      term_bucket: r.term_bucket,
+      n_listings: Number(r.n_listings) || 0,
       avg_cap: r.avg_cap != null ? Number(r.avg_cap) : null,
       upper_quartile_cap: r.upper_quartile_cap != null ? Number(r.upper_quartile_cap) : null,
       median_cap: r.median_cap != null ? Number(r.median_cap) : null,

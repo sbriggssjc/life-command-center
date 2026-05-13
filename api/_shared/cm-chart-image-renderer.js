@@ -514,20 +514,16 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'available_by_term_summary': {
-      // Round 4c — PDF dialysis p.30 bottom. 4 grouped sky-blue bars
-      // (Avg Price, left axis $0–$8M) + 4 dot/line series (Avg Cap,
-      // Upper Quartile, Lower Quartile, Median) on right axis (3.5%–8%).
-      //
-      // X-axis is categorical (term buckets), not time-series. Use the
-      // un-cropped chart.rows directly — recentRows truncation would
-      // drop categories for non-time-series charts.
+      // Round 4c — PDF dialysis p.30 bottom (original combo).
+      // Round 32 — Restructured per user note "Avail_by_Term_Summary
+      // still doesn't match the format from our Excel/PDF deliverables".
+      // Master `Dialysis Comp Work MASTER.xlsx` > 'Market Size' chart 0
+      // shows ONLY the Avg Price bar by firm-term bucket. The Round 4c
+      // overlay of 4 cap-stat dots has been split off into a separate
+      // chart_template_id `available_cap_dispersion_by_term` to mirror
+      // the master's one-stat-per-chart layout.
       const termRows = chart.rows || [];
       const termLabels = termRows.map(r => r.term_bucket || '?');
-      const dotPointRadius = 6;
-      const dotPointStyle = 'rectRot'; // diamond marker, similar to PDF
-      // Round 7 — pre-compute price-bar labels here so the formatter
-      // can read them off ctx.dataset (closures get dropped through
-      // QuickChart's serialization).
       const termPriceLabels = termRows.map((row) => {
         const v = Number(row.avg_price) || 0;
         const m = v / 1_000_000;
@@ -540,63 +536,21 @@ function buildChartConfig(chart, brand) {
         data: {
           labels: termLabels,
           datasets: [
-            { type: 'bar', label: 'Avg Price (left axis)',
+            { type: 'bar', label: 'Avg Price',
               data: termRows.map(r => r.avg_price),
-              // Pre-computed labels for datalabels formatter
               priceLabels: termPriceLabels,
-              backgroundColor: PDF_COLORS.cap_mid, // sky
+              backgroundColor: PDF_COLORS.cap_mid,
               borderColor: PDF_COLORS.cap_mid,
               borderRadius: 1,
               barPercentage: 0.6, categoryPercentage: 0.85,
-              yAxisID: 'y', order: 5 },
-            { type: 'scatter', label: 'Avg Cap',
-              data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
-              backgroundColor: PDF_COLORS.cap_short, // navy
-              borderColor: PDF_COLORS.cap_short,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 1 },
-            { type: 'scatter', label: 'Upper Quartile',
-              data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
-              backgroundColor: PDF_COLORS.cap_long_term, // purple
-              borderColor: PDF_COLORS.cap_long_term,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 2 },
-            { type: 'scatter', label: 'Lower Quartile',
-              data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
-              backgroundColor: PDF_COLORS.cap_outside_firm, // gray
-              borderColor: PDF_COLORS.cap_outside_firm,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 3 },
-            { type: 'scatter', label: 'Median',
-              data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
-              backgroundColor: PDF_COLORS.cap_mid_long, // sage
-              borderColor: PDF_COLORS.cap_mid_long,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 4 },
+              yAxisID: 'y', order: 1 },
           ],
         },
         options: (() => {
           const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT });
           opts.scales = opts.scales || {};
           opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
-          opts.scales.y1 = {
-            type: 'linear',
-            position: 'right',
-            min: 0.035, max: 0.08,  // 3.5%–8% per PDF
-            grid: { drawOnChartArea: false },
-            ticks: {
-              callback: (v) => (v * 100).toFixed(1) + '%',
-              font: { size: 11 },
-            },
-          };
-          // Round 6a — total callouts above each price bar + count under the
-          // term-bucket label, per user feedback: "we want data labels and
-          // callouts so we can see the totals." datalabels plugin is shipped
-          // by QuickChart hosted; the formatter shows N listings + avg price.
           opts.plugins = opts.plugins || {};
-          // Round 7 — datalabels formatter reads priceLabels[i] off the
-          // bar dataset (pre-computed above). No closure over termRows
-          // so the function survives QuickChart's JSON serialization.
           opts.plugins.datalabels = {
             display: function (ctx) { return ctx.dataset.type === 'bar'; },
             color: PDF_COLORS.cap_short,
@@ -608,6 +562,62 @@ function buildChartConfig(chart, brand) {
               return (ctx.dataset.priceLabels || [])[ctx.dataIndex] || '';
             },
           };
+          return opts;
+        })(),
+      };
+    }
+
+    case 'available_cap_dispersion_by_term': {
+      // Round 32 — New chart split from available_by_term_summary.
+      // Shows 4 cap-stat dot series per firm-term bucket: Avg Cap,
+      // Upper Quartile, Median, Lower Quartile. Matches the master's
+      // separated-by-stat layout (price + cap stats no longer
+      // overlapped on one chart).
+      const termRows = chart.rows || [];
+      const termLabels = termRows.map(r => r.term_bucket || '?');
+      const dotPointRadius = 6;
+      const dotPointStyle = 'rectRot';
+      return {
+        type: 'scatter',
+        data: {
+          labels: termLabels,
+          datasets: [
+            { type: 'scatter', label: 'Avg Cap',
+              data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
+              backgroundColor: PDF_COLORS.cap_short,
+              borderColor: PDF_COLORS.cap_short,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, order: 1 },
+            { type: 'scatter', label: 'Upper Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_long_term,
+              borderColor: PDF_COLORS.cap_long_term,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, order: 2 },
+            { type: 'scatter', label: 'Median',
+              data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
+              backgroundColor: PDF_COLORS.cap_mid_long,
+              borderColor: PDF_COLORS.cap_mid_long,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, order: 3 },
+            { type: 'scatter', label: 'Lower Quartile',
+              data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
+              backgroundColor: PDF_COLORS.cap_outside_firm,
+              borderColor: PDF_COLORS.cap_outside_firm,
+              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
+              showLine: false, order: 4 },
+          ],
+        },
+        options: (() => {
+          const opts = commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+            yAxisRange: { min: 0.04, max: 0.09 },
+          });
+          opts.scales = opts.scales || {};
+          opts.scales.x = { ...(opts.scales.x || {}), type: 'category',
+            ticks: { callback: function (v) {
+              return termLabels[v] || '';
+            } } };
           return opts;
         })(),
       };
@@ -2204,59 +2214,30 @@ function buildChartConfig(chart, brand) {
         const n = row.n_listings ?? 0;
         return `${priceLabel}\n(n=${n})`;
       });
+      // Round 32 — Restructured per user note "Review this chart's
+      // formatting in the dialysis version and update to match" — and
+      // the dia version itself is now simplified to a single Avg Price
+      // bar (master 'Market Size' chart 0 style). Cap stats moved to
+      // separate template available_cap_dispersion_by_term.
       return {
         type: 'bar',
         data: {
           labels: termLabels,
           datasets: [
-            { type: 'bar', label: 'Avg Price (left axis)',
+            { type: 'bar', label: 'Avg Price',
               data: termRows.map(r => r.avg_price),
               priceLabels: termPriceLabels,
               backgroundColor: PDF_COLORS.cap_mid,
               borderColor: PDF_COLORS.cap_mid,
               borderRadius: 1,
               barPercentage: 0.6, categoryPercentage: 0.85,
-              yAxisID: 'y', order: 5 },
-            { type: 'scatter', label: 'Avg Cap',
-              data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
-              backgroundColor: PDF_COLORS.cap_short,
-              borderColor: PDF_COLORS.cap_short,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 1 },
-            { type: 'scatter', label: 'Upper Quartile',
-              data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
-              backgroundColor: PDF_COLORS.cap_long_term,
-              borderColor: PDF_COLORS.cap_long_term,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 2 },
-            { type: 'scatter', label: 'Lower Quartile',
-              data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
-              backgroundColor: PDF_COLORS.cap_outside_firm,
-              borderColor: PDF_COLORS.cap_outside_firm,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 3 },
-            { type: 'scatter', label: 'Median',
-              data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
-              backgroundColor: PDF_COLORS.cap_mid_long,
-              borderColor: PDF_COLORS.cap_mid_long,
-              pointRadius: dotPointRadius, pointStyle: dotPointStyle,
-              showLine: false, yAxisID: 'y1', order: 4 },
+              yAxisID: 'y', order: 1 },
           ],
         },
         options: (() => {
           const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY_COMPACT });
           opts.scales = opts.scales || {};
           opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
-          opts.scales.y1 = {
-            type: 'linear',
-            position: 'right',
-            min: 0.04, max: 0.09,  // R31 T2c: tightened to fit gov data (6.5-8.5%)
-            grid: { drawOnChartArea: false },
-            ticks: {
-              callback: function (v) { return (v * 100).toFixed(1) + '%'; },
-              font: { size: 11 },
-            },
-          };
           opts.plugins = opts.plugins || {};
           opts.plugins.datalabels = {
             display: function (ctx) { return ctx.dataset.type === 'bar'; },
