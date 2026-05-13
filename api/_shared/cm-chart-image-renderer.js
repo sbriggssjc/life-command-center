@@ -1016,9 +1016,15 @@ function buildChartConfig(chart, brand) {
       // User: "the asking cap rates for anything before 2010 appear
       // to be very lacking or gaps… needs an adjustment to the Y-axis
       // so that we can see the data."
+      // Round 31 — Both verticals widened. Dia 4.75-7.25% was clipping
+      // the long-term cohort (max 8.87%) and the all-window (max 7.99%).
+      // Gov narrowed slightly so the lines fill the chart frame better.
+      // User: "We also have a y-axis issue with the cap rate lines not
+      // displaying in view on the chart" (dia) and "Y-axis does not
+      // allow the data to be in view on the chart" (gov).
       const yLeftRange  = govLike
-        ? { min: 0.05, max: 0.090 }       // gov cap rate window
-        : { min: 0.0475, max: 0.0725 };   // dialysis cap rate window
+        ? { min: 0.055, max: 0.095 }      // gov: tightened 5.5-9.5% (data 6.05-8.78%)
+        : { min: 0.0475, max: 0.0925 };   // dia: widened to 4.75-9.25% (long-term max 8.87%)
       // Round 17 — tightened gov price-change axis 0.14 → 0.08. Actual
       // gov data tops at ~7% TTM (was specced 0-14% from the dialysis
       // p.35 deck assumption). User: "Sentiment needs the y-axis

@@ -623,11 +623,14 @@
       case 'seller_sentiment_monthly': {
         // Round 27 — mirrors Round 10/17/26 server config. Cap lines on
         // LEFT axis with per-vertical range; price-change bars on RIGHT.
-        //   Gov:   cap 5.0–9.0% / price 0–8%
-        //   Dia:   cap 4.75–7.25% / price 0–70%
+        // Round 31 — User: cap rate lines clipped from view on both
+        // verticals. Dia widened (long-term cohort hit 8.87% above old
+        // 7.25%). Gov tightened bottom to focus on actual data span.
+        //   Gov:   cap 5.5–9.5% / price 0–8%   (data 6.05-8.78%)
+        //   Dia:   cap 4.75–9.25% / price 0–70% (long-term max 8.87%)
         const govLike = chart.vertical === 'gov' || chart.vertical === 'government_leased';
-        const capMin = govLike ? 0.05  : 0.0475;
-        const capMax = govLike ? 0.09  : 0.0725;
+        const capMin = govLike ? 0.055  : 0.0475;
+        const capMax = govLike ? 0.095  : 0.0925;
         const pcMin  = 0;
         const pcMax  = govLike ? 0.08  : 0.70;
         const opts = commonChartOptions('percent_basis_points');
