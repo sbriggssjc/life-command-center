@@ -1016,12 +1016,6 @@ function detectDomainMismatch(domain, metadata, entityFields) {
 
 // Expose last classifier diagnostic for pipeline summary (debugging)
 let _lastClassifierDiag = null;
-// Round 76ex (2026-05-13): same pattern for upsertDomainLoans third loop —
-// Vercel's runtime logs drop fire-and-forget console output after res.json()
-// returns, so the Round 76ew console.logs never surface. Capture the same
-// trace into a module-level diag that gets persisted in the pipeline summary
-// (queryable via entity.metadata._pipeline_summary._loans_diag).
-let _lastLoansDiag = null;
 function classifyDomainWithDiag(metadata, entityFields) {
   const result = classifyDomain(metadata, entityFields);
   // Build diagnostic snapshot
@@ -2137,7 +2131,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   }
 
   // Step 5c: Upsert loans
-  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect, results.records, entity);
+  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect);
 
   // Step 5c2: Upsert CMBS loan records (Round 76ek.b).
   // metadata.loan_records[] arrives from extension/content/costar.js when the
@@ -5153,47 +5147,9 @@ function mapLoanType(rawType) {
  * Upsert loan records in the domain database.
  * Created from sales_history entries that have lender/loan_amount data.
  */
-async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resultsRecords = null, entity = null) {
-  // Round 76ez (2026-05-13): stamp early-exit diag onto resultsRecords so
-  // even an empty-sales-history return can be observed via SQL.
-  const earlyDiag = {
-    property_id:        propertyId,
-    domain,
-    sales_history_len:  Array.isArray(metadata.sales_history) ? metadata.sales_history.length : null,
-    metadata_loans_len: Array.isArray(metadata.loans) ? metadata.loans.length : null,
-    function_reached:   'entry',
-    invoked_at:         new Date().toISOString(),
-  };
-  if (resultsRecords) resultsRecords.loans_diag = earlyDiag;
-  // Round 76fa (2026-05-13): direct DB-write probe. Bypass the records-spread
-  // plumbing entirely — write the diag straight onto entity.metadata via a
-  // dedicated opsQuery PATCH. If the diag still doesn't appear after this,
-  // upsertDomainLoans is genuinely not being called.
-  // Round 76fb (2026-05-13): write to the entity's `tags` text[] column
-  // instead of `metadata`, because the outer processSidebarExtraction PATCH
-  // overwrites metadata wholesale with an in-memory snapshot — discarding
-  // any inline metadata writes from upstream writers. `tags` is a separate
-  // column the outer PATCH doesn't touch, so probe entries survive.
-  const flushDiag = async (snapshot) => {
-    if (!entity?.id) return;
-    try {
-      const tag = `_loans_probe:${snapshot.function_reached || 'unknown'}:${snapshot.invoked_at || snapshot.finished_at || ''}:${JSON.stringify(snapshot).slice(0, 500)}`;
-      await opsQuery('PATCH',
-        `entities?id=eq.${entity.id}`,
-        { tags: [...(entity.tags || []), tag] }
-      );
-    } catch (_e) { /* probe write failure is non-fatal */ }
-  };
-  await flushDiag(earlyDiag);
-  // Round 76ex: reset diag at function entry so cross-run leakage can't
-  // make one entity's loans-debug appear on a different entity's summary.
-  _lastLoansDiag = null;
+async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   const sales = metadata.sales_history;
-  if (!Array.isArray(sales) || sales.length === 0) {
-    earlyDiag.function_reached = 'early_return_no_sales';
-    await flushDiag(earlyDiag);
-    return 0;
-  }
+  if (!Array.isArray(sales) || sales.length === 0) return 0;
 
   let count = 0;
   for (const sale of sales) {
@@ -5467,54 +5423,9 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
   // amount band), then PATCHes the existing row with the rich payload or
   // INSERTs a new row when no match is found.
   const financingLoans = Array.isArray(metadata.loans) ? metadata.loans : [];
-  // Round 76ex (2026-05-13): capture a structured diag into _lastLoansDiag
-  // (persisted to entity.metadata._pipeline_summary._loans_diag) since
-  // Vercel drops fire-and-forget console output. The Round 76ew console
-  // logs are kept as belt-and-suspenders in case the run is synchronous.
-  const _loansDiag = {
-    property_id:           propertyId,
-    domain,
-    financing_loans_count: financingLoans.length,
-    metadata_keys_sample:  Object.keys(metadata).slice(0, 30),
-    metadata_loans_typeof: typeof metadata.loans,
-    metadata_loans_isArr:  Array.isArray(metadata.loans),
-    fin_entries:           [],
-    patches:               [],
-    inserts:               [],
-    errors:                [],
-  };
-  console.log(`[upsertDomainLoans:financing] entering third loop with ` +
-    `${financingLoans.length} financing entr${financingLoans.length === 1 ? 'y' : 'ies'} ` +
-    `(property=${propertyId}, domain=${domain})`);
   for (const fin of financingLoans) {
     const amount = Number(fin.loan_amount_dollars);
-    const finSnapshot = {
-      keys:                 Object.keys(fin),
-      loan_amount_dollars:  fin.loan_amount_dollars,
-      lender_name:          fin.lender_name,
-      originator:           fin.originator,
-      origination_date_iso: fin.origination_date_iso,
-      maturity_date_iso:    fin.maturity_date_iso,
-      interest_rate_pct:    fin.interest_rate_pct,
-      ltv_pct:              fin.ltv_pct,
-      term_months:          fin.term_months,
-      special_servicer:     fin.special_servicer,
-      origination_appraisal_dollars: fin.origination_appraisal_dollars,
-      computed_amount:      amount,
-    };
-    _loansDiag.fin_entries.push(finSnapshot);
-    console.log(`[upsertDomainLoans:financing]   fin entry: ` +
-      `loan_amount_dollars=${fin.loan_amount_dollars} ` +
-      `lender_name=${fin.lender_name || '?'} ` +
-      `originator=${fin.originator || '?'} ` +
-      `origination_date_iso=${fin.origination_date_iso || '?'} ` +
-      `interest_rate_pct=${fin.interest_rate_pct || '?'} ` +
-      `ltv_pct=${fin.ltv_pct || '?'}`);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      finSnapshot.skip_reason = `amount=${amount} not finite or <= 0`;
-      console.log(`[upsertDomainLoans:financing]   SKIP: amount=${amount} not finite or <= 0`);
-      continue;
-    }
+    if (!Number.isFinite(amount) || amount <= 0) continue;
     const lenderName = fin.lender_name || null;
     const originator = fin.originator || null;
     const origDate   = fin.origination_date_iso || null;
@@ -5647,22 +5558,13 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
         confidence:  0.6,
         fields:      { ...loanData, updated_at: nowIso },
       }).catch(err => {
-        _loansDiag.errors.push({ stage: 'filterByFieldPriority', message: err?.message });
         console.warn('[upsertDomainLoans:financing] field-priority filter failed:', err?.message);
         return { ...loanData, updated_at: nowIso };
       });
-      const patchRes = await domainPatch(domain,
+      await domainPatch(domain,
         `loans?loan_id=eq.${existingLoanId}`,
         filteredPatch,
         'upsertDomainLoans:financing');
-      _loansDiag.patches.push({
-        loan_id:           existingLoanId,
-        loanData_keys:     Object.keys(loanData),
-        filteredPatch_keys: Object.keys(filteredPatch || {}),
-        patch_status:      patchRes?.status,
-        patch_ok:          patchRes?.ok,
-        patch_error:       patchRes?.ok ? undefined : patchRes?.data,
-      });
       pushProvenance(provCollect, 'loans', existingLoanId, loanData);
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
@@ -5681,30 +5583,6 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resu
     }
   }
 
-  // Round 76ex: persist diag to module-level slot so processSidebarExtraction
-  // can flush it into _pipeline_summary at the end of the run.
-  _lastLoansDiag = _loansDiag;
-  // Round 76ey (2026-05-13): module state is unreliable across concurrent
-  // Vercel lambda invocations — write the diag straight onto the metadata
-  // object so it flows out via `...metadata` spread in updatedMeta. Stamped
-  // at the top level so SQL can read it without going through
-  // _pipeline_summary nesting.
-  try {
-    metadata._loans_diag_inline = _loansDiag;
-  } catch (e) { /* metadata frozen — ignore */ }
-  // Round 76ez (2026-05-13): write full diag onto resultsRecords so it
-  // flows out via results.records.loans_diag → propagation.records →
-  // entity.metadata._pipeline_summary.domain_records.loans_diag. This is
-  // the most reliable plumbing (no module state, no spread-order quirks).
-  _loansDiag.function_reached = 'final_assignment';
-  _loansDiag.finished_at      = new Date().toISOString();
-  if (resultsRecords) resultsRecords.loans_diag = _loansDiag;
-  // Round 76fa: direct DB-write probe at end of function.
-  await flushDiag(_loansDiag);
-  // Round 76fc sentinel `return 9999` reverted in Round 76fe — leaving
-  // it in production once Vercel's build cache eventually busts would
-  // mis-report loan counts. Keep the diag instrumentation, restore the
-  // real return.
   return count;
 }
 
@@ -8737,7 +8615,6 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       domain_records_note: 'writes_this_run_only — see domain_records_current for live DB state',
       domain_records_current: await fetchDomainRecordsCurrent(domain, propagation.property_id).catch(() => null),
       _classifier_diag: _lastClassifierDiag,
-      _loans_diag: _lastLoansDiag,
     },
   };
   await opsQuery('PATCH',
