@@ -5649,6 +5649,14 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   // Round 76ex: persist diag to module-level slot so processSidebarExtraction
   // can flush it into _pipeline_summary at the end of the run.
   _lastLoansDiag = _loansDiag;
+  // Round 76ey (2026-05-13): module state is unreliable across concurrent
+  // Vercel lambda invocations — write the diag straight onto the metadata
+  // object so it flows out via `...metadata` spread in updatedMeta. Stamped
+  // at the top level so SQL can read it without going through
+  // _pipeline_summary nesting.
+  try {
+    metadata._loans_diag_inline = _loansDiag;
+  } catch (e) { /* metadata frozen — ignore */ }
   return count;
 }
 
