@@ -618,28 +618,39 @@
       const summary = summaryEl ? textOf(summaryEl) : textOf(finEl).split('\n')[0];
       const loan = { summary };
 
-      // Each property-detail-metric pair (RCA's standard) plus a
-      // generic .metric / .field / [data-field] fallback for layout drift.
-      const metricRows = [
-        ...finEl.querySelectorAll('property-detail-metric .metric'),
-        ...finEl.querySelectorAll('.metric'),
-        ...finEl.querySelectorAll('.field'),
-        ...finEl.querySelectorAll('[data-field]'),
-      ];
-      const seenMetrics = new Set();
-      metricRows.forEach((row) => {
-        if (seenMetrics.has(row)) return;
-        seenMetrics.add(row);
-        const label = textOf(row.querySelector('label') || row)
+      // Round 76es (2026-05-13): mirror the row pattern that
+      // extractCharacteristics uses — RCA's Financing block emits the same
+      // .row > <label> + <div:not(label)> layout as Property Characteristics,
+      // not the property-detail-metric / .metric / .field selectors the prior
+      // implementation guessed at. The Round 76er metadata.loans[] writer
+      // PATCHed empty payloads onto the existing sales_history loan row
+      // because none of those legacy selectors matched any DOM, so loan{}
+      // never gained interest_rate / origination / original_ltv / etc.
+      const rowSet = new Set();
+      [
+        '.row.row-no-gutters',
+        '.row',
+        '[class*="row-no-gutters"]',
+      ].forEach(sel => {
+        finEl.querySelectorAll(sel).forEach(r => rowSet.add(r));
+      });
+      const seenLabels = [];
+      [...rowSet].forEach((row) => {
+        const labelEl = row.querySelector('label');
+        const valueDiv = row.querySelector('div:not(label)');
+        if (!labelEl || !valueDiv) return;
+        const label = textOf(labelEl)
           .replace(/[:?]+\s*$/, '').trim().toLowerCase();
-        const valueEl = row.querySelector('.col-sm-7 span')
-          || row.querySelector('.col-sm-7')
-          || row.querySelector('.value')
-          || row.querySelector('[data-value]');
-        const value = valueEl ? textOf(valueEl) : '';
+        const value = textOf(valueDiv).trim();
         if (!label || !value) return;
+        seenLabels.push(label);
         loan[label.replace(/\s+/g, '_')] = value;
       });
+      // Per-loan diagnostic: surfaces which labels the .row walker found.
+      // Empty array == financing block found but layout doesn't match the
+      // .row pattern; investigate via DevTools and extend the selector list.
+      console.log('[lcc-rca] Round 76es: extractFinancing parsed',
+        seenLabels.length, 'label/value pair(s):', seenLabels);
 
       if (loan.summary || Object.keys(loan).length > 1) {
         // Round 76er.b (2026-05-13): normalize the label/value strings into
