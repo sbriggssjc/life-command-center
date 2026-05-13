@@ -618,38 +618,102 @@
       const summary = summaryEl ? textOf(summaryEl) : textOf(finEl).split('\n')[0];
       const loan = { summary };
 
-      // Round 76es (2026-05-13): mirror the row pattern that
-      // extractCharacteristics uses — RCA's Financing block emits the same
-      // .row > <label> + <div:not(label)> layout as Property Characteristics,
-      // not the property-detail-metric / .metric / .field selectors the prior
-      // implementation guessed at. The Round 76er metadata.loans[] writer
-      // PATCHed empty payloads onto the existing sales_history loan row
-      // because none of those legacy selectors matched any DOM, so loan{}
-      // never gained interest_rate / origination / original_ltv / etc.
-      const rowSet = new Set();
-      [
-        '.row.row-no-gutters',
-        '.row',
-        '[class*="row-no-gutters"]',
-      ].forEach(sel => {
-        finEl.querySelectorAll(sel).forEach(r => rowSet.add(r));
-      });
+      // Round 76et (2026-05-13): text-walker primary path. The 229 Camden
+      // Bypass recapture proved that none of the structural selectors we've
+      // guessed at (property-detail-metric / .metric / .field / .row +
+      // <label>/<div:not(label)>) match RCA's Financing block — three rounds
+      // of recaptures all PATCHed empty rich-field payloads. Since the
+      // VISIBLE text in the block is well-structured ("Loan Status:
+      // Outstanding\nLoan Type: 1st Mortgage\n..."), parse textOf(finEl)
+      // line-by-line for "Label: Value" pairs. This is the same approach
+      // CoStar's parser uses for Property Characteristics — DOM-agnostic
+      // and resilient to Angular component churn.
+      //
+      // Known RCA Financing-block labels (from screenshot + sample notes):
+      const KNOWN_LABELS = [
+        'Loan Status', 'Loan Type', 'Loan Amount', 'Interest Rate',
+        'Debt Yield', 'Total Reserves', 'Term', 'Deal Appraisal',
+        'Originator', 'Lender Name', 'Lender Group', 'Special Servicer',
+        'Mortgage Broker', 'Original LTV', 'Loan DSCR', 'Loan Dscr',
+        'Amortization Type', 'Origination', 'Defeasance Date',
+        'Prepayment Date', 'Original Maturity', 'Extension Maturity',
+      ];
+      const labelToKey = (lbl) =>
+        lbl.toLowerCase().replace(/[:?]+$/, '').trim().replace(/\s+/g, '_');
       const seenLabels = [];
-      [...rowSet].forEach((row) => {
-        const labelEl = row.querySelector('label');
-        const valueDiv = row.querySelector('div:not(label)');
-        if (!labelEl || !valueDiv) return;
-        const label = textOf(labelEl)
-          .replace(/[:?]+\s*$/, '').trim().toLowerCase();
-        const value = textOf(valueDiv).trim();
-        if (!label || !value) return;
-        seenLabels.push(label);
-        loan[label.replace(/\s+/g, '_')] = value;
-      });
-      // Per-loan diagnostic: surfaces which labels the .row walker found.
-      // Empty array == financing block found but layout doesn't match the
-      // .row pattern; investigate via DevTools and extend the selector list.
-      console.log('[lcc-rca] Round 76es: extractFinancing parsed',
+
+      const rawText = textOf(finEl);
+      const lines = rawText.split(/\r?\n/).map(s => s.replace(/ /g, ' ').trim()).filter(Boolean);
+
+      // Pass 1: same-line "Label: Value" patterns
+      for (const line of lines) {
+        for (const lbl of KNOWN_LABELS) {
+          // Match "Loan Status: Outstanding" with optional whitespace.
+          const re = new RegExp(
+            '^' + lbl.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '\\s*[:?]\\s*(.+)$',
+            'i'
+          );
+          const m = line.match(re);
+          if (m) {
+            const key = labelToKey(lbl);
+            if (loan[key] === undefined) {
+              loan[key] = m[1].trim();
+              seenLabels.push(key);
+            }
+            break;
+          }
+        }
+      }
+
+      // Pass 2: two-line "Label:\nValue" patterns (RCA renders columns this
+      // way sometimes when textContent is collected from a flex/grid layout).
+      for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i];
+        for (const lbl of KNOWN_LABELS) {
+          const re = new RegExp(
+            '^' + lbl.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '\\s*[:?]\\s*$',
+            'i'
+          );
+          if (re.test(line)) {
+            const key = labelToKey(lbl);
+            const next = lines[i + 1];
+            // Guard: next line is not itself a known label (avoids consuming
+            // "Loan Status:\nLoan Type:" as if "Loan Type:" were the value).
+            const nextIsLabel = KNOWN_LABELS.some(
+              x => new RegExp('^' + x.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '\\s*[:?]?', 'i').test(next)
+            );
+            if (!nextIsLabel && loan[key] === undefined) {
+              loan[key] = next.trim();
+              seenLabels.push(key);
+            }
+            break;
+          }
+        }
+      }
+
+      // Fallback Pass 3: keep the .row > label/div walker in case a future
+      // RCA layout regression flips back to that structure.
+      if (seenLabels.length === 0) {
+        const rowSet = new Set();
+        ['.row.row-no-gutters', '.row', '[class*="row-no-gutters"]'].forEach(sel => {
+          finEl.querySelectorAll(sel).forEach(r => rowSet.add(r));
+        });
+        [...rowSet].forEach((row) => {
+          const labelEl = row.querySelector('label');
+          const valueDiv = row.querySelector('div:not(label)');
+          if (!labelEl || !valueDiv) return;
+          const label = textOf(labelEl).replace(/[:?]+\s*$/, '').trim().toLowerCase();
+          const value = textOf(valueDiv).trim();
+          if (!label || !value) return;
+          const key = label.replace(/\s+/g, '_');
+          if (loan[key] === undefined) {
+            loan[key] = value;
+            seenLabels.push(key);
+          }
+        });
+      }
+
+      console.log('[lcc-rca] Round 76et: extractFinancing parsed',
         seenLabels.length, 'label/value pair(s):', seenLabels);
 
       if (loan.summary || Object.keys(loan).length > 1) {
