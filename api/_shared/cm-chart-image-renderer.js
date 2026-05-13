@@ -1123,20 +1123,16 @@ function buildChartConfig(chart, brand) {
 
     case 'rent_psf_box_quarterly':
     case 'ppsf_box_quarterly': {
-      // User feedback (2026-05-07): "There is no chart in Data_Rent_PSF_Box.
-      // Its also displayed in weird timeline increments." Add an IQR-as-bar
-      // chart: floating bar from lower_quartile→upper_quartile, with the
-      // median rendered as a line on top. min/max are printed as light
-      // dashed lines for whiskers.
-      // Source view: cm_dialysis_rent_box_q (or _ppsf_box_q for gov-PSF):
-      //   period_end, n_leases, rent_min, rent_lower_quartile,
-      //   rent_median, rent_upper_quartile, rent_max
+      // Round 30 — User: "Let's remove the min and max from the chart
+      // and adjust the y-axis so we can see the movement of the data
+      // better." IQR box + median line; y-axis pinned $5-$50/SF
+      // (dia rent IQR data lives $9.83-$45.62).
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            // Floating bar: [lower_quartile, upper_quartile] → the box body
+            // Floating bar: [lower_quartile, upper_quartile] → IQR box body
             { type: 'bar',  label: 'IQR (25th-75th %)',
               data: rows.map(r => [r.rent_lower_quartile ?? r.lower_quartile,
                                     r.rent_upper_quartile ?? r.upper_quartile]),
@@ -1146,19 +1142,12 @@ function buildChartConfig(chart, brand) {
               data: rows.map(r => r.rent_median ?? r.median),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0, pointRadius: 0, borderWidth: 2.5, order: 0 },
-            { type: 'line', label: 'Min',
-              data: rows.map(r => r.rent_min ?? r.min),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0, pointRadius: 0, borderWidth: 1,
-              borderDash: [4, 4], order: 1 },
-            { type: 'line', label: 'Max',
-              data: rows.map(r => r.rent_max ?? r.max),
-              borderColor: palette[2], backgroundColor: 'transparent',
-              tension: 0, pointRadius: 0, borderWidth: 1,
-              borderDash: [4, 4], order: 1 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY }),
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_CURRENCY,
+          yAxisRange: { min: 5, max: 50 },
+        }),
       };
     }
 
@@ -1311,6 +1300,10 @@ function buildChartConfig(chart, brand) {
               data: rows.map(r => r.count_core_10plus),
               backgroundColor: palette[1], borderRadius: 2,
               yAxisID: 'y', order: 2 },
+            // Round 30 — distinct line colors so the two cap series
+            // are visually different (was palette[0] navy vs palette[2]
+            // mid-blue — too similar; user noticed lines crossing
+            // ambiguously). Navy for Total, amber for 10+yr cohort.
             { type: 'line', label: 'Total Market — Avg Asking Cap',
               data: rows.map(r => r.avg_cap_total),
               borderColor: palette[0], backgroundColor: 'transparent',
@@ -1318,17 +1311,18 @@ function buildChartConfig(chart, brand) {
               yAxisID: 'y1', order: 0 },
             { type: 'line', label: '10+ Year Term — Avg Asking Cap',
               data: rows.map(r => r.avg_cap_core_10plus),
-              borderColor: palette[2], backgroundColor: 'transparent',
+              borderColor: '#D97706', backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y1', order: 0 },
           ],
         },
+        // Round 30 — Cap rate axis tightened 5.5-7.5% (data lives
+        // 5.89-7.00%). The prior CAP_RATE_BID_ASK_RANGE 5.5-10.0%
+        // squashed the cap lines into the bottom of the chart.
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_INTEGER,
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          // Tighter than CAP_RATE_RANGE so the cap line shows movement.
-          // Asking caps land 5.5-8% — the BID_ASK range fits.
-          yRightRange:  CAP_RATE_BID_ASK_RANGE,
+          yRightRange:  { min: 0.055, max: 0.075 },
         }),
       };
     }
@@ -2030,7 +2024,13 @@ function buildChartConfig(chart, brand) {
       // term remaining at close and we do not need to differentiate
       // NM sales and the balance. Just one dataset and also add a
       // trendline that moves over time."
-      //   • Gov + Dia core  = firm_term_years >= 8  (view applies filter)
+      // Round 30 — User: "Can we go further back in time with this
+      // chart so we can see the movement over time? … verify 8+yr
+      // (dia) / 6+yr (gov) firm-term filters."
+      //   • Dia core = firm_term_years >= 8  (view applies filter)
+      //   • Gov core = firm_term_years >= 6  (R30 fix: was 8)
+      //   • Source views back to 2001-01-01; renderer no longer
+      //     constrains the timeline window.
       // x = sale_date (numeric ms), y = cap_rate.
       // Single sky-blue dot series + a 12-month rolling-avg trendline
       // computed in JS (sorted by date, sliding-window mean over ±6mo).
@@ -2056,7 +2056,7 @@ function buildChartConfig(chart, brand) {
         type: 'scatter',
         data: {
           datasets: [
-            { label: 'Core sales (firm term ≥ 8 yr)',
+            { label: 'Core sales (long firm term)',
               data: dots,
               backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
               borderColor: PDF_COLORS.cap_mid,

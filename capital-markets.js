@@ -731,15 +731,9 @@
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
       case 'rent_psf_box_quarterly': {
-        // Box-and-whisker per quarter as a 5-line chart: min / Q1 / median / Q3 / max.
-        // Chart.js core has no native box plot; this gives the same 5-number-summary
-        // visualization without pulling in chartjs-chart-boxplot. The shaded band
-        // between Q1 and Q3 is rendered via the "fill" reference on the Q3 dataset
-        // pointing at the Q1 dataset (index +1), creating an IQR shaded band.
+        // Round 30 — Removed Min and Max series per user. IQR band
+        // (Q3 fills DOWN to Q1) + Median line. Y-axis pinned $5-$50.
         datasets = [
-          { label: 'Max',            data: chart.rows.map(r => r.rent_max),
-            borderColor: palette[4], backgroundColor: 'transparent',
-            borderWidth: 1, borderDash: [4, 3], tension: 0.2, pointRadius: 0 },
           { label: 'Upper Quartile', data: chart.rows.map(r => r.rent_upper_quartile),
             borderColor: palette[1], backgroundColor: palette[3] + '88',
             fill: '+1', tension: 0.2, pointRadius: 0, borderWidth: 1.5 },
@@ -749,11 +743,9 @@
           { label: 'Median',         data: chart.rows.map(r => r.rent_median),
             borderColor: palette[0], backgroundColor: 'transparent',
             tension: 0.2, pointRadius: 0, borderWidth: 2.5 },
-          { label: 'Min',            data: chart.rows.map(r => r.rent_min),
-            borderColor: palette[4], backgroundColor: 'transparent',
-            borderWidth: 1, borderDash: [4, 3], tension: 0.2, pointRadius: 0 },
         ];
         const opts = commonChartOptions('currency_per_sf');
+        opts.scales.y.min = 5; opts.scales.y.max = 50;
         opts.scales.y.ticks.callback = (v) => '$' + Number(v).toFixed(0);
         opts.plugins.tooltip.callbacks.label = (ctx) =>
           `${ctx.dataset.label}: $${Number(ctx.parsed.y).toFixed(2)}/SF`;
@@ -905,16 +897,18 @@
             data: total_count, backgroundColor: palette[3], borderRadius: 2, yAxisID: 'y' },
           { type: 'bar',  label: '10+ Year Term — # Available',
             data: core_count,  backgroundColor: palette[1], borderRadius: 2, yAxisID: 'y' },
+          // Round 30 — distinct colors (navy vs amber) + tighter
+          // y-axis 5.5-7.5% so the cap movement reads clearly.
           { type: 'line', label: 'Total Market — Avg Asking Cap',
             data: total_cap, borderColor: palette[0], backgroundColor: 'transparent',
             tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
           { type: 'line', label: '10+ Year Term — Avg Asking Cap',
-            data: core_cap,  borderColor: palette[2], backgroundColor: 'transparent',
+            data: core_cap,  borderColor: '#D97706', backgroundColor: 'transparent',
             tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
         ];
         const opts = commonChartOptions('integer_count');
         opts.scales.y1 = {
-          position: 'right',
+          position: 'right', min: 0.055, max: 0.075,
           ticks: {
             color: brandColor('nm_axis', '#6A748C'),
             font: { family: 'Calibri, sans-serif', size: 9 },
@@ -999,7 +993,9 @@
       case 'core_cap_rate_dot_plot': {
         // Round 27 — mirrors Round 24 server rework. Single sky-dot series
         // (no NM split per user) + 12-month rolling-average navy trendline.
-        // Cohort: firm_term_years >= 8yr (both verticals).
+        // Round 30 — Cohort filters: dia firm_term >= 8yr, gov >= 6yr
+        // (the source view applies the cohort filter; renderer is
+        // vertical-neutral). Source data goes back to 2001-01-01.
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
         const dots = (chart.rows || [])
@@ -1015,7 +1011,7 @@
           return { x: d.x, y: n > 0 ? sum / n : null };
         });
         const ds = [
-          { label: 'Core sales (firm term ≥ 8 yr)',
+          { label: 'Core sales (long firm term)',
             data: dots,
             backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
             pointRadius: 3, pointStyle: 'circle', showLine: false, order: 2 },
@@ -1033,20 +1029,18 @@
       }
 
       case 'available_cap_rate_dot_plot': {
-        // Round 27 — mirrors Round 24 server rework. Added linear-regression
-        // trendline + x-axis auto-center on data ±10% padding (capped 0-30y).
+        // Round 30 — Single dot series (removed NM split per user).
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
         const allDots = (chart.rows || [])
           .filter(r => r.cap_rate != null && r.firm_term_years != null)
-          .map(r => ({ x: Number(r.firm_term_years), y: Number(r.cap_rate), nm: !!r.is_northmarq }));
+          .map(r => ({ x: Number(r.firm_term_years), y: Number(r.cap_rate) }));
         const xs = allDots.map(d => d.x);
         const xMinData = xs.length ? Math.min(...xs) : 0;
         const xMaxData = xs.length ? Math.max(...xs) : 30;
         const pad = Math.max(1, (xMaxData - xMinData) * 0.10);
         const xMin = Math.max(0, Math.floor(xMinData - pad));
         const xMax = Math.min(30, Math.ceil(xMaxData + pad));
-        // Least-squares linear regression through ALL points
         const n = allDots.length;
         let sx = 0, sy = 0, sxx = 0, sxy = 0;
         for (const d of allDots) { sx += d.x; sy += d.y; sxx += d.x * d.x; sxy += d.x * d.y; }
@@ -1058,14 +1052,10 @@
           { x: xMax, y: m * xMax + b },
         ];
         const ds = [
-          { label: 'Market listings',
-            data: allDots.filter(d => !d.nm),
+          { label: 'Active listings',
+            data: allDots,
             backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
-            pointRadius: 4, pointStyle: 'circle', showLine: false, order: 2 },
-          { label: 'NM-listed',
-            data: allDots.filter(d => d.nm),
-            backgroundColor: navy, borderColor: navy,
-            pointRadius: 5, pointStyle: 'rectRot', showLine: false, order: 1 },
+            pointRadius: 4, pointStyle: 'circle', showLine: false, order: 1 },
           { label: 'Linear Trendline',
             data: trendData, type: 'line',
             borderColor: navy, backgroundColor: 'transparent',

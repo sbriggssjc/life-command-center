@@ -1,0 +1,89 @@
+-- =====================================================================
+-- Round 30 — User feedback batch from
+-- "Capital Markets Exports - Notes.docx" (2026-05-13).
+--
+-- Five chart-level fixes shipped (the rest are deferred to R31, see
+-- the deferred list at bottom).
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-13)
+-- ---------------------------------------------------------------------
+-- 1) cm_dialysis_active_listings_m (dia DB) — extend timeline back
+--    From: generate_series('2017-01-01', last_completed_q, 1 mon)
+--    To:   generate_series('2014-01-01', last_completed_q, 1 mon)
+--    User: "Data_Active_Cap_Quart - Can we pull data from earlier in
+--    time so we can see better movement to these ranges. Also, double
+--    check the data sources for these because there doesn't appear to
+--    be much movement at all to these data sets."
+--    Verified available_listings has cap-rate data in 2014+ (24 valid
+--    in 2014, 34 in 2015, 44 in 2016). Quartile downstream view now
+--    starts ~2015 (was 2017) — full coverage from 2017.
+--
+-- 2) cm_gov_core_cap_dot_q (gov DB) — firm-term filter 8yr → 6yr
+--    User: "Data_Core_Cap_Dot - Can we go further back in time with
+--    this chart so we can see the movement over time?" + earlier
+--    note that gov core cohort is 6+ yr (vs dia 8+ yr).
+--    Pre-existing source view filter was 8yr (mistakenly aligned with
+--    dia); R30 sets gov back to its documented 6yr cohort. Adds 39
+--    additional dots, mostly 2010-2024 mid-firm-term gov sales.
+--    Source data already goes back to 2001-01-01.
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js + capital-markets.js)
+-- ---------------------------------------------------------------------
+-- 3) sold_cap_by_term_dot_plot — REDESIGNED (was R28 scatter)
+--    User: "I believe this was an attempt to match our lease term
+--    comparison chart. We want that to be four lines for the various
+--    term buckets and they are TTM monthly rolling averages over time
+--    for each of those lease term remaining buckets at close."
+--    Now: 4-line stepped TTM cohort time series.
+--      Dia cohorts: 12+, 8-12, 6-8, ≤5 (cap_12plus/cap_8to12/...)
+--      Gov cohorts: 10+, 6-10, <5, outside-firm (cap_10plus/cap_5to10/...)
+--    The dia / gov master_m views already had per-cohort TTM avg cap
+--    columns from prior rounds — the R28 base view was rewritten to
+--    pull those into a stable cohort-shape dataset (see R30 migrations
+--    cm_gov_sold_cap_by_term_4line_cohort_round30 and the dia
+--    counterpart applied earlier in this batch).
+--    cm-excel-export.js CHART_COLUMNS extended to support both vertical
+--    cohort schemas; data-tab writer drops blanks for the other
+--    vertical's columns.
+--
+-- 4) available_cap_rate_dot_plot — single combined dot series
+--    User: "Remove the NM-brokered listings from the data labels table."
+--    Removed the NM-vs-market dual-series split. One sky-blue dot
+--    series with the linear-regression trendline retained.
+--
+-- 5) rent_psf_box_quarterly / ppsf_box_quarterly — IQR + median only
+--    User: "Let's remove the min and max from the chart and adjust
+--    the y-axis so we can see the movement of the data better."
+--    Removed the dashed Min and Max line series; y-axis pinned to
+--    $5-$50/SF (dia IQR data lives $9.83-$45.62).
+--
+-- 6) available_market_size_combo — distinct cap-line colors + tighter axis
+--    User: "we have one data point cross the other and it probably
+--    shouldn't. Let's also change one of the colors of the cap rate
+--    lines so we can tell the difference between the two."
+--    Total Market avg cap stays NM Blue (palette[0]).
+--    10+ Year Term avg cap switched palette[2] (mid-blue) → amber
+--    (#D97706) to differentiate the two cap lines clearly.
+--    Cap-rate (right) axis tightened from CAP_RATE_BID_ASK_RANGE
+--    (5.5-10%) to 5.5-7.5% (data lives 5.89-7.00%).
+--
+-- 7) core_cap_rate_dot_plot — label generalized for cross-vertical use
+--    Label "Core sales (firm term ≥ 8 yr)" → "Core sales (long firm
+--    term)" since gov filter is now 6+ and dia stays 8+ (see #2).
+--
+-- ---------------------------------------------------------------------
+-- ROUND 31 candidate scope (DEFERRED — need Excel master/format review)
+-- ---------------------------------------------------------------------
+--   • Excel-format-match items vs Government/Dialysis Master files:
+--     Renewal_Rate, Term_Rate, NL_Spread, Renewal_Growth formatting,
+--     Val_Index formula review, Inventory_Backlog, Market_Turnover,
+--     Avail_by_Term_Summary
+--   • NEW chart: Rent & Price PSF (dia) — needs chair-vs-SF treatment
+--     since dia properties are chair-counted not SF-leased
+--   • NEW chart: Asking Cap Rate Ranges by Lease Term Buckets (4-line
+--     line chart, the active-listing counterpart to sold_cap_by_term)
+--   • Avail_by_Firm_Term style match vs dia equivalent
+--   • Lease Renewal chart format match
+-- =====================================================================
