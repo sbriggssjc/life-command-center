@@ -1,0 +1,69 @@
+-- =====================================================================
+-- Round 31 Tier 2a — Excel format-match batch (subset).
+--
+-- Format-match items where we could inspect the master Excel
+-- `Copy Government Master Document.xlsx` > 'All Charts' sheet via
+-- openpyxl. Inspection scripts were tracked in commit 00e678a and
+-- cleaned up here.
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js,
+-- capital-markets.js)  — no Supabase view changes in this batch.
+-- ---------------------------------------------------------------------
+-- 1) Term_Rate (`lease_termination_rate`) — RESTRUCTURED.
+--    User: "Data_Term_Rate - Review the formatting of the chart in
+--    our Excel and update".
+--    Master 'All Charts' chart 4: 2 bars of TTM counts.
+--      Series 0: Leases In Firm Term (TTM) — total_leases_active
+--                                            minus leases_outside_firm_term
+--      Series 1: Leases Outside Firm (TTM) — leases_outside_firm_term
+--    Previously: 1 area (Termination Rate %) + 1 line (Outside Firm
+--    count) on a dual-axis combo. The rate % was a derived
+--    `terminated_ttm / total_leases_active` figure not present in the
+--    master. Restructured to match.
+--
+-- 2) NM_vs_Market (`nm_vs_market_cap`) — Y-axis tightened + labels.
+--    Master 'All Charts' charts 7 & 8: y range 0.0525..0.0925 (fixed).
+--    Previously rendered with default CAP_RATE_RANGE; cap lines lived
+--    in a wider window than the master, making movement read smaller.
+--    Labels updated to master phrasing:
+--      "Northmarq Cap Rate" → "NM Average Cap (TTM)"
+--      "Market Cap Rate"    → "Non-NM Average Cap (TTM)"
+--
+-- 3) Renewal_Rate (`lease_renewal_rate`) — Added 5th series.
+--    Master 'All Charts' chart 3 has 5 stacked bars:
+--      First Generation Lease Commencements (TTM)
+--      Renewed Leases (TTM)
+--      Succeeding/Superseding Leases (TTM)
+--      Expired Leases (TTM)
+--      Terminated Leases (TTM)
+--    The server renderer had only the latter 4. Added First-Generation
+--    as the first/lowest stack tier (pale fill, additive new-supply).
+--    The in-app renderer (`capital-markets.js`) already had this
+--    series since Round 29 — server now matches.
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED — Round 31 Tier 2b (next PR)
+-- ---------------------------------------------------------------------
+--   • NL_Spread restructure: master shows 3 lines (10Y Treasury, Avg
+--     Cap TTM, 10+ Year Cap TTM); current chart is 2-line filled-area
+--     spread between Market Spread and NM Spread. Significant
+--     restructure.
+--   • Inventory_Backlog + Market_Turnover: format-match vs master,
+--     plus user wants both to extend back pre-2018.
+--   • Avail_by_Term_Summary (dia): format-match vs master.
+--   • Avail_by_Firm_Term (gov): style-match vs dia equivalent.
+--   • Renewal_Growth: master shows single-bar (Renewal Rent/SF only)
+--     whereas current chart has 3 series (rent bar + quartile whiskers
+--     + CAGR dots). Kept current 3-series — more analytical value than
+--     the simpler master format; revisit if user explicitly wants
+--     simpler.
+--
+-- ROUND 31 Tier 3 (DEFERRED — next PR)
+-- ---------------------------------------------------------------------
+--   • Data-quality investigations: Bid_Ask pre-2013/2010 gaps,
+--     DOM_Ask labels (low/high/most-recent), NM_vs_Market smoothness,
+--     Sentiment pre-2010/2014 gaps, CPI_CAGR pre-2018, Val_Index
+--     formula review, Cap_by_Term smoothness, Inventory_Backlog
+--     pre-2018 (gov), Sold_Cap_by_Term gov 4-line formatting confirm.
+-- =====================================================================

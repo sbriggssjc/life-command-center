@@ -1591,11 +1591,13 @@ function buildChartConfig(chart, brand) {
 
     case 'lease_renewal_rate': {
       // Round 9 — stacked bars per the PDF.
-      // Round 29 — distinguishable colors for 4 outcomes (prior palette
-      // used pale [3] for Expired which blended into the background and
-      // muted axis [4] for Terminated). New scheme uses 3 sequential
-      // navy→sky shades for the "continuing" tiers + amber for the
-      // negative "Terminated" bucket so the lost-lease signal pops.
+      // Round 29 — distinguishable colors for 4 outcomes.
+      // Round 31 Tier 2 — Added First Generation Lease Commencements
+      // (5th series) to match master Excel "Renewal_Rate" chart in
+      // `Copy Government Master Document.xlsx` > 'All Charts' > chart
+      // 3. Series order matches master: First Gen, Renewed, S/S,
+      // Expired, Terminated. The in-app renderer (capital-markets.js)
+      // already had this series since R29.
       const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
@@ -1604,6 +1606,10 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
+            { label: 'First Generation Commencements',
+              data: rows.map(r => r.first_generation_commencements),
+              backgroundColor: palette[3],              // pale (additive new supply)
+              stack: 'leases' },
             { label: 'Renewed',           data: rows.map(r => r.renewed_leases),
               backgroundColor: PDF_COLORS.cap_short,    // navy
               stack: 'leases' },
