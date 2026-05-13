@@ -642,6 +642,83 @@
       });
 
       if (loan.summary || Object.keys(loan).length > 1) {
+        // Round 76er.b (2026-05-13): normalize the label/value strings into
+        // typed fields the backend writer can consume directly. The Financing
+        // section emits values like "$1.6 m (approx)", "3.3%", "84 Months",
+        // "04/30/2021"; without normalization the backend's parseCurrency /
+        // parsePercent helpers would mis-parse them ("$1.6 m" → 1.6) or
+        // silently drop them. Emit alongside the raw label-value pairs so
+        // downstream consumers can still see the original text.
+        const normalized = {};
+        // Loan amount: "$1.6 m (approx)" → 1600000
+        const amtMatch = String(loan.loan_amount || '').match(
+          /\$?\s*([\d.,]+)\s*([mkb])?/i
+        );
+        if (amtMatch) {
+          normalized.loan_amount_dollars =
+            rcaParseDollars(amtMatch[1], amtMatch[2]);
+        }
+        // Interest rate: "3.3%" → 3.3 (or "3.3% null" → 3.3)
+        const rateMatch = String(loan.interest_rate || '').match(/([\d.]+)\s*%/);
+        if (rateMatch) {
+          normalized.interest_rate_pct = parseFloat(rateMatch[1]);
+        }
+        // LTV: "61.9%" → 61.9
+        const ltvMatch = String(loan.original_ltv || '').match(/([\d.]+)\s*%/);
+        if (ltvMatch) normalized.ltv_pct = parseFloat(ltvMatch[1]);
+        // Debt yield: "10.0%" → 10.0
+        const dyMatch = String(loan.debt_yield || '').match(/([\d.]+)\s*%/);
+        if (dyMatch) normalized.debt_yield_pct = parseFloat(dyMatch[1]);
+        // Term: "84 Months" → 84 months, 7 years
+        const termMatch = String(loan.term || '').match(/([\d.]+)\s*(month|mo|year|yr)/i);
+        if (termMatch) {
+          const n = parseFloat(termMatch[1]);
+          const isYears = /year|yr/i.test(termMatch[2]);
+          normalized.term_months = isYears ? Math.round(n * 12) : Math.round(n);
+          normalized.term_years  = isYears ? n : Math.round(n / 12 * 100) / 100;
+        }
+        // Total Reserves: "$394,730" → 394730
+        const resMatch = String(loan.total_reserves || '').match(
+          /\$?\s*([\d.,]+)\s*([mkb])?/i
+        );
+        if (resMatch) {
+          normalized.total_reserves_dollars =
+            rcaParseDollars(resMatch[1], resMatch[2]);
+        }
+        // Deal Appraisal: "$48,500,000" → 48500000
+        const apprMatch = String(loan.deal_appraisal || '').match(
+          /\$?\s*([\d.,]+)\s*([mkb])?/i
+        );
+        if (apprMatch) {
+          normalized.origination_appraisal_dollars =
+            rcaParseDollars(apprMatch[1], apprMatch[2]);
+        }
+        // Dates: "04/30/2021" → "2021-04-30"
+        const toIso = (s) => {
+          if (!s) return null;
+          const m = String(s).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+          if (!m) return null;
+          let y = m[3];
+          if (y.length === 2) {
+            const n = parseInt(y, 10);
+            y = (n <= 69 ? '20' : '19') + y.padStart(2, '0');
+          }
+          return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+        };
+        const origDate = toIso(loan.origination);
+        if (origDate) normalized.origination_date_iso = origDate;
+        const matDate = toIso(loan.original_maturity);
+        if (matDate) normalized.maturity_date_iso = matDate;
+        const defDate = toIso(loan.defeasance_date);
+        if (defDate) normalized.defeasance_date_iso = defDate;
+        const prepayDate = toIso(loan.prepayment_date);
+        if (prepayDate) normalized.prepayment_date_iso = prepayDate;
+        // CMBS flag: "CMBS" group implies is_cmbs=true
+        if (loan.lender_group && /\bcmbs\b/i.test(loan.lender_group)) {
+          normalized.is_cmbs = true;
+        }
+        Object.assign(loan, normalized);
+
         data.loans = data.loans || [];
         data.loans.push(loan);
       }
