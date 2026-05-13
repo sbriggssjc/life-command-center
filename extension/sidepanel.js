@@ -2318,6 +2318,13 @@ function buildMetadata(ctx, domain) {
     tenants: ctx.tenants || [],
     contacts: ctx.contacts || [],
     sales_history: ctx.sales_history || [],
+    // Round 76ev (2026-05-13): forward the rca.js Financing-block payload
+    // through to the backend. Without this whitelist entry the entire
+    // metadata.loans[] array was being dropped here, so upsertDomainLoans's
+    // Round 76er.c third loop never had anything to iterate — every
+    // recapture's "PATCH with empty rich fields" was traced to this single
+    // missing line.
+    loans: ctx.loans || [],
     // Sale notes & document links from CoStar comp detail pages
     sale_notes_raw: ctx.sale_notes_raw || null,
     document_links: ctx.document_links || [],
