@@ -2137,7 +2137,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   }
 
   // Step 5c: Upsert loans
-  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect);
+  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect, results.records);
 
   // Step 5c2: Upsert CMBS loan records (Round 76ek.b).
   // metadata.loan_records[] arrives from extension/content/costar.js when the
@@ -5153,12 +5153,25 @@ function mapLoanType(rawType) {
  * Upsert loan records in the domain database.
  * Created from sales_history entries that have lender/loan_amount data.
  */
-async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
+async function upsertDomainLoans(domain, propertyId, metadata, provCollect, resultsRecords = null) {
+  // Round 76ez (2026-05-13): stamp early-exit diag onto resultsRecords so
+  // even an empty-sales-history return can be observed via SQL.
+  const earlyDiag = {
+    property_id:        propertyId,
+    domain,
+    sales_history_len:  Array.isArray(metadata.sales_history) ? metadata.sales_history.length : null,
+    metadata_loans_len: Array.isArray(metadata.loans) ? metadata.loans.length : null,
+    function_reached:   'entry',
+  };
+  if (resultsRecords) resultsRecords.loans_diag = earlyDiag;
   // Round 76ex: reset diag at function entry so cross-run leakage can't
   // make one entity's loans-debug appear on a different entity's summary.
   _lastLoansDiag = null;
   const sales = metadata.sales_history;
-  if (!Array.isArray(sales) || sales.length === 0) return 0;
+  if (!Array.isArray(sales) || sales.length === 0) {
+    earlyDiag.function_reached = 'early_return_no_sales';
+    return 0;
+  }
 
   let count = 0;
   for (const sale of sales) {
@@ -5657,6 +5670,12 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   try {
     metadata._loans_diag_inline = _loansDiag;
   } catch (e) { /* metadata frozen — ignore */ }
+  // Round 76ez (2026-05-13): write full diag onto resultsRecords so it
+  // flows out via results.records.loans_diag → propagation.records →
+  // entity.metadata._pipeline_summary.domain_records.loans_diag. This is
+  // the most reliable plumbing (no module state, no spread-order quirks).
+  _loansDiag.function_reached = 'final_assignment';
+  if (resultsRecords) resultsRecords.loans_diag = _loansDiag;
   return count;
 }
 
