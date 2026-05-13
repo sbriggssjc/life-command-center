@@ -1591,9 +1591,15 @@ function _udTabOverview() {
     const p   = _udCache?.property || {};
     const fb  = _udCache?.fallback || {};
     const own = _udCache?.ownership || null;
-    const trueOwnerId     = p.true_owner_id     || fb.true_owner_id     || own?.true_owner_id     || null;
+    // Suppress the true_owner if it's a chain-operator shell (see
+    // 20260513_dia_purge_cms_operator_owner_pollution). The "Create SF
+    // Account" / "Search SF" chips downstream would otherwise offer to
+    // mint or look up a Salesforce account named "Fresenius Medical Care"
+    // for every dialysis property — actively destructive.
+    const _trueOwnerOk = !own?.true_owner_is_operator;
+    const trueOwnerId     = _trueOwnerOk ? (p.true_owner_id     || fb.true_owner_id     || own?.true_owner_id     || null) : null;
     const recordedOwnerId = p.recorded_owner_id || fb.recorded_owner_id || own?.recorded_owner_id || null;
-    const trueOwnerName   = own?.true_owner_name   || p.true_owner_name   || fb.true_owner_name   || p.assessed_owner || null;
+    const trueOwnerName   = _trueOwnerOk ? (own?.true_owner_name   || p.true_owner_name   || fb.true_owner_name   || p.assessed_owner || null) : null;
     const recordedName    = own?.recorded_owner_name || p.recorded_owner_name || fb.recorded_owner_name || null;
     const trueSfAccount   = own?.true_sf_acct || p.true_owner_sf_account_id || null;
     const entityMeta      = _udCache?.entityMeta || {};
