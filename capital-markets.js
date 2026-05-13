@@ -1184,6 +1184,36 @@
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
 
+      case 'rent_and_price_per_chair': {
+        // Round 31 — Dia counterpart to gov rent_and_price_psf.
+        // Properties measured by chair count, not SF. Bars = rent/chair
+        // (left), line = price/chair (right).
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const navy = brandColor('nm_navy', '#003DA5');
+        datasets = [
+          { type: 'bar', label: 'Avg Rent / Chair (TTM)',
+            data: chart.rows.map(r => r.rent_per_chair),
+            backgroundColor: sky, borderColor: sky,
+            borderRadius: 1, yAxisID: 'y', order: 2 },
+          { type: 'line', label: 'Avg Sale Price / Chair (TTM)',
+            data: chart.rows.map(r => r.price_per_chair),
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+            yAxisID: 'y1', order: 0 },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.y.min = 0; opts.scales.y.max = 16000;
+        opts.scales.y.ticks = opts.scales.y.ticks || {};
+        opts.scales.y.ticks.callback = (v) => '$' + (Number(v) / 1000).toFixed(0) + 'K';
+        opts.scales.y1 = { type: 'linear', position: 'right',
+          min: 0, max: 250000,
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => '$' + (Number(v) / 1000).toFixed(0) + 'K',
+                   color: brandColor('nm_axis','#6A748C'),
+                   font: { family: 'Calibri', size: 9 } } };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+
       case 'rent_and_price_psf': {
         // PDF deck p.9 gov: sky bars (rent PSF) + navy line (price PSF).
         const sky  = brandColor('nm_sky',  '#62B5E5');
@@ -1209,9 +1239,12 @@
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
 
+      case 'asking_cap_by_term_dot_plot':
       case 'sold_cap_by_term_dot_plot': {
         // Round 30 — User redefined as 4-line TTM cohort time series
         // (was a scatter in R28). Mirrors server renderer logic.
+        // Round 31 — asking_cap_by_term_dot_plot (NEW active-listings
+        // counterpart) shares the same 4-line cohort renderer.
         const hasDialysisCohorts = (chart.rows || []).some(r =>
           r.cap_12plus != null || r.cap_8to12 != null ||
           r.cap_6to8 != null  || r.cap_5orless != null);

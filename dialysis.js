@@ -104,6 +104,14 @@ let diaIntakeQueue = null;
 let diaIntakeLoading = false;
 let diaIntakeIdx = 0;
 
+// Ownership Research backlog (Layer H.1 view + H.2/H.3/H.4 canonical clusters).
+// Lists the recorded_owner / canonical entity research worklist — resolve
+// one canonical and you fix multiple properties.
+let diaOwnershipBacklog       = null;   // array of cluster rows
+let diaOwnershipBacklogLoading = false;
+let diaOwnershipFilterState   = '';     // optional state filter (e.g. 'TX')
+let diaOwnershipFilterText    = '';     // optional name-substring filter
+
 // ============================================================================
 // QUERY FUNCTION
 // ============================================================================
@@ -3546,6 +3554,57 @@ async function loadDiaClarificationQueue() {
 }
 
 /**
+ * Load Ownership Research backlog from v_recorded_owner_canonical_clusters
+ * (Layer H.2.a) and v_ownership_research_backlog (Layer H.1).
+ *
+ * Strategy: pull the canonical clusters view as the leverage list — every
+ * row is one canonical entity with the count of recorded_owners variants
+ * + total dialysis properties under that canonical. Sorted by total
+ * properties DESC so the highest-leverage research targets surface first.
+ *
+ * The backlog view (v_ownership_research_backlog) also has per-property
+ * detail, but for the worklist UI we want one row per research target,
+ * not one row per property.
+ */
+async function loadDiaOwnershipBacklog() {
+  if (diaOwnershipBacklogLoading) return;
+  diaOwnershipBacklogLoading = true;
+  try {
+    // The cluster view already aggregates by canonical with cluster_size +
+    // canonical_total_properties. We collapse to one row per canonical
+    // client-side.
+    const rows = await diaQuery('v_recorded_owner_canonical_clusters', '*', {
+      order: 'canonical_total_properties.desc',
+      limit: 500
+    });
+    const seen = new Set();
+    const collapsed = [];
+    for (const r of (rows || [])) {
+      if (seen.has(r.canonical)) continue;
+      seen.add(r.canonical);
+      collapsed.push({
+        canonical:                  r.canonical,
+        cluster_size:               Number(r.cluster_size) || 0,
+        canonical_total_properties: Number(r.canonical_total_properties) || 0,
+        // Carry one representative recorded_owner row for the property
+        // drilldown link.
+        sample_recorded_owner_id:   r.recorded_owner_id,
+        sample_recorded_owner_name: r.recorded_owner_name,
+        sample_properties:          Number(r.properties) || 0,
+      });
+    }
+    diaOwnershipBacklog = collapsed;
+  } catch (e) {
+    console.error('loadDiaOwnershipBacklog error:', e);
+    showToast('Ownership backlog load failed', 'error');
+    diaOwnershipBacklog = [];
+  }
+  diaOwnershipBacklogLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
+  renderDiaTab();
+}
+
+/**
  * Load email intake queue — staged items with extraction + match data
  */
 async function loadDiaIntakeQueue() {
@@ -4830,7 +4889,8 @@ function renderDiaResearch() {
     { key: 'intake',         num: '4', label: 'Intake',           count: inCount,    phase: 'ingest',      desc: 'Review email intake documents before DB promotion' },
     { key: 'property',       num: '5', label: 'Property Review',  count: prCount,    phase: 'enrichment',  desc: 'Verify property-clinic links' },
     { key: 'lease',          num: '6', label: 'Lease Backfill',   count: lbCount,    phase: 'enrichment',  desc: 'Research missing lease data' },
-    { key: 'clinic_leads',   num: '7', label: 'Clinic Leads',     count: clLeadCount, phase: 'prospecting', desc: 'Qualify leads for outreach' },
+    { key: 'ownership',      num: '7', label: 'Ownership',        count: (typeof diaOwnershipBacklog !== 'undefined' && diaOwnershipBacklog) ? diaOwnershipBacklog.length : null, phase: 'enrichment',  desc: 'Resolve LLC chains to real decision-makers' },
+    { key: 'clinic_leads',   num: '8', label: 'Clinic Leads',     count: clLeadCount, phase: 'prospecting', desc: 'Qualify leads for outreach' },
     { key: 'staleness',      num: '',  label: 'Staleness',        count: null,       phase: 'monitoring',  desc: 'Data freshness monitoring' },
     { key: 'run_health',     num: '',  label: 'Run Health',       count: null,       phase: 'monitoring',  desc: 'Pipeline run diagnostics' },
   ];
@@ -4897,7 +4957,7 @@ function renderDiaResearch() {
   html += `<div style="padding:10px 14px;background:${currentPhase.color}10;border-radius:8px;border-left:3px solid ${currentPhase.color};margin-bottom:16px;display:flex;align-items:center;gap:10px;">`;
   html += `<span style="font-size:18px">${currentPhase.icon}</span>`;
   html += `<div>`;
-  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 7' : ''}</div>`;
+  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 8' : ''}</div>`;
   html += `<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>${currentStep.label}:</strong> ${currentStep.desc}</div>`;
   html += '</div></div>';
 
@@ -4924,6 +4984,9 @@ function renderDiaResearch() {
     html += renderDiaPropertyResearch();
   } else if (diaResearchMode === 'lease') {
     html += renderDiaLeaseResearch();
+  } else if (diaResearchMode === 'ownership') {
+    if (!diaOwnershipBacklog) loadDiaOwnershipBacklog();
+    html += renderDiaOwnershipResearch();
   } else if (diaResearchMode === 'clinic_leads') {
     html += renderDiaClinicLeads();
   } else if (diaResearchMode === 'staleness') {
@@ -6002,6 +6065,169 @@ function _capturePriorLeases() {
     });
   });
   window._diaLeaseFormDraft._priorLeases = leases;
+}
+
+
+// ============================================================================
+// OWNERSHIP RESEARCH WORKBENCH (Layer H.5 — frontend for the backlog series)
+// ============================================================================
+//
+// Surfaces the canonical-name leverage list from
+// v_recorded_owner_canonical_clusters so Scott can resolve one SPE name
+// and fix multiple properties. Each row = one canonical entity (e.g.
+// "SMBC Leasing & Finance Inc"), showing how many name variants exist
+// and how many dialysis properties currently sit under that canonical.
+//
+// Clicking a row opens a sample property in the detail drawer where the
+// existing Resolve Ownership form can be used to set the true_owner_id.
+// When that fires, the migration-V propagation trigger auto-fills any
+// linked properties whose true_owner_id is NULL — so one click can
+// resolve dozens of buildings.
+
+function renderDiaOwnershipResearch() {
+  if (diaOwnershipBacklog === null) {
+    return '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading ownership backlog…</p></div>';
+  }
+  const rows = diaOwnershipBacklog || [];
+  const filterText  = (diaOwnershipFilterText || '').toLowerCase().trim();
+  const filterState = (diaOwnershipFilterState || '').toUpperCase().trim();
+  const filtered = rows.filter(r => {
+    if (filterText && !(r.canonical || '').toLowerCase().includes(filterText)) return false;
+    return true;
+  });
+  // filterState is reserved for future use (cluster view doesn't carry
+  // state today). Drilldown into the per-property backlog will respect it.
+
+  // Top metrics
+  const totalClusters     = rows.length;
+  const totalProperties   = rows.reduce((s, r) => s + (r.canonical_total_properties || 0), 0);
+  const totalVariants     = rows.reduce((s, r) => s + (r.cluster_size || 0), 0);
+  const top5Properties    = rows.slice(0, 5).reduce((s, r) => s + (r.canonical_total_properties || 0), 0);
+
+  let html = '<div class="ownership-research-workbench">';
+
+  // Context header
+  html += '<div style="padding:12px 14px;background:var(--s2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.5">';
+  html += '<strong>Ownership research backlog.</strong> Each row is one canonical entity (e.g. "SMBC Leasing & Finance Inc") that has multiple recorded_owner name variants in our deed data. ';
+  html += 'Resolving the canonical&rsquo;s true_owner_id once via the property detail panel auto-fills any linked properties whose true_owner is still NULL ';
+  html += '(via the migration-V propagation trigger). Sorted by total properties &mdash; biggest leverage first.';
+  html += '</div></div>';
+
+  // Metrics row
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">';
+  const metric = (label, value, sub, color) =>
+    `<div style="background:var(--s2);border:1px solid var(--border);border-left:3px solid ${color};border-radius:8px;padding:10px 14px">` +
+    `<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:4px">${esc(label)}</div>` +
+    `<div style="font-size:20px;font-weight:700;color:var(--text)">${esc(value)}</div>` +
+    `<div style="font-size:11px;color:var(--text2);margin-top:2px">${esc(sub)}</div>` +
+    `</div>`;
+  html += metric('Canonical clusters', fmtN(totalClusters),        'distinct research targets', '#62B5E5');
+  html += metric('Properties covered', fmtN(totalProperties),      'under a canonical', '#34d399');
+  html += metric('Total variants',     fmtN(totalVariants),        'recorded_owners rows', '#fbbf24');
+  html += metric('Top-5 properties',   fmtN(top5Properties),       'resolve these first', '#a855e8');
+  html += '</div>';
+
+  // Filter / search
+  html += '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">';
+  html += `<input id="ownershipBacklogFilter" type="text" value="${esc(diaOwnershipFilterText || '')}" placeholder="Filter canonical name…" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px">`;
+  html += '<button id="ownershipBacklogRefresh" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer;font-size:12px">Refresh</button>';
+  html += '</div>';
+
+  // Empty state
+  if (!filtered.length) {
+    html += '<div style="text-align:center;padding:48px;color:var(--text3);background:var(--s2);border:1px dashed var(--border);border-radius:8px">';
+    html += rows.length === 0
+      ? 'No canonical clusters yet &mdash; v_recorded_owner_canonical_clusters returned 0 rows. Run dia_unify_canonical_true_owners on the DB to seed.'
+      : 'No clusters match your filter.';
+    html += '</div></div>';
+    return html;
+  }
+
+  // Top leverage table
+  html += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;overflow:hidden">';
+  html += '<div style="display:flex;padding:10px 14px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:700;background:var(--s3);border-bottom:1px solid var(--border)">';
+  html += '<div style="flex:3">Canonical entity</div>';
+  html += '<div style="flex:1;text-align:right">Variants</div>';
+  html += '<div style="flex:1;text-align:right">Properties</div>';
+  html += '<div style="flex:2">Sample recorded_owner</div>';
+  html += '<div style="flex:1.4;text-align:right">Action</div>';
+  html += '</div>';
+
+  filtered.slice(0, 100).forEach((r, idx) => {
+    const rowBg = idx % 2 === 0 ? 'var(--s2)' : 'var(--s2-alt, var(--s2))';
+    html += `<div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);background:${rowBg};font-size:12px">`;
+    html += `<div style="flex:3;font-weight:600;color:var(--text)">${esc(r.canonical || '')}</div>`;
+    html += `<div style="flex:1;text-align:right;color:var(--text2)">${esc(fmtN(r.cluster_size))}</div>`;
+    html += `<div style="flex:1;text-align:right;color:var(--text);font-weight:700">${esc(fmtN(r.canonical_total_properties))}</div>`;
+    html += `<div style="flex:2;color:var(--text3);font-size:11px">${esc(r.sample_recorded_owner_name || '—')}</div>`;
+    html += `<div style="flex:1.4;text-align:right">`;
+    if (r.sample_recorded_owner_id) {
+      html += `<button class="ownership-open-sample" data-canonical="${esc(r.canonical || '')}" data-recorded-owner-id="${esc(r.sample_recorded_owner_id)}" style="padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:var(--s3);color:var(--text);cursor:pointer;font-size:11px">Open sample &rsaquo;</button>`;
+    }
+    html += `</div>`;
+    html += '</div>';
+  });
+
+  if (filtered.length > 100) {
+    html += `<div style="padding:8px 14px;color:var(--text3);font-size:11px;background:var(--s3);text-align:center">Showing top 100 of ${fmtN(filtered.length)} clusters. Filter to narrow.</div>`;
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Bind handlers after render
+  setTimeout(() => {
+    const refresh = document.getElementById('ownershipBacklogRefresh');
+    if (refresh) refresh.addEventListener('click', () => {
+      diaOwnershipBacklog = null;
+      loadDiaOwnershipBacklog();
+    });
+    const filter = document.getElementById('ownershipBacklogFilter');
+    if (filter) filter.addEventListener('input', (e) => {
+      diaOwnershipFilterText = e.target.value || '';
+      renderDiaTab();
+      // Restore focus + caret after rerender
+      setTimeout(() => {
+        const refocus = document.getElementById('ownershipBacklogFilter');
+        if (refocus) {
+          refocus.focus();
+          try { refocus.setSelectionRange(refocus.value.length, refocus.value.length); } catch (e) {}
+        }
+      }, 0);
+    });
+    document.querySelectorAll('.ownership-open-sample').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const recOwnerId = btn.dataset.recordedOwnerId;
+        if (!recOwnerId) return;
+        // Find one dialysis property pointing at this recorded_owner_id so
+        // we can open the detail drawer with the existing Resolve Ownership
+        // form already wired up. The first match is enough — resolving
+        // its true_owner_id propagates to all sibling properties via the
+        // migration-V trigger.
+        try {
+          const props = await diaQuery('properties',
+            'property_id,facility_name,address,city,state,recorded_owner_id,true_owner_id',
+            { filter: `recorded_owner_id=eq.${encodeURIComponent(recOwnerId)}`, limit: 1 });
+          const row = props && props[0];
+          if (!row) {
+            showToast('No dialysis property found for that recorded_owner', 'warn');
+            return;
+          }
+          if (typeof showDetail === 'function') {
+            showDetail(row, 'dia-clinic');
+          } else {
+            showToast('showDetail not available', 'error');
+          }
+        } catch (err) {
+          console.error('open-sample error', err);
+          showToast('Failed to open sample property', 'error');
+        }
+      });
+    });
+  }, 0);
+
+  return html;
 }
 
 

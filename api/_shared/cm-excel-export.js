@@ -348,6 +348,20 @@ const CHART_COLUMNS = {
     { key: 'is_northmarq',     header: 'NM-Listed',           width: 12 },
     { key: 'last_price',       header: 'Asking Price ($)',    format: 'currency_dollars',    width: 18 },
   ],
+  // Round 31 — NEW: Asking Cap Rate Ranges by Lease Term Buckets
+  // (active-listings 4-line TTM cohort, dia only — gov deferred).
+  asking_cap_by_term_dot_plot: [
+    { key: 'period_end',  header: 'Month End',     format: 'date_short',          width: 13 },
+    { key: 'subspecialty', header: 'Subspecialty', width: 14 },
+    { key: 'cap_12plus',  header: '12+ Year Cap',  format: 'percent_basis_points', width: 14 },
+    { key: 'cap_8to12',   header: '8-12 Year Cap', format: 'percent_basis_points', width: 15 },
+    { key: 'cap_6to8',    header: '6-8 Year Cap',  format: 'percent_basis_points', width: 14 },
+    { key: 'cap_5orless', header: '≤5 Year Cap',   format: 'percent_basis_points', width: 14 },
+    { key: 'cap_12plus_n',  header: '12+ n',  format: 'integer_count', width: 8 },
+    { key: 'cap_8to12_n',   header: '8-12 n', format: 'integer_count', width: 8 },
+    { key: 'cap_6to8_n',    header: '6-8 n',  format: 'integer_count', width: 8 },
+    { key: 'cap_5orless_n', header: '≤5 n',   format: 'integer_count', width: 8 },
+  ],
   // Round 30 — Sold_Cap_by_Term redefined as 4-line TTM cohort series.
   // Different column shape for gov vs dia. Data-tab writer iterates the
   // cols array as-is; missing fields render as blank (cohort columns
@@ -404,6 +418,15 @@ const CHART_COLUMNS = {
     { key: 'price_psf',          header: 'Avg Sale Price / SF',   format: 'currency_per_sf',  width: 22 },
     { key: 'n_with_rent_ttm',    header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
     { key: 'n_with_price_ttm',   header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
+  ],
+  // Round 31 — Dia counterpart (per-chair unit econ).
+  rent_and_price_per_chair: [
+    { key: 'period_end',     header: 'Quarter End',                format: 'date_short',       width: 13 },
+    { key: 'subspecialty',   header: 'Subspecialty',               width: 14 },
+    { key: 'rent_per_chair', header: 'Avg Rent / Chair (TTM)',     format: 'currency_dollars', width: 22 },
+    { key: 'price_per_chair', header: 'Avg Sale Price / Chair',    format: 'currency_dollars', width: 24 },
+    { key: 'rent_n',         header: 'N w/ Rent (TTM)',            format: 'integer_count',    width: 17 },
+    { key: 'price_n',        header: 'N w/ Price (TTM)',           format: 'integer_count',    width: 17 },
   ],
   transaction_count_ttm: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -777,12 +800,16 @@ const TAB_NAMES = {
   available_by_firm_term_summary:   'Data_Avail_by_Firm_Term',
   // Round 28 — Cap Rate Comparison by Lease Term Remaining (closed sales)
   sold_cap_by_term_dot_plot:        'Data_Sold_Cap_by_Term',
+  // Round 31 — Asking Cap Rate Ranges by Lease Term Buckets (active listings, dia)
+  asking_cap_by_term_dot_plot:      'Data_Ask_Cap_by_Term',
   // Round 19 — market-activity charts (both verticals)
   market_turnover:                  'Data_Market_Turnover',
   inventory_backlog:                'Data_Inventory_Backlog',
   // Round 20 — PDF-parity combos
   txn_count_avg_deal_combo:         'Data_Txn_AvgDeal_Combo',
   rent_and_price_psf:               'Data_Rent_Price_PSF',
+  // Round 31 — Dia counterpart (per-chair unit econ).
+  rent_and_price_per_chair:         'Data_Rent_Price_Chair',
   dom_and_pct_of_ask:           'Data_DOM_Ask',
   bid_ask_spread:               'Data_Bid_Ask',
   // Phase 2c additions

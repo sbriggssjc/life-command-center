@@ -150,6 +150,11 @@ export const DIA_READ_TABLES = new Set([
   'v_ownership_current',
   'v_ownership_chain',
   'v_property_rankings',
+  // Ownership Research workbench (Layer H.5 frontend for the canonical
+  // cleanup series — surfaces v_recorded_owner_canonical_clusters as
+  // the leverage-sorted research worklist).
+  'v_recorded_owner_canonical_clusters',
+  'v_ownership_research_backlog',
   // Operations tab — clinic detail data
   'facility_patient_counts',
   'clinic_trends',

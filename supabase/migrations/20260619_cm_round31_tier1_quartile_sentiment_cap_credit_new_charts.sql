@@ -1,0 +1,101 @@
+-- =====================================================================
+-- Round 31 Tier 1 — Investigations + new charts. Follow-up to Round 30
+-- batch deferred items from "Capital Markets Exports - Notes.docx".
+--
+-- This is the first of three Round 31 PRs:
+--   Tier 1 (this PR): investigations + new charts
+--   Tier 2 (next PR): Excel-format-match batch
+--   Tier 3 (next PR): data-quality investigations
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-13)
+-- ---------------------------------------------------------------------
+-- 1) cm_gov_cap_by_credit_q  (gov DB) — REWRITTEN as TTM view.
+--    User: "Data_Cap_by_Credit - Missing State and municipal data sets,
+--    investigate". Root cause:
+--      • parent view classified state/muni by `lower(government_type) =
+--        'state' / 'municipal'` — matched only 2 rows each. Bulk of
+--        state-level sales live as 'Local/State' (22 rows), 'Federal
+--        & State' (8), 'State & Federal' (3).
+--      • 3-sample-per-quarter gate suppressed everything (no quarter
+--        had 3+ matches under narrow classification).
+--      • No cap-rate band filter, so 2015 state_avg was 15.86% from a
+--        single outlier.
+--    Fix: dedicated TTM view computing federal/state/muni directly:
+--      - broader matching (ILIKE %state%/%local%/%municipal%/%federal%)
+--      - cap-rate band 0.04-0.12
+--      - 4-quarter TTM rolling avg
+--      - per-cohort gate n>=2 for state/muni, n>=3 for federal
+--    Result: state cap line now visible 2018-2025 (averaging 7.0-8.4%);
+--    municipal remains thin (only 2 transactions historically, single
+--    quarter visible).
+--
+-- 2) cm_dialysis_asking_cap_by_term_m  (dia DB) — NEW VIEW.
+--    Source: cm_dialysis_active_listings_m (R30: now extended to 2014).
+--    Produces 4-line TTM cohort series for active asking caps:
+--      12+ / 8-12 / 6-8 / ≤5 firm-term years
+--    Min-sample gate n>=5 per TTM window. Powers the new Asking Cap
+--    Rate Ranges by Lease Term Buckets chart.
+--
+-- 3) cm_dialysis_rent_price_per_chair_q  (dia DB) — NEW VIEW.
+--    Quarterly TTM rolling avg of (annual_rent / total_chairs) and
+--    (sold_price / total_chairs). Outlier bands: rent/chair $1K-$30K,
+--    price/chair $10K-$500K. Min-sample n>=5. Powers the new dialysis
+--    Rent & Price per Chair chart.
+--
+-- ---------------------------------------------------------------------
+-- LCC chart catalog (LCC Opps DB)
+-- ---------------------------------------------------------------------
+-- 4) cm_chart_catalog — 2 new chart_template_id rows:
+--      • asking_cap_by_term_dot_plot — 4-line cohort TTM (dia only;
+--        gov deferred — no historical active-listing data)
+--      • rent_and_price_per_chair    — combo bars+line (dia only;
+--        gov uses rent_and_price_psf since gov measures by SF)
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js,
+-- capital-markets.js, api/_shared/cm-excel-export.js)
+-- ---------------------------------------------------------------------
+-- 5) seller_sentiment / seller_sentiment_monthly — y-axis fixes both
+--    verticals. User: "We also have a y-axis issue with the cap rate
+--    lines not displaying in view on the chart" (dia) + "Y-axis does
+--    not allow the data to be in view on the chart" (gov).
+--      Dia widened 4.75-7.25% → 4.75-9.25% (long-term cohort hit 8.87%)
+--      Gov tightened 5.0-9.0% → 5.5-9.5% (data lives 6.05-8.78%)
+--
+-- 6) asking_cap_by_term_dot_plot renderer case — reuses the R30
+--    sold_cap_by_term_dot_plot 4-line cohort renderer (same column
+--    shape: cap_12plus / cap_8to12 / cap_6to8 / cap_5orless).
+--
+-- 7) rent_and_price_per_chair renderer case — combo bars (rent/chair
+--    left axis $0-$16K) + line (price/chair right axis $0-$250K).
+--
+-- ---------------------------------------------------------------------
+-- INVESTIGATIONS — no code change required
+-- ---------------------------------------------------------------------
+-- a) cm_dialysis_cap_quartile_m — User: "Is this data a true
+--    statistical upper and lower quartile? The data looks to be
+--    equidistant to and from the median." VERIFIED: view uses
+--    percentile_cont(0.25/0.50/0.75). The "equidistant" appearance
+--    is because real dia cap-rate distribution (filtered 0.04-0.12)
+--    clusters symmetrically near the median. TTM smoothing makes the
+--    median appear flat (7.50% across 6 consecutive months Q4'25 -
+--    Q1'26) when 139-167 sales fall in each rolling window. The data
+--    is correct — no fix required.
+--
+-- ---------------------------------------------------------------------
+-- ROUND 31 Tier 2 candidate scope (DEFERRED to next PR)
+-- ---------------------------------------------------------------------
+--   • Excel-format-match items vs Government/Dialysis Master files:
+--     Renewal_Rate, Term_Rate, NL_Spread, Renewal_Growth, Inventory_Backlog,
+--     Market_Turnover, Avail_by_Term_Summary, Avail_by_Firm_Term
+--
+-- ROUND 31 Tier 3 candidate scope (DEFERRED to next PR)
+-- ---------------------------------------------------------------------
+--   • Data-quality investigations:
+--     Bid_Ask pre-2013/2010 gaps, DOM_Ask labels (low/high/most-recent),
+--     NM_vs_Market smoothness, Sentiment pre-2010/2014 gaps,
+--     CPI_CAGR pre-2018, Val_Index formula review,
+--     Cap_by_Term smoothness, Inventory_Backlog pre-2018 (gov),
+--     Sold_Cap_by_Term gov 4-line formatting confirm
+-- =====================================================================

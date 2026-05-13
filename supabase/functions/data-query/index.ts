@@ -77,6 +77,9 @@ const DIA_READ_TABLES = new Set([
   "sale_brokers", "brokers", "broker_companies", "loans", "property_intel",
   "v_property_detail", "v_lease_detail", "v_ownership_current",
   "v_ownership_chain", "v_property_rankings",
+  // Ownership Research workbench (Layer H.5 frontend for the canonical
+  // cleanup series).
+  "v_recorded_owner_canonical_clusters", "v_ownership_research_backlog",
   "facility_patient_counts", "v_facility_patient_counts_latest", "clinic_trends", "clinic_quality_metrics",
   "facility_cost_reports", "leases",
   "lease_extensions", "lease_rent_schedule", "v_lease_extensions_summary",

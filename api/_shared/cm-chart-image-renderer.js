@@ -2372,6 +2372,51 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'rent_and_price_per_chair': {
+      // Round 31 — Dialysis counterpart to gov rent_and_price_psf.
+      // User: "Still missing the following charts: Rent & Price PSF"
+      // (dia). Dialysis properties are measured by CHAIR count, not SF,
+      // so the unit-econ axis is per-chair.
+      //   Bars = Avg Rent / Chair  (left $, TTM rolling)
+      //   Line = Avg Sold Price / Chair (right $, TTM rolling)
+      return {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Avg Rent / Chair (TTM)',
+              data: rows.map(r => r.rent_per_chair != null ? Number(r.rent_per_chair) : null),
+              backgroundColor: PDF_COLORS.cap_mid,
+              borderColor: PDF_COLORS.cap_mid,
+              borderRadius: 1,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Sale Price / Chair (TTM)',
+              data: rows.map(r => r.price_per_chair != null ? Number(r.price_per_chair) : null),
+              borderColor: palette[0],
+              backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: (() => {
+          const o = comboOpts({
+            yLeftFormat:  AXIS_FORMAT_CURRENCY,    // $X,XXX (rent/chair)
+            yRightFormat: AXIS_FORMAT_CURRENCY,    // $XXX,XXX (price/chair)
+            yLeftRange:   { min: 0, max: 16000 },  // rent $0-$16K/chair
+            yRightRange:  { min: 0, max: 250000 }, // price $0-$250K/chair
+          });
+          const ann = buildAnnotations(rows, r => r.price_per_chair,
+            function (v) { return '$' + Math.round(v / 1000) + 'K'; });
+          for (const k of Object.keys(ann)) {
+            ann[k].yScaleID = 'y1';
+            ann[k].yAdjust  = -14;
+          }
+          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
+          return o;
+        })(),
+      };
+    }
+
     case 'rent_and_price_psf': {
       // Master deck p.9 (gov): bars = rent PSF (left $), line = price PSF
       // (right $). Both TTM-rolling.
@@ -2412,10 +2457,16 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'asking_cap_by_term_dot_plot':
     case 'sold_cap_by_term_dot_plot': {
       // Round 30 — User redefined: "four distinct lines of rolling TTM
       // monthly averages by lease term bucket." Replaces the Round 28
       // scatter dot-plot (wrong execution).
+      // Round 31 — asking_cap_by_term_dot_plot (NEW active-listings
+      // counterpart) shares the same 4-line cohort renderer. Dia uses
+      // the same column shape (cap_12plus / cap_8to12 / cap_6to8 /
+      // cap_5orless). Gov asking version deferred (no historical
+      // active-listing data; only the sold version applies for gov).
       //   Gov cohorts: 10+ / 6-10 / <5 / Outside Firm
       //   Dia cohorts: 12+ / 8-12 / 6-8 / ≤5
       const hasDialysisCohorts = rows.some(r =>
