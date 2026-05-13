@@ -1016,6 +1016,12 @@ function detectDomainMismatch(domain, metadata, entityFields) {
 
 // Expose last classifier diagnostic for pipeline summary (debugging)
 let _lastClassifierDiag = null;
+// Round 76ex (2026-05-13): same pattern for upsertDomainLoans third loop —
+// Vercel's runtime logs drop fire-and-forget console output after res.json()
+// returns, so the Round 76ew console.logs never surface. Capture the same
+// trace into a module-level diag that gets persisted in the pipeline summary
+// (queryable via entity.metadata._pipeline_summary._loans_diag).
+let _lastLoansDiag = null;
 function classifyDomainWithDiag(metadata, entityFields) {
   const result = classifyDomain(metadata, entityFields);
   // Build diagnostic snapshot
@@ -5148,6 +5154,9 @@ function mapLoanType(rawType) {
  * Created from sales_history entries that have lender/loan_amount data.
  */
 async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
+  // Round 76ex: reset diag at function entry so cross-run leakage can't
+  // make one entity's loans-debug appear on a different entity's summary.
+  _lastLoansDiag = null;
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
@@ -5423,14 +5432,42 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   // amount band), then PATCHes the existing row with the rich payload or
   // INSERTs a new row when no match is found.
   const financingLoans = Array.isArray(metadata.loans) ? metadata.loans : [];
-  // Round 76ew (2026-05-13): diagnostic to disambiguate "Round 76er.c third
-  // loop never ran" vs "third loop ran but produced empty payload". Visible
-  // in Vercel function logs on every capture.
+  // Round 76ex (2026-05-13): capture a structured diag into _lastLoansDiag
+  // (persisted to entity.metadata._pipeline_summary._loans_diag) since
+  // Vercel drops fire-and-forget console output. The Round 76ew console
+  // logs are kept as belt-and-suspenders in case the run is synchronous.
+  const _loansDiag = {
+    property_id:           propertyId,
+    domain,
+    financing_loans_count: financingLoans.length,
+    metadata_keys_sample:  Object.keys(metadata).slice(0, 30),
+    metadata_loans_typeof: typeof metadata.loans,
+    metadata_loans_isArr:  Array.isArray(metadata.loans),
+    fin_entries:           [],
+    patches:               [],
+    inserts:               [],
+    errors:                [],
+  };
   console.log(`[upsertDomainLoans:financing] entering third loop with ` +
     `${financingLoans.length} financing entr${financingLoans.length === 1 ? 'y' : 'ies'} ` +
     `(property=${propertyId}, domain=${domain})`);
   for (const fin of financingLoans) {
     const amount = Number(fin.loan_amount_dollars);
+    const finSnapshot = {
+      keys:                 Object.keys(fin),
+      loan_amount_dollars:  fin.loan_amount_dollars,
+      lender_name:          fin.lender_name,
+      originator:           fin.originator,
+      origination_date_iso: fin.origination_date_iso,
+      maturity_date_iso:    fin.maturity_date_iso,
+      interest_rate_pct:    fin.interest_rate_pct,
+      ltv_pct:              fin.ltv_pct,
+      term_months:          fin.term_months,
+      special_servicer:     fin.special_servicer,
+      origination_appraisal_dollars: fin.origination_appraisal_dollars,
+      computed_amount:      amount,
+    };
+    _loansDiag.fin_entries.push(finSnapshot);
     console.log(`[upsertDomainLoans:financing]   fin entry: ` +
       `loan_amount_dollars=${fin.loan_amount_dollars} ` +
       `lender_name=${fin.lender_name || '?'} ` +
@@ -5439,6 +5476,7 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
       `interest_rate_pct=${fin.interest_rate_pct || '?'} ` +
       `ltv_pct=${fin.ltv_pct || '?'}`);
     if (!Number.isFinite(amount) || amount <= 0) {
+      finSnapshot.skip_reason = `amount=${amount} not finite or <= 0`;
       console.log(`[upsertDomainLoans:financing]   SKIP: amount=${amount} not finite or <= 0`);
       continue;
     }
@@ -5574,13 +5612,22 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
         confidence:  0.6,
         fields:      { ...loanData, updated_at: nowIso },
       }).catch(err => {
+        _loansDiag.errors.push({ stage: 'filterByFieldPriority', message: err?.message });
         console.warn('[upsertDomainLoans:financing] field-priority filter failed:', err?.message);
         return { ...loanData, updated_at: nowIso };
       });
-      await domainPatch(domain,
+      const patchRes = await domainPatch(domain,
         `loans?loan_id=eq.${existingLoanId}`,
         filteredPatch,
         'upsertDomainLoans:financing');
+      _loansDiag.patches.push({
+        loan_id:           existingLoanId,
+        loanData_keys:     Object.keys(loanData),
+        filteredPatch_keys: Object.keys(filteredPatch || {}),
+        patch_status:      patchRes?.status,
+        patch_ok:          patchRes?.ok,
+        patch_error:       patchRes?.ok ? undefined : patchRes?.data,
+      });
       pushProvenance(provCollect, 'loans', existingLoanId, loanData);
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
@@ -5599,6 +5646,9 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
     }
   }
 
+  // Round 76ex: persist diag to module-level slot so processSidebarExtraction
+  // can flush it into _pipeline_summary at the end of the run.
+  _lastLoansDiag = _loansDiag;
   return count;
 }
 
@@ -8631,6 +8681,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       domain_records_note: 'writes_this_run_only — see domain_records_current for live DB state',
       domain_records_current: await fetchDomainRecordsCurrent(domain, propagation.property_id).catch(() => null),
       _classifier_diag: _lastClassifierDiag,
+      _loans_diag: _lastLoansDiag,
     },
   };
   await opsQuery('PATCH',
