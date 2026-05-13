@@ -1,0 +1,80 @@
+-- =====================================================================
+-- Round 31 Tier 2b — NL_Spread restructure + Inventory_Backlog
+-- 2-bar inflow/outflow + Market_Turnover dia pre-2018 extension.
+-- Follow-up to R31 Tier 2a.
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-13)
+-- ---------------------------------------------------------------------
+-- 1) cm_gov_net_lease_spread_q (gov DB) — added cap_10plus_year to
+--    projection so the renderer can plot the 3 underlying yield lines
+--    that the master Excel chart shows (instead of derived spreads).
+--
+-- 2) cm_dialysis_inventory_backlog_m (dia DB) — RESTRUCTURED.
+--    User: "Data_Inventory_Backlog - Can we take this data back in
+--    time so we can see better movement prior to 2018? This also
+--    doesn't match the formatting or style of the chart in our Excel."
+--    Master `Dialysis Comp Work MASTER.xlsx` > 'Charts' > chart 5
+--    shows 2 TTM-count bars: "No. Added to Market" + "No. Sold".
+--    Changes:
+--      • generate_series 2018-01-01 → 2014-01-01
+--      • Added new columns: added_ttm (count of listings opened in
+--        trailing 12 months), sold_ttm (count of closed sales in
+--        trailing 12 months)
+--      • active_count + months_of_supply retained for data tab + back-
+--        compat; sold_ttm aliased as ttm_sales for downstream consumers
+--
+-- 3) cm_gov_inventory_backlog_m (gov DB) — same restructure as dia.
+--    Note: gov available_listings has very thin pre-2026 history; the
+--    sold_ttm series will be the only meaningful pre-2026 signal.
+--    Format-match is preserved so the chart renders consistently.
+--
+-- 4) cm_dialysis_market_turnover_m (dia DB) — User: "Data_Market_Turnover
+--    - Let's try to make it go back before 2018 too." Extended
+--    generate_series 2018-01-01 → 2014-01-01. No format change (no
+--    clear master Excel counterpart found for this chart). Gov view
+--    already starts at 2013-01-01.
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js,
+-- capital-markets.js, api/_shared/cm-excel-export.js)
+-- ---------------------------------------------------------------------
+-- 5) net_lease_spread renderer — RESTRUCTURED.
+--    User: "Data_NL_Spread - Review the data and charts in our Excel
+--    and update; also we're missing much of the data prior to 2010
+--    for NM, review this data source."
+--    Master 'All Charts' chart 11 shows 3 lines of underlying yields
+--    (NOT derived spreads): 10Y Treasury, Avg Cap Rate (TTM),
+--    10+ Year Cap (TTM). Renderer rewritten to plot these instead of
+--    the 3 derived spread series (market / NM / non-NM).
+--    Note: the master_spread / nm_spread / non_nm_spread columns
+--    remain in the view for backward compatibility with the data tab
+--    and any downstream consumers; they are simply no longer rendered.
+--
+-- 6) inventory_backlog renderer — RESTRUCTURED.
+--    Combo (active-listings bar + months-of-supply line) → 2 TTM-count
+--    bars (added vs sold). Excel-export CHART_COLUMNS updated to
+--    surface added_ttm + sold_ttm alongside active_count + months_of_
+--    supply.
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED — Round 31 Tier 2c (next PR)
+-- ---------------------------------------------------------------------
+--   • Avail_by_Term_Summary (dia): master shows the same info split
+--     across 4 separate Market Size sheet charts (Avg Price bar +
+--     Count 2-bar + 4-line quartiles + DOM 2-bar). Our chart packs
+--     everything into a single 5-series combo. Visually serviceable
+--     but doesn't match the master's separated-by-stat layout.
+--     Restructure deferred — substantial work.
+--   • Avail_by_Firm_Term (gov): already structurally aligned with the
+--     dia equivalent (same 5-series 4-bars + dots layout). Further
+--     visual tuning deferred.
+--
+-- ROUND 31 Tier 3 (DEFERRED — next PR)
+-- ---------------------------------------------------------------------
+--   • Data-quality investigations: Bid_Ask / DOM_Ask / Sentiment
+--     pre-2010/2014 gaps; DOM_Ask labels (low/high/most-recent);
+--     NM_vs_Market smoothness; CPI_CAGR pre-2018; Val_Index formula
+--     review; Cap_by_Term smoothness; Sold_Cap_by_Term gov 4-line
+--     formatting confirm.
+-- =====================================================================

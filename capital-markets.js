@@ -680,14 +680,19 @@
         return new Chart(canvas, { type: 'bar', data: { labels: stateLabels, datasets }, options: opts });
       }
       case 'net_lease_spread': {
-        // Filled-area spread: market cap minus 10Y Treasury (in bps)
+        // Round 31 Tier 2b — Match master Excel "All Charts" chart 11.
+        // 3 lines: 10Y Treasury + Avg Cap (TTM) + 10+ Year Cap (TTM).
+        // NOT the derived spread.
         datasets = [
-          { label: 'Market Spread',   data: chart.rows.map(r => r.market_spread),
-            borderColor: palette[0], backgroundColor: palette[3],
-            fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 },
-          { label: 'NM Spread',       data: chart.rows.map(r => r.nm_spread),
+          { label: '10-Year Treasury Yield', data: chart.rows.map(r => r.treasury_10y_yield),
+            borderColor: palette[2], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: 'Average Cap Rate (TTM)', data: chart.rows.map(r => r.avg_cap_rate),
+            borderColor: palette[0], backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+          { label: '10+ Year Cap (TTM)',     data: chart.rows.map(r => r.cap_10plus_year),
             borderColor: palette[1], backgroundColor: 'transparent',
-            tension: 0.25, pointRadius: 2, borderWidth: 2 },
+            tension: 0.3, pointRadius: 0, borderWidth: 2 },
         ];
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('percent_basis_points') });
@@ -1145,27 +1150,23 @@
       }
 
       case 'inventory_backlog': {
-        // Combo: active-listings bars (left axis) + months-of-supply line (right axis).
+        // Round 31 Tier 2b — Restructured to match master Excel
+        // `Dialysis Comp Work MASTER.xlsx` > 'Charts' > chart 5:
+        // 2-bar inflow vs outflow. Mirrors server renderer rewrite.
         const sky  = brandColor('nm_sky',  '#62B5E5');
-        const pale = brandColor('nm_pale', '#E0E8F4');
         const navy = brandColor('nm_navy', '#003DA5');
         datasets = [
-          { type: 'bar', label: 'Active Listings',
-            data: chart.rows.map(r => Number(r.active_count) || 0),
-            backgroundColor: pale, borderColor: sky, borderRadius: 1,
+          { type: 'bar', label: 'No. Added to Market (TTM)',
+            data: chart.rows.map(r => Number(r.added_ttm) || 0),
+            backgroundColor: sky, borderColor: sky, borderRadius: 1,
+            yAxisID: 'y', order: 1 },
+          { type: 'bar', label: 'No. Sold (TTM)',
+            data: chart.rows.map(r => Number(r.sold_ttm ?? r.ttm_sales) || 0),
+            backgroundColor: navy, borderColor: navy, borderRadius: 1,
             yAxisID: 'y', order: 2 },
-          { type: 'line', label: 'Months of Supply',
-            data: chart.rows.map(r => r.months_of_supply != null ? Number(r.months_of_supply) : null),
-            borderColor: navy, backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-            yAxisID: 'y1', order: 0 },
         ];
-        const opts = commonChartOptions('integer_count');
-        opts.scales.y1 = { type: 'linear', position: 'right',
-          grid: { drawOnChartArea: false },
-          ticks: { callback: (v) => v + ' mo', color: brandColor('nm_axis','#6A748C'),
-                   font: { family: 'Calibri', size: 9 } } };
-        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets },
+          options: commonChartOptions('integer_count') });
       }
 
       case 'txn_count_avg_deal_combo': {

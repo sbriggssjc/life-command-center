@@ -1708,20 +1708,31 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'net_lease_spread': {
-      // 3 spread lines: market / NM / non-NM (vs 10Y Treasury)
+      // Round 31 Tier 2b — Restructured to match master Excel "All
+      // Charts" chart 11. Master shows 3 LINES of underlying yields
+      // (NOT the derived spread): 10Y Treasury + Avg Cap Rate (TTM)
+      // + 10+ Year Cap (TTM). User: "Data_NL_Spread - Review the data
+      // and charts in our Excel and update".
+      // Previous implementation plotted 3 spread series (market / NM /
+      // non-NM) — that view's `market_spread`/`nm_spread`/`non_nm_spread`
+      // columns are retained for backward compatibility but no longer
+      // rendered.
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
-            { label: 'Market Spread (Cap - 10Y)', data: rows.map(r => r.market_spread),
+            { label: '10-Year Treasury Yield',
+              data: rows.map(r => r.treasury_10y_yield != null ? Number(r.treasury_10y_yield) : null),
+              borderColor: palette[2], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'Average Cap Rate (TTM)',
+              data: rows.map(r => r.avg_cap_rate != null ? Number(r.avg_cap_rate) : null),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'NM Spread',                  data: rows.map(r => r.nm_spread),
+            { label: '10+ Year Cap (TTM)',
+              data: rows.map(r => r.cap_10plus_year != null ? Number(r.cap_10plus_year) : null),
               borderColor: palette[1], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2, borderDash: [4, 4] },
-            { label: 'Non-NM Spread',              data: rows.map(r => r.non_nm_spread),
-              borderColor: palette[2], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
@@ -2294,48 +2305,35 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'inventory_backlog': {
-      // Combo: bars = active listings (left axis), line = months of supply
-      // (right axis). For gov, historical bars are sparse until ~2024
-      // when listing tracking became reliable; recent values are the
-      // meaningful signal. For dia, both series are robust 2018+.
+      // Round 31 Tier 2b — Restructured to match master Excel
+      // `Dialysis Comp Work MASTER.xlsx` > 'Charts' > chart 5: 2 bars
+      // of TTM counts comparing market inflow vs outflow.
+      //   Series 0: "No. Added to Market" (TTM listings opened)
+      //   Series 1: "No. Sold" (TTM closed sales)
+      // User: "Can we take this data back in time so we can see better
+      // movement prior to 2018? This also doesn't match the formatting
+      // or style of the chart in our Excel."
+      // Source views extended to 2014-01-01 (was 2018-01-01).
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'Active Listings',
-              data: rows.map(r => Number(r.active_count) || 0),
-              backgroundColor: palette[3],         // pale fill
-              borderColor: palette[1],             // sky border
+            { type: 'bar', label: 'No. Added to Market (TTM)',
+              data: rows.map(r => Number(r.added_ttm) || 0),
+              backgroundColor: palette[1],         // sky
+              borderColor: palette[1],
+              borderRadius: 1,
+              yAxisID: 'y', order: 1 },
+            { type: 'bar', label: 'No. Sold (TTM)',
+              data: rows.map(r => Number(r.sold_ttm ?? r.ttm_sales) || 0),
+              backgroundColor: palette[0],         // navy
+              borderColor: palette[0],
               borderRadius: 1,
               yAxisID: 'y', order: 2 },
-            { type: 'line', label: 'Months of Supply',
-              data: rows.map(r => r.months_of_supply != null ? Number(r.months_of_supply) : null),
-              borderColor: palette[0],             // navy
-              backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-              yAxisID: 'y1', order: 0 },
           ],
         },
-        options: (() => {
-          const o = comboOpts({
-            yLeftFormat:  AXIS_FORMAT_INTEGER,
-            yRightFormat: AXIS_FORMAT_INTEGER,
-          });
-          // Right-axis tick suffix — months.
-          o.scales.y1.ticks = o.scales.y1.ticks || {};
-          o.scales.y1.ticks.callback = function (v) { return v + ' mo'; };
-          // Annotate months-of-supply (the more interesting line).
-          const ann = buildAnnotations(rows, r => r.months_of_supply, function (v) {
-            return Number(v).toFixed(1) + ' mo';
-          });
-          for (const k of Object.keys(ann)) {
-            ann[k].yScaleID = 'y1';
-            ann[k].yAdjust  = -14;
-          }
-          if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
-          return o;
-        })(),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
       };
     }
 
