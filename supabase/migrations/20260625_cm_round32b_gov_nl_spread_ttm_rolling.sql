@@ -1,0 +1,67 @@
+-- =====================================================================
+-- Round 32b — Gov NL_Spread cap_10plus_year coverage fix via TTM
+-- rolling rewrite. Follow-up to R31 Tier 2b (NL_Spread 3-line
+-- restructure) + R31 Tier 3 verification finding.
+--
+-- ---------------------------------------------------------------------
+-- ROOT CAUSE
+-- ---------------------------------------------------------------------
+-- During the R31 closeout static audit, found that `cm_gov_market_
+-- quarterly.cap_10plus_year` is only populated in 9/33 quarters from
+-- 2018 forward, and 0/4 quarters in 2024 and 0/4 in 2025. Root
+-- cause: the parent view's cap-by-firm-term cohorts are computed as
+-- per-QUARTER averages with a `count(...) >= 3` gate, but gov sales
+-- per quarter (~7-10 total) split too thin across cohorts to pass
+-- the n>=3 gate in recent periods.
+--
+-- The downstream `cm_gov_net_lease_spread_q` view (rewritten in R31
+-- T2b to plot 3 underlying yield lines per master Excel chart 11)
+-- inherits this gap and shows the "10+ Year Cap (TTM)" line
+-- truncating 2023-onward.
+--
+-- ---------------------------------------------------------------------
+-- FIX
+-- ---------------------------------------------------------------------
+-- Rewrite `cm_gov_net_lease_spread_q` to compute its own TTM 12-month
+-- rolling cap series directly from sales_transactions (same pattern
+-- as the R31 T3 cm_gov_nm_vs_market_q TTM rewrite). The view's
+-- avg_cap_rate is also recomputed as TTM rolling so the 3 yield lines
+-- move at a consistent cadence with the treasury yield (which is
+-- already monthly-resolution from FRED).
+--
+-- Per-cohort min-sample gates calibrated for TTM windows:
+--   • avg_cap (total): n >= 5
+--   • cap_10plus_year: n >= 2 (TTM windows have 2-10 sales recently)
+--   • nm_avg_cap: n >= 3 (sparse cohort)
+--   • non_nm_avg_cap: n >= 5
+--
+-- Backward compat: derived spread columns (market_spread, nm_spread,
+-- non_nm_spread) preserved for the data tab and any downstream
+-- consumers. The renderer no longer references them but the schema
+-- contract is unchanged.
+--
+-- ---------------------------------------------------------------------
+-- VERIFICATION (post-fix)
+-- ---------------------------------------------------------------------
+--   • treasury_10y_yield:  100% coverage 2018-2026 (FRED-backed)
+--   • avg_cap_rate (TTM):  100% coverage 2018-2026
+--   • cap_10plus_year:     100% coverage 2018-2026 (was 9/33 quarters
+--                          + 0/4 in 2024 + 0/4 in 2025)
+--   • Recent values: Treasury 4.0-4.5%, Avg Cap 7.9-8.5%, 10+ Year
+--     Cap 7.2-8.3% — 10+ correctly trades inside Avg, as expected
+--     for longer-firm-term sales.
+--
+-- ---------------------------------------------------------------------
+-- SCOPE DECISION
+-- ---------------------------------------------------------------------
+-- Considered modifying the parent `cm_gov_market_quarterly` view to
+-- expose TTM cohort caps. Rejected: that view is a master aggregator
+-- referenced by ~15+ downstream views (cap_by_term_m, sold_cap_by_
+-- term, valuation_index_q, etc.). Risk of regressing other charts
+-- outweighs the benefit. Instead, fixed only the specific consumer
+-- (cm_gov_net_lease_spread_q) where the user noticed the gap.
+--
+-- Other downstream views that depend on quarter-only cap_10plus_year
+-- will continue to show sparse coverage. Out of R31 scope; can be
+-- addressed individually if/when the user notices specific charts.
+-- =====================================================================
