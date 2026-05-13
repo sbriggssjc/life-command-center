@@ -5423,9 +5423,25 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   // amount band), then PATCHes the existing row with the rich payload or
   // INSERTs a new row when no match is found.
   const financingLoans = Array.isArray(metadata.loans) ? metadata.loans : [];
+  // Round 76ew (2026-05-13): diagnostic to disambiguate "Round 76er.c third
+  // loop never ran" vs "third loop ran but produced empty payload". Visible
+  // in Vercel function logs on every capture.
+  console.log(`[upsertDomainLoans:financing] entering third loop with ` +
+    `${financingLoans.length} financing entr${financingLoans.length === 1 ? 'y' : 'ies'} ` +
+    `(property=${propertyId}, domain=${domain})`);
   for (const fin of financingLoans) {
     const amount = Number(fin.loan_amount_dollars);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
+    console.log(`[upsertDomainLoans:financing]   fin entry: ` +
+      `loan_amount_dollars=${fin.loan_amount_dollars} ` +
+      `lender_name=${fin.lender_name || '?'} ` +
+      `originator=${fin.originator || '?'} ` +
+      `origination_date_iso=${fin.origination_date_iso || '?'} ` +
+      `interest_rate_pct=${fin.interest_rate_pct || '?'} ` +
+      `ltv_pct=${fin.ltv_pct || '?'}`);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      console.log(`[upsertDomainLoans:financing]   SKIP: amount=${amount} not finite or <= 0`);
+      continue;
+    }
     const lenderName = fin.lender_name || null;
     const originator = fin.originator || null;
     const origDate   = fin.origination_date_iso || null;
