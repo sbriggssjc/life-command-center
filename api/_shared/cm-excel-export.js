@@ -333,6 +333,18 @@ const CHART_COLUMNS = {
     { key: 'lower_quartile_cap',  header: 'Lower Q Cap',     format: 'percent_basis_points', width: 14 },
     { key: 'period_end',          header: 'As of',           format: 'date_short',          width: 13 },
   ],
+  // Round 32 — Cap dispersion chart (split from avail summary). Same
+  // underlying data, different render — keep all four cap stats but
+  // drop avg_price + n_listings since those are on the price chart.
+  available_cap_dispersion_by_term: [
+    { key: 'term_bucket',         header: 'Term Bucket',     width: 18 },
+    { key: 'avg_cap',             header: 'Avg Cap',         format: 'percent_basis_points', width: 13 },
+    { key: 'upper_quartile_cap',  header: 'Upper Q Cap',     format: 'percent_basis_points', width: 14 },
+    { key: 'median_cap',          header: 'Median Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'lower_quartile_cap',  header: 'Lower Q Cap',     format: 'percent_basis_points', width: 14 },
+    { key: 'n_listings',          header: 'Listings',        format: 'integer_count',       width: 12 },
+    { key: 'period_end',          header: 'As of',           format: 'date_short',          width: 13 },
+  ],
   // Round 18 — 3 new charts
   core_cap_rate_dot_plot: [
     { key: 'period_end',       header: 'Sale Date',           format: 'date_short',          width: 13 },
@@ -799,6 +811,8 @@ const TAB_NAMES = {
   core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
   available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',
   available_by_firm_term_summary:   'Data_Avail_by_Firm_Term',
+  // Round 32 — Cap rate dispersion chart split from avail summary
+  available_cap_dispersion_by_term: 'Data_Avail_Cap_Dispersion',
   // Round 28 — Cap Rate Comparison by Lease Term Remaining (closed sales)
   sold_cap_by_term_dot_plot:        'Data_Sold_Cap_by_Term',
   // Round 31 — Asking Cap Rate Ranges by Lease Term Buckets (active listings, dia)
