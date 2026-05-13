@@ -697,20 +697,28 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'nm_vs_market_cap': {
+      // Round 31 Tier 2 — Y-axis tightened to 5.25-9.25% to match
+      // master Excel "All Charts" chart 7/8 (NM Average Cap vs Non-NM
+      // Average Cap). Master uses 0.0525..0.09250 fixed range; tighter
+      // window than the default CAP_RATE_RANGE so the two cap lines
+      // fill the chart frame.
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
-            { label: 'NM Cap Rate',     data: rows.map(r => r.nm_cap_rate),
+            { label: 'NM Average Cap (TTM)',     data: rows.map(r => r.nm_cap_rate),
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
-            { label: 'Market Cap Rate', data: rows.map(r => r.market_cap_rate),
+            { label: 'Non-NM Average Cap (TTM)', data: rows.map(r => r.market_cap_rate),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisRange: { min: 0.0525, max: 0.0925 },
+        }),
       };
     }
 
@@ -1615,45 +1623,42 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'lease_termination_rate': {
-      // Round 9 — user feedback: "looks great but is still quarterly
-      // and ... I think its missing a dataset here (chart normally
-      // shows the total number of leases outside of the firm term)."
-      //
-      // Now a dual-axis combo:
-      //   • Left (left axis %): Termination Rate TTM (sky area)
-      //   • Right (right axis count): Leases Outside Firm Term (navy line)
-      // The "outside firm term" series is from gsa_leases.latest_action
-      // ∈ ('Succeeding', 'Extension') — leases active past their
-      // original firm term.
-      const termRate = rows.map(r => {
-        const total = Number(r.total_leases_active) || 0;
-        const term  = Number(r.terminated_ttm) || 0;
-        return total > 0 ? term / total : null;
-      });
+      // Round 9 — Originally area (Termination Rate %) + line (Outside
+      // Firm count).
+      // Round 31 Tier 2 — Restructured to match master Excel "Term_Rate"
+      // chart in `Copy Government Master Document.xlsx` > 'All Charts'
+      // > chart 4: two bar series (counts), no rate %, no dual axis.
+      //   Series 0: "Leases In Firm Term (TTM)"     — total - outside
+      //   Series 1: "Leases Outside Firm (TTM)"     — outside_firm_term
+      // User: "Data_Term_Rate - Review the formatting of the chart in
+      // our Excel and update".
       const outsideFirm = rows.map(r =>
         r.leases_outside_firm_term != null ? Number(r.leases_outside_firm_term) : null
       );
+      const inFirm = rows.map(r => {
+        const total   = r.total_leases_active != null ? Number(r.total_leases_active) : null;
+        const outside = r.leases_outside_firm_term != null ? Number(r.leases_outside_firm_term) : null;
+        if (total == null || outside == null) return null;
+        return Math.max(0, total - outside);
+      });
       return {
-        type: 'line',
+        type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'line', label: 'Termination Rate (TTM)',
-              data: termRate,
-              borderColor: palette[1], backgroundColor: palette[3],
-              fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
-              yAxisID: 'y', order: 2 },
-            { type: 'line', label: 'Leases Outside Firm Term',
+            { type: 'bar', label: 'Leases In Firm Term (TTM)',
+              data: inFirm,
+              backgroundColor: palette[0],            // NM navy
+              borderColor: palette[0],
+              borderRadius: 1, yAxisID: 'y', order: 1 },
+            { type: 'bar', label: 'Leases Outside Firm (TTM)',
               data: outsideFirm,
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-              yAxisID: 'y1', order: 0 },
+              backgroundColor: palette[1],            // sky
+              borderColor: palette[1],
+              borderRadius: 1, yAxisID: 'y', order: 2 },
           ],
         },
-        options: comboOpts({
-          yLeftFormat:  AXIS_FORMAT_PERCENT_1DP,
-          yRightFormat: AXIS_FORMAT_INTEGER,
-        }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
       };
     }
 

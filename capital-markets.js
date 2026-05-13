@@ -420,14 +420,18 @@
           options: commonChartOptions('percent_basis_points') });
       }
       case 'nm_vs_market_cap': {
+        // Round 31 Tier 2 — Labels + y-axis pinned to match master
+        // ("NM Average Cap (TTM)" / "Non-NM Average Cap (TTM)";
+        // y range 5.25-9.25%).
         datasets = [
-          { label: 'Northmarq Cap Rate', data: chart.rows.map(r => r.nm_cap_rate),
+          { label: 'NM Average Cap (TTM)', data: chart.rows.map(r => r.nm_cap_rate),
             borderColor: palette[0], backgroundColor: 'transparent', tension: 0.25, pointRadius: 3, pointBackgroundColor: palette[0], borderWidth: 2.5 },
-          { label: 'Market Cap Rate', data: chart.rows.map(r => r.market_cap_rate),
+          { label: 'Non-NM Average Cap (TTM)', data: chart.rows.map(r => r.market_cap_rate),
             borderColor: palette[1], backgroundColor: 'transparent', tension: 0.25, pointRadius: 3, pointBackgroundColor: palette[1], borderWidth: 2.5 },
         ];
-        return new Chart(canvas, { type: 'line', data: { labels, datasets },
-          options: commonChartOptions('percent_basis_points') });
+        const opts = commonChartOptions('percent_basis_points');
+        opts.scales.y.min = 0.0525; opts.scales.y.max = 0.0925;
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
       }
       case 'avg_deal_size': {
         datasets = [{
@@ -715,21 +719,26 @@
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
       case 'lease_termination_rate': {
+        // Round 31 Tier 2 — Restructured to match master Excel
+        // Term_Rate format: 2 bars of TTM counts (In Firm + Outside
+        // Firm), no termination-rate %, no dual axis. Mirrors server
+        // renderer rewrite.
         const opts = commonChartOptions('integer_count');
-        opts.scales.y1 = {
-          position: 'right',
-          ticks: { color: brandColor('nm_axis', '#6A748C'),
-                   font: { family: 'Calibri, sans-serif', size: 9 },
-                   callback: tickFormatterFor('percent_one_decimal') },
-          grid: { display: false },
-          max: 0.15,
-        };
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const navy = brandColor('nm_navy', '#003DA5');
         datasets = [
-          { type: 'bar', label: 'Active Leases', data: chart.rows.map(r => r.total_leases_active),
-            backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
-          { type: 'line', label: 'Termination Rate', data: chart.rows.map(r => r.terminated_ttm / Math.max(1, r.total_leases_active)),
-            borderColor: palette[0], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1' },
+          { type: 'bar', label: 'Leases In Firm Term (TTM)',
+            data: chart.rows.map(r => {
+              const t = Number(r.total_leases_active) || 0;
+              const o = Number(r.leases_outside_firm_term) || 0;
+              return Math.max(0, t - o);
+            }),
+            backgroundColor: navy, borderColor: navy,
+            borderRadius: 1, yAxisID: 'y', order: 1 },
+          { type: 'bar', label: 'Leases Outside Firm (TTM)',
+            data: chart.rows.map(r => r.leases_outside_firm_term),
+            backgroundColor: sky, borderColor: sky,
+            borderRadius: 1, yAxisID: 'y', order: 2 },
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
