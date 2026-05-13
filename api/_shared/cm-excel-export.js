@@ -348,12 +348,23 @@ const CHART_COLUMNS = {
     { key: 'is_northmarq',     header: 'NM-Listed',           width: 12 },
     { key: 'last_price',       header: 'Asking Price ($)',    format: 'currency_dollars',    width: 18 },
   ],
+  // Round 30 — Sold_Cap_by_Term redefined as 4-line TTM cohort series.
+  // Different column shape for gov vs dia. Data-tab writer iterates the
+  // cols array as-is; missing fields render as blank (cohort columns
+  // not present in the other vertical's view).
   sold_cap_by_term_dot_plot: [
-    { key: 'period_end',       header: 'Sale Date',           format: 'date_short',          width: 13 },
-    { key: 'cap_rate',         header: 'Sold Cap',            format: 'percent_basis_points', width: 13 },
-    { key: 'firm_term_years',  header: 'Firm Term (yrs)',     format: 'number_one_decimal',  width: 16 },
-    { key: 'is_northmarq',     header: 'NM-Brokered',         width: 14 },
-    { key: 'sold_price',       header: 'Sold Price ($)',      format: 'currency_dollars',    width: 18 },
+    { key: 'period_end',       header: 'Month End',         format: 'date_short',          width: 13 },
+    { key: 'subspecialty',     header: 'Subspecialty',      width: 14 },
+    // Dia cohorts
+    { key: 'cap_12plus',       header: '12+ Year Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'cap_8to12',        header: '8-12 Year Cap',     format: 'percent_basis_points', width: 15 },
+    { key: 'cap_6to8',         header: '6-8 Year Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'cap_5orless',      header: '≤5 Year Cap',       format: 'percent_basis_points', width: 14 },
+    // Gov cohorts
+    { key: 'cap_10plus',       header: '10+ Year Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'cap_5to10',        header: '6-10 Year Cap',     format: 'percent_basis_points', width: 15 },
+    { key: 'cap_less5',        header: '< 5 Year Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'cap_outside_firm', header: 'Outside Firm Cap',  format: 'percent_basis_points', width: 17 },
   ],
   available_by_firm_term_summary: [
     { key: 'term_bucket',         header: 'Firm Term Bucket',  width: 18 },

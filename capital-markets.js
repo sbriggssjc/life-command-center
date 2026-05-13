@@ -1217,48 +1217,42 @@
       }
 
       case 'sold_cap_by_term_dot_plot': {
-        // Round 28 — closed-sale counterpart to available_cap_rate_dot_plot.
-        // Mirrors the renderer's regression-trendline implementation.
-        const sky  = brandColor('nm_sky',  '#62B5E5');
-        const navy = brandColor('nm_navy', '#003DA5');
-        const allDots = (chart.rows || [])
-          .filter(r => r.cap_rate != null && r.firm_term_years != null)
-          .map(r => ({ x: Number(r.firm_term_years), y: Number(r.cap_rate), nm: !!r.is_northmarq }));
-        const xs = allDots.map(d => d.x);
-        const xMinData = xs.length ? Math.min(...xs) : 0;
-        const xMaxData = xs.length ? Math.max(...xs) : 20;
-        const pad = Math.max(1, (xMaxData - xMinData) * 0.10);
-        const xMin = Math.max(0, Math.floor(xMinData - pad));
-        const xMax = Math.min(30, Math.ceil(xMaxData + pad));
-        const n = allDots.length;
-        let sx = 0, sy = 0, sxx = 0, sxy = 0;
-        for (const d of allDots) { sx += d.x; sy += d.y; sxx += d.x * d.x; sxy += d.x * d.y; }
-        const denom = (n * sxx - sx * sx);
-        const m = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
-        const b = (sy - m * sx) / Math.max(n, 1);
-        const trendData = [
-          { x: xMin, y: m * xMin + b },
-          { x: xMax, y: m * xMax + b },
-        ];
-        const ds = [
-          { label: 'Closed sales (last 5 yr)',
-            data: allDots,
-            backgroundColor: 'rgba(98,181,229,0.55)', borderColor: sky,
-            pointRadius: 4, pointStyle: 'circle', showLine: false, order: 1 },
-          { label: 'Linear Trendline',
-            data: trendData, type: 'line',
-            borderColor: navy, backgroundColor: 'transparent',
-            borderDash: [6, 4], borderWidth: 2, pointRadius: 0,
-            showLine: true, order: 0 },
+        // Round 30 — User redefined as 4-line TTM cohort time series
+        // (was a scatter in R28). Mirrors server renderer logic.
+        const hasDialysisCohorts = (chart.rows || []).some(r =>
+          r.cap_12plus != null || r.cap_8to12 != null ||
+          r.cap_6to8 != null  || r.cap_5orless != null);
+        const PDF = { long: '#7E6BAD', midL: '#4CB582', mid: '#62B5E5', short: '#003DA5', outside: '#6A748C' };
+        datasets = hasDialysisCohorts ? [
+          { label: '12+ Year',  data: chart.rows.map(r => r.cap_12plus),
+            borderColor: PDF.long, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
+          { label: '8-12 Year', data: chart.rows.map(r => r.cap_8to12),
+            borderColor: PDF.midL, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2 },
+          { label: '6-8 Year',  data: chart.rows.map(r => r.cap_6to8),
+            borderColor: PDF.mid, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2 },
+          { label: '≤5 Year',   data: chart.rows.map(r => r.cap_5orless),
+            borderColor: PDF.short, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2 },
+        ] : [
+          { label: '10+ Year',     data: chart.rows.map(r => r.cap_10plus),
+            borderColor: PDF.long, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
+          { label: '6-10 Year',    data: chart.rows.map(r => r.cap_5to10),
+            borderColor: PDF.midL, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2 },
+          { label: '< 5 Year',     data: chart.rows.map(r => r.cap_less5),
+            borderColor: PDF.short, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 2 },
+          { label: 'Outside Firm', data: chart.rows.map(r => r.cap_outside_firm),
+            borderColor: PDF.outside, backgroundColor: 'transparent',
+            stepped: 'before', pointRadius: 0, borderWidth: 1.5, borderDash: [3,3] },
         ];
         const opts = commonChartOptions('percent_basis_points');
-        opts.scales.x = { type: 'linear', position: 'bottom', min: xMin, max: xMax,
-          title: { display: true, text: 'Firm Lease Term Remaining at Sale (Years)',
-                   color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 10 } },
-          ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 } },
-          grid: { color: 'rgba(0,0,0,0.05)' } };
-        opts.scales.y.min = 0.04; opts.scales.y.max = 0.12;
-        return new Chart(canvas, { type: 'scatter', data: { datasets: ds }, options: opts });
+        opts.scales.y.min = 0.04; opts.scales.y.max = 0.11;
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
       }
 
       // DataTable types — rendered by renderDataTable() instead
