@@ -5162,6 +5162,14 @@ function _udTabOwnership() {
     if (own.recorded_owner_address) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.recorded_owner_address) + (own.recorded_owner_city ? ', ' + esc(own.recorded_owner_city) : '') + '</div>';
     const _sfAccId = own.sf_account_id || own.sf_company_id;
     if (_sfAccId) html += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce \u2192</a>';
+    // EDGAR link on Recorded Owner card \u2014 only when the True Owner card is
+    // hidden (deed directly names the canonical CIK-filer, e.g. "Realty
+    // Income Corp" on the deed). Otherwise the link appears on the True
+    // Owner card below.
+    if (!_hasTrueOwner && own.true_owner_sec_cik) {
+      const _sfShownR = !!_sfAccId;
+      html += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px' + (_sfShownR ? ';margin-left:10px' : '') + '" title="View SEC EDGAR filings (CIK ' + esc(own.true_owner_sec_cik) + ')">SEC filings \u2192</a>';
+    }
     html += '</div>';
 
     // True Owner card
@@ -5173,6 +5181,13 @@ function _udTabOwnership() {
       if (own.true_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.true_owner_state) + '</div>';
       if (own.true_owner_city) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.true_owner_city) + '</div>';
       if (_sfAccId) html += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce \u2192</a>';
+      // EDGAR link on True Owner card \u2014 when the canonical is a public
+      // CIK-filer. Sits next to "View in Salesforce" with a 10px gap
+      // when both are present.
+      if (own.true_owner_sec_cik) {
+        const _sfShownT = !!_sfAccId;
+        html += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px' + (_sfShownT ? ';margin-left:10px' : '') + '" title="View SEC EDGAR filings (CIK ' + esc(own.true_owner_sec_cik) + ')">SEC filings \u2192</a>';
+      }
       html += '</div>';
     }
     html += '</div>';
