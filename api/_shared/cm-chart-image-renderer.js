@@ -2085,20 +2085,15 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'available_cap_rate_dot_plot': {
-      // Round 24 — User: "let's adjust the X-axis to show the data at
-      // center of view. Let's also add a trendline to the data."
-      // x = firm_term_years; y = current asking cap rate.
-      // NM-brokered listings retain a distinct color (snapshot chart;
-      // keeps NM-vs-market split for the available-inventory view).
+      // Round 24 — trendline + axis centering.
+      // Round 30 — User: "Remove the NM-brokered listings from the
+      // data labels table." Single combined dot series (no NM split).
       const allDots = rows
         .filter(r => r.cap_rate != null && r.firm_term_years != null)
         .map(r => ({
           x: Number(r.firm_term_years),
           y: Number(r.cap_rate),
-          nm: !!r.is_northmarq,
         }));
-      const scatterAll = allDots.filter(d => !d.nm);
-      const scatterNM  = allDots.filter(d =>  d.nm);
 
       // Auto-center x-axis around data ±10% padding, capped to [0, 30]
       const xs = allDots.map(d => d.x);
@@ -2125,17 +2120,11 @@ function buildChartConfig(chart, brand) {
         type: 'scatter',
         data: {
           datasets: [
-            { label: 'Market listings',
-              data: scatterAll,
+            { label: 'Active listings',
+              data: allDots,
               backgroundColor: 'rgba(98,181,229,0.55)',
               borderColor: PDF_COLORS.cap_mid,
               pointRadius: 4, pointStyle: 'circle',
-              showLine: false, order: 2 },
-            { label: 'NM-brokered listings',
-              data: scatterNM,
-              backgroundColor: PDF_COLORS.cap_short,
-              borderColor: PDF_COLORS.cap_short,
-              pointRadius: 5, pointStyle: 'rectRot',
               showLine: false, order: 1 },
             { label: 'Linear Trendline',
               data: trendData,
@@ -2418,9 +2407,55 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'sold_cap_by_term_dot_plot': {
-      // Round 28 — NEW: closed-sale counterpart to available_cap_rate_dot_plot.
-      // x = firm_term_years (linear, auto-centered), y = sold cap rate.
-      // Last-5-year window. Linear-regression trendline.
+      // Round 30 — User redefined: "four distinct lines of rolling TTM
+      // monthly averages by lease term bucket." Replaces the Round 28
+      // scatter dot-plot (wrong execution).
+      //   Gov cohorts: 10+ / 6-10 / <5 / Outside Firm
+      //   Dia cohorts: 12+ / 8-12 / 6-8 / ≤5
+      const hasDialysisCohorts = rows.some(r =>
+        r.cap_12plus != null || r.cap_8to12 != null ||
+        r.cap_6to8 != null  || r.cap_5orless != null
+      );
+      const datasets = hasDialysisCohorts ? [
+        { label: '12+ Year',  data: rows.map(r => r.cap_12plus),
+          borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
+        { label: '8-12 Year', data: rows.map(r => r.cap_8to12),
+          borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
+        { label: '6-8 Year',  data: rows.map(r => r.cap_6to8),
+          borderColor: PDF_COLORS.cap_mid, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
+        { label: '≤5 Year',   data: rows.map(r => r.cap_5orless),
+          borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
+      ] : [
+        { label: '10+ Year',     data: rows.map(r => r.cap_10plus),
+          borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
+        { label: '6-10 Year',    data: rows.map(r => r.cap_5to10),
+          borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
+        { label: '< 5 Year',     data: rows.map(r => r.cap_less5),
+          borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 2 },
+        { label: 'Outside Firm', data: rows.map(r => r.cap_outside_firm),
+          borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
+          stepped: 'before', pointRadius: 0, borderWidth: 1.5, borderDash: [3,3] },
+      ];
+      return {
+        type: 'line',
+        data: { labels, datasets },
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisRange:  { min: 0.04, max: 0.11 },
+        }),
+      };
+    }
+
+    case 'sold_cap_by_term_dot_plot_OLD_DEPRECATED_R30': {
+      // Round 30 — superseded: see new case below. User redefined chart
+      // as 4-line TTM cohort time series (not a scatter).
       const allDots = rows
         .filter(r => r.cap_rate != null && r.firm_term_years != null)
         .map(r => ({
