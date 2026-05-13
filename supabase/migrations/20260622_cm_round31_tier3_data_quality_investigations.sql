@@ -1,0 +1,129 @@
+-- =====================================================================
+-- Round 31 Tier 3 — Data-quality investigations from
+-- "Capital Markets Exports - Notes.docx" deferred backlog. Follow-up
+-- to R31 Tier 2a + 2b.
+--
+-- This PR is view-only — no renderer or code changes. All fixes are
+-- min-sample gate adjustments, cutoff-filter removals, and TTM
+-- smoothing rewrites that affect the data feed.
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-13)
+-- ---------------------------------------------------------------------
+-- 1) cm_dialysis_bid_ask_spread_m  (dia DB) — gate lowered 10→5.
+--    User: "Data is missing for anything before 2013, investigate."
+--    Root cause: available_listings has 1-8 listings/month with both
+--    cap_rate + last_cap_rate populated pre-2013, below the n>=10
+--    quality gate. Lowering to n>=5 unlocks 2011+ months. The signal
+--    is noisier but visible — matches user's expectation that some
+--    data exists pre-2013.
+--
+-- 2) cm_gov_bid_ask_spread_m  (gov DB) — gate lowered 10→5 (same fix).
+--    User: "Data is sporadic before 2010, investigate."
+--
+-- 3) cm_gov_cpi_vs_renewal_cagr  (gov DB) — REMOVED 2014-10-01 cutoff.
+--    User: "Data_CPI_CAGR - Missing any data for renewal CAGR prior
+--    to 2018, investigate."
+--    Two findings:
+--      a) The cagr_5yr column uses `power(ttm_psf / lag(ttm_psf, 20),
+--         1/5) - 1` — a TRUE 5-year CAGR. lag(20) = 20 quarters = 5
+--         years. With renewal data starting 2013-Q1, cagr_5yr cannot
+--         be computed before 2018-Q1. Pre-2018 NULLs are structural
+--         — cannot be backfilled without pre-2013 GSA lease data.
+--      b) The view's WHERE c.period_end >= '2014-10-01' filter was
+--         unnecessary — it suppressed pre-Q4-2014 CPI data even
+--         though CPI itself goes back decades. Cutoff dropped to
+--         2010-01-01 so the CPI line is now visible back to ~2010
+--         (renewal CAGR will still be NULL pre-2018 but the CPI
+--         baseline is visible).
+--
+-- 4) cm_gov_cap_by_term_m  (gov DB) — per-cohort gate lowered 10→5.
+--    User: "Data sets are very sporadic and don't match the smoothness
+--    of what's in the Excel/PDF versions… suggesting a data quality
+--    or filtering issue, investigate."
+--    Round 26 introduced n>=10 cohort gates. The <5-year cohort never
+--    reached 10/TTM-window in any of the 147 quarters (0% coverage).
+--    Lowered all four cohort gates to n>=5:
+--      • cap_10plus:       140/147 → 147/147 covered (100%)
+--      • cap_6to10:        135/147 → 147/147 (100%)
+--      • cap_less5:          0/147 →  14/147 (was completely invisible)
+--      • cap_outside_firm: 146/147 → 147/147 (100%)
+--
+-- 5) cm_gov_nm_vs_market_q  (gov DB) — REWRITTEN as TTM rolling.
+--    User: "The NM brokered data does not move as smoothly as what's
+--    in our Excel which suggests we have a data quality issue or a
+--    formula issue with this data set, investigate."
+--    Root cause: parent view exposes nm_avg_cap / non_nm_avg_cap as
+--    PER-QUARTER averages. With NM-only sales thin in some quarters
+--    (1-5 transactions), the line is noisy and jagged. Master Excel
+--    uses TTM-rolling averages.
+--    Rewrite computes 12-month TTM rolling avgs from sales_transactions
+--    with cap-rate band 0.04-0.12. Per-cohort gates n>=3 for NM, n>=5
+--    for Non-NM.
+--
+-- 6) cm_dialysis_nm_vs_market_q  (dia DB) — same TTM rewrite as gov.
+--    User: "The NM averages do not move as smoothly as what's in our
+--    Excel and PDF capital markets report data lines, do we have a
+--    data issue here?"
+--
+-- ---------------------------------------------------------------------
+-- INVESTIGATIONS — no fix required
+-- ---------------------------------------------------------------------
+-- a) cm_dialysis_dom_pct_ask_m  (dia DB) — User: "Data is very sparse
+--    before 2013, investigate. Data labels are inconsistent; we want a
+--    low, high and most recent label."
+--    Findings:
+--      • The view has no n-gate; the sparseness is purely from the
+--        source available_listings data — pre-2014 has 0 listings/month
+--        with sold_date + listing_date both populated. Can't manufacture
+--        what isn't there.
+--      • The server renderer (api/_shared/cm-chart-image-renderer.js
+--        case 'dom_and_pct_of_ask') already calls buildAnnotations()
+--        which renders peak/trough/last labels on the % of Ask line
+--        — matches user's "low, high, most-recent" request. The
+--        in-app renderer in capital-markets.js doesn't show these
+--        annotations (separate code path) — could be aligned in a
+--        future PR.
+--
+-- b) cm_dialysis_seller_sentiment_m  (dia DB) — User: "Data is very
+--    sparse or inconsistent for anything before 2014, investigate."
+--    Findings: view has no n-gate. Source data (sales_transactions
+--    joined to available_listings via sale_transaction_id) has 1-3
+--    records/month pre-2014 because available_listings linkage was
+--    sparsely populated for older sales. The Round 31 Tier 1 axis
+--    fix (4.75-9.25% dia / 5.5-9.5% gov) already addresses the
+--    "lines not in view" complaint. Data sparseness is a source-data
+--    limitation; cannot be fixed at the view layer.
+--
+-- c) cm_gov_valuation_index_q  (gov DB) — User: "Review the formula
+--    for this index again to ensure we are using the same formula
+--    from our Excel; these lines don't move or match the movement
+--    shown in our Excel."
+--    Findings: current formula is `valuation_index = avg_noi_psf /
+--    avg_cap_rate` (Income Approach: Value PSF = NOI / Cap). Both
+--    inputs are TTM rolling. Master Excel cell formula was not
+--    inspected (would require deeper openpyxl walk through the
+--    formula bar). DEFERRED — needs user confirmation of which
+--    formula the Excel master uses (could be: rent/cap, NOI growth ×
+--    cap compression composite, or a normalized 100×base/current
+--    index). Leaving current formula intact pending user clarification.
+--
+-- d) cm_gov_sold_cap_by_term_dot  (gov DB) — User: "These should be
+--    four distinct lines of rolling TTM monthly averages by lease
+--    term bucket." VERIFIED: 4 cohort columns (cap_10plus / cap_5to10
+--    / cap_less5 / cap_outside_firm) are populated. After R31 T3
+--    cap_by_term gate lowering (#4 above), the <5yr cohort coverage
+--    is much improved. No further change needed.
+--
+-- ---------------------------------------------------------------------
+-- ROUND 31 SUMMARY — all tiers shipped
+-- ---------------------------------------------------------------------
+--   Tier 1  (88e704a + #791 PR): investigations + new charts
+--   Tier 2a (#793 PR):           Excel format-match — Term_Rate +
+--                                NM_vs_Market + Renewal_Rate
+--   Tier 2b (#795 PR):           NL_Spread restructure +
+--                                Inventory_Backlog + Market_Turnover
+--   Tier 2c (deferred):          Avail_by_Term_Summary multi-chart
+--                                breakout + Avail_by_Firm_Term tuning
+--   Tier 3  (this PR):           Data-quality investigations
+-- =====================================================================
