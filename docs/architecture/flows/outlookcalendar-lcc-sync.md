@@ -6,6 +6,8 @@
 - Trigger: `Recurrence`
 - Connectors: `shared_office365`, `shared_outlook`, `shared_onedriveforbusiness`
 - Action count: 16
+- Flow ID: `74ba8f8d-6454-4753-8cb8-524605129d6c`
+- **Health (verified 2026-05-14, Task #7):** Status On. Last 8+ runs in 28-day history ALL Succeeded; avg run duration ~1m27s. No failure pattern — flow is healthy. "Stabilize" = optional hardening (idempotency/dead-letter/correlation/partial-source error handling), not a repair.
 
 ## Purpose
 Scheduled sync pipeline between Outlook calendar artifacts and LCC-facing sync state.

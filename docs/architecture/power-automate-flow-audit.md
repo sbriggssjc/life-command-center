@@ -7,51 +7,45 @@ Scope: Power Automate flows that integrate Outlook, Teams, Salesforce, and LCC/d
 ## Purpose
 This file is the authoritative portfolio registry for flow architecture, risk posture, dependencies, and remediation status. Detailed behavior lives in per-flow sheets under `docs/architecture/flows/`.
 
+## Current Environment
+- Power Automate portal URL: `https://make.powerautomate.com/`
+- Tenant / org name: `NorthMarq Capital, LLC` (Microsoft 365 tenant)
+- Default environment ID (production): `Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f`
+- Default environment URL prefix: `https://make.powerautomate.com/environments/Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f/`
+- Active user: `sbriggssjc@gmail.com` (signed in as Scott Briggs in tenant)
+- Non-prod environment for clone-first repair: `TBD — no dedicated non-prod environment yet; current "clone" strategy = save-as a Copy of the flow into the same Default environment with name suffix \`-NONPROD\` and trigger temporarily replaced with manual Button trigger to prevent live executions during repair.`
+- Environment captured: 2026-05-13
+
 ## Current Flow Inventory
 | Flow Name | Export Artifact | Trigger | Primary Purpose | Detail Doc | Status |
 |---|---|---|---|---|---|
-| LCC Flagged Email Intake | `LCCFlaggedEmailIntake_20260511211601.zip` | `When_an_email_is_flagged_(V3)` | Ingest flagged Outlook emails + attachments into LCC intake pipeline | `flows/lcc-flagged-email-intake.md` | Active |
-| HTTP-Switch | `HTTP-Switch_20260511211836.zip` | HTTP Request (`manual`) | Route request by `operation` to Salesforce Account/Contact lookup branches | `flows/http-switch-salesforce-lookup.md` | Active |
+| LCC Flagged Email Intake | `LCCFlaggedEmailIntake_20260511211601.zip` | `When_an_email_is_flagged_(V3)` | Ingest flagged Outlook emails + attachments into LCC intake pipeline. **Hardened 2026-05-13** with Terminate (Succeeded) at end of True branch with permissive Run after so the post-intake Outlook cleanup (Flag/Mark/Move) no longer fails the run on 404 NotFound. Flow ID `44227dbb-3c8b-46b2-9a6a-6c46130a6beb`. | `flows/lcc-flagged-email-intake.md` + `FLOW_CHANGES_LOG.md` Task #4 | Active (hardened) |
+| HTTP-Switch | `HTTP-Switch_20260511211836.zip` | HTTP Request (`manual`) | Route request by `operation` to Salesforce Account/Contact lookup branches. **SOQL injection fixed 2026-05-13** (Task #6) — added `EscapeAccountName` / `EscapeContactEmail` Compose actions that escape `'` → `\'` before the SOQL queries; both `SoqlAccount` and `SoqlContact` now reference the escaped value. Flow ID `c3744e93-5e95-4b6f-a839-d4308389d21f`. | `flows/http-switch-salesforce-lookup.md` + `FLOW_CHANGES_LOG.md` Task #6 | Active (SOQL-hardened) |
 | LCCSFFlow1 | `LCCSFFlow1_20260511211808.zip` | `Recurrence` (every 1 minute) | Poll `sf_sync_queue` and process `find/link` tasks against Salesforce + Supabase | `flows/lcc-sf-flow1-queue-worker.md` | Active |
 | LCC Outlook Intake | `LCCOutlookIntake_20260511212049.zip` | `When_an_email_is_flagged_(V3)` | Post flagged-email intake payload to LCC Outlook intake endpoint | `flows/lcc-outlook-intake.md` | Active |
-| HTTP Init LLC | `http-initLLC_20260511212018.zip` | HTTP Request (`manual`) | End-to-end OM staging workflow: prepare upload -> PUT -> stage -> extract | `flows/http-init-llc.md` | Active |
+| HTTP Init LLC | `http-initLLC_20260511212018.zip` | HTTP Request (`manual`) | End-to-end OM staging workflow: prepare upload -> PUT -> stage -> extract. **Recovered 2026-05-13** with Condition-after-stage-response soft-skip guard; auto-disabled 2026-05-08 → 2026-05-13. Flow ID `ab11601a-b7d7-4efa-8f3a-52873e873270`. | `flows/http-init-llc.md` + `flows/http-init-llc-repair-runbook.md` | Active (recovered) |
 | Manual ForEach Post | `manual-foreachpost_20260511211947.zip` | HTTP Request (`manual`) | Iterate attachments and post Teams card/message per item | `flows/manual-foreachpost-teams.md` | Active |
 | LoopNet Power Automate | `LoopNetPowerAutomate_20260511214000.zip` | `When_a_new_email_arrives_(V3)` | Ingest LoopNet emails to LCC LoopNet ingest endpoint | `flows/loopnet-power-automate.md` | Active |
 | RCM Power Automate | `RCMPowerAutomate_20260511214031.zip` | `When_a_new_email_arrives_(V3)` | Ingest RCM emails to LCC RCM ingest endpoint | `flows/rcm-power-automate.md` | Active |
 | LCC Morning Briefing | `LCCMorningBriefing_20260511215210.zip` | `Recurrence` (weekly weekend) | Pull briefing email payload from LCC and send via Office 365 email | `flows/lcc-morning-briefing.md` | Active |
 | HTTP-ParseJSON | `HTTP-ParseJSON_20260511215138.zip` | HTTP Request (`manual`) | Parse input JSON, call LCC property lookup, and send email output | `flows/http-parsejson-property-email.md` | Active |
 | LCC Daily Briefing | `LCCDailyBriefing_20260511215104.zip` | `Recurrence` (weekday) | Pull daily snapshot from LCC and post to Teams channel | `flows/lcc-daily-briefing.md` | Active |
-| ToDo-LCCSync | `ToDo-LCCSync_20260511215037.zip` | `Recurrence` (hourly) | Aggregate multiple To Do folders and update OneDrive sync artifact | `flows/todo-lcc-sync.md` | Active |
+| ToDo-LCCSync | `ToDo-LCCSync_20260511215037.zip` | `Recurrence` (hourly) | Aggregate multiple To Do folders and update OneDrive sync artifact. **Recovered 2026-05-13** by stripping legacy `?['value']` accessor from Apply_to_each_2's foreach expression (Microsoft To-Do connector contract drift). Flow ID `fee2a0fe-21fa-4e28-b230-f83189d4b20b`. 8 other Apply to each loops have the same latent bug — surgical fix only addresses the one that hit runtime. | `flows/todo-lcc-sync.md` + `FLOW_CHANGES_LOG.md` Task #3 | Active (recovered) |
 | OutlookCalendar-LifeCommandCenterSync | `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip` | `Recurrence` (hourly) | Merge multi-calendar events and sync consolidated payload to Supabase edge endpoint | `flows/outlookcalendar-lcc-sync.md` | Active |
 | LCC-PersonalCalendarSync | `LCC-PersonalCalendarSync_20260512134721.zip` | `Recurrence` (hourly) | Pull personal calendar events and sync to Supabase edge endpoint | `flows/lcc-personal-calendar-sync.md` | Active |
 | SyncSFTaskstoSupabase | `SyncSFTaskstoSupabase_20260512134655.zip` | `Recurrence` (every 6 hours) | Query Salesforce tasks and push to Supabase sync endpoint | `flows/sync-sf-tasks-to-supabase.md` | Active |
 | SyncSFActivitiestoSupabase | `SyncSFActivitiestoSupabase_20260512134632.zip` | `Recurrence` (every 4 hours) | Query Salesforce activities and push normalized payload to Supabase sync endpoint | `flows/sync-sf-activities-to-supabase.md` | Active |
-| CompleteSFTask | `CompleteSFTask_20260512134535.zip` | HTTP Request (`manual`) | Find open Salesforce Tasks and conditionally complete/update by action | `flows/complete-sf-task.md` | Active |
-| GovLeaseLeadSync | `GovLeaseLeadSync_20260512134512.zip` | HTTP Request (`manual`) | Upsert Salesforce Lead records based on incoming agency payload | `flows/govlease-lead-sync.md` | Active |
+| CompleteSFTask | `CompleteSFTask_20260512134535.zip` | HTTP Request (`manual`) | Find open Salesforce Tasks and conditionally complete/update by action. **FIXED 2026-05-13** (Task #6 Part B.1): OData injection closed via `EscapeSubject` Compose + rewired Filter Query; Condition made null-safe and corrected from the always-null `?['records']` key to `?['value']`. 0 runs/28d. Flow ID `06b7b1dc-f917-4970-b075-7dd7fcef56c1`. Residual: Switch-case branch audit for `['records']` key bug (see changes log). | `flows/complete-sf-task.md` + `FLOW_CHANGES_LOG.md` Task #6 Part B.1 | Active (injection + null-handling FIXED) |
+| GovLeaseLeadSync | `GovLeaseLeadSync_20260512134512.zip` | HTTP Request (`manual`) | Upsert Salesforce Lead records based on incoming agency payload. **FIXED 2026-05-13** (Task #6 Part B.2): OData injection closed via `EscapeAgency` Compose + rewired Filter Query `Company eq '@{outputs('EscapeAgency')}'`; Condition made null-safe with coalesce. 0 runs/28d. Flow ID `227bd734-6f65-4b33-9d2c-1ab19e2ff7e9`. | `flows/govlease-lead-sync.md` + `FLOW_CHANGES_LOG.md` Task #6 Part B.2 | Active (injection + null-handling FIXED) |
 | HTTP-Postmessagechat | `HTTP-Postmessagechat_20260512134401.zip` | HTTP Request (`manual`) | Post arbitrary request body as Teams chat/channel message | `flows/http-postmessagechat.md` | Active |
 | HTTP-Postmessagechat2 | `HTTP-Postmessagechat2_20260512134447.zip` | HTTP Request (`manual`) | Format and post GovLease intake ops alert message to Teams | `flows/http-postmessagechat2.md` | Active |
-| Flagged Email to To Do Task | `FlaggedEmailtoToDoTask_20260512135651.zip` | Outlook flag trigger | Create downstream To Do task from flagged work email | `flows/flagged-email-to-todo-task.md` | Failing |
-| Flagged Email to To Do | `FlaggedEmailtoToDo_20260512135754.zip` | Outlook flag trigger | Sync flagged email into To Do tracking path | `flows/flagged-email-to-todo.md` | Failing |
-| Flagged Personal Email to To Do | `FlaggedPersonalEmailtoToDo_20260512135719.zip` | Outlook flag trigger (`V2`) | Create To Do tasks from personal mailbox flagged emails | `flows/flagged-personal-email-to-todo.md` | Active |
-| Button -> Send an HTTP request | `Button-SendanHTTPrequest_20260512135816.zip` | Request (`Button`) | Manual utility HTTP invocation flow | `flows/button-send-http-request.md` | Active |
-| Log Activity to SF from LCC | `LogActivitytoSFfromLCC_20260512135623.zip` | HTTP Request (`manual`) | Write LCC-origin activity payloads into Salesforce | `flows/log-activity-to-sf-from-lcc.md` | Active |
-| Outlook Calendar - LCC Sync | `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip` | `Recurrence` | Sync Outlook calendar context into LCC workflows | `flows/outlookcalendar-lcc-sync.md` | Active |
-| LCC - Personal Calendar Sync | `LCC-PersonalCalendarSync_20260512134721.zip` | `Recurrence` | Sync personal calendar context into LCC planning | `flows/lcc-personal-calendar-sync.md` | Active |
-| Sync SF Tasks to Supabase | `SyncSFTaskstoSupabase_20260512134655.zip` | `Recurrence` | Pull Salesforce tasks into Supabase/LCC data plane | `flows/sync-sf-tasks-to-supabase.md` | Active |
-| Sync SF Activities to Supabase | `SyncSFActivitiestoSupabase_20260512134632.zip` | `Recurrence` | Pull Salesforce activities into Supabase/LCC data plane | `flows/sync-sf-activities-to-supabase.md` | Active |
-| Sync Flagged Emails to Supabase | `SyncFlaggedEmailstoSupabase_20260512135136.zip`, `SyncFlaggedEmailstoSupabase_20260512135251.zip` | `Recurrence` | Sync flagged Outlook emails into Supabase intake/task context | `flows/sync-flagged-emails-to-supabase.md` | Active (Duplicate variants) |
-| Unflag Completed Email Tasks | `UnflagCompletedEmailTasks_20260512135227.zip` | `Recurrence` | Unflag emails whose linked To Do items are completed | `flows/unflag-completed-email-tasks.md` | Active |
-| Recovery - Reflag Completed Emails | `Recovery-ReflagCompletedEmails_20260512135202.zip` | Request (`Button`) | Operator recovery flow to reflag emails when needed | `flows/recovery-reflag-completed-emails.md` | Active |
-| HTTP Init LLC (disabled) | `http-initLLC_20260511212018.zip` | HTTP Request (`manual`) | OM staging workflow currently auto-disabled by platform after persistent failure | `flows/http-init-llc.md` | Disabled |
-| SyncFlaggedEmailstoSupabase (Graph Pull Variant) | `SyncFlaggedEmailstoSupabase_20260512135251.zip` | `Recurrence` (daily) | Pull inbox emails via Office connector (GetEmailsV3) for flagged-email sync pipeline | `flows/sync-flagged-emails-to-supabase.md` | Active |
-| SyncFlaggedEmailstoSupabase (Supabase Push Variant) | `SyncFlaggedEmailstoSupabase_20260512135136.zip` | `Recurrence` (daily) | Push flagged-email sync payload to Supabase edge flagged-email endpoint | `flows/sync-flagged-emails-to-supabase.md` | Active |
-| UnflagCompletedEmailTasks | `UnflagCompletedEmailTasks_20260512135227.zip` | `Recurrence` (every 15 min) | Unflag linked emails when To Do tasks with EmailID markers are completed | `flows/unflag-completed-email-tasks.md` | Active |
-| Recovery-ReflagCompletedEmails | `Recovery-ReflagCompletedEmails_20260512135202.zip` | HTTP Request (`manual`) | Recovery flow to re-flag emails based on To Do EmailID markers | `flows/recovery-reflag-completed-emails.md` | Active |
-| FlaggedEmailtoToDo | `FlaggedEmailtoToDo_20260512135754.zip` | `When_an_email_is_flagged_(V3)` | Create To Do task from flagged work email with due/status/importance fields | `flows/flagged-email-to-todo.md` | Active |
-| FlaggedEmailtoToDoTask | `FlaggedEmailtoToDoTask_20260512135651.zip` | `When_an_email_is_flagged_(V3)` | Create To Do task from flagged work email (lean payload variant) | `flows/flagged-email-to-todo-task.md` | Active |
-| FlaggedPersonalEmailtoToDo | `FlaggedPersonalEmailtoToDo_20260512135719.zip` | `When_an_email_is_flagged_(V2)` | Create To Do task from flagged personal email | `flows/flagged-personal-email-to-todo.md` | Active |
-| LogActivitytoSFfromLCC | `LogActivitytoSFfromLCC_20260512135623.zip` | HTTP Request (`manual`) | Create Salesforce Task activity record from LCC-triggered payload | `flows/log-activity-to-sf-from-lcc.md` | Active |
-| Button-SendanHTTPrequest | `Button-SendanHTTPrequest_20260512135816.zip` | HTTP Request (`manual`) | Send manual HTTP request to Azure cognitive endpoint | `flows/button-send-http-request.md` | Active |
+| Flagged Email to To Do Task | `FlaggedEmailtoToDoTask_20260512135651.zip` | `When_an_email_is_flagged_(V3)` | Create To Do task from flagged work email (lean payload variant). **DEPRECATED 2026-05-13** (Task #5) — turned Off as duplicate of `Flagged Email to To Do`. Flow ID `2116af42-659e-416b-bce6-1d74e8daa480`. | `flows/flagged-email-to-todo-task.md` + `FLOW_CHANGES_LOG.md` Task #5 | Off (deprecated 2026-05-13) |
+| Flagged Email to To Do | `FlaggedEmailtoToDo_20260512135754.zip` | `When_an_email_is_flagged_(V3)` | Create To Do task from flagged work email with due/status/importance fields. **Canonical** business flow (post-2026-05-13 consolidation). Flow ID `9071662c-ec79-49d2-82c1-03d8ba4302a6`. | `flows/flagged-email-to-todo.md` + `FLOW_CHANGES_LOG.md` Task #5 | Active (canonical) |
+| Flagged Personal Email to To Do | `FlaggedPersonalEmailtoToDo_20260512135719.zip` | `When_an_email_is_flagged_(V2)` | Create To Do tasks from personal mailbox flagged emails | `flows/flagged-personal-email-to-todo.md` | Active |
+| Button -> Send an HTTP request | `Button-SendanHTTPrequest_20260512135816.zip` | Request (`Button`) | Send manual HTTP request to Azure cognitive endpoint | `flows/button-send-http-request.md` | Active |
+| Log Activity to SF from LCC | `LogActivitytoSFfromLCC_20260512135623.zip` | HTTP Request (`manual`) | Create Salesforce Task activity record from LCC-triggered payload. **PARTIALLY HARDENED 2026-05-13** (Task #6 Part B.3): trigger Request Body JSON Schema added (6 typed contract fields incl. `schema_version`) — fixed the "Invalid parameters" broken-action state on `Create record` and established the documented contract. Residual governance (documented, deferred): strict `required` enforcement, `X-LCC-Key` request-auth Condition, audit/correlation Compose. 0 runs/28d. Flow ID `6700bdfc-3bbd-4c85-a85c-e9660042aab1`. | `flows/log-activity-to-sf-from-lcc.md` + `FLOW_CHANGES_LOG.md` Task #6 Part B.3 | Active (schema fixed; auth hardening outstanding) |
+| Sync Flagged Emails to Supabase (Graph Pull Variant) | `SyncFlaggedEmailstoSupabase_20260512135251.zip` | `Recurrence` (daily) | Pull inbox emails via Office connector (GetEmailsV3) for flagged-email sync pipeline | `flows/sync-flagged-emails-to-supabase.md` | Active (canonical pull variant) |
+| Sync Flagged Emails to Supabase (Supabase Push Variant) | `SyncFlaggedEmailstoSupabase_20260512135136.zip` | `Recurrence` (daily) | Push flagged-email sync payload to Supabase edge flagged-email endpoint | `flows/sync-flagged-emails-to-supabase.md` | Active (P0: plaintext apikey in export) |
 
 ## Dependency Map
 | Domain | Dependency | Notes |
@@ -108,15 +102,15 @@ Source emails:
 - `C:\Users\scott\Downloads\6 of your flow(s) have failed.eml` (dated 2026-05-06)
 - `C:\Users\scott\Downloads\Alert! We've disabled one of your flows.eml` (dated 2026-05-08)
 
-Confirmed failures in prior-week alert:
-| Flow | Failure Count | Flow ID | Priority |
-|---|---:|---|---|
-| To Do - Life Command Center Sync | 95 | `fee2a0fe-21fa-4e28-b230-f83189d4b20b` | P0 |
-| LCC Flagged Email Intake | 31 | `44227dbb-3c8b-46b2-9a6a-6c46130a6beb` | P0 |
-| Flagged Email to To Do Task | 20 | `2116af42-659e-416b-bce6-1d74e8daa480` | P1 |
-| Flagged Email to To Do | 16 | `9071662c-ec79-49d2-82c1-03d8ba4302a6` | P1 |
-| HTTP -> Switch... | 4 | `c3744e93-5e95-4b6f-a839-d4308389d21f` | P1 |
-| LCC Morning Briefing Email | 2 | `6ec55229-302e-492c-b4b9-a4cab92adc6d` | P2 |
+Confirmed failures in prior-week alert (status updated as flows are repaired):
+| Flow | Failure Count | Flow ID | Priority | Repair Status |
+|---|---:|---|---|---|
+| To Do - Life Command Center Sync | 95 | `fee2a0fe-21fa-4e28-b230-f83189d4b20b` | P0 | **Recovered 2026-05-13** (Task #3) |
+| LCC Flagged Email Intake | 31 | `44227dbb-3c8b-46b2-9a6a-6c46130a6beb` | P0 | **Hardened 2026-05-13** (Task #4) |
+| Flagged Email to To Do Task | 20 | `2116af42-659e-416b-bce6-1d74e8daa480` | P1 | **Deprecated 2026-05-13** (Task #5; duplicate of canonical) |
+| Flagged Email to To Do | 16 | `9071662c-ec79-49d2-82c1-03d8ba4302a6` | P1 | **Healthy 2026-05-13** (Task #5; canonical chosen; failures self-resolved) |
+| HTTP -> Switch... | 4 | `c3744e93-5e95-4b6f-a839-d4308389d21f` | **P0** | **FIXED + validated 2026-05-13** — SOQL injection closed in both SoqlAccount + SoqlContact via escape-Compose actions; live test with apostrophe+`$` payload returned HTTP 200. SF mutation governance still pending. See `FLOW_CHANGES_LOG.md` Task #6. |
+| LCC Morning Briefing Email | 2 | `6ec55229-302e-492c-b4b9-a4cab92adc6d` | P2 | Pending |
 
 Confirmed disabled flow alert:
 - Flow name: `Http -> Init LccApiKey, Call prepare-upload, Parse prepare response, ...`
@@ -148,9 +142,13 @@ Confirmed disabled flow alert:
 5. Harden `HTTP-Switch` and Salesforce mutation flows (`CompleteSFTask`, `GovLeaseLeadSync`, `Log Activity to SF from LCC`) with strict schema/auth controls.
 6. Stabilize calendar sync flows and define business/personal boundary + conflict policy.
 7. Lock observability standards across all recurrence/manual flows and close remaining P1/P2 gaps.
-| P0 | Security | Plaintext Supabase `Authorization`/`apikey` material detected in flagged-email sync push variant (`SyncFlaggedEmailstoSupabase_20260512135136.zip`). | Rotate exposed keys immediately, move to secure references, re-export and verify credential-free definitions. | Platform + Flow Owners | Open |
-| P1 | Portfolio Hygiene | Multiple flagged-email-to-ToDo flows exist (`FlaggedEmailtoToDo`, `FlaggedEmailtoToDoTask`) with overlapping triggers but different payload semantics. | Consolidate to one canonical flow or document strict split-purpose and lifecycle ownership. | Flow Owners | Open |
+
+## Tail Gap Items (folded from prior duplicate appends)
+| Priority | Category | Gap | Required Action | Owner | Status |
+|---|---|---|---|---|---|
 | P1 | Secret Handling | Manual Azure HTTP button flow uses subscription key header and requires controlled secret storage/rotation governance. | Move secret to managed reference and add rotation audit entry. | Platform + Flow Owner | Open |
+
+> Note: All other "tail" gap rows previously appended after the execution-order block (P0 SyncFlaggedEmailstoSupabase apikey leak, P1 flagged-email-to-ToDo variant overlap) are already represented in the main Gap Matrix above and have been folded out of this section to remove duplication.
 
 ## Change-Control Standard
 1. Capture current flow snapshot hash and export artifact.

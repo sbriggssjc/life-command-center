@@ -5,6 +5,8 @@
 - Display name: `LCC - Personal Calendar Sync`
 - Trigger: `Recurrence`
 - Connector: `shared_outlook`
+- Flow ID: `99dd28dc-c627-4188-898c-b60669e0c270`
+- **Health (verified 2026-05-14, Task #7):** Status On. Last 10+ runs in 28-day history ALL Succeeded; avg run duration ~4s. No failure pattern — flow is healthy. "Stabilize" = optional hardening (idempotency/dead-letter/correlation), not a repair.
 
 ## Purpose
 Scheduled synchronization of personal calendar context into LCC planning workflow.
