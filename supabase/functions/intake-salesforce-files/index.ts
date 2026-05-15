@@ -263,13 +263,21 @@ async function handleManifest(req: Request, body: Record<string, unknown> | null
       }));
 
     if (newRows.length) {
+      // Note: we already de-duped against existing rows via the lookup above,
+      // so a plain insert is correct. Avoid `?on_conflict=content_version_id,source_system`
+      // because that unique index is PARTIAL (WHERE content_version_id IS NOT NULL),
+      // which PostgREST's `on_conflict` shortcut can't target (42P10).
       const res = await dbFetch(
         vertical as Vertical, "POST",
-        `sf_files?on_conflict=content_version_id,source_system`,
-        newRows, "resolution=merge-duplicates,return=minimal",
+        `sf_files`,
+        newRows, "return=minimal",
       );
       if (res.ok) discovered += newRows.length;
-      else errors += newRows.length;
+      else {
+        errors += newRows.length;
+        console.error("[intake-salesforce-files] manifest insert failed",
+          { vertical, status: res.status, data: res.data, sample: newRows[0] });
+      }
     }
 
     // to_fetch = every file in this batch whose bytes are not already stored

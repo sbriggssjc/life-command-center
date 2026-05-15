@@ -73,51 +73,161 @@ Tested live — returns proper rows for Comp `a1YVs000000sngTMAQ` with nested `C
 
 ### Recommended fix when resuming:
 
-**Delete `Map Files to Manifest` entirely** and replace with a **Compose** action whose Input is a single `@select()` expression:
+After three attempted approaches this session, the path that actually works in PA is:
+
+**Restructure as a per-link inner loop** with a nested `Get records` call against `ContentVersion` inside. This is the proper two-step pattern. Everything else has been ruled out:
+
+| Attempt | What we tried | Why it failed |
+|---|---|---|
+| 1 | `Map Files to Manifest` (Select action) mapping ContentDocumentLink fields directly | ContentDocumentLink doesn't carry `Title`, `VersionData`, etc. — fields all null. |
+| 2 | `Get records` with Select Query `ContentDocument/LatestPublishedVersionId,...` | PA Salesforce connector rejects multi-level paths in `$select`: *"Found a path with multiple navigation properties or a bad complex property path in a select clause."* |
+| 3 | `Compose` action with `select(..., createObject(...))` | `createObject` is not a defined PA WDL function. *"The template function 'createObject' is not defined or not valid."* |
+
+So the two-step structure is required. Final shape:
 
 ```
-@select(outputs('Get_records')?['body/value'],
-  json(concat('{',
-    '"content_version_id":"', item()?['ContentDocument']?['LatestPublishedVersionId'], '",',
-    '"content_document_id":"', item()?['ContentDocumentId'], '",',
-    '"title":', json(concat('"', replace(item()?['ContentDocument']?['Title'], '"', '\"'), '"')), ',',
-    '"file_name":', json(concat('"', replace(item()?['ContentDocument']?['Title'], '"', '\"'), '.', item()?['ContentDocument']?['FileExtension'], '"')), ',',
-    '"extension":"', item()?['ContentDocument']?['FileExtension'], '",',
-    '"version_number":1,',
-    '"size_bytes":', item()?['ContentDocument']?['ContentSize'], ',',
-    '"sf_download_url":"/services/data/v59.0/sobjects/ContentVersion/', item()?['ContentDocument']?['LatestPublishedVersionId'], '/VersionData"',
-  '}'))
-)
+Manually trigger a flow (Property Id input)
+↓
+Initialize variable (BatchId)
+↓
+Get records (Content Document Link)
+  Filter Query: LinkedEntityId eq '@{triggerBody()?['text']}'
+  (No Select Query — leave default)
+↓
+Apply to each [body('Get_records')?['value']]
+  ↓ inside the loop, per link:
+  Get records (Content Versions)
+    Filter Query: ContentDocumentId eq '@{items('Apply_to_each')?['ContentDocumentId']}' and IsLatest eq true
+    Top Count: 1
+  ↓
+  POST File Manifest (single-item)
+    Body: @addProperty(
+      json(concat('{"payload_version":"sf-files-2026-05-v1","batch_id":"',variables('BatchId'),'"}')),
+      'files',
+      array(createObject_via_addProperty_chain_or_inline_json(
+        first(outputs('Get_Content_Versions')?['body/value'])
+      ))
+    )
+  ↓
+  Get File Bytes (Salesforce Send-HTTP)
+    URI: /services/data/v59.0/sobjects/ContentVersion/@{first(outputs('Get_Content_Versions')?['body/value'])?['Id']}/VersionData
+  ↓
+  Get Upload URL (intake-salesforce-files?action=upload-url)
+  ↓
+  PUT bytes (HTTP)
+  ↓
+  POST File Bytes (intake-salesforce-files?action=bytes)
 ```
 
-Or — cleaner — use the proper Workflow Definition `select()` syntax which lets you pass an object-projection without string concatenation:
+### Current state of Flow 6 on the server (end of third session)
+
+Structural rebuild completed AND first inner HTTP action wired. Test run against Comp `a1YVs000000sngTMAQ`:
+- Get records (ContentDocumentLink, filter LinkedEntityId eq Property Id) → **0.4s, 2 rows** ✓
+- Apply to each over those rows → **2s, "1 of 2" iterations** ✓
+- Inner Get records 1 (ContentVersion, filter ContentDocumentId eq `items('Apply_to_each')?['ContentDocumentId']` AND IsLatest eq true, Top 1) → **0.5s** ✓
+- Inner HTTP POST File Manifest → **0.4s, Succeeded** ✓ (returned 2xx)
+
+The five-action structural chain (discovery + per-link fetch + manifest post) is wired and accepted by the LCC endpoint.
+
+**Resolved 2026-05-15:** The reason no row appeared in `sf_files` despite the manifest POST returning 2xx was a Postgres `42P10` error inside the endpoint — *not* a body issue. The handler used `?on_conflict=content_version_id,source_system` to deduplicate, but the matching unique index `uq_sf_files_version` is **PARTIAL** (`WHERE content_version_id IS NOT NULL`), and PostgREST's `on_conflict` shortcut can't target partial unique indexes. Every insert was rejected with `there is no unique or exclusion constraint matching the ON CONFLICT specification`, and the endpoint silently incremented its `errors` counter while still returning `ok:false`. The `ok` field was being ignored upstream.
+
+**Fix (deployed v6 ACTIVE):** Removed the `on_conflict` shortcut from `handleManifest()` in `supabase/functions/intake-salesforce-files/index.ts`. Application-level dedup via the `existing` lookup is already sufficient — the on_conflict was redundant. The handler now also returns an `insert_errors` array for visibility on any future failures. Verified end-to-end via direct curl: a fake manifest payload posted at v6 inserted `file_id:2` into `sf_files` and the response correctly reported `discovered:1, errors:0`. The bug applied to both `dia` and `gov` DBs (same partial index in both).
+
+The current Flow 6 (5-action chain through POST File Manifest) should now begin populating `sf_files` rows when re-run against Comp `a1YVs000000sngTMAQ`. Re-test before adding more inner actions.
+
+### POST File Manifest inner action — saved config
+
+- URI: `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-salesforce-files?action=manifest`
+- Method: POST
+- Headers: `Content-Type: application/json`, `X-PA-Webhook-Secret: <hex secret>`
+- Body (rendered as a `json(...)` chip):
 
 ```
-@select(outputs('Get_records')?['body/value'],
-  createObject(
-    'content_version_id', item()?['ContentDocument']?['LatestPublishedVersionId'],
-    'content_document_id', item()?['ContentDocumentId'],
-    'title', item()?['ContentDocument']?['Title'],
-    'file_name', concat(item()?['ContentDocument']?['Title'], '.', item()?['ContentDocument']?['FileExtension']),
-    'extension', item()?['ContentDocument']?['FileExtension'],
-    'version_number', 1,
-    'size_bytes', item()?['ContentDocument']?['ContentSize'],
-    'sf_download_url', concat('/services/data/v59.0/sobjects/ContentVersion/', item()?['ContentDocument']?['LatestPublishedVersionId'], '/VersionData')
-  )
-)
+@{json(concat('{
+  "payload_version":"sf-files-2026-05-v1",
+  "batch_id":"',variables('BatchId'),'",
+  "files":[{
+    "content_version_id":"',first(outputs('Get_records_1')?['body/value'])?['Id'],'",
+    "content_document_id":"',items('Apply_to_each')?['ContentDocumentId'],'",
+    "title":"',first(outputs('Get_records_1')?['body/value'])?['Title'],'",
+    "file_name":"',first(outputs('Get_records_1')?['body/value'])?['PathOnClient'],'",
+    "extension":"',first(outputs('Get_records_1')?['body/value'])?['FileExtension'],'",
+    "version_number":',string(first(outputs('Get_records_1')?['body/value'])?['VersionNumber']),',
+    "size_bytes":',string(first(outputs('Get_records_1')?['body/value'])?['ContentSize']),',
+    "sf_download_url":"/services/data/v59.0/sobjects/ContentVersion/',first(outputs('Get_records_1')?['body/value'])?['Id'],'/VersionData"
+  }]
+}'))}
 ```
 
-Then update `POST File Manifest`'s body to reference `outputs('Compose')` instead of `outputs('Map_Files_to_Manifest')?['body']`.
+The expression parses cleanly and PA collapses it to a `json(...)` chip. Add a `"vertical":"dia",` entry inside the file object (or as a top-level payload field) if the next test still produces empty `sf_files`.
 
-### After the Compose fix
+### Remaining inner actions (5 to add inside Apply to each, after Get records 1)
 
-The rest of the chain should work unchanged:
-- POST File Manifest → returns `to_fetch` array with proper download URLs
-- Apply to each over `to_fetch`:
-  - Get File Bytes (Salesforce Send-HTTP GET on the manifest URL)
-  - Get Upload URL
-  - PUT bytes
-  - POST File Bytes
+All five mirror Flow 2's original inner-loop pattern, just adapted for single-file shape:
+
+1. **`POST File Manifest`** (HTTP, body sends ONE file's metadata):
+   - URI: `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-salesforce-files?action=manifest`
+   - Headers: `Content-Type: application/json`, `X-PA-Webhook-Secret: <secret>`
+   - Body:
+     ```
+     @addProperty(
+       json(concat('{"payload_version":"sf-files-2026-05-v1","batch_id":"', variables('BatchId'), '"}')),
+       'files',
+       array(createArray(
+         json(concat(
+           '{"content_version_id":"', first(outputs('Get_records_1')?['body/value'])?['Id'], '",',
+           '"content_document_id":"', items('Apply_to_each')?['ContentDocumentId'], '",',
+           '"title":"', first(outputs('Get_records_1')?['body/value'])?['Title'], '",',
+           '"file_name":"', first(outputs('Get_records_1')?['body/value'])?['PathOnClient'], '",',
+           '"extension":"', first(outputs('Get_records_1')?['body/value'])?['FileExtension'], '",',
+           '"version_number":', string(first(outputs('Get_records_1')?['body/value'])?['VersionNumber']), ',',
+           '"size_bytes":', string(first(outputs('Get_records_1')?['body/value'])?['ContentSize']), ',',
+           '"sf_download_url":"/services/data/v59.0/sobjects/ContentVersion/', first(outputs('Get_records_1')?['body/value'])?['Id'], '/VersionData"}'
+         ))
+       ))
+     )
+     ```
+   - Note: if title or filename contains quotes, this will fail JSON parsing. May need `replace(...,'"','\"')` wrapping. Worth testing first without to see how SF data behaves.
+
+2. **`Get File Bytes`** (Salesforce "Send an HTTP request" — but if that action isn't available, use a generic HTTP GET):
+   - PA Salesforce connector might not expose "Send HTTP request to Salesforce" — Flow 2's pattern used `body('POST_File_Manifest')?['to_fetch'][0]?['sf_download_url']` which is now `first(body('POST_File_Manifest')?['to_fetch'])?['sf_download_url']`.
+   - Actually simpler: use generic HTTP, but it'd need SF OAuth. The SF connector handles this. Look in the action list for any Salesforce action whose URL field accepts raw paths.
+   - Fallback: use the Salesforce connector's "Get records" or "Update record" pattern, which won't return raw file bytes. May need to mint the connector's `Send an HTTP request to Salesforce` action which previously couldn't be found by name — try searching for "Salesforce custom action" or "Salesforce Invoke" or look under "See all" for the Salesforce connector. The Flow 2 file move flow used this action successfully, so it's available somewhere in the connector.
+
+3. **`Get Upload URL`** (HTTP POST to intake-salesforce-files?action=upload-url):
+   - URI: `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-salesforce-files?action=upload-url`
+   - Body:
+     ```
+     @addProperty(
+       json(concat('{"content_version_id":"', first(outputs('Get_records_1')?['body/value'])?['Id'], '","vertical":"dia"}')),
+       'file_name',
+       first(outputs('Get_records_1')?['body/value'])?['PathOnClient']
+     )
+     ```
+
+4. **`PUT bytes`** (HTTP PUT, body is bytes from Get File Bytes):
+   - URI: `@{body('Get_Upload_URL')?['upload_url']}`
+   - Headers: `x-upsert: true`
+   - Body: `@{body('Get_File_Bytes')}`
+
+5. **`POST File Bytes`** (HTTP POST to intake-salesforce-files?action=bytes):
+   - URI: `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-salesforce-files?action=bytes`
+   - Body:
+     ```
+     @{addProperty(
+       json('{"vertical":"dia"}'),
+       'storage_path',
+       body('Get_Upload_URL')?['storage_path']
+     )}
+     ```
+
+### Test expectation
+
+After adding all 5 inner actions, run against Comp `a1YVs000000sngTMAQ`. Expected:
+- Both files end up in the `salesforce-files` storage bucket on Dialysis_DB
+- Two rows in `sf_files` tracking the storage paths
+- Files have `%PDF-1.x` header (binary, not base64 ASCII)
+- The OM is one of the two files
 
 ### Test target
 
