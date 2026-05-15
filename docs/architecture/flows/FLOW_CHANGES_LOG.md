@@ -1,6 +1,6 @@
 # Power Automate Flow Changes Log
 
-Last updated: 2026-05-12
+Last updated: 2026-05-14
 Purpose: authoritative ledger of flow changes, risks, validation evidence, and rollback notes.
 
 ## Required Entry Fields
@@ -792,4 +792,170 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   3. **Correlation ID + schema_version** — add `correlation_id` (`guid()`) and `schema_version` to the POST payload for traceability (mirrors the governance pattern applied to the SF mutation flows in Task #6).
 - Docs updated: both per-flow detail docs now record the Flow ID and the verified-healthy status.
 - No flow definitions were changed this session — assessment only.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Task #7 follow-up: Calendar Sync Flows — hardening applied (retry policy + payload traceability)
+- Per the user's direction, the optional hardening recommended in the 2026-05-14 calendar health assessment was applied to both calendar sync flows. Both were already healthy (0 failures/28d) — this is preventive robustness, not a repair.
+
+- **LCC - Personal Calendar Sync** (`99dd28dc-c627-4188-898c-b60669e0c270`), action `HTTP`:
+  - **Retry policy** — was `Default` (opaque profile-based exponential). Set to explicit `Exponential interval`, count `4`, interval `PT10S`. Deterministic + documented; covers transient Supabase 408/429/5xx.
+  - **Payload traceability** — body was `@json(concat('{"events":',string(variables('AllEvents')),'}'))`. Now `@json(concat('{"events":',string(variables('AllEvents')),',"correlation_id":"',guid(),'","schema_version":"1.0"}'))` — every POST now carries a unique `correlation_id` and a `schema_version` marker.
+  - Verified in Code view; flow saved cleanly.
+
+- **Outlook Calendar - Life Command Center Sync** (`74ba8f8d-6454-4753-8cb8-524605129d6c`), action `Sync Events to Supabase`:
+  - **Retry policy** — was `Default`. Set to explicit `Exponential interval`, count `4`, interval `PT10S`.
+  - **Payload traceability** — body was `@setProperty(json('{}'), 'events', variables('AllEvents'))`. Now `@setProperty(setProperty(setProperty(json('{}'), 'events', variables('AllEvents')), 'correlation_id', guid()), 'schema_version', '1.0')` — adds `correlation_id` + `schema_version` via nested setProperty.
+  - Verified in Code view; flow saved cleanly.
+
+- Endpoint contract note: both flows POST to `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot/sync/calendar-events`. The `/sync/calendar-events` edge function should be confirmed to (a) tolerate the two new top-level keys (`correlation_id`, `schema_version`) — a well-built handler ignores unknown keys, but verify — and (b) upsert events on a stable event-id key for idempotency. The `correlation_id` now in the payload makes per-run sync outcomes traceable in the edge function logs.
+- **Not applied (deliberately):** an explicit dead-letter fault branch. In both flows the Supabase POST failing already surfaces as a Failed run in the 28-day history, so a separate dead-letter action adds marginal observability for real edit risk on the flaky in-browser editor. If a Supabase-outage alerting hook is wanted later, add a `Configure run after → has failed/has timed out` branch off the POST that writes to a dead-letter sink.
+- Rollback: in each HTTP action, revert Retry policy to `Default` and restore the original (simpler) body expression. Save.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Task #12: Complete SF Task — Switch-case branch audit + systemic ['records'] key fix
+- Flow name: `Complete SF Task` (Flow ID `06b7b1dc-f917-4970-b075-7dd7fcef56c1`)
+- Risk tier: `P1` (entire true-path of the flow was non-functional)
+- This closes the residual audit item flagged in the 2026-05-13 Part B.1 addendum.
+- Finding: the `?['records']` key bug was **systemic** — every action in the Condition's true-path Switch referenced the PA Salesforce `Get records` (GetItems) output via `body('Get_records')?['records']`, which is always null (the connector returns rows under `?['value']`). Combined with the already-fixed Condition, the entire success branch of this flow was non-functional: every Update record targeted a null Id and every Response returned a null task_id. Masked only because the flow has 0 runs/28d.
+- Audited the full Switch via the action Code view (had to unfold Monaco's collapsed regions with Ctrl+K Ctrl+J). Seven `?['records']` references found and fixed to `?['value']` across five actions:
+  1. `Switch default → Response_default` → `body.task_id`
+  2. `Case_complete → Update_record_complete` → `parameters.id`
+  3. `Case_complete → Update_record_complete` → `parameters.item/Description` (first reference; the `triggerBody ref_id` reference was already correct)
+  4. `Case_complete → Response_complete` → `body.task_id`
+  5. `Case_reschedule → Update_record_reschedule` → `parameters.id`
+  6. `Case_reschedule → Update_record_reschedule` → `parameters.item/Description`
+  7. `Case_reschedule → Response_reschedule` → `body.task_id`
+- Editor technique notes: (a) the Update record `id`/`Description` fields were fixed via the delete-chip → fx → paste → Add pattern; (b) the Response actions' `body` is a JSON object — the reliable fix was to **select-all the Body field and paste the corrected full JSON** (with the expression as `@{...}`); PA auto-converts the `@{...}` token to a chip on paste, which is far more reliable than the per-chip dance. One Response field briefly got a duplicated chip+literal from a mis-landed paste — caught and cleaned via the full-body re-paste. The action-level Code view is **read-only** (confirmed — typing shows a "read-only editor" tooltip).
+- Verified: every fixed reference confirmed in each action's Code view as `body('Get_records')?['value']`. Flow saved cleanly ("Your flow is ready to go").
+- Affected endpoints/tables/connectors: Salesforce connector (`shared_salesforce`), `Get records` (GetItems) + two `Update record` (PatchItem_V3) against the `Task` object, three `Response` actions. No new coupling.
+- Security impact: none (correctness fix). Functional impact: **MAJOR** — the flow's entire complete/reschedule success path now actually resolves the SF Task Id and can perform its updates; previously every run down the true-path would have failed or no-op'd.
+- Rollback: per-field, revert each `?['value']` back to `?['records']`. (Restores the broken behaviour — do not.)
+- Complete SF Task residual items: **NONE remaining** — Bug A (OData injection), Bug B (Condition null-handling + key), and the Switch-branch key audit are all complete.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Task #13: Log Activity to SF from LCC — governance hardening (schema-required + audit Compose)
+- Flow name: `Log Activity to SF from LCC` (Flow ID `6700bdfc-3bbd-4c85-a85c-e9660042aab1`)
+- Risk tier: `P1` (unauthenticated Salesforce write endpoint)
+- Closes the deferred governance items from the 2026-05-13 Part B.3 entry. Structure is now `manual → AuditLog → Create record → Response`.
+- **Strict required-field enforcement (DONE)** — added a `"required": ["sf_contact_id","activity_type","activity_date"]` array to the trigger's Request Body JSON Schema. PA now rejects (HTTP 400) any inbound payload missing the three fields the `Create record` action cannot function without. Editor note: the new-designer schema textarea commits if you blur it by clicking another element *within the same Parameters panel* (e.g. the field label) rather than switching tabs — tab-switching discards the edit.
+- **Audit / correlation Compose (DONE)** — inserted a `Compose` action named `AuditLog` between the trigger and `Create record`. Inputs expression:
+  `setProperty(setProperty(setProperty(setProperty(json('{}'), 'correlation_id', guid()), 'source', 'lcc-log-activity-to-sf'), 'schema_version', coalesce(triggerBody()?['schema_version'], 'unset')), 'received_payload', triggerBody())`
+  Every run now emits a structured audit record (`correlation_id`, `source`, `schema_version`, full `received_payload`) visible in run history before the SF write — making each Salesforce Task creation traceable.
+- Verified both via Code view; flow saved cleanly ("Your flow is ready to go").
+- **Residual item — X-LCC-Key request-auth check (NOT applied, genuinely blocked):** the recommended defense-in-depth control is a `Condition` immediately after the trigger comparing `triggerOutputs()?['headers']?['X-LCC-Key']` against the LCC API secret, terminating with HTTP 403 on mismatch. This was **not** built because it requires embedding/handling the actual `LCC_API_KEY` secret value, which should not be typed into the flow by an automated agent. Recommended completion path for Scott: either (a) create a Power Platform **environment variable** holding the key and reference it in the Condition, or (b) supply the value and add the Condition directly. Until then, the access gate remains the SAS signature in the trigger URL plus the new schema-required validation. This is the single remaining governance gap on this flow.
+- Affected endpoints/tables/connectors: HTTP Request trigger (schema only), new `Compose`. `Create record` (PostItem_V2 / `Task`) unchanged. HTTP trigger URL unchanged.
+- Security impact: **POSITIVE** — payload-shape validation now enforced; every write is audit-traceable. Net gap remaining: request-auth (documented above).
+- Rollback: delete the `AuditLog` Compose (Create record's runAfter reverts to the trigger), and remove the `required` array from the trigger schema. Save.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Task #14: calendar-events edge function verification (PASS)
+- Verified the Supabase edge function backing both calendar sync flows: `/functions/v1/ai-copilot/sync/calendar-events` is a route inside the `ai-copilot` edge function on the Dialysis_DB project (ref `zqzrriwuavgrquhisnoa`). Read `handleSyncCalendarEvents` source directly via the Supabase MCP.
+- **Idempotency — CONFIRMED.** The handler upserts via `d.from("calendar_events").upsert(batch, { onConflict: "id", ignoreDuplicates: false })`. The conflict key is the event `id` (mapped from `e.Id || e.id`). Re-sending the same event updates the row rather than inserting a duplicate — so the hourly recurrence + overlapping calendar-view windows on both flows are safe. Events with no resolvable Id are mapped to `null` and filtered out (graceful skip).
+- **Tolerance of the new payload keys — CONFIRMED.** The handler destructures only `body.event` and `body.events`; unknown top-level keys (`correlation_id`, `schema_version` added in the Task #7 hardening) are silently ignored — no 400, no error. Both calendar flows' payloads remain valid.
+- **Payload-shape flexibility — CONFIRMED.** `normalizeSFArray` accepts both a bare array and a `{value:[...]}` wrapper, so both flows' body shapes work.
+- Minor enhancement opportunity (not a gap): the handler does not read or echo `correlation_id`, so end-to-end correlation currently lives only in the Power Automate run history, not the edge function logs/response. If full request tracing is wanted later, the handler could capture `body.correlation_id` into its result and any `calendar_events` audit column. Low priority.
+- No changes made — verification only. The Task #7 calendar hardening is confirmed safe against the live endpoint.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Gap #2: Dead-letter / flow-health plane built + first flow wired
+Gap analysis backlog item #2. Three deliverables — landing zone, ingestion contract, first flow wired.
+
+**Landing zone (LCC Opps `xengecqvemvfknjvbvrq`) — APPLIED.**
+- Migration `supabase/migrations/20260514120000_lcc_flow_run_failures_dead_letter_plane.sql` applied via Supabase MCP. Purely additive (new table/functions/view, touches nothing existing).
+- `flow_run_failures` — append-only forensic dead-letter log. RLS on, no policies (reachable only via the SECURITY DEFINER RPC + service_role).
+- `lcc_record_flow_failure(...)` RPC — single ingestion entrypoint; inserts a `flow_run_failures` row AND opens a de-duplicated `lcc_health_alerts` row (`alert_kind='flow_failure'`, one open alert per flow per 24h) so flow failures surface in the SAME unified pane the daily briefing already reads. `execute` granted to `anon` (the publishable key can call it without table access).
+- `v_flow_run_failures_open` triage view; `lcc_resolve_flow_failure(id, note)` resolution helper.
+- Smoke-tested directly: insert + alert-threading + cleanup all confirmed.
+
+**Ingestion contract — no edge function, PostgREST RPC directly.**
+- Endpoint: `POST https://xengecqvemvfknjvbvrq.supabase.co/rest/v1/rpc/lcc_record_flow_failure`, headers `apikey` + `Authorization: Bearer <LCC Opps anon key>` + `Content-Type: application/json`, body keys = the RPC's `p_*` params. Fewer moving parts on the dead-letter path is deliberate.
+- Full reusable pattern documented in `docs/architecture/flows/dead-letter-fault-branch-runbook.md` (Scope + run-after + Terminate, with the exact PA expressions).
+- Note: the anon/publishable key is currently inline in the flow's HTTP headers. It is the low-sensitivity client-facing key, but per the standing P0 it should move to a Power Platform environment variable.
+
+**First flow wired — `Log Activity to SF from LCC` (`6700bdfc-3bbd-4c85-a85c-e9660042aab1`).**
+- Added `PostDeadLetter` HTTP action: POSTs the contract above; body carries `p_flow_name`, `p_flow_run_id` (`workflow().run.name`), `p_correlation_id` (`outputs('AuditLog')?['correlation_id']`), `p_failed_action`, `p_error_kind`, `p_error_detail` (`substring(string(actions('Create_record')),0,900)`), `p_payload` (`triggerBody()`).
+- Run-after configured: fires on `Response` **has failed / is skipped / has timed out** (Is successful unchecked) — so it catches the `Create record` failure path (Create record fails → Response skipped → PostDeadLetter runs). Retry policy: Fixed interval, count 2, `PT5S`.
+- Added `Terminate` (status Failed) after `PostDeadLetter` so a successful dead-letter POST does not flip the run green and hide the original failure.
+- Final structure: `manual → AuditLog → Create record → Response → PostDeadLetter → Terminate(Failed)`. Saved cleanly.
+- **Validation — PASS.** Posted the exact PostDeadLetter contract (URL + anon-key headers + representative body) twice via curl: both returned HTTP 200 with a `failure_id`; confirmed **2 `flow_run_failures` rows** and **1 de-duplicated `lcc_health_alerts` row** (second POST within 24h correctly did not open a second alert); test rows cleaned up (0 remaining). The PA run-after mechanics are standard platform behaviour; the new ingestion contract is the part proven here.
+- Observability compliance matrix: `Log Activity to SF from LCC` "Dead-letter" cell moves ☐ → ✅.
+- Rollout: per the runbook, wire the same pattern into Wave-2 flows next (the two flagged-email intake paths, `LCCSFFlow1`, the three Salesforce sync flows, the other SF mutation flows), then Wave 4.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Gap #2 Wave 2: dead-letter fault branch rolled into 5 high-traffic / SF flows
+Per the dead-letter runbook rollout plan, the standard fault branch (`PostDeadLetter` HTTP → `Terminate(Failed)`) was wired into the Wave-2 set. All five built live in the PA portal, each saved cleanly ("Your flow is ready to go").
+
+**Flows wired this wave:**
+1. `LCC Flagged Email Intake` (`44227dbb-3c8b-46b2-9a6a-6c46130a6beb`)
+2. `LCC Outlook Intake to Teams` (`5716339f-c2aa-4851-a3bf-ec5347f59986`)
+3. `LCC SF Flow 1 — Link Contacts & Companies` (`ac97f1da-f84f-4be4-b5bb-15bc695e17ac`) — the `LCCSFFlow1` queue worker
+4. `Sync SF Tasks to Supabase` (`2415ad2f-9a56-4da2-90f4-811fb1d5bad1`)
+5. `Sync SF Activities to Supabase` (`2b145cca-031e-43ba-bf42-db976cf380ed`)
+
+**Standard pattern applied to each** (identical to the `Log Activity to SF from LCC` starter):
+- New `PostDeadLetter` HTTP action appended after the flow's terminal action. `POST https://xengecqvemvfknjvbvrq.supabase.co/rest/v1/rpc/lcc_record_flow_failure`; headers `apikey` + `Authorization: Bearer <LCC Opps anon key>` + `Content-Type: application/json`.
+- Body carries `p_flow_name` (hard-coded display name), `p_flow_run_id` (`@{workflow()?['run']?['name']}`), `p_failed_action` (`"flow body"`), `p_error_kind` (`"has_failed"`), `p_error_detail` (`@{concat('Run ', workflow()?['run']?['name'], ' failed; open run history for the failing action.')}`), and `p_payload`.
+- Run-after on the terminal action set to **has failed / is skipped / has timed out** (Is successful unchecked).
+- Retry policy on `PostDeadLetter`: Fixed interval, count `2`, `PT5S`.
+- `Terminate` (status Failed) appended after `PostDeadLetter` so a successful dead-letter POST does not flip the run green and hide the original failure.
+
+**Per-flow terminal action + p_payload source:**
+- `LCC Flagged Email Intake` / `LCC Outlook Intake to Teams` — terminal action is the existing `HTTP` post; `p_payload` is the trigger/email body (email-triggered flows).
+- `LCC SF Flow 1` — terminal action is `Apply to each`; `p_payload` = `@{string(body('ListPending'))}` (the queue rows being processed).
+- `Sync SF Tasks to Supabase` — terminal action is `HTTP`; `p_payload` = `@{string(body('Execute_a_SOQL_query'))}`.
+- `Sync SF Activities to Supabase` — terminal action is `HTTP`; `p_payload` = `@{string(body('Select'))}` (the normalized rows being pushed).
+
+**Editor nuance discovered (recorded for the runbook):** in the new designer, *typing* a JSON body that contains a bare unquoted `@{...}` token (e.g. `"p_payload": @{body('X')}`) leaves it as literal text and trips the "Enter a valid JSON" validator — the on-paste token→chip conversion that makes the bare form work does not fire on typed input. Fix used for the scheduled flows: keep the body valid JSON as-typed by quoting the payload expression — `"p_payload": "@{string(body('X'))}"`. `string()` makes it an explicit JSON-string scalar; PA still interpolates `@{...}` inside quoted strings at runtime, so the RPC receives the queue/result body as a jsonb string. Slightly less queryable than a nested object but fully diagnosable, and guaranteed to pass validation. The two email-triggered flows kept the chip form (pasted, not typed).
+
+- Validation: ingestion contract itself was already proven end-to-end against the live RPC in the Gap #2 starter entry (2 forensic rows + 1 de-duplicated alert + cleanup). The per-flow run-after / Terminate mechanics are standard platform behaviour. No forced test failures run on the live flows this wave.
+- Observability compliance matrix: "Dead-letter" cell moves ☐ → ✅ for all five flows above.
+- Rollback (per flow): delete the `Terminate` and `PostDeadLetter` actions; the terminal action's run-after reverts to default. Save.
+- Remaining rollout: Wave 4 long-tail (briefing/Teams-post, email-to-ToDo, recovery/unflag) — ~21 flows still ☐ on the Dead-letter column. Other SF mutation flows (`Complete SF Task`, `GovLease Lead Sync`, `HTTP-Switch`) also still pending.
+- Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-05-14 — Gap #2 Wave 4 COMPLETE: dead-letter fault branch rolled into the entire long-tail
+
+Completion of the Gap #2 dead-letter rollout — the standard `PostDeadLetter` HTTP → `Terminate(Failed)` fault branch is now wired into every remaining long-tail flow. Same pattern as Wave 2 throughout: an HTTP `POST` to the `lcc_record_flow_failure` PostgREST RPC, three headers (`apikey` / `Authorization: Bearer <LCC Opps anon JWT>` / `Content-Type: application/json`), run-after = has-failed / is-skipped / has-timed-out attached to the flow's terminal action, Fixed-interval 2×PT5S retry policy on `PostDeadLetter`, then `Terminate(Failed)` to preserve the honest red run status. The `is-skipped` leg is what makes this catch upstream failures in the long multi-action flows — when an action mid-flow fails, the terminal action is skipped, and the skip cascade fires `PostDeadLetter`.
+
+Body conventions by trigger type:
+- **HTTP / email / manual-triggered flows** → `p_payload = "@{string(triggerBody())}"`.
+- **Scheduled (Recurrence) flows** → `p_payload = "@{string(workflow()?['run'])}"` (no `triggerBody()` exists; the run object is always resolvable and the run id alone opens the exact failed run in the 28-day history). The two briefing flows use `"@{string(outputs('HTTP'))}"` instead — their upstream `HTTP` data-fetch is the most diagnosable context for a Post/Send failure.
+
+**SF mutation flows — DONE (3):**
+1. `HTTP-Switch` (`c3744e93-5e95-4b6f-a839-d4308389d21f`) — terminal action `Switch`. Saved cleanly.
+2. `Complete SF Task` (`06b7b1dc-f917-4970-b075-7dd7fcef56c1`) — terminal action `Condition`. Saved cleanly.
+3. `GovLease Lead Sync` (`227bd734-6f65-4b33-9d2c-1ab19e2ff7e9`) — terminal action `Response`. Saved cleanly.
+
+**Email-triggered long-tail — DONE (4):**
+4. `Flagged Email to To Do` (`9071662c-ec79-49d2-82c1-03d8ba4302a6`) — terminal action `Add a to-do (V3)`. Saved cleanly.
+5. `LoopNet_Power_Automate` (`2b1df646-06cf-47d9-b6fd-d7c7169593b9`) — terminal action `Mark as read or unread (V3)`. Saved cleanly.
+6. `RCM_Power_Automate` — terminal action wired; saved cleanly.
+7. `Flagged Personal Email to To Do` — terminal action wired; saved cleanly.
+
+**Teams-post flows — DONE (3):**
+8. `manual -> For each,Post card in a chat or channel` (Manual ForEach Post, `58f6471c-edc5-432c-ab48-91e75bc1a98f`) — terminal action `For each`. Saved cleanly.
+9. `Http -> Post message in a chat or channel` (`7facad4b-1c16-4b82-a49b-44293b6b86a0`) — terminal action `Post message in a chat or channel`. Saved cleanly.
+10. `Http -> Post message in a chat or channel` (`d0f56ef1-19c8-4b91-a852-b3c88836e712`) — terminal action `Post message in a chat or channel`. Saved cleanly.
+
+**Briefing flows — DONE (2):**
+11. `LCC Daily Briefing to Teams` (`ae558dcc-07f7-4a84-a6f6-389816f3abdb`) — terminal action `Post card in a chat or channel`. `p_payload` references `outputs('HTTP')`. Saved cleanly. (Note: the `Post card` action carries a pre-existing "Invalid parameters" designer warning unrelated to this change; the fault branch was added without touching it and the flow saved.)
+12. `LCC Morning Briefing Email` (`6ec55229-302e-492c-b4b9-a4cab92adc6d`) — terminal action `Send an email (V2)`. `p_payload` references `outputs('HTTP')`. Saved cleanly.
+
+**HTTP lookup/orchestration flows — DONE (3):**
+13. `HTTP Init LLC` (`Http -> Init LccApiKey,Call prepare-upload,...`, `ab11601a-b7d7-4efa-8f3a-52873e873270`) — terminal action `Respond` (long 13-action OM-staging chain; the skip cascade carries any mid-chain failure to the dead letter). Saved cleanly.
+14. `Http -> Parse JSON,HTTP,Send an email (V2)` (HTTP-ParseJSON, `3495d4d8-a009-43b0-aa30-26bdda2899d7`) — terminal action `Send an email (V2)`. Saved cleanly.
+15. `Button -> Send an HTTP request` (`9e82987a-df53-49b6-b15c-873e975691ac`) — terminal action `HTTP`. Saved cleanly.
+
+**Sync/recovery flows — DONE (5):**
+16. `To Do - Life Command Center Sync` (`fee2a0fe-21fa-4e28-b230-f83189d4b20b`) — terminal action `Update file` (long fan-out chain of 9× `List to-do's` + `Apply to each` pairs; skip cascade carries upstream failures). Scheduled flow. Saved cleanly.
+17. `Sync Flagged Emails to Supabase` (Supabase Push variant, `47568a01-f13a-4490-a848-473832076bcb`) — terminal action `HTTP`. Scheduled flow. Saved cleanly.
+18. `Sync Flagged Emails to Supabase` (Graph Pull variant, `b53a73db-6ddf-44cf-8dcf-df44223a1ecf`) — terminal action `Get emails (V3)`. Scheduled flow. Saved cleanly.
+19. `Recovery - Reflag Completed Emails` (`05529300-3b8b-469a-8eed-0a6717632ca0`) — terminal action `Apply to each`. Manual-triggered. Saved cleanly.
+20. `Unflag Completed Email Tasks` (`3dccf37f-232c-4bdc-90a7-37b5b256e538`) — terminal action `Apply to each`. Scheduled flow. Saved cleanly.
+
+**Total: 20 flows wired in Wave 4**, on top of the 6 from the starter + Wave 2 — **26 flows on the dead-letter plane**. The only deliberate exception is the two calendar sync flows (`LCC - Personal Calendar Sync`, `Outlook Calendar - LCC Sync`), which were hardened separately in the 2026-05-13 campaign and carry their own fault handling into the `calendar-events` edge function; folding them into the generic `PostDeadLetter` pattern is deferred (see gap-analysis note).
+
+- Validation: the `lcc_record_flow_failure` ingestion contract was proven end-to-end against the live RPC in the Gap #2 starter entry (2 forensic rows + 1 de-duplicated alert + cleanup). The per-flow run-after / Terminate mechanics are standard Power Automate platform behaviour, identical to Wave 2. No forced test failures were run against live flows this wave — each flow was confirmed to save with PA's "Your flow is ready to go" green state.
+- Rollback per flow: delete the `PostDeadLetter` HTTP action + the trailing `Terminate`, and reset the terminal action's run-after to "is successful" only. No other action in any flow was modified.
+- Gap #2 status: **closed** — the dead-letter / flow-health plane now covers the full active portfolio. Remaining observability work (correlation IDs, schema versioning, retry policies on the *primary* actions) is the separate observability-standard Waves 3-4 backlog, not Gap #2.
 - Owner: LCC architecture/audit track (Scott Briggs).

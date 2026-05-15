@@ -8,6 +8,7 @@
 - Action count: 16
 - Flow ID: `74ba8f8d-6454-4753-8cb8-524605129d6c`
 - **Health (verified 2026-05-14, Task #7):** Status On. Last 8+ runs in 28-day history ALL Succeeded; avg run duration ~1m27s. No failure pattern — flow is healthy. "Stabilize" = optional hardening (idempotency/dead-letter/correlation/partial-source error handling), not a repair.
+- **Hardened 2026-05-14 (Task #7 follow-up):** `Sync Events to Supabase` HTTP POST retry policy set to explicit Exponential (count 4, interval PT10S); body enriched with `correlation_id` (guid()) + `schema_version` via nested setProperty.
 
 ## Purpose
 Scheduled sync pipeline between Outlook calendar artifacts and LCC-facing sync state.
