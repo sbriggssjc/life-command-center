@@ -1016,6 +1016,18 @@ function detectDomainMismatch(domain, metadata, entityFields) {
 
 // Expose last classifier diagnostic for pipeline summary (debugging)
 let _lastClassifierDiag = null;
+
+// Round 76fg (2026-05-15): capture the actual PostgREST error response when
+// upsertDomainProperty's POST/PATCH fails. Without this, every gov/dia
+// property_upsert_failed surfaces to the sidebar UI as just the reason string
+// — Vercel function logs hold the body but the user has no visibility, and
+// repeat captures of the same property keep failing for the same opaque
+// reason. Surfacing the error response in entity.metadata._pipeline_last_
+// error_detail (and the sidebar status line) makes the fix path
+// self-service. Populated inside upsertDomainProperty; read once by
+// propagateToDomainDbDirect into the propagation result, then reset on the
+// next call.
+let _lastDomainPropertyError = null;
 function classifyDomainWithDiag(metadata, entityFields) {
   const result = classifyDomain(metadata, entityFields);
   // Build diagnostic snapshot
@@ -2066,7 +2078,24 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   const propertyId = await upsertDomainProperty(domain, entity, metadata);
   if (!propertyId) {
     console.error(`[Sidebar pipeline] ${domain} property upsert failed for:`, entity.address);
-    return { propagated: false, reason: 'property_upsert_failed', ...results };
+    // Round 76fg: surface the captured PostgREST error so the sidebar
+    // status line and entity metadata show the actual reason (column /
+    // constraint / type) instead of the bare 'property_upsert_failed'
+    // sentinel that was indistinguishable across all failure modes.
+    const err = _lastDomainPropertyError;
+    const errSummary = err
+      ? [err.message, err.details, err.hint]
+          .filter(Boolean)
+          .join(' — ')
+          .substring(0, 400) || null
+      : null;
+    return {
+      propagated: false,
+      reason: 'property_upsert_failed',
+      error: errSummary,
+      error_detail: err,
+      ...results,
+    };
   }
 
   // Step 5a.5 (dialysis only): if a CMS clinic exists at this normalized
@@ -2585,6 +2614,11 @@ async function linkDialysisMedicareIdInline(propertyId, entity) {
 }
 
 async function upsertDomainProperty(domain, entity, metadata) {
+  // Round 76fg: reset captured error each call. Set on the true-failure
+  // path (POST 4xx + retry-lookup miss) so propagateToDomainDbDirect can
+  // surface it into the entity metadata.
+  _lastDomainPropertyError = null;
+
   // Strip CoStar/LoopNet listing-status prefixes ("For Sale | ",
   // "For Lease | ", "Reduced | ", …) off the incoming address before any
   // lookup or write. Without this guard, the prefixed form becomes the
@@ -2894,6 +2928,54 @@ async function upsertDomainProperty(domain, entity, metadata) {
     delete propertyData.anchor_rent_source;
     delete propertyData.lease_bump_pct;
     delete propertyData.lease_bump_interval_mo;
+
+    // Round 76fg (2026-05-15): defensive whitelist gate. The explicit-
+    // delete pattern above is fragile — every new field added to the
+    // shared propertyData object upstream has to be remembered here, and
+    // a single miss yields a PostgREST "column not found" that surfaces
+    // as the opaque 'property_upsert_failed' the user sees in the
+    // sidebar (this is the third round in the 76eq → 76eq → 76fg arc
+    // chasing this same class of bug, most recently for the RCA capture
+    // at 3401 Northern Cross Blvd / NWS Fort Worth / GSA-NOAA tenant).
+    // Whitelist what gov.properties actually accepts so any unknown key
+    // can never reach the wire.
+    const GOV_PROPERTY_COLUMNS = new Set([
+      'address', 'city', 'state', 'zip_code', 'county',
+      'latitude', 'longitude',
+      'land_acres', 'year_built', 'year_renovated', 'rba', 'sf_leased',
+      'gov_occupancy_pct', 'building_type', 'is_build_to_suit',
+      'agency', 'agency_full_name', 'agency_canonical', 'agency_full',
+      'government_type', 'lease_structure',
+      'gross_rent', 'gross_rent_psf', 'noi', 'noi_psf',
+      'expenses', 'noi_source', 'noi_as_of_date',
+      'expense_ratio', 'estimated_expenses', 'estimated_value',
+      'lease_commencement', 'lease_expiration', 'termination_date',
+      'firm_term_years', 'firm_term_remaining',
+      'total_term_years', 'term_remaining',
+      'rent_escalations', 'renewal_options',
+      'recorded_owner_id', 'true_owner_id', 'developer',
+      'linked_gsa_lease_id', 'linked_frpp_id',
+      'match_confidence', 'match_method',
+      'investment_score', 'deal_grade',
+      'status', 'data_source', 'notes',
+      'lease_number', 'location_code',
+      'normalized_address',
+      'assessed_value', 'assessed_owner',
+      'tax_delinquent', 'tax_delinquent_amount',
+      'latest_deed_date', 'latest_deed_grantee',
+      'latest_sale_price', 'latest_sale_grantor',
+      'public_record_count',
+      'comp_name', 'original_developer_contact_id',
+      'base_year', 'base_year_taxes', 'base_year_opex',
+      'current_annual_opex', 'current_re_taxes',
+      'agency_id',
+    ]);
+    for (const k of Object.keys(propertyData)) {
+      if (!GOV_PROPERTY_COLUMNS.has(k)) {
+        console.warn(`[upsertDomainProperty] dropping unknown gov.properties column "${k}" from payload (defensive whitelist)`);
+        delete propertyData[k];
+      }
+    }
   }
 
   if (lookup.ok && lookup.data?.length) {
@@ -2998,6 +3080,23 @@ async function upsertDomainProperty(domain, entity, metadata) {
   console.error(`  Address: "${address}" (normalized: "${normAddr}"), city=${entity.city}, state=${entity.state}`);
   console.error(`  propertyData keys (${Object.keys(propertyData).length}): ${Object.keys(propertyData).sort().join(',')}`);
   console.error(`  Retry-lookup also missed; this is not a write race -- likely a real validation failure.`);
+  // Round 76fg: stash the PostgREST response so the caller can surface it
+  // into entity.metadata._pipeline_last_error_detail. The message,
+  // details, and hint fields come straight from PostgREST's JSON error
+  // body (PGRST-coded), which is what the user actually needs to fix the
+  // upstream payload — "column 'foo' does not exist", "violates check
+  // constraint 'bar'", etc.
+  const errBody = result?.data && typeof result.data === 'object' ? result.data : null;
+  _lastDomainPropertyError = {
+    status:        result?.status || null,
+    message:       errBody?.message || (typeof result?.data === 'string' ? result.data.substring(0, 240) : null),
+    details:       errBody?.details || null,
+    hint:          errBody?.hint || null,
+    code:          errBody?.code || null,
+    domain,
+    address,
+    propertyDataKeys: Object.keys(propertyData).sort(),
+  };
   return null;
 }
 
