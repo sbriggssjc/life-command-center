@@ -104,20 +104,27 @@ The canonical staging shape is government's `sf_comps_staging` pattern: an ident
 
 | Database | Status |
 |---|---|
-| `Dialysis_DB` | **Built** (Phase 1): `sf_sync_log`, `sf_property_staging`, `sf_comp_staging`, `sf_listing_staging`, `sf_deal_staging` |
-| `government` | Partially present: `sf_comps_staging`, `sf_contacts_import`, `sf_activities`, `sf_sync_log`. Needs the same `sf_property_staging` / `sf_listing_staging` / `sf_deal_staging` shape added for parity. |
-| `LCC Opps` | Needs the cross-vertical staging tables (`sf_company_staging`, `sf_contact_staging`, `sf_sync_log`). |
+| `Dialysis_DB` | **Built & applied**: `sf_sync_log`, `sf_property_staging`, `sf_comp_staging`, `sf_listing_staging`, `sf_deal_staging` |
+| `government` | **Built & applied**: `sf_property_staging`, `sf_comp_staging`, `sf_listing_staging`, `sf_deal_staging` (it already had `sf_sync_log`; the legacy `sf_comps_staging` Excel-import table is left untouched). |
+| `LCC Opps` | **Built & applied**: `sf_sync_log` — the central pipeline ledger (the edge functions write all object_intake / crawl_run / error rows here). Cross-vertical `sf_company_staging` / `sf_contact_staging` are a follow-on. |
 
-All three converge on one shape. The remaining migrations mirror the Phase 1 `create_sf_staging_tables.sql` already applied to `Dialysis_DB`.
+All staging tables converge on one canonical shape (the `create_sf_staging_tables.sql` migration).
 
 ### 5.2 File tables and storage
 
-- A private `salesforce-files` Storage bucket per database (modeled on government's existing `intake-attachments` bucket).
-- An `sf_files` metadata table: `content_document_id`, `content_version_id`, `linked_entity_type`, `linked_entity_id`, `title`, `file_name`, `extension`, `version_number`, `sha256`, `size_bytes`, `sf_download_url`, `storage_path`, `ingestion_status`, `extraction_status`. Modeled on government's `intake_attachments`.
+**Built & applied** on both `Dialysis_DB` and `government`:
+- A private `salesforce-files` Storage bucket.
+- An `sf_files` metadata table: `content_document_id`, `content_version_id`, `linked_entity_type`, `linked_entity_sf_id`, `title`, `file_name`, `extension`, `version_number`, `sha256`, `size_bytes`, `sf_download_url`, `storage_path`, `linked_property_id`, `ingestion_status`, `extraction_status`. Dedup is a unique index on `(content_version_id, source_system)`.
 
-### 5.3 Provenance tables (already present, to be wired in)
+### 5.3 Provenance — the existing `lcc_merge_field()` system on LCC Opps
 
-Both `Dialysis_DB` and `government` already have `field_precedence_policy` (per-field rules: source-authoritative / manual-override / overlay / derived-only). `government` has `field_value_provenance` (authority_source, authority_rank, manual_override, last_confirmed_at); `Dialysis_DB` has `lease_field_provenance` and `field_precedence_policy` plus `record_field_overrides` and `manual_change_events`. The promotion worker (Section 7) uses these — nothing new needs to be invented, only connected.
+The provenance gate is **not** something this project builds — `LCC Opps` already runs a central, cross-database one, and the `sf-promotion-worker` simply calls it:
+
+- **`lcc_merge_field(workspace_id, target_database, target_table, record_pk, field_name, value, source, source_run_id, confidence, recorded_by)`** — a decision-and-audit function. It looks up the current authoritative provenance and the source's priority, decides `write` / `skip` / `conflict`, logs the decision (with supersede tracking) to `field_provenance`, and returns the decision plus an `enforce_mode`. It does **not** write the domain table — the caller does that when the decision is `write` and enforcement is on.
+- **`field_source_priority`** (1,382 rows) — per-`(target_table, field_name, source)` registry: `priority` (lower = higher trust), `min_confidence`, and `enforce_mode` (`record_only` / `warn` / `strict`) for gradual rollout.
+- **`field_provenance`** (157k+ rows) — the append-only ledger of every field decision, keyed by `target_database` + table + record + field.
+
+So "don't overwrite higher-quality or newer data" is already enforced by a battle-tested function. The Salesforce work only needs to (a) call it for every promoted field with `source='salesforce'`, and (b) seed `field_source_priority` with Salesforce's per-field priorities (Section 6.3).
 
 ---
 
@@ -134,35 +141,34 @@ Because the two stages are separate, a bad or stale Salesforce pull can never da
 
 ### 6.2 The promotion gate (per field, every time)
 
-For each candidate field on each staged record, the worker:
+The `sf-promotion-worker` does not implement its own gate — for every candidate field on each linked staging row it **calls `lcc_merge_field()`** with `source='salesforce'`. That function:
 
-1. **Looks up the rule** in `field_precedence_policy` for that `(table, field)`. Mode is one of:
-   - `manual-override` — a human-verified field. Salesforce **never** auto-overwrites it. A conflicting Salesforce value goes to the review queue.
-   - `source-authoritative` — promote only if the incoming source outranks the current source, or the field is empty.
-   - `overlay` — promote if newer, regardless of source rank (used for genuinely Salesforce-owned CRM fields).
-   - `derived-only` — never written by ingestion at all (computed downstream).
-2. **Reads current provenance** from `field_value_provenance` for that record/field: who set it, at what authority rank, and `last_confirmed_at`.
-3. **Compares.** Salesforce is allowed to win only when: the field is empty; OR the rule is `overlay` and the Salesforce record's `LastModifiedDate` is newer than `last_confirmed_at`; OR the rule is `source-authoritative` and Salesforce's authority rank for that field beats the incumbent's.
-4. **Acts:**
-   - *Promote* — write the domain field, update `field_value_provenance` (authority_source = `salesforce`, the rank, `last_change_event_id`, `last_confirmed_at`), and append a row to `manual_change_events` / promotion log with the previous value.
-   - *Hold* — leave the domain field, but keep the staged observation (it stays queryable as evidence and history).
-   - *Conflict* — when the rule can't safely decide (e.g. `manual-override` field with a materially different Salesforce value), write a review-queue row instead of guessing.
+1. **Reads the current authoritative provenance** for `(target_database, target_table, record_pk, field_name)` from `field_provenance`.
+2. **Reads the source priority** for `(target_table, field_name, 'salesforce')` from `field_source_priority` — plus `min_confidence` and `enforce_mode`.
+3. **Decides:**
+   - `skip` — incoming confidence below the field's `min_confidence`; or a lower-priority source trying to override a higher-priority existing value.
+   - `write` — no prior provenance; or the field is blank; or Salesforce outranks the incumbent source; or it's a same-priority same-value refresh.
+   - `conflict` — a same-priority source disagrees with the current value (can't safely choose — surfaces for review).
+4. **Logs** the decision to `field_provenance` (and marks any superseded prior), then returns the decision + `enforce_mode`.
+5. **The caller acts on the decision.** When the decision is `write` *and* `enforce_mode` is `strict`, the worker patches the domain field. Under `record_only` / `warn`, the decision is logged but the domain table is not touched — this is the gradual-rollout dial.
+
+Because every field passes through `lcc_merge_field()`, the full audit trail lands in `field_provenance` even in report-only mode — so you can see exactly what *would* promote before any enforcement is switched on.
 
 ### 6.3 Per-field authority for Salesforce
 
-`field_precedence_policy` is seeded so Salesforce is authoritative only where it genuinely is:
+`field_source_priority` is seeded with one row per `(target_table, field_name, 'salesforce')` so Salesforce ranks high only where it genuinely should. Lower `priority` number = higher trust:
 
-- **Salesforce authoritative / overlay** — listing status, marketing status, deal stage, broker/team assignment, expected close date, the Salesforce record IDs themselves, Salesforce file metadata.
-- **Not Salesforce authoritative** — CMS/Medicare identifiers, public-record ownership chains, deed/transfer facts, and any derived underwriting metric (NOI, cap rate calculations). Salesforce observations of these are stored but do not promote over the public-record or derived source.
-- **Newer-document-wins** — current rent, lease expiration, current cap rate: a Salesforce value competes on `source_document_date` / recency, not on being "from Salesforce."
+- **High trust (low priority number)** — listing status, marketing status, deal stage, broker/team assignment, expected close date, the Salesforce record IDs, Salesforce file metadata.
+- **Low trust (high priority number)** — CMS/Medicare identifiers, public-record ownership chains, deed/transfer facts, derived underwriting metrics (NOI, cap-rate calculations). Salesforce values for these are logged but lose to the public-record / derived source.
+- **Mid trust** — current rent, lease expiration, current cap rate: Salesforce competes with documents and other sources on priority + recency.
 
-The point: "don't overwrite better data" is not a hope, it's a gate every field passes through, and the rules live in a table you can tune without code changes.
+Rollout uses `enforce_mode`: start every Salesforce field at `record_only` (the worker's report-only default), review the `field_provenance` decisions, then move trusted fields to `strict` to turn on real domain writes. Until a row exists in `field_source_priority`, an unregistered Salesforce value can only fill a blank field — it can never override an existing value — so the system is safe even before seeding.
 
 ---
 
 ## 7. The LCC intake endpoints
 
-Three edge functions, all siblings of the existing `intake-receiver`, all reusing `_shared` (`auth.ts`, `cors.ts`, `supabase-client.ts` with `opsClient` / `govClient` / `diaClient`).
+Three edge functions, **all deployed and ACTIVE** on the Dialysis_DB Supabase project (where the other LCC edge functions live), siblings of the existing `intake-receiver`, each bundling a minimal `_shared` (`cors.ts`, `auth.ts` with `authenticateWebhook`, `utils.ts`) and reaching the three databases via `DIA_/GOV_/OPS_SUPABASE_*` env vars. `verify_jwt` is off — they authenticate via the `X-PA-Webhook-Secret` header. None of them ever writes a domain table.
 
 ### 7.1 `intake-salesforce` — object intake
 
@@ -185,7 +191,9 @@ Three edge functions, all siblings of the existing `intake-receiver`, all reusin
 
 ### 7.3 `sf-promotion-worker` — provenance-gated promotion
 
-A scheduled edge function (or Supabase cron) that drains `process_status = 'pending'` staging rows, runs the Section 6 promotion gate field-by-field, writes domain tables where the gate allows, and moves each staging row to `linked` / `held` / `review`. This is deliberately separate from intake so promotion cadence and intake cadence are independent.
+`POST ?action=run` — body `{ vertical?, limit?, enforce? }`. Drains `process_status = 'linked'` staging rows and, for every mapped field, calls `lcc_merge_field()` on LCC Opps (Section 6.2). Each call logs the decision to `field_provenance`; the worker tallies `write` / `skip` / `conflict` and returns a per-vertical report. It then marks each staging row `process_status = 'reported'`.
+
+**v1 scope (deployed): report-only, Property object.** `enforce` defaults to `false`, so no domain table is written — the full provenance audit trail is produced and the response shows what *would* promote. The `PROPERTY_FIELD_MAP` maps `sf_property_staging` columns to `properties` columns (`street→address`, `city→city`, `state→state`, `zip_code→zip_code`, `property_name→building_name`, `building_sf→building_size`, `year_built→year_built`, `property_type→property_type`). Follow-ons: seed `field_source_priority`, flip trusted fields to `enforce_mode='strict'`, and add Comp/Listing/Deal mappings (including the Comp → `sales_transactions` vs `available_listings` routing). Deliberately separate from intake so promotion cadence and intake cadence are independent.
 
 ---
 

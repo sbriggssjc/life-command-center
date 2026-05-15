@@ -10,6 +10,7 @@
 // Routes:
 //   POST ?action=objects         — stage a batch of Salesforce records
 //   POST ?action=crawl-complete  — close a batch: crawl_run row + link-probe
+//   POST ?action=retry           — re-stage failed sync_log rows; dead-letter exhausted
 //   POST ?action=dead-letter     — mark sync_log rows dead
 //   GET  ?action=watermark       — last successful crawl_run date
 //   GET  ?action=file-targets    — staged SF ids for Flow 2 file discovery
@@ -79,7 +80,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(req, {
       service: "intake-salesforce",
       version: PAYLOAD_VERSION,
-      actions: ["objects", "crawl-complete", "dead-letter", "watermark", "file-targets", "retry-queue"],
+      actions: ["objects", "crawl-complete", "retry", "dead-letter", "watermark", "file-targets", "retry-queue"],
     });
   }
 
@@ -99,6 +100,7 @@ Deno.serve(async (req: Request) => {
       const body = (await parseBody(req)) as Record<string, unknown> | null;
       if (action === "objects") return await handleObjects(req, body);
       if (action === "crawl-complete") return await handleCrawlComplete(req, body);
+      if (action === "retry") return await handleRetry(req, body);
       if (action === "dead-letter") return await handleDeadLetter(req, body);
       return errorResponse(req, `Unknown POST action: ${action}`, 400);
     }
@@ -323,6 +325,92 @@ async function handleRetryQueue(req: Request): Promise<Response> {
   );
   const items = Array.isArray(res.data) ? res.data : [];
   return jsonResponse(req, { items, count: Array.isArray(items) ? items.length : 0 });
+}
+
+// ── POST ?action=retry ──────────────────────────────────────────────────────
+// body: { limit? }
+// Drains sf_sync_log error rows (retry_count < MAX_RETRY): re-maps and re-stages
+// each from its stored SF-record payload. On success the ledger row flips to
+// 'ok'; on repeated failure retry_count increments and the row is dead-lettered
+// once it reaches MAX_RETRY. One server-side action that supersedes the manual
+// retry-queue (read) + dead-letter (write) pair.
+async function handleRetry(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  const b = body || {};
+  const limit = Math.min(Number(b.limit) || 100, 200);
+
+  const res = await dbFetch(
+    "ops", "GET",
+    `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=${limit}` +
+    "&select=sync_id,sync_type,sf_object_type,sf_object_id,import_batch,payload,retry_count",
+  );
+  const items = (Array.isArray(res.data) ? res.data : []) as Record<string, unknown>[];
+  const stats = { scanned: items.length, retried_ok: 0, still_error: 0, dead_lettered: 0, skipped: 0 };
+
+  for (const item of items) {
+    const syncId = String(item.sync_id);
+    const objectType = String(item.sf_object_type || "");
+    const batchId = String(item.import_batch || "");
+    const payload = item.payload as Record<string, unknown> | null;
+    const nextRetries = (Number(item.retry_count) || 0) + 1;
+
+    // Only object_intake rows carrying a real SF record (has an Id) are
+    // retryable — staging-upsert-failure markers ({staging_table,count}) are
+    // skipped and left for manual attention.
+    const objectKey = resolveObjectKey(objectType);
+    if (item.sync_type !== "object_intake" || !objectKey || !payload || !payload.Id) {
+      stats.skipped++;
+      continue;
+    }
+
+    let ok = false;
+    let errMsg = "";
+    try {
+      const mapped = await mapRecord(objectKey, payload);
+      const { vertical, resolved } = routeVertical(mapped.row);
+      const cfg = OBJECT_CONFIG[objectKey];
+      const stagingRow = {
+        ...mapped.row,
+        source_system: "salesforce",
+        import_batch: batchId,
+        process_status: resolved ? "pending" : "review",
+        process_notes: resolved ? null : "vertical routing unresolved — defaulted to dia",
+        match_method: resolved ? null : "vertical_unresolved",
+        imported_at: isoNow(),
+        updated_at: isoNow(),
+      };
+      const onConflict = `${cfg.sfIdColumn},source_system,import_batch`;
+      const up = await dbFetch(
+        vertical, "POST",
+        `${cfg.stagingTable}?on_conflict=${onConflict}`,
+        [stagingRow], "resolution=merge-duplicates,return=minimal",
+      );
+      ok = up.ok;
+      if (!ok) errMsg = `staging upsert failed: ${JSON.stringify(up.data)}`;
+    } catch (err) {
+      errMsg = err instanceof Error ? err.message : String(err);
+    }
+
+    if (ok) {
+      await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, {
+        status: "ok", retry_count: nextRetries, retried_at: isoNow(), error_message: null,
+      });
+      stats.retried_ok++;
+    } else if (nextRetries >= MAX_RETRY) {
+      await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, {
+        status: "dead", retry_count: nextRetries, retried_at: isoNow(),
+        error_message: `retry exhausted: ${errMsg}`.slice(0, 500),
+      });
+      stats.dead_lettered++;
+    } else {
+      await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, {
+        status: "error", retry_count: nextRetries, retried_at: isoNow(),
+        error_message: errMsg.slice(0, 500),
+      });
+      stats.still_error++;
+    }
+  }
+
+  return jsonResponse(req, { ok: true, ...stats });
 }
 
 // ── POST ?action=dead-letter ────────────────────────────────────────────────
