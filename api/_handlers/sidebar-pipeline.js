@@ -3097,6 +3097,42 @@ async function upsertDomainProperty(domain, entity, metadata) {
     address,
     propertyDataKeys: Object.keys(propertyData).sort(),
   };
+  // Round 76fg.b (2026-05-15): belt-and-suspenders. Round 76fg's
+  // first attempt plumbed the captured error through the
+  // propagateToDomainDbDirect return value into _pipeline_summary.
+  // per_domain.<dom>.{error,error_detail}, but post-deploy retries
+  // on the Northern Cross / NWS Fort Worth entity surfaced reason=
+  // 'property_upsert_failed' WITHOUT the new fields — symptom of
+  // either an old Railway image still in rotation or an Object-
+  // spread quirk we haven't pinned down. Mutating the shared
+  // metadata object here bypasses the return-value chain entirely:
+  // processSidebarExtraction's final PATCH spreads `...metadata`
+  // into updatedMeta (sidebar-pipeline.js:8677), so anything we set
+  // here lands on entity.metadata._postgrest_capture on the next
+  // wallclock write, regardless of how the per_domain summary is
+  // assembled. Self-explaining failure mode = self-service fix.
+  if (metadata && typeof metadata === 'object') {
+    metadata._postgrest_capture = {
+      captured_at: new Date().toISOString(),
+      domain,
+      address,
+      table: 'properties',
+      method: 'POST',
+      http_status:        result?.status || null,
+      postgrest_message:  errBody?.message || null,
+      postgrest_details:  errBody?.details || null,
+      postgrest_hint:     errBody?.hint || null,
+      postgrest_code:     errBody?.code || null,
+      // First 400 chars of the raw body in case PostgREST returns text
+      // instead of structured JSON (rare — usually means infra-level
+      // 502/504 surfaced as a 4xx by a proxy).
+      raw_body_preview:
+        typeof result?.data === 'string'
+          ? result.data.substring(0, 400)
+          : (errBody ? JSON.stringify(errBody).substring(0, 400) : null),
+      property_data_keys: Object.keys(propertyData).sort(),
+    };
+  }
   return null;
 }
 
