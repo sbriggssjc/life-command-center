@@ -12138,6 +12138,11 @@ function _udSubjectFromCache(db) {
     expense_structure: lease.expense_structure || p.expense_structure || '',
     lease_bump_pct: _udNumOrNull(p.lease_bump_pct || lease.lease_bump_pct),
     lease_bump_interval_mo: _udNumOrNull(p.lease_bump_interval_mo || lease.lease_bump_interval_mo),
+    // Subject row — same structured escalation surface as the comp rows so
+    // _udBumpsCell can pick the same preferred field.
+    annualized_escalation_percent_current: _udNumOrNull(lease.annualized_escalation_percent_current),
+    escalation_frequency_years_current: _udNumOrNull(lease.escalation_frequency_years_current),
+    escalation_raw_text_current: lease.escalation_raw_text_current || '',
     recorded_owner: own.recorded_owner || own.recorded_owner_name || p.recorded_owner_name || '',
     true_owner: own.true_owner || own.true_owner_name || p.true_owner_name || ''
   };
@@ -12342,7 +12347,13 @@ async function _udFetchLeaseCompCandidates(db, subject, count) {
       rent_per_sf: _udNumOrNull(l.rent_per_sf || p.rent_per_sf),
       expense_structure: l.expense_structure || p.expense_structure || '',
       lease_bump_pct: _udNumOrNull(l.lease_bump_pct || p.lease_bump_pct),
-      lease_bump_interval_mo: _udNumOrNull(l.lease_bump_interval_mo || p.lease_bump_interval_mo)
+      lease_bump_interval_mo: _udNumOrNull(l.lease_bump_interval_mo || p.lease_bump_interval_mo),
+      // Structured escalation rolled up from lease_escalations onto the
+      // leases row by the 20260608 trigger and exposed on v_lease_detail
+      // by 20260515. DECIMAL form (0.025 = 2.5%/yr).
+      annualized_escalation_percent_current: _udNumOrNull(l.annualized_escalation_percent_current),
+      escalation_frequency_years_current: _udNumOrNull(l.escalation_frequency_years_current),
+      escalation_raw_text_current: l.escalation_raw_text_current || ''
     };
   });
 }
@@ -12352,6 +12363,32 @@ function _udFmtBumps(pct, intervalMo) {
   const p = pct == null ? '?' : (Number(pct).toFixed(2).replace(/\.?0+$/, '') + '%');
   const i = intervalMo == null ? '?' : (Number(intervalMo) + 'mo');
   return `${p} / ${i}`;
+}
+
+// Pick the best escalation representation for the BUMPS column:
+//   1. annualized_escalation_percent_current (rolled up from lease_escalations
+//      via the 20260608 trigger). Stored DECIMAL (0.025 = 2.5%/yr) — display
+//      as "2.5% / yr". This is the structured numeric path.
+//   2. legacy properties.lease_bump_pct / lease_bump_interval_mo on the lease
+//      or property row. Stored PERCENT-form (2.5 = 2.5%) — display as
+//      "2.5% / 60mo" via _udFmtBumps.
+//   3. raw escalation_raw_text_current ("Fixed", "CPI", "10% every 5 years"),
+//      passed through verbatim. No fabricated rates when text is categorical.
+//
+// Returning '' (rather than '? / ?mo') for genuinely unknown rows matches the
+// task's "if escalation is genuinely unknown … the cell stays blank" rule.
+function _udBumpsCell(rec) {
+  const annual = rec.annualized_escalation_percent_current;
+  if (annual != null && annual !== '') {
+    const pct = Number(annual) * 100;
+    if (Number.isFinite(pct)) {
+      return `${pct.toFixed(2).replace(/\.?0+$/, '')}% / yr`;
+    }
+  }
+  if (rec.lease_bump_pct != null || rec.lease_bump_interval_mo != null) {
+    return _udFmtBumps(rec.lease_bump_pct, rec.lease_bump_interval_mo);
+  }
+  return rec.escalation_raw_text_current || '';
 }
 
 async function _udExportLeaseComps(db, propertyId, btn) {
@@ -12610,7 +12647,7 @@ function _udPopulateDataRow(sheet, db, rowIdx, rec, opts) {
   _udSetCell(sheet, rowIdx, c.initialTerm, _udYearsBetweenDates(startDate, endDate));
   _udSetCell(sheet, rowIdx, c.termRem, _udYearsBetweenDates(new Date(), endDate));
   _udSetCell(sheet, rowIdx, c.expenses, rec.expense_structure || '');
-  _udSetCell(sheet, rowIdx, c.bumps, _udFmtBumps(rec.lease_bump_pct, rec.lease_bump_interval_mo));
+  _udSetCell(sheet, rowIdx, c.bumps, _udBumpsCell(rec));
 
   // USER/OWNER + DISTANCE only apply to comparables. The template has no
   // U/V cells in row 4 (subject), so we leave them untouched there.

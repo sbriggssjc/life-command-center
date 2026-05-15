@@ -7810,18 +7810,26 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
       );
       const lease = activeLease.ok && activeLease.data?.length ? activeLease.data[0] : null;
       if (lease) {
-        // Check if escalation already exists for this lease from OM/sidebar
+        // Check if escalation already exists for this lease from OM/sidebar.
+        // Match either the canonical 'percent' label or the legacy 'percentage'
+        // value rows written before the 2026-05-15 fix landed.
         const existEsc = await domainQuery(domain, 'GET',
           `lease_escalations?lease_id=eq.${lease.lease_id}` +
-          `&escalation_type=eq.percentage&select=escalation_id&limit=1`
+          `&escalation_type=in.(percent,percentage)&select=escalation_id&limit=1`
         );
         if (!existEsc.ok || !existEsc.data?.length) {
+          // dia.lease_escalations.annualized_escalation_percent is GENERATED
+          // and only fires when escalation_type='percent' (exact lowercase)
+          // AND escalation_value + escalation_frequency_years are non-null.
+          // escalation_value must be stored as DECIMAL form (0.025 = 2.5%);
+          // bumpPct arrives in percent-form so we divide by 100.
+          const bumpDecimal = bumpPct != null ? Number(bumpPct) / 100 : null;
           const escData = stripNulls({
             lease_id:                      lease.lease_id,
             property_id:                   parseInt(propertyId, 10),
-            escalation_type:               'percentage',
-            escalation_value:              bumpPct || null,
-            // annualized_escalation_percent is a GENERATED column — do not write it
+            escalation_type:               'percent',
+            escalation_value:              bumpDecimal,
+            escalation_unit:               bumpDecimal != null ? 'percent' : null,
             escalation_frequency_years:    bumpIntervalMo ? bumpIntervalMo / 12 : 1,
             rent_amount:                   lease.annual_rent ? Number(lease.annual_rent) : null,
             effective_date:                lease.lease_start || null,
