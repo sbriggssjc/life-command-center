@@ -1,6 +1,6 @@
 # Infrastructure Topology
 
-> Last reviewed: 2026-05-10. Optimization branch: `claude/optimize-cloud-subscriptions-KJT9J`.
+> Last reviewed: 2026-05-16. Optimization branch: `claude/optimize-cloud-subscriptions-KJT9J`.
 >
 > **Correction note**: An earlier version of this file (committed earlier
 > in this branch) claimed LCC was "fully on Vercel." That was wrong.
@@ -8,11 +8,13 @@
 > in the `Dialysis_DB` edge function CORS configs, plus `package.json`'s
 > `start:railway` script and the existence of `server.js` on a deploy
 > branch — confirms LCC actually runs on Railway. The Railway dashboard
-> screenshot (handsome-luck project) confirms two services:
-> `tranquil-delight` (live production until trial expired 2026-05-09,
-> restored 2026-05-10 via Railway Hobby subscription) and
-> `life-command-center` (dormant rename attempt with no successful
-> deployment).
+> (handsome-luck project) now hosts three services: `tranquil-delight`
+> (live LCC production, Hobby plan since 2026-05-10), `life-command-center`
+> (dormant rename attempt, online but unused), and `Dialysis` (added per
+> the Dialysis compute-routing migration — see `DialysisProject/INFRASTRUCTURE.md`).
+>
+> **2026-05-16 deploy unblock**: Two stale-config errors were corrected
+> this revision and are described in the *Recent fixes* section below.
 
 ## Current state (as of 2026-05-10)
 
@@ -72,11 +74,45 @@ Full rationale: `LONG_TERM_HOSTING_STRATEGY.md`. Step-by-step migration:
   pointed at a file not present on the default branch. Railway's
   nixpacks reads `package.json`'s `start` script (`node server.js`)
   directly, so the Dockerfile was never the actual build path.
-  Deletion is harmless; nothing references it.
+  *Correction (2026-05-16):* the earlier claim that "nothing references
+  it" was incomplete — `railway.json` still had
+  `"builder": "DOCKERFILE"` pointing at the deleted file, which broke
+  every `tranquil-delight` deploy from 2026-05-13 through 2026-05-16.
+  Fixed in the *Recent fixes* section below.
 - **Misleading `.env.example` comment**: An earlier commit on this
   branch changed `LCC_BASE_URL`'s example value to a Vercel URL.
   This branch has since reverted it to point at the Railway URL
   until the Render cut-over (see `RENDER_MIGRATION_PLAN.md`).
+
+## Recent fixes (2026-05-16)
+
+Two service builds in `handsome-luck` were stuck on stale config and
+have been unblocked in this revision:
+
+1. **`tranquil-delight` (LCC) — DOCKERFILE builder pointed at deleted file.**
+   `railway.json` had `"build": { "builder": "DOCKERFILE", "dockerfilePath": "Dockerfile" }`,
+   but the Dockerfile was deleted earlier in this branch. Every push
+   from 2026-05-13 through 2026-05-16 failed with
+   `couldn't locate the dockerfile at path Dockerfile`, so production
+   was running a 6-day-old image (PR #721) while ~10 newer PRs queued
+   up unrunnable. Fix: revert to `"build": { "builder": "NIXPACKS" }`.
+   nixpacks auto-detects the `node server.js` start script via
+   `package.json`, which matches the doc-stated build path.
+
+2. **`Dialysis` — `requirements.txt` referenced a sibling not in the build cache layer.**
+   Root cause: `requirements.txt` was a 2-line file containing
+   `-r requirements_utf8.txt` plus `-e .`. Railpack's caching layer
+   copies only the manifest files (`requirements.txt`,
+   `pyproject.toml`) before running `pip install`, so the `-r`
+   reference resolved before `requirements_utf8.txt` existed in the
+   build context. Fix: inline the deps directly into
+   `requirements.txt` (now the canonical file), and convert
+   `requirements_utf8.txt` to a one-line forwarder (`-r requirements.txt`)
+   so the 8+ CI workflows and scripts that reference it keep working
+   without a sweeping rename. The `-e .` directive was also dropped
+   from the install step — it would have failed in the same caching
+   layer (source tree not yet copied) and isn't required at runtime
+   because `app.py` imports `from src.x ...` work from cwd.
 
 ## What this branch tracks separately
 
