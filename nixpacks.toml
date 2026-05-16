@@ -1,0 +1,14 @@
+# Nixpacks configuration for tranquil-delight (LCC Express server).
+#
+# Without this file, Nixpacks auto-detects the project as Deno because the
+# repo contains supabase/functions/*.ts (Supabase Edge Functions, which DO
+# run on Deno -- but only in Supabase, not in Railway). The runtime image
+# then ships with Deno on PATH but NO Node, and the start command
+# 'node server.js' fails with 'node: command not found'.
+#
+# Forcing providers = ["node"] makes Nixpacks treat this as a Node project,
+# installs Node 20 (matches package.json engines), and produces a container
+# where 'node server.js' resolves correctly. The supabase/functions/ folder
+# remains in the image as plain files; it's not built or executed at runtime
+# because nothing on the Railway side imports it.
+providers = ["node"]
