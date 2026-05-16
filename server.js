@@ -29,7 +29,10 @@ import syncHandler from './api/sync.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-app.use(express.json({ limit: '10mb' }));
+// 30 MB matches the OM_INLINE_MAX_BYTES (25 MB) + headroom for base64 inflation
+// of post-bytes JSON envelope. NorthMarq OMs from SF average 5-15 MB; the largest
+// observed (Pizza Hut Fairview OM, ingested via Flow 7 backfill) was 27 MB.
+app.use(express.json({ limit: '30mb' }));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
