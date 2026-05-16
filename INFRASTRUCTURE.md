@@ -13,8 +13,9 @@
 > (dormant rename attempt, online but unused), and `Dialysis` (added per
 > the Dialysis compute-routing migration — see `DialysisProject/INFRASTRUCTURE.md`).
 >
-> **2026-05-16 deploy unblock**: Two stale-config errors were corrected
-> this revision and are described in the *Recent fixes* section below.
+> **2026-05-16 deploy unblock**: Three errors blocking the Dialysis and
+> tranquil-delight deploys were diagnosed and resolved this revision —
+> details in the *Recent fixes* section below.
 
 ## Current state (as of 2026-05-10)
 
@@ -86,8 +87,8 @@ Full rationale: `LONG_TERM_HOSTING_STRATEGY.md`. Step-by-step migration:
 
 ## Recent fixes (2026-05-16)
 
-Two service builds in `handsome-luck` were stuck on stale config and
-have been unblocked in this revision:
+Two service builds and one runtime crash in `handsome-luck` were
+stuck and have been unblocked in this revision:
 
 1. **`tranquil-delight` (LCC) — DOCKERFILE builder pointed at deleted file.**
    `railway.json` had `"build": { "builder": "DOCKERFILE", "dockerfilePath": "Dockerfile" }`,
@@ -113,6 +114,26 @@ have been unblocked in this revision:
    from the install step — it would have failed in the same caching
    layer (source tree not yet copied) and isn't required at runtime
    because `app.py` imports `from src.x ...` work from cwd.
+
+3. **`Dialysis` — runtime crash on Supabase key validation.**
+   Once the build was unblocked (fix #2), the container crashed on
+   boot with `RuntimeError: create_client received an invalid/short key`.
+   The Railway service had `DIA_SUPABASE_URL` / `DIA_SUPABASE_KEY`
+   while the Python code reads unprefixed `SUPABASE_URL` /
+   `SUPABASE_KEY` / `SUPABASE_SERVICE_ROLE_KEY` — first sub-fix was
+   to rename the Railway variables (no code change, done via Raw
+   Editor). The container then booted but tripped on a defensive
+   guard in `supabase_local.py:create_client` and
+   `config/__init__.py:_validate_supabase_key`: both required a
+   legacy JWT (two literal dots, ≥100 chars). The Dialysis Supabase
+   project's API key is the new `sb_secret_*` format that Supabase
+   rolled out in September 2025 — no dots, ~50 chars. Both call
+   sites were refactored to use a shared
+   `_looks_like_valid_supabase_key` helper that accepts either
+   legacy JWT (2 dots, ≥100 chars) or new format
+   (`sb_secret_*` / `sb_publishable_*`, ≥30 chars). Legacy projects
+   continue to work unchanged. Fixed in DialysisProject commit
+   `b7575a536`.
 
 ## What this branch tracks separately
 
