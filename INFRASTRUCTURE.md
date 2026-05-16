@@ -8,12 +8,15 @@
 > in the `Dialysis_DB` edge function CORS configs, plus `package.json`'s
 > `start:railway` script and the existence of `server.js` on a deploy
 > branch — confirms LCC actually runs on Railway. The Railway dashboard
-> (handsome-luck project) now hosts three services: `tranquil-delight`
+> (handsome-luck project) now hosts five services: `tranquil-delight`
 > (live LCC production, Hobby plan since 2026-05-10), `life-command-center`
-> (dormant rename attempt, online but unused), and `Dialysis` (added per
-> the Dialysis compute-routing migration — see `DialysisProject/INFRASTRUCTURE.md`).
+> (dormant rename attempt, online but unused), `Dialysis` (Streamlit/
+> gunicorn app, added per the Dialysis compute-routing migration —
+> see `DialysisProject/INFRASTRUCTURE.md`), and two new cron services
+> as of 2026-05-16: `public-record-ingest` (cron `0 7 * * *`) and
+> `cms-ingestion` (cron `0 6 * * *`).
 >
-> **2026-05-16 deploy unblock**: Three errors blocking the Dialysis and
+> **2026-05-16 deploy unblock**: Four errors blocking the Dialysis and
 > tranquil-delight deploys were diagnosed and resolved this revision —
 > details in the *Recent fixes* section below.
 
@@ -87,8 +90,9 @@ Full rationale: `LONG_TERM_HOSTING_STRATEGY.md`. Step-by-step migration:
 
 ## Recent fixes (2026-05-16)
 
-Two service builds and one runtime crash in `handsome-luck` were
-stuck and have been unblocked in this revision:
+Three service builds (one Dialysis, two tranquil-delight) plus one
+Dialysis runtime crash in `handsome-luck` were stuck and have been
+unblocked in this revision:
 
 1. **`tranquil-delight` (LCC) — DOCKERFILE builder pointed at deleted file.**
    `railway.json` had `"build": { "builder": "DOCKERFILE", "dockerfilePath": "Dockerfile" }`,
@@ -134,6 +138,33 @@ stuck and have been unblocked in this revision:
    (`sb_secret_*` / `sb_publishable_*`, ≥30 chars). Legacy projects
    continue to work unchanged. Fixed in DialysisProject commit
    `b7575a536`.
+
+4. **`tranquil-delight` — Nixpacks auto-detected the project as Deno, not Node.**
+   After fix #1 the build/deploy succeeded but every deploy failed
+   at the `Network > Healthcheck` step. Deploy logs showed
+   `/bin/bash: line 1: node: command not found` looping every
+   ~250ms while the healthcheck timed out at 5 min. The build log
+   revealed the actual Nixpacks plan:
+
+   ```
+   setup: deno
+   build: deno cache supabase/functions/availability-checker/index.ts
+   start: node server.js
+   ```
+
+   Nixpacks picked Deno because the repo contains
+   `supabase/functions/*.ts` (Supabase Edge Functions, which DO run
+   on Deno — but only in Supabase, not on Railway). So the runtime
+   image installed Deno, then tried to invoke `node server.js`
+   against an empty Node PATH. Two prior commits failed to address
+   this because they targeted the wrong layer
+   (`b35f5a6` switched DOCKERFILE → NIXPACKS; `1ee11ea` removed
+   the custom `startCommand` from `railway.json`). The actual fix
+   is `nixpacks.toml` with `providers = ["node"]` (commit `6731dc5`),
+   which forces Node-provider mode regardless of what `supabase/`
+   subdirectories exist. `supabase/functions/` remains in the
+   image as plain source files but never executes at Railway
+   runtime — those edge functions deploy to Supabase, not Railway.
 
 ## What this branch tracks separately
 
