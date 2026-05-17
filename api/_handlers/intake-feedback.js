@@ -197,12 +197,16 @@ async function recordFeedback(req, res) {
 // Map a feedback decision to a staged_intake_items.status and persist it.
 // Returns the applied status (or null if decision doesn't dictate one).
 async function updateIntakeStatus(intake_id, decision) {
+  // Bug-fix #3 (2026-05-17): 'review_needed' was a typo of the canonical
+  // 'review_required' status. The paired migration expands the CHECK to
+  // accept 'matched' and 'no_match' as well, so this mapping is now
+  // schema-valid for every decision path.
   const newStatus =
       decision === 'approved'  ? 'matched'
     : decision === 'corrected' ? 'matched'
-    : decision === 'rejected'  ? 'review_needed'
+    : decision === 'rejected'  ? 'review_required'
     : decision === 'no_match'  ? 'no_match'
-    : decision === 'deferred'  ? 'review_needed'
+    : decision === 'deferred'  ? 'review_required'
     : null;
 
   if (newStatus) {
