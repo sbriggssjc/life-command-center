@@ -38,6 +38,8 @@ import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceCont
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
+import { writeListingCreatedSignal } from '../_shared/signals.js';
+import { runListingBdPipeline } from '../_shared/listing-bd.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -2524,6 +2526,69 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       );
     } catch (err) {
       console.warn('[intake-promoter] status flip to finalized failed (non-fatal):', err?.message);
+    }
+
+    // ── Item #1 (audit/01-bd-pipeline-trigger): Fire runListingBdPipeline
+    // on truly-new OM listings (closes D-5). Gate:
+    //   - listingResult.ok                  — write actually landed
+    //   - !listingResult.updated            — not a dia PATCH-existing-active
+    //   - !listingResult.merged_into_existing — not a gov 23505 re-merge
+    // Re-promotion of the same intake (rare) may slip the gate; Scott can
+    // dedupe inbox items.
+    //
+    // Matches sync.js:2571 pattern: inline await on runListingBdPipeline,
+    // parallel writeListingCreatedSignal for telemetry. Wrapped in try/catch
+    // so BD failure NEVER rolls back the promotion.
+    const _wasInsert = listingResult?.ok
+      && !listingResult.updated
+      && !listingResult.merged_into_existing;
+    const _newListingId = listingResult?.listing_id || null;
+    const _lccEntityId = lccEntityResult?.entity_id || match?.lcc_entity_id || null;
+    if (_wasInsert && _newListingId && _lccEntityId && snapshot?.state) {
+      try {
+        const _listingForBd = {
+          id:         _lccEntityId,
+          name:       snapshot.address || null,
+          address:    snapshot.address || null,
+          city:       snapshot.city || null,
+          state:      snapshot.state,
+          domain:     match.domain,
+          asset_type: snapshot.asset_type || snapshot.property_type || null,
+          email:      snapshot.listing_broker_email || null,
+          metadata: {
+            domain_property_id: match.property_id,
+            domain_listing_id:  _newListingId,
+            asset_type:         snapshot.asset_type || snapshot.property_type || null,
+            listing_status:     'active',
+          },
+        };
+        writeListingCreatedSignal(_listingForBd, { id: context.actorId }).catch(err =>
+          console.warn('[bd-trigger:om-intake] writeListingCreatedSignal failed:', err?.message)
+        );
+        const _bdResult = await runListingBdPipeline(
+          _listingForBd,
+          context.workspaceId,
+          context.actorId,
+          { triggerSource: 'om_intake' }
+        );
+        result.bd_pipeline = {
+          listing_id:   _newListingId,
+          t011_queued:  _bdResult?.t011_same_asset?.queued || 0,
+          t012_queued:  _bdResult?.t012_geographic?.queued || 0,
+          total_queued: _bdResult?.total_queued || 0,
+        };
+        console.log(`[bd-trigger:om-intake] queued ${_bdResult?.total_queued || 0} draft candidates (T-011=${_bdResult?.t011_same_asset?.queued || 0}, T-012=${_bdResult?.t012_geographic?.queued || 0}) for listing_id=${_newListingId} domain=${match.domain}`);
+      } catch (err) {
+        console.error('[bd-trigger:om-intake] runListingBdPipeline failed (non-fatal):', err?.message || err);
+        result.bd_pipeline = { error: err?.message || String(err) };
+      }
+    } else if (_wasInsert && _newListingId) {
+      console.warn('[bd-trigger:om-intake] new listing detected but BD not fired:', {
+        listing_id:    _newListingId,
+        has_entity:    !!_lccEntityId,
+        has_state:     !!snapshot?.state,
+        has_workspace: !!context.workspaceId,
+      });
     }
   }
 

@@ -18,7 +18,8 @@
 
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix } from '../_shared/entity-link.js';
 import { opsQuery } from '../_shared/ops-db.js';
-import { writeSignal } from '../_shared/signals.js';
+import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
+import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 // Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
@@ -1479,13 +1480,13 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
  * Main domain propagation dispatcher.
  * Routes to the correct domain backend based on classified domain.
  */
-async function propagateToDomainDb(entity, metadata, domain) {
+async function propagateToDomainDb(entity, metadata, domain, opts = {}) {
   if (!domain) return { propagated: false, reason: 'no_domain' };
 
   try {
     if (domain === 'dialysis' || domain === 'government') {
       if (!getDomainCredentials(domain)) return { propagated: false, reason: 'domain_db_not_configured' };
-      return await propagateToDomainDbDirect(domain, entity, metadata);
+      return await propagateToDomainDbDirect(domain, entity, metadata, opts);
     }
     return { propagated: false, reason: 'unknown_domain' };
   } catch (err) {
@@ -2067,8 +2068,11 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
 
 // ── Domain DB propagation (direct PostgREST for both dialysis & government) ─
 
-async function propagateToDomainDbDirect(domain, entity, metadata) {
+async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
   const results = { domain, property_id: null, records: {} };
+  // Item #1: workspaceId/userId threaded from processSidebarExtraction so
+  // we can fire runListingBdPipeline after the listing upsert.
+  const { workspaceId = null, userId = null } = opts;
 
   // Phase 2.2.b: shared array writers push per-row provenance entries onto.
   // Flushed at the end of this function via recordCoStarFieldsProvenance.
@@ -2141,6 +2145,49 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   }
   if (domain === 'dialysis') {
     results.records.listings = await upsertDialysisListings(propertyId, metadata);
+  }
+
+  // ── Item #1 (audit/01-bd-pipeline-trigger): Fire runListingBdPipeline
+  // on truly NEW listings. Writers above return { count, insertedListingId }
+  // where insertedListingId is non-null ONLY on a genuinely-new INSERT path.
+  // Matches the sync.js:2571 SF-webhook pattern: inline await + parallel
+  // writeListingCreatedSignal for telemetry. Failures never roll back the
+  // upstream pipeline. processSidebarExtraction is already fire-and-forget
+  // (see entities-handler.js), so added latency does not block the user.
+  const _newListingId = results.records?.listings?.insertedListingId || null;
+  if (_newListingId && workspaceId && entity?.id && entity?.state) {
+    try {
+      const _listingForBd = {
+        ...entity,
+        asset_type: entity.asset_type || metadata?.asset_type || entity.metadata?.asset_type || null,
+        metadata: { ...(entity.metadata || {}), listing_status: 'active' },
+      };
+      writeListingCreatedSignal(_listingForBd, { id: userId }).catch(err =>
+        console.warn('[bd-trigger:sidebar] writeListingCreatedSignal failed:', err?.message)
+      );
+      const _bdResult = await runListingBdPipeline(
+        _listingForBd,
+        workspaceId,
+        userId,
+        { triggerSource: 'sidebar_capture' }
+      );
+      results.records.bd_pipeline = {
+        listing_id: _newListingId,
+        t011_queued: _bdResult?.t011_same_asset?.queued || 0,
+        t012_queued: _bdResult?.t012_geographic?.queued || 0,
+        total_queued: _bdResult?.total_queued || 0,
+      };
+      console.log(`[bd-trigger:sidebar] queued ${_bdResult?.total_queued || 0} draft candidates (T-011=${_bdResult?.t011_same_asset?.queued || 0}, T-012=${_bdResult?.t012_geographic?.queued || 0}) for listing_id=${_newListingId} domain=${domain}`);
+    } catch (err) {
+      console.error('[bd-trigger:sidebar] runListingBdPipeline failed (non-fatal):', err?.message || err);
+      results.records.bd_pipeline = { error: err?.message || String(err) };
+    }
+  } else if (_newListingId) {
+    console.warn('[bd-trigger:sidebar] new listing detected but BD not fired:', {
+      listing_id: _newListingId, domain,
+      has_workspaceId: !!workspaceId, has_userId: !!userId,
+      has_entity_id: !!entity?.id, has_state: !!entity?.state,
+    });
   }
 
   // Step 5b2: Upsert broker links
@@ -2452,7 +2499,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     // 3. Available_listings — look up by property_id since the writer
     //    returns a count, not the listing_id. Most recent CoStar-sourced
     //    listing for this property is the one we just wrote.
-    if (propertyId && results.records?.listings && results.records.listings > 0) {
+    if (propertyId && results.records?.listings?.count > 0) {
       try {
         const listingLookup = await domainQuery(
           domain, 'GET',
@@ -8067,7 +8114,8 @@ async function upsertDialysisListings(propertyId, metadata) {
       parsed_asking_price: parsedAskingPrice,
       sales_history_count: Array.isArray(metadata.sales_history) ? metadata.sales_history.length : 0,
     });
-    return 0;
+    // Item #1: every return path uses { count, insertedListingId } shape.
+    return { count: 0, insertedListingId: null };
   }
 
   try {
@@ -8316,7 +8364,10 @@ async function upsertDialysisListings(propertyId, metadata) {
       propertyId: propertyIdInt,
       listingDate: lookup.data[0].listing_date || ingestionDatePart,
     });
-    return 1;
+    // Item #1: PATCH path = UPDATE on existing in-window listing. NOT a new
+    // listing for BD purposes — insertedListingId stays null so the caller
+    // does not re-fire runListingBdPipeline on every re-capture.
+    return { count: 1, insertedListingId: null };
   }
 
   console.log('[upsertDialysisListings] attempting INSERT for property', propertyIdInt);
@@ -8335,7 +8386,7 @@ async function upsertDialysisListings(propertyId, metadata) {
       data: result.data,
       record,
     });
-    return 0;
+    return { count: 0, insertedListingId: null };
   }
 
   // Recover the new listing_id from the insert response (PostgREST returns
@@ -8413,10 +8464,12 @@ async function upsertDialysisListings(propertyId, metadata) {
       `sale_transaction_id=${latestSaleId ?? 'null'} ` +
       `sold_price=${latestSalePrice ?? 'null'} sale_date=${latestSale.sale_date}`
     );
-    // Return 0 — don't count as "new active listing" since it's already sold
-    return 0;
+    // Already auto-closed as sold — not a genuinely-new active listing.
+    return { count: 0, insertedListingId: null };
   }
-  return 1;
+  // Item #1: genuine new INSERT (not auto-closed). Surface listing_id so
+  // propagateToDomainDbDirect can fire runListingBdPipeline.
+  return { count: 1, insertedListingId: currentListingId };
 
   } catch (err) {
     console.error('[upsertDialysisListings] unexpected error:', {
@@ -8424,7 +8477,7 @@ async function upsertDialysisListings(propertyId, metadata) {
       error: err?.message || err,
       stack: err?.stack?.slice(0, 300),
     });
-    return 0;
+    return { count: 0, insertedListingId: null };
   }
 }
 
@@ -8441,7 +8494,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
   const hasAskingPrice = !!metadata.asking_price;
   const hasCurrentSale = Array.isArray(metadata.sales_history)
     && metadata.sales_history.some(s => s.is_current === true);
-  if (!hasAskingPrice && !hasCurrentSale) return 0;
+  if (!hasAskingPrice && !hasCurrentSale) return { count: 0, insertedListingId: null };
 
   // Derive listing_date from the most recent is_current sale, else today
   let listingDate = new Date().toISOString().split('T')[0];
@@ -8563,7 +8616,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
         { Prefer: 'return=representation,resolution=merge-duplicates' }
       )
     : { ok: true };
-  if (!result.ok) return 0;
+  if (!result.ok) return { count: 0, insertedListingId: null };
 
   // Post-insert check: if a closed sale already exists for this property
   // within the last 2 years, immediately close the listing so we don't
@@ -8595,9 +8648,36 @@ async function upsertGovListings(propertyId, entity, metadata) {
       },
       'upsertGovListings:autoClose'
     );
-    return 0; // Sold, not an active listing
+    // Already auto-closed as sold — not a genuinely-new active listing.
+    return { count: 0, insertedListingId: null };
   }
-  return 1;
+  // Item #1: discriminate true INSERT vs PATCH-of-existing-Active.
+  //   wasInsert == true  → no prior Active row was found at the top of the
+  //                        function; the upsert just created a new row.
+  //   wasInsert == false → an existing Active row was PATCHed in place
+  //                        above (activeLookup branch); do NOT re-fire BD.
+  // Rare same-day on_conflict merge case (property + source + status +
+  // listing_date all identical) is an accepted false-positive: it queues
+  // T-011/T-012 candidates again, which Scott can delete. Worth keeping
+  // the gate simple and predictable.
+  const wasInsert = !(typeof _existingActiveId !== 'undefined' && _existingActiveId);
+  let insertedListingId = null;
+  if (wasInsert) {
+    if (Array.isArray(result.data) && result.data.length && result.data[0].listing_id != null) {
+      insertedListingId = result.data[0].listing_id;
+    } else if (result.data?.listing_id != null) {
+      insertedListingId = result.data.listing_id;
+    } else {
+      // Fallback when PostgREST didn't return representation.
+      const lookup = await domainQuery('government', 'GET',
+        `available_listings?property_id=eq.${propertyId}` +
+        `&listing_status=eq.Active&listing_source=eq.costar_sidebar` +
+        `&select=listing_id&order=listing_id.desc&limit=1`
+      );
+      if (lookup.ok && lookup.data?.length) insertedListingId = lookup.data[0].listing_id;
+    }
+  }
+  return { count: 1, insertedListingId };
 }
 
 // ── Main pipeline entry point ───────────────────────────────────────────────
@@ -8668,10 +8748,10 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
   let anyPropagated = false;
   let primaryPropagation = null;
   if (allDomains.length === 0) {
-    primaryPropagation = await propagateToDomainDb(entity, metadata, null);
+    primaryPropagation = await propagateToDomainDb(entity, metadata, null, { workspaceId, userId });
   } else {
     for (const dom of allDomains) {
-      const r = await propagateToDomainDb(entity, metadata, dom);
+      const r = await propagateToDomainDb(entity, metadata, dom, { workspaceId, userId });
       perDomainResults[dom] = r;
       if (r.propagated) anyPropagated = true;
       else if (!firstError) firstError = r;

@@ -1,0 +1,89 @@
+audit(item-1): fire runListingBdPipeline from sidebar + OM intake
+
+Closes audit findings A-1 (partial), D-1, D-5 from LCC_Holistic_Audit_2026-05-17.docx.
+
+Before this commit, only the Salesforce listing webhook (api/sync.js:2571)
+fired the listing-as-BD pipeline. Every CoStar sidebar capture and every
+OM email intake silently landed a row in available_listings and ended the
+workflow — the cadence engine + 14-template library had effectively no
+upstream callers, which is why the weekly template-health report shows
+0 sends across all 14 templates in 120 days.
+
+Changes
+-------
+
+api/_handlers/sidebar-pipeline.js
+  * upsertDialysisListings / upsertGovListings now return
+    { count, insertedListingId } instead of a bare 0/1. insertedListingId
+    is populated ONLY on a genuinely-new INSERT — not on PATCH-of-existing-
+    active and not on auto-close-as-sold. This is the discriminator the
+    BD trigger uses so re-captures of the same listing don't re-queue
+    T-011/T-012 inbox items.
+  * propagateToDomainDb / propagateToDomainDbDirect take an opts object
+    carrying { workspaceId, userId } threaded from processSidebarExtraction.
+  * After the listing upsert, if insertedListingId is set, we await
+    runListingBdPipeline(entity, workspaceId, userId, { triggerSource:
+    'sidebar_capture' }) and fire writeListingCreatedSignal in parallel for
+    telemetry parity with sync.js. Failure is caught + logged; never rolls
+    back the pipeline. processSidebarExtraction is already a fire-and-
+    forget background job, so the added 0.5-3s of latency does not block
+    any user-facing request.
+
+api/_handlers/intake-promoter.js
+  * After the staged_intake_promotions audit write + status flip block,
+    fires runListingBdPipeline when
+        listingResult.ok &&
+        !listingResult.updated &&
+        !listingResult.merged_into_existing
+    (i.e., a genuinely-new INSERT, not a re-promote and not a dup-key
+    merge). Uses the LCC entity for the listing (lccEntityResult.entity_id
+    or match.lcc_entity_id). Same try/catch shape as the sidebar path.
+
+AUDIT_PROGRESS.md
+  * New file. Sprint tracker companion to LCC_Holistic_Audit_2026-05-17.docx
+    listing all 10 priority items with branch / status / closes columns
+    plus per-item closeout sections. Created via Node fs.writeFile so it
+    is visible to Windows git (sandbox-side direct writes are not).
+
+Why this matters
+----------------
+
+The audit identified "collection without consequence" as the single
+biggest structural gap: the LCC has built first-rate ingestion, first-rate
+data infrastructure, and a sophisticated cadence engine — but the bridges
+between them are missing in four places. Items #1 (this commit), #2 (drain
+research queues), #5 (provenance integrity), and #7 (seed cadence on new
+contacts) are the four "wiring" interventions that convert the system from
+"research database" to "BD pipeline" without building any new subsystems.
+
+The sidebar trigger is the highest-leverage of the four. Every CoStar
+listing Scott or the team browses now auto-queues peer-owner outreach
+candidates (T-011: same asset type / same state; T-012: geographic
+proximity) for batch review. The OM-intake trigger does the same for
+flagged-email OMs from Power Automate.
+
+Verification
+------------
+
+  grep -c "runListingBdPipeline" api/_handlers/sidebar-pipeline.js   # >= 2
+  grep -c "runListingBdPipeline" api/_handlers/intake-promoter.js    # >= 2
+  grep -c "insertedListingId"    api/_handlers/sidebar-pipeline.js   # >= 6
+  node -c api/_handlers/sidebar-pipeline.js                          # parses
+  node -c api/_handlers/intake-promoter.js                           # parses
+
+Smoke test (optional but recommended)
+  1. Capture a CoStar listing for an asset_type + state with known
+     peer-owner contacts in the entities table.
+  2. SELECT * FROM inbox_items
+     WHERE source_type='listing_bd_trigger'
+       AND created_at > now() - interval '5 minutes';
+     Should return T-011/T-012 candidates.
+  3. Re-capture the same listing (PATCH path).
+  4. Re-run the SELECT — should return NO additional rows (insertedListingId
+     stays null on UPDATE).
+
+Refs
+----
+  audit:  LCC_Holistic_Audit_2026-05-17.docx, findings A-1, D-1, D-5
+  patch:  audit/patches/01-bd-pipeline-trigger/apply.mjs
+  paired: existing sync.js:2571 SF-webhook pattern this mirrors
