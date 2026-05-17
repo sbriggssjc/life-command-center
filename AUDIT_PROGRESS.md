@@ -605,6 +605,37 @@ is_build_to_suit         3
 - Field-level focus (chip click → scroll to + focus the specific input within the rendered tab).
 
 
+
+## Closeout — bug-fix #1 — Add inbox_items.flag_removed_at column
+- **Status:** ✅ DONE
+- **Branch:** `bugfix/01-inbox-flag-removed-at`
+- **Patch:** `audit/patches/bug-01-inbox-flag-removed-at/apply.mjs`
+- **Closes part of:** Task #28 (app loading slowly). Surfaced via production Postgres logs during Item #6 triage.
+
+### What this fixes
+`api/sync.js` (handleFlaggedEmails + dependents) references `inbox_items.flag_removed_at` at lines 358, 406, 459, 545, 600, 601, 659. The column was missing on LCC Opps, throwing on every flagged-email read + silently dropping writes when an email was unflagged in Outlook.
+
+- **Read path:** had a graceful fallback (retry without the filter) but burned one failed query per request. After this fix, the first query succeeds.
+- **Write path:** had NO fallback. Lines 459/601/659 wrote `new Date().toISOString()` to a non-existent column → silent ingest_write_failures rows. After this fix, the writes land.
+
+### Files changed
+- `supabase/migrations/20260517240000_lcc_inbox_items_flag_removed_at.sql` — new migration
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Apply
+- Migration file is in the repo. Apply via Supabase Studio's SQL Editor on LCC Opps (project `xengecqvemvfknjvbvrq`) — the MCP route was wedged at apply-time on 2026-05-17 with intermittent `Connection terminated due to connection timeout` errors. Studio uses a different connection path and should succeed.
+
+### Verification
+1. Studio query: `SELECT column_name FROM information_schema.columns WHERE table_name='inbox_items' AND column_name='flag_removed_at';` → returns one row.
+2. Hard-reload the app; `api/sync.js` no longer emits `flag_removed_at` error in Postgres logs.
+3. Home load time drops noticeably (one fewer failed round-trip on every flagged-email render).
+
+### Related findings during triage (handed off to follow-up bugs)
+- Bug #2: `invalid input syntax for type bytea` (sidebar uploads) — root cause TBD.
+- Bug #3: `staged_intake_items_status_check` violations — unknown writer using disallowed status.
+- Observation: LCC Opps DB had intermittent query timeouts via Supabase MCP during this work, while dia + gov were instant. `recordWriteFailure` in `api/_shared/ops-db.js` is currently `await`ed inside `domainQuery`, so each silent failure adds ~50-200ms latency. With high failure rates that compounds. Captured as a Phase B refinement on Item #5.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
