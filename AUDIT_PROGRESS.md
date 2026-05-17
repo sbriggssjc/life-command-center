@@ -513,6 +513,42 @@ Per Scott's broker methodology: NOI ÷ TTM cap rate from CM reports. NOI ≈ act
 - These two edge cases were small enough to defer; the major signal cleanup is in.
 
 
+
+## Closeout — item 4 Phase C — Next Best Action rail on Home tab
+- **Status:** ✅ DONE
+- **Branch:** `audit/05-nba-home-rail`
+- **Patch:** `audit/patches/05-nba-home-rail/apply.mjs`
+- **Closes:** B-1 (cross-domain) + B-3 (next-best-action surfacing) — user-visible payoff for the entire Item #4 build.
+
+### What this adds
+- New widget on Home, immediately after the 4 stat cards and before Weather.
+- Renders the top 10 globally-ranked gaps merged across dia + gov.
+- Each row is clickable and opens the unified property detail panel for that record.
+- Domain switch (All / Dialysis / Government) persisted in localStorage as 'lcc.nba.domain'.
+- Refresh button + automatic refresh on the existing 5-minute auto-refresh interval and on tab regain-focus (visibilitychange).
+
+### Data flow
+GET /api/admin?_route=next-best-action&domain={both|dia|gov}&limit=15  →  handleNextBestAction  →  fan-out to dia.v_next_best_action + gov.v_next_best_action  →  global re-rank by gap_value DESC  →  top-N slice  →  {items, by_domain, total_merged}
+
+### Row layout
+- Rank number, severity chip (CRIT/HIGH/MED/LOW color-coded), domain tag (DIA/GOV), label (with the `[N dup records]` annotation from v3.2 when present), suggested action (1-line summary), value estimate (NOI/cap from v3).
+- Left border stripe color-coded by severity.
+- Click row → openUnifiedDetail(db, { property_id }). Fallback navTo(pageDia|pageGov) if detail not loaded yet.
+
+### Files changed
+- index.html — widget block after Home stats grid
+- styles.css — .nba-* block (layout + severity colors)
+- app.js — state vars, handlePageLoad pageHome wiring, render/load fns, bootApp Promise.all entry, auto-refresh + visibilitychange entries
+- AUDIT_PROGRESS.md — this closeout
+
+### Verification (post-apply, post-commit)
+1. grep -c "renderNextBestActionPanel" app.js   → 4 or more
+2. grep -c "loadNextBestActionData"   app.js   → 5 or more
+3. grep -c "nextBestActionWidget"     index.html → 1
+4. grep -c ".nba-row"                 styles.css → 1 or more
+5. Smoke: hard-reload the app, land on Home. Rail visible with 10 ranked rows, top entry has expected value, clicking a row opens the unified detail panel.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
