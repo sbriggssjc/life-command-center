@@ -1,0 +1,29 @@
+bugfix(01): add inbox_items.flag_removed_at column on LCC Opps
+
+Surfaced in production Postgres logs during Item #6 triage:
+  ERROR: column inbox_items.flag_removed_at does not exist
+
+api/sync.js (handleFlaggedEmails + dependents) references this column
+at lines 358, 406, 459, 545, 600, 601, 659. The column was supposed
+to land in schema/028_email_dedup_constraint.sql but never reached
+this environment.
+
+Impact:
+  • Reads had a graceful fallback (retry without filter) but burned
+    one failed query per request — directly contributing to slow Home
+    loads.
+  • Writes at 459/601/659 had NO fallback. Unflagging an email in
+    Outlook silently dropped the flag_removed_at write.
+
+Fix:
+  • ALTER TABLE inbox_items ADD COLUMN flag_removed_at TIMESTAMPTZ
+  • CREATE INDEX (workspace_id, source_type, status) WHERE
+    flag_removed_at IS NULL — matches the hot read shape
+
+Apply path: Supabase Studio SQL Editor on project xengecqvemvfknjvbvrq
+(LCC Opps). MCP route was intermittently timing out at apply-time on
+2026-05-17; Studio uses a separate connection path and should succeed.
+
+Files changed:
+  • supabase/migrations/20260517240000_lcc_inbox_items_flag_removed_at.sql
+  • AUDIT_PROGRESS.md

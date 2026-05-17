@@ -1,0 +1,35 @@
+bugfix(02+03): repair LCC Opps intake pipeline schema drift
+
+Two production errors surfaced during Item #6 triage, both in the
+staged_intake pipeline on LCC Opps.
+
+Bug #2 — invalid input syntax for type bytea
+  schema/037_staged_intake_on_lcc_opps.sql:57 declares
+    inline_data text     -- base64 payload
+  but the production LCC Opps DB drifted to bytea. Every inline upload
+  (sidebar, email body, Copilot) fails the PostgREST cast on POST.
+
+  Repair: ALTER COLUMN inline_data TYPE text USING
+    encode(inline_data,'base64')
+  Preserves existing rows by base64-encoding any binary content to the
+  shape the extractor expects. The DO-block inspects
+  information_schema first and only ALTERs if needed (idempotent +
+  safe to re-run).
+
+Bug #3 — staged_intake_items_status_check violations
+  api/_handlers/intake-feedback.js lines 200–206 PATCHes:
+    'approved' / 'corrected' → 'matched'        ❌ not in CHECK
+    'rejected' / 'deferred'  → 'review_needed'  ❌ typo of 'review_required'
+    'no_match'                → 'no_match'       ❌ not in CHECK
+  Two-part fix:
+    1. Code: rename 'review_needed' → 'review_required' (canonical).
+    2. Migration: expand the CHECK to include 'matched' and 'no_match'
+       as legitimate post-feedback states.
+
+Apply: run the migration via Supabase Studio SQL Editor on LCC Opps
+(MCP route still flaky as of this commit).
+
+Files changed:
+  • supabase/migrations/20260517250000_lcc_intake_schema_drift_repair.sql
+  • api/_handlers/intake-feedback.js (canonical status name)
+  • AUDIT_PROGRESS.md
