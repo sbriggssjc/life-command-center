@@ -1,0 +1,84 @@
+audit(item-5/a): surface silent domain-DB write failures
+
+Phase A of audit item #5 (Phase B = pushProvenance call-site migration +
+D-13 ownership_research_queue column-schema fix, deferred).
+
+Closes audit finding A-3 (the table + instrumentation half).
+
+The audit identified that domainPatch swallows non-2xx PostgREST responses
+with only a console.warn — no persistent record, no alerting, no way to
+audit the pattern. The downstream impact: field_provenance records writes
+that never actually landed (D-3), and column-schema mismatches like the
+ownership_research_queue writers (D-13 — discovered during item #2) can
+run for months unnoticed.
+
+Changes
+-------
+
+supabase/migrations/20260517160000_lcc_ingest_write_failures_table.sql
+  * New table public.ingest_write_failures on LCC Opps. Single cross-
+    domain row per non-2xx write response.
+  * Two views: v_ingest_write_failures_recent (last 7 days, with derived
+    error_summary) and v_ingest_write_failures_by_label (30-day rollup).
+  * Already applied via Supabase MCP at 2026-05-17.
+
+api/_shared/ops-db.js
+  * New exported recordWriteFailure({...}) helper. Fire-and-forget POST
+    to ingest_write_failures on LCC Opps. Never throws or propagates.
+    Truncates paths > 500 chars, caps error_detail at 5KB, extracts
+    record_pk from PostgREST =eq.<value> filter pattern.
+
+api/_shared/domain-db.js
+  * domainQuery signature gains a 6th positional parameter `opts = {}`
+    carrying optional { label, sourceRunId, callerFile }. Existing
+    callers continue to work unchanged.
+  * After every non-2xx POST / PATCH / PUT / DELETE response,
+    domainQuery now fires recordWriteFailure. GETs are intentionally
+    NOT instrumented (those failures are usually about missing rows,
+    not silent corruption).
+  * Renamed the local `opts` variable (fetch options) to `fetchOpts`
+    to free the name for the new public parameter.
+
+api/_handlers/sidebar-pipeline.js
+  * domainPatch threads its `label` through to domainQuery via the new
+    opts parameter, so the resulting ingest_write_failures row carries
+    a meaningful tag like 'upsertDomainSales:dialysis:patch'.
+
+AUDIT_PROGRESS.md
+  * Item #5 row: PENDING → IN PROGRESS (Phase A landed).
+  * New closeout section with verification steps and scope-of-impact.
+
+Scope of impact
+---------------
+
+Every domain DB write from every code path is now instrumented automatically
+without per-call-site changes. The 40+ writers in sidebar-pipeline.js plus
+all callers in intake-promoter.js, admin handlers, and any future code
+get the same treatment for free.
+
+**Expect a burst of new ingest_write_failures rows after this deploys.**
+The D-13 silent-write bug — ownership_research_queue writers at
+sidebar-pipeline.js:1759 and :2592 POSTing columns that don't exist on the
+real table — will START surfacing immediately. Look for HTTP 400 rows with
+label=null caller_file='domain-db.js' on those paths. Phase B will fix
+those writers (either rewrite to use the correct task_type='contact_
+discovery' / 'entity_resolution' schema, or remove them as redundant
+since the Python ai_research.py pipeline already covers those task types).
+
+Verification
+------------
+  grep -c "recordWriteFailure" api/_shared/ops-db.js       # >= 1
+  grep -c "recordWriteFailure" api/_shared/domain-db.js    # >= 2
+  node -c api/_shared/ops-db.js
+  node -c api/_shared/domain-db.js
+  node -c api/_handlers/sidebar-pipeline.js
+
+After deploy, on LCC Opps SQL:
+  SELECT * FROM v_ingest_write_failures_recent LIMIT 20;
+  SELECT label, domain, n, http_statuses FROM v_ingest_write_failures_by_label;
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #5 (Top-10)
+  findings: A-3 (silent-write loop), D-13 (column-schema mismatch — Phase B)
+  branch:   audit/05-provenance-integrity (Phase A of 2)

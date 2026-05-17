@@ -22,7 +22,7 @@
 | 2 | Drain `llc_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B) | A-1, B-5 | Phase A merged to main as `54ee38e` (cron live, verified). Phase B (UI) deferred to follow-up session. D-13 moved to item #5. |
 | 3 | Wire `resolveOwnerLinks` for dia + backfill | `audit/03-dia-owner-linkage` | 🟨 IN PROGRESS | A-2 | CRITICAL · Phase A: forward-looking dia owner resolution (this commit). Phase B: one-shot backfill of 13,338 NULL-owner dia properties (deferred). |
 | 4 | Build `v_next_best_action` UNION view + Home rail | `audit/04-next-best-action` | 🟦 PENDING | B-1, B-3, B-13 | CRITICAL |
-| 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) + sidebar→ownership_research_queue schema fix | `audit/05-provenance-integrity` | 🟦 PENDING | A-3, D-13 | CRITICAL · sidebar writers at sidebar-pipeline.js:1759 + :2592 have been silently failing for unknown duration (wrong columns: write `property_id` to a table whose schema is `research_id`/`lead_id`/`task_type`). Discovered 2026-05-17 during item #2 investigation. |
+| 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) + sidebar→ownership_research_queue schema fix | `audit/05-provenance-integrity` | 🟨 IN PROGRESS | A-3, D-13 | CRITICAL · Phase A (this commit): ingest_write_failures table + domainQuery instrumentation. Phase B (deferred): gate 47 pushProvenance/recordCoStarFieldsProvenance call sites on .ok + fix D-13 column-schema mismatch in two ownership_research_queue writers. |
 | 6 | Data Completeness rail on `detail.js` + persisted column | `audit/06-completeness-rail` | 🟦 PENDING | B-2, B-15 | HIGH |
 | 7 | Seed cadence on new contact writes | `audit/07-contact-cadence-seed` | 🟦 PENDING | D-2, D-6 | CRITICAL |
 | 8 | Sticky next-action bar on `detail.js` | `audit/08-detail-next-action-bar` | 🟦 PENDING | B-9, B-10 | HIGH |
@@ -130,6 +130,31 @@ The audit doc finding **D-13** ("ownership_research_queue has a writer; no conta
   3. `node -c api/_handlers/intake-promoter.js` → parses
   4. (Smoke test) Re-promote an existing dia OM intake by re-flagging it in Power Automate; query `SELECT recorded_owner_id, true_owner_id FROM dia.properties WHERE property_id = <X>` before and after; the FKs should now populate when a matching owner exists.
 - **Commit SHA:** _paste after `git commit`_
+
+
+
+## Closeout — item 5 — Phase A (surface silent domain-DB write failures)
+- **Status:** 🟨 IN PROGRESS (Phase A landed; Phase B = call-site migration + D-13 column-schema fix, deferred)
+- **Branch:** `audit/05-provenance-integrity`
+- **Patch:** `audit/patches/05-provenance-integrity/apply.mjs`
+- **Closes:** A-3 (the instrumentation + tracking-table half). Phase B will close the call-site migration + D-13.
+- **Files changed:**
+  - `supabase/migrations/20260517160000_lcc_ingest_write_failures_table.sql` — new table + 2 views on LCC Opps. Already applied via Supabase MCP at 2026-05-17.
+  - `api/_shared/ops-db.js` — new `recordWriteFailure({...})` helper. Fire-and-forget POST to LCC Opps. Never throws.
+  - `api/_shared/domain-db.js` — `domainQuery` now takes an `opts` parameter (`label`, `sourceRunId`, `callerFile`) and auto-calls `recordWriteFailure` on every non-2xx POST/PATCH/PUT/DELETE. GETs are NOT instrumented (those failures are usually about missing rows, not silent corruption).
+  - `api/_handlers/sidebar-pipeline.js` — `domainPatch` passes its `label` through to `domainQuery` so the new ingest_write_failures rows carry meaningful tags. (Polish — instrumentation works even without this.)
+  - `AUDIT_PROGRESS.md` — this file.
+- **Scope of impact:**
+  - Every domain DB write from every code path (sidebar-pipeline, intake-promoter, admin handlers, etc.) is now instrumented automatically — no per-call-site change required.
+  - **Important:** Existing silent failures (the ones from D-13: ownership_research_queue writers POSTing wrong columns) will START surfacing in `ingest_write_failures` after this lands. We expect to see a burst of 4xx rows from `sidebar-pipeline.js:1759` (BROKER_FIRSTNAME_ONLY enqueue) and `:2592` (auto-enqueue with property_id). Phase B will fix those writers.
+- **Verification (post-commit):**
+  1. `grep -c "recordWriteFailure" api/_shared/ops-db.js` → ≥ 1 (definition)
+  2. `grep -c "recordWriteFailure" api/_shared/domain-db.js` → ≥ 2 (import + call)
+  3. `node -c api/_shared/ops-db.js` and `node -c api/_shared/domain-db.js` → both parse
+  4. (LCC Opps SQL, after first sidebar capture or intake post-deploy)
+     `SELECT * FROM v_ingest_write_failures_recent LIMIT 20;`
+     Expected to surface the D-13 silent-write rows (ownership_research_queue 4xx).
+  5. `SELECT label, domain, n, http_statuses FROM v_ingest_write_failures_by_label LIMIT 20;` → triage rollup.
 
 
 # Sprint preflight — 2026-05-17
