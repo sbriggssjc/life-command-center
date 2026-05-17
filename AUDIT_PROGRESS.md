@@ -443,6 +443,52 @@ Then extend handleNextBestAction to also fetch from LCC Opps via opsQuery.
 Home rail UI in `app.js` calling `/api/admin?_route=next-best-action`, rendering the merged top-20 with click-through to property_id detail or entity_pk detail. Replaces the wrong-table Research pulse-card (audit B-13).
 
 
+
+## Closeout — item 4 valuation v3 — NOI ÷ cap_rate (broker methodology)
+- **Status:** ✅ DONE (live on dia + gov)
+- **Branch:** `audit/04-valuation-v3`
+- **Patch:** `audit/patches/04-next-best-action-valuation-v3/apply.mjs`
+- **Migrations applied** via Supabase MCP at 2026-05-17:
+  - dia: `20260517210000_dia_next_best_action_valuation_v3.sql`
+  - gov: `20260517210000_gov_next_best_action_valuation_v3.sql`
+
+### Discovery that motivated this
+Scott's input — sold 33820 Weyerhaeuser Way (Federal Way, WA) for ~$115M; v_next_best_action ranked it at $575M. Investigation found multiple polluted columns:
+- `dia.properties.current_value_estimate` — stores dialysis-operator BUSINESS valuations (revenue × ~5× EBITDA), not real estate. Top ranked properties showed implausible $/SF ($12,363/SF on a 5,880 SF Maryland building).
+- `dia.properties.last_known_rent` — same pollution class.
+- `dia.leases.annual_rent` — same pollution on the same rows (operator revenue loaded into rent column).
+
+### Fix
+Per Scott's broker methodology: NOI ÷ TTM cap rate from CM reports. NOI ≈ active NNN lease annual_rent (with $5M sanity cap). Cap rate from `cm_dialysis_cap_ttm_q` (overall subspecialty, 7.85% Q1 2026) and `cm_gov_cap_by_term_q` (by lease term tier; today only cap_outside_firm populated ≈ 9.76% Q1 2026, fallback to TTM).
+
+### Value signal priority (final)
+1. Most recent sale within 10y (truth)
+2. Active listing price (market signal)
+3. **NOI ÷ cap_rate (broker methodology)**
+4. SF × $400/SF, capped at 200K (dia) or 500K (gov)
+5. estimated_value (gov) or current_value_estimate × 0.2 (dia, polluted)
+6. gross_rent × 10 (gov) or last_known_rent × 2 capped (dia, polluted)
+7. $1M baseline
+
+### Coverage breakdown on dia (15,219 properties)
+| Signal source | Count | Quality |
+|---|---|---|
+| Recent sale | 1,504 | ✅ Truth |
+| Active listing | 346 | ✅ Market |
+| **NOI ÷ cap_rate** | **2,920** | ✅ Broker methodology |
+| SF × $400 capped | 7,031 | OK proxy |
+| Polluted CVE × 0.2 | 350 | Discounted |
+| Polluted rent × 2 | 13 | Marginal |
+| $1M baseline | 3,055 | No signal |
+
+**4,770 properties (31%) now have high-quality real-estate-grounded value signals** vs zero before.
+
+### Open follow-ups
+- **Discovery #4 (junk property records)**: Top 10 ranks still tied at $160M cluster — properties with garbage addresses ("property #13900", "Juru Pa Va Lley", "15 5 2 2 2 4 3 2 4") that have no usable data. Either filter from view via address-quality predicate, or investigate upstream ingestion path. **Task #25**.
+- **Upstream rent/value column pollution**: The same writer path is loading operator-revenue into properties.current_value_estimate, properties.last_known_rent, AND leases.annual_rent. Worth tracing once item #5 Phase B (silent-write fix) lands more completely.
+- **dia cap-rate term tiers**: `cm_dialysis_cap_ttm_q` only has `subspecialty='all'` today. When the CM pipeline adds term-tier slicing (matching gov's structure), the dia view can be extended to use it.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

@@ -1,0 +1,81 @@
+audit(item-4/v3): NOI ÷ cap_rate valuation methodology
+
+Item #4 valuation v3. Both dia and gov v_property_value_signal views
+rewritten to prefer real transaction prices, then NOI ÷ TTM cap rate
+(broker methodology per Scott), then capped SF proxy, then heavily-
+discounted polluted columns.
+
+Audit-discovery that motivated this
+-----------------------------------
+
+Scott reported he sold 33820 Weyerhaeuser Way (Federal Way, WA) for
+$115M; v_next_best_action ranked it at $575M. Investigation found
+multiple polluted columns on dia:
+  • current_value_estimate, last_known_rent, leases.annual_rent all
+    store dialysis-operator BUSINESS valuations (revenue × ~5× EBITDA
+    multiple), not real estate values.
+  • Top-ranked properties showed implausible $/SF ($12,363/SF on a
+    5,880 SF building in Maryland).
+  • Same operator-revenue numbers replicated across multiple writer
+    paths.
+
+Fix
+---
+
+Per Scott's broker methodology: NOI ÷ TTM cap rate from CM reports.
+NOI ≈ active NNN lease annual_rent (with $5M sanity cap to filter
+the operator-revenue pollution). Cap rate from cm_dialysis_cap_ttm_q
+and cm_gov_cap_by_term_q (by lease-term tier; falls back to
+cap_outside_firm → cm_gov_cap_ttm_q on gov; subspecialty='all' for dia).
+
+Value priority (both domains)
+  1. Recent sale within 10y (truth)
+  2. Active listing price (market)
+  3. NOI ÷ cap_rate (broker methodology)
+  4. SF × $400, capped at 200K (dia) / 500K (gov)
+  5. estimated_value (gov) or current_value_estimate × 0.2 (dia, polluted)
+  6. gross_rent × 10 (gov) or last_known_rent × 2 capped (dia, polluted)
+  7. $1M baseline
+
+Changes
+-------
+
+supabase/migrations/dialysis/20260517210000_dia_next_best_action_valuation_v3.sql
+supabase/migrations/government/20260517210000_gov_next_best_action_valuation_v3.sql
+  * Both rewrite v_property_value_signal with the new priority chain.
+  * Already applied to dia + gov via Supabase MCP at 2026-05-17.
+
+AUDIT_PROGRESS.md
+  * Item #4 valuation v3 closeout section.
+  * Coverage breakdown: 4,770 of 15,219 dia properties (31%) now use
+    high-quality signals (recent sale / active listing / NOI cap).
+  * Discovery #4 logged: junk property records polluting top ranks.
+
+Open follow-ups
+---------------
+  • Discovery #4 (Task #25): junk property records with garbage
+    addresses still dominate top-10 ($160M tied cluster from SF cap).
+  • Upstream pollution: the same writer path that polluted
+    current_value_estimate / last_known_rent also wrote to
+    leases.annual_rent. Worth tracing during item #5 Phase B.
+  • dia cap-rate term tiers: dia view has only subspecialty='all';
+    extend when CM publishes term-sliced rates.
+
+Verification
+------------
+
+  SELECT count(*) FILTER (WHERE rev_value > 1000000) AS clean_signals,
+         count(*) AS total
+  FROM public.v_property_value_signal;
+
+  SELECT property_id, address, rev_value::bigint
+  FROM public.properties p JOIN public.v_property_value_signal v USING(property_id)
+  WHERE property_id = 23518;  -- Federal Way; expect ≈$80M (SF cap, since
+                              -- lease rent is rejected by $5M cap).
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #4 valuation v3
+  paired:   dia view (commit 2483680), gov view (commit 26993d0),
+            endpoint (commit a065178), rank hotfix (commit 3d42a6a)
+  branch:   audit/04-valuation-v3
