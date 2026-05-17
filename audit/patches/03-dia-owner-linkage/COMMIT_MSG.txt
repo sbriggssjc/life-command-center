@@ -1,0 +1,77 @@
+audit(item-3/a): wire resolveOwnerLinks for dia domain
+
+Phase A of audit item #3 (Phase B = one-shot backfill, deferred).
+
+Closes audit finding A-2 (the forward-looking half — the historical
+backfill of 13,338 NULL-recorded-owner-id dia properties is Phase B,
+intentionally deferred to keep this commit small and reviewable).
+
+Before this commit, every dia OM intake terminated at `return { ok: true,
+skipped: 'owner_resolution_not_implemented_for_dialysis' }`. OM email is
+the dominant intake path for dia, so 87.6% of dia properties (13,338 of
+15,219) have NULL `recorded_owner_id` despite often having a clear seller
+name in the OM. Nearby-owners, LLC research enqueue, Salesforce account-
+link, and the planned "nearby owners outreach" features have all been
+operating on a partial view.
+
+Changes
+-------
+
+api/_handlers/intake-promoter.js
+  * New import: `reconcilePropertyOwnership` from `./sidebar-pipeline.js`.
+  * New function `resolveOwnerLinksDia(match, snapshot)` (~120 lines):
+      - Mirrors the gov `resolveOwnerLinks` pattern with dia column names:
+        `normalized_name` for fuzzy match (gov: `canonical_name`),
+        `sf_company_id` / `salesforce_id` for SF telemetry (gov:
+        `sf_account_id`).
+      - Owner-name signal priority: `snapshot.seller_name` →
+        `property.assessed_owner` → regex-parsed from `property.notes`.
+      - Normalizes the name (strip entity suffixes, collapse whitespace),
+        then ILIKE-matches against `recorded_owners.{name,normalized_name}`
+        and `true_owners.{name,normalized_name}` — 4 PostgREST queries
+        per intake, deduped client-side.
+      - PATCHes `dia.properties.true_owner_id` and `recorded_owner_id`
+        when a match is found.
+      - Calls `reconcilePropertyOwnership('dialysis', propertyId)` after
+        the FK patches to denormalize `recorded_owner_name` /
+        `true_owner_name` onto `dia.properties` (matching the sidebar
+        path which already does this for CoStar captures).
+      - Returns sf_sync_flags for telemetry but skips the gov-style SF
+        auto-PATCH because dia's SF integration runs through
+        `crossReferenceSalesforce` in sidebar-pipeline.js (separate path).
+  * `resolveOwnerLinks` dispatcher: routes `match.domain === 'dialysis'`
+    to `resolveOwnerLinksDia`. Gov path is unchanged.
+
+AUDIT_PROGRESS.md
+  * Item #2 row: now ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B), commit
+    `54ee38e`.
+  * Item #3 row: 🟦 PENDING → 🟨 IN PROGRESS (Phase A in this commit,
+    Phase B = backfill, deferred).
+  * New closeout section for item #3 Phase A with verification steps
+    and scope-of-impact notes.
+
+What this does NOT do
+---------------------
+- **No backfill of historical data.** The 13,338 NULL-owner dia
+  properties stay NULL until Phase B's one-shot script runs against
+  them. Forward-looking OM intakes from this commit onward will link
+  properly if a matching `recorded_owners` row exists.
+- **No new owner records.** This patch only LINKS to existing
+  `recorded_owners` / `true_owners`. Creating new rows from OM data
+  is sidebar-pipeline's job (upsertDomainOwners), not the OM-intake
+  promoter's.
+
+Verification
+------------
+  grep -c "resolveOwnerLinksDia"      api/_handlers/intake-promoter.js   # >= 2
+  grep -c "reconcilePropertyOwnership" api/_handlers/intake-promoter.js  # >= 2
+  node -c                              api/_handlers/intake-promoter.js
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #3 (Top-10)
+  finding:  A-2 ("Dialysis OM intake never populates properties.recorded_owner_id")
+  branch:   audit/03-dia-owner-linkage (Phase A of 2)
+  pairing:  reconcilePropertyOwnership lives in sidebar-pipeline.js:6789
+            and is already domain-aware (handles both gov and dia by
+            switching column names internally).

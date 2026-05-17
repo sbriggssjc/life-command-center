@@ -1,4 +1,8 @@
 // api/_handlers/intake-promoter.js
+// Item #3 (audit/03-dia-owner-linkage): pulled in to denormalize
+// recorded_owner_name / true_owner_name on dia.properties after the new
+// resolveOwnerLinksDia branch patches recorded_owner_id / true_owner_id.
+import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
 // ============================================================================
 // Intake Promoter — write matched OM intakes into domain databases
 // Life Command Center
@@ -1500,7 +1504,190 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
 // This runs only for gov matches today. Dialysis has different owner
 // structures (operator + landlord separation) that need their own mapper.
 
+// ── Item #3 (audit/03-dia-owner-linkage): dia owner resolution sibling.
+// Mirrors the gov resolveOwnerLinks pattern below with dia column names:
+//   - lookup tables: recorded_owners (PK recorded_owner_id UUID),
+//     true_owners (PK true_owner_id UUID) — same as gov
+//   - fuzzy-match cols: dia uses 'normalized_name' (gov uses 'canonical_name')
+//   - SF link: dia.recorded_owners has NO sf_account_id; dia.true_owners
+//     has sf_company_id + salesforce_id. The dia SF integration runs via
+//     crossReferenceSalesforce in sidebar-pipeline.js, NOT via the
+//     resolveOwnerLinks SF auto-link path. We surface sf_sync_flags for
+//     telemetry but skip the gov-style auto-PATCH for sf_account_id.
+// After the FK patches, call reconcilePropertyOwnership('dialysis', ...)
+// to denormalize recorded_owner_name / true_owner_name onto properties
+// (matching what sidebar-pipeline's deed-parser flow already does for
+// CoStar captures).
+async function resolveOwnerLinksDia(match, snapshot) {
+  const propertyId = match.property_id; // dia property_id is BIGINT, not UUID
+  const propRes = await domainQuery(
+    'dialysis',
+    'GET',
+    `properties?property_id=eq.${propertyId}&select=recorded_owner_id,true_owner_id,assessed_owner,notes&limit=1`
+  );
+  if (!propRes.ok || !Array.isArray(propRes.data) || !propRes.data.length) {
+    return { ok: false, skipped: 'property_not_found' };
+  }
+  const prop = propRes.data[0];
+
+  // Owner-name signal: same priority as gov.
+  let ownerName = (snapshot?.seller_name || '').trim()
+               || (prop.assessed_owner || '').trim();
+  if (!ownerName && typeof prop.notes === 'string') {
+    const m = prop.notes.match(/(?:Lessor|Owner|Seller)\s*:\s*([^\n,;]+)/i);
+    if (m) ownerName = m[1].trim();
+  }
+
+  const result = {
+    ok: true,
+    domain:          'dialysis',
+    owner_name_used: ownerName || null,
+    recorded_owner:  { already_linked: !!prop.recorded_owner_id },
+    true_owner:      { already_linked: !!prop.true_owner_id },
+    sf_sync_flags:   [],
+  };
+  if (!ownerName) {
+    result.skipped = 'no_owner_signal';
+    return result;
+  }
+
+  // Normalize same way as gov (strip suffix tokens, collapse whitespace).
+  const coreName = ownerName
+    .replace(/,/g, ' ')
+    .replace(/\b(LLC|L\.L\.C\.|LP|L\.P\.|INC|INC\.|CORP|CORP\.|LLP|CO|LTD|PLLC)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const pattern = `*${coreName}*`;
+
+  // dia.recorded_owners has no sf_account_id; dia.true_owners has
+  // sf_company_id (different name). Two helpers because column lists differ.
+  const lookupRecordedOwner = async () => {
+    const [byName, byNorm] = await Promise.all([
+      domainQuery('dialysis', 'GET',
+        `recorded_owners?name=ilike.${encodeURIComponent(pattern)}&select=recorded_owner_id,name,true_owner_id&limit=5`
+      ),
+      domainQuery('dialysis', 'GET',
+        `recorded_owners?normalized_name=ilike.${encodeURIComponent(pattern)}&select=recorded_owner_id,name,true_owner_id&limit=5`
+      ),
+    ]);
+    const rows = [], seen = new Set();
+    for (const r of (byName.data || [])) { if (!seen.has(r.recorded_owner_id)) { seen.add(r.recorded_owner_id); rows.push(r); } }
+    for (const r of (byNorm.data || [])) { if (!seen.has(r.recorded_owner_id)) { seen.add(r.recorded_owner_id); rows.push(r); } }
+    return rows;
+  };
+  const lookupTrueOwner = async () => {
+    const [byName, byNorm] = await Promise.all([
+      domainQuery('dialysis', 'GET',
+        `true_owners?name=ilike.${encodeURIComponent(pattern)}&select=true_owner_id,name,sf_company_id,salesforce_id&limit=5`
+      ),
+      domainQuery('dialysis', 'GET',
+        `true_owners?normalized_name=ilike.${encodeURIComponent(pattern)}&select=true_owner_id,name,sf_company_id,salesforce_id&limit=5`
+      ),
+    ]);
+    const rows = [], seen = new Set();
+    for (const r of (byName.data || [])) { if (!seen.has(r.true_owner_id)) { seen.add(r.true_owner_id); rows.push(r); } }
+    for (const r of (byNorm.data || [])) { if (!seen.has(r.true_owner_id)) { seen.add(r.true_owner_id); rows.push(r); } }
+    return rows;
+  };
+
+  // ---- true_owner first
+  if (!prop.true_owner_id) {
+    const toRows = await lookupTrueOwner();
+    if (toRows.length) {
+      const best = toRows[0];
+      const patchRes = await domainQuery(
+        'dialysis',
+        'PATCH',
+        `properties?property_id=eq.${propertyId}`,
+        { true_owner_id: best.true_owner_id }
+      );
+      result.true_owner = {
+        already_linked: false,
+        resolved_id:    best.true_owner_id,
+        resolved_name:  best.name,
+        sf_company_id:  best.sf_company_id || null,
+        salesforce_id:  best.salesforce_id || null,
+        patched:        patchRes.ok,
+      };
+      if (!best.sf_company_id && !best.salesforce_id) {
+        result.sf_sync_flags.push({
+          kind: 'true_owner',
+          owner_id: best.true_owner_id,
+          name: best.name,
+          reason: 'no_sf_link — surface for manual SF match (dia SF sync runs via crossReferenceSalesforce)',
+        });
+      }
+    } else {
+      result.true_owner.lookup = 'no_match';
+    }
+  } else {
+    const existing = await domainQuery(
+      'dialysis',
+      'GET',
+      `true_owners?true_owner_id=eq.${encodeURIComponent(prop.true_owner_id)}&select=true_owner_id,name,sf_company_id,salesforce_id&limit=1`
+    );
+    if (existing.ok && existing.data?.length) {
+      const row = existing.data[0];
+      result.true_owner.resolved_name = row.name;
+      result.true_owner.sf_company_id = row.sf_company_id || null;
+      result.true_owner.salesforce_id = row.salesforce_id || null;
+    }
+  }
+
+  // ---- recorded_owner
+  if (!prop.recorded_owner_id) {
+    const roRows = await lookupRecordedOwner();
+    if (roRows.length) {
+      const best = roRows[0];
+      const patchRes = await domainQuery(
+        'dialysis',
+        'PATCH',
+        `properties?property_id=eq.${propertyId}`,
+        { recorded_owner_id: best.recorded_owner_id }
+      );
+      result.recorded_owner = {
+        already_linked: false,
+        resolved_id:    best.recorded_owner_id,
+        resolved_name:  best.name,
+        true_owner_id:  best.true_owner_id || null,
+        patched:        patchRes.ok,
+      };
+    } else {
+      result.recorded_owner.lookup = 'no_match';
+    }
+  } else {
+    const existing = await domainQuery(
+      'dialysis',
+      'GET',
+      `recorded_owners?recorded_owner_id=eq.${encodeURIComponent(prop.recorded_owner_id)}&select=recorded_owner_id,name,true_owner_id&limit=1`
+    );
+    if (existing.ok && existing.data?.length) {
+      result.recorded_owner.resolved_name = existing.data[0].name;
+    }
+  }
+
+  // Denormalize recorded_owner_name + true_owner_name onto properties.
+  // reconcilePropertyOwnership reads ownership_history if present and
+  // patches the denorm columns. If no ownership_history rows exist, it
+  // returns { updated:false } silently — safe to call unconditionally.
+  try {
+    const reconcileRes = await reconcilePropertyOwnership('dialysis', propertyId);
+    if (reconcileRes?.updated) {
+      result.reconcile = { ok: true, patch: reconcileRes.patch };
+    } else {
+      result.reconcile = { ok: true, reason: reconcileRes?.reason || 'no_ownership_history' };
+    }
+  } catch (err) {
+    result.reconcile = { ok: false, error: err?.message || String(err) };
+  }
+
+  return result;
+}
+
 async function resolveOwnerLinks(match, snapshot) {
+  if (match.domain === 'dialysis') {
+    return resolveOwnerLinksDia(match, snapshot);
+  }
   if (match.domain !== 'government') {
     return { ok: true, skipped: `owner_resolution_not_implemented_for_${match.domain}` };
   }
