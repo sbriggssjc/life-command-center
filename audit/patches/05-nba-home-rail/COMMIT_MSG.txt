@@ -1,0 +1,37 @@
+audit(item-4/phase-c): Next Best Action rail on Home tab
+
+User-visible payoff for the entire Item #4 build. Renders the cross-domain
+prioritized broker queue (dia + gov v_next_best_action) at the top of the
+Home page so Scott opens the app and immediately sees the highest-value
+gaps to close.
+
+Widget placement: directly under the 4 Home stat cards, above Weather.
+Top 10 ranked rows merged globally by gap_value DESC across both domains.
+Each row shows rank, severity chip, domain tag, gap_label (with the
+[N dup records] annotation from v3.2 when present), suggested action,
+and value estimate (NOI ÷ cap_rate from v3). Left-border stripe is
+color-coded by severity. Clicking a row opens openUnifiedDetail(db,
+{ property_id }) for the underlying record.
+
+Controls:
+  • Domain switch (All / Dialysis / Government), persisted in
+    localStorage['lcc.nba.domain'].
+  • Manual refresh button.
+  • Auto-refresh on the existing 5-minute interval and on tab
+    visibilitychange.
+
+Endpoint:
+  GET /api/admin?_route=next-best-action&domain={both|dia|gov}&limit=15
+  (handleNextBestAction, shipped Phase B-2)
+
+Files changed:
+  • index.html  — #nextBestActionWidget block after stats grid
+  • styles.css  — .nba-* layout + severity colors
+  • app.js      — state vars, handlePageLoad pageHome wiring,
+                   render/load fns, bootApp Promise.all entry,
+                   auto-refresh + visibilitychange entries
+  • AUDIT_PROGRESS.md — closeout
+
+Closes B-1 (cross-domain) + B-3 (next-best-action surfacing) — user-
+visible payoff for the entire Item #4 build (Phase A + B-1 + B-2 + v3
++ v3.2 + Phase C all on main).

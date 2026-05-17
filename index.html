@@ -113,6 +113,22 @@
               <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
             </div>
 
+            <!-- Next Best Action — cross-domain prioritized broker queue (Item #4 Phase C, 2026-05-17) -->
+            <div class="widget" id="nextBestActionWidget">
+              <div class="widget-title">
+                Next Best Action
+                <div class="nba-controls">
+                  <div class="nba-domain-switch" id="nbaDomainSwitch">
+                    <button type="button" class="nba-domain-btn active" data-nba-domain="both" onclick="setNbaDomainView('both')">All</button>
+                    <button type="button" class="nba-domain-btn" data-nba-domain="dia"  onclick="setNbaDomainView('dia')">Dialysis</button>
+                    <button type="button" class="nba-domain-btn" data-nba-domain="gov"  onclick="setNbaDomainView('gov')">Government</button>
+                  </div>
+                  <button type="button" class="nba-refresh-btn" onclick="loadNextBestActionData(true)" title="Refresh">↻</button>
+                </div>
+              </div>
+              <div id="nextBestActionContent"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
+
             <!-- Weather -->
             <div class="widget" id="weatherWidget">
               <div class="widget-title">Weather — Locating...</div>

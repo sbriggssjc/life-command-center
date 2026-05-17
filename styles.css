@@ -194,6 +194,44 @@ input, select { font-family: inherit; }
 .db-market-html { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; max-height: 220px; overflow: auto; font-size: 12px; color: var(--text2); line-height: 1.45; }
 .db-market-html table { width: 100%; border-collapse: collapse; }
 .db-market-html td, .db-market-html th { border: 1px solid var(--border); padding: 4px 6px; }
+/* Next Best Action — Home rail (Item #4 Phase C, 2026-05-17) */
+#nextBestActionWidget .widget-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.nba-controls { display: flex; align-items: center; gap: 6px; }
+.nba-domain-switch { display: inline-flex; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; }
+.nba-domain-btn { font-size: 11px; padding: 3px 8px; border: 0; background: transparent; color: var(--text2); border-radius: 6px; cursor: pointer; font-weight: 600; }
+.nba-domain-btn.active { background: var(--accent2); color: #fff; }
+.nba-refresh-btn { font-size: 14px; line-height: 1; padding: 2px 6px; border: 1px solid var(--border); background: var(--s2); color: var(--text2); border-radius: 6px; cursor: pointer; }
+.nba-refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
+.nba-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text2); margin-bottom: 8px; }
+.nba-count strong { color: var(--text1); font-weight: 700; }
+.nba-warn { color: var(--yellow); font-weight: 600; }
+.nba-list { display: grid; gap: 6px; }
+.nba-row { display: grid; grid-template-columns: 32px 56px 1fr auto; align-items: center; gap: 10px; padding: 8px 10px 8px 8px; background: var(--s2); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.nba-row:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent2) 8%, var(--s2)); }
+.nba-row.nba-sev-critical { border-left-color: var(--red, #ef4444); }
+.nba-row.nba-sev-high     { border-left-color: var(--orange, #f59e0b); }
+.nba-row.nba-sev-medium   { border-left-color: var(--yellow, #eab308); }
+.nba-row.nba-sev-low      { border-left-color: var(--text3); }
+.nba-rank { font-size: 12px; font-weight: 700; color: var(--text2); text-align: center; }
+.nba-tag-stack { display: flex; flex-direction: column; gap: 3px; align-items: stretch; }
+.nba-sev-chip { font-size: 9px; font-weight: 800; letter-spacing: 0.4px; text-align: center; padding: 2px 4px; border-radius: 4px; border: 1px solid transparent; }
+.nba-sev-critical-chip { background: color-mix(in srgb, var(--red, #ef4444) 18%, transparent); color: var(--red, #ef4444); border-color: color-mix(in srgb, var(--red, #ef4444) 45%, transparent); }
+.nba-sev-high-chip     { background: color-mix(in srgb, var(--orange, #f59e0b) 18%, transparent); color: var(--orange, #f59e0b); border-color: color-mix(in srgb, var(--orange, #f59e0b) 45%, transparent); }
+.nba-sev-medium-chip   { background: color-mix(in srgb, var(--yellow, #eab308) 18%, transparent); color: var(--yellow, #eab308); border-color: color-mix(in srgb, var(--yellow, #eab308) 45%, transparent); }
+.nba-sev-low-chip      { background: var(--s1); color: var(--text2); border-color: var(--border); }
+.nba-domain-tag { font-size: 9px; font-weight: 800; letter-spacing: 0.4px; text-align: center; padding: 2px 4px; border-radius: 4px; border: 1px solid transparent; }
+.nba-domain-tag-dia { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.nba-domain-tag-gov { background: color-mix(in srgb, var(--accent2) 16%, transparent); color: var(--accent2); border-color: color-mix(in srgb, var(--accent2) 40%, transparent); }
+.nba-body { min-width: 0; overflow: hidden; }
+.nba-label { font-size: 13px; font-weight: 600; color: var(--text1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nba-action { font-size: 11px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.nba-value { font-size: 13px; font-weight: 700; color: var(--text1); text-align: right; white-space: nowrap; }
+.nba-empty { font-size: 12px; color: var(--text3); padding: 12px 4px; text-align: center; }
+@media (max-width: 720px) {
+  .nba-row { grid-template-columns: 28px 48px 1fr auto; gap: 8px; padding: 7px 8px; }
+  .nba-action { font-size: 10px; }
+  .nba-value { font-size: 12px; }
+}
 
 /* Modal */
 .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.65); z-index: 300; align-items: center; justify-content: center; padding: 20px; }

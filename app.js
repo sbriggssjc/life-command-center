@@ -182,6 +182,10 @@ let canonicalLoaded = false;    // true once canonical load attempted
 let dailyBriefingSnapshot = null;
 let dailyBriefingLoaded = false;
 let dailyBriefingRoleView = 'broker';
+// Next Best Action — Home rail (Item #4 Phase C, 2026-05-17)
+let nbaSnapshot = null;
+let nbaLoaded = false;
+let nbaDomainView = 'both';
 let logCallData = {};
 let govConnected = false;
 let diaConnected = false;
@@ -910,6 +914,8 @@ function handlePageLoad(pageId) {
     case 'pageHome':
       renderDailyBriefingPanel();
       if (!dailyBriefingLoaded) loadDailyBriefingData();
+      renderNextBestActionPanel();
+      if (!nbaLoaded) loadNextBestActionData();
       break;
     case 'pagePipeline':
       if (currentPipelineTab === 'mywork') {
@@ -6049,6 +6055,171 @@ async function loadDailyBriefingData(force = false) {
 window.loadDailyBriefingData = loadDailyBriefingData;
 
 // ============================================================
+// NEXT BEST ACTION — Home rail (Item #4 Phase C, 2026-05-17)
+// Cross-domain prioritized broker queue. Reads from
+//   GET /api/admin?_route=next-best-action&domain={both|dia|gov}&limit=15
+// which fans out across dia + gov v_next_best_action views and returns
+// a globally re-ranked list of the highest-value open gaps.
+// ============================================================
+function getNbaDomainView() {
+  try {
+    const stored = localStorage.getItem('lcc.nba.domain');
+    if (stored === 'dia' || stored === 'gov' || stored === 'both') return stored;
+  } catch (_) {}
+  return 'both';
+}
+
+function setNbaDomainView(view) {
+  if (!['both', 'dia', 'gov'].includes(view)) return;
+  nbaDomainView = view;
+  try { localStorage.setItem('lcc.nba.domain', view); } catch (_) {}
+  setNbaDomainSwitchActive(view);
+  loadNextBestActionData(true);
+}
+window.setNbaDomainView = setNbaDomainView;
+
+function setNbaDomainSwitchActive(view) {
+  document.querySelectorAll('#nbaDomainSwitch .nba-domain-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.nbaDomain === view);
+  });
+}
+
+function formatNbaValue(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return '—';
+  const sign = '$';
+  if (v >= 1e9) return sign + (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return sign + (v / 1e6).toFixed(v >= 10e6 ? 0 : 1) + 'M';
+  if (v >= 1e3) return sign + Math.round(v / 1e3) + 'K';
+  return sign + Math.round(v);
+}
+
+function formatNbaGapType(type) {
+  if (!type) return '';
+  const map = {
+    missing_recorded_owner: 'Missing recorded owner',
+    llc_research_pending:   'LLC research pending',
+    lease_tenant_drift:     'Lease vs property tenant drift',
+    orphan_sale_owner:      'Sale missing owner backlink',
+    stale_active_listing:   'Stale active listing'
+  };
+  if (map[type]) return map[type];
+  if (String(type).startsWith('cms_chain_drift:')) return 'CMS chain drift';
+  return String(type).replace(/_/g, ' ');
+}
+
+function nbaDomainTag(srcDomain) {
+  if (srcDomain === 'dialysis')   return { code: 'DIA', cls: 'nba-domain-tag-dia' };
+  if (srcDomain === 'government') return { code: 'GOV', cls: 'nba-domain-tag-gov' };
+  return { code: '?', cls: '' };
+}
+
+function openNbaItem(srcDomain, propertyId) {
+  if (!propertyId) return;
+  const db = srcDomain === 'dialysis' ? 'dia' : (srcDomain === 'government' ? 'gov' : null);
+  if (!db) return;
+  if (typeof openUnifiedDetail === 'function') {
+    try { openUnifiedDetail(db, { property_id: Number(propertyId) }, {}, null); return; }
+    catch (e) { console.warn('[NBA] openUnifiedDetail failed:', e.message); }
+  }
+  if (typeof navTo === 'function') navTo(db === 'dia' ? 'pageDia' : 'pageGov');
+}
+window.openNbaItem = openNbaItem;
+
+function renderNextBestActionPanel() {
+  const el = document.getElementById('nextBestActionContent');
+  if (!el) return;
+
+  nbaDomainView = getNbaDomainView();
+  setNbaDomainSwitchActive(nbaDomainView);
+
+  if (!nbaLoaded) {
+    el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+    return;
+  }
+  if (!nbaSnapshot || !nbaSnapshot.ok) {
+    el.innerHTML = '<div class="widget-error"><div class="err-msg">Next-best-action queue unavailable.</div><button class="retry-btn" onclick="loadNextBestActionData(true)">Retry</button></div>';
+    return;
+  }
+
+  const items = Array.isArray(nbaSnapshot.items) ? nbaSnapshot.items : [];
+  const total = Number(nbaSnapshot.total_merged) || items.length;
+  const byDomain = nbaSnapshot.by_domain || {};
+
+  if (items.length === 0) {
+    el.innerHTML = '<div class="nba-empty">No outstanding gaps. Queue is clear.</div>';
+    return;
+  }
+
+  const failed = Object.entries(byDomain).filter(([, v]) => v && !v.ok).map(([k]) => k);
+
+  const parts = [];
+  parts.push('<div class="nba-meta">');
+  parts.push('<span class="nba-count"><strong>' + Math.min(items.length, 10) + '</strong> shown · <strong>' + total.toLocaleString() + '</strong> total open</span>');
+  if (failed.length > 0) {
+    parts.push('<span class="nba-warn" title="' + esc(failed.join(', ')) + '">⚠ partial</span>');
+  }
+  parts.push('</div>');
+
+  parts.push('<div class="nba-list">');
+  items.slice(0, 10).forEach((row, idx) => {
+    const sev = String(row.gap_severity || 'low').toLowerCase();
+    const dom = nbaDomainTag(row.source_domain);
+    const label = String(row.gap_label || '').trim() || ('Property #' + (row.property_id || ''));
+    const action = String(row.suggested_action || '').trim() || formatNbaGapType(row.gap_type);
+    const val = formatNbaValue(row.gap_value);
+    const pid = row.property_id;
+    const clickAttr = pid
+      ? ' onclick="openNbaItem(&quot;' + esc(row.source_domain || '') + '&quot;, ' + Number(pid) + ')"'
+      : '';
+    parts.push('<div class="nba-row nba-sev-' + esc(sev) + '"' + clickAttr + '>');
+    parts.push(  '<div class="nba-rank">#' + (row.rank || (idx + 1)) + '</div>');
+    parts.push(  '<div class="nba-tag-stack">');
+    parts.push(    '<span class="nba-sev-chip nba-sev-' + esc(sev) + '-chip">' + esc(sev.toUpperCase()) + '</span>');
+    parts.push(    '<span class="nba-domain-tag ' + dom.cls + '">' + dom.code + '</span>');
+    parts.push(  '</div>');
+    parts.push(  '<div class="nba-body">');
+    parts.push(    '<div class="nba-label" title="' + esc(label) + '">' + esc(label) + '</div>');
+    parts.push(    '<div class="nba-action" title="' + esc(action) + '">' + esc(action) + '</div>');
+    parts.push(  '</div>');
+    parts.push(  '<div class="nba-value">' + esc(val) + '</div>');
+    parts.push('</div>');
+  });
+  parts.push('</div>');
+
+  el.innerHTML = parts.join('');
+}
+
+async function loadNextBestActionData(force = false) {
+  nbaDomainView = getNbaDomainView();
+
+  if (!force && nbaLoaded && nbaSnapshot) {
+    renderNextBestActionPanel();
+    return;
+  }
+
+  nbaLoaded = false;
+  renderNextBestActionPanel();
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+
+  try {
+    const url = '/api/admin?_route=next-best-action&domain=' + encodeURIComponent(nbaDomainView) + '&limit=15';
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    nbaSnapshot = await res.json();
+  } catch (e) {
+    console.warn('[NextBestAction] Load failed:', e.message);
+    nbaSnapshot = null;
+  } finally {
+    nbaLoaded = true;
+    renderNextBestActionPanel();
+  }
+}
+window.loadNextBestActionData = loadNextBestActionData;
+
+// ============================================================
 // TEAM PULSE — manager/owner widget showing team health at a glance
 // ============================================================
 function renderTeamPulse() {
@@ -7186,7 +7357,7 @@ function bootApp() {
     loadFeatureFlags().then(() => {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
-        Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData()])
+        Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
           .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
           .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
       });
@@ -7239,6 +7410,7 @@ function startAutoRefresh() {
     loadMarket();
     loadCanonicalData();
     loadDailyBriefingData(true);
+    loadNextBestActionData(true);
     updateGreeting();
   }, interval);
 }
@@ -7263,6 +7435,7 @@ document.addEventListener('visibilitychange', () => {
       loadMarket();
       loadCanonicalData();
       loadDailyBriefingData(true);
+      loadNextBestActionData(true);
       updateGreeting();
     }
   }
