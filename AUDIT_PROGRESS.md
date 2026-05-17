@@ -636,6 +636,42 @@ is_build_to_suit         3
 - Observation: LCC Opps DB had intermittent query timeouts via Supabase MCP during this work, while dia + gov were instant. `recordWriteFailure` in `api/_shared/ops-db.js` is currently `await`ed inside `domainQuery`, so each silent failure adds ~50-200ms latency. With high failure rates that compounds. Captured as a Phase B refinement on Item #5.
 
 
+
+## Closeout — bug-fix #2 + #3 — Intake pipeline schema drift on LCC Opps
+- **Status:** ✅ DONE
+- **Branch:** `bugfix/02-03-intake-schema-drift`
+- **Patch:** `audit/patches/bug-02-03-intake-schema-drift/apply.mjs`
+- **Closes part of:** Task #29 (sidebar uploads broken). Surfaced via production Postgres logs during Item #6 triage.
+
+### Bug #2 — `invalid input syntax for type bytea`
+- `schema/037_staged_intake_on_lcc_opps.sql` line 57 declared `inline_data text` (base64 payload).
+- Production LCC Opps drifted to `bytea` somewhere along the way.
+- Every inline upload (sidebar, email body, Copilot) fails the PostgREST type cast on POST.
+- Fix: `ALTER COLUMN inline_data TYPE text USING encode(inline_data,'base64')` — preserves any binary rows by base64-stringifying them to the shape the extractor expects.
+
+### Bug #3 — `staged_intake_items_status_check` violations
+- `api/_handlers/intake-feedback.js` lines 200–206 PATCHed statuses `'matched'`, `'review_needed'`, and `'no_match'` — none in the CHECK list.
+- `'review_needed'` was a typo of the canonical `'review_required'`.
+- `'matched'` and `'no_match'` are legitimate post-feedback states with no canonical equivalent.
+- Two-part fix:
+  1. Code: rename `'review_needed'` → `'review_required'`.
+  2. Migration: expand CHECK to include `'matched'` and `'no_match'`.
+
+### Files changed
+- `supabase/migrations/20260517250000_lcc_intake_schema_drift_repair.sql`
+- `api/_handlers/intake-feedback.js` — canonical status name
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Apply
+Run the migration via Supabase Studio SQL Editor on LCC Opps (project `xengecqvemvfknjvbvrq`). The DO-block in the migration is idempotent + safe: it inspects `information_schema` first and only ALTERs if needed.
+
+### Verification
+1. `SELECT data_type FROM information_schema.columns WHERE table_name='staged_intake_artifacts' AND column_name='inline_data';` → returns `text`.
+2. `SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class t ON c.conrelid=t.oid WHERE t.relname='staged_intake_items' AND c.conname='staged_intake_items_status_check';` → includes `matched` and `no_match`.
+3. Try a sidebar upload of a small PDF → row appears in `staged_intake_artifacts` with non-null `inline_data`. No bytea errors in Postgres logs.
+4. Try the inbox-feedback "approve" / "reject" / "no_match" buttons on a staged item → no CHECK violation; status updates correctly.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
