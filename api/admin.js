@@ -2859,8 +2859,11 @@ async function handleNextBestAction(req, res) {
   });
 
   const items = merged.slice(offset, offset + limit).map((row, idx) => ({
-    rank: offset + idx + 1,
+    // Hotfix (2026-05-17): spread row FIRST so the per-domain ROW_NUMBER()
+    // rank from each v_next_best_action view doesn't clobber the merged
+    // cross-domain rank below.
     ...row,
+    rank: offset + idx + 1,
   }));
 
   const byDomain = {};
