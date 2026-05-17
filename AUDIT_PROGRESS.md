@@ -18,11 +18,11 @@
 
 | # | Item | Branch | Status | Closes | Notes |
 |---|------|--------|--------|--------|-------|
-| 1 | Fire `runListingBdPipeline` from sidebar + OM intake | `audit/01-bd-pipeline-trigger` | 🟧 REVIEW | A-1 (part), D-1, D-5 | CRITICAL · sidebar + OM-intake wired; pending verification |
-| 2 | Drain `llc_research_queue` + `ownership_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | 🟦 PENDING | A-1, B-5, D-13 | CRITICAL · scraper deferred per Scott |
+| 1 | Fire `runListingBdPipeline` from sidebar + OM intake | `audit/01-bd-pipeline-trigger` | ✅ DONE | A-1 (part), D-1, D-5 | Merged to main as commit `60f0364` on 2026-05-17 |
+| 2 | Drain `llc_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | 🟨 IN PROGRESS | A-1, B-5 | CRITICAL · Phase A: cron scheduled (2026-05-17). Phase B: UI surfaces. D-13 moved to item #5 — see notes below. |
 | 3 | Wire `resolveOwnerLinks` for dia + backfill | `audit/03-dia-owner-linkage` | 🟦 PENDING | A-2 | CRITICAL |
 | 4 | Build `v_next_best_action` UNION view + Home rail | `audit/04-next-best-action` | 🟦 PENDING | B-1, B-3, B-13 | CRITICAL |
-| 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) | `audit/05-provenance-integrity` | 🟦 PENDING | A-3 | CRITICAL |
+| 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) + sidebar→ownership_research_queue schema fix | `audit/05-provenance-integrity` | 🟦 PENDING | A-3, D-13 | CRITICAL · sidebar writers at sidebar-pipeline.js:1759 + :2592 have been silently failing for unknown duration (wrong columns: write `property_id` to a table whose schema is `research_id`/`lead_id`/`task_type`). Discovered 2026-05-17 during item #2 investigation. |
 | 6 | Data Completeness rail on `detail.js` + persisted column | `audit/06-completeness-rail` | 🟦 PENDING | B-2, B-15 | HIGH |
 | 7 | Seed cadence on new contact writes | `audit/07-contact-cadence-seed` | 🟦 PENDING | D-2, D-6 | CRITICAL |
 | 8 | Sticky next-action bar on `detail.js` | `audit/08-detail-next-action-bar` | 🟦 PENDING | B-9, B-10 | HIGH |
@@ -65,6 +65,48 @@ After Top 10 ships, follow the 5-phase roadmap from the audit doc (Stop the blee
 - **Date applied:** _paste at apply time_
 
 ---
+
+
+## Closeout — item 1 — Fire runListingBdPipeline from sidebar + OM intake
+- **Status:** ✅ DONE
+- **Branch:** `audit/01-bd-pipeline-trigger`
+- **Item commit:** `7f058d6 audit(item-1): fire runListingBdPipeline from sidebar + OM intake`
+- **Merge commit:** `60f0364 Merge audit/01-bd-pipeline-trigger: fire runListingBdPipeline from sidebar + OM intake`
+- **Merged into main:** 2026-05-17
+- **Closes:** A-1 (partial — full closure pairs with item #2), D-1 ✓, D-5 ✓
+- **Smoke test recommended:** Capture a CoStar listing for an asset+state with known peer-owner contacts; confirm new `inbox_items` rows with `source_type='listing_bd_trigger'`. Re-capture; confirm no duplicate inbox items.
+
+## Closeout — item 2 — Phase A (cron migration)
+- **Status:** 🟨 IN PROGRESS (Phase A landed; Phase B = UI, in flight)
+- **Branch:** `audit/02-research-queue-drain`
+- **Patch:** `audit/patches/02-research-queue-drain/apply.mjs`
+- **Files changed:**
+  - `supabase/migrations/20260517140000_lcc_llc_research_tick_cron.sql` — pg_cron schedule for `lcc-llc-research-tick` (every 30 min, calls existing handler in safe-mode without API key)
+  - `AUDIT_PROGRESS.md` — this file
+- **Migration applied via Supabase MCP** on LCC Opps (`xengecqvemvfknjvbvrq`) at 2026-05-17 14:42 UTC. Verified `cron.job` row: `jobid=30, jobname='lcc-llc-research-tick', schedule='*/30 * * * *', active=true`.
+- **Initial queue depths at preflight (2026-05-17 14:30 UTC):**
+  - dia.llc_research_queue: 1,267 queued
+  - gov.llc_research_queue: 199 queued
+- **Verification (post-commit):**
+  1. `grep -F "lcc-llc-research-tick" supabase/migrations/20260517140000_lcc_llc_research_tick_cron.sql` → present
+  2. (LCC Opps SQL) `SELECT * FROM cron.job WHERE jobname='lcc-llc-research-tick'` → 1 row, active=true
+  3. Wait until the next :00 or :30 minute boundary, then `SELECT * FROM cron.job_run_details WHERE jobid=30 ORDER BY end_time DESC LIMIT 5` → run records appear, status='succeeded'
+- **Phase B (next):** apply script that adds Owner Research Queue UI to gov.js + dialysis.js. Ranked by linked-property estimated value, sosBtns one-click SOS links, inline Mark-researched form writing back to `recorded_owners.manager_name`/`registered_agent_name`.
+
+---
+
+# Discoveries — 2026-05-17 (item #2 investigation)
+
+## D-discovery-1: `ownership_research_queue` is a working AI pipeline, NOT a missing system
+
+The audit doc finding **D-13** ("ownership_research_queue has a writer; no contact-resolution worker") was incorrect on the consumer side. The actual gov-DB table has columns `research_id`/`lead_id`/`task_type`/`task_status`/`ai_prompt`/`ai_response`/`ai_confidence`/`ai_sources`/`human_verified` — i.e., a full AI research + human-verification workflow, NOT a simple first-name-only broker resolver. As of 2026-05-17, the queue carries **32,437 complete / 15,662 skipped / 691 queued / 142 failed** rows across 9 task types: `county_lookup`, `entity_resolution`, `deed_owner_verify`, `entity_registry_verify`, `parcel_verify`, `contact_discovery`, `mortgage_extract`, `public_record_extract`, `tax_mailing_verify`. The Python file `pipeline/ai_research.py` is the producer/consumer; most-recent rows are from 2026-05-11, so the pipeline is actively running.
+
+## D-discovery-2: sidebar-pipeline.js writers to ownership_research_queue have been silently failing
+
+`api/_handlers/sidebar-pipeline.js:1759-1769` and `:2592-2603` POST to `ownership_research_queue` with these columns: `property_id`, `address`, `city`, `state`, `recorded_owner_name`, `source`, `priority`, `status`, `created_at`. **None of those columns exist on the real table** (the schema is `research_id`, `lead_id`, `task_type`, `task_status`, `ai_prompt`, ...). Every one of those POSTs has been failing with PostgREST 400 ("column does not exist"). Because `domainQuery` swallows non-2xx responses without throwing (the silent-write bug in finding **A-3 / D-3**), nobody noticed. Date range of the bug is unknown — needs git-blame on those two writer call sites.
+
+**Resolution:** moved D-13 from item #2 to item #5 ("Fix silent-write loop in sidebar-pipeline"). When item #5 lands the silent-write fix, those writes will start surfacing errors. The writers should then be either (a) rewritten to use the correct AI-pipeline schema (`task_type='contact_discovery'` for first-name-only brokers, `task_type='entity_resolution'` for unknown true_owner), or (b) deleted as redundant since the existing Python pipeline already covers both cases.
+
 
 # Sprint preflight — 2026-05-17
 

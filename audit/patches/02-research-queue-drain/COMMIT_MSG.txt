@@ -1,0 +1,70 @@
+audit(item-2/a): schedule lcc-llc-research-tick cron + tracker updates
+
+Phase A of audit item #2 (split for safer review — Phase B = UI in a
+follow-up commit on this same branch).
+
+Closes audit findings A-1 (the queue-drainer half), B-5 (the cron half).
+Finding D-13 — originally in item #2 — is moved to item #5 because the
+investigation revealed it's a column-schema bug in two silent-write call
+sites (sidebar-pipeline.js:1759 + :2592), which fits naturally in item #5
+(silent-write / provenance integrity).
+
+Changes
+-------
+
+supabase/migrations/20260517140000_lcc_llc_research_tick_cron.sql
+  * New migration. Schedules pg_cron job `lcc-llc-research-tick` to run
+    every 30 minutes on LCC Opps. The cron POSTs to the existing
+    /api/admin?_route=llc-research-tick handler, which drains
+    llc_research_queue on both gov and dia DBs up to limit=50 rows/tick.
+  * Already applied to LCC Opps (xengecqvemvfknjvbvrq) at 2026-05-17 via
+    Supabase MCP. This commit puts the .sql in the repo so any new
+    environment provisioning (branches, restores, fresh local dev)
+    picks up the schedule.
+  * Idempotent: if a job with this name already exists, unschedule then
+    re-schedule. cron.schedule has no IF NOT EXISTS.
+
+AUDIT_PROGRESS.md
+  * Item #1 row: 🟧 REVIEW → ✅ DONE with commit SHA `60f0364`.
+  * Item #2 row: 🟦 PENDING → 🟨 IN PROGRESS (Phase A landed, Phase B pending).
+  * Item #5 row: scope expanded to include D-13.
+  * New "Closeout" sections for item #1 and item #2 Phase A.
+  * New "Discoveries" section documenting:
+      D-discovery-1: ownership_research_queue is a working AI pipeline
+        (pipeline/ai_research.py producer/consumer), not the missing
+        system the audit doc described.
+      D-discovery-2: sidebar-pipeline.js writers to ownership_research_queue
+        have been failing silently because they use property_id/address/
+        city as columns on a table whose actual schema is research_id/
+        lead_id/task_type/ai_prompt/etc. Failure has been masked by the
+        domainQuery silent-write bug (A-3).
+
+Feature-flag behavior
+---------------------
+The cron is harmless without `OPENCORPORATES_API_KEY`. handleLlcResearchTick
+returns `handler_configured: false` and leaves queued rows untouched. Per
+Scott's preference, the SOS-direct scraper is deferred; the Phase-B UI
+(coming) surfaces queued rows for manual research via SOS one-click links.
+
+Verification
+------------
+  # Confirm migration file is in the repo
+  ls supabase/migrations/20260517140000_lcc_llc_research_tick_cron.sql
+
+  # On LCC Opps SQL editor:
+  SELECT jobid, jobname, schedule, active FROM cron.job
+  WHERE jobname = 'lcc-llc-research-tick';
+  # Expected: 1 row, schedule='*/30 * * * *', active=true
+
+  # After the next :00 or :30 boundary:
+  SELECT * FROM cron.job_run_details
+  WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname='lcc-llc-research-tick')
+  ORDER BY end_time DESC LIMIT 5;
+  # Expected: runs appear, status='succeeded'
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #2 (Top-10)
+  branch:   audit/02-research-queue-drain (Phase A of 2)
+  handler:  api/admin.js:2623 handleLlcResearchTick
+  next:     Phase B — Owner Research Queue UI in gov.js + dialysis.js
