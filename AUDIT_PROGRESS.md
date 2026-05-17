@@ -372,6 +372,77 @@ LCC Opps view + backend endpoint that fans out to dia + gov + LCC Opps, merges +
 Home rail UI in app.js — replaces the wrong-table Research pulse-card (B-13) with the live merged top-20 ranked gaps.
 
 
+
+## Closeout — item 4 Phase B-2 — cross-domain endpoint for v_next_best_action
+- **Status:** 🟨 IN PROGRESS (B-2 landed; B-3 = LCC Opps view, deferred; C = Home rail UI, deferred)
+- **Branch:** `audit/04-next-best-action-phase-b2`
+- **Patch:** `audit/patches/04-next-best-action-phase-b2/apply.mjs`
+- **Files changed:**
+  - `api/admin.js` — adds `case 'next-best-action'` to the route dispatcher; new `handleNextBestAction(req, res)` function (~80 lines) that fans out to dia + gov in parallel via `domainQuery`, merges, globally re-ranks by gap_value DESC (tiebreak first_seen_at ASC), applies offset + limit, returns tagged with source_domain.
+
+### Endpoint contract
+```
+GET /api/admin?_route=next-best-action
+  ?domain=both|dia|gov          (default 'both')
+  &limit=50                      (1-500, default 50)
+  &offset=0                      (default 0)
+  &severity=critical|high|medium|low   (optional)
+  &gap_type=missing_recorded_owner     (optional exact match)
+
+Response:
+{
+  "ok": true,
+  "total_merged": 34219,
+  "returned": 50,
+  "limit": 50, "offset": 0,
+  "severity": null, "gap_type": null,
+  "by_domain": { "dialysis": { "ok": true, "fetched": 100 }, "government": { "ok": true, "fetched": 100 } },
+  "items": [
+    {
+      "rank": 1,
+      "gap_type": "missing_recorded_owner",
+      "gap_severity": "critical",
+      "property_id": 12345,
+      "gap_label": "1234 Federal Plaza",
+      "suggested_action": "Research recorded owner for 1234 Federal Plaza",
+      "gap_value": 966854484,
+      "first_seen_at": "2026-05-17T...",
+      "source_domain": "government"
+    },
+    ...
+  ]
+}
+```
+
+### Verification (post-deploy, requires LCC_API_KEY)
+```bash
+# Top 10 unified gaps across both domains
+curl -H "X-LCC-Key: $LCC_API_KEY" \
+  "https://tranquil-delight-production-633f.up.railway.app/api/admin?_route=next-best-action&limit=10"
+
+# Just critical gaps
+curl -H "X-LCC-Key: $LCC_API_KEY" \
+  "https://tranquil-delight-production-633f.up.railway.app/api/admin?_route=next-best-action&severity=critical&limit=20"
+
+# Just CMS chain transitions on dia
+curl -H "X-LCC-Key: $LCC_API_KEY" \
+  "https://tranquil-delight-production-633f.up.railway.app/api/admin?_route=next-best-action&domain=dia&gap_type=cms_chain_drift:operator_transition_candidate&limit=20"
+```
+
+### Phase B-3 (deferred)
+Build `v_next_best_action_ops` on LCC Opps surfacing:
+- `v_field_provenance_conflicts` (Phase 3 of provenance system)
+- `v_field_provenance_unranked` (schema-drift detector)
+- `inbox_items` with `source_type` IN ('new_contact_qualify', 'listing_bd_trigger', 'provenance_conflict')
+- `lcc_health_alerts` (unresolved)
+- `v_ingest_write_failures_recent` (last 24h)
+
+Then extend handleNextBestAction to also fetch from LCC Opps via opsQuery.
+
+### Phase C (deferred)
+Home rail UI in `app.js` calling `/api/admin?_route=next-best-action`, rendering the merged top-20 with click-through to property_id detail or entity_pk detail. Replaces the wrong-table Research pulse-card (audit B-13).
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

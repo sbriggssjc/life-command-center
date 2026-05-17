@@ -1,0 +1,61 @@
+audit(item-4/b2): cross-domain endpoint for v_next_best_action
+
+Phase B-2 of audit item #4 (Phase B-3 = LCC Opps view, Phase C = UI).
+
+Adds /api/admin?_route=next-best-action that fans out to dia + gov in
+parallel via domainQuery, merges, globally re-ranks by gap_value DESC
+(tiebreak first_seen_at ASC), applies offset + limit, and returns the
+unified ranked queue tagged with source_domain per row.
+
+This is the cross-domain merge layer for the v_next_best_action surface
+built in Phase A (dia) + Phase B-1 (gov). After this lands, any frontend
+can call one URL and get the entire ranked gap surface across both
+domain DBs in a single response.
+
+Changes
+-------
+
+api/admin.js
+  * Route dispatcher: `case 'next-best-action': return
+    handleNextBestAction(req, res);`.
+  * New handler ~80 lines. Auth via authenticate(req,res). Query params:
+    domain (both/dia/gov), limit, offset, severity, gap_type.
+  * Fetches (offset + limit + 50) from each domain in parallel as
+    headroom so the global re-rank slice is accurate when one domain
+    dominates.
+  * Tags each row with source_domain so the UI can render the badge.
+  * Returns by_domain telemetry per call so partial failures are
+    observable (e.g. dia ok, gov 503).
+
+AUDIT_PROGRESS.md
+  * Phase B-2 closeout with the endpoint contract, sample curl
+    invocations, and the Phase B-3 / C roadmap.
+
+Endpoint contract
+-----------------
+
+  GET /api/admin?_route=next-best-action
+    ?domain=both|dia|gov   (default 'both')
+    &limit=50              (1-500, default 50)
+    &offset=0              (default 0)
+    &severity=...          (optional)
+    &gap_type=...          (optional exact match)
+
+  → { ok, total_merged, returned, limit, offset, severity, gap_type,
+      by_domain, items[] }
+
+Verification
+------------
+
+  node -c api/admin.js
+
+  curl -H "X-LCC-Key: $LCC_API_KEY" \
+    "https://tranquil-delight-production-633f.up.railway.app/api/admin?_route=next-best-action&limit=10"
+
+  # Should return total_merged in the 30000s and 10 ranked items.
+
+Refs
+----
+  audit:    item #4 Phase B-2
+  paired:   dia view (commit 2483680), gov view (commit 26993d0)
+  branch:   audit/04-next-best-action-phase-b2
