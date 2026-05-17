@@ -4709,24 +4709,70 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
-      if (result.ok) {
+
+      // Discovery patch #2 (audit/discovery-02-sales-409-dedupe, 2026-05-17):
+      // defensive 409 recovery against uq_st_property_date_price partial
+      // unique index on (property_id, sale_date, sold_price). The upstream
+      // lookup uses fuzzy match (price ±5%, date ±14d); when an exact-match
+      // row already exists from another writer (deed parser, RCA capture)
+      // the lookup misses but the unique index still rejects. Pre-patch
+      // observed: 26+ silent 409s per gov sidebar capture.
+      let recoveredSaleId = null;
+      if (!result.ok
+          && result.status === 409
+          && /uq_st_property_date_price/.test(JSON.stringify(result.data || {}))) {
+        const exactLookup = await domainQuery(domain, 'GET',
+          `sales_transactions?property_id=eq.${propertyId}` +
+          `&sale_date=eq.${encodeURIComponent(saleData.sale_date)}` +
+          `&sold_price=eq.${saleData.sold_price}` +
+          `&select=sale_id&limit=1`
+        );
+        if (exactLookup.ok && exactLookup.data?.length) {
+          recoveredSaleId = exactLookup.data[0].sale_id;
+          // PATCH the existing row with our refreshed payload. Force an
+          // updated_at bump so the audit trail reflects this re-ingest.
+          const patchData = { ...saleData, updated_at: new Date().toISOString() };
+          // Same field-priority gate as the upstream-lookup PATCH branch,
+          // so a fuzzy-miss recovery doesn't bypass curated data protection.
+          const filteredRecoveryPatch = await filterByFieldPriority({
+            targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+            targetTable: domain === 'dialysis' ? 'dia.sales_transactions' : 'gov.sales_transactions',
+            recordPk:    recoveredSaleId,
+            source:      metadata._intake_promoted ? 'om_extraction' : 'costar_sidebar',
+            confidence:  metadata._intake_promoted ? 0.7 : 0.6,
+            fields:      patchData,
+          }).catch(() => patchData);
+          await domainPatch(domain,
+            `sales_transactions?sale_id=eq.${recoveredSaleId}`,
+            filteredRecoveryPatch,
+            'upsertDomainSales:409Recovery'
+          );
+          console.log(`[upsertDomainSales:409Recovery] recovered sale ${recoveredSaleId} for property=${propertyId} date=${saleData.sale_date} price=${saleData.sold_price}`);
+        }
+      }
+
+      if (result.ok || recoveredSaleId) {
         count++;
-        // Create BD alert for new dialysis sale capture (gov uses sf_comps_staging)
-        if (domain === 'dialysis') {
+        // Determine the sale_id to use for the post-write flow:
+        //   • result.ok       → freshly inserted, sale_id from response
+        //   • recoveredSaleId → 409 recovery, sale_id from exact lookup
+        const inserted = result.ok
+          ? (Array.isArray(result.data) ? result.data[0] : result.data)
+          : null;
+        const newSaleId = inserted?.sale_id ?? recoveredSaleId ?? null;
+
+        // Create BD alert for new dialysis sale capture (gov uses sf_comps_staging).
+        // Only on a TRUE insert — 409 recovery means we already knew about this sale.
+        if (domain === 'dialysis' && result.ok) {
           await createSaleAlert(propertyId, saleData);
         }
         // Close any still-active listings for this property on a new sale.
-        // The POST uses Prefer: return=representation (see domain-db.js) so
-        // result.data is the inserted row(s) — grab sale_id off it to stamp
-        // onto the dialysis listing row as sale_transaction_id.
-        const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
-        const newSaleId = inserted?.sale_id ?? null;
         await closeActiveListingsOnSale(
           domain, propertyId, datePart, saleData.sold_price, newSaleId
         );
         // Link brokers from text fields to sale_brokers table
         await linkSaleBrokers(domain, newSaleId, saleData);
-        // Phase 2.2.b: record per-row provenance for the new sale
+        // Phase 2.2.b: record per-row provenance for the sale (insert or recovery)
         if (newSaleId) {
           pushProvenance(provCollect, 'sales_transactions', newSaleId, {
             sale_date:        saleData.sale_date,
@@ -4738,6 +4784,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
             listing_broker:   saleData.listing_broker || null,
             procuring_broker: saleData.procuring_broker || saleData.purchasing_broker || null,
             transaction_type: saleData.transaction_type || null,
+            cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
+            cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
+            cap_rate_quality:          saleData.cap_rate_quality || null,
           });
         }
       }

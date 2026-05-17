@@ -240,6 +240,39 @@ GROUP BY label ORDER BY n DESC;
 ```
 
 
+
+## Discovery patch #2 — sales_transactions 409 dedupe recovery (2026-05-17)
+- **Trigger:** After Discovery #1 silenced the schema-drift failures, the residual silent-failure pattern visible in `v_ingest_write_failures_by_label` was 26+ HTTP 409s per gov sidebar capture against the `uq_st_property_date_price` partial unique index.
+- **Branch:** `audit/discovery-02-sales-409-dedupe`
+- **Patch:** `audit/patches/discovery-02-sales-409-dedupe/apply.mjs`
+
+### What was failing
+The `uq_st_property_date_price` partial unique index on `gov.sales_transactions` enforces uniqueness on `(property_id, sale_date, sold_price) WHERE sale_date IS NOT NULL AND exclude_from_market_metrics IS NOT TRUE`. `upsertDomainSales`'s upstream lookup uses fuzzy match (`price ±5%` AND `date ±14d`), which misses cases where another writer (deed parser, RCA capture, sidebar-pipeline-from-prior-version) inserted an exact-match row. The POST then 409s against the unique index and the work is silently dropped.
+
+### Fix
+Defensive 409 recovery at the POST call site (`api/_handlers/sidebar-pipeline.js:4711`):
+1. On 409 whose error_detail mentions `uq_st_property_date_price`, GET the existing row by EXACT `(property_id, sale_date, sold_price)`.
+2. PATCH the row with the refreshed payload (gated through the same `filterByFieldPriority` as the normal upstream-lookup branch).
+3. Continue the same post-write flow (close listings, link brokers, push provenance) using the recovered sale_id.
+4. Skip the dialysis `createSaleAlert` call on recovery (it's a re-ingest, not a new sale signal).
+
+The unique-index error message string is matched conservatively so future schema-renames don't accidentally trigger recovery on different conflicts.
+
+### Verification (post-deploy)
+```sql
+-- On LCC Opps: 409 count should drop after next gov sidebar capture
+SELECT label, http_status, count(*) AS n
+FROM v_ingest_write_failures_recent
+WHERE http_status = 409
+  AND occurred_at > now() - interval '15 minutes'
+GROUP BY label, http_status
+ORDER BY n DESC;
+
+-- A new label 'upsertDomainSales:409Recovery' may appear in Vercel logs
+-- (console.log) confirming the recovery path is firing successfully.
+```
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
