@@ -1,0 +1,88 @@
+audit(item-4/a): propagation gap views + v_next_best_action core (dia)
+
+Phase A of audit item #4 (Phase B = gov mirror + LCC Opps view + backend
+endpoint + Home rail UI, deferred to next session).
+
+Closes the dia side of audit findings B-1 (unified next-best-action queue),
+B-3 (value-weighted sort), and lays the foundation for B-13 (replaces the
+wrong-table Home Research pulse-card once the UI lands).
+
+The audit identified that the LCC has rich gap-tracking primitives but
+they live in three separate worlds that don't talk to each other:
+  • Strategic priority scoring (briefing-data.js)
+  • Property-research queues (gov.js / dialysis.js per-screen heuristics)
+  • Data-quality / provenance views (ops.js only)
+
+This commit creates the SQL foundation that unifies them on the dia side.
+Three new propagation-gap views detect cross-table denormalization drift
+(audit findings A-7 / A-13 / discovered surface), and v_next_best_action
+UNIONs every known gap source into a single ranked queue.
+
+Changes
+-------
+
+supabase/migrations/dialysis/20260517190000_dia_next_best_action_views_phase_a.sql
+  * v_gap_chain_drift          — CMS chain_organization vs properties.tenant
+                                  (with normalized loose-match filter to
+                                   ignore cosmetic differences). drift_kind
+                                  surfaces 'operator_transition_candidate'
+                                  and 'cms_chain_but_property_tenant_null'.
+  * v_gap_lease_tenant_drift   — active lease tenant vs properties.tenant.
+  * v_gap_orphan_sale_owner    — sales with NULL recorded_owner_id where
+                                  the property has one (last 5 years).
+  * v_next_best_action          — UNION ALL across 6 sources:
+                                  1. missing_recorded_owner
+                                  2. llc_research_pending
+                                  3. cms_chain_drift (both kinds)
+                                  4. lease_tenant_drift
+                                  5. orphan_sale_owner
+                                  6. stale_active_listing
+                                  Each row carries (gap_type, gap_severity,
+                                  property_id, gap_label, suggested_action,
+                                  gap_value, first_seen_at). Severity tier
+                                  uses the same COALESCE(current_value_
+                                  estimate, last_known_rent*10, 0) signal as
+                                  gap_value so high-rent low-value-est
+                                  properties don't get mis-labeled.
+                                  Ranked by gap_value DESC, first_seen_at
+                                  ASC. 21,056 rows live as of deploy.
+
+Already applied to dia (zqzrriwuavgrquhisnoa) via Supabase MCP at 2026-05-17.
+
+AUDIT_PROGRESS.md
+  * Item #4 row: 🟦 PENDING → 🟨 IN PROGRESS.
+  * New closeout section with the 6-source list, severity distribution,
+    and Phase B plan.
+
+Severity distribution (post-fix)
+--------------------------------
+
+  critical:    898 rows ($20M – $575M)
+      high:  1,447 rows ($5.6M – $345M)
+    medium:  4,079 rows ($1.15M – $29M)
+       low: 14,632 rows ($0 – $4.5M)
+
+The top 898 critical gaps are essentially the broker's $20M+ priority
+hit list — properties of that value with either no recorded owner, an
+unresolved chain transition, or a tenant-propagation mismatch.
+
+What this does NOT do
+---------------------
+
+  • No gov mirror (Phase B).
+  • No LCC Opps view (provenance conflicts, inbox triage, health alerts).
+  • No backend endpoint. UI consumers must query the view directly today.
+  • No Home rail UI. Items still surface in the SQL editor only.
+  • No dismiss/resolve flow (Phase C).
+
+Verification
+------------
+
+  SELECT count(*) FROM public.v_next_best_action;          -- ~21,000
+  SELECT * FROM public.v_next_best_action ORDER BY rank LIMIT 20;
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #4 (Top-10)
+  findings: B-1, B-3, B-13, A-7 (dia side), A-13
+  branch:   audit/04-next-best-action-phase-a
