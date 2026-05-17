@@ -489,6 +489,30 @@ Per Scott's broker methodology: NOI ÷ TTM cap rate from CM reports. NOI ≈ act
 - **dia cap-rate term tiers**: `cm_dialysis_cap_ttm_q` only has `subspecialty='all'` today. When the CM pipeline adds term-tier slicing (matching gov's structure), the dia view can be extended to use it.
 
 
+
+## Closeout — item 4 v3.2 — dedupe + junk filter on missing_recorded_owner
+- **Status:** ✅ DONE (live on dia + gov)
+- **Branch:** `audit/04-dedupe-and-junk-filter`
+- **Patch:** `audit/patches/04-next-best-action-dedupe-and-junk-filter/apply.mjs`
+- **Closes:** Discovery #4 (junk property records) + Discovery #5 (duplicate property records at same address) — both surfaced by the v3 NOI/cap fix.
+
+### Cleanup applied to v_next_best_action.missing_recorded_owner
+- **Address quality predicate:** must be NOT NULL, ≥ 8 chars after trim, start with a digit, not pure digits + whitespace, not start with "property #".
+- **Dedupe:** PARTITION BY `lower(trim(address)), lower(trim(city)), state` → keep smallest property_id per group. Surface `[N dup records]` inline in gap_label so duplicates are visible at a glance. Suggested action prompts consolidation first.
+
+### Impact (dia)
+- missing_recorded_owner: 13,338 → **10,115 rows** (−3,223; junk + dedupe).
+- Top 15 dia entries now all real street addresses; no phantom records visible at the top.
+
+### Impact (gov)
+- Top 15 dominated by real federal addresses + 1 explicit duplicate notation: `6120 S. Yale Ave., Ste. 300 [7 dup records]`.
+
+### Edge cases remaining (smaller follow-ups)
+- "**2 locations**" still passes the filter — starts with "2", >8 chars. Would need a street-suffix predicate (`address ~ '\b(St|Rd|Ave|Blvd|Dr|Hwy|Way|Pkwy|Ln|Ct|Pl)\b'`) to catch.
+- Two distinct ranks for "6120 S. Yale Ave., Ste. 300" remain (property_ids 16458 and 16451) because subtle city/state variations in some records keep them in separate partition groups. A more aggressive dedupe could normalize on address only.
+- These two edge cases were small enough to defer; the major signal cleanup is in.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
