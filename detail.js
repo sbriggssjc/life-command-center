@@ -255,6 +255,15 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       promises.push(Promise.resolve([]));
     }
 
+    // Completeness — pulls v_property_completeness for the rail at the top
+    // of the detail panel (Item #6 Phase A, 2026-05-17). Best-effort: never
+    // blocks the detail render if the view fetch fails.
+    if (propFilter) {
+      promises.push(qFn('v_property_completeness', '*', { filter: propFilter, limit: 1 }));
+    } else {
+      promises.push(Promise.resolve([]));
+    }
+
     const settled = await Promise.allSettled(promises);
     let _partialFail = false;
 
@@ -277,6 +286,9 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     const chain = safeExtract(3) || [];
     const rankings = safeExtract(4)[0] || null;
     const propertyCmsRow = safeExtract(5)[0] || null;
+    // Index 6 is the completeness view (Item #6 Phase A). May be empty if
+    // the view fetch failed or this is a fallback-only render.
+    const completenessRow = safeExtract(6)[0] || null;
     // Authoritative denormalized CMS link from `properties`. Either column may
     // hold the CCN; treat them equivalently for short-circuit purposes.
     const denormCcn = propertyCmsRow
@@ -355,7 +367,10 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         })
       : synthProperty;
 
-    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, _fallbackOnly: allEmpty });
+    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, completeness: completenessRow, _fallbackOnly: allEmpty });
+    // Render the data completeness rail at the top of the detail panel.
+    // Best-effort: never throws upward (Item #6 Phase A, 2026-05-17).
+    try { _udRenderCompletenessRail(); } catch (e) { console.warn('completeness rail render failed', e); }
 
     // ── Dialysis Operations tab: auto-match CMS facility when rankings is empty ──
     // Uses the /api/cms-match?action=resolve endpoint to fuzzy-match the property's
@@ -1256,6 +1271,89 @@ function _udRenderFallbackHeader(db, fb) {
 // ============================================================================
 // TAB RENDERERS
 // ============================================================================
+
+// ============================================================================
+// Data Completeness rail — Item #6 Phase A (2026-05-17)
+// Reads _udCache.completeness ({ completeness_score, completeness_band,
+// missing_fields: [{key,label,weight,tab}, ...] }) and renders the rail.
+// Click a chip -> switches the active tab to where that field lives.
+// ============================================================================
+function _udRenderCompletenessRail() {
+  const rail = document.getElementById('detailCompletenessRail');
+  if (!rail) return;
+  const cmp = _udCache && _udCache.completeness;
+  if (!cmp || cmp.completeness_score == null) {
+    rail.style.display = 'none';
+    rail.innerHTML = '';
+    return;
+  }
+  const score = Math.max(0, Math.min(100, Number(cmp.completeness_score) || 0));
+  const band = String(cmp.completeness_band || 'poor').toLowerCase();
+  let missing = Array.isArray(cmp.missing_fields) ? cmp.missing_fields : [];
+  // Defensive: if Postgres returned the jsonb as a string for any reason,
+  // try to parse it. (PostgREST normally returns it as a native array.)
+  if (!Array.isArray(cmp.missing_fields) && typeof cmp.missing_fields === 'string') {
+    try { missing = JSON.parse(cmp.missing_fields) || []; } catch (_) { missing = []; }
+  }
+  // Top 6 highest-weight missing fields (already weight-sorted by the view).
+  const top = missing.slice(0, 6);
+
+  const parts = [];
+  parts.push('<div class="cr-summary">');
+  parts.push(  '<span class="cr-label">Completeness</span>');
+  parts.push(  '<span class="cr-score">' + score + '</span>');
+  parts.push(  '<span class="cr-score-band cr-band-' + esc(band) + '">' + esc(band) + '</span>');
+  parts.push('</div>');
+
+  if (top.length === 0) {
+    parts.push('<div class="cr-empty">All high-value fields populated</div>');
+  } else {
+    parts.push('<div class="cr-chips">');
+    top.forEach(f => {
+      const key = String(f.key || '');
+      const label = String(f.label || key);
+      const weight = Number(f.weight) || 0;
+      const tab = String(f.tab || 'Overview');
+      parts.push('<span class="cr-chip" title="Missing — +' + weight + ' if filled. Opens ' + esc(tab) + ' tab." onclick="_udCompletenessChipClick(&quot;' + esc(key) + '&quot;, &quot;' + esc(tab) + '&quot;)">'
+        + '+ ' + esc(label)
+        + '<span class="cr-chip-weight">+' + weight + '</span>'
+        + '</span>');
+    });
+    if (missing.length > top.length) {
+      parts.push('<span class="cr-empty">+' + (missing.length - top.length) + ' more</span>');
+    }
+    parts.push('</div>');
+  }
+
+  rail.innerHTML = parts.join('');
+  rail.style.display = '';
+}
+window._udRenderCompletenessRail = _udRenderCompletenessRail;
+
+function _udCompletenessChipClick(fieldKey, tab) {
+  // Switch to the target tab so the broker can fill the gap inline. Future
+  // enhancement: focus the specific input inside the rendered tab.
+  if (typeof switchUnifiedTab === 'function' && tab) {
+    switchUnifiedTab(tab);
+  }
+  // Telemetry hook reserved — not wired in Phase A.
+  console.debug('[Completeness] chip click', fieldKey, '-> tab', tab);
+}
+window._udCompletenessChipClick = _udCompletenessChipClick;
+
+// Hide the rail when the panel closes so the next open starts clean.
+(function _udWireCompletenessRailClose() {
+  if (window._udCompletenessRailWired) return;
+  window._udCompletenessRailWired = true;
+  const origClose = window.closeDetail;
+  if (typeof origClose === 'function') {
+    window.closeDetail = function () {
+      const rail = document.getElementById('detailCompletenessRail');
+      if (rail) { rail.style.display = 'none'; rail.innerHTML = ''; }
+      return origClose.apply(this, arguments);
+    };
+  }
+})();
 
 function _udRenderTab(tab) {
   if (!_udCache) return '<div class="detail-empty">No data loaded</div>';

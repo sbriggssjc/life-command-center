@@ -233,6 +233,26 @@ input, select { font-family: inherit; }
   .nba-value { font-size: 12px; }
 }
 
+/* Data Completeness rail — detail panel (Item #6 Phase A, 2026-05-17) */
+.completeness-rail { background: var(--s1); border-bottom: 1px solid var(--border); padding: 8px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cr-summary { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.cr-score { font-size: 16px; font-weight: 800; color: var(--text1); line-height: 1; }
+.cr-score-band { font-size: 9px; font-weight: 800; letter-spacing: 0.4px; padding: 2px 6px; border-radius: 999px; border: 1px solid transparent; text-transform: uppercase; }
+.cr-band-excellent { background: color-mix(in srgb, var(--green, #22c55e) 18%, transparent); color: var(--green, #22c55e); border-color: color-mix(in srgb, var(--green, #22c55e) 45%, transparent); }
+.cr-band-good      { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.cr-band-fair      { background: color-mix(in srgb, var(--yellow, #eab308) 18%, transparent); color: var(--yellow, #eab308); border-color: color-mix(in srgb, var(--yellow, #eab308) 45%, transparent); }
+.cr-band-poor      { background: color-mix(in srgb, var(--red, #ef4444) 18%, transparent); color: var(--red, #ef4444); border-color: color-mix(in srgb, var(--red, #ef4444) 45%, transparent); }
+.cr-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+.cr-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.cr-chip { font-size: 11px; padding: 4px 9px; border: 1px dashed var(--border); background: var(--s2); color: var(--text2); border-radius: 999px; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.cr-chip:hover { color: var(--accent); border-color: var(--accent); border-style: solid; background: color-mix(in srgb, var(--accent) 8%, var(--s2)); }
+.cr-chip-weight { display: inline-block; margin-left: 4px; padding: 0 4px; font-size: 9px; font-weight: 800; color: var(--text3); border-radius: 4px; }
+.cr-empty { font-size: 11px; color: var(--text3); font-style: italic; }
+@media (max-width: 720px) {
+  .completeness-rail { padding: 6px 10px; gap: 6px; }
+  .cr-chip { font-size: 10px; padding: 3px 7px; }
+}
+
 /* Modal */
 .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.65); z-index: 300; align-items: center; justify-content: center; padding: 20px; }
 .modal-overlay.open { display: flex; }

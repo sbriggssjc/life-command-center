@@ -549,6 +549,62 @@ GET /api/admin?_route=next-best-action&domain={both|dia|gov}&limit=15  →  hand
 5. Smoke: hard-reload the app, land on Home. Rail visible with 10 ranked rows, top entry has expected value, clicking a row opens the unified detail panel.
 
 
+
+## Closeout — item 6 Phase A — Data Completeness rail on detail.js
+- **Status:** ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B: persisted column + list sort + NBA integration)
+- **Branch:** `audit/06-completeness-rail`
+- **Patch:** `audit/patches/06-completeness-rail/apply.mjs`
+- **Closes:** B-2 (no inline completeness signal) + broker-side half of B-15. The list-sort half of B-15 ships in Phase B.
+
+### What this adds
+- Two new views: `v_property_completeness` on dia + gov. Each returns:
+  `property_id`, `completeness_score` (0-100), `completeness_band` (excellent/good/fair/poor), `missing_fields` (JSONB array of `{ key, label, weight, tab }` sorted by weight DESC).
+- Detail panel renders a horizontal rail directly under the tab bar showing the score, band chip, and the top 6 highest-weight missing fields as clickable chips.
+- Click a chip → switches to the tab where that field lives, so Scott can fill the gap inline without hunting through the panel.
+- Rail auto-hides when the detail panel closes; opens fresh on every property load.
+
+### Calibrated weights
+
+Dia (15,219 properties; star_rating + qip_total_performance_score 0% populated and dropped from the spec):
+```
+recorded_owner       14   anchor_rent          12   tenant_or_operator   10
+cms_link              9   building_size         8   lease_commencement    7
+latest_sale_price     6   total_chairs          6   lease_bump_pct        5
+ttm_revenue           5   latest_patient_count  5   parcel_number         5
+year_built            4   latest_deed_date      4
+```
+
+Gov (17,448 properties; lease_structure 0% populated, dropped):
+```
+recorded_owner          14   gross_rent              11   noi                     11
+agency                  10   lease_number            10   lease_expiration         9
+rba                      8   lease_commencement       7   term_remaining           5
+latest_sale_price        5   year_built               4   federal_employee_count   3
+is_build_to_suit         3
+```
+
+### Files changed
+- `supabase/migrations/dialysis/20260517230000_dia_v_property_completeness.sql`
+- `supabase/migrations/government/20260517230000_gov_v_property_completeness.sql`
+- `index.html` — completeness rail mount between detailTabs and detailBody
+- `styles.css` — `.completeness-rail` + `.cr-chip` styles
+- `detail.js` — fetch into parallel Promise.all, attach to `_udCache`, renderer + chip click handler, close-detail hook
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "v_property_completeness" detail.js` → 1+
+2. `grep -c "_udRenderCompletenessRail" detail.js` → 3+ (definition + window export + call site)
+3. `grep -c "completeness-rail" index.html` → 1
+4. `grep -c "completeness_score" supabase/migrations/dialysis/20260517230000_*.sql` → 5+
+5. Smoke: open a dia property with NO recorded owner and a gov property without an NOI; rail visible with score + chips; click a chip → correct tab activates.
+
+### Deferred to Phase B
+- Persisted `completeness_score` + `completeness_band` columns on properties (refreshed via trigger or nightly cron).
+- "Sort by completeness" option on dia + gov list views (the half of B-15 not closed by this patch).
+- Completeness-band weighting in `v_next_best_action` so "almost-complete underwriting candidates" rank higher.
+- Field-level focus (chip click → scroll to + focus the specific input within the rendered tab).
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
