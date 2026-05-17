@@ -20,6 +20,7 @@ import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreet
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
+import { getCadenceState } from '../_shared/cadence-engine.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 // Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
@@ -1120,6 +1121,88 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
     }
 
     if (link.createdEntity) created++;
+
+    // ── Item #7 (audit/07-contact-cadence-seed): seed cadence + inbox
+    // triage for newly-created person entities so each captured broker
+    // is immediately visible in the triage flow instead of dead-ending
+    // at a row write. Closes D-2 and the contact-side of D-6.
+    //
+    // Gating:
+    //   • Only on link.createdEntity === true (skip pre-existing entities;
+    //     they already have whatever cadence state they need).
+    //   • Only for person entities — companies don't get cadence rows.
+    //   • Only when we have a workspaceId + userId (sidebar paths that
+    //     skip the bridge gate land here with both unset; bail silently).
+    //
+    // Both calls wrapped in try/catch: a failure here MUST NOT roll back
+    // the upstream unpackContacts work. Stragglers can be re-seeded later
+    // via a backfill if needed.
+    if (link.createdEntity && entityType === 'person' && workspaceId && link.entityId) {
+      try {
+        // 1. Initialize touchpoint_cadence at touch 0 (idempotent — if a
+        //    row already exists for this entity_id it's returned unchanged).
+        const cadenceRes = await getCadenceState(
+          { entity_id: link.entityId },
+          { domain }
+        );
+        if (!cadenceRes?.ok) {
+          console.warn('[contact-cadence-seed] getCadenceState non-ok for',
+            link.entityId, '-', cadenceRes?.error || 'unknown');
+        }
+        // 2. POST inbox_items so the new contact lands in Scott's triage
+        //    queue. Skip if cadence row was pre-existing (is_new === false)
+        //    — that means this contact was already triaged before.
+        if (cadenceRes?.ok && cadenceRes.is_new) {
+          const role = contact.role || 'unknown';
+          const title = `New contact: ${contact.name}${role && role !== 'unknown' ? ' (' + role + ')' : ''}`;
+          const bodyLines = [
+            `Captured from ${source} on ${new Date(extractedAt).toLocaleDateString()}.`,
+            `Role: ${role}`,
+          ];
+          if (contact.company) bodyLines.push(`Firm: ${contact.company}`);
+          if (contact.email)   bodyLines.push(`Email: ${contact.email}`);
+          if (contact.phones?.length) bodyLines.push(`Phone: ${contact.phones[0]}`);
+          if (contact.title)   bodyLines.push(`Title: ${contact.title}`);
+          bodyLines.push('');
+          bodyLines.push('Triage to qualify, set priority tier, and route to the right cadence template.');
+
+          const inboxRes = await opsQuery('POST', 'inbox_items', {
+            workspace_id:   workspaceId,
+            source_user_id: userId,
+            visibility:     'private',
+            title,
+            body:           bodyLines.join('\n'),
+            source_type:    'new_contact_qualify',
+            status:         'new',
+            priority:       'normal',
+            entity_id:      link.entityId,
+            domain:         domain || null,
+            metadata: {
+              role,
+              source:           `${source}_sidebar`,
+              contact_name:     contact.name,
+              contact_email:    contact.email || null,
+              contact_phone:    contact.phones?.[0] || contact.phone || null,
+              contact_company:  contact.company || null,
+              contact_title:    contact.title || null,
+              cadence_id:       cadenceRes.cadence?.id || null,
+              extracted_at:     extractedAt,
+              property_entity_id: propertyEntityId || null,
+            },
+          }, { 'Prefer': 'return=minimal' });
+          if (!inboxRes?.ok) {
+            console.warn('[contact-cadence-seed] inbox_items POST failed for',
+              link.entityId, '-', inboxRes?.status, inboxRes?.data);
+          } else {
+            console.log(`[contact-cadence-seed] seeded cadence + inbox for new contact ${contact.name} (entity ${link.entityId}, domain ${domain})`);
+          }
+        }
+      } catch (err) {
+        // Never propagate — cadence/inbox seeding is best-effort follow-up
+        // to the unpackContacts core work.
+        console.error('[contact-cadence-seed] failed (non-fatal):', err?.message || err);
+      }
+    }
 
     // Store additional contact details via PATCH if we have enrichment data
     if (entityType === 'person' && (contact.email || contact.phones?.length || contact.title)) {

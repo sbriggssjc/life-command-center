@@ -22,9 +22,9 @@
 | 2 | Drain `llc_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B) | A-1, B-5 | Phase A merged to main as `54ee38e` (cron live, verified). Phase B (UI) deferred to follow-up session. D-13 moved to item #5. |
 | 3 | Wire `resolveOwnerLinks` for dia + backfill | `audit/03-dia-owner-linkage` | 🟨 IN PROGRESS | A-2 | CRITICAL · Phase A: forward-looking dia owner resolution (this commit). Phase B: one-shot backfill of 13,338 NULL-owner dia properties (deferred). |
 | 4 | Build `v_next_best_action` UNION view + Home rail | `audit/04-next-best-action` | 🟦 PENDING | B-1, B-3, B-13 | CRITICAL |
-| 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) + sidebar→ownership_research_queue schema fix | `audit/05-provenance-integrity` | 🟨 IN PROGRESS | A-3, D-13 | CRITICAL · Phase A (this commit): ingest_write_failures table + domainQuery instrumentation. Phase B (deferred): gate 47 pushProvenance/recordCoStarFieldsProvenance call sites on .ok + fix D-13 column-schema mismatch in two ownership_research_queue writers. |
+| 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) | `audit/05-provenance-integrity` | ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B) | A-3 | Phase A merged to main as `08846cc`. ingest_write_failures table live + domainQuery instrumented. Phase B (pushProvenance gating + D-13 column-schema fix) deferred until we observe real failure patterns. |
 | 6 | Data Completeness rail on `detail.js` + persisted column | `audit/06-completeness-rail` | 🟦 PENDING | B-2, B-15 | HIGH |
-| 7 | Seed cadence on new contact writes | `audit/07-contact-cadence-seed` | 🟦 PENDING | D-2, D-6 | CRITICAL |
+| 7 | Seed cadence on new contact writes | `audit/07-contact-cadence-seed` | 🟧 REVIEW | D-2, D-6 (part) | CRITICAL · sidebar path landed. contacts-handler mirror = follow-up. |
 | 8 | Sticky next-action bar on `detail.js` | `audit/08-detail-next-action-bar` | 🟦 PENDING | B-9, B-10 | HIGH |
 | 9 | Value-weighted sort on every list | `audit/09-value-sort` | 🟦 PENDING | B-3 | HIGH |
 | 10 | Global error visibility (window.error, retry CTAs, toast tiering) | `audit/10-global-error-visibility` | 🟦 PENDING | C-5, C-6, C-9, C-10 | HIGH |
@@ -155,6 +155,47 @@ The audit doc finding **D-13** ("ownership_research_queue has a writer; no conta
      `SELECT * FROM v_ingest_write_failures_recent LIMIT 20;`
      Expected to surface the D-13 silent-write rows (ownership_research_queue 4xx).
   5. `SELECT label, domain, n, http_statuses FROM v_ingest_write_failures_by_label LIMIT 20;` → triage rollup.
+
+
+
+## Closeout — item 7 — Seed cadence + inbox triage on new contact entities
+- **Status:** 🟧 REVIEW (pending merge to main)
+- **Branch:** `audit/07-contact-cadence-seed`
+- **Patch:** `audit/patches/07-contact-cadence-seed/apply.mjs`
+- **Closes:** D-2 (sidebar new-contact dead-end) ✓. D-6 (cadence engine only covers contacts) is partially addressed — the contact half now seeds automatically; the broader `subject_kind = property | listing | owner` extension stays open as a separate finding.
+- **Files changed:**
+  - `api/_handlers/sidebar-pipeline.js`
+    - Added `getCadenceState` import from `./cadence-engine.js`.
+    - Inside `unpackContacts` (the entity-creation pass), after `ensureEntityLink` returns `link.createdEntity === true` for a person entity AND workspaceId/userId are present:
+      1. Call `getCadenceState({ entity_id: link.entityId }, { domain })` to initialize the cadence row at touch 0 (idempotent — returns existing row if already there).
+      2. If `cadenceRes.is_new === true` (genuinely-new entity, not a re-link of an existing one), POST an `inbox_items` row with `source_type='new_contact_qualify'`, the entity_id, role-aware title, and contact metadata (firm, email, phone, title, property_entity_id) for Scott's triage flow.
+    - Whole block wrapped in try/catch. A failure here NEVER rolls back the unpackContacts core work.
+  - `AUDIT_PROGRESS.md` — item #5 flipped to DONE (Phase A) with merge SHA `08846cc`; item #7 to REVIEW; new closeout section.
+- **Scope of impact:**
+  - Every CoStar sidebar capture that produces a new person contact will now create a triage inbox item AND a cadence row.
+  - Re-captures of the same broker (existing entity) are a no-op for both calls — no spam.
+  - Companies (org-type entities) are NOT seeded into cadence — only persons.
+- **What this does NOT do:**
+  - Does NOT mirror the seed for non-sidebar contact creates (contacts-handler / Salesforce-sync paths). Those producers create LCC entities through a different path; covering them requires reading `contacts-handler.js` and adding a similar hook. **Deferred to a follow-up.**
+  - Does NOT extend the cadence engine to property / listing / owner subjects (the broader D-6). The audit lists that as a separate fix.
+- **Verification (post-commit, post-deploy):**
+  1. `grep -c "getCadenceState" api/_handlers/sidebar-pipeline.js` → ≥ 2 (import + call)
+  2. `grep -c "contact-cadence-seed" api/_handlers/sidebar-pipeline.js` → ≥ 1
+  3. `node -c api/_handlers/sidebar-pipeline.js` → parses
+  4. After deploy, capture a CoStar listing on a property with brokers you've never seen before. On LCC Opps SQL:
+     ```sql
+     SELECT * FROM inbox_items
+     WHERE source_type = 'new_contact_qualify'
+       AND created_at > now() - interval '15 minutes'
+     ORDER BY created_at DESC LIMIT 20;
+
+     SELECT * FROM touchpoint_cadence
+     WHERE current_touch = 0
+       AND created_at > now() - interval '15 minutes'
+     ORDER BY created_at DESC LIMIT 20;
+     ```
+     Both should return rows matching the new brokers.
+- **Commit SHA:** _paste after `git commit`_
 
 
 # Sprint preflight — 2026-05-17
