@@ -19,8 +19,8 @@
 | # | Item | Branch | Status | Closes | Notes |
 |---|------|--------|--------|--------|-------|
 | 1 | Fire `runListingBdPipeline` from sidebar + OM intake | `audit/01-bd-pipeline-trigger` | ✅ DONE | A-1 (part), D-1, D-5 | Merged to main as commit `60f0364` on 2026-05-17 |
-| 2 | Drain `llc_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | 🟨 IN PROGRESS | A-1, B-5 | CRITICAL · Phase A: cron scheduled (2026-05-17). Phase B: UI surfaces. D-13 moved to item #5 — see notes below. |
-| 3 | Wire `resolveOwnerLinks` for dia + backfill | `audit/03-dia-owner-linkage` | 🟦 PENDING | A-2 | CRITICAL |
+| 2 | Drain `llc_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B) | A-1, B-5 | Phase A merged to main as `54ee38e` (cron live, verified). Phase B (UI) deferred to follow-up session. D-13 moved to item #5. |
+| 3 | Wire `resolveOwnerLinks` for dia + backfill | `audit/03-dia-owner-linkage` | 🟨 IN PROGRESS | A-2 | CRITICAL · Phase A: forward-looking dia owner resolution (this commit). Phase B: one-shot backfill of 13,338 NULL-owner dia properties (deferred). |
 | 4 | Build `v_next_best_action` UNION view + Home rail | `audit/04-next-best-action` | 🟦 PENDING | B-1, B-3, B-13 | CRITICAL |
 | 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) + sidebar→ownership_research_queue schema fix | `audit/05-provenance-integrity` | 🟦 PENDING | A-3, D-13 | CRITICAL · sidebar writers at sidebar-pipeline.js:1759 + :2592 have been silently failing for unknown duration (wrong columns: write `property_id` to a table whose schema is `research_id`/`lead_id`/`task_type`). Discovered 2026-05-17 during item #2 investigation. |
 | 6 | Data Completeness rail on `detail.js` + persisted column | `audit/06-completeness-rail` | 🟦 PENDING | B-2, B-15 | HIGH |
@@ -106,6 +106,30 @@ The audit doc finding **D-13** ("ownership_research_queue has a writer; no conta
 `api/_handlers/sidebar-pipeline.js:1759-1769` and `:2592-2603` POST to `ownership_research_queue` with these columns: `property_id`, `address`, `city`, `state`, `recorded_owner_name`, `source`, `priority`, `status`, `created_at`. **None of those columns exist on the real table** (the schema is `research_id`, `lead_id`, `task_type`, `task_status`, `ai_prompt`, ...). Every one of those POSTs has been failing with PostgREST 400 ("column does not exist"). Because `domainQuery` swallows non-2xx responses without throwing (the silent-write bug in finding **A-3 / D-3**), nobody noticed. Date range of the bug is unknown — needs git-blame on those two writer call sites.
 
 **Resolution:** moved D-13 from item #2 to item #5 ("Fix silent-write loop in sidebar-pipeline"). When item #5 lands the silent-write fix, those writes will start surfacing errors. The writers should then be either (a) rewritten to use the correct AI-pipeline schema (`task_type='contact_discovery'` for first-name-only brokers, `task_type='entity_resolution'` for unknown true_owner), or (b) deleted as redundant since the existing Python pipeline already covers both cases.
+
+
+
+## Closeout — item 3 — Phase A (resolveOwnerLinksDia)
+- **Status:** 🟨 IN PROGRESS (Phase A landed; Phase B = one-shot backfill, deferred)
+- **Branch:** `audit/03-dia-owner-linkage`
+- **Patch:** `audit/patches/03-dia-owner-linkage/apply.mjs`
+- **Closes:** A-2 (forward-looking half) — backfill of historical 13,338 NULL-owner dia properties is Phase B.
+- **Files changed:**
+  - `api/_handlers/intake-promoter.js`
+    - New `resolveOwnerLinksDia(match, snapshot)` sibling function (~120 lines). Mirrors the gov `resolveOwnerLinks` pattern with dia column names (`normalized_name` instead of `canonical_name`, `sf_company_id`/`salesforce_id` instead of `sf_account_id`). Owner-name signal: `snapshot.seller_name` → `property.assessed_owner` → parsed from `property.notes`. Patches `true_owner_id` and `recorded_owner_id` on `dia.properties` when a fuzzy ILIKE match is found.
+    - Updated `resolveOwnerLinks` dispatcher to route dia matches to the new sibling instead of returning the `owner_resolution_not_implemented_for_dialysis` skip.
+    - After FK patches, calls `reconcilePropertyOwnership('dialysis', propertyId)` to denormalize `recorded_owner_name` + `true_owner_name` onto `dia.properties` (matching what `sidebar-pipeline.js` already does for CoStar captures).
+    - New import: `reconcilePropertyOwnership` from `./sidebar-pipeline.js`.
+  - `AUDIT_PROGRESS.md` — this file.
+- **Scope of impact:**
+  - **Forward-looking:** Every new dia OM intake from this commit forward will get owner FK linkage if a matching `recorded_owners` / `true_owners` row exists. Audit baseline (pre-patch): 13,338 of 15,219 dia properties (87.6%) have NULL `recorded_owner_id`. Phase A doesn't fix the historical backlog; Phase B will.
+  - **Backward-looking (Phase B, deferred):** A one-shot Node script that walks the 13,338 NULL-owner properties and applies the same fuzzy-match logic. Will need rate-limiting + progress tracking + resumability (13k+ PostgREST round trips). ~200 lines of Node.
+- **Verification (post-commit):**
+  1. `grep -c "resolveOwnerLinksDia" api/_handlers/intake-promoter.js` → ≥ 2 (definition + dispatch call)
+  2. `grep -c "reconcilePropertyOwnership" api/_handlers/intake-promoter.js` → ≥ 2 (import + call)
+  3. `node -c api/_handlers/intake-promoter.js` → parses
+  4. (Smoke test) Re-promote an existing dia OM intake by re-flagging it in Power Automate; query `SELECT recorded_owner_id, true_owner_id FROM dia.properties WHERE property_id = <X>` before and after; the FKs should now populate when a matching owner exists.
+- **Commit SHA:** _paste after `git commit`_
 
 
 # Sprint preflight — 2026-05-17
