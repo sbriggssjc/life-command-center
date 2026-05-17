@@ -335,6 +335,43 @@ Hawaii → Fresenius operator transition, value $127M).
    (B-13). Click-through to property_id detail or entity_pk detail.
 
 
+
+## Closeout — item 4 Phase B-1 — gov mirror of v_next_best_action
+- **Status:** 🟨 IN PROGRESS (gov mirror landed; Phase B-2 = backend endpoint + LCC Opps view; Phase C = Home rail UI)
+- **Branch:** `audit/04-next-best-action-phase-b1`
+- **Patch:** `audit/patches/04-next-best-action-phase-b1/apply.mjs`
+- **Migration applied** to gov (`scknotsqkcheojiaewwh`) at 2026-05-17 via Supabase MCP. 3 views live (v_gap_agency_drift + v_gap_orphan_sale_owner + v_next_best_action).
+
+### What landed
+| View | Rows live |
+|---|---|
+| `v_gap_agency_drift` | ~842 (796 disagreement + 46 property-agency-null) |
+| `v_gap_orphan_sale_owner` | ~2,362 (last 5 years; previously impossible to write — Discovery #1 unblocked) |
+| `v_next_best_action` | ~13,240 unified ranked rows |
+
+### Gap distribution on gov
+| gap_type | Count | Max value |
+|---|---|---|
+| missing_recorded_owner | 9,816 | $967M |
+| orphan_sale_owner | 2,362 | $319M |
+| agency_drift:agency_disagreement | 796 | $1.3M |
+| llc_research_pending | 220 | $347M |
+| agency_drift:lease_agency_but_property_agency_null | 46 | $1.3M |
+
+### Notes vs dia
+Federal property values dwarf dialysis clinic values — a single missing-recorded-owner gap on a $967M federal property outranks 200+ medium-value dia gaps. The unified rank order is dominated by these top federal properties when both views are merged at the application layer (Phase B-2 endpoint).
+
+Skipped vs dia:
+- `v_gap_chain_drift` — no medicare_clinics analog on gov.
+- `v_gap_lease_tenant_drift` — folded into the broader `v_gap_agency_drift`.
+
+### Phase B-2 (next)
+LCC Opps view + backend endpoint that fans out to dia + gov + LCC Opps, merges + re-ranks by gap_value, returns top N. ~150 lines of JS.
+
+### Phase C (after that)
+Home rail UI in app.js — replaces the wrong-table Research pulse-card (B-13) with the live merged top-20 ranked gaps.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

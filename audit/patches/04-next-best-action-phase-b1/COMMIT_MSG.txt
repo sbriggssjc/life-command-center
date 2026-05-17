@@ -1,0 +1,47 @@
+audit(item-4/b1): gov mirror of v_next_best_action
+
+Phase B-1 of item #4 (Phase B-2 = backend endpoint + LCC Opps view;
+Phase C = Home rail UI).
+
+Mirrors the dia.v_next_best_action surface onto gov with the same row
+shape so a single UI consumer can render both domains. Federal domain
+adaptations: agency (vs tenant), estimated_value (vs current_value_
+estimate), gross_rent (vs last_known_rent), tenant_agency (vs lease
+tenant), listing_status (vs is_active), last_seen_at (vs last_seen).
+Skipped: cms_chain_drift (no medicare_clinics analog on gov).
+
+Changes
+-------
+
+supabase/migrations/government/20260517200000_gov_next_best_action_views_phase_b1.sql
+  * v_gap_agency_drift          — properties.agency vs leases.tenant_agency
+                                  disagreement (gov analog of dia's lease
+                                  tenant drift). Loose normalized match.
+  * v_gap_orphan_sale_owner     — sales captured before owner was known
+                                  (now writable since Discovery #1 added
+                                  the column on gov, 2026-05-17).
+  * v_next_best_action           — UNION of 5 sources:
+                                    1. missing_recorded_owner (~9,816)
+                                    2. llc_research_pending    (~220)
+                                    3. agency_drift            (~842)
+                                    4. orphan_sale_owner       (~2,362)
+                                    5. stale_active_listing    (~0 today)
+
+Already applied to gov (scknotsqkcheojiaewwh) via Supabase MCP.
+
+AUDIT_PROGRESS.md
+  * Closeout section for Phase B-1 with gov gap distribution and the
+    cross-domain ranking observation (federal values dwarf dia values).
+
+Sizing
+------
+
+  Total gov gaps:   13,240 ranked rows
+  Top value:        $967M (single missing-recorded-owner gap)
+  Top 5 gap types:  (see closeout in AUDIT_PROGRESS.md)
+
+Refs
+----
+  audit:    item #4 Phase B-1
+  paired:   dia view shipped in commit 2483680
+  branch:   audit/04-next-best-action-phase-b1
