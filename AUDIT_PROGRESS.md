@@ -198,6 +198,48 @@ The audit doc finding **D-13** ("ownership_research_queue has a writer; no conta
 - **Commit SHA:** _paste after `git commit`_
 
 
+
+## Discovery patch #1 — gov schema mirror + loans CHECK expansion (2026-05-17)
+- **Trigger:** Item #5 instrumentation (`ingest_write_failures`) went live ~17:55 UTC. Within 2 minutes, 48 silent-write failures landed across 5 distinct patterns. Three are fixed by this discovery patch.
+- **Branch:** `audit/discovery-01-gov-schema-mirror`
+- **Patch:** `audit/patches/discovery-01-gov-schema-mirror/apply.mjs`
+- **Migration applied via Supabase MCP** on gov (`scknotsqkcheojiaewwh`) at 2026-05-17 18:05 UTC. Verified: all 3 columns + expanded CHECK present.
+
+### Fixes (live on gov)
+| Pattern | Fix |
+|---|---|
+| 14x 400 on `sales_transactions.recorded_owner_id`/`recorded_owner_name` (column not found) | Added both columns to gov (UUID FK to recorded_owners + text). |
+| 10x 400 on `ownership_history.sale_id` (column not found) | Added column to gov (UUID FK to sales_transactions). |
+| 2-10x 400 on `loans.loan_type` CHECK violation | Expanded gov's `loans_loan_type_check` to include 'Refinance' and 'Acquisition' (dia's event vocabulary) alongside gov's existing product taxonomy. |
+
+### Still open (tracked as separate items)
+- **12x 409 on `sales_transactions` uq_st_property_date_price** per gov capture. JS-level fix: sidebar sales POST needs `on_conflict=property_id,sale_date,sold_price` + `Prefer: resolution=merge-duplicates`. Tracked as Task #23.
+- **D-13 ownership_research_queue column-schema mismatch.** Tracked in item #5 Phase B (Task #21).
+
+### Why this happened
+A-5-class schema drift: dia and gov are sibling Supabase projects with their own migration lineage. A migration that added `ownership_history.sale_id` + `sales_transactions.recorded_owner_id` + `sales_transactions.recorded_owner_name` to dia was never mirrored to gov. Same story for the loans CHECK: the dia constraint was authored when only 'Refinance'/'Acquisition' values were needed; gov's was authored later with a richer product vocabulary that doesn't overlap. Both drifts were invisible because of the silent-write loop (audit finding A-3), which item #5 just fixed.
+
+### Verification (live)
+```sql
+-- On gov (scknotsqkcheojiaewwh) — all should return true
+SELECT col, exists FROM (VALUES
+  ('ownership_history.sale_id'),
+  ('sales_transactions.recorded_owner_id'),
+  ('sales_transactions.recorded_owner_name')
+) AS expected(col)
+JOIN LATERAL (
+  SELECT EXISTS(SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND (table_name||'.'||column_name)=col)
+) AS check(exists) ON true;
+
+-- On LCC Opps: silent-failure counts should DROP after next sidebar capture
+SELECT label, count(*) AS n
+FROM v_ingest_write_failures_recent
+WHERE occurred_at > now() - interval '15 minutes'
+GROUP BY label ORDER BY n DESC;
+```
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

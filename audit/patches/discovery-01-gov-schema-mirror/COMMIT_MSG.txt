@@ -1,0 +1,73 @@
+audit(discovery-01): gov schema mirror + loans CHECK expansion
+
+Surfaced by item #5's ingest_write_failures instrumentation within 2
+minutes of going live. Three patterns of silent gov-side writes were
+running on every CoStar sidebar capture for an unknown duration:
+
+  1. upsertDomainOwners:linkOwnershipToSale  (sidebar-pipeline.js:6744)
+     PATCHed ownership_history.sale_id, which existed on dia but not gov.
+  2. upsertDomainOwners:linkSaleToOwner  (sidebar-pipeline.js:6684)
+     PATCHed sales_transactions.recorded_owner_id + recorded_owner_name,
+     both existed on dia but not gov.
+  3. upsertDomainLoans:financing  (sidebar-pipeline.js:5424)
+     INSERTed gov.loans with loan_type='Refinance'/'Acquisition' (output
+     of mapLoanType(), built for dia's CHECK). gov's loans_loan_type_check
+     only allowed bank-product values, so every loan row was rejected.
+
+Closes 3 of 5 silent-failure patterns observed by item #5 in the first
+2 minutes of being live. The remaining 2 (12x 409 dedupe on
+sales_transactions + D-13 ownership_research_queue) are tracked as
+separate items (Task #23 + #5 Phase B respectively).
+
+Changes
+-------
+
+supabase/migrations/government/20260517180000_gov_schema_mirror_audit_discovery.sql
+  * Adds ownership_history.sale_id (uuid FK to sales_transactions).
+  * Adds sales_transactions.recorded_owner_id (uuid FK to recorded_owners).
+  * Adds sales_transactions.recorded_owner_name (text).
+  * Expands loans_loan_type_check to include 'Refinance' and 'Acquisition'
+    alongside the existing product taxonomy.
+  * Already applied to gov via Supabase MCP at 2026-05-17 18:05 UTC.
+
+AUDIT_PROGRESS.md
+  * New "Discovery patch #1" section documenting all 5 patterns, what was
+    fixed by this commit, what's still open, and why this happened
+    (A-5-class drift between sibling Supabase projects).
+
+Why this happened
+-----------------
+
+A-5-class schema drift: dia and gov are sibling Supabase projects with
+their own migration lineage. A migration that added these columns + the
+broader CHECK on dia was never mirrored to gov. Both drifts were invisible
+because of the silent-write loop (audit finding A-3) — which item #5 just
+fixed, making this discovery possible.
+
+Verification (post-deploy on gov)
+---------------------------------
+
+  SELECT col, exists FROM (VALUES
+    ('ownership_history.sale_id'),
+    ('sales_transactions.recorded_owner_id'),
+    ('sales_transactions.recorded_owner_name')
+  ) AS expected(col)
+  JOIN LATERAL (
+    SELECT EXISTS(SELECT 1 FROM information_schema.columns
+      WHERE table_schema='public' AND (table_name||'.'||column_name)=col)
+  ) AS check(exists) ON true;
+
+After the next sidebar capture, on LCC Opps:
+
+  SELECT label, count(*) AS n
+  FROM v_ingest_write_failures_recent
+  WHERE occurred_at > now() - interval '15 minutes'
+  GROUP BY label ORDER BY n DESC;
+
+The labels touched by this patch should DROP to zero.
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx (finding A-5 class)
+  trigger:  item #5 instrumentation going live (commit 08846cc)
+  branch:   audit/discovery-01-gov-schema-mirror
