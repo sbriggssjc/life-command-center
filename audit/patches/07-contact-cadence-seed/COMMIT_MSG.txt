@@ -1,0 +1,87 @@
+audit(item-7): seed cadence + inbox triage on newly-captured contact entities
+
+Closes audit finding D-2 (sidebar new-contact dead-end) and the contact
+half of D-6 (cadence engine only covers contacts). The broader D-6 — extend
+cadence to property / listing / owner subjects — remains as a separate
+finding and is not addressed here.
+
+Before this commit, every CoStar sidebar capture that produced a new person
+entity (broker, owner-side contact) ended at the row write. The cadence
+engine's 7-touch prospecting sequence in cadence-engine.js could only fire
+for contacts that already had a touchpoint_cadence row, and nothing was
+calling getCadenceState on new entities. Each fresh broker was an invisible
+lead. The weekly template-health report explained the downstream effect:
+0 sends across all 14 templates in 120 days.
+
+Changes
+-------
+
+api/_handlers/sidebar-pipeline.js
+  * Added getCadenceState import from ../_shared/cadence-engine.js.
+  * Inside unpackContacts, after each ensureEntityLink result, if:
+        link.createdEntity === true
+     && entityType         === 'person'
+     && workspaceId        && link.entityId
+    fire (wrapped in try/catch — never rolls back upstream work):
+      1. getCadenceState({ entity_id: link.entityId }, { domain }) —
+         initializes touchpoint_cadence at touch 0. Idempotent: a
+         pre-existing row for this entity is returned unchanged.
+      2. If cadenceRes.is_new is true, POST inbox_items with:
+           source_type   = 'new_contact_qualify'
+           status        = 'new'
+           visibility    = 'private'
+           entity_id     = link.entityId
+           title         = "New contact: <name> (<role>)"
+           body          = source + role + firm + email + phone + title
+           metadata      = role, source, contact_name, contact_email,
+                            contact_phone, contact_company, contact_title,
+                            cadence_id, extracted_at, property_entity_id
+
+AUDIT_PROGRESS.md
+  * Item #5 row: 🟨 IN PROGRESS → ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B)
+    with merge SHA 08846cc.
+  * Item #7 row: 🟦 PENDING → 🟧 REVIEW with patch + commit references.
+  * New closeout section with verification steps.
+
+Behavior
+--------
+
+Forward-looking from this commit:
+  • Every NEW person entity from a sidebar capture → cadence + inbox row.
+  • Re-captures of existing brokers → no-op (cadenceRes.is_new === false).
+  • Org entities (companies) → not seeded; cadence is contact-only.
+  • Failures → swallowed; upstream sidebar work continues.
+
+What this does NOT do
+---------------------
+  • Does NOT mirror this seeding for non-sidebar contact creates
+    (contacts-handler.js, Salesforce-sync). Those paths create LCC
+    entities differently and need their own hook. Deferred.
+  • Does NOT extend cadence to non-contact subjects (property / listing /
+    owner). The broader D-6 fix is a separate item.
+  • Does NOT change cadence priority_tier from the default 'B'. Item #8
+    (lead scoring) handles that.
+
+Verification
+------------
+  grep -c "getCadenceState"    api/_handlers/sidebar-pipeline.js  # >= 2
+  grep -c "contact-cadence-seed" api/_handlers/sidebar-pipeline.js  # >= 1
+  node -c                      api/_handlers/sidebar-pipeline.js
+
+After deploy, on LCC Opps SQL:
+  SELECT * FROM inbox_items
+  WHERE source_type = 'new_contact_qualify'
+    AND created_at > now() - interval '1 hour'
+  ORDER BY created_at DESC LIMIT 20;
+
+  SELECT entity_id, current_touch, phase, priority_tier, created_at
+  FROM touchpoint_cadence
+  WHERE current_touch = 0
+    AND created_at > now() - interval '1 hour'
+  ORDER BY created_at DESC LIMIT 20;
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #7 (Top-10)
+  finding:  D-2 (sidebar new-contact dead-end)
+  branch:   audit/07-contact-cadence-seed
