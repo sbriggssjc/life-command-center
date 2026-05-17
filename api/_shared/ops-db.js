@@ -202,3 +202,63 @@ export function withErrorHandler(handler) {
     }
   };
 }
+
+// ============================================================================
+// Item #5 (audit/05-provenance-integrity, 2026-05-17):
+// Record a non-2xx response from a domain DB write to the
+// ingest_write_failures table on LCC Opps. Fire-and-forget — never throws,
+// never blocks the caller. Closes audit finding A-3 / D-3.
+//
+// Wired automatically into every POST/PATCH/PUT/DELETE made via domainQuery
+// (api/_shared/domain-db.js). Callers can also invoke it directly if they
+// already have an error context to record.
+//
+// Recording is intentionally best-effort:
+//   • LCC Opps unreachable → write is dropped, original caller is unaffected.
+//   • opsQuery throws       → caught and logged, never re-raised.
+//   • Recursive recording   → impossible: opsQuery talks to LCC Opps, not
+//                              dia/gov, so its failures don't trigger this.
+// ============================================================================
+export async function recordWriteFailure({
+  domain, method, path, status, errorDetail, fields, label, sourceRunId, callerFile
+} = {}) {
+  try {
+    if (!isOpsConfigured()) return;
+    // Extract record PK from PostgREST filter pattern: =eq.<value>
+    let recordPk = null;
+    const m = String(path || '').match(/=eq\.([^&]+)/i);
+    if (m) {
+      try { recordPk = decodeURIComponent(m[1]).substring(0, 120); }
+      catch { recordPk = m[1].substring(0, 120); }
+    }
+    // Cap path length so a runaway query string can't bloat the table.
+    const truncatedPath = String(path || '').substring(0, 500);
+    // Cap error_detail size. PostgREST bodies are normally <1KB but be safe.
+    let safeDetail = errorDetail;
+    if (errorDetail !== null && errorDetail !== undefined) {
+      try {
+        const s = JSON.stringify(errorDetail);
+        if (s.length > 5000) {
+          safeDetail = { _truncated: true, preview: s.substring(0, 5000) };
+        }
+      } catch {
+        safeDetail = { _stringified: String(errorDetail).substring(0, 5000) };
+      }
+    }
+    await opsQuery('POST', 'ingest_write_failures', {
+      domain:            domain || null,
+      method:            method || null,
+      path:              truncatedPath || null,
+      record_pk:         recordPk,
+      http_status:       typeof status === 'number' ? status : null,
+      error_detail:      safeDetail || null,
+      fields_attempted:  Array.isArray(fields) ? fields : null,
+      label:             label || null,
+      source_run_id:     sourceRunId || null,
+      caller_file:       callerFile || null,
+    }, { 'Prefer': 'return=minimal' });
+  } catch (err) {
+    // Never propagate — recording is telemetry, not control flow.
+    console.warn('[recordWriteFailure] internal error (suppressed):', err?.message || err);
+  }
+}

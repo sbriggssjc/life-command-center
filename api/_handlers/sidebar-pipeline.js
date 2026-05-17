@@ -703,7 +703,13 @@ function selectPrimaryTenant(metadata, domain) {
  * domainQuery(..., 'PATCH', ...) directly within this pipeline.
  */
 async function domainPatch(domain, path, data, label) {
-  const result = await domainQuery(domain, 'PATCH', path, data);
+  // Item #5 (audit/05-provenance-integrity): pass label through to
+  // domainQuery so the ingest_write_failures row carries a meaningful
+  // tag for triage (e.g. 'upsertDomainSales:dialysis:patch').
+  const result = await domainQuery(domain, 'PATCH', path, data, {}, {
+    label,
+    callerFile: 'sidebar-pipeline.js',
+  });
   if (!result.ok) {
     console.error(`[${label}] PATCH failed:`, {
       domain, path,
@@ -711,6 +717,9 @@ async function domainPatch(domain, path, data, label) {
       error: result.data,
       fields: Object.keys(data),
     });
+    // Note: the recordWriteFailure call now happens inside domainQuery, so
+    // we no longer need to record from here. console.error remains for fast
+    // triage in Vercel function logs.
   }
   return result;
 }
