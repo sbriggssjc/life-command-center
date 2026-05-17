@@ -1,0 +1,46 @@
+audit(item-6/phase-a): Data Completeness rail on detail.js
+
+Adds a horizontal rail at the top of every property detail panel showing
+a completeness score (0-100), a band (excellent/good/fair/poor), and
+clickable chips for the top missing high-value fields. Click a chip →
+switches to the tab where that field lives, so Scott can close the gap
+inline without hunting through the panel.
+
+Server-side calibration via two new views (already live on dia + gov):
+  v_property_completeness — returns property_id, completeness_score,
+  completeness_band, and missing_fields (JSONB array of { key, label,
+  weight, tab } sorted by weight DESC).
+
+Calibrated weights (sum=100) reflect underwriting impact, derived from
+actual field-population stats:
+
+  Dia (15,219 properties; star_rating + qip dropped as 0% populated):
+    recorded_owner 14, anchor_rent 12, tenant/operator 10, cms_link 9,
+    building_size 8, lease_commencement 7, latest_sale_price 6,
+    total_chairs 6, lease_bump_pct 5, ttm_revenue 5, patient_count 5,
+    parcel_number 5, year_built 4, latest_deed_date 4
+
+  Gov (17,448 properties; lease_structure dropped as 0% populated):
+    recorded_owner 14, gross_rent 11, noi 11, agency 10, lease_number 10,
+    lease_expiration 9, rba 8, lease_commencement 7, term_remaining 5,
+    latest_sale_price 5, year_built 4, federal_employee_count 3,
+    is_build_to_suit 3
+
+Bands: 90+ excellent, 70-89 good, 40-69 fair, <40 poor.
+
+Live distribution (post-migration):
+  Dia: 121 excellent / 660 good / 4,707 fair / 9,731 poor
+  Gov: 788 excellent / 7,455 good / 2,362 fair / 6,843 poor
+
+Files changed:
+  • supabase/migrations/dialysis/20260517230000_dia_v_property_completeness.sql
+  • supabase/migrations/government/20260517230000_gov_v_property_completeness.sql
+  • index.html         — #detailCompletenessRail mount between tabs and body
+  • styles.css         — .completeness-rail + .cr-chip styles
+  • detail.js          — fetch into parallel Promise.all, attach to _udCache,
+                          renderer + chip click handler, close-detail hook
+  • AUDIT_PROGRESS.md  — closeout
+
+Closes B-2 (no inline completeness signal) + broker-side half of B-15.
+Phase B deferred: persisted column + nightly refresh + list-sort UI +
+completeness-band weighting in v_next_best_action.
