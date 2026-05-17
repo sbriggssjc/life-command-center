@@ -93,6 +93,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
+    case 'next-best-action':        return handleNextBestAction(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -2771,6 +2772,114 @@ async function handleLlcResearchTick(req, res) {
   }
 
   return res.status(200).json(result);
+}
+
+// ============================================================================
+// NEXT-BEST-ACTION (Item #4 Phase B-2, 2026-05-17)
+// ============================================================================
+//
+// GET /api/admin?_route=next-best-action
+//   Query params:
+//     domain      'dia' | 'gov' | 'both'   (default 'both')
+//     limit       1-500                     (default 50)
+//     offset      >= 0                      (default 0)
+//     severity    'critical'|'high'|'medium'|'low'  (optional filter)
+//     gap_type    exact match               (optional filter, e.g. 'missing_recorded_owner')
+//
+// Fans out in parallel to dia.v_next_best_action + gov.v_next_best_action,
+// merges, globally re-ranks by gap_value DESC, applies offset + limit, and
+// returns the unified ranked list tagged with source_domain per row.
+//
+// This is the cross-domain merge layer for the v_next_best_action surface
+// built in Phase A (dia) + Phase B-1 (gov). The Phase C Home rail UI in
+// app.js will call this single endpoint to render the merged queue.
+//
+// Closes the cross-domain merge half of audit finding B-1.
+// Phase C (Home rail UI) and Phase B-3 (LCC Opps view for provenance
+// conflicts + inbox triage + health alerts) are queued as follow-ups.
+// ============================================================================
+async function handleNextBestAction(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'GET only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia', 'gov', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: "domain must be 'dia', 'gov', or 'both'" });
+  }
+  const limit  = Math.min(500, Math.max(1, parseInt(req.query.limit  || '50', 10)));
+  const offset = Math.max(0,                parseInt(req.query.offset || '0', 10));
+  const severityFilter = req.query.severity ? String(req.query.severity) : null;
+  const gapTypeFilter  = req.query.gap_type ? String(req.query.gap_type) : null;
+  if (severityFilter && !['critical','high','medium','low'].includes(severityFilter)) {
+    return res.status(400).json({ error: "severity must be 'critical', 'high', 'medium', or 'low'" });
+  }
+
+  const targets = domainParam === 'both'
+    ? ['dialysis', 'government']
+    : domainParam === 'dia' ? ['dialysis'] : ['government'];
+
+  // Fetch enough headroom from each domain so global re-rank can produce
+  // an accurate offset+limit slice. We pull (offset + limit + 50) from each
+  // side so the merged top-N is correct even when one domain dominates.
+  const fetchLimit = Math.min(500, offset + limit + 50);
+
+  const fanOutResults = await Promise.all(targets.map(async (dom) => {
+    let path = 'v_next_best_action?select=*'
+             + '&order=gap_value.desc.nullslast,first_seen_at.asc'
+             + '&limit=' + fetchLimit;
+    if (severityFilter) path += '&gap_severity=eq.' + encodeURIComponent(severityFilter);
+    if (gapTypeFilter)  path += '&gap_type=eq.'      + encodeURIComponent(gapTypeFilter);
+
+    const r = await domainQuery(dom, 'GET', path);
+    if (!r.ok) {
+      console.error('[next-best-action] ' + dom + ' query failed:', r.status, r.data);
+      return { domain: dom, ok: false, rows: [], status: r.status, error: r.data };
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
+    return {
+      domain: dom,
+      ok: true,
+      rows: rows.map(row => ({ ...row, source_domain: dom })),
+    };
+  }));
+
+  // Merge + global re-rank by gap_value DESC, tiebreak first_seen_at ASC
+  const merged = [];
+  for (const { rows } of fanOutResults) {
+    for (const row of rows) merged.push(row);
+  }
+  merged.sort((a, b) => {
+    const av = Number(a.gap_value) || 0;
+    const bv = Number(b.gap_value) || 0;
+    if (av !== bv) return bv - av;
+    return String(a.first_seen_at || '').localeCompare(String(b.first_seen_at || ''));
+  });
+
+  const items = merged.slice(offset, offset + limit).map((row, idx) => ({
+    rank: offset + idx + 1,
+    ...row,
+  }));
+
+  const byDomain = {};
+  for (const r of fanOutResults) {
+    byDomain[r.domain] = r.ok
+      ? { ok: true, fetched: r.rows.length }
+      : { ok: false, status: r.status, error: r.error };
+  }
+
+  return res.status(200).json({
+    ok:            true,
+    total_merged:  merged.length,
+    returned:      items.length,
+    limit, offset,
+    severity:      severityFilter,
+    gap_type:      gapTypeFilter,
+    by_domain:     byDomain,
+    items,
+  });
 }
 
 // Local stripNulls — admin.js doesn't import the sidebar-pipeline version
