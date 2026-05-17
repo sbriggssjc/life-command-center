@@ -1,0 +1,60 @@
+audit(discovery-02): defensive 409 recovery in upsertDomainSales
+
+Closes the remaining silent-failure pattern visible after Discovery #1:
+26+ HTTP 409 conflicts per gov sidebar capture against the
+uq_st_property_date_price partial unique index on sales_transactions.
+
+The unique index enforces (property_id, sale_date, sold_price) uniqueness
+on the partial set WHERE sale_date IS NOT NULL AND
+exclude_from_market_metrics IS NOT TRUE. upsertDomainSales's upstream
+lookup uses fuzzy match (price ±5% AND date ±14d), which misses exact-
+match rows inserted by other writers (deed parser, RCA capture, prior
+sidebar versions). The POST then hits the unique index and silently fails.
+
+Changes
+-------
+
+api/_handlers/sidebar-pipeline.js (line ~4711, "Create new" branch)
+  * On POST failure with status 409 AND error_detail containing
+    "uq_st_property_date_price":
+      1. GET the existing row by EXACT (property_id, sale_date, sold_price).
+      2. PATCH the row with the refreshed payload, gated through the same
+         filterByFieldPriority that the normal upstream-lookup branch uses.
+      3. Continue the same post-write flow (closeActiveListingsOnSale,
+         linkSaleBrokers, pushProvenance) using the recovered sale_id.
+      4. Skip the dialysis createSaleAlert call on recovery (this is a
+         re-ingest, not a new sale signal).
+  * count++ now fires on either path (true insert OR successful recovery)
+    so upstream consumers see the work as completed.
+  * Non-409 failures are still surfaced via item #5's ingest_write_failures
+    instrumentation (no behavior change for those).
+
+AUDIT_PROGRESS.md
+  * New Discovery patch #2 section documenting the fix.
+
+Verification
+------------
+
+  grep -c "409Recovery" api/_handlers/sidebar-pipeline.js   # >= 1
+  node -c api/_handlers/sidebar-pipeline.js
+
+After deploy, on LCC Opps SQL:
+  SELECT label, http_status, count(*) AS n
+  FROM v_ingest_write_failures_recent
+  WHERE http_status = 409
+    AND occurred_at > now() - interval '15 minutes'
+  GROUP BY label, http_status
+  ORDER BY n DESC;
+
+The 409 count should drop to zero on the next gov sidebar capture.
+Vercel logs will show "[upsertDomainSales:409Recovery] recovered sale ..."
+lines when the recovery path fires.
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, audit-discovery item
+  trigger:  item #5 instrumentation surfaced this pattern (commit 08846cc)
+  paired:   Discovery #1 (gov schema mirror, commit bc90778) silenced the
+            three label-bearing patterns; this closes the remaining null-
+            label 409 pattern that was hidden underneath.
+  branch:   audit/discovery-02-sales-409-dedupe
