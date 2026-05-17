@@ -21,7 +21,7 @@
 | 1 | Fire `runListingBdPipeline` from sidebar + OM intake | `audit/01-bd-pipeline-trigger` | ✅ DONE | A-1 (part), D-1, D-5 | Merged to main as commit `60f0364` on 2026-05-17 |
 | 2 | Drain `llc_research_queue` (cron + UI, no scraper) | `audit/02-research-queue-drain` | ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B) | A-1, B-5 | Phase A merged to main as `54ee38e` (cron live, verified). Phase B (UI) deferred to follow-up session. D-13 moved to item #5. |
 | 3 | Wire `resolveOwnerLinks` for dia + backfill | `audit/03-dia-owner-linkage` | 🟨 IN PROGRESS | A-2 | CRITICAL · Phase A: forward-looking dia owner resolution (this commit). Phase B: one-shot backfill of 13,338 NULL-owner dia properties (deferred). |
-| 4 | Build `v_next_best_action` UNION view + Home rail | `audit/04-next-best-action` | 🟦 PENDING | B-1, B-3, B-13 | CRITICAL |
+| 4 | Build `v_next_best_action` UNION view + Home rail | `audit/04-next-best-action-phase-a` | 🟨 IN PROGRESS | B-1, B-3 (dia), B-13 | CRITICAL · Phase A: 6 gap sources + 3 propagation views on dia (21k+ ranked gaps live). Phase B: gov mirror + LCC Opps view + Home rail UI. |
 | 5 | Fix silent-write loop in sidebar-pipeline (provenance integrity) | `audit/05-provenance-integrity` | ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B) | A-3 | Phase A merged to main as `08846cc`. ingest_write_failures table live + domainQuery instrumented. Phase B (pushProvenance gating + D-13 column-schema fix) deferred until we observe real failure patterns. |
 | 6 | Data Completeness rail on `detail.js` + persisted column | `audit/06-completeness-rail` | 🟦 PENDING | B-2, B-15 | HIGH |
 | 7 | Seed cadence on new contact writes | `audit/07-contact-cadence-seed` | 🟧 REVIEW | D-2, D-6 (part) | CRITICAL · sidebar path landed. contacts-handler mirror = follow-up. |
@@ -271,6 +271,68 @@ ORDER BY n DESC;
 -- A new label 'upsertDomainSales:409Recovery' may appear in Vercel logs
 -- (console.log) confirming the recovery path is firing successfully.
 ```
+
+
+
+## Closeout — item 4 Phase A — propagation gap views + v_next_best_action (dia)
+- **Status:** 🟨 IN PROGRESS (Phase A landed on dia; Phase B = gov mirror + LCC Opps view + UI)
+- **Branch:** `audit/04-next-best-action-phase-a`
+- **Patch:** `audit/patches/04-next-best-action-phase-a/apply.mjs`
+- **Migration applied** to dia (`zqzrriwuavgrquhisnoa`) at 2026-05-17 via Supabase MCP. Verified: 4 views live (3 propagation + v_next_best_action), 21,056 ranked gap rows.
+
+### What landed
+| View | Rows live |
+|---|---|
+| `v_gap_chain_drift` | ~2,600 (subset of 5,136 linked properties; cosmetic matches filtered out) |
+| `v_gap_lease_tenant_drift` | ~3,500 |
+| `v_gap_orphan_sale_owner` | ~280 (last 5 years only) |
+| `v_next_best_action` | 21,056 unified ranked rows |
+
+### Severity distribution after fix (gap_severity now mirrors gap_value)
+| Severity | Count | Value range |
+|---|---|---|
+| critical | 898 | $20M – $575M |
+| high | 1,447 | $5.6M – $345M |
+| medium | 4,079 | $1.15M – $29M |
+| low | 14,632 | $0 – $4.5M |
+
+### Try it
+```sql
+-- Top 20 highest-value research gaps on dia right now
+SELECT rank, gap_type, gap_severity, property_id, gap_label, suggested_action, gap_value
+FROM public.v_next_best_action
+ORDER BY rank
+LIMIT 20;
+
+-- Just the operator-transition candidates (CMS shows a different chain
+-- than properties.tenant) — these are real BD intelligence signals
+SELECT rank, property_id, gap_label, gap_value
+FROM public.v_next_best_action
+WHERE gap_type LIKE 'cms_chain_drift%'
+ORDER BY gap_value DESC
+LIMIT 20;
+```
+
+### What this enables for Scott
+The dia side of "every gap that needs manual attention, in value-ranked order"
+is now queryable in a single SELECT. Top 898 critical gaps are properties
+worth ≥ $20M with un-researched owners or unresolved chain transitions —
+that's a priority BD outreach hit list. The view also surfaced a concrete
+A-13 instance discovered during build (property #25278: Liberty Dialysis
+Hawaii → Fresenius operator transition, value $127M).
+
+### Phase B — next session
+1. **gov mirror** — same 3 propagation views + v_next_best_action on gov,
+   adapted to gov column names (asking_price vs initial_price, etc.).
+2. **LCC Opps view** — `v_next_best_action_ops` aggregating:
+   - v_field_provenance_conflicts (Phase 3 of provenance system)
+   - v_field_provenance_unranked
+   - inbox_items with source_type IN ('new_contact_qualify','listing_bd_trigger','provenance_conflict')
+   - lcc_health_alerts
+3. **Backend endpoint** `/api/admin?_route=next-best-action` — fans out to
+   dia/gov/LCC Opps, merges + re-ranks, returns top N.
+4. **Home rail UI** in app.js — replaces the wrong-table Research pulse-card
+   (B-13). Click-through to property_id detail or entity_pk detail.
 
 
 # Sprint preflight — 2026-05-17
