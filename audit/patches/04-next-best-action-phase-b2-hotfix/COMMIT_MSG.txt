@@ -1,0 +1,28 @@
+audit(item-4/b2-hotfix): fix cross-domain rank duplication in next-best-action endpoint
+
+One-line spread-order fix. Each domain's v_next_best_action computes
+rank via ROW_NUMBER() OVER (...) scoped to that view. When the endpoint
+merged across both domains and spread rows with:
+
+    { rank: offset + idx + 1, ...row }
+
+…the per-domain rank from the view clobbered the merged rank because
+spread happened AFTER the literal property. Output showed
+`1, 1, 2, 2, 3, 4, 3, 5, ...` interleaved by source_domain.
+
+Fix
+---
+
+api/admin.js handleNextBestAction:
+    { ...row, rank: offset + idx + 1 }   ← rank now wins
+
+Verification
+
+  curl ...&limit=15 | jq '.items[] | {rank, source_domain, property_id}'
+
+Should show rank: 1..15 strictly monotonic.
+
+Refs
+----
+  paired:  api/admin.js handleNextBestAction (commit fc14e8a / merge a065178)
+  branch:  audit/04-next-best-action-phase-b2-hotfix
