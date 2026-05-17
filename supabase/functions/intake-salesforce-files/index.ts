@@ -2,32 +2,44 @@
 // intake-salesforce-files — Salesforce file intake for the SF -> LCC bridge
 // Life Command Center
 //
-// The front door Power Automate's "SF -> LCC: File Discovery & Move" flow
-// POSTs to. Transport (Power Automate) discovers ContentDocumentLink /
-// ContentVersion and moves bytes; this function records metadata, dedups,
-// stores bytes in the salesforce-files bucket, and enqueues extraction.
-// It never writes a domain table.
-//
 // Routes:
-//   POST ?action=manifest     — record discovered files, return the to-fetch list
-//   POST ?action=upload-url   — mint a Storage signed-upload URL for one file
-//   POST ?action=bytes        — store one file's bytes, finalize + enqueue extraction
-//   POST ?action=retry-files  — return stuck (discovered/failed) files as a to-fetch list
-//   POST ?action=fetch        — server-side: download discovered files from Salesforce
-//   GET  (no action)          — info
+//   POST ?action=manifest      — record discovered files, return the to-fetch list
+//   POST ?action=upload-url    — mint a Storage signed-upload URL for one file
+//   POST ?action=bytes         — store one file's bytes, finalize + enqueue extraction
+//   POST ?action=retry-files   — return stuck (discovered/failed) files as a to-fetch list
+//   POST ?action=fetch         — server-side: download discovered files from Salesforce
+//   POST ?action=stage-queued  — drain sf_files at extraction_status:"queued" through
+//                                LCC's /api/intake/stage-om pipeline (real OM extraction +
+//                                property matching). Marks rows extraction_status:"extracted"
+//                                with intake_id in process_notes.
+//   GET  (no action)           — info
 // ============================================================================
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
 
-const PAYLOAD_VERSION = "sf-files-2026-05-v1";
+const PAYLOAD_VERSION = "sf-files-2026-05-v5";
 const BUCKET = "salesforce-files";
-const MAX_INLINE_BYTES = 6 * 1024 * 1024; // 6 MB cap on inline base64 uploads
+const MAX_INLINE_BYTES = 6 * 1024 * 1024;
 
 type Vertical = "dia" | "gov" | "ops";
 
-// ── per-vertical DB access (service-role, server-side only) ─────────────────
+// ── vertical auto-routing ───────────────────────────────────────────────────
+const DIA_SIGNALS = ["dialysis", "davita", "fresenius", "renal", "kidney", "clinic", "nephrology"];
+const GOV_SIGNALS = ["gsa", "federal", "government", "u.s.", "department of", "veterans", "social security"];
+
+function routeFileVertical(f: Record<string, unknown>): Vertical {
+  const explicit = String(f.vertical || "").toLowerCase();
+  if (explicit === "dia" || explicit === "gov" || explicit === "ops") return explicit as Vertical;
+  const hay = [
+    f.linked_entity_tenant, f.linked_entity_property_type, f.linked_entity_name, f.title, f.file_name,
+  ].filter((v) => v).join(" ").toLowerCase();
+  if (DIA_SIGNALS.some((s) => hay.includes(s))) return "dia";
+  if (GOV_SIGNALS.some((s) => hay.includes(s))) return "gov";
+  return "dia";
+}
+
 function dbEnv(vertical: Vertical): { url: string; key: string } | null {
   const map: Record<Vertical, [string, string]> = {
     ops: ["OPS_SUPABASE_URL", "OPS_SUPABASE_SERVICE_KEY"],
@@ -39,20 +51,12 @@ function dbEnv(vertical: Vertical): { url: string; key: string } | null {
   return url && key ? { url, key } : null;
 }
 
-async function dbFetch(
-  vertical: Vertical, method: string, path: string,
-  body?: unknown, prefer = "return=minimal",
-): Promise<{ ok: boolean; status: number; data: unknown }> {
+async function dbFetch(vertical: Vertical, method: string, path: string, body?: unknown, prefer = "return=minimal"): Promise<{ ok: boolean; status: number; data: unknown }> {
   const env = dbEnv(vertical);
   if (!env) return { ok: false, status: 503, data: { error: `${vertical} DB not configured` } };
   const res = await fetch(`${env.url}/rest/v1/${path}`, {
     method,
-    headers: {
-      apikey: env.key,
-      Authorization: `Bearer ${env.key}`,
-      "Content-Type": "application/json",
-      Prefer: method === "GET" ? "count=exact" : prefer,
-    },
+    headers: { apikey: env.key, Authorization: `Bearer ${env.key}`, "Content-Type": "application/json", Prefer: method === "GET" ? "count=exact" : prefer },
     body: body && method !== "GET" ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -61,79 +65,43 @@ async function dbFetch(
   return { ok: res.ok, status: res.status, data };
 }
 
-// Upload raw bytes to the salesforce-files Storage bucket on a vertical.
-async function storageUpload(
-  vertical: Vertical, path: string, bytes: Uint8Array, contentType: string,
-): Promise<{ ok: boolean; status: number; error?: string }> {
+async function storageUpload(vertical: Vertical, path: string, bytes: Uint8Array, contentType: string): Promise<{ ok: boolean; status: number; error?: string }> {
   const env = dbEnv(vertical);
   if (!env) return { ok: false, status: 503, error: `${vertical} not configured` };
   const res = await fetch(`${env.url}/storage/v1/object/${BUCKET}/${path}`, {
     method: "POST",
-    headers: {
-      apikey: env.key,
-      Authorization: `Bearer ${env.key}`,
-      "Content-Type": contentType || "application/octet-stream",
-      "x-upsert": "true",
-    },
+    headers: { apikey: env.key, Authorization: `Bearer ${env.key}`, "Content-Type": contentType || "application/octet-stream", "x-upsert": "true" },
     body: bytes,
   });
   if (res.ok) return { ok: true, status: res.status };
   return { ok: false, status: res.status, error: await res.text() };
 }
 
-// ── Salesforce auth + file download ─────────────────────────────────────────
-// One Salesforce org for all verticals. A Connected App with the OAuth 2.0
-// Client Credentials Flow enabled (run-as an integration user) mints tokens
-// against the standard token endpoint — which is NOT behind the SSO gateway
-// that blocked the username/password flow.
+// ── Salesforce auth (Connected App, optional) ──────────────────────────────
 const SF_INSTANCE_URL = Deno.env.get("SF_INSTANCE_URL") ?? "";
 const SF_CLIENT_ID = Deno.env.get("SF_CLIENT_ID") ?? "";
 const SF_CLIENT_SECRET = Deno.env.get("SF_CLIENT_SECRET") ?? "";
-
 let sfTokenCache: { token: string; instanceUrl: string; expiresAt: number } | null = null;
 
 async function getSfToken(): Promise<{ token: string; instanceUrl: string } | null> {
   if (!SF_INSTANCE_URL || !SF_CLIENT_ID || !SF_CLIENT_SECRET) return null;
   const now = Date.now();
-  if (sfTokenCache && sfTokenCache.expiresAt > now + 60_000) {
-    return { token: sfTokenCache.token, instanceUrl: sfTokenCache.instanceUrl };
-  }
-  const form = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: SF_CLIENT_ID,
-    client_secret: SF_CLIENT_SECRET,
-  });
-  const res = await fetch(`${SF_INSTANCE_URL}/services/oauth2/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: form.toString(),
-  });
+  if (sfTokenCache && sfTokenCache.expiresAt > now + 60_000) return { token: sfTokenCache.token, instanceUrl: sfTokenCache.instanceUrl };
+  const form = new URLSearchParams({ grant_type: "client_credentials", client_id: SF_CLIENT_ID, client_secret: SF_CLIENT_SECRET });
+  const res = await fetch(`${SF_INSTANCE_URL}/services/oauth2/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() });
   if (!res.ok) return null;
   const data = (await res.json()) as { access_token?: string; instance_url?: string };
   if (!data.access_token) return null;
-  sfTokenCache = {
-    token: data.access_token,
-    instanceUrl: data.instance_url || SF_INSTANCE_URL,
-    expiresAt: now + 25 * 60 * 1000, // refresh well before the ~1h expiry
-  };
+  sfTokenCache = { token: data.access_token, instanceUrl: data.instance_url || SF_INSTANCE_URL, expiresAt: now + 25 * 60 * 1000 };
   return { token: sfTokenCache.token, instanceUrl: sfTokenCache.instanceUrl };
 }
 
-// Download a Salesforce file by its VersionData path (relative path stored by
-// the manifest step, e.g. /services/data/v59.0/sobjects/ContentVersion/{Id}/VersionData).
-async function sfDownloadBytes(
-  auth: { token: string; instanceUrl: string },
-  path: string,
-): Promise<{ ok: boolean; bytes?: Uint8Array; contentType?: string; error?: string }> {
+async function sfDownloadBytes(auth: { token: string; instanceUrl: string }, path: string): Promise<{ ok: boolean; bytes?: Uint8Array; contentType?: string; error?: string }> {
   const url = path.startsWith("http") ? path : `${auth.instanceUrl}${path}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
   if (!res.ok) return { ok: false, error: `${res.status} ${await res.text()}` };
   const bytes = new Uint8Array(await res.arrayBuffer());
-  return {
-    ok: true,
-    bytes,
-    contentType: res.headers.get("content-type") || "application/octet-stream",
-  };
+  return { ok: true, bytes, contentType: res.headers.get("content-type") || "application/octet-stream" };
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -165,6 +133,15 @@ function storagePath(row: Record<string, unknown>): string {
   return parts.map((p) => encodeURIComponent(p)).join("/");
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 // ── main handler ────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   const cors = handleCors(req);
@@ -177,7 +154,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(req, {
       service: "intake-salesforce-files",
       version: PAYLOAD_VERSION,
-      actions: ["manifest", "upload-url", "bytes", "retry-files", "fetch"],
+      actions: ["manifest", "upload-url", "bytes", "retry-files", "fetch", "stage-queued"],
     });
   }
 
@@ -186,15 +163,14 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    if (req.method !== "POST") {
-      return errorResponse(req, `Method ${req.method} not allowed`, 405);
-    }
+    if (req.method !== "POST") return errorResponse(req, `Method ${req.method} not allowed`, 405);
     const body = (await parseBody(req)) as Record<string, unknown> | null;
     if (action === "manifest") return await handleManifest(req, body);
     if (action === "upload-url") return await handleUploadUrl(req, body);
     if (action === "bytes") return await handleBytes(req, body);
     if (action === "retry-files") return await handleRetryFiles(req, body);
     if (action === "fetch") return await handleFetch(req, body);
+    if (action === "stage-queued") return await handleStageQueued(req, body);
     return errorResponse(req, `Unknown POST action: ${action}`, 400);
   } catch (err) {
     console.error("[intake-salesforce-files]", err);
@@ -203,11 +179,6 @@ Deno.serve(async (req: Request) => {
 });
 
 // ── POST ?action=manifest ───────────────────────────────────────────────────
-// body: { batch_id, files: [{ vertical, content_document_id, content_version_id,
-//          linked_entity_type, linked_entity_sf_id, title, file_name, extension,
-//          version_number, size_bytes, sf_download_url }] }
-// Records discovered files in sf_files (dedup on content_version_id) and returns
-// only the files whose bytes are not already stored.
 async function handleManifest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
   if (!body) return errorResponse(req, "Missing JSON body", 400);
   const batchId = String(body.batch_id || "");
@@ -215,77 +186,61 @@ async function handleManifest(req: Request, body: Record<string, unknown> | null
   if (!batchId) return errorResponse(req, "batch_id is required", 400);
   if (!files) return errorResponse(req, "files[] is required", 400);
 
-  // group incoming files by vertical
   const byVertical: Record<string, Record<string, unknown>[]> = {};
   for (const f of files) {
-    const v = String(f.vertical || "dia");
+    const v = routeFileVertical(f);
     (byVertical[v] ??= []).push(f);
   }
 
   const toFetch: Record<string, unknown>[] = [];
+  const insertErrors: string[] = [];
   let discovered = 0, errors = 0;
 
   for (const [vertical, vFiles] of Object.entries(byVertical)) {
     const cvids = vFiles.map((f) => f.content_version_id).filter(Boolean) as string[];
     if (!cvids.length) continue;
 
-    // which content_version_ids already exist, and their ingestion_status
     const inList = cvids.map((c) => `"${c}"`).join(",");
-    const existing = await dbFetch(
-      vertical as Vertical, "GET",
-      `sf_files?content_version_id=in.(${inList})&select=content_version_id,ingestion_status`,
-    );
+    const existing = await dbFetch(vertical as Vertical, "GET",
+      `sf_files?content_version_id=in.(${inList})&select=content_version_id,ingestion_status`);
     const statusByCvid: Record<string, string> = {};
     for (const r of (Array.isArray(existing.data) ? existing.data : []) as Record<string, unknown>[]) {
       statusByCvid[String(r.content_version_id)] = String(r.ingestion_status);
     }
 
-    // insert only the genuinely new ones
-    const newRows = vFiles
-      .filter((f) => !(String(f.content_version_id) in statusByCvid))
-      .map((f) => ({
-        content_document_id: f.content_document_id ?? null,
-        content_version_id: f.content_version_id ?? null,
-        linked_entity_type: f.linked_entity_type ?? null,
-        linked_entity_sf_id: f.linked_entity_sf_id ?? null,
-        title: f.title ?? null,
-        file_name: f.file_name ?? null,
-        extension: f.extension ?? null,
-        version_number: f.version_number ?? null,
-        size_bytes: f.size_bytes ?? null,
-        sf_download_url: f.sf_download_url ?? null,
-        source_system: "salesforce",
-        import_batch: batchId,
-        ingestion_status: "discovered",
-        extraction_status: "pending",
-        discovered_at: isoNow(),
-        updated_at: isoNow(),
-      }));
+    const newRows = vFiles.filter((f) => !(String(f.content_version_id) in statusByCvid)).map((f) => ({
+      content_document_id: f.content_document_id ?? null,
+      content_version_id: f.content_version_id ?? null,
+      linked_entity_type: f.linked_entity_type ?? null,
+      linked_entity_sf_id: f.linked_entity_sf_id ?? null,
+      title: f.title ?? null,
+      file_name: f.file_name ?? null,
+      extension: f.extension ?? null,
+      version_number: f.version_number ?? null,
+      size_bytes: f.size_bytes ?? null,
+      sf_download_url: f.sf_download_url ?? null,
+      source_system: "salesforce",
+      import_batch: batchId,
+      ingestion_status: "discovered",
+      extraction_status: "pending",
+      discovered_at: isoNow(),
+      updated_at: isoNow(),
+    }));
 
     if (newRows.length) {
-      // Note: we already de-duped against existing rows via the lookup above,
-      // so a plain insert is correct. Avoid `?on_conflict=content_version_id,source_system`
-      // because that unique index is PARTIAL (WHERE content_version_id IS NOT NULL),
-      // which PostgREST's `on_conflict` shortcut can't target (42P10).
-      const res = await dbFetch(
-        vertical as Vertical, "POST",
-        `sf_files`,
-        newRows, "return=minimal",
-      );
+      const res = await dbFetch(vertical as Vertical, "POST", `sf_files`, newRows, "return=minimal");
       if (res.ok) discovered += newRows.length;
       else {
         errors += newRows.length;
-        console.error("[intake-salesforce-files] manifest insert failed",
-          { vertical, status: res.status, data: res.data, sample: newRows[0] });
+        const errMsg = `${vertical}: status=${res.status} data=${JSON.stringify(res.data).slice(0,200)}`;
+        insertErrors.push(errMsg);
+        console.error("[intake-salesforce-files] manifest insert failed", errMsg);
       }
     }
 
-    // to_fetch = every file in this batch whose bytes are not already stored
     for (const f of vFiles) {
       const cur = statusByCvid[String(f.content_version_id)];
-      if (cur !== "stored") {
-        toFetch.push({ vertical, ...f });
-      }
+      if (cur !== "stored") toFetch.push({ ...f, vertical });
     }
   }
 
@@ -293,100 +248,63 @@ async function handleManifest(req: Request, body: Record<string, unknown> | null
     ok: errors === 0,
     batch_id: batchId,
     received: files.length,
-    discovered,
-    errors,
+    discovered, errors,
+    insert_errors: insertErrors.length ? insertErrors : undefined,
     to_fetch: toFetch,
   });
 }
 
 // ── POST ?action=upload-url ─────────────────────────────────────────────────
-// body: { vertical, content_version_id }
-// Mints a Supabase Storage signed-upload URL for the file's target path so the
-// caller (Power Automate) can PUT the raw bytes straight to the salesforce-files
-// bucket — no size cap, and the service-role key never leaves the server.
-// Mirrors the LCC OM-ingest prepare-upload pattern
-// (api/_handlers/intake-prepare-upload.js). After a successful PUT, the caller
-// finalizes the row with ?action=bytes { storage_path }.
 async function handleUploadUrl(req: Request, body: Record<string, unknown> | null): Promise<Response> {
   if (!body) return errorResponse(req, "Missing JSON body", 400);
   const vertical = String(body.vertical || "dia") as Vertical;
   const cvid = String(body.content_version_id || "");
   if (!cvid) return errorResponse(req, "content_version_id is required", 400);
-
   const env = dbEnv(vertical);
   if (!env) return errorResponse(req, `${vertical} DB not configured`, 503);
 
-  // look up the sf_files row recorded by the manifest step
-  const lookup = await dbFetch(
-    vertical, "GET",
-    `sf_files?content_version_id=eq.${encodeURIComponent(cvid)}&source_system=eq.salesforce` +
-    `&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name&limit=1`,
-  );
+  const lookup = await dbFetch(vertical, "GET",
+    `sf_files?content_version_id=eq.${encodeURIComponent(cvid)}&source_system=eq.salesforce&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name&limit=1`);
   const rows = Array.isArray(lookup.data) ? lookup.data as Record<string, unknown>[] : [];
-  if (!rows.length) {
-    return errorResponse(req, `No sf_files row for content_version_id ${cvid} — run manifest first`, 404);
-  }
-  const objectPath = storagePath(rows[0]); // bucket-relative path
+  if (!rows.length) return errorResponse(req, `No sf_files row for content_version_id ${cvid}`, 404);
+  const objectPath = storagePath(rows[0]);
 
-  // mint the signed upload URL via Supabase Storage REST
+  // Idempotency: delete existing object first so signed-upload URL minting doesn't fail.
+  await fetch(`${env.url}/storage/v1/object/${BUCKET}/${objectPath}`, {
+    method: "DELETE",
+    headers: { apikey: env.key, Authorization: `Bearer ${env.key}` },
+  }).catch(() => {});
+
   const signEndpoint = `${env.url}/storage/v1/object/upload/sign/${BUCKET}/${objectPath}`;
   const signRes = await fetch(signEndpoint, {
     method: "POST",
-    headers: {
-      apikey: env.key,
-      Authorization: `Bearer ${env.key}`,
-      "Content-Type": "application/json",
-    },
+    headers: { apikey: env.key, Authorization: `Bearer ${env.key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ expiresIn: 3600 }),
   });
   const signText = await signRes.text();
   let signJson: Record<string, unknown> | null = null;
-  try { signJson = signText ? JSON.parse(signText) : null; } catch { /* keep text for error */ }
-  if (!signRes.ok || !signJson?.url) {
-    return errorResponse(
-      req,
-      `Signed-URL mint failed: ${String(signJson?.message || signJson?.error || signText || "no data").slice(0, 300)}`,
-      signRes.status || 500,
-    );
-  }
+  try { signJson = signText ? JSON.parse(signText) : null; } catch {}
+  if (!signRes.ok || !signJson?.url) return errorResponse(req, `Signed-URL mint failed: ${String(signJson?.message || signJson?.error || signText || "no data").slice(0, 300)}`, signRes.status || 500);
 
-  // Supabase returns a relative "/object/upload/sign/...?token=JWT". The caller
-  // PUTs the bytes there with the x-upsert header — the ?token is the only auth
-  // (do NOT add an Authorization header on the PUT).
   const uploadUrl = `${env.url}/storage/v1${signJson.url}`;
-
   return jsonResponse(req, {
-    ok: true,
-    content_version_id: cvid,
-    vertical,
-    storage_path: objectPath,        // pass this back to ?action=bytes after the PUT
-    upload_url: uploadUrl,           // PUT the raw file bytes here
-    upload_method: "PUT",
-    upload_headers: { "x-upsert": "true" },
+    ok: true, content_version_id: cvid, vertical, storage_path: objectPath,
+    upload_url: uploadUrl, upload_method: "PUT", upload_headers: { "x-upsert": "true" },
     expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
   });
 }
 
 // ── POST ?action=bytes ──────────────────────────────────────────────────────
-// body: { vertical, content_version_id, file_base64?, storage_path?, mime_type? }
-// Stores the bytes (inline base64 -> bucket, or accepts a pre-uploaded
-// storage_path), verifies sha256, finalizes the sf_files row, enqueues extraction.
 async function handleBytes(req: Request, body: Record<string, unknown> | null): Promise<Response> {
   if (!body) return errorResponse(req, "Missing JSON body", 400);
   const vertical = String(body.vertical || "dia") as Vertical;
   const cvid = String(body.content_version_id || "");
   if (!cvid) return errorResponse(req, "content_version_id is required", 400);
 
-  // look up the sf_files row recorded by the manifest step
-  const lookup = await dbFetch(
-    vertical, "GET",
-    `sf_files?content_version_id=eq.${encodeURIComponent(cvid)}&source_system=eq.salesforce` +
-    `&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name&limit=1`,
-  );
+  const lookup = await dbFetch(vertical, "GET",
+    `sf_files?content_version_id=eq.${encodeURIComponent(cvid)}&source_system=eq.salesforce&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name&limit=1`);
   const rows = Array.isArray(lookup.data) ? lookup.data as Record<string, unknown>[] : [];
-  if (!rows.length) {
-    return errorResponse(req, `No sf_files row for content_version_id ${cvid} — run manifest first`, 404);
-  }
+  if (!rows.length) return errorResponse(req, `No sf_files row for content_version_id ${cvid}`, 404);
   const row = rows[0];
 
   let path: string | null = null;
@@ -395,9 +313,7 @@ async function handleBytes(req: Request, body: Record<string, unknown> | null): 
 
   if (typeof body.file_base64 === "string" && body.file_base64) {
     const bytes = b64ToBytes(body.file_base64);
-    if (bytes.byteLength > MAX_INLINE_BYTES) {
-      return errorResponse(req, `Inline file exceeds ${MAX_INLINE_BYTES} bytes — use storage_path instead`, 413);
-    }
+    if (bytes.byteLength > MAX_INLINE_BYTES) return errorResponse(req, `Inline file exceeds ${MAX_INLINE_BYTES} bytes`, 413);
     sha = await sha256Hex(bytes);
     size = bytes.byteLength;
     path = storagePath(row);
@@ -409,7 +325,6 @@ async function handleBytes(req: Request, body: Record<string, unknown> | null): 
       return errorResponse(req, `Storage upload failed: ${up.error}`, up.status || 500);
     }
   } else if (typeof body.storage_path === "string" && body.storage_path) {
-    // Power Automate uploaded the bytes straight to the bucket
     path = String(body.storage_path);
     sha = (body.sha256 as string) ?? null;
     size = (body.size_bytes as number) ?? null;
@@ -418,152 +333,238 @@ async function handleBytes(req: Request, body: Record<string, unknown> | null): 
   }
 
   const patch = await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-    ingestion_status: "stored",
-    extraction_status: "queued",
-    storage_path: path,
-    sha256: sha,
-    size_bytes: size,
-    stored_at: isoNow(),
-    updated_at: isoNow(),
+    ingestion_status: "stored", extraction_status: "queued",
+    storage_path: path, sha256: sha, size_bytes: size,
+    stored_at: isoNow(), updated_at: isoNow(),
   });
 
   return jsonResponse(req, {
-    ok: patch.ok,
-    content_version_id: cvid,
-    file_id: row.file_id,
-    storage_path: path,
-    sha256: sha,
-    extraction_status: "queued",
+    ok: patch.ok, content_version_id: cvid, file_id: row.file_id,
+    storage_path: path, sha256: sha, extraction_status: "queued",
   });
 }
 
 // ── POST ?action=retry-files ────────────────────────────────────────────────
-// body: { vertical?, limit? }
-// Returns sf_files rows still stuck at ingestion_status in (discovered, failed)
-// as a to_fetch list (same shape as the manifest response) so the retry flow
-// can re-run the move loop against them. The file analog of
-// intake-salesforce's ?action=retry.
 async function handleRetryFiles(req: Request, body: Record<string, unknown> | null): Promise<Response> {
   const b = body || {};
   const limit = Math.min(Number(b.limit) || 50, 200);
-  const verticals: Vertical[] = b.vertical
-    ? [String(b.vertical) as Vertical]
-    : ["dia", "gov"];
-
+  const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
   const toFetch: Record<string, unknown>[] = [];
   const report: Record<string, number> = {};
-
   for (const vertical of verticals) {
-    const res = await dbFetch(
-      vertical, "GET",
+    const res = await dbFetch(vertical, "GET",
       `sf_files?source_system=eq.salesforce&ingestion_status=in.(discovered,failed)` +
-      `&select=content_version_id,content_document_id,linked_entity_type,linked_entity_sf_id,` +
-      `title,file_name,extension,version_number,size_bytes,sf_download_url,ingestion_status` +
-      `&limit=${limit}`,
-    );
+      `&select=content_version_id,content_document_id,linked_entity_type,linked_entity_sf_id,title,file_name,extension,version_number,size_bytes,sf_download_url,ingestion_status` +
+      `&limit=${limit}`);
     const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : [];
     for (const r of rows) toFetch.push({ vertical, ...r });
     report[vertical] = rows.length;
   }
-
-  return jsonResponse(req, {
-    ok: true,
-    count: toFetch.length,
-    by_vertical: report,
-    to_fetch: toFetch,
-  });
+  return jsonResponse(req, { ok: true, count: toFetch.length, by_vertical: report, to_fetch: toFetch });
 }
 
 // ── POST ?action=fetch ──────────────────────────────────────────────────────
-// body: { vertical?, limit? }
-// The server-side "Move": drains sf_files rows still at
-// ingestion_status='discovered', downloads each file's bytes straight from
-// Salesforce (Connected App OAuth), stores them in the salesforce-files
-// bucket, finalizes the row, and enqueues extraction. Power Automate only
-// does discovery (the manifest step) — it never moves bytes.
+// Server-side byte mover via Salesforce Connected App. Drains rows still at
+// ingestion_status='discovered'. Requires SF_INSTANCE_URL + SF_CLIENT_ID + SF_CLIENT_SECRET.
 async function handleFetch(req: Request, body: Record<string, unknown> | null): Promise<Response> {
   const b = body || {};
   const limit = Math.min(Number(b.limit) || 25, 100);
-  const verticals: Vertical[] = b.vertical
-    ? [String(b.vertical) as Vertical]
-    : ["dia", "gov"];
-
+  const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
   const auth = await getSfToken();
-  if (!auth) {
-    return errorResponse(
-      req,
-      "Salesforce not configured — set SF_INSTANCE_URL, SF_CLIENT_ID, SF_CLIENT_SECRET",
-      503,
-    );
-  }
-
+  if (!auth) return errorResponse(req, "Salesforce not configured", 503);
   const report: Record<string, unknown> = {};
-
   for (const vertical of verticals) {
-    const vStats = {
-      discovered: 0, stored: 0, failed: 0, skipped: 0,
-      errors: [] as string[],
-    };
-
-    const pending = await dbFetch(
-      vertical, "GET",
+    const vStats = { discovered: 0, stored: 0, failed: 0, skipped: 0, errors: [] as string[] };
+    const pending = await dbFetch(vertical, "GET",
       `sf_files?ingestion_status=eq.discovered&source_system=eq.salesforce` +
       `&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name,sf_download_url` +
-      `&limit=${limit}`,
-    );
+      `&limit=${limit}`);
     const rows = Array.isArray(pending.data) ? pending.data as Record<string, unknown>[] : [];
     vStats.discovered = rows.length;
-
     for (const row of rows) {
       const dlPath = String(row.sf_download_url || "");
       if (!dlPath) {
         vStats.skipped++;
         await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-          ingestion_status: "failed",
-          process_notes: "no sf_download_url on row",
-          updated_at: isoNow(),
+          ingestion_status: "failed", process_notes: "no sf_download_url on row", updated_at: isoNow(),
         });
         continue;
       }
-
       const dl = await sfDownloadBytes(auth, dlPath);
       if (!dl.ok || !dl.bytes) {
         vStats.failed++;
         vStats.errors.push(`${row.content_version_id}: ${dl.error}`);
         await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-          ingestion_status: "failed",
-          process_notes: `download failed: ${dl.error}`,
-          updated_at: isoNow(),
+          ingestion_status: "failed", process_notes: `download failed: ${dl.error}`, updated_at: isoNow(),
         });
         continue;
       }
-
       const path = storagePath(row);
-      const up = await storageUpload(
-        vertical, path, dl.bytes, dl.contentType || "application/octet-stream",
-      );
+      const up = await storageUpload(vertical, path, dl.bytes, dl.contentType || "application/octet-stream");
       if (!up.ok) {
         vStats.failed++;
         vStats.errors.push(`${row.content_version_id}: storage ${up.error}`);
         await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-          ingestion_status: "failed",
-          process_notes: `storage upload failed: ${up.error}`,
+          ingestion_status: "failed", process_notes: `storage upload failed: ${up.error}`, updated_at: isoNow(),
+        });
+        continue;
+      }
+      const sha = await sha256Hex(dl.bytes);
+      await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
+        ingestion_status: "stored", extraction_status: "queued",
+        storage_path: path, sha256: sha, size_bytes: dl.bytes.byteLength,
+        stored_at: isoNow(), updated_at: isoNow(),
+      });
+      vStats.stored++;
+    }
+    report[vertical] = vStats;
+  }
+  return jsonResponse(req, {
+    ok: true, mode: "server-side fetch",
+    note: "Drained sf_files rows at ingestion_status='discovered'.",
+    by_vertical: report,
+  });
+}
+
+// ── POST ?action=stage-queued ───────────────────────────────────────────────
+// Drains sf_files rows still at extraction_status='queued' through LCC's
+// /api/intake/stage-om pipeline. For each row:
+//   1. Download bytes from this DB's salesforce-files bucket
+//   2. base64-encode (max 25MB per LCC cap; our PDFs are ~6-7MB)
+//   3. POST to https://<LCC_BASE_URL>/api/intake/stage-om with X-LCC-Key
+//   4. On success: PATCH → extraction_status='extracted', process_notes captures intake_id
+//   5. On failure: PATCH → extraction_status='extract_failed' with error
+// LCC's stage-om handler does: pdf-parse + AI classification + property matching.
+const LCC_BASE_URL = Deno.env.get("LCC_BASE_URL") || "tranquil-delight-production-633f.up.railway.app";
+const LCC_API_KEY = Deno.env.get("LCC_API_KEY") || "";
+
+async function handleStageQueued(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  if (!LCC_API_KEY) {
+    return errorResponse(req, "LCC_API_KEY not configured — set it as an edge function secret", 503);
+  }
+  const b = body || {};
+  const limit = Math.min(Number(b.limit) || 10, 50);
+  const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
+
+  const report: Record<string, unknown> = {};
+
+  for (const vertical of verticals) {
+    const vStats = {
+      queued: 0, staged: 0, failed: 0, errors: [] as string[],
+      stage_results: [] as Record<string, unknown>[],
+    };
+
+    const pending = await dbFetch(vertical, "GET",
+      `sf_files?ingestion_status=eq.stored&extraction_status=eq.queued&source_system=eq.salesforce` +
+      `&extension=eq.pdf` +
+      `&select=file_id,content_version_id,content_document_id,linked_entity_type,linked_entity_sf_id,title,file_name,extension,size_bytes,sha256,storage_path` +
+      `&limit=${limit}`);
+    const rows = Array.isArray(pending.data) ? pending.data as Record<string, unknown>[] : [];
+    vStats.queued = rows.length;
+
+    const env = dbEnv(vertical);
+    if (!env) {
+      report[vertical] = { ...vStats, error: `${vertical} DB not configured` };
+      continue;
+    }
+
+    for (const row of rows) {
+      const fileId = row.file_id;
+      const storagePathStr = String(row.storage_path || "");
+      if (!storagePathStr) {
+        vStats.failed++;
+        vStats.errors.push(`file_id ${fileId}: no storage_path`);
+        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
+          extraction_status: "extract_failed",
+          process_notes: "no storage_path on row",
           updated_at: isoNow(),
         });
         continue;
       }
 
-      const sha = await sha256Hex(dl.bytes);
-      await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-        ingestion_status: "stored",
-        extraction_status: "queued",
-        storage_path: path,
-        sha256: sha,
-        size_bytes: dl.bytes.byteLength,
-        stored_at: isoNow(),
+      // Download bytes from bucket
+      const dlRes = await fetch(`${env.url}/storage/v1/object/${BUCKET}/${storagePathStr}`, {
+        headers: { apikey: env.key, Authorization: `Bearer ${env.key}` },
+      });
+      if (!dlRes.ok) {
+        vStats.failed++;
+        vStats.errors.push(`file_id ${fileId}: storage download HTTP ${dlRes.status}`);
+        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
+          extraction_status: "extract_failed",
+          process_notes: `storage download failed: HTTP ${dlRes.status}`,
+          updated_at: isoNow(),
+        });
+        continue;
+      }
+      const bytes = new Uint8Array(await dlRes.arrayBuffer());
+      const base64 = bytesToBase64(bytes);
+
+      const linkedType = String(row.linked_entity_type || "Comp__c");
+      const linkedId = String(row.linked_entity_sf_id || "");
+      const title = String(row.title || row.file_name || "Salesforce file");
+      const fileName = String(row.file_name || "om.pdf");
+
+      const stagePayload = {
+        intake_source: "salesforce",
+        intake_channel: "email",
+        intent: `Salesforce ${linkedType} ${linkedId} — ${title} (vertical:${vertical})`,
+        artifacts: {
+          primary_document: {
+            bytes_base64: base64,
+            file_name: fileName,
+            mime_type: "application/pdf",
+            size_bytes: bytes.byteLength,
+            sha256: row.sha256 ?? null,
+          },
+        },
+        seed_data: {
+          sf_entity_type: linkedType,
+          sf_entity_id: linkedId,
+          source_vertical: vertical,
+          source_content_version_id: row.content_version_id,
+        },
+      };
+
+      const base = LCC_BASE_URL.startsWith("http") ? LCC_BASE_URL : `https://${LCC_BASE_URL}`;
+      const stageRes = await fetch(`${base}/api/intake/stage-om`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-LCC-Key": LCC_API_KEY },
+        body: JSON.stringify(stagePayload),
+      });
+      const stageText = await stageRes.text();
+      let stageJson: Record<string, unknown> = {};
+      try { stageJson = stageText ? JSON.parse(stageText) : {}; } catch {}
+
+      if (!stageRes.ok || stageJson.error) {
+        vStats.failed++;
+        const errMsg = String(stageJson.error || stageJson.detail || `HTTP ${stageRes.status}`);
+        vStats.errors.push(`file_id ${fileId}: ${errMsg.slice(0, 200)}`);
+        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
+          extraction_status: "extract_failed",
+          process_notes: `stage-om failed: ${errMsg.slice(0, 300)}`,
+          updated_at: isoNow(),
+        });
+        continue;
+      }
+
+      const intakeId = stageJson.intake_id || stageJson.inbox_id || null;
+      const extractionStatus = stageJson.extraction_status || null;
+      const matchStatus = stageJson.entity_match_status || stageJson.match_status || null;
+      const matchedEntityId = stageJson.matched_entity_id || null;
+      await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
+        extraction_status: "extracted",
+        process_notes: `intake:${intakeId} extract:${extractionStatus} match:${matchStatus}` +
+          (matchedEntityId ? ` matched:${matchedEntityId}` : ""),
         updated_at: isoNow(),
       });
-      vStats.stored++;
+      vStats.staged++;
+      vStats.stage_results.push({
+        file_id: fileId,
+        intake_id: intakeId,
+        extraction_status: extractionStatus,
+        match_status: matchStatus,
+        matched_entity_id: matchedEntityId,
+      });
     }
 
     report[vertical] = vStats;
@@ -571,9 +572,9 @@ async function handleFetch(req: Request, body: Record<string, unknown> | null): 
 
   return jsonResponse(req, {
     ok: true,
-    mode: "server-side fetch",
-    note: "Drained sf_files rows at ingestion_status='discovered'; stored bytes " +
-      "are queued for extraction.",
+    mode: "stage-queued",
+    note: "Pumped sf_files at extraction_status='queued' through LCC /api/intake/stage-om. " +
+      "Successful rows are now extraction_status='extracted' with intake_id in process_notes.",
     by_vertical: report,
   });
 }
