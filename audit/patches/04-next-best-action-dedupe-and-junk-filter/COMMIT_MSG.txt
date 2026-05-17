@@ -1,0 +1,37 @@
+audit(item-4/v3.2): dedupe + junk filter on missing_recorded_owner
+
+Closes Discovery #4 (junk property records) + Discovery #5 (duplicate
+property records at same address) — both surfaced by the v3 NOI/cap
+valuation fix exposing them at the top of the ranked queue.
+
+Changes (dia + gov, applied via Supabase MCP at 2026-05-17)
+-----------------------------------------------------------
+
+Both v_next_best_action.missing_recorded_owner branches rewritten to:
+  • Filter junk addresses: require NOT NULL, ≥8 chars after trim, start
+    with a digit, not pure digits + whitespace, not start with
+    "property #" placeholder.
+  • Dedupe by (lower(trim(address)), lower(trim(city)), state): keep
+    smallest property_id per partition. Surface dup_count > 1 inline
+    in gap_label as "[N dup records]" so Scott sees duplicates at a
+    glance, and suggested_action prompts consolidation.
+
+Impact
+------
+
+Dia: missing_recorded_owner rows 13,338 → 10,115 (−3,223 junk + dedupe).
+Gov: top of queue now shows "6120 S. Yale Ave., Ste. 300 [7 dup records]"
+inline instead of 7 separate ranks. All top entries are real street
+addresses.
+
+Edge cases remaining (deferred):
+  • "2 locations" still passes (starts with "2", >8 chars). Would need
+    a street-suffix predicate to catch.
+  • Subtle city/state variations leave a few same-address records in
+    separate partition groups.
+
+Refs
+----
+  audit:    LCC_Holistic_Audit_2026-05-17.docx, item #4 v3.2
+  closes:   Discovery #4 (Task #25), Discovery #5 (Task #26)
+  branch:   audit/04-dedupe-and-junk-filter
