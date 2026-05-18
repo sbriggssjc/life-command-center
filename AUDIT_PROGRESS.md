@@ -2772,3 +2772,41 @@ Tile headline correctly said "532 of 1232 active owners" but modal footer said "
 
 No SQL changes. No Edge Function changes. No allowlist changes.
 
+
+
+## QA pass #30 — canonicalize_agency expansion (FBI hyphen + FCC) ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-30-canonicalizer-fbi-fcc`
+- **Patch:** `audit/patches/qa-30-canonicalizer-fbi-fcc/apply.mjs`
+- **Migration:** `supabase/migrations/government/20260518240000_gov_qa30_canonicalize_agency_fbi_hyphen_fcc.sql`
+- **Severity:** P3 cleanup.
+
+### Symptom
+QA-28's Chrome probe found three federal misses the post-QA-24 canonicalizer didn't catch:
+- "Federal Bureau-Investigation" (1 prop) — hyphen separator, no "of"
+- "Federal Communications Commission" (1 prop) — FCC not in canonicalizer map
+- "FCC" (2 props) — FCC not in canonicalizer map
+
+### Fix
+Two regex changes in `canonicalize_agency()`:
+- **FBI broadened**: `federal\s+bureau\s+of\s+investigation` → `federal\s+bureau[\s-]+(of[\s-]+)?investigation` (accepts space or hyphen; "of" optional)
+- **FCC added**: new line `\m(fcc|federal\s+communications\s+commission)\M` → 'FCC'
+
+Re-canonicalization UPDATE applied to `properties.agency_canonical`.
+
+### Verified live
+- "Federal Bureau-Investigation" (1) → FBI
+- "FCC" (2) → FCC
+- "Federal Communications Commission" (1) → FCC
+
+FBI bucket gained 1 property. FCC is a new canonical agency category with 3 properties.
+
+### Out of scope
+"Federal Building" (1 prop) — ambiguous (could be GSA-managed building or building name not tenant agency). Single property, left as raw string.
+
+### Files changed
+- `supabase/migrations/government/20260518240000_gov_qa30_canonicalize_agency_fbi_hyphen_fcc.sql`
+- `AUDIT_PROGRESS.md` — this closeout
+
+No frontend. No Edge Function. No allowlist changes. Migration applied live via Supabase MCP on 2026-05-18.
+
