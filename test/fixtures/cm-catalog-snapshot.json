@@ -1,6 +1,6 @@
 {
   "_doc": "Snapshot of cm_chart_catalog from LCC Opps (xengecqvemvfknjvbvrq) for the export-bundle audit test. Filtered to chart_template_ids that ship to dialysis or gov. Refresh via `node scripts/cm-refresh-catalog-snapshot.mjs` after catalog migrations land. The audit test (test/cm-export-bundle-audit.test.js) reads this file and asserts every entry has a TAB_NAMES entry in cm-excel-export.js.",
-  "_refreshed_at": "2026-05-13",
+  "_refreshed_at": "2026-05-18",
   "_filter": "applies_to_verticals contains 'dialysis' or 'gov'",
   "templates": [
     {
@@ -66,15 +66,6 @@
         "dialysis"
       ],
       "phase": 4
-    },
-    {
-      "chart_template_id": "available_cap_dispersion_by_term",
-      "chart_type": "scatter",
-      "applies_to_verticals": [
-        "dialysis",
-        "gov"
-      ],
-      "phase": 32
     },
     {
       "chart_template_id": "available_cap_rate_dot_plot",
