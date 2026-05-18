@@ -7058,7 +7058,16 @@ function renderCalendarFull() {
     html += '<div class="widget" style="margin-bottom:8px">';
     for (const ev of events) {
       const canceled = isCanceled(ev);
-      const time = ev.is_all_day ? '<span class="cal-allday">All Day</span>' : `${formatTime(ev.start_time)} – ${formatTime(ev.end_time)}`;
+      // QA-12 (2026-05-18): events with identical start_time and end_time
+      // are tasks-ingested-as-zero-duration-events from Outlook. Render them
+      // as "Task @ HH:MM" rather than "5:40 AM – 5:40 AM".
+      const isZeroDur = !ev.is_all_day && ev.start_time && ev.end_time
+        && new Date(ev.start_time).getTime() === new Date(ev.end_time).getTime();
+      const time = ev.is_all_day
+        ? '<span class="cal-allday">All Day</span>'
+        : (isZeroDur
+            ? `<span class="cal-task">Task @ ${formatTime(ev.start_time)}</span>`
+            : `${formatTime(ev.start_time)} – ${formatTime(ev.end_time)}`);
       const cancelStyle = canceled ? ' style="opacity:0.4;text-decoration:line-through"' : '';
       html += `<div class="cal-item"${cancelStyle}><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
     }

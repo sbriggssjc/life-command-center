@@ -2130,3 +2130,33 @@ Brandywine Realty Trust (NYSE: BDN) appeared on the live NBA rail as rank #9 + #
 - **Optional** SEC EDGAR CTA routing for `is_public_reit = true` rows if a user navigates to one by direct lookup.
 - **Optional** extend the normalizer with common abbreviations (Hldgs, Mgmt, Cap Prtnrs, etc.).
 
+
+
+## QA pass #12 — P2 omnibus ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-12-p2-omnibus`
+- **Patch:** `audit/patches/qa-12-p2-omnibus/apply.mjs`
+
+### What shipped
+1. **Address direction-suffix canonicalization (DATA FIX, both DBs)**
+   - New `public.canonicalize_address_directions(text)` IMMUTABLE helper, BEFORE INSERT/UPDATE trigger on `properties.address`.
+   - Backfilled: gov 710 rows, dia 450 rows. Property 3198 now reads "1200 New Jersey Ave SE".
+2. **AI Copilot FAB accessibility** — `#copilotFab` gained `aria-label="Open AI Copilot"`.
+3. **Calendar zero-duration events** — `renderCalendarFull` now renders `start_time === end_time` events as "Task @ 5:40 AM" instead of "5:40 AM – 5:40 AM".
+4. **Detail panel header — duplicated city** — both header render sites in `detail.js` now suppress the subtitle when the title already embeds it ("Washington, DC" was appearing twice).
+5. **Data Quality duplicate-candidate cluster cleanup** — `ops.js` filters parse-debris clusters (canonical_name=null + all members are 2-letter state codes) and Title-cases the cluster label.
+
+### Files changed
+- `supabase/migrations/government/20260518160000_gov_qa12_address_direction_caps.sql`
+- `supabase/migrations/dialysis/20260518160000_dia_qa12_address_direction_caps.sql`
+- `index.html` (FAB aria-label)
+- `app.js` (Calendar zero-duration render)
+- `detail.js` (header dedupe, two sites)
+- `ops.js` (Data Quality cluster filter + Title-case)
+- `AUDIT_PROGRESS.md` (this closeout)
+
+### Deferred P2s (separate follow-ups)
+- Home Inbox cards inline actions (currently only "Open in Outlook ↗"; Inbox PAGE has full action set)
+- Messages page inline actions
+- Research page LLC + Agency Drift widgets
+
