@@ -1,0 +1,31 @@
+audit(item-8/phase-b): next-action bar per-action workflows
+
+Phase A shipped the sticky bar with a generic "Take action →" button
+that always switched to the relevant tab. Phase B makes the button
+do the right thing for the two owner-research gap_types (the most
+common case where the right action is "open the SoS portal"):
+
+  missing_recorded_owner → "Open SoS →"
+    window.open() to the state SoS portal biased with property address.
+
+  llc_research_pending   → "Open SoS →"
+    window.open() to the guessed-state SoS portal biased with the LLC
+    search name (gap_label, with [N dup records] annotation stripped).
+
+All other gap_types continue to use the Phase A tab-switch fallback.
+The button LABEL and meta line both update dynamically — meta reads
+"opens Secretary of State portal" for owner-research gaps vs "opens
+<Tab>" for others.
+
+Reuses _lccSosPortalUrl from #2B (LLC Research widget) when available
+(26 mapped states + Google fallback for the rest).
+
+Files changed:
+  • detail.js          — 3 anchored edits (render label/meta, dispatch
+                          spec helper, click handler)
+  • AUDIT_PROGRESS.md  — closeout
+
+Phase C continuations:
+  • Per-action workflows for agency_drift:* / orphan_sale_owner /
+    lease_tenant_drift / cms_chain_drift:* — one-click PATCH from the
+    bar instead of opening the relevant tab.

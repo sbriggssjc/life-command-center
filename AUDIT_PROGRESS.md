@@ -1545,3 +1545,46 @@ Closes the in-app observability loop on the silent-write telemetry. Today Scott 
 - pushProvenance gating sweep (~30 call sites)
 - Item #3 Phase C — external enrichment pipeline (13,131 orphans)
 
+
+
+## Closeout — item 8 Phase B ✅ — per-action inline workflows
+- **Status:** ✅ DONE.
+- **Branch:** `audit/08B-next-action-per-action-workflows`
+- **Patch:** `audit/patches/08B-next-action-per-action-workflows/apply.mjs`
+
+### What this adds
+The sticky next-action bar's button is now gap_type-aware. Phase A always said "Take action →" and switched to a tab; Phase B shows the right verb and does the right thing:
+
+| Gap type | Button label | Action on click |
+|---|---|---|
+| `missing_recorded_owner` | **"Open SoS →"** | `window.open()` to the property's state SoS portal, biased with the property address |
+| `llc_research_pending` | **"Open SoS →"** | `window.open()` to the queue's guessed-state SoS portal, biased with the LLC search_name |
+| all others | "Take action →" | switch to the relevant tab (unchanged) |
+
+The meta line under the action text also updates: "opens Secretary of State portal" for owner-research gaps vs "opens Rent Roll tab" (or whichever tab) for others.
+
+### How it works
+Two helpers added to `detail.js`:
+- `_udNextActionDispatchFor(gapType)` → returns `{ label, metaSuffix }` so the renderer doesn't hard-code per-type CTA text.
+- `_udNextActionClick(gapType)` → dispatches: SoS portal open via `_lccSosPortalUrl()` (from #2B's LLC widget) for owner-research gaps; otherwise falls through to existing tab-switch.
+
+Search name extraction strips the `[N dup records]` annotation from `gap_label` so the SoS query isn't polluted by the dedupe metadata. State pulled from `_udCache.property.state` or `_udCache.fallback.state`.
+
+### Files changed
+- `detail.js` — 3 anchored edits (label/meta render + dispatch helper + click handler)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. Hard-reload, open any gov property with `missing_recorded_owner` as its top gap.
+2. The sticky bar at the bottom now shows **"Open SoS →"** instead of "Take action →".
+3. Meta line: "$X.XM value · opens Secretary of State portal".
+4. Click → a new tab opens at the state's SoS search portal (CA / DE / NY / etc. mapped; Google fallback for unmapped states).
+5. Open a property whose top gap is `lease_tenant_drift` or `stale_active_listing` — bar still says "Take action →" and the tab-switch flow is unchanged.
+
+### Phase C continuations (deferred)
+- Per-action workflows for the remaining gap types:
+  - `agency_drift:*` — reuse the resolve-agency-drift endpoint for one-click PATCH from the bar
+  - `orphan_sale_owner` — one-click most-recent backlink (single-row version of A-1)
+  - `lease_tenant_drift` — one-click back-fill of `properties.tenant` from active lease
+  - `cms_chain_drift:*` — one-click "use CMS chain value"
+
