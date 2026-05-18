@@ -893,9 +893,33 @@ function renderDiaOverview() {
         ).length;
       }
 
-      // 3. Missing SF: owners without salesforce_id
-      const totalOwners = ownerRows.length;
-      const missingSF = ownerRows.filter(o => !o.salesforce_id).length;
+      // 3. Unprospected Owners (QA-25 2026-05-18): only count owners that
+      //    actually own >= 1 property. Previously this widget counted ALL
+      //    true_owners — including 2,190 zero-prop stubs — which inflated
+      //    "Missing SF Link" to a misleading 79%. Filtering to real owners
+      //    drops the denominator from 3,422 to ~842 and gives an honest
+      //    "owners we haven't entered into SF yet" number. Powered by
+      //    v_prospect_targets view (excludes is_operator_not_owner rows).
+      let totalOwnersWithProps = 0;
+      let unprospectedOwners = 0;
+      let topUnprospected = [];
+      try {
+        const ptRes = await diaQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,last_contact_date,prospecting_status', { order: 'prop_count.desc.nullslast', limit: 250 });
+        const ptRows = Array.isArray(ptRes.data) ? ptRes.data : (Array.isArray(ptRes) ? ptRes : []);
+        unprospectedOwners = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
+        topUnprospected = ptRows;
+        // Owners with props = unprospected + SF-linked-with-props. Use SF-linked
+        // owner count derived from ownerRows (already filters salesforce_id).
+        // Approx denominator: ownersWithSF + unprospected. Stub owners (no props)
+        // are correctly excluded from BOTH numerator and denominator.
+        totalOwnersWithProps = unprospectedOwners + ownersWithSF.length;
+      } catch (err) {
+        console.warn('Prospect targets load failed, falling back to legacy metric:', err.message);
+        unprospectedOwners = ownerRows.filter(o => !o.salesforce_id).length;
+        totalOwnersWithProps = ownerRows.length;
+      }
+      // Stash for the modal (opened on card click)
+      window._diaTopUnprospected = topUnprospected;
 
       // ── Update DOM ──
       const _fmtPct = (n, d) => d > 0 ? Math.round(n / d * 100) + '%' : '—';
@@ -911,11 +935,20 @@ function renderDiaOverview() {
 
       const missEl = document.getElementById('diaOwnMissVal');
       const missSub = document.getElementById('diaOwnMissSub');
-      if (missEl) {
-        missEl.textContent = _fmtPct(missingSF, totalOwners);
-        missEl.style.color = missingSF > totalOwners * 0.5 ? '#f87171' : missingSF > totalOwners * 0.25 ? '#fbbf24' : '#34d399';
+      // QA-25: relabel "Missing SF Link" → "Unprospected Owners" + make clickable
+      const missTitleEl = missEl ? missEl.closest('.dia-info-card')?.querySelector('div:first-child') : null;
+      if (missTitleEl) missTitleEl.textContent = 'Unprospected Owners';
+      const missCard = missEl ? missEl.closest('.dia-info-card') : null;
+      if (missCard) {
+        missCard.style.cursor = 'pointer';
+        missCard.setAttribute('onclick', '_diaShowProspectTargets()');
+        missCard.setAttribute('title', 'Click to see top unprospected owners by property count');
       }
-      if (missSub) missSub.textContent = missingSF + ' of ' + totalOwners + ' groups missing Salesforce';
+      if (missEl) {
+        missEl.textContent = _fmtPct(unprospectedOwners, totalOwnersWithProps);
+        missEl.style.color = unprospectedOwners > totalOwnersWithProps * 0.5 ? '#f87171' : unprospectedOwners > totalOwnersWithProps * 0.25 ? '#fbbf24' : '#34d399';
+      }
+      if (missSub) missSub.textContent = unprospectedOwners + ' of ' + totalOwnersWithProps + ' active owners — click to view BD targets';
     } catch (err) {
       console.warn('Ownership coverage load failed:', err.message);
       const wrap = document.getElementById('diaOwnershipCoverage');
@@ -10680,6 +10713,60 @@ window.renderDiaLeases = renderDiaLeases;
 window.renderDiaLoans = renderDiaLoans;
 window.goToDiaTab = goToDiaTab;
 window.infoCard = infoCard;
+
+// QA-25 (2026-05-18): show top unprospected owners modal. Opens when user
+// clicks the reframed "Unprospected Owners" card on the dia home dashboard.
+// Data was prefetched by the ownership-coverage block and stashed at
+// window._diaTopUnprospected (rows from v_prospect_targets).
+window._diaShowProspectTargets = function() {
+  const rows = window._diaTopUnprospected || [];
+  if (!rows.length) {
+    alert('Loading prospect targets — try again in a moment.');
+    return;
+  }
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let modal = document.getElementById('diaProspectModal');
+  if (modal) modal.remove();
+  modal = document.createElement('div');
+  modal.id = 'diaProspectModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  const top = rows.slice(0, 100);
+  const tableRows = top.map((r, i) => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 10px;color:var(--text3);font-variant-numeric:tabular-nums">${i + 1}</td>
+      <td style="padding:8px 10px;font-weight:600">${esc(r.name || '(unnamed)')}</td>
+      <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums;color:#6c8cff;font-weight:700">${r.prop_count || 0}</td>
+      <td style="padding:8px 10px;color:var(--text2)">${esc(r.state || '—')}</td>
+      <td style="padding:8px 10px;color:var(--text3);font-size:11px">${r.prospecting_status ? esc(r.prospecting_status) : (r.last_contact_date ? 'last contact ' + esc(String(r.last_contact_date).slice(0,10)) : 'never contacted')}</td>
+    </tr>`).join('');
+  modal.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:14px;max-width:900px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,0.5)">
+      <div style="padding:18px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--s2)">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:var(--text1)">Unprospected Owners — Top BD Targets</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:4px">Owners with property holdings but no SF account link. Ordered by property count.</div>
+        </div>
+        <button onclick="document.getElementById('diaProspectModal').remove()" style="background:transparent;border:1px solid var(--border);color:var(--text1);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px">Close</button>
+      </div>
+      <div style="overflow-y:auto;flex:1">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead style="position:sticky;top:0;background:var(--s2);z-index:1">
+            <tr style="border-bottom:2px solid var(--border)">
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">#</th>
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">Owner</th>
+              <th style="padding:10px;text-align:right;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">Properties</th>
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">State</th>
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">Status</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+      <div style="padding:12px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);background:var(--s2)">Showing top ${top.length} of ${rows.length}. To add an owner to your SF prospecting list, look them up in Salesforce and link the account ID via the owner detail panel.</div>
+    </div>`;
+  document.body.appendChild(modal);
+};
 window.showSaleDetail = showSaleDetail;
 window.openDiaSaleOrProperty = function(record) {
   // If the sale comp has a property_id, open the full property sidebar

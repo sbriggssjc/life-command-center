@@ -46,6 +46,12 @@ const GOV_READ_TABLES = new Set([
   // table only existed on dia. Gov migration:
   // supabase/migrations/government/20260518140000_gov_qa07_property_intel.sql
   "property_intel",
+  // QA-25 (2026-05-18): v_prospect_targets — owners with >=1 property but
+  // no SF account link, ordered by prop_count. Reframes "Missing SF Link"
+  // widget from a misleading data-quality metric into an actionable
+  // prospecting queue. Gov migration:
+  // supabase/migrations/government/20260518230000_gov_qa25_v_prospect_targets.sql
+  "v_prospect_targets",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -130,6 +136,11 @@ const DIA_READ_TABLES = new Set([
   "v_gap_chain_drift",
   "v_gap_orphan_sale_owner",
   "llc_research_queue",
+  // QA-25 (2026-05-18): v_prospect_targets — owners with >=1 property but
+  // no SF link, ordered by prop_count. Powers the reframed "Unprospected
+  // Owners" widget on the dia home dashboard. Dia migration:
+  // supabase/migrations/dialysis/20260518230000_dia_qa25_v_prospect_targets.sql
+  "v_prospect_targets",
 ]);
 
 const DIA_WRITE_TABLES = new Set([

@@ -4326,7 +4326,27 @@ function renderGovOverview() {
       const ownerRows = ownerRes.data || ownerRes || [];
       const totalOwners = ownerRows.length;
       const ownersWithSF = ownerRows.filter(o => o.sf_account_id);
-      const missingSF = ownerRows.filter(o => !o.sf_account_id).length;
+
+      // 3. Unprospected Owners (QA-25 2026-05-18): only count owners that
+      //    actually own >= 1 property. Previously "Missing SF Link" counted
+      //    ALL true_owners — including 6,303 zero-prop stubs — which
+      //    inflated the headline to a misleading 97%. Powered by
+      //    v_prospect_targets view; falls back to legacy metric if 403/empty.
+      let totalOwnersWithProps = 0;
+      let missingSF = 0;
+      let topUnprospected = [];
+      try {
+        const ptRes = await govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 });
+        const ptRows = Array.isArray(ptRes.data) ? ptRes.data : (Array.isArray(ptRes) ? ptRes : []);
+        missingSF = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
+        topUnprospected = ptRows;
+        totalOwnersWithProps = missingSF + ownersWithSF.length;
+      } catch (err) {
+        console.warn('Prospect targets load failed, falling back to legacy metric:', err.message);
+        missingSF = ownerRows.filter(o => !o.sf_account_id).length;
+        totalOwnersWithProps = ownerRows.length;
+      }
+      window._govTopUnprospected = topUnprospected;
 
       // Query gov-specific sf_activities table for recent activity, join on sf_account_id
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
@@ -4344,7 +4364,9 @@ function renderGovOverview() {
       if (!wrap) return;
       const _fmtPct = (n, d) => d > 0 ? Math.round(n / d * 100) + '%' : '—';
       const _c = { blue:'#6c8cff', green:'#34d399', yellow:'#fbbf24', red:'#f87171' };
-      const missColor = missingSF > totalOwners * 0.5 ? _c.red : missingSF > totalOwners * 0.25 ? _c.yellow : _c.green;
+      // QA-25 (2026-05-18): denominator is now active owners (>=1 property)
+      // instead of all true_owners. Excludes 6,303 zero-prop stubs.
+      const missColor = missingSF > totalOwnersWithProps * 0.5 ? _c.red : missingSF > totalOwnersWithProps * 0.25 ? _c.yellow : _c.green;
 
       wrap.innerHTML = `<div class="gov-grid gov-grid-3">
         <div class="gov-info-card">
@@ -4357,10 +4379,10 @@ function renderGovOverview() {
           <div style="font-size:24px;font-weight:800;color:${_c.green};margin-bottom:4px">${_fmtPct(recentActivityOwners, ownersWithSF.length)}</div>
           <div style="font-size:11px;color:var(--text2)">${recentActivityOwners} active in 180d of ${ownersWithSF.length} SF-linked groups</div>
         </div>
-        <div class="gov-info-card">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Missing SF Link</div>
-          <div style="font-size:24px;font-weight:800;color:${missColor};margin-bottom:4px">${_fmtPct(missingSF, totalOwners)}</div>
-          <div style="font-size:11px;color:var(--text2)">${missingSF} of ${totalOwners} groups missing Salesforce</div>
+        <div class="gov-info-card" onclick="_govShowProspectTargets()" style="cursor:pointer" title="Click to see top unprospected owners by property count">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Unprospected Owners</div>
+          <div style="font-size:24px;font-weight:800;color:${missColor};margin-bottom:4px">${_fmtPct(missingSF, totalOwnersWithProps)}</div>
+          <div style="font-size:11px;color:var(--text2)">${missingSF} of ${totalOwnersWithProps} active owners — click to view BD targets</div>
         </div>
       </div>`;
     } catch (err) {
@@ -5213,6 +5235,60 @@ function buildGovPipelineTable(allLeads) {
 /**
  * Re-render just the pipeline table (on search/sort change without full re-render).
  */
+// QA-25 (2026-05-18): show top unprospected owners modal. Opens when user
+// clicks the reframed "Unprospected Owners" card on the gov home dashboard.
+// Data was prefetched by the ownership-coverage block and stashed at
+// window._govTopUnprospected (rows from v_prospect_targets).
+window._govShowProspectTargets = function() {
+  const rows = window._govTopUnprospected || [];
+  if (!rows.length) {
+    alert('Loading prospect targets — try again in a moment.');
+    return;
+  }
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let modal = document.getElementById('govProspectModal');
+  if (modal) modal.remove();
+  modal = document.createElement('div');
+  modal.id = 'govProspectModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  const top = rows.slice(0, 100);
+  const tableRows = top.map((r, i) => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 10px;color:var(--text3);font-variant-numeric:tabular-nums">${i + 1}</td>
+      <td style="padding:8px 10px;font-weight:600">${esc(r.name || '(unnamed)')}</td>
+      <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums;color:#6c8cff;font-weight:700">${r.prop_count || 0}</td>
+      <td style="padding:8px 10px;color:var(--text2)">${esc(r.state || '—')}</td>
+      <td style="padding:8px 10px;color:var(--text3);font-size:11px">${esc(r.entity_type || '—')}</td>
+    </tr>`).join('');
+  modal.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:14px;max-width:900px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,0.5)">
+      <div style="padding:18px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--s2)">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:var(--text1)">Unprospected Owners — Top BD Targets</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:4px">Owners with property holdings but no SF account link. Ordered by property count.</div>
+        </div>
+        <button onclick="document.getElementById('govProspectModal').remove()" style="background:transparent;border:1px solid var(--border);color:var(--text1);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px">Close</button>
+      </div>
+      <div style="overflow-y:auto;flex:1">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead style="position:sticky;top:0;background:var(--s2);z-index:1">
+            <tr style="border-bottom:2px solid var(--border)">
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">#</th>
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">Owner</th>
+              <th style="padding:10px;text-align:right;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">Properties</th>
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">State</th>
+              <th style="padding:10px;text-align:left;font-size:10px;text-transform:uppercase;color:var(--text3);letter-spacing:0.6px">Type</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+      <div style="padding:12px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);background:var(--s2)">Showing top ${top.length} of ${rows.length}. To add an owner to your SF prospecting list, look them up in Salesforce and link the account ID via the owner detail panel.</div>
+    </div>`;
+  document.body.appendChild(modal);
+};
+
 window.govRenderPipelineTable = function() {
   const container = document.getElementById('govPipelineTableContainer');
   if (!container || !govData || !govData.leads) return;
