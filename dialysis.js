@@ -124,7 +124,7 @@ let diaOwnershipFilterText    = '';     // optional name-substring filter
  */
 async function diaQuery(table, select, params = {}) {
   // Query via serverless proxy — keeps secret key server-side
-  const { filter, filter2, order, limit = 1000, offset = 0 } = params;
+  const { filter, filter2, order, limit = 1000, offset = 0, includeCount = false } = params;
 
   const url = new URL('/api/dia-query', window.location.origin);
   url.searchParams.set('table', table);
@@ -134,8 +134,13 @@ async function diaQuery(table, select, params = {}) {
   if (order) url.searchParams.set('order', order);
   if (limit !== undefined) url.searchParams.set('limit', limit);
   if (offset !== undefined) url.searchParams.set('offset', offset);
-  // Skip count=exact by default — views compute from 1M+ row tables, count doubles query cost
-  url.searchParams.set('count', 'false');
+  // QA-27 (2026-05-18): callers can opt-in to count=exact via includeCount.
+  // Default remains count=false to keep view queries fast (the legacy comment
+  // applies: views compute from 1M+ row tables, count doubles query cost).
+  // When includeCount is true, the helper returns {data, count} instead of
+  // just the rows array — used by the parallel-pagination path in
+  // diaQueryAll to learn the total without separate count query.
+  if (!includeCount) url.searchParams.set('count', 'false');
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -146,35 +151,39 @@ async function diaQuery(table, select, params = {}) {
     if (!response.ok) {
       const errBody = await response.text();
       console.error(`diaQuery ${table}: HTTP ${response.status}`, errBody);
-      return [];
+      return includeCount ? { data: [], count: 0 } : [];
     }
 
     const result = await response.json();
+    if (includeCount) return { data: result.data || [], count: result.count || 0 };
     return result.data || [];
   } catch (err) {
     clearTimeout(timeout);
-    if (err.name === 'AbortError') { console.warn('diaQuery ' + table + ' timed out (30s)'); return []; }
+    if (err.name === 'AbortError') { console.warn('diaQuery ' + table + ' timed out (30s)'); return includeCount ? { data: [], count: 0 } : []; }
     console.error('diaQuery error:', err);
-    return [];
+    return includeCount ? { data: [], count: 0 } : [];
   }
 }
 
-// Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
+// QA-27 (2026-05-18): parallel pagination — mirror of QA-26's govQueryAll
+// fix. First page fetched with includeCount=true; remaining pages issued in
+// parallel via Promise.all. For full-table reads (medicare_clinics 8.5k rows,
+// true_owners 3.4k, etc.) this turns N sequential round-trips into 1 +
+// parallel batch. Wall-clock drops from N × ~400ms to first + slowest_parallel
+// (~800ms-1.2s regardless of N).
 async function diaQueryAll(table, select, params = {}) {
-  let all = [], offset = 0;
   const pageSize = 1000;
-  const maxTime = 120000; // 2-minute total timeout
-  const start = Date.now();
-  while (true) {
-    if (Date.now() - start > maxTime) {
-      console.warn('diaQueryAll(' + table + ') total timeout after ' + Math.round((Date.now() - start) / 1000) + 's — returning ' + all.length + ' rows');
-      break;
-    }
-    const rows = await diaQuery(table, select, { ...params, limit: pageSize, offset });
-    all = all.concat(rows);
-    if (rows.length < pageSize) break;
-    offset += pageSize;
+  const firstPage = await diaQuery(table, select, { ...params, limit: pageSize, offset: 0, includeCount: true });
+  const firstData = firstPage.data || [];
+  const total = firstPage.count || firstData.length;
+  if (total <= pageSize) return firstData;
+  const pages = [];
+  for (let off = pageSize; off < total; off += pageSize) {
+    pages.push(diaQuery(table, select, { ...params, limit: pageSize, offset: off }));
   }
+  const others = await Promise.all(pages);
+  let all = firstData;
+  for (const rows of others) all = all.concat(rows || []);
   return all;
 }
 
@@ -850,14 +859,18 @@ function renderDiaOverview() {
     _diaOwnershipCoverageLoading = true;
   (async () => {
     try {
+      // QA-27 (2026-05-18): parallelize the two big full-table reads
+      // (ownership_history + true_owners). Previously awaited serially.
+      // Round 76ei (2026-04-29): the filter2 value used to be 'or=(...)' which failed
+      // the Edge function's compound parser (`startsWith("or(")` — no `=`). That made
+      // every ownership-coverage query 400-error and the dashboard show "0 of 0".
+      // Fixed by dropping the spurious `=` so it routes through the compound branch.
+      const [ownHistory, owners] = await Promise.all([
+        diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null', filter2: 'or(notes.not.like.CMS*,notes.is.null)' }),
+        diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id')
+      ]);
       // 1. Ownership depth: properties with 3+ ownership records = deep chain (likely traced to developer)
-      //    Also count properties with ANY ownership vs total properties with sales
-      // Exclude CMS operator rows (notes LIKE 'CMS%') — those are tenant/operator data, not property ownership
-      // Round 76ei (2026-04-29): the filter2 value used to be 'or=(...)' which failed the
-      // Edge function's compound parser (`startsWith("or(")` — no `=`). That made every
-      // ownership-coverage query 400-error and the dashboard show "0 of 0". Fixed by
-      // dropping the spurious `=` so it routes through the compound branch correctly.
-      const ownHistory = await diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null', filter2: 'or(notes.not.like.CMS*,notes.is.null)' });
+      //    Exclude CMS operator rows (notes LIKE 'CMS%') — tenant/operator data, not property ownership.
       const ownRows = Array.isArray(ownHistory) ? ownHistory : (ownHistory.data || []);
       const depthByProp = {};
       ownRows.forEach(o => {
@@ -870,7 +883,6 @@ function renderDiaOverview() {
       // 2. Prospecting: true_owners with SF activity in last 180 days via ID join
       //    true_owners.salesforce_id is mostly Contact IDs (003*) with some Account IDs (001*)
       //    Join to salesforce_activities via sf_contact_id, sf_company_id, OR true_owner_id
-      const owners = await diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id');
       const ownerRows = Array.isArray(owners) ? owners : (owners.data || []);
       const ownersWithSF = ownerRows.filter(o => o.salesforce_id);
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
@@ -904,8 +916,12 @@ function renderDiaOverview() {
       let unprospectedOwners = 0;
       let topUnprospected = [];
       try {
-        const ptRes = await diaQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,last_contact_date,prospecting_status', { order: 'prop_count.desc.nullslast', limit: 250 });
-        const ptRows = Array.isArray(ptRes.data) ? ptRes.data : (Array.isArray(ptRes) ? ptRes : []);
+        // QA-27 (2026-05-18): use includeCount so unprospectedOwners reflects
+        // the TRUE total (not capped at limit=250). On dia v_prospect_targets
+        // returns 532 rows; before QA-27 the count fell back to ptRows.length
+        // which was 250 even when the real count was higher.
+        const ptRes = await diaQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,last_contact_date,prospecting_status', { order: 'prop_count.desc.nullslast', limit: 250, includeCount: true });
+        const ptRows = ptRes.data || [];
         unprospectedOwners = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
         topUnprospected = ptRows;
         // Owners with props = unprospected + SF-linked-with-props. Use SF-linked

@@ -1,0 +1,43 @@
+QA-27 (P1 perf): mirror QA-26 parallel pagination to dia + add count opt-in to diaQuery
+
+Same shape as QA-26 (gov). diaQueryAll was fetching 1000-row pages one
+after another. Couldn't be fixed without first refactoring diaQuery,
+which hardcoded count=false in its URL builder and discarded the
+Content-Range total.
+
+Three changes:
+
+1. diaQuery now accepts includeCount: true. When set, the URL doesn't
+   force count=false (Edge Function default = count=exact) and the
+   function returns {data, count} instead of just data. Default behavior
+   unchanged for every existing call site.
+
+2. diaQueryAll rewritten: fetches page 0 with includeCount=true, then
+   issues all remaining pages via Promise.all. For full-table reads
+   (medicare_clinics 8.5k, ownership_history 12.3k) wall-clock drops
+   from N × ~400ms serial to first + parallel batch (~800ms regardless
+   of N).
+
+3. Dia ownership coverage block now Promise.all's the two big
+   independent reads (ownership_history + true_owners) instead of
+   awaiting them serially.
+
+Bonus: the QA-25 dia "Unprospected Owners" widget's denominator was
+previously capped at limit=250 because diaQuery returned just the row
+array. With includeCount: true, the widget now reports the true total
+of 532 unprospected owners (was showing 250).
+
+Expected dia home dashboard speedup:
+- Top-level Promise.all:  ~3-5s -> ~1-2s
+- Ownership coverage:     ~8-12s -> ~1-2s
+
+Backward compatibility: diaQuery returns array by default (no existing
+caller changes behavior). Only diaQueryAll and the QA-25 widget have
+been updated to use the envelope.
+
+Files changed:
+- dialysis.js (diaQuery count opt-in, diaQueryAll parallel,
+  ownership-coverage block parallel, QA-25 widget uses count)
+- AUDIT_PROGRESS.md (closeout)
+
+Patch: audit/patches/qa-27-dia-parallel-pagination/
