@@ -1,0 +1,77 @@
+-- =====================================================================
+-- Round 33 Tier B — Time-extension fixes for Sold_Cap_by_Term,
+-- Ask_Cap_by_Term, Core_Cap_Dot. Follow-up to R33 Tier A.
+--
+-- ROOT CAUSE (the same one breaking three charts)
+-- ---------------------------------------------------------------------
+-- The renderer (api/_shared/cm-chart-image-renderer.js) applies
+-- `recentRows(chart.rows, windowSize)` to every chart pre-render.
+-- windowSize is derived from cadence/data_shape:
+--   • cadence='quarterly'  → 104 rows
+--   • cadence='monthly'    → 240 rows
+--   • data_shape~='yearly' → 26 rows
+--
+-- Two combinations slice off the user-requested historical depth:
+--
+-- 1) sold_cap_by_term_dot_plot: catalog had cadence='quarterly' but
+--    the source view (cm_{vertical}_sold_cap_by_term_dot) returns
+--    MONTHLY rows. recentRows(rows, 104) sliced to the last 104
+--    monthly rows = ~8.7 years = ~2017+. User: "go back to 2010".
+--
+-- 2) core_cap_rate_dot_plot + sold_cap_by_term_dot_plot:
+--    data_shape is 'per_sale' (or 'per_sale_snapshot'). Each row is
+--    a sale, NOT a time-period anchor. recentRows(rows, 240) just
+--    keeps the 240 most-recent sales — which happens to be ~2017+
+--    because per-year sale counts trend upward. User: "go back as
+--    far as the data allows".
+--
+-- ---------------------------------------------------------------------
+-- FIXES (3 of them)
+-- ---------------------------------------------------------------------
+-- 1) LCC Opps catalog: chart_template_id 'sold_cap_by_term_dot_plot'
+--    cadence updated 'quarterly' → 'monthly'. Now uses the 240-row
+--    monthly window; combined with cropForRender's every-Nth
+--    downsample, the chart spans the full 303-month source range
+--    (2001-01 → 2026-03) at every-other-month cadence.
+--
+-- 2) api/_shared/cm-chart-image-renderer.js: data_shape starts-with
+--    'per_sale' BYPASSES recentRows entirely. cropForRender still
+--    downsamples (preserves time range, not row order) so QuickChart's
+--    240-point hard limit is honored. Affects:
+--      • core_cap_rate_dot_plot (1118 sales → ~224 every-5th sample
+--        spanning 2001-2026)
+--      • sold_cap_by_term_dot_plot (data_shape='per_sale_snapshot')
+--
+-- 3) cm_dialysis_active_listings_m (dia DB) — month_anchors
+--    generate_series start 2014-01-01 → 2010-01-01. User: "Data_Ask_
+--    Cap_by_Term … let's go back as far as the data allows us".
+--    available_listings has only 1-13 listings/year pre-2014 so the
+--    Ask_Cap_by_Term n>=5 TTM cohort gate will mostly produce NULLs
+--    pre-2014, but the chart axis now extends back to 2010 showing
+--    the full data range.
+--
+-- ---------------------------------------------------------------------
+-- VERIFICATION (post-fix)
+-- ---------------------------------------------------------------------
+--   • cm_dialysis_sold_cap_by_term_dot: 303 monthly rows (2001-2026)
+--     → renderer now passes all 303 through cropForRender → ~152
+--     rows at every-2nd-month cadence spanning the full range.
+--   • cm_dialysis_core_cap_dot_q: 1118 sales (2001-2026) → renderer
+--     bypasses recentRows → cropForRender step=5 keeps ~224 rows.
+--   • cm_gov_sold_cap_by_term_dot: 303 monthly rows (2001-2026) →
+--     same path as dia.
+--   • cm_gov_core_cap_dot_q: 893 sales (2001-2026) → same path.
+--   • cm_dialysis_active_listings_m: now generates monthly anchors
+--     back to 2010-01-01 (was 2014-01-01).
+--
+-- ---------------------------------------------------------------------
+-- ROUND 33 REMAINING (deferred PRs)
+-- ---------------------------------------------------------------------
+--   Tier C — Smoothness + data validation (Sold_Cap_by_Term boxy,
+--            NM_vs_Market not smooth enough, DOM_Ask >100% of ask,
+--            Avail_by_Tenant + Active_DOM_PC DOM too long)
+--   Tier D — Excel format-match (Inventory, Market_Turnover,
+--            Renewal_Rate, Term_Rate, Renewal_Growth)
+--   Tier E — Add Rent_Price_PSF for dia + Core_Cap_Dot trendline review
+--   Tier F — Val_Index formula confirmation + structural items
+-- =====================================================================
