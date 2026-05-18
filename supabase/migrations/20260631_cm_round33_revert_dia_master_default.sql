@@ -1,0 +1,42 @@
+-- =====================================================================
+-- Round 33 REVERT — dia default flip to master_template caused
+-- mostly-blank charts in the export.
+--
+-- ROOT CAUSE
+-- ---------------------------------------------------------------------
+-- The api/_shared/cm-template-loader.js CHARTS_SHEET_COLUMNS array
+-- only populates columns B-O (14 columns) of the dia master
+-- template's Charts sheet. The pre-existing comment in that file
+-- describes it as "Phase 1 master coverage (B-O = 14 columns)".
+--
+-- BUT the 37 chart objects in dialysis-master-template.xlsx reference
+-- data in columns B-CJ (84 columns). Examples:
+--   'Charts'!$AB$75:$AB$218   — 10+ Year Cap (ttm)
+--   'Charts'!$AH$69:$AH$218   — FMC cap (Cap by Credit)
+--   'Charts'!$BC$130:$BC$218  — Price per SF (ttm)
+--   'Charts'!$BK$130:$BK$218  — Individual buyer count (ttm)
+--   'Charts'!$BM$19:$BG$218   — Cash Return Index
+--   'Charts'!$CH$94           — Doughnut available count
+--
+-- Result of PR #819 (the default flip): a handful of charts have
+-- data, ~25+ render blank. Worse than the previous PNG-image fallback.
+--
+-- FIX (this PR — code-only)
+-- ---------------------------------------------------------------------
+-- api/capital-markets.js: revert the dia default flip. Default is
+-- back to 'data_tabs' (the PNG-image path) so users see filled
+-- charts. The master_template path stays available as opt-in via
+-- ?layout=master_template for callers who want the partially-
+-- populated editable workbook.
+--
+-- FOLLOW-UP (task #8)
+-- ---------------------------------------------------------------------
+-- Properly expand the loader column coverage from B-O to B-CJ:
+--   1. Inspect every chart object in dia master template and build
+--      the complete column→view-key map
+--   2. Verify cm_dialysis_market_quarterly_master_m has all needed
+--      columns; add missing ones
+--   3. Update CHARTS_SHEET_COLUMNS in cm-template-loader.js
+--   4. Re-test with a fresh export
+--   5. Re-flip the dia default to master_template
+-- =====================================================================

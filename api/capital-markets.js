@@ -1216,20 +1216,21 @@ async function exportWorkbook(req, res) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  // 5a. Dialysis: master template path is now the DEFAULT (Round 33).
-  //     Marketing team feedback 2026-05-18: "the charts in the Excel
-  //     export are PNG images or graphics and not editable charts like
-  //     what's in our Excel version." The master template path ships
-  //     the actual master XLSX shell with all 37 chart objects intact
-  //     — natively editable in Excel (right-click → Edit Data /
-  //     Format Chart Area). The legacy ExcelJS chart-per-tab layout
-  //     with embedded PNG images stays available as opt-OUT via
-  //     ?layout=data_tabs (used by some integrations expecting that
-  //     specific tab structure).
+  // 5a. Round 33 REVERT — the dia default flip to master_template
+  //     produced mostly-blank charts in the export. The
+  //     cm-template-loader's CHARTS_SHEET_COLUMNS only populates
+  //     columns B-O of the Charts sheet, but the 37 chart objects in
+  //     dialysis-master-template.xlsx reference data in columns
+  //     B through CJ. Result: a handful of charts had data, the
+  //     other ~25+ rendered blank — worse than the PNG fallback.
+  //     Reverting to data_tabs default until the loader's column
+  //     coverage is expanded (tracked as Round 33 P1.5).
+  //
+  //     Marketing team can still opt in to master_template via
+  //     ?layout=master_template for the partially-populated path.
   //
   // Diagnostic header X-CM-Workbook-Path tells the caller which path fired.
-  const layoutDefault = (vertical === 'dialysis') ? 'master_template' : 'data_tabs';
-  const layout = req.query.layout || layoutDefault;
+  const layout = req.query.layout || 'data_tabs';
   const masterEligible = (vertical === 'dialysis' && layout === 'master_template');
   const masterHasRows = Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0;
 
