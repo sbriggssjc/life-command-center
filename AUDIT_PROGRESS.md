@@ -1466,3 +1466,42 @@ A second widget on the Research page (below LLC Research) that surfaces the 807 
 - **ingest_write_failures admin dashboard** — Settings widget showing recent failure rates.
 - **Agency-drift Phase B** — bulk mode ("Resolve all where lease + property_canonical share root word"), 'lease_agency_but_property_agency_null' handler (the easier sibling of disagreement).
 
+
+
+## Phase C — Agency-drift widget Phase B ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/phase-c-agency-drift-phase-b`
+- **Patch:** `audit/patches/phase-c-agency-drift-phase-b/apply.mjs`
+
+### What this adds
+Extends the agency-drift widget from A-5 to handle the second drift_kind on gov:
+`lease_agency_but_property_agency_null` (46 properties where the lease has tenant_agency but `properties.agency` is NULL — pure fill-in, no judgment call required).
+
+The widget header gets a filter toggle:
+- **Disagreement** (808 cases, default) — side-by-side red/green chips, "Use lease value"
+- **Missing** (46 cases) — italic "(blank)" placeholder + green lease chip, "Fill in from lease"
+
+Active mode is persisted in `localStorage.lcc.adrift.kind`. The POST resolve endpoint is reused unchanged — both modes patch the same fields.
+
+### Files changed
+- `api/admin.js` — accept `kind` query param + echo in response
+- `app.js` — `_lccGetAgencyDriftKind` / `_lccSetAgencyDriftKind` helpers + mode-aware render
+- `styles.css` — `.lcc-agency-drift-blank` + `.lcc-adrift-controls`
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. Open Research page. Agency Drift widget shows a "Disagreement | Missing" toggle in its header.
+2. Click **Missing** → widget reloads with up to 15 NULL-property rows. Each shows italic "(blank)" + green lease chip + "Fill in from lease" button.
+3. Click **Fill in from lease** on a row → confirm → row disappears.
+4. SQL spot-check on gov:
+   ```sql
+   SELECT count(*) FROM public.v_gap_agency_drift
+    WHERE drift_kind = 'lease_agency_but_property_agency_null';
+   -- Drops with each resolution.
+   ```
+
+### Live counts (verified 2026-05-18)
+- `agency_disagreement`: 808
+- `lease_agency_but_property_agency_null`: 46
+- (7,293 NULL drift_kind rows are not surfaced — they're properties with non-disagreeing data)
+

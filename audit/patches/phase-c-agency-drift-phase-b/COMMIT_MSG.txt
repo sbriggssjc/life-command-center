@@ -1,0 +1,28 @@
+audit(phase-c): agency-drift widget Phase B — missing-property handler
+
+Extends the agency-drift widget from A-5 to handle the second
+drift_kind on gov: 'lease_agency_but_property_agency_null' (46 cases).
+
+The widget header gets a 2-button toggle:
+  • Disagreement (808 cases, default) — side-by-side red/green chips,
+    "Use lease value"
+  • Missing (46 cases) — italic "(blank)" placeholder + green lease
+    chip, "Fill in from lease"
+
+Active mode persists in localStorage.lcc.adrift.kind. The existing
+POST /api/admin?_route=resolve-agency-drift is reused unchanged —
+both modes patch the same three property fields.
+
+GET endpoint now accepts a `kind` query param. Default preserves
+A-5 behavior.
+
+Files changed:
+  • api/admin.js   — kind param + echo in response
+  • app.js         — _lccGetAgencyDriftKind / _lccSetAgencyDriftKind
+                       + mode-aware render
+  • styles.css     — .lcc-agency-drift-blank + .lcc-adrift-controls
+  • AUDIT_PROGRESS.md
+
+Live counts (verified 2026-05-18):
+  agency_disagreement: 808
+  lease_agency_but_property_agency_null: 46
