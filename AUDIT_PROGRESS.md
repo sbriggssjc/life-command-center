@@ -2461,3 +2461,37 @@ After QA-22 every surface agrees on `summary.error` (1 today):
 - `ops.js` — Pipeline My Work pager key + threshold guard
 - `AUDIT_PROGRESS.md` — this closeout
 
+
+
+## QA pass #23 — norm_text chains DaVita brand canonicalization ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-23-norm-text-chain-davita`
+- **Patch:** `audit/patches/qa-23-norm-text-chain-davita/apply.mjs`
+- **Migration:** `supabase/migrations/dialysis/20260518210000_dia_qa23_norm_text_chain_davita_brand.sql`
+
+### Symptom
+QA pass #6 verification opened a DaVita-tenanted dia property and the detail panel header still read "Davita Lakewood Community Dialysis Center" — even though QA-22's properties.tenant backfill went 2,531 bad rows → 0.
+
+### Root cause
+v_property_detail__base builds page_title from:
+```
+COALESCE(norm_text(pl.tenant), norm_text(pmc.facility_name),
+         norm_text(p.tenant), norm_text(p.address))
+```
+The first two LATERAL-join sources had thousands of "Davita" rows that QA-22 didn't touch (leases.tenant: 2,348, medicare_clinics.facility_name: 6). The QA-19 norm_text trusted mixed-case input as-is, so the bad casing flowed through.
+
+### Fix
+Chain `canonicalize_davita_brand` onto `norm_text`'s output — applies to ALL paths (trusted-mixed-case AND smart-title-case). One function changed; 4 dependent views auto-fixed: v_property_detail, v_lease_detail, v_ownership_current, v_ownership_chain.
+
+### Verified live
+Property 38564 v_property_detail.page_title:
+- Before: "Davita Lakewood Community Dialysis Center – Lakewood, WA"
+- After:  "**DaVita** Lakewood Community Dialysis Center – Lakewood, WA"
+
+### Lesson
+When a view's column is built via COALESCE over multiple upstream sources, fixing one source isn't enough. View-level canonicalization (in norm_text) is more robust than chasing each upstream column.
+
+### Files changed
+- `supabase/migrations/dialysis/20260518210000_dia_qa23_norm_text_chain_davita_brand.sql`
+- `AUDIT_PROGRESS.md` — this closeout
+
