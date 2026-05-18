@@ -1,0 +1,40 @@
+QA-24 (P1): canonicalize Agency Breakdown — VA properly displayed as #1 federal tenant
+
+Two coupled bugs were splitting VA-related properties across three buckets
+on the Gov dashboard's Agency Breakdown widget, masking the fact that
+Veterans Affairs is the #1 federal tenant by property count (1,875), not
+#3 as it appeared (657).
+
+(a) Data — canonicalize_agency() regex missed singular "Veteran Affairs"
+    Pattern was \m(va|veterans\s+affairs|...)\M. The source had 1,217
+    rows of "US Department of Veteran Affairs" (singular) and 289 rows
+    of "US Department of Veterans Affairs - 1" (suffixed plural variant).
+    The 1,217 singular rows had agency_canonical = NULL.
+
+    Fix: veterans\s+affairs -> veterans?\s+affairs (plus same pattern
+    for veterans?\s+health, department\s+of\s+veterans?). Re-canonicalized
+    affected rows via UPDATE on properties.agency_canonical.
+
+(b) UI — gov.js dashboard grouped by raw .agency instead of canonical
+    portfolio.forEach(p => { const a = p.agency || 'Unknown'; ... })
+    bypassed agency_canonical entirely. Even after the regex fix, the
+    dashboard would still group by whatever raw string upstream gave.
+
+    Fix: const a = p.agency_canonical || p.agency || 'Unknown'
+    (same for distinctAgencies count).
+
+Verified live (Supabase MCP, 2026-05-18):
+  Before: VA appeared in 3 buckets (1,217 + 657 + 289 = 2,163 fragmented)
+  After:  VA = 1,875 in single canonical bucket (~1.5x GSA's 1,267)
+
+Lesson: when the canonicalizer regex skips a major variant, the impact
+compounds because the dashboard (which falls back to raw .agency for
+robustness) silently fragments it. Fixing one without the other isn't
+enough — both data and frontend group-by must use the canonical column.
+
+Files changed:
+- supabase/migrations/government/20260518220000_gov_qa24_canonicalize_agency_veteran_singular.sql
+- gov.js (distinctAgencies + agencyMap use p.agency_canonical || p.agency)
+- AUDIT_PROGRESS.md (closeout)
+
+Patch: audit/patches/qa-24-agency-canonicalization/
