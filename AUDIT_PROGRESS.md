@@ -2495,3 +2495,63 @@ When a view's column is built via COALESCE over multiple upstream sources, fixin
 - `supabase/migrations/dialysis/20260518210000_dia_qa23_norm_text_chain_davita_brand.sql`
 - `AUDIT_PROGRESS.md` — this closeout
 
+
+
+## QA pass #24 — Agency Breakdown canonicalization (gov) ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-24-agency-canonicalization`
+- **Patch:** `audit/patches/qa-24-agency-canonicalization/apply.mjs`
+- **Migration:** `supabase/migrations/government/20260518220000_gov_qa24_canonicalize_agency_veteran_singular.sql`
+- **Severity:** P1 — masked VA as the #1 federal tenant.
+
+### Symptom
+Gov dashboard Agency Breakdown widget showed VA-related properties split across THREE raw-string buckets:
+- "US Department of Veteran Affairs" — 1,217 (singular)
+- "US Department of Veterans Affairs - 1" — 289 (suffixed plural variant)
+- Canonical "VA" — 657 (already canonicalized)
+
+Result: GSA at 1,083 appeared as #1; VA's true 1,875 was hidden across the three buckets.
+
+### Two bugs, one impact
+**(a) Data — canonicalize_agency() regex didn't match singular "Veteran Affairs":**
+The regex was `\m(va|veterans\s+affairs|...)\M`. 1,217 rows of "US Department of Veteran Affairs" (singular) had agency_canonical = NULL.
+
+**Fix:** `veterans\s+affairs` → `veterans?\s+affairs` (plus same pattern for `veterans?\s+health`, `department\s+of\s+veterans?`).
+
+**(b) UI — gov.js dashboard grouped by raw .agency, not .agency_canonical:**
+`portfolio.forEach(p => { const a = p.agency || 'Unknown'; ... })` bypassed the canonical column entirely. Even after the regex fix, the dashboard would still group by whatever raw string the upstream gave.
+
+**Fix:** `const a = p.agency_canonical || p.agency || 'Unknown';` (and same for distinctAgencies count).
+
+### Verified live (Supabase MCP, 2026-05-18)
+Before re-canonicalization:
+```
+US Department of Veteran Affairs        1,217
+General Services Administration (GSA)   1,083
+SSA                                       781
+US Department of Veterans Affairs - 1     289
+```
+
+After re-canonicalization (agency_canonical):
+```
+VA      1,875   ← +1,218 (was hidden across 3 buckets)
+SSA     1,320
+GSA     1,267
+```
+
+VA is now correctly displayed as the **#1 federal tenant**, ~1.5× GSA.
+
+### Lesson
+When the canonicalizer regex skips a major variant, the impact compounds: not only does that raw value go un-canonicalized, the dashboard (which groups by raw `.agency` for fallback robustness) silently fragments it across multiple top-agency entries. Fixing one without the other isn't enough — both data and frontend group-by must use the canonical column.
+
+### Out of scope (noted for future passes)
+- Non-federal entities tagged as "Federal" (Federal Credit Unions, "10 Federal Self Storage", etc.) — canonicalizer correctly returns NULL; frontend now falls back to raw string.
+- State/local government tenants (Florida DoH, Shelby County Government, etc.) — canonicalizer is federal-only by design.
+- 8–14 sec page-render delay on Gov dashboard (separate investigation).
+- SF PROSPECTING 0% / MISSING SF LINK 97% — real data gap, not a display bug.
+
+### Files changed
+- `supabase/migrations/government/20260518220000_gov_qa24_canonicalize_agency_veteran_singular.sql`
+- `gov.js` — `distinctAgencies` + `agencyMap` group-by use `p.agency_canonical || p.agency`
+- `AUDIT_PROGRESS.md` — this closeout
+

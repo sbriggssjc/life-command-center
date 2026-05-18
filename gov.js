@@ -4422,7 +4422,11 @@ function renderGovOverview() {
   const withRentPSF = useMV ? [] : portfolio.filter(p => p.gross_rent_psf > 0);
   const avgRentPSF = useMV ? (mv.avg_rent_psf ? Number(mv.avg_rent_psf).toFixed(2) : '—') : (withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—');
   const totalNOI = useMV ? (mv.total_noi || 0) : portfolio.reduce((s, p) => s + (p.noi || 0), 0);
-  const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+  // QA-24 (2026-05-18): prefer agency_canonical so the count isn't inflated
+  // by raw-string variants ("US Department of Veteran Affairs" vs
+  // "US Department of Veterans Affairs - 1" etc). Falls back to raw agency
+  // for rows that don't match the canonicalizer.
+  const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency_canonical || p.agency).filter(Boolean)).size;
   const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
   const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
   const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
@@ -4441,7 +4445,13 @@ function renderGovOverview() {
   let unknownAgencyStats = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
   if (!useMV) {
     portfolio.forEach(p => {
-      const a = p.agency || 'Unknown';
+      // QA-24 (2026-05-18): group by agency_canonical so "US Department of
+      // Veteran Affairs" / "US Department of Veterans Affairs - 1" / "VA"
+      // all collapse into the canonical "VA" bucket. Falls back to raw
+      // agency for rows that don't match the canonicalizer (state/local
+      // tenants, etc.). Previously these split into separate top-agency
+      // entries, fragmenting the chart and underreporting biggest tenants.
+      const a = p.agency_canonical || p.agency || 'Unknown';
       if (a === 'Unknown') {
         // Separate tracking for Unknown agencies (Issue #5)
         unknownAgencyStats.count++;
