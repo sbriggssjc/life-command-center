@@ -1683,3 +1683,42 @@ Each row can now be closed in 2 clicks from the property's detail panel as Scott
 - stale_active_listing → "Take action →" (tab-switch)
 - cms_chain_drift:* → "Take action →" (tab-switch, candidate for B-4)
 
+
+
+## Closeout — item 8 Phase B-4 ✅ — tenant_drift handlers
+- **Status:** ✅ DONE.
+- **Branch:** `audit/08B4-next-action-tenant-drift`
+- **Patch:** `audit/patches/08B4-next-action-tenant-drift/apply.mjs`
+
+### What this adds
+Two more one-click PATCH branches on the sticky next-action bar (dia-only). Both write to `dia.properties.tenant` from an authoritative source:
+
+- **`lease_tenant_drift`** (3,544 NBA rows) → "Use lease tenant →" — pulls `lease_tenant` from `v_gap_lease_tenant_drift` and PATCHes `properties.tenant`.
+- **`cms_chain_drift:cms_chain_but_property_tenant_null`** (40 NBA rows) → "Use CMS chain →" — pulls `cms_chain` from `v_gap_chain_drift` and PATCHes `properties.tenant`.
+
+The `cms_chain_drift:operator_transition_candidate` variant (~2,522 rows) STAYS as tab-switch — that one's a judgment call between two competing tenant values (property says X, CMS says Y) and shouldn't be auto-resolved.
+
+### New endpoints
+- `POST /api/admin?_route=resolve-lease-tenant-drift` body `{ property_id }`. Label: `resolveLeaseTenantDrift`.
+- `POST /api/admin?_route=resolve-cms-chain-drift` body `{ property_id }`. Filters server-side on `drift_kind=cms_chain_but_property_tenant_null` so accidental calls on the transition variant return 404. Label: `resolveCmsChainDrift`.
+
+### Files changed
+- `api/admin.js` — dispatcher cases + 2 new handlers
+- `detail.js` — dispatch-spec helper extension + 2 click branches + 2 resolve helpers
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Per-action dispatcher coverage after this patch
+- missing_recorded_owner → "Open SoS →" (B)
+- llc_research_pending → "Open SoS →" (B)
+- agency_drift:agency_disagreement → "Use lease value →" (B-2)
+- agency_drift:lease_agency_but_property_agency_null → "Fill from lease →" (B-2)
+- orphan_sale_owner → "Backlink sale →" (B-3)
+- **lease_tenant_drift → "Use lease tenant →"** (B-4, this patch)
+- **cms_chain_drift:cms_chain_but_property_tenant_null → "Use CMS chain →"** (B-4, this patch)
+- cms_chain_drift:operator_transition_candidate → "Take action →" (tab-switch, intentional)
+- stale_active_listing → "Take action →" (tab-switch)
+
+### Auto-resolvable gap coverage by domain (after this patch)
+- **dia**: missing_recorded_owner (SoS open) + llc_research_pending (SoS open) + orphan_sale_owner (backlink) + lease_tenant_drift (PATCH) + cms_chain_drift:null_tenant (PATCH) = 5 of 6 dia gap types one-click resolvable. Only operator_transition_candidate stays as tab-switch.
+- **gov**: missing_recorded_owner (SoS open) + llc_research_pending (SoS open) + agency_drift:* (PATCH × 2) + orphan_sale_owner (backlink) = 5 of 5 gov gap types covered. Stale_active_listing stays as tab-switch (the "re-verify" action is judgment-heavy).
+

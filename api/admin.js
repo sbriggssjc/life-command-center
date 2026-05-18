@@ -101,6 +101,8 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-agency-drift':    return handleResolveAgencyDrift(req, res);
     case 'write-failures-rollup':   return handleWriteFailuresRollup(req, res);
     case 'resolve-orphan-sale':     return handleResolveOrphanSale(req, res);
+    case 'resolve-lease-tenant-drift': return handleResolveLeaseTenantDrift(req, res);
+    case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -3374,6 +3376,92 @@ async function handleResolveOrphanSale(req, res) {
     });
   } catch (err) {
     console.error('[resolve-orphan-sale]', err?.message || err);
+    return res.status(500).json({ error: 'resolve_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// RESOLVE LEASE-TENANT DRIFT — Item #8 Phase B-4 (2026-05-18, dia-only)
+//
+// POST /api/admin?_route=resolve-lease-tenant-drift
+//   Body: { property_id }
+//   Looks up v_gap_lease_tenant_drift for the property to fetch
+//   lease_tenant, then PATCHes dia.properties.tenant = lease_tenant.
+// ============================================================================
+async function handleResolveLeaseTenantDrift(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const propertyId = Number((req.body || {}).property_id);
+  if (!Number.isFinite(propertyId)) return res.status(400).json({ error: 'property_id (number) required' });
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+    const driftRes = await domainQuery('dialysis', 'GET',
+      'v_gap_lease_tenant_drift?property_id=eq.' + propertyId +
+      '&select=property_id,lease_tenant,prop_tenant&limit=1'
+    );
+    if (!driftRes.ok || !driftRes.data?.length) {
+      return res.status(404).json({ error: 'no_active_drift', message: 'No active lease-tenant drift row for this property' });
+    }
+    const leaseTenant = (driftRes.data[0].lease_tenant || '').trim();
+    if (!leaseTenant) {
+      return res.status(409).json({ error: 'no_lease_tenant', message: 'Lease has no tenant to apply' });
+    }
+    const r = await domainQuery('dialysis', 'PATCH',
+      'properties?property_id=eq.' + propertyId,
+      { tenant: leaseTenant, updated_at: new Date().toISOString() },
+      undefined, { label: 'resolveLeaseTenantDrift' });
+    if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
+    return res.status(200).json({ ok: true, property_id: propertyId, tenant: leaseTenant });
+  } catch (err) {
+    console.error('[resolve-lease-tenant-drift]', err?.message || err);
+    return res.status(500).json({ error: 'resolve_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// RESOLVE CMS CHAIN DRIFT — Item #8 Phase B-4 (2026-05-18, dia-only)
+//
+// POST /api/admin?_route=resolve-cms-chain-drift
+//   Body: { property_id }
+//   Only handles the 'cms_chain_but_property_tenant_null' drift_kind.
+//   Looks up v_gap_chain_drift for the property, fetches cms_chain,
+//   and PATCHes dia.properties.tenant = cms_chain.
+//   The 'operator_transition_candidate' variant is NOT auto-resolvable
+//   (needs human judgment between competing tenant values).
+// ============================================================================
+async function handleResolveCmsChainDrift(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const propertyId = Number((req.body || {}).property_id);
+  if (!Number.isFinite(propertyId)) return res.status(400).json({ error: 'property_id (number) required' });
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+    const driftRes = await domainQuery('dialysis', 'GET',
+      'v_gap_chain_drift?property_id=eq.' + propertyId +
+      '&drift_kind=eq.cms_chain_but_property_tenant_null' +
+      '&select=property_id,cms_chain,prop_tenant,drift_kind&limit=1'
+    );
+    if (!driftRes.ok || !driftRes.data?.length) {
+      return res.status(404).json({ error: 'no_active_drift', message: 'No cms_chain_but_property_tenant_null drift for this property (operator_transition_candidate is not auto-resolvable)' });
+    }
+    const cmsChain = (driftRes.data[0].cms_chain || '').trim();
+    if (!cmsChain) {
+      return res.status(409).json({ error: 'no_cms_chain', message: 'CMS chain has no value to apply' });
+    }
+    const r = await domainQuery('dialysis', 'PATCH',
+      'properties?property_id=eq.' + propertyId,
+      { tenant: cmsChain, updated_at: new Date().toISOString() },
+      undefined, { label: 'resolveCmsChainDrift' });
+    if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
+    return res.status(200).json({ ok: true, property_id: propertyId, tenant: cmsChain });
+  } catch (err) {
+    console.error('[resolve-cms-chain-drift]', err?.message || err);
     return res.status(500).json({ error: 'resolve_failed', message: err?.message });
   }
 }

@@ -1416,6 +1416,17 @@ function _udNextActionDispatchFor(gapType) {
   if (t === 'orphan_sale_owner') {
     return { label: 'Backlink sale →', metaSuffix: "attributes sale to property's current owner" };
   }
+  // Item #8 Phase B-4 (2026-05-18): tenant_drift one-click PATCHes (dia-only).
+  // lease_tenant_drift: properties.tenant := lease_tenant
+  // cms_chain_drift:cms_chain_but_property_tenant_null: properties.tenant := cms_chain
+  if (t === 'lease_tenant_drift') {
+    return { label: 'Use lease tenant →', metaSuffix: 'patches properties.tenant from active lease' };
+  }
+  if (t === 'cms_chain_drift:cms_chain_but_property_tenant_null') {
+    return { label: 'Use CMS chain →', metaSuffix: 'fills properties.tenant from CMS chain' };
+  }
+  // cms_chain_drift:operator_transition_candidate stays as tab-switch —
+  // it's a judgment call between property tenant and CMS chain.
   // Other gap types: existing tab-switch UX
   return { label: 'Take action →', metaSuffix: 'opens ' + _udNextActionTabForGap(t) };
 }
@@ -1618,6 +1629,126 @@ async function _udNextActionResolveOrphanSale() {
 }
 window._udNextActionResolveOrphanSale = _udNextActionResolveOrphanSale;
 
+// Item #8 Phase B-4 (2026-05-18): lease_tenant_drift resolver (dia-only).
+// Fetches lease_tenant from v_gap_lease_tenant_drift, confirms with user,
+// POSTs to /api/admin?_route=resolve-lease-tenant-drift, hides the bar.
+async function _udNextActionResolveLeaseTenantDrift() {
+  const prop = (_udCache && _udCache.property) || {};
+  const propertyId = Number(prop.property_id);
+  if (!Number.isFinite(propertyId)) {
+    if (typeof showToast === 'function') showToast('Missing property_id', 'error');
+    return;
+  }
+  if (_udCache.db !== 'dia') {
+    if (typeof showToast === 'function') showToast('Lease-tenant drift only applies to dia properties', 'warn');
+    return;
+  }
+
+  // Fetch the lease_tenant for this property to preview in the confirm.
+  let leaseTenant = null;
+  try {
+    const r = await diaQuery('v_gap_lease_tenant_drift', '*', {
+      filter: 'property_id=eq.' + propertyId,
+      limit: 1,
+    });
+    const rows = Array.isArray(r) ? r : (r?.data || []);
+    if (rows.length) leaseTenant = (rows[0].lease_tenant || '').trim();
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Fetch lease-tenant drift row', e);
+    return;
+  }
+  if (!leaseTenant) {
+    if (typeof showToast === 'function') showToast('Lease has no tenant to apply', 'warn');
+    return;
+  }
+
+  let confirmed = true;
+  if (typeof asyncConfirm === 'function') {
+    confirmed = await asyncConfirm('Set properties.tenant to "' + leaseTenant + '" from the active lease?');
+  }
+  if (!confirmed) return;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const res = await fetch('/api/admin?_route=resolve-lease-tenant-drift', {
+      method: 'POST', headers,
+      body: JSON.stringify({ property_id: propertyId }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (typeof showToast === 'function') showToast('Updated tenant from lease', 'ok');
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Resolve lease-tenant drift', e);
+    return;
+  }
+  if (_udCache) {
+    _udCache.nextAction = null;
+    _setUdCache(_udCache);
+  }
+  const bar = document.getElementById('detailNextActionBar');
+  if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+}
+window._udNextActionResolveLeaseTenantDrift = _udNextActionResolveLeaseTenantDrift;
+
+// Item #8 Phase B-4 (2026-05-18): cms_chain_drift resolver for the
+// 'cms_chain_but_property_tenant_null' variant only (dia-only).
+async function _udNextActionResolveCmsChainDrift() {
+  const prop = (_udCache && _udCache.property) || {};
+  const propertyId = Number(prop.property_id);
+  if (!Number.isFinite(propertyId)) {
+    if (typeof showToast === 'function') showToast('Missing property_id', 'error');
+    return;
+  }
+  if (_udCache.db !== 'dia') {
+    if (typeof showToast === 'function') showToast('CMS chain drift only applies to dia properties', 'warn');
+    return;
+  }
+
+  let cmsChain = null;
+  try {
+    const r = await diaQuery('v_gap_chain_drift', '*', {
+      filter: 'property_id=eq.' + propertyId + '&drift_kind=eq.cms_chain_but_property_tenant_null',
+      limit: 1,
+    });
+    const rows = Array.isArray(r) ? r : (r?.data || []);
+    if (rows.length) cmsChain = (rows[0].cms_chain || '').trim();
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Fetch cms-chain drift row', e);
+    return;
+  }
+  if (!cmsChain) {
+    if (typeof showToast === 'function') showToast('No CMS chain value to apply (or this is the operator_transition_candidate variant — needs manual review)', 'warn');
+    return;
+  }
+
+  let confirmed = true;
+  if (typeof asyncConfirm === 'function') {
+    confirmed = await asyncConfirm('Set properties.tenant to "' + cmsChain + '" from CMS chain?');
+  }
+  if (!confirmed) return;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const res = await fetch('/api/admin?_route=resolve-cms-chain-drift', {
+      method: 'POST', headers,
+      body: JSON.stringify({ property_id: propertyId }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (typeof showToast === 'function') showToast('Updated tenant from CMS chain', 'ok');
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Resolve cms-chain drift', e);
+    return;
+  }
+  if (_udCache) {
+    _udCache.nextAction = null;
+    _setUdCache(_udCache);
+  }
+  const bar = document.getElementById('detailNextActionBar');
+  if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+}
+window._udNextActionResolveCmsChainDrift = _udNextActionResolveCmsChainDrift;
+
 function _udNextActionClick(gapType) {
   // Item #8 Phase B (2026-05-18): dispatch by gap_type. SoS-portal opens
   // for owner-research gaps; everything else falls through to tab-switch.
@@ -1666,6 +1797,17 @@ function _udNextActionClick(gapType) {
     _udNextActionResolveOrphanSale().catch(e => console.warn('[NextAction] orphan_sale resolve failed:', e?.message));
     return;
   }
+
+  // Item #8 Phase B-4 (2026-05-18): tenant_drift handlers (dia-only).
+  if (t === 'lease_tenant_drift') {
+    _udNextActionResolveLeaseTenantDrift().catch(e => console.warn('[NextAction] lease_tenant resolve failed:', e?.message));
+    return;
+  }
+  if (t === 'cms_chain_drift:cms_chain_but_property_tenant_null') {
+    _udNextActionResolveCmsChainDrift().catch(e => console.warn('[NextAction] cms_chain resolve failed:', e?.message));
+    return;
+  }
+  // cms_chain_drift:operator_transition_candidate falls through to tab-switch.
 
   // Default: switch to the tab where this gap lives.
   const tab = _udNextActionTabForGap(gapType);

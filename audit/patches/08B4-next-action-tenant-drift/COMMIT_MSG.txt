@@ -1,0 +1,33 @@
+audit(item-8/phase-b4): next-action dispatcher — tenant_drift handlers
+
+Two more one-click PATCH branches on the sticky next-action bar
+(dia-only). Both write to dia.properties.tenant from an authoritative
+source:
+
+  lease_tenant_drift  (3,544 NBA rows)  "Use lease tenant →"
+    Fetch lease_tenant from v_gap_lease_tenant_drift, confirm,
+    PATCH properties.tenant := lease_tenant.
+
+  cms_chain_drift:cms_chain_but_property_tenant_null (40 NBA rows)
+                                        "Use CMS chain →"
+    Fetch cms_chain from v_gap_chain_drift filtered on the null-tenant
+    drift_kind, confirm, PATCH properties.tenant := cms_chain.
+
+  cms_chain_drift:operator_transition_candidate (~2,522 rows)
+    Stays as tab-switch — judgment call between two competing tenant
+    values shouldn't be auto-resolved.
+
+Two new endpoints, both labeled for ingest_write_failures telemetry:
+  resolve-lease-tenant-drift  →  label='resolveLeaseTenantDrift'
+  resolve-cms-chain-drift     →  label='resolveCmsChainDrift'
+
+Per-action dispatcher coverage after this patch — auto-resolvable
+gap types:
+  dia: 5 of 6  (only operator_transition_candidate stays manual)
+  gov: 5 of 5  (only stale_active_listing stays manual)
+
+Files changed:
+  • api/admin.js     — 2 dispatcher cases + 2 handlers
+  • detail.js        — dispatch spec extension + 2 click branches
+                       + 2 resolve helpers
+  • AUDIT_PROGRESS.md
