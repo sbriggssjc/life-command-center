@@ -1091,6 +1091,85 @@ SELECT rank, completeness_band, gap_value::bigint AS weighted, raw_gap_value::bi
 - Now cheap because the persisted column from B-1 is indexed.
 
 
+
+## Closeout — item 6 Phase B-3 + item 9 Phase B — list sort UI + completeness chip helpers
+- **Status:** ✅ DONE (building blocks). Per-tab adoption tracked as Phase C with a clear punch list below.
+- **Branch:** `audit/06B3-09B-list-sort-ui-completeness-chips`
+- **Patch:** `audit/patches/06B3-09B-list-sort-ui-completeness-chips/apply.mjs`
+- **Closes:** the building-block half of #6 Phase B-3 + #9 Phase B. The two items overlap (a sort toggle whose options include completeness, a chip showing the band), so they ship as one patch.
+
+### What this delivers
+
+**1. Generic helpers in `app.js`** (ready for adoption on every list view):
+- `lccCompletenessChip(score, band)` — returns colored chip HTML (excellent/good/fair/poor/unknown).
+- `lccGetListSort(table, defaultKey)` — reads localStorage `lcc.sort.<table>`.
+- `lccSetListSort(table, key, onChange?)` — persists + fires re-render callback.
+- `lccSortListByKey(rows, key, specs)` — in-memory stable sort. Specs declarative `{ field, dir, nulls }` or a custom compare fn.
+- `lccRenderSortToggle(table, defaultKey, keys, onChangeFnName)` — toggle DOM.
+
+**2. CSS** for the chip (4 band colors + unknown) and the sort toggle (button group with active state).
+
+**3. Safe demonstration** — the NBA Home rail now renders the completeness chip per row. The view already returns `completeness_band` + `completeness_score` (Phase B-2 exposure), so zero new fetches. Excellent-band properties get a green chip, fair-band yellow, poor-band red, etc.
+
+### Per-tab migration pattern (Phase C punch list)
+
+Each list tab adopts in 6 steps:
+
+```js
+// 1. After lazy-load, store the raw array on a domain-scoped state object
+//    (e.g. govData.salesTransactions). Already in place for most tabs.
+
+// 2. Define a sort-specs map for this table. Keys are user-facing sort
+//    options; values describe how to sort.
+const SALES_SORT_SPECS = {
+  value:        { field: 'sold_price',          dir: 'desc', nulls: 'last' },
+  date:         { field: 'sale_date',           dir: 'desc', nulls: 'last' },
+  completeness: { field: 'completeness_score',  dir: 'desc', nulls: 'last' },
+};
+
+// 3. Before rendering the table, sort by the active key.
+const sortKey = lccGetListSort('gov_sales_transactions', 'value');
+const rowsSorted = lccSortListByKey(govData.salesTransactions, sortKey, SALES_SORT_SPECS);
+
+// 4. Inject the toggle into the tab header. Provide the re-render callback
+//    name as a string (it must be on window).
+const toggleHtml = lccRenderSortToggle(
+  'gov_sales_transactions', 'value',
+  [{key:'value',label:'Value'},{key:'date',label:'Date'},{key:'completeness',label:'Completeness'}],
+  'renderGovSales'  // existing render fn — needs to read the new sort key
+);
+
+// 5. Render the completeness chip in the row HTML where appropriate.
+//    Most tables: a small column at the right of the address/title.
+'<td>' + lccCompletenessChip(row.completeness_score, row.completeness_band) + '</td>'
+
+// 6. Ensure the underlying SELECT includes completeness_score + completeness_band
+//    (they're cheap — indexed since B-1).
+```
+
+**Punch list (per-tab adoption, Phase C):**
+| Tab | DB | Default sort | Status |
+|---|---|---|---|
+| Sales transactions | both | value | 📋 pending |
+| Available listings | both | date  | 📋 pending |
+| Portfolio properties | gov | value | 📋 pending |
+| Prospect leads | gov | priority_score | 📋 pending |
+| Operations / CMS table | dia | value | 📋 pending |
+| Loans | both | value | 📋 pending |
+
+### Files changed
+- `app.js` — 5 helpers (~140 lines) + NBA rail integration (4 lines)
+- `styles.css` — `.lcc-cmp-chip` (5 variants) + `.lcc-sort-toggle` (group + buttons)
+- `AUDIT_PROGRESS.md` — this closeout + migration pattern
+
+### Verification
+1. `grep -c "lccCompletenessChip" app.js` → 3 or more (definition + window export + NBA call site)
+2. `grep -c "lccRenderSortToggle" app.js` → 2 or more (definition + window export)
+3. `grep -c ".lcc-cmp-chip" styles.css` → 6 or more (base + 4 band variants + unknown)
+4. Hard-reload the app → land on Home → NBA rail shows a band chip next to each domain tag. Top excellent-band rows show green chips; fair-band yellow; poor-band red.
+5. From devtools: `lccCompletenessChip(87, 'good')` returns an HTML string with the right classes.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

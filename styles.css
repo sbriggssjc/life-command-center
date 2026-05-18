@@ -253,6 +253,27 @@ input, select { font-family: inherit; }
   .cr-chip { font-size: 10px; padding: 3px 7px; }
 }
 
+/* Item #6 Phase B-3 / Item #9 Phase B (2026-05-17): list sort + chip helpers */
+
+/* Completeness band chip — usable anywhere a list row needs to surface a
+   property's completeness band at a glance. */
+.lcc-cmp-chip { display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: 0.4px; padding: 2px 6px; border-radius: 999px; border: 1px solid transparent; text-transform: uppercase; vertical-align: middle; line-height: 1; }
+.lcc-cmp-chip-excellent { background: color-mix(in srgb, var(--green, #22c55e) 18%, transparent); color: var(--green, #22c55e); border-color: color-mix(in srgb, var(--green, #22c55e) 45%, transparent); }
+.lcc-cmp-chip-good      { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.lcc-cmp-chip-fair      { background: color-mix(in srgb, var(--yellow, #eab308) 18%, transparent); color: var(--yellow, #eab308); border-color: color-mix(in srgb, var(--yellow, #eab308) 45%, transparent); }
+.lcc-cmp-chip-poor      { background: color-mix(in srgb, var(--red, #ef4444) 14%, transparent); color: var(--red, #ef4444); border-color: color-mix(in srgb, var(--red, #ef4444) 35%, transparent); }
+.lcc-cmp-chip-unknown   { background: var(--s2); color: var(--text3); border-color: var(--border); }
+.lcc-cmp-chip[title]    { cursor: help; }
+
+/* Sort toggle — usable in any list tab header. Pairs with lccRenderSortToggle()
+   helper in app.js. */
+.lcc-sort-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text2); }
+.lcc-sort-toggle-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text3); }
+.lcc-sort-toggle-group { display: inline-flex; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; }
+.lcc-sort-toggle-btn { font-size: 11px; padding: 3px 9px; border: 0; background: transparent; color: var(--text2); border-radius: 6px; cursor: pointer; font-weight: 600; }
+.lcc-sort-toggle-btn.active { background: var(--accent2); color: #fff; }
+.lcc-sort-toggle-btn:hover:not(.active) { background: var(--s1); color: var(--text1); }
+
 /* Next-action bar — detail panel (Item #8 Phase A, 2026-05-17) */
 .next-action-bar { position: sticky; bottom: 0; z-index: 3; background: var(--s1); border-top: 1px solid var(--border); padding: 10px 14px; padding-bottom: calc(10px + var(--safe-bottom, 0px)); display: flex; align-items: center; gap: 10px; cursor: pointer; transition: background 0.15s; }
 .next-action-bar:hover { background: color-mix(in srgb, var(--accent2) 6%, var(--s1)); }

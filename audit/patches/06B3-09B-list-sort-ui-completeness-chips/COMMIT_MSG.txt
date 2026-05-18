@@ -1,0 +1,33 @@
+audit(item-6/phase-b3 + item-9/phase-b): list sort + chip helpers
+
+Combined patch because #6 Phase B-3 (completeness band chip in list rows)
+and #9 Phase B (sort UI toggle on lists) overlap on the same surface
+area. Ship the building blocks once; per-tab adoption is tracked as
+Phase C.
+
+What's in this patch:
+
+1. Generic helpers in app.js:
+   • lccCompletenessChip(score, band)   — colored chip HTML
+   • lccGetListSort(table, defaultKey)   — read localStorage
+   • lccSetListSort(table, key, onChange?)— write + re-render hook
+   • lccSortListByKey(rows, key, specs)  — in-memory stable sort
+   • lccRenderSortToggle(table, default,  — toggle DOM
+       keys, onChangeFnName)
+
+2. CSS for the chip (excellent/good/fair/poor/unknown) and the sort
+   toggle (button group with active state).
+
+3. Safe demonstration: the NBA Home rail now renders the completeness
+   chip per row. The view already returns completeness_band +
+   completeness_score (B-2 exposure), so zero new fetches.
+
+Per-tab adoption pattern documented in AUDIT_PROGRESS.md closeout —
+6-step recipe + a punch list of the 6 tabs that should adopt next:
+sales_transactions (both), available_listings (both), gov portfolio,
+gov prospects, dia operations/CMS, loans.
+
+Files changed:
+  • app.js     — 5 helpers + NBA rail integration
+  • styles.css — .lcc-cmp-chip + .lcc-sort-toggle
+  • AUDIT_PROGRESS.md
