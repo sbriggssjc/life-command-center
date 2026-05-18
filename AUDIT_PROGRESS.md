@@ -1588,3 +1588,62 @@ Search name extraction strips the `[N dup records]` annotation from `gap_label` 
   - `lease_tenant_drift` — one-click back-fill of `properties.tenant` from active lease
   - `cms_chain_drift:*` — one-click "use CMS chain value"
 
+
+
+## Closeout — item 8 Phase B-2 ✅ — next-action dispatcher: agency_drift
+- **Status:** ✅ DONE.
+- **Branch:** `audit/08B2-next-action-agency-drift`
+- **Patch:** `audit/patches/08B2-next-action-agency-drift/apply.mjs`
+
+### What this adds
+Extends the per-gap_type dispatcher shipped in Phase B to handle the agency_drift gap_types (gov-only). When a property's top NBA gap is one of:
+- `agency_drift:agency_disagreement` (808 cases)
+- `agency_drift:lease_agency_but_property_agency_null` (46 cases)
+
+…the bar's CTA becomes "Use lease value →" / "Fill from lease →" instead of the generic "Take action →". Click → fetches the lease's tenant_agency from `v_gap_agency_drift`, asyncConfirms with the proposed value, POSTs to the existing `resolve-agency-drift` endpoint shipped in A-5, toasts on success, and hides the bar (drift resolved).
+
+### Why this matters
+The Agency Drift widget on the Research page already lets Scott batch-resolve these from a queue view. The bar lets him resolve **as he encounters each property**, without leaving the detail panel — closes the "see the gap → fix the gap" loop in one click.
+
+### Workflow
+- Click "Use lease value →" on the bar
+- govQuery v_gap_agency_drift filtered by property_id
+- asyncConfirm with the proposed agency value (e.g. "GSA - Social Security Admin")
+- POST /api/admin?_route=resolve-agency-drift (the endpoint shipped in A-5)
+- showToast('Updated agency from lease', 'ok')
+- Hide the bar; clear _udCache.nextAction
+
+### Files changed
+- `detail.js` — 3 anchored edits (dispatch-spec helper, click branch, new resolve helper)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. Open any gov property whose top gap is `agency_drift:agency_disagreement` or `agency_drift:lease_agency_but_property_agency_null` (find one via the NBA Home rail).
+2. Sticky bar at the bottom shows **"Use lease value →"** or **"Fill from lease →"**.
+3. Meta line: "$X.XM value · patches properties.agency from active lease".
+4. Click → confirm dialog with the proposed agency value → confirm → toast → bar disappears.
+5. On gov Studio:
+   ```sql
+   SELECT agency, agency_canonical, agency_full_name, updated_at
+     FROM public.properties WHERE property_id = <id>;
+   -- agency / agency_canonical / agency_full_name are now the lease values
+   -- updated_at is the moment you clicked
+   ```
+
+### Per-action dispatcher coverage after this patch
+| Gap type | Button | Action |
+|---|---|---|
+| missing_recorded_owner | "Open SoS →" | window.open SoS portal (B) |
+| llc_research_pending | "Open SoS →" | window.open SoS portal (B) |
+| **agency_drift:agency_disagreement** | **"Use lease value →"** | **PATCH via resolve-agency-drift (B-2)** |
+| **agency_drift:lease_agency_but_property_agency_null** | **"Fill from lease →"** | **PATCH via resolve-agency-drift (B-2)** |
+| lease_tenant_drift | "Take action →" | tab-switch (A) — Phase B-3 candidate |
+| orphan_sale_owner | "Take action →" | tab-switch (A) — Phase B-3 candidate |
+| stale_active_listing | "Take action →" | tab-switch (A) |
+| cms_chain_drift:* | "Take action →" | tab-switch (A) |
+
+### Phase B-3 candidates (deferred)
+- **orphan_sale_owner** — one-click most-recent backlink (single-row version of A-1's logic). Needs a new admin sub-route `resolve-orphan-sale` that mirrors the safety check from A-1.
+- **lease_tenant_drift** — one-click back-fill of `properties.tenant` from the active lease (parallels agency_drift).
+- **cms_chain_drift:cms_chain_but_property_tenant_null** — one-click "use CMS chain value" (parallels agency_drift but writes `properties.tenant` from `cms_chain`).
+

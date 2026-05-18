@@ -296,14 +296,12 @@ Extends the per-gap_type dispatcher shipped in Phase B to handle the agency_drif
 The Agency Drift widget on the Research page already lets Scott batch-resolve these from a queue view. The bar lets him resolve **as he encounters each property**, without leaving the detail panel — closes the "see the gap → fix the gap" loop in one click.
 
 ### Workflow
-```
-1. Click "Use lease value →" on the bar
-2. govQuery('v_gap_agency_drift', filter: property_id=eq.X)
-3. asyncConfirm: Set properties.agency to "GSA - Social Security Admin"?
-4. POST /api/admin?_route=resolve-agency-drift (from A-5)
-5. showToast('Updated agency from lease', 'ok')
-6. Hide the bar; clear _udCache.nextAction
-```
+- Click "Use lease value →" on the bar
+- govQuery v_gap_agency_drift filtered by property_id
+- asyncConfirm with the proposed agency value (e.g. "GSA - Social Security Admin")
+- POST /api/admin?_route=resolve-agency-drift (the endpoint shipped in A-5)
+- showToast('Updated agency from lease', 'ok')
+- Hide the bar; clear _udCache.nextAction
 
 ### Files changed
 - \`detail.js\` — 3 anchored edits (dispatch-spec helper, click branch, new resolve helper)
