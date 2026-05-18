@@ -1,0 +1,44 @@
+audit(item-10/phase-b): client_errors telemetry loop
+
+Completes Item #10 by closing the loop on browser-side error
+visibility. Phase A added local visibility (toasts + console with
+tags + rate limiting). Phase B persists errors centrally so we can
+see patterns across users + time.
+
+Three pieces:
+
+1. New table public.client_errors on LCC Opps (already applied via
+   MCP, committed for repo provenance):
+     id, workspace_id, user_email, user_agent, url, label, tier,
+     code, message, stack, detail, occurred_at, reported_at
+   Plus 3 indexes and a convenience view v_client_error_rollup
+   (24h volume by label/tier).
+
+2. New admin sub-route POST /api/admin?_route=client-error:
+     Body: { batch: [<errorRecord>, ...] }
+   Normalizes + clamps each row (label ≤ 200, stack ≤ 4000, etc.),
+   validates tier, caps batch at 50, inserts into client_errors.
+   Returns 200 even on partial-failure so the client doesn't retry.
+
+3. Browser-side buffer + flush in app.js:
+   • lccReportError now queues each error into _lccErrBuffer.
+   • Flush every 30s, on beforeunload, on visibilitychange → visible,
+     or immediately when buffer hits 10.
+   • Only tiers 'error' and 'warn' get reported (info/ok stay local).
+   • fetch(..., { keepalive: true }) so unload doesn't lose data.
+   • Skips POST during pre-auth boot, holds buffer (capped at 100).
+   • New diagnostic accessors:
+       window.lccFlushErrors()  — force immediate flush
+       window.lccErrorBuffer()  — snapshot pending queue
+
+Files changed:
+  • supabase/migrations/20260517260000_lcc_client_errors_table.sql
+  • api/admin.js
+  • app.js
+  • AUDIT_PROGRESS.md
+
+Phase C (deferred):
+  • Sweep ~50 ad-hoc console.warn+showToast sites → lccReportError.
+  • Settings widget surfacing user's recent error volume.
+  • "Top errors this week" admin dashboard from v_client_error_rollup.
+  • Volume-threshold alerting (cron + Slack webhook).

@@ -1055,6 +1055,25 @@ function lccReportError(label, err, options) {
   if (typeof showToast === 'function') {
     try { showToast(userMessage, tier); } catch (e) { console.warn('[LCC] showToast failed', e); }
   }
+
+  // Item #10 Phase B: queue for telemetry POST (fire-and-forget).
+  // Buffered + batched in _lccFlushClientErrors so error storms don't
+  // translate into one POST per error.
+  try {
+    if (typeof _lccQueueClientError === 'function') {
+      _lccQueueClientError({
+        label:       lbl,
+        tier,
+        code,
+        message:     detail ? String(detail).slice(0, 2000) : null,
+        stack:       (err && err.stack) ? String(err.stack).slice(0, 4000) : null,
+        url:         typeof location !== 'undefined' ? location.pathname + location.search : null,
+        user_agent:  typeof navigator !== 'undefined' ? navigator.userAgent : null,
+        occurred_at: new Date().toISOString(),
+      });
+    }
+  } catch (_) { /* never break the reporter itself */ }
+
   return code;
 }
 window.lccReportError = lccReportError;
@@ -1065,6 +1084,67 @@ window.lccErrorStats = function () {
   _lccErrRateState.forEach((v, k) => { out[k] = { count: v.count, lastShownAt: new Date(v.lastShown).toISOString() }; });
   return out;
 };
+
+// ============================================================================
+// CLIENT-ERROR TELEMETRY — Item #10 Phase B (2026-05-17)
+//
+// Buffer browser-side errors captured by lccReportError, flush to
+// /api/admin?_route=client-error in batches every 30s or on
+// beforeunload (whichever first). Fire-and-forget: telemetry never
+// breaks control flow.
+// ============================================================================
+const _LCC_ERR_FLUSH_INTERVAL_MS = 30000;
+const _LCC_ERR_BATCH_MAX = 10;
+const _LCC_ERR_REPORTED_TIERS = new Set(['error', 'warn']); // 'info' / 'ok' stay local
+const _lccErrBuffer = [];
+
+function _lccQueueClientError(record) {
+  if (!record || !record.tier || !_LCC_ERR_REPORTED_TIERS.has(record.tier)) return;
+  _lccErrBuffer.push(record);
+  if (_lccErrBuffer.length >= _LCC_ERR_BATCH_MAX) {
+    // Drain immediately on a full batch so a fast error storm doesn't
+    // wait for the timer.
+    _lccFlushClientErrors();
+  }
+}
+
+async function _lccFlushClientErrors() {
+  if (_lccErrBuffer.length === 0) return;
+  // Pre-auth boot: no workspace_id yet means our POST would be orphaned.
+  // Hold the buffer for the next flush — but cap it so a long pre-auth
+  // session doesn't OOM us.
+  if (!LCC_USER || !LCC_USER.workspace_id) {
+    if (_lccErrBuffer.length > 100) _lccErrBuffer.splice(0, _lccErrBuffer.length - 100);
+    return;
+  }
+  const batch = _lccErrBuffer.splice(0, _lccErrBuffer.length);
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    await fetch('/api/admin?_route=client-error', {
+      method:    'POST',
+      headers,
+      body:      JSON.stringify({ batch }),
+      keepalive: true, // survives page unload
+    });
+  } catch (e) {
+    // Swallow — telemetry never breaks control flow. Buffer is already
+    // drained so we don't loop on a dead endpoint.
+    console.debug('[lccReportError] flush failed (suppressed):', e && e.message);
+  }
+}
+
+// Periodic flush + on-unload safety net.
+setInterval(_lccFlushClientErrors, _LCC_ERR_FLUSH_INTERVAL_MS);
+window.addEventListener('beforeunload', _lccFlushClientErrors);
+// Also flush when tab regains focus, so errors that piled up during
+// background time don't sit indefinitely.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') _lccFlushClientErrors();
+});
+// Expose for devtools-driven manual flush + buffer inspection.
+window.lccFlushErrors = _lccFlushClientErrors;
+window.lccErrorBuffer = () => _lccErrBuffer.slice();
 
 (function _lccWireGlobalErrorHandlers() {
   if (window._lccGlobalErrorsWired) return;

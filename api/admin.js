@@ -94,6 +94,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
+    case 'client-error':            return handleClientErrorReport(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -2883,6 +2884,80 @@ async function handleNextBestAction(req, res) {
     by_domain:     byDomain,
     items,
   });
+}
+
+// ============================================================================
+// CLIENT ERROR REPORT — Item #10 Phase B (2026-05-17)
+//
+// POST /api/admin?_route=client-error
+//   Body: { batch: [<errorRecord>, ...] }
+//
+//   errorRecord: { label, tier, code?, message?, stack?, detail?,
+//                  url?, user_agent?, occurred_at? }
+//
+// Fire-and-forget telemetry endpoint. Buffers browser-side errors
+// captured by lccReportError into public.client_errors on LCC Opps.
+// Never blocks the caller; returns 200 even on partial-insert errors
+// so the client's flush loop doesn't churn on retries.
+// ============================================================================
+async function handleClientErrorReport(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const batch = Array.isArray(body.batch) ? body.batch : [];
+  if (batch.length === 0) {
+    return res.status(200).json({ ok: true, inserted: 0, reason: 'empty_batch' });
+  }
+  // Cap batch size so a runaway client can't blast us.
+  const capped = batch.slice(0, 50);
+
+  const workspaceId = (req.headers['x-lcc-workspace'] || '').trim()
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID
+    || null;
+
+  // Normalize records — clamp string lengths, validate tier, drop garbage.
+  const ALLOWED_TIERS = new Set(['error', 'warn', 'info', 'ok']);
+  const rows = capped.map(r => {
+    if (!r || typeof r !== 'object') return null;
+    const tier = typeof r.tier === 'string' && ALLOWED_TIERS.has(r.tier.toLowerCase())
+      ? r.tier.toLowerCase()
+      : 'error';
+    const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim().slice(0, 200) : null;
+    if (!label) return null;
+    return {
+      workspace_id: workspaceId,
+      user_email:   (user.email || r.user_email || null) ? String(user.email || r.user_email).slice(0, 200) : null,
+      user_agent:   r.user_agent ? String(r.user_agent).slice(0, 500) : null,
+      url:          r.url ? String(r.url).slice(0, 500) : null,
+      label,
+      tier,
+      code:         r.code ? String(r.code).slice(0, 32) : null,
+      message:      r.message ? String(r.message).slice(0, 2000) : null,
+      stack:        r.stack ? String(r.stack).slice(0, 4000) : null,
+      detail:       (r.detail && typeof r.detail === 'object') ? r.detail : null,
+      occurred_at:  r.occurred_at && /^[0-9]{4}-/.test(String(r.occurred_at)) ? r.occurred_at : new Date().toISOString(),
+    };
+  }).filter(Boolean);
+
+  if (rows.length === 0) {
+    return res.status(200).json({ ok: true, inserted: 0, reason: 'no_valid_rows' });
+  }
+
+  try {
+    const { opsQuery } = await import('./_shared/ops-db.js');
+    const r = await opsQuery('POST', 'client_errors', rows, { 'Prefer': 'return=minimal' });
+    if (!r.ok) {
+      console.warn('[client-error] insert failed:', r.status, r.data);
+      return res.status(200).json({ ok: false, inserted: 0, status: r.status });
+    }
+    return res.status(200).json({ ok: true, inserted: rows.length });
+  } catch (err) {
+    console.warn('[client-error] handler threw:', err?.message || err);
+    return res.status(200).json({ ok: false, inserted: 0, error: 'exception' });
+  }
 }
 
 // Local stripNulls — admin.js doesn't import the sidebar-pipeline version
