@@ -1395,6 +1395,18 @@ function _udNextActionTabForGap(gapType) {
   return 'Overview';
 }
 
+// Item #8 Phase B (2026-05-18): per-gap_type dispatch spec. Returns
+// { label, metaSuffix } so the bar can show the right CTA text and
+// destination hint without hard-coding into the renderer.
+function _udNextActionDispatchFor(gapType) {
+  const t = String(gapType || '');
+  if (t === 'missing_recorded_owner' || t === 'llc_research_pending') {
+    return { label: 'Open SoS →', metaSuffix: 'opens Secretary of State portal' };
+  }
+  // Other gap types: existing tab-switch UX
+  return { label: 'Take action →', metaSuffix: 'opens ' + _udNextActionTabForGap(t) };
+}
+
 function _udFormatNabValue(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v === 0) return '';
@@ -1421,10 +1433,13 @@ function _udRenderNextActionBar() {
     || String(next.gap_label || '').trim()
     || 'Open next action';
   const valStr = _udFormatNabValue(next.gap_value);
-  const tab = _udNextActionTabForGap(next.gap_type);
+  // Item #8 Phase B (2026-05-18): dispatch UX by gap_type. The button
+  // label + meta destination both reflect what clicking the button
+  // will actually do, instead of the generic "Take action" + tab name.
+  const dispatch = _udNextActionDispatchFor(next.gap_type);
   const meta = [];
   if (valStr) meta.push(valStr + ' value');
-  meta.push('opens ' + tab);
+  meta.push(dispatch.metaSuffix);
   const metaText = meta.join(' · ');
 
   const parts = [];
@@ -1434,7 +1449,7 @@ function _udRenderNextActionBar() {
   parts.push(  '<div class="nab-action-text" title="' + esc(action) + '">' + esc(action) + '</div>');
   parts.push(  '<div class="nab-meta">' + esc(metaText) + '</div>');
   parts.push('</div>');
-  parts.push('<button type="button" class="nab-cta" onclick="event.stopPropagation();_udNextActionClick(&quot;' + esc(next.gap_type) + '&quot;)">Take action →</button>');
+  parts.push('<button type="button" class="nab-cta" onclick="event.stopPropagation();_udNextActionClick(&quot;' + esc(next.gap_type) + '&quot;)">' + esc(dispatch.label) + '</button>');
 
   bar.className = 'next-action-bar nab-sev-' + esc(sev);
   bar.onclick = function () { _udNextActionClick(next.gap_type); };
@@ -1444,11 +1459,43 @@ function _udRenderNextActionBar() {
 window._udRenderNextActionBar = _udRenderNextActionBar;
 
 function _udNextActionClick(gapType) {
+  // Item #8 Phase B (2026-05-18): dispatch by gap_type. SoS-portal opens
+  // for owner-research gaps; everything else falls through to tab-switch.
+  const t = String(gapType || '');
+
+  if (t === 'missing_recorded_owner' || t === 'llc_research_pending') {
+    // Pull state + search context from the cached property + next-action row.
+    const prop = (_udCache && _udCache.property) || {};
+    const fallback = (_udCache && _udCache.fallback) || {};
+    const next = (_udCache && _udCache.nextAction) || {};
+    const state = prop.state || fallback.state || '';
+    // For missing_recorded_owner the gap_label is the address; for
+    // llc_research_pending it's the LLC search_name. Either way it's the
+    // string we want to bias the SoS / Google search toward.
+    const searchName = String(next.gap_label || '').replace(/\s*\[\d+\s*dup records\]\s*$/, '').trim()
+      || prop.recorded_owner_name
+      || prop.address
+      || '';
+    // Reuse the SoS portal map from #2B (LLC widget); fall back to Google.
+    let url;
+    if (typeof _lccSosPortalUrl === 'function') {
+      url = _lccSosPortalUrl(state, searchName);
+    } else {
+      const q = encodeURIComponent('"' + searchName + '" ' + (state ? state + ' ' : '') + 'secretary of state LLC filing');
+      url = 'https://www.google.com/search?q=' + q;
+    }
+    try { window.open(url, '_blank', 'noopener'); } catch (e) {
+      console.warn('[NextAction] window.open failed:', e?.message);
+    }
+    console.debug('[NextAction] click', gapType, '-> SoS portal', url);
+    return;
+  }
+
+  // Default: switch to the tab where this gap lives.
   const tab = _udNextActionTabForGap(gapType);
   if (typeof switchUnifiedTab === 'function' && tab) {
     switchUnifiedTab(tab);
   }
-  // Telemetry hook reserved — not wired in Phase A.
   console.debug('[NextAction] click', gapType, '-> tab', tab);
 }
 window._udNextActionClick = _udNextActionClick;
