@@ -30,6 +30,16 @@ const GOV_READ_TABLES = new Set([
   "ingestion_tracker", "ingestion_log",
   "unified_contacts", "contact_change_log", "contact_merge_queue",
   "gsa_leases", "frpp_records",
+  // QA-02 (2026-05-18): SHOWSTOPPER fix. These views were created during
+  // the audit sprint (Items #4, #6, #8, A-5) but never added to the
+  // Edge Function allowlist — every detail-panel feature was silently
+  // returning {data:[]} for gov properties.
+  "v_property_completeness",
+  "v_next_best_action",
+  "v_property_value_signal",
+  "v_gap_agency_drift",
+  "v_gap_orphan_sale_owner",
+  "llc_research_queue",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -99,6 +109,17 @@ const DIA_READ_TABLES = new Set([
   "v_data_quality_summary",
   "v_data_quality_issues",
   "v_property_merge_candidates",
+  // QA-02 (2026-05-18): SHOWSTOPPER fix. These views were created during
+  // the audit sprint (Items #4, #6, #8, A-1, B-3, B-4) but never added
+  // to the Edge Function allowlist — every detail-panel feature was
+  // silently returning {data:[]} for dia properties.
+  "v_property_completeness",
+  "v_next_best_action",
+  "v_property_value_signal",
+  "v_gap_lease_tenant_drift",
+  "v_gap_chain_drift",
+  "v_gap_orphan_sale_owner",
+  "llc_research_queue",
 ]);
 
 const DIA_WRITE_TABLES = new Set([

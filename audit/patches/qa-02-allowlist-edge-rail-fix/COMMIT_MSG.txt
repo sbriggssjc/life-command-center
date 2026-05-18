@@ -1,0 +1,73 @@
+qa(02): edge-function allowlist + completeness-rail null-crash
+
+Closes the SHOWSTOPPER from the 2026-05-18 in-browser QA pass. QA-01
+fixed api/_shared/allowlist.js, but that's the Express path and is
+not used in production. The deployed Vercel frontend goes:
+
+  /api/gov-query
+   → vercel.json rewrite to /api/admin?_route=edge-data&_source=gov
+   → handleEdgeDataProxy in api/admin.js
+   → https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/data-query
+
+The Edge Function's GOV_READ_TABLES / DIA_READ_TABLES sets are the
+real allowlist. They were missing every sprint-era view, so the
+frontend got silent {data:[]} (and then, after the first redeploy
+attempt, 403 "Read access denied for table:") for:
+
+  v_property_completeness    — Item #6 completeness rail
+  v_next_best_action          — Item #8 next-action bar
+  v_property_value_signal     — NBA value FK
+  v_gap_agency_drift          — A-5 widget + #8 B-2 dispatcher (gov)
+  v_gap_lease_tenant_drift    — #8 B-4 dispatcher (dia)
+  v_gap_chain_drift           — #8 B-4 dispatcher (dia)
+  v_gap_orphan_sale_owner     — NBA orphan branch
+  llc_research_queue          — NBA llc branch
+
+These have already been added to both allowlists in
+supabase/functions/data-query/index.ts, and Edge Function v14 has been
+deployed live to project zqzrriwuavgrquhisnoa during the QA session.
+This commit makes the source-of-truth tree match what's running in
+production so the next CI rebuild doesn't regress.
+
+QA-04 — paired completeness-rail fix:
+Once the cache populated, the rail still hid itself because the
+chip renderer crashed on a null entry. v_property_completeness returns
+missing_fields[] as a positional array (one slot per catalog field);
+fields the property HAS populated are encoded as null, not dropped.
+Added a defensive .filter() in _udRenderCompletenessRail.
+
+api/admin.js: added a comment near DATA_QUERY_EDGE_URL noting that
+the live Edge Function is on Dialysis_DB (zqzrriwuavgrquhisnoa), not
+LCC Opps (xengecqvemvfknjvbvrq) — both projects host a `data-query`
+function and deploying to the wrong one silently no-ops against prod
+traffic (this happened during the QA session and cost ~20 min).
+
+Three-layer verification captured live in the QA pass:
+  • SQL via Supabase MCP — view returns 17,459 rows for gov
+  • PostgREST anon read — row visible for property_id=3198
+  • Frontend govQuery — pre-fix 403, post-fix {count:17459}, rail and
+    sticky next-action bar both render with correct content
+
+Files changed:
+  • supabase/functions/data-query/index.ts (sentinel verify only; the
+    on-disk content already matches deployed v14)
+  • detail.js (QA-04 null-filter near _udRenderCompletenessRail)
+  • api/admin.js (one-line comment above DATA_QUERY_EDGE_URL)
+  • AUDIT_PROGRESS.md (closeout)
+
+Queued for follow-up (separate patches):
+  • P0 — dia v_next_best_action Postgres 57014 statement timeout
+  • P0 — govQuery('property_intel') always 403 (table doesn't exist
+         on gov; should be v_property_intel)
+  • P0 — govQuery('v_ownership_chain') always 400 on gov (column
+         property_id does not exist on the gov view)
+  • P1 — "Open Activities" stat: 0 (Home) vs 23 (Pipeline) vs 7,402
+         (Metrics) — pick a canonical definition
+  • P1 — Sync error count contradicts itself (Pipeline header says
+         "1 outlook failing", Metrics tile says "0 SYNC ERRORS")
+  • P1 — Public REITs in llc_research_queue (Brandywine Realty Trust
+         at NBA rank #9 + #10) + same-entity duplicates
+  • P2 — Casing nits: "Dod", "Ave Se", lowercase "townebank" cluster
+  • P2 — Calendar zero-duration events
+  • P2 — Home inbox cards lack inline actions (Inbox page has them)
+  • P2 — AI Copilot FAB has no visible/accessible label
