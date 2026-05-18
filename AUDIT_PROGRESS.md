@@ -1940,3 +1940,51 @@ The frontend pipeline-stage feature in `detail.js` was always written to be doma
 - **P1** Public REITs + same-entity duplicates in `llc_research_queue`
 - **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
 
+
+
+## QA pass #8 — gov v_ownership_chain filter shape ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-08-gov-ownership-chain-filter`
+- **Patch:** `audit/patches/qa-08-gov-ownership-chain-filter/apply.mjs`
+
+### Symptom
+Console showed `govQuery v_ownership_chain: HTTP 400 {error: "Supabase returned 400", detail: "column v_ownership_chain.property_id does not exist"}` on every "Begin Prospecting" click on a gov property. The Ownership tab silently re-rendered with an empty chain timeline until the user reloaded the panel.
+
+### Root cause
+`detail.js`'s `_udOwnerBeginProspecting` (line ~5620) hard-coded `property_id=eq.X` as the filter when re-fetching the chain after writing to `true_owners`. The gov `v_ownership_chain` view's columns are `ownership_id` / `lease_number` / `address` / `city` / `state` / `transfer_date` / `from_owner` / `to_owner` / ... — there is no `property_id`. The dia view does have `property_id`.
+
+The main panel fetch at line ~222 already dispatched correctly (gov→`lease_number=eq.X`, dia→`property_id=eq.X`), but the refresh path missed the dispatch.
+
+### Fix
+Mirror the existing pattern in the refresh path:
+```js
+const propId   = _udCache?.ids?.property_id   || _udCache?.property?.property_id;
+const leaseNum = _udCache?.ids?.lease_number  || _udCache?.property?.lease_number;
+const chainFilter = (db === 'gov' && leaseNum)
+  ? 'lease_number=eq.' + encodeURIComponent(leaseNum)
+  : (propId ? 'property_id=eq.' + propId : null);
+```
+
+### Verified live (2026-05-18)
+```
+await window.govQuery('v_ownership_chain', '*',
+  { filter: 'lease_number=eq.LDC02050', order: 'transfer_date.desc', limit: 50 })
+→ { count: 2, data: [
+    { ownership_id: '19be4192…',
+      from_owner: 'Museum Of The Bible, Inc..The',
+      to_owner:   'Woc Llc',
+      transfer_date: '2016-11-01' }, … ] }
+```
+Before the fix: same call with `property_id=eq.{N}` → HTTP 400.
+
+### Files changed
+- `detail.js` — one block (~10 lines) inside `_udOwnerBeginProspecting`
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Queued for follow-up
+- **P1** "Open Activities" stat conflict (Home vs Pipeline vs Metrics)
+- **P1** Sync error count contradicts itself
+- **P1** Public REITs + same-entity duplicates in `llc_research_queue`
+- **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
+- **Optional** uniformity cleanup — add `property_id` to gov `v_ownership_chain` so the frontend can use the same filter shape across domains (not required, but would remove the dispatch).
+

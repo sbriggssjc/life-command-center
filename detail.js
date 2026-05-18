@@ -5614,10 +5614,19 @@ async function _udOwnerBeginProspecting(trueOwnerId, ownerName) {
     }
     // 2. Refresh the Ownership tab to show updated status
     const bodyEl = document.getElementById('detailBody');
-    // Re-fetch chain data to pick up the updated prospecting_status
-    const propId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
-    if (propId) {
-      const chainRes = await qFn('v_ownership_chain', '*', { filter: 'property_id=eq.' + propId, order: 'transfer_date.desc', limit: 50 }).catch(() => []);
+    // Re-fetch chain data to pick up the updated prospecting_status.
+    // QA-08 (2026-05-18): gov v_ownership_chain has no property_id column
+    // (its keys are ownership_id / lease_number / address). Using
+    // property_id=eq.X on gov returned 400 (column does not exist) and
+    // silently emptied _udCache.chain on every Begin Prospecting click.
+    // Mirror the dispatch at line ~222 — gov→lease_number, dia→property_id.
+    const propId   = _udCache?.ids?.property_id   || _udCache?.property?.property_id;
+    const leaseNum = _udCache?.ids?.lease_number  || _udCache?.property?.lease_number;
+    const chainFilter = (db === 'gov' && leaseNum)
+      ? 'lease_number=eq.' + encodeURIComponent(leaseNum)
+      : (propId ? 'property_id=eq.' + propId : null);
+    if (chainFilter) {
+      const chainRes = await qFn('v_ownership_chain', '*', { filter: chainFilter, order: 'transfer_date.desc', limit: 50 }).catch(() => []);
       _udCache.chain = Array.isArray(chainRes) ? chainRes : (chainRes?.data || []);
     }
     if (bodyEl) bodyEl.innerHTML = _udTabOwnership();
