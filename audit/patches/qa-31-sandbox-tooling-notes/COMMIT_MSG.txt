@@ -1,0 +1,35 @@
+QA-31 (P3 doc): document Edit-tool truncation bug on virtiofs mount
+
+During QA-29 I encountered a silent truncation bug when using the
+Cowork Edit tool on dialysis.js (615KB) and gov.js (506KB). The
+bug nearly caused QA-29 to ship a corrupted dialysis.js missing
+183 lines (including the QA-25 modal handler that was already
+deployed and working live).
+
+Reproduced the bug in a controlled test (2026-05-18):
+- File: dialysis.js, 614,710 bytes / 10,928 lines
+- Operation: one Edit tool call adding 15 chars near line 10920
+- Result: file size unchanged at 614,710 bytes, lost 3 lines from
+  end, tail truncated mid-string
+
+Root cause: the Edit tool's atomic-write pattern is unreliable on
+the virtiofs/FUSE mount that exposes Windows C:\ to the Linux
+sandbox. Edit content is applied correctly, but trailing ~30 to
+~9,000 bytes are silently dropped.
+
+Workaround documented in audit/SANDBOX_TOOLING_NOTES.md:
+- For files >500KB, route edits through Python via
+  mcp__workspace__bash instead of the Edit tool. Python writes are
+  reliable on this mount (tested with 752KB writes).
+- Post-edit verification: wc -l + tail -3 must show valid content.
+- Recovery: git show HEAD:<file> > <file> (regular git checkout
+  fails because the mount blocks unlinks).
+
+This patch ships the documentation only — no code changes.
+
+Files changed:
+- audit/SANDBOX_TOOLING_NOTES.md (new)
+- audit/patches/qa-31-sandbox-tooling-notes/ (new)
+- AUDIT_PROGRESS.md (closeout)
+
+Patch: audit/patches/qa-31-sandbox-tooling-notes/
