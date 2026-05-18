@@ -1,0 +1,53 @@
+QA-33 (P1 hotfix): agency_canonical in SELECT + revert QA-26 parallel pagination
+
+Chrome verification of QA-24..30 surfaced two regressions on the live
+gov dashboard:
+
+(1) QA-24 IS DEAD CODE. The DB has agency_canonical='VA' correctly for
+    every VA row (migration ran fine), but the frontend NEVER fetches
+    that column. The properties SELECT in _loadPaginatedQuery lists ~30
+    columns and agency_canonical isn't one of them. So in the chart's
+    `p.agency_canonical || p.agency` fallback, p.agency_canonical is
+    always undefined and the chart groups by raw .agency.
+
+    Live JS probe confirmed: every VA row had
+    { agency: "VETERANS AFFAIRS", has_canonical_field: false }.
+
+    Chart showed pre-QA-24 fragmented state: VA in 3 buckets (1,217 +
+    289 + canonical "VA" missing), SSA split (773 + 428), USDA split
+    (439 + 176).
+
+    Fix: add 'agency_canonical' to the SELECT, between 'agency' and
+    'agency_full_name'.
+
+(2) QA-26 IS A PERF REGRESSION. Live timings:
+    - govConnected = true at ~3s
+    - govDataLoaded = true at ~18s (was supposed to be ~1.5s)
+    - Full load (Phase 2 + ownership coverage): ~194s
+    - Browser unresponsive mid-load — screenshot tool timed out 60s
+
+    The parallel-pagination fix issued ~60 concurrent HTTP requests at
+    startup. In theory drops N round-trips to ~1. In practice it
+    overwhelms Vercel's worker pool, Supabase PostgREST, and the
+    browser's response-parsing thread.
+
+    Reverts: govQueryAll, _loadPaginatedQuery, and ownership-coverage
+    Promise.all back to serial. Predictable, slower, but usable.
+
+    A throttled-parallel (concurrency=4) approach is the better
+    long-term fix. Deferred to follow-up.
+
+Not in scope:
+- QA-24 SQL migration stays (still correct, still wanted)
+- QA-25/28/29/30 unaffected
+- QA-27 (dia parallel) NOT reverted — need to probe dia first to
+  confirm if it has the same symptom. Will revert separately if so.
+
+Files changed:
+- gov.js (agency_canonical to SELECT; revert parallel-pagination helpers
+  and ownership-coverage block)
+- AUDIT_PROGRESS.md (closeout)
+
+No SQL. No Edge Function. No allowlist changes.
+
+Patch: audit/patches/qa-33-agency-canonical-select-and-revert-parallel/
