@@ -1,0 +1,36 @@
+audit(item-6/phase-b1): persist completeness column + nightly refresh
+
+Phase B-1 of Item #6 (Data Completeness). Phase A (shipped earlier as
+`7813160`) added the v_property_completeness view that computes the
+score + band + missing_fields JSONB at query time. Phase B-1 persists
+the score + band as denormalized columns so list-level usages are
+cheap.
+
+Both migrations already applied to live DBs via MCP at 2026-05-17:
+  • Dia (zqzrriwuavgrquhisnoa): 15,219 / 15,219 properties scored
+  • Gov (scknotsqkcheojiaewwh): 17,454 / 17,454 properties scored
+
+What's in each migration:
+  • ALTER TABLE properties ADD COLUMN completeness_score (int),
+    completeness_band (text)
+  • Indexes on score (DESC NULLS LAST) + band
+  • Function refresh_property_completeness() that patches changed rows
+    only — returns (updated_count, total_scored, ran_at)
+  • pg_cron schedule "refresh_property_completeness_nightly":
+      dia at 0 7 * * * (07:00 UTC)
+      gov at 5 7 * * * (07:05 UTC, staggered)
+
+Unlocks:
+  • Phase B-2 — NBA queue weighting (cheap join to weight gap_value
+    by completeness band).
+  • Phase B-3 — list-sort by completeness without joining the view
+    on every render.
+
+Files changed:
+  • supabase/migrations/dialysis/20260517270000_dia_property_completeness_persisted.sql
+  • supabase/migrations/government/20260517270000_gov_property_completeness_persisted.sql
+  • AUDIT_PROGRESS.md
+
+No app-code changes in this patch. detail.js continues to read from
+the view (still useful for the missing_fields JSONB). List queries
+can start reading the persisted columns once Phase B-3 lands.

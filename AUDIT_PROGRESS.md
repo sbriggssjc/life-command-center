@@ -993,6 +993,42 @@ Plus 3 indexes (label/time, workspace/time, tier/time) and a convenience view `v
 - Optional: server-side alerting when a label's volume exceeds a threshold within a window (cron + Slack webhook).
 
 
+
+## Closeout — item 6 Phase B-1 — persisted completeness column + nightly refresh
+- **Status:** ✅ DONE (B-1 of 3 in Item #6 Phase B). B-2 (NBA queue weighting) + B-3 (list-sort UI) queued as follow-ups.
+- **Branch:** `audit/06B1-completeness-persisted-column`
+- **Patch:** `audit/patches/06B1-completeness-persisted-column/apply.mjs`
+- **Closes:** the persistence half of B-15. Unlocks NBA queue weighting + list-sort by completeness as cheap follow-ups.
+
+### What this adds (both DBs)
+- New columns on `public.properties`: `completeness_score INTEGER`, `completeness_band TEXT` — denormalized cache of the `v_property_completeness` view.
+- Indexes: `idx_properties_completeness_score` (DESC NULLS LAST) + `idx_properties_completeness_band`.
+- Function: `public.refresh_property_completeness()` — incrementally patches changed rows from the view. Returns `(updated_count, total_scored, ran_at)`.
+- Cron: `refresh_property_completeness_nightly` — runs the function nightly at 07:00 UTC (dia) / 07:05 UTC (gov) so the two domains don't pile up on the same minute.
+
+### Live state (verified via MCP 2026-05-17)
+- **Dia:** 15,219 / 15,219 properties scored, cron schedule `0 7 * * *`.
+- **Gov:** 17,454 / 17,454 properties scored, cron schedule `5 7 * * *`.
+
+### Why persist?
+The Phase A view (`v_property_completeness`) computes CASE expressions over ~15-17k rows on every query. For per-property reads (detail panel), the cost is fine. For list-level reads that would need to join the view for every render, the cost compounds. Persisted columns + indexes make list sorts and the NBA queue weighting free.
+
+### Files changed
+- `supabase/migrations/dialysis/20260517270000_dia_property_completeness_persisted.sql` (already applied via MCP)
+- `supabase/migrations/government/20260517270000_gov_property_completeness_persisted.sql` (already applied via MCP)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `SELECT count(*) FILTER (WHERE completeness_score IS NOT NULL), count(*) FROM public.properties;` → equal numbers on each domain.
+2. `SELECT schedule, command FROM cron.job WHERE jobname = 'refresh_property_completeness_nightly';` → returns the schedule + the refresh call.
+3. `SELECT completeness_band, count(*) FROM public.properties GROUP BY 1 ORDER BY 2 DESC;` → distribution matches the view's distribution from Item #6 Phase A.
+4. Manual refresh: `SELECT * FROM public.refresh_property_completeness();` → returns `(0, <total_scored>, <ts>)` after the seed (zero changes because the seed already aligned them).
+
+### Follow-ups (Phase B-2 + B-3)
+- **Phase B-2 — NBA queue weighting.** Modify `v_next_best_action` so `gap_value` is multiplied by `(1 + (100 - completeness_score)/100)` or similar, so an "almost-complete" record's open gaps rank higher than a "mostly-empty" record's same-dollar gaps. Concretely: when two properties both have a "missing_recorded_owner" gap at $5M value, prefer the one that's 75% complete over the one that's 30% complete — because closing the owner gap on the 75% one delivers a near-finished underwriting.
+- **Phase B-3 — List sort UI.** Add a "Sort by: Value · Date · Completeness" toggle to gov + dia list views, with localStorage persistence. Plus a visible completeness band chip in list rows.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
