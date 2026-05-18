@@ -1,0 +1,33 @@
+audit(fresh/A-1): backfill 4,142 orphan sale owner backlinks
+
+First action item from the fresh audit conducted on 2026-05-18 after
+the original Top-10 sprint closed.
+
+Diagnosis (verified via MCP):
+  • Gov: 6,865 sales had recorded_owner_id=NULL while the linked
+    property's recorded_owner_id WAS populated.
+  • Dia: 1,022 same pattern.
+  • Safety check: only 3,466 (gov) + 676 (dia) are the MOST-RECENT
+    sale per property — those can be safely attributed to the
+    property's current owner. The earlier 3,399 (gov) + 346 (dia)
+    are sales where the buyer was different from today's owner
+    (property changed hands since) — left untouched.
+  • Cross-check: 64 (gov) + 807 (dia) sales where recorded_owner_id
+    was ALREADY set AND disagreeing with the property's current
+    owner — correctly preserved (historical buyers).
+
+Fix:
+  Single UPDATE per DB restricted to row_number() OVER
+  (PARTITION BY property_id ORDER BY sale_date DESC) = 1.
+
+Effect on NBA queue:
+  Gov orphan_sale_owner: 2,373 → 1,029  (-1,344 closed, -414 excellent)
+  Dia orphan_sale_owner:   283 →    31  (-252 closed, -32 excellent)
+  Total: -1,596 NBA gap rows closed in one migration
+
+Both migrations already applied via Supabase MCP at 2026-05-18.
+
+Files changed:
+  • supabase/migrations/dialysis/20260518100000_dia_backfill_orphan_sale_owners.sql
+  • supabase/migrations/government/20260518100000_gov_backfill_orphan_sale_owners.sql
+  • AUDIT_PROGRESS.md — fresh audit log (A-1 closeout + A-2 through A-5 queued)
