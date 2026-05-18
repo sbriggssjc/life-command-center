@@ -390,15 +390,25 @@ function buildChartConfig(chart, brand) {
   // quarter window. The cadence hint lets the export endpoint swap
   // quarterly chart rows for master_m monthly data without re-encoding the
   // chart_template_id.
+  // Round 33 — `per_sale*` data_shape: each row is a discrete sale, not
+  // a time-period anchor. Slicing by recent-N would just keep the
+  // newest 240 sales (which happens to be ~7-9 years from the latest
+  // date because per-year sale counts trend upward). User wants those
+  // scatters to span the full source range (~2001-2026). Skip
+  // recentRows for per_sale shapes; let cropForRender downsample if
+  // we still exceed QuickChart's hard 240-point limit (it preserves
+  // the time range by taking every-Nth row).
   const isAnnual  = String(chart.data_shape || '').includes('yearly');
   const isMonthly = chart.cadence === 'monthly'
                  || String(chart.data_shape || '').includes('monthly');
+  const isPerSale = String(chart.data_shape || '').startsWith('per_sale');
   const windowSize = isAnnual  ? RECENT_YEARS_DEFAULT
                    : isMonthly ? RECENT_MONTHS_DEFAULT
                    :             RECENT_QUARTERS_DEFAULT;
   // recentRows = clip to recent window; cropForRender = downsample if
   // we still exceed QuickChart's 250-point hard limit. Belt + suspenders.
-  const rows = cropForRender(recentRows(chart.rows, windowSize));
+  // Per-sale scatters bypass recentRows so the full time range is preserved.
+  const rows = cropForRender(isPerSale ? (chart.rows || []) : recentRows(chart.rows, windowSize));
   const labels = rows.map(r => periodEndLabel(r.period_end || r.year));
 
   switch (chart.chart_template_id) {
