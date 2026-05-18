@@ -4712,7 +4712,11 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       });
     } else {
       // Create new
-      const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
+      // Fresh audit A-2 (2026-05-18): label the POST so the 409-recovery
+      // log entries surface in ingest_write_failures as recoverable
+      // (vs. anonymous 4xx in the unlabeled bucket).
+      const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData,
+        { label: 'upsertDomainSales:initialInsert' });
 
       // Discovery patch #2 (audit/discovery-02-sales-409-dedupe, 2026-05-17):
       // defensive 409 recovery against uq_st_property_date_price partial
@@ -5761,12 +5765,40 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
     const rate       = Number.isFinite(fin.interest_rate_pct) ? fin.interest_rate_pct : null;
     const termMo     = Number.isFinite(fin.term_months) ? fin.term_months : null;
     const termYr     = Number.isFinite(fin.term_years)  ? fin.term_years  : null;
+    // Fresh audit A-4 (2026-05-18): inline normalizer for CoStar-style
+    // loan status text. Mapped to the loans_status_check allowed enum.
+    // Unknown / unparseable inputs return null (loans_status_check now
+    // allows NULL after the paired migration).
+    function mapLoanStatus(raw) {
+      if (raw == null) return null;
+      const s = String(raw).toLowerCase();
+      if (!s.trim()) return null;
+      if (/(outstanding|current|active|performing|open|in\s*good\s*standing)/.test(s)) return 'active';
+      if (/(paid[\s_-]*off|paid[\s_-]*in[\s_-]*full|closed[\s_-]*paid|satisfied)/.test(s)) return 'paid_off';
+      if (/matured|mature[d]?/.test(s)) return 'matured';
+      if (/(default|delinquent|foreclos|reo|non[\s_-]*performing|distressed)/.test(s)) return 'defaulted';
+      if (/(refinanced|refi'?d|paid[\s_-]*by[\s_-]*refi)/.test(s)) return 'refinanced';
+      if (/(assumed|assumption)/.test(s)) return 'assumed';
+      // Common CoStar headers we DO see: "Loan Status:OutstandingLoan Type:..."
+      // — try once more on a substring after "Loan Status:" prefix.
+      const m = s.match(/loan\s*status[:\s]+([a-z][a-z\s]+?)(?:loan|\d|$)/);
+      if (m && m[1]) {
+        const inner = m[1].trim();
+        if (/outstanding|current|active|performing/.test(inner)) return 'active';
+        if (/paid/.test(inner)) return 'paid_off';
+        if (/matur/.test(inner)) return 'matured';
+        if (/default|delinquent|foreclos/.test(inner)) return 'defaulted';
+        if (/refi/.test(inner)) return 'refinanced';
+        if (/assum/.test(inner)) return 'assumed';
+      }
+      return null;
+    }
     const appraisal  = Number.isFinite(fin.origination_appraisal_dollars)
       ? fin.origination_appraisal_dollars : null;
     const reserves   = Number.isFinite(fin.total_reserves_dollars)
       ? fin.total_reserves_dollars : null;
     const debtYield  = Number.isFinite(fin.debt_yield_pct) ? fin.debt_yield_pct : null;
-    const status     = fin.loan_status || null;
+    const status     = mapLoanStatus(fin.loan_status);
     const isCmbs     = fin.is_cmbs === true || null;
     // mapLoanType('1st Mortgage') → null (no direct keyword match), but the
     // dia.loans CHECK constraint requires Refinance | Acquisition. Cross-

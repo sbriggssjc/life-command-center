@@ -1297,3 +1297,60 @@ The remaining 1,060 are either earlier sales (need ownership_history resolution 
 | client_errors consumption | Migrate ~50 ad-hoc `console.warn + showToast` to `lccReportError` | Medium |
 | ingest_write_failures admin dashboard | Settings widget showing recent failure rates | Small |
 
+
+
+## Fresh audit A-2 + A-4 ✅ — sales POST label + loans status normalization
+- **Status:** ✅ DONE.
+- **Branch:** `audit/fresh-A2-A4-data-cleanup`
+- **Patch:** `audit/patches/fresh-A2-A4-data-cleanup/apply.mjs`
+
+### A-2 (sales_transactions 409 anonymization)
+Diagnosis: 269 ingest_write_failures rows over 24h were sales_transactions POST → 409 conflicts on `uq_st_property_date_price`. The 409-recovery branch (sidebar-pipeline.js:4717) ALREADY catches and resolves them via lookup + PATCH — the existing recovery code is correct. BUT the initial POST was unlabeled, so the recovered failures showed up in the log as anonymous 4xx, contributing to the 579 "unlabeled errors" bucket (A-3).
+
+Fix: pass `{ label: 'upsertDomainSales:initialInsert' }` to the POST. Behavior unchanged; failures now have an identifiable label.
+
+### A-4 (loans_status_check rejecting NULL status)
+Diagnosis: 54 silent `upsertDomainLoans:financing` 4xx/24h. Root cause: CoStar's loan_status text blob is often unparseable → writer assigns `status = fin.loan_status || null` → `stripNulls` removes the NULL from payload → PostgREST inserts default NULL → `loans_status_check` rejects because NULL wasn't in the allowed enum.
+
+Two-part fix:
+1. **SQL** (applied via MCP): expand `loans_status_check` to allow NULL. Unknown-status loans no longer reject the whole row.
+2. **JS** (this patch): add `mapLoanStatus()` inline helper. Maps CoStar-style text → enum:
+   - "Outstanding / Current / Active / Performing / Open" → `active`
+   - "Paid Off / Paid in Full / Closed-Paid / Satisfied" → `paid_off`
+   - "Matured" → `matured`
+   - "Default / Delinquent / Foreclosure / REO / Non-Performing / Distressed" → `defaulted`
+   - "Refinanced / Refi'd" → `refinanced`
+   - "Assumed / Assumption" → `assumed`
+   - Unrecognized → `null` (defensive — falls through to the NULL-allowed CHECK)
+   - Plus a substring fallback that strips the "Loan Status:" prefix from CoStar's concatenated header before the regex match.
+
+### Files changed
+- `supabase/migrations/government/20260518110000_gov_loans_status_check_allow_null.sql` (already applied via MCP)
+- `api/_handlers/sidebar-pipeline.js` — mapLoanStatus helper + apply + sales POST label
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "mapLoanStatus" api/_handlers/sidebar-pipeline.js` → 2 or more (definition + call site)
+2. `grep -c "upsertDomainSales:initialInsert" api/_handlers/sidebar-pipeline.js` → 1
+3. After deploy + a fresh CoStar capture of any gov property with a loan:
+   ```sql
+   -- On LCC Opps:
+   SELECT label, http_status, count(*)
+     FROM public.ingest_write_failures
+    WHERE occurred_at > now() - interval '1 hour'
+      AND (label = 'upsertDomainLoans:financing'
+        OR label = 'upsertDomainSales:initialInsert')
+    GROUP BY 1, 2 ORDER BY 1, 2;
+   -- Expected: 0 rows for 'upsertDomainLoans:financing' (status normalizes
+   -- or NULL is now allowed). Any 'upsertDomainSales:initialInsert' rows
+   -- with http_status=409 are EXPECTED — they're the 409 recoveries now
+   -- properly labeled.
+   ```
+
+### Fresh-audit punch list status (after this patch)
+- A-1 ✅ orphan sale backfill
+- A-2 ✅ sales POST labeled
+- A-3 📋 unlabeled 400 errors triage (next)
+- A-4 ✅ loans status normalized + CHECK loosened
+- A-5 📋 agency-drift review UI
+
