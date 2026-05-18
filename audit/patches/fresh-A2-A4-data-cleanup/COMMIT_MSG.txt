@@ -1,0 +1,43 @@
+audit(fresh/A-2+A-4): sales POST label + loans status normalization
+
+Two fresh-audit findings combined because both touch the same
+upsert-writer code path in sidebar-pipeline.js.
+
+A-2 — sales_transactions 409 anonymization
+  Diagnosis: 269 ingest_write_failures rows over 24h were
+  sales_transactions POST → 409 → recovered. The recovery branch
+  (sidebar-pipeline.js:4717) catches them correctly; the issue is
+  that the initial POST had no label, so the recovered failures
+  showed up anonymously in the log.
+
+  Fix: pass { label: 'upsertDomainSales:initialInsert' } to the
+  POST so the recovery cases are identifiable. Behavior unchanged;
+  telemetry cleaner.
+
+A-4 — loans_status_check rejecting NULL
+  Diagnosis: 54 silent upsertDomainLoans:financing 4xx/24h. Root
+  cause: CoStar's loan_status text is often unparseable → writer
+  sends null → stripNulls drops it → PostgREST inserts default
+  NULL → loans_status_check (active|paid_off|matured|defaulted|
+  refinanced|assumed) rejects NULL.
+
+  Two-part fix:
+    1. SQL (applied via MCP at 2026-05-18): expand
+       loans_status_check to allow NULL defensively.
+    2. JS: add mapLoanStatus() inline regex normalizer that maps
+       CoStar-style text ("Outstanding", "Paid Off", "Foreclosure",
+       etc.) to the enum, with a "Loan Status:" prefix fallback for
+       CoStar's concatenated header strings. Unrecognized inputs
+       fall through as NULL (now allowed by the CHECK).
+
+Files changed:
+  • supabase/migrations/government/20260518110000_gov_loans_status_check_allow_null.sql
+  • api/_handlers/sidebar-pipeline.js
+  • AUDIT_PROGRESS.md
+
+Fresh-audit punch list after this patch:
+  A-1 ✅ orphan sale backfill
+  A-2 ✅ sales POST labeled
+  A-3 📋 unlabeled 400 errors triage
+  A-4 ✅ loans status normalized + CHECK loosened
+  A-5 📋 agency-drift review UI
