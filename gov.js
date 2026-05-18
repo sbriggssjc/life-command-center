@@ -188,6 +188,38 @@ async function govQueryAll(table, select, params = {}) {
 }
 
 // ============================================================================
+// QA-28 (2026-05-18): private "Federal" name detector
+// ============================================================================
+// ~826 properties had agency values like "Campco Federal Credit Union",
+// "10 Federal Self Storage", "First Federal Lakewood" etc. These are
+// private businesses with "Federal" in the name, not federal tenants.
+// The canonicalize_agency() SQL function correctly returns NULL for them
+// (no federal match), but the Agency Breakdown chart's fallback to raw
+// .agency would surface them at the bottom of the chart. This helper
+// classifies them so the chart can roll them into "Unknown" instead.
+//
+// Patterns covered (case-insensitive):
+//   - federal credit union (162+130+125+114+1+1 = 533 props)
+//   - federal self storage / "<n> federal self storage" (154+1 props)
+//   - federal savings, federal bank
+//   - first federal <bank-name> (141 props)
+//   - "federal way" (city name in WA, not federal)
+// ============================================================================
+function _govIsPrivateFederalNamedEntity(name) {
+  if (!name) return false;
+  const s = String(name).toLowerCase();
+  if (/federal\s+credit\s+union/.test(s)) return true;
+  if (/federal\s+savings/.test(s)) return true;
+  if (/federal\s+bank\b/.test(s)) return true;
+  if (/^first\s+federal\b/.test(s)) return true;
+  if (/\bself[\s-]?storage\b/.test(s)) return true;
+  if (/^\d+\s+federal\b/.test(s)) return true;
+  if (/^federal\s+way\b/.test(s)) return true;
+  return false;
+}
+if (typeof window !== 'undefined') window._govIsPrivateFederalNamedEntity = _govIsPrivateFederalNamedEntity;
+
+// ============================================================================
 // METRIC CARD HTML
 // ============================================================================
 
@@ -4472,7 +4504,11 @@ function renderGovOverview() {
   // by raw-string variants ("US Department of Veteran Affairs" vs
   // "US Department of Veterans Affairs - 1" etc). Falls back to raw agency
   // for rows that don't match the canonicalizer.
-  const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency_canonical || p.agency).filter(Boolean)).size;
+  // QA-28 (2026-05-18): also exclude private businesses with "Federal" in
+  // the name (credit unions, self-storage, banks) that the canonicalizer
+  // correctly returned NULL for. These were polluting the distinct-agency
+  // count and the Agency Breakdown chart.
+  const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency_canonical || (p.agency && !_govIsPrivateFederalNamedEntity(p.agency) ? p.agency : null)).filter(Boolean)).size;
   const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
   const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
   const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
@@ -4497,7 +4533,19 @@ function renderGovOverview() {
       // agency for rows that don't match the canonicalizer (state/local
       // tenants, etc.). Previously these split into separate top-agency
       // entries, fragmenting the chart and underreporting biggest tenants.
-      const a = p.agency_canonical || p.agency || 'Unknown';
+      // QA-28 (2026-05-18): skip private businesses with "Federal" in the
+      // name (credit unions, self-storage, banks) — they aren't federal
+      // tenants and were polluting the breakdown's bottom rows. Roll them
+      // into the Unknown bucket instead so the chart stays focused on
+      // real federal/state/local government tenants.
+      let a;
+      if (p.agency_canonical) {
+        a = p.agency_canonical;                             // canonical federal agency
+      } else if (p.agency && _govIsPrivateFederalNamedEntity(p.agency)) {
+        a = 'Unknown';                                      // QA-28: private "Federal" name → Unknown
+      } else {
+        a = p.agency || 'Unknown';                          // state/local govt fallback
+      }
       if (a === 'Unknown') {
         // Separate tracking for Unknown agencies (Issue #5)
         unknownAgencyStats.count++;
