@@ -993,6 +993,104 @@ function smoothDOMUpdate(container, html) {
 }
 window.smoothDOMUpdate = smoothDOMUpdate;
 
+// ============================================================================
+// GLOBAL ERROR VISIBILITY — Item #10 Phase A (2026-05-17)
+//
+// Today: uncaught errors + unhandled rejections vanish silently into the
+// console. The user has no way to know the app is broken until they
+// re-load the page hours later.
+//
+// lccReportError(label, err, options) is the single central path:
+//   • Console-logs with full context.
+//   • Surfaces a tiered toast (info/ok/warn/error) to the user.
+//   • Rate-limits per-label to max 1 toast / 10s so a runaway loop
+//     can't spam the UI.
+//   • Tags the toast with a short error code (e.g. [E-4F2A]) the user
+//     can quote when reporting bugs.
+//
+// Global handlers wire `window.error` and `unhandledrejection` through
+// the same path so silent failures become visible.
+// ============================================================================
+const _LCC_ERR_RATE_MS = 10000; // per-label cooldown
+const _lccErrRateState = new Map(); // label -> { lastShown, count }
+
+function _lccErrCode() {
+  // Short 4-char tag for end-user quoting; collisions OK (we have console too).
+  return Math.random().toString(16).slice(2, 6).toUpperCase();
+}
+
+function lccReportError(label, err, options) {
+  options = options || {};
+  const tier = options.tier || 'error'; // 'error' | 'warn' | 'info' | 'ok'
+  const lbl = String(label || 'Error');
+  const code = options.code || _lccErrCode();
+  const detail = err && (err.message || err.reason || err.error) ? (err.message || err.reason || err.error) : (typeof err === 'string' ? err : '');
+
+  // Console always — never lose the stack.
+  try {
+    if (tier === 'error') console.error('[LCC E-' + code + ']', lbl, err);
+    else if (tier === 'warn') console.warn('[LCC W-' + code + ']', lbl, err);
+    else console.info('[LCC I-' + code + ']', lbl, err);
+  } catch (_) {}
+
+  if (options.silent) return code;
+
+  // Rate-limit per-label
+  const now = Date.now();
+  const st = _lccErrRateState.get(lbl) || { lastShown: 0, count: 0 };
+  st.count += 1;
+  if (now - st.lastShown < _LCC_ERR_RATE_MS) {
+    _lccErrRateState.set(lbl, st);
+    return code; // suppressed this round
+  }
+  st.lastShown = now;
+  _lccErrRateState.set(lbl, st);
+
+  // Toast composition: tag + label + (detail if short)
+  const tagPrefix = tier === 'error' ? 'E' : tier === 'warn' ? 'W' : 'I';
+  const userMessage = options.userMessage
+    || (lbl + (detail ? ': ' + (String(detail).length > 80 ? String(detail).slice(0, 77) + '…' : detail) : ''))
+    + ' [' + tagPrefix + '-' + code + ']';
+
+  if (typeof showToast === 'function') {
+    try { showToast(userMessage, tier); } catch (e) { console.warn('[LCC] showToast failed', e); }
+  }
+  return code;
+}
+window.lccReportError = lccReportError;
+
+// Diagnostic accessor — call from devtools to see what's been rate-limited.
+window.lccErrorStats = function () {
+  const out = {};
+  _lccErrRateState.forEach((v, k) => { out[k] = { count: v.count, lastShownAt: new Date(v.lastShown).toISOString() }; });
+  return out;
+};
+
+(function _lccWireGlobalErrorHandlers() {
+  if (window._lccGlobalErrorsWired) return;
+  window._lccGlobalErrorsWired = true;
+
+  window.addEventListener('error', function (event) {
+    // Skip noisy resource loads (image 404s, etc.). Only catch JS errors,
+    // which have event.error or a message + filename + lineno.
+    if (event && (event.error || (event.message && event.filename))) {
+      lccReportError('JS error', event.error || event.message, {
+        tier: 'error',
+        userMessage: 'Something went wrong on this page. ' +
+          (event.message ? '(' + String(event.message).slice(0, 80) + ')' : ''),
+      });
+    }
+  });
+
+  window.addEventListener('unhandledrejection', function (event) {
+    const reason = event && event.reason;
+    lccReportError('Unhandled promise rejection', reason, {
+      tier: 'error',
+      userMessage: 'A background task failed silently. Reload may help.',
+    });
+  });
+})();
+
 // ── Custom Modal (async replacements for confirm/prompt) ──────────────
 let _modalResolve = null;
 let _modalPrevFocus = null;

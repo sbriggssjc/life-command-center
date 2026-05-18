@@ -774,6 +774,77 @@ cms_chain_drift:*        → Operations
 - v_sales_comps / lease comps lists get the same treatment.
 
 
+
+## Closeout — item 10 Phase A — Global error visibility
+- **Status:** ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B: client_errors table + per-widget retry CTAs + sourcemap symbolication)
+- **Branch:** `audit/10-global-error-visibility`
+- **Patch:** `audit/patches/10-global-error-visibility/apply.mjs`
+- **Closes:** C-5 (no global error capture), C-6 (toast tiers inconsistent / `.ok` unstyled), C-9 (unhandled rejections invisible), C-10 (runaway loops could spam UI).
+
+### What this adds
+
+**1. Toast tier styles** in `styles.css`:
+- `.toast.ok` — success/green border. Was used in 8+ places in `contacts-ui.js` without a matching CSS class — toasts rendered neutral.
+- `.toast.warn` — alias for `.warning`.
+- `.toast-tag` chip style for the error-code tag prefix.
+
+**2. `lccReportError(label, err, options)` helper** in `app.js`:
+- Central path for reporting any user-impactful failure.
+- Console-logs with full context (`[LCC E-XXXX] label, err`).
+- Surfaces a tiered toast (`'error'` | `'warn'` | `'info'` | `'ok'`).
+- Tags the toast with a short error code (e.g. `[E-4F2A]`) so users can quote it when reporting bugs.
+- **Rate-limited per-label**: max 1 toast per 10 seconds for the same label, so a runaway loop can't spam the UI. Suppressed errors still console-log normally.
+- Options:
+  - `tier` — toast severity
+  - `userMessage` — override the default formatted message
+  - `silent: true` — log only, no toast
+  - `code` — pre-assigned error code (for cross-reference with backend logs)
+
+**3. Global handlers** wired automatically on first load:
+- `window.addEventListener('error', ...)` — catches uncaught JS errors. Filters out resource-load 404s so it only fires on real exceptions.
+- `window.addEventListener('unhandledrejection', ...)` — catches unhandled promise rejections (the silent failure mode that was invisible until now).
+- Both route through `lccReportError`.
+
+**4. `window.lccErrorStats()`** diagnostic accessor:
+- Returns `{ label: { count, lastShownAt } }` for every label that hit the rate limiter. Useful from devtools when investigating a noisy session.
+
+### Files changed
+- `styles.css` — toast tier classes (.ok, .warn) + .toast-tag chip
+- `app.js` — lccReportError helper + global handlers + diagnostic accessor
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "lccReportError" app.js` → 2 or more (definition + window export)
+2. `grep -c "addEventListener\\('error'" app.js` → 1 or more
+3. `grep -c "addEventListener\\('unhandledrejection'" app.js` → 1 or more
+4. `grep -c "\\.toast\\.ok" styles.css` → 1 or more
+5. Smoke: open devtools console and run `throw new Error('test')`. A red toast appears with the error message + `[E-XXXX]` tag, console shows `[LCC E-XXXX] JS error`.
+6. Smoke: run `Promise.reject(new Error('async test'))`. A red toast appears with "A background task failed silently. Reload may help." + `[E-XXXX]`, console shows `[LCC E-XXXX] Unhandled promise rejection`.
+7. Smoke: run `for (let i=0; i<100; i++) throw new Error('spam' + i)` (in a setInterval). Confirm only ~1 toast per 10s appears (the rest are suppressed); console still shows every error. `window.lccErrorStats()` returns the count.
+
+### Adoption guide for follow-up work
+Any handler that currently does:
+```js
+try { ... }
+catch (e) {
+  console.warn('Failed to load X:', e);
+  if (typeof showToast === 'function') showToast('Failed: ' + e.message, 'error');
+}
+```
+…should switch to:
+```js
+try { ... }
+catch (e) { lccReportError('Load X', e); }
+```
+Same UX, rate-limited, console-logged with code tag, ready for Phase B telemetry.
+
+### Phase B (deferred)
+- POST captured errors to a `client_errors` table on LCC Opps for historical aggregation + alerting.
+- Migrate the ~50 existing ad-hoc `console.warn + showToast` sites to `lccReportError`.
+- Extend the `.widget-error` retry pattern (used by Daily Briefing) to every list-loader `catch` block.
+- Sourcemap symbolication so production stack traces are readable.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
