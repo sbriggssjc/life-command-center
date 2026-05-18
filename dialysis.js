@@ -240,7 +240,10 @@ async function loadDiaSalesCompsFromTxns() {
   let all = [];
   for (let pg = 0; pg <= 20; pg++) {
     const batch = await diaQuery('sales_transactions', select, {
-      order: 'sale_date.desc.nullslast',
+      // Value-weighted sort (Item #9 Phase A, 2026-05-17): biggest comps
+      // surface first. Tiebreaker on sale_date keeps recency where prices
+      // are equal/null.
+      order: 'sold_price.desc.nullslast,sale_date.desc.nullslast',
       limit: 1000,
       offset: pg * 1000,
     });

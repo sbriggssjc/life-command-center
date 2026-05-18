@@ -307,7 +307,11 @@ async function loadGovData() {
         'gross_rent,gross_rent_psf,noi,noi_psf,estimated_value,' +
         'recorded_owner_id,true_owner_id,assessed_owner,latest_deed_grantee,latest_deed_date,latest_sale_price,' +
         'investment_score,deal_grade,agency_risk_level,location_tier,' +
-        'intel_status,status,data_source'
+        'intel_status,status,data_source',
+        // Value-weighted sort (Item #9 Phase A, 2026-05-17): most valuable
+        // gov holdings surface first. Falls back through gross_rent, then
+        // RBA so properties missing a value still rank by rent/size.
+        { order: 'estimated_value.desc.nullslast,gross_rent.desc.nullslast,rba.desc.nullslast' }
       ),
       govQuery('properties', 'property_id', { limit: 0 }),
       govQueryAll('available_listings',
@@ -400,7 +404,10 @@ async function _loadGovPhase2(startTime) {
       ),
       _loadPaginatedQuery('sales_transactions',
         '*',
-        { order: 'sale_date.desc' }
+        // Value-weighted sort (Item #9 Phase A, 2026-05-17): biggest comps
+        // surface first. Tiebreaker on sale_date keeps recency where prices
+        // are equal/null.
+        { order: 'sold_price.desc.nullslast,sale_date.desc.nullslast' }
       )
     ]);
 
