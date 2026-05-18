@@ -2294,3 +2294,32 @@ QA-08 fixed `_udOwnerBeginProspecting` but missed a second caller in the main fe
 - **P2** Address full Title-casing — "240 w 5th ave" still appears lowercase in the Agency Drift widget. QA-12 only handled direction suffixes (Se/Sw/Ne/Nw), not the street name.
 - **P2** Inbox header reads "100 items" but Metrics says "7,420 needs triage" — header should be "Showing 100 of 7,420" to match Messages convention.
 
+
+
+## QA pass #18 — address title-case + inbox header pagination ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-18-address-titlecase-inbox-pagination`
+- **Patch:** `audit/patches/qa-18-address-titlecase-inbox-pagination/apply.mjs`
+
+### QA-18a — Address title-case
+New IMMUTABLE `public.titlecase_address(text)` on both DBs:
+- Ordinals stay (5th, 21st)
+- Digit-starting words stay (240, 1200)
+- Direction abbreviations uppercase (N/NE/SE/etc.)
+- "PO" uppercase (PO Box)
+- Everything else `initcap` (main→Main, ave→Ave)
+
+Backfill gated on `address ~ '\m[a-z]+\M'` so mixed-case names (McMillan) aren't clobbered. Gov: 10,787 → 80 remaining (the 80 are mostly correct ordinals).
+
+### QA-18b — Inbox header pagination
+`renderInboxTriage` now fetches `work_counts` in parallel and shows "Showing 100 of 7,420 items" instead of "100 items". Numerically agrees with Metrics + Sync Health inbox tiles.
+
+### Files changed
+- `supabase/migrations/government/20260518180000_gov_qa18_address_titlecase.sql`
+- `supabase/migrations/dialysis/20260518180000_dia_qa18_address_titlecase.sql`
+- `ops.js` (renderInboxTriage)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### What's next
+Every P0/P1/P2 item from the original QA pass and QA pass #2 is now resolved. Suggest running another fresh walkthrough — patterns from this session suggest the next layer will be either more performance corners or long-tail data-integrity nits.
+

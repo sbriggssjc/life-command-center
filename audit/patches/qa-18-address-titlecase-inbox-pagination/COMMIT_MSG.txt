@@ -1,0 +1,54 @@
+qa(18): address title-case + inbox header pagination
+
+Closes the two P2 items left from QA pass #2.
+
+QA-18a — Address title-case (data fix, both DBs)
+
+  QA-12 fixed direction suffixes (Se→SE). QA pass #2 surfaced
+  "240 w 5th ave" on the Research page's Agency Drift widget —
+  full-lowercase addresses were still passing through.
+
+  New IMMUTABLE function public.titlecase_address(text) on both DBs:
+    • Ordinals stay lowercase suffix (5th, 21st)
+    • Digit-starting words stay (240, 1200)
+    • Direction abbreviations uppercase (N/NE/SE/etc.)
+    • "PO" uppercase (PO Box convention)
+    • Everything else initcap (main→Main, ave→Ave)
+
+  One-shot backfill gated on `address ~ '\m[a-z]+\M'` (at least one
+  all-lowercase word) so addresses like "McMillan Blvd" are NOT
+  touched — we don't want to collapse correct mixed-case names to
+  "Mcmillan". Gov: 10,787 lowercase-word addresses → 80 remaining
+  (the 80 are mostly correct ordinals).
+
+  No trigger added — title-casing on every UPDATE would clobber
+  mixed-case proper names. The existing QA-12 trigger continues to
+  handle direction suffixes on writes (lossless).
+
+QA-18b — Inbox header pagination
+
+  Inbox page header read "Inbox · 100 items" but Metrics said
+  "INBOX · 7,420 needs triage". Same concept, different displays.
+
+  renderInboxTriage now fetches /api/queue-v2?view=work_counts in
+  parallel with /api/inbox?action=list. Picks the right total based
+  on the active filter pill (new → inbox_new, triaged →
+  inbox_triaged, all → sum). Header text becomes "Showing 100 of
+  7,420 items" when the canonical total exceeds the on-page count.
+  Falls back to the previous behavior when work_counts is
+  unavailable.
+
+  Inbox header now numerically agrees with Metrics + Sync Health
+  inbox tiles.
+
+Files changed:
+  • supabase/migrations/government/20260518180000_gov_qa18_address_titlecase.sql
+  • supabase/migrations/dialysis/20260518180000_dia_qa18_address_titlecase.sql
+  • ops.js (renderInboxTriage)
+  • AUDIT_PROGRESS.md (closeout)
+
+Migrations applied live via Supabase MCP on 2026-05-18.
+
+Every P0/P1/P2 from the original QA pass and QA pass #2 is now
+resolved. Next step: a fresh QA walkthrough to surface the next
+layer of issues.
