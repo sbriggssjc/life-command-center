@@ -264,6 +264,19 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       promises.push(Promise.resolve([]));
     }
 
+    // Next-action — pulls top-ranked gap from v_next_best_action for the
+    // sticky action bar at the bottom of the panel (Item #8 Phase A,
+    // 2026-05-17). Best-effort: never blocks the detail render.
+    if (propFilter) {
+      promises.push(qFn('v_next_best_action', '*', {
+        filter: propFilter,
+        order: 'gap_value.desc.nullslast',
+        limit: 1,
+      }));
+    } else {
+      promises.push(Promise.resolve([]));
+    }
+
     const settled = await Promise.allSettled(promises);
     let _partialFail = false;
 
@@ -289,6 +302,9 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Index 6 is the completeness view (Item #6 Phase A). May be empty if
     // the view fetch failed or this is a fallback-only render.
     const completenessRow = safeExtract(6)[0] || null;
+    // Index 7 is the top next-action row (Item #8 Phase A). May be empty
+    // if the property has no open gaps or the view fetch failed.
+    const nextActionRow = safeExtract(7)[0] || null;
     // Authoritative denormalized CMS link from `properties`. Either column may
     // hold the CCN; treat them equivalently for short-circuit purposes.
     const denormCcn = propertyCmsRow
@@ -367,10 +383,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         })
       : synthProperty;
 
-    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, completeness: completenessRow, _fallbackOnly: allEmpty });
+    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, completeness: completenessRow, nextAction: nextActionRow, _fallbackOnly: allEmpty });
     // Render the data completeness rail at the top of the detail panel.
     // Best-effort: never throws upward (Item #6 Phase A, 2026-05-17).
     try { _udRenderCompletenessRail(); } catch (e) { console.warn('completeness rail render failed', e); }
+    // Render the next-action bar at the bottom of the detail panel.
+    // Best-effort: never throws upward (Item #8 Phase A, 2026-05-17).
+    try { _udRenderNextActionBar(); } catch (e) { console.warn('next-action bar render failed', e); }
 
     // ── Dialysis Operations tab: auto-match CMS facility when rankings is empty ──
     // Uses the /api/cms-match?action=resolve endpoint to fuzzy-match the property's
@@ -1350,10 +1369,89 @@ window._udCompletenessChipClick = _udCompletenessChipClick;
     window.closeDetail = function () {
       const rail = document.getElementById('detailCompletenessRail');
       if (rail) { rail.style.display = 'none'; rail.innerHTML = ''; }
+      const nab = document.getElementById('detailNextActionBar');
+      if (nab) { nab.style.display = 'none'; nab.innerHTML = ''; }
       return origClose.apply(this, arguments);
     };
   }
 })();
+
+// ============================================================================
+// Sticky next-action bar — Item #8 Phase A (2026-05-17)
+// Reads _udCache.nextAction (single row from v_next_best_action ordered by
+// gap_value DESC). Click anywhere on the bar -> switches to the tab where
+// the action lives. Companion to the completeness rail.
+// ============================================================================
+
+// Map a gap_type to the detail panel tab where the action is best executed.
+function _udNextActionTabForGap(gapType) {
+  const t = String(gapType || '');
+  if (t === 'missing_recorded_owner') return 'Ownership & CRM';
+  if (t === 'llc_research_pending')   return 'Ownership & CRM';
+  if (t === 'lease_tenant_drift')     return 'Rent Roll';
+  if (t === 'orphan_sale_owner')      return 'Deal History';
+  if (t === 'stale_active_listing')   return 'Overview';
+  if (t.startsWith('cms_chain_drift:')) return 'Operations';
+  return 'Overview';
+}
+
+function _udFormatNabValue(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return '';
+  const sign = '$';
+  if (v >= 1e9) return sign + (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return sign + (v / 1e6).toFixed(v >= 10e6 ? 0 : 1) + 'M';
+  if (v >= 1e3) return sign + Math.round(v / 1e3) + 'K';
+  return sign + Math.round(v);
+}
+
+function _udRenderNextActionBar() {
+  const bar = document.getElementById('detailNextActionBar');
+  if (!bar) return;
+  const next = _udCache && _udCache.nextAction;
+  if (!next || !next.gap_type) {
+    // No open gap for this property — hide the bar (the completeness rail
+    // up top already handles the "fully populated" state).
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    return;
+  }
+  const sev = String(next.gap_severity || 'low').toLowerCase();
+  const action = String(next.suggested_action || '').trim()
+    || String(next.gap_label || '').trim()
+    || 'Open next action';
+  const valStr = _udFormatNabValue(next.gap_value);
+  const tab = _udNextActionTabForGap(next.gap_type);
+  const meta = [];
+  if (valStr) meta.push(valStr + ' value');
+  meta.push('opens ' + tab);
+  const metaText = meta.join(' · ');
+
+  const parts = [];
+  parts.push('<span class="nab-label">Next action</span>');
+  parts.push('<span class="nab-sev-chip nab-sev-' + esc(sev) + '-chip">' + esc(sev.toUpperCase()) + '</span>');
+  parts.push('<div class="nab-body">');
+  parts.push(  '<div class="nab-action-text" title="' + esc(action) + '">' + esc(action) + '</div>');
+  parts.push(  '<div class="nab-meta">' + esc(metaText) + '</div>');
+  parts.push('</div>');
+  parts.push('<button type="button" class="nab-cta" onclick="event.stopPropagation();_udNextActionClick(&quot;' + esc(next.gap_type) + '&quot;)">Take action →</button>');
+
+  bar.className = 'next-action-bar nab-sev-' + esc(sev);
+  bar.onclick = function () { _udNextActionClick(next.gap_type); };
+  bar.innerHTML = parts.join('');
+  bar.style.display = '';
+}
+window._udRenderNextActionBar = _udRenderNextActionBar;
+
+function _udNextActionClick(gapType) {
+  const tab = _udNextActionTabForGap(gapType);
+  if (typeof switchUnifiedTab === 'function' && tab) {
+    switchUnifiedTab(tab);
+  }
+  // Telemetry hook reserved — not wired in Phase A.
+  console.debug('[NextAction] click', gapType, '-> tab', tab);
+}
+window._udNextActionClick = _udNextActionClick;
 
 function _udRenderTab(tab) {
   if (!_udCache) return '<div class="detail-empty">No data loaded</div>';
