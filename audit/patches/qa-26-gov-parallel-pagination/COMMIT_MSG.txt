@@ -1,0 +1,46 @@
+QA-26 (P1 perf): parallelize gov pagination — cut dashboard render from ~8s to ~1.5s
+
+Gov home dashboard showed 8-14 seconds of "loading..." widgets. Phase 1
+was Promise.all'd at the top level but each paginated query inside was
+fetching pages SERIALLY at 1000 rows/page. For properties (17,472 rows =
+18 pages) at ~400ms round-trip each, that's ~7s of latency for a query
+the DB itself runs in 95ms.
+
+Fix: rewrite govQueryAll and _loadPaginatedQuery so the first page is
+fetched with count=exact, then all remaining pages issue in parallel via
+Promise.all. Wall-clock drops from ~18×400ms serial to ~400ms first +
+parallel batch ~= 800-1200ms.
+
+Also parallelized the ownership-coverage block in renderGovOverview,
+which awaited three independent queries serially: ownership_history full
+scan, true_owners full scan, and the QA-25 v_prospect_targets query.
+All three now run via Promise.all (with a settled-result wrapper on
+v_prospect_targets so a 403 falls back cleanly to legacy metric).
+
+Expected speedup:
+- Phase 1 (first paint): ~7-8s -> ~1.0-1.5s
+- Phase 2 (background): ~6-10s -> ~1-2s
+- Ownership coverage:   ~12-18s -> ~1.5-2s
+
+No SQL changes. No Edge Function changes. No allowlist changes. Pure
+frontend pagination refactor.
+
+Diagnosis (live table sizes on gov, 2026-05-18):
+  properties         17,472 rows  18 pages  ~7.2s serial
+  prospect_leads     11,516 rows  12 pages  ~4.8s serial
+  ownership_history  13,508 rows  14 pages  ~5.6s serial
+  sales_transactions  7,706 rows   8 pages  ~3.2s serial
+  true_owners        14,099 rows  15 pages  ~6.0s serial
+
+EXPLAIN ANALYZE on full properties query with same big column set + sort:
+95ms DB execution time. The remainder is round-trip latency.
+
+Out of scope: dia side has the same serial pattern but diaQuery
+hardcodes count=false in its URL builder, so the same fix needs
+diaQuery refactored first. Separate patch.
+
+Files changed:
+- gov.js (govQueryAll, _loadPaginatedQuery, ownership-coverage block)
+- AUDIT_PROGRESS.md (closeout)
+
+Patch: audit/patches/qa-26-gov-parallel-pagination/

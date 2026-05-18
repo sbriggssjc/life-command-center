@@ -166,21 +166,25 @@ async function govWriteService(endpoint, data) {
 
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
 async function govQueryAll(table, select, params = {}) {
-  let all = [], offset = 0;
-  const pageSize = 1000;  // Match PostgREST max-rows cap (5000 caused pagination to stop early)
-  const maxTime = 120000; // 2-minute total timeout
-  const start = Date.now();
-  while (true) {
-    if (Date.now() - start > maxTime) {
-      console.warn('govQueryAll(' + table + ') total timeout after ' + Math.round((Date.now() - start) / 1000) + 's — returning ' + all.length + ' rows');
-      break;
-    }
-    const result = await govQuery(table, select, { ...params, limit: pageSize, offset, count: false });
-    all = all.concat(result.data || []);
-    if ((result.data || []).length < pageSize) break;
-    offset += pageSize;
+  // QA-26 (2026-05-18): parallelize page fetches. Was serial — 1000-row pages
+  // fetched one-at-a-time. For properties (17k rows = 18 pages × ~400ms each)
+  // that's 7s of round-trips for a query the DB itself executes in 95ms.
+  // The fix: fetch page 0 with count=exact, then issue all remaining pages
+  // in parallel via Promise.all. Drops 18 serial round-trips to 2 sequential
+  // waits (first page + parallel batch).
+  const pageSize = 1000;
+  const firstPage = await govQuery(table, select, { ...params, limit: pageSize, offset: 0, count: true });
+  const firstData = firstPage.data || [];
+  const total = firstPage.count || firstData.length;
+  if (total <= pageSize) return { data: firstData, count: total };
+  const pages = [];
+  for (let off = pageSize; off < total; off += pageSize) {
+    pages.push(govQuery(table, select, { ...params, limit: pageSize, offset: off, count: false }));
   }
-  return { data: all, count: all.length };
+  const others = await Promise.all(pages);
+  let all = firstData;
+  for (const p of others) all = all.concat(p.data || []);
+  return { data: all, count: total };
 }
 
 // ============================================================================
@@ -245,13 +249,22 @@ let _govDataLoading = false;
 // every batch to come back with len < pageSize on the first call, exiting the
 // loop after a single page and silently truncating the result. Round 76el.
 async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 1000) {
-  let all = [], offset = 0;
-  while (true) {
-    const batch = await govQuery(table, columns, { ...options, limit: pageSize, offset, count: false });
-    all = all.concat(batch.data || []);
-    if (!batch.data || batch.data.length < pageSize) break;
-    offset += pageSize;
+  // QA-26 (2026-05-18): parallel pagination — same fix as govQueryAll. First
+  // page is fetched with count=exact to learn the total, then all remaining
+  // pages are issued via Promise.all. For full-table reads (properties at
+  // 17k rows, prospect_leads at 11k, sales_transactions at 7.7k) this cuts
+  // 12–18 serial round-trips down to 1 + parallel batch.
+  const firstPage = await govQuery(table, columns, { ...options, limit: pageSize, offset: 0, count: true });
+  const firstData = firstPage.data || [];
+  const total = firstPage.count || firstData.length;
+  if (total <= pageSize) return firstData;
+  const pages = [];
+  for (let off = pageSize; off < total; off += pageSize) {
+    pages.push(govQuery(table, columns, { ...options, limit: pageSize, offset: off, count: false }));
   }
+  const others = await Promise.all(pages);
+  let all = firstData;
+  for (const p of others) all = all.concat(p.data || []);
   return all;
 }
 
@@ -4309,8 +4322,20 @@ function renderGovOverview() {
   // Lazy-load ownership coverage metrics (Section 12)
   (async () => {
     try {
+      // QA-26 (2026-05-18): parallelize the three independent table reads
+      // (ownership_history, true_owners, v_prospect_targets). Previously these
+      // were awaited sequentially — for ownership_history alone that's 14
+      // round-trips × ~400ms (now parallel-paginated post-QA-26-fix, but the
+      // outer Promise.all keeps Step 1/2/3 from blocking each other anyway).
+      const [ownHistory, ownerRes, ptResSettled] = await Promise.all([
+        govQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' }),
+        govQueryAll('true_owners', 'true_owner_id,name,sf_account_id'),
+        govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
+          .then(r => ({ ok: true, value: r }))
+          .catch(err => ({ ok: false, err }))
+      ]);
+
       // 1. Ownership depth: properties with 3+ ownership records = deep chain
-      const ownHistory = await govQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' });
       const ownRows = ownHistory.data || ownHistory || [];
       const depthByProp = {};
       ownRows.forEach(o => {
@@ -4322,7 +4347,6 @@ function renderGovOverview() {
 
       // 2. Prospecting: true_owners with sf_account_id and recent activity
       //    Gov uses sf_activities table (not salesforce_activities) with sf_account_id join
-      const ownerRes = await govQueryAll('true_owners', 'true_owner_id,name,sf_account_id');
       const ownerRows = ownerRes.data || ownerRes || [];
       const totalOwners = ownerRows.length;
       const ownersWithSF = ownerRows.filter(o => o.sf_account_id);
@@ -4335,14 +4359,14 @@ function renderGovOverview() {
       let totalOwnersWithProps = 0;
       let missingSF = 0;
       let topUnprospected = [];
-      try {
-        const ptRes = await govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 });
+      if (ptResSettled.ok) {
+        const ptRes = ptResSettled.value;
         const ptRows = Array.isArray(ptRes.data) ? ptRes.data : (Array.isArray(ptRes) ? ptRes : []);
         missingSF = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
         topUnprospected = ptRows;
         totalOwnersWithProps = missingSF + ownersWithSF.length;
-      } catch (err) {
-        console.warn('Prospect targets load failed, falling back to legacy metric:', err.message);
+      } else {
+        console.warn('Prospect targets load failed, falling back to legacy metric:', ptResSettled.err && ptResSettled.err.message);
         missingSF = ownerRows.filter(o => !o.sf_account_id).length;
         totalOwnersWithProps = ownerRows.length;
       }
