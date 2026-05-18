@@ -7247,6 +7247,12 @@ let msgData = { flagged: [], recent: [], sent: [] };
 let currentMsgTab = 'flagged';
 let messagesLoaded = false;
 
+// QA-14 (2026-05-18): external_id → { id, status } map of canonical inbox
+// rows, populated alongside loadMessages so renderMessages's flagged tab can
+// attach Triage/Promote/Assign/Dismiss actions to cards whose email is
+// already in the inbox queue.
+let msgCanonicalById = new Map();
+
 async function loadMessages() {
   if (messagesLoaded) { renderMessages(); return; }
   const el = document.getElementById('msgList');
@@ -7272,6 +7278,24 @@ async function loadMessages() {
       const type = (a.activity_type || '').toLowerCase();
       return type.includes('email') || type.includes('correspondence');
     }).slice(0, 50);
+
+    // QA-14 (2026-05-18): Fetch the canonical inbox so we can attach
+    // Triage/Promote/Assign/Dismiss to flagged-tab cards whose email has
+    // already been canonicalized. The map join key is external_id (Outlook's
+    // immutable message id, set on both raw flagged emails and canonical
+    // inbox rows). Limit covers the visible message list comfortably.
+    try {
+      const invRes = await fetch('/api/queue-v2?view=inbox&per_page=500');
+      if (invRes.ok) {
+        const invData = await invRes.json();
+        const rows = invData?.items || invData?.data || [];
+        msgCanonicalById = new Map();
+        for (const r of rows) {
+          if (r.external_id) msgCanonicalById.set(String(r.external_id), { id: r.id, status: r.status });
+        }
+      }
+    } catch (e) { console.warn('canonical inbox cross-ref load failed', e?.message || e); }
+
     messagesLoaded = true;
     renderMessages();
   } catch (e) {
@@ -7299,6 +7323,12 @@ function renderMessages() {
   if (currentMsgTab === 'flagged') {
     items = msgData.flagged.map(e => {
       const links = outlookLinks(e);
+      // QA-14 (2026-05-18): attach the canonical inbox row id (if the
+      // email has been canonicalized by the inbox sync). Lets the
+      // flagged-tab card render Triage/Promote/Assign/Dismiss buttons
+      // exactly like inboxItemHTML on the Inbox page.
+      const extId = e.external_id || e.message_id || e.id || '';
+      const canonical = extId ? msgCanonicalById.get(String(extId)) : null;
       return {
         sender: e.sender_name || e.sender_email || 'Unknown',
         subject: e.subject || '(No subject)',
@@ -7307,6 +7337,8 @@ function renderMessages() {
         desktopLink: links.desktop,
         webLink: links.web,
         unread: e.is_read === false,
+        canonicalId: canonical?.id || null,
+        canonicalStatus: canonical?.status || null,
       };
     });
   } else if (currentMsgTab === 'recent') {
@@ -7351,6 +7383,23 @@ function renderMessages() {
   let html = '';
   for (const m of items.slice(0, 50)) {
     const hasLink = !!(m.desktopLink || m.webLink);
+    // QA-14 (2026-05-18): when the flagged-tab item has a canonical inbox
+    // row, surface the same Triage/Promote/Assign/Dismiss buttons that the
+    // Inbox page renders. Otherwise emit just the Outlook link plus a small
+    // hint that the row will get actions on next inbox sync.
+    const idEnc = m.canonicalId ? encodeURIComponent(m.canonicalId) : '';
+    const titleArg = jsStringArg(m.subject || 'Untitled');
+    const showTriage = m.canonicalId && m.canonicalStatus === 'new';
+    const inboxHint = (currentMsgTab === 'flagged' && !m.canonicalId)
+      ? `<span style="display:inline-block;margin-top:6px;margin-left:8px;font-size:10px;color:var(--text3)">(not yet in inbox queue)</span>`
+      : '';
+    const actionsHtml = m.canonicalId ? `
+      <div class="msg-actions" onclick="event.stopPropagation()" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        ${showTriage ? `<button class="q-action" style="font-size:11px;padding:3px 8px" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${idEnc}'))">Triage</button>` : ''}
+        <button class="q-action primary" style="font-size:11px;padding:3px 8px" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${idEnc}'))">Promote</button>
+        <button class="q-action" style="font-size:11px;padding:3px 8px" onclick="quickReassign(decodeURIComponent('${idEnc}'),'inbox',${titleArg})">Assign</button>
+        <button class="q-action danger" style="font-size:11px;padding:3px 8px" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${idEnc}'))">Dismiss</button>
+      </div>` : '';
     html += `<div class="msg-item${m.unread ? ' unread' : ''}">
       <div class="msg-header">
         <div class="msg-sender">${esc(m.sender)}</div>
@@ -7358,7 +7407,8 @@ function renderMessages() {
       </div>
       <div class="msg-subject">${esc(m.subject)}</div>
       ${m.preview ? `<div class="msg-preview">${esc(m.preview)}</div>` : ''}
-      ${hasLink ? `<a href="${safeHref(m.webLink || m.desktopLink)}" target="_blank" rel="noopener" onclick="event.stopPropagation();return openOutlookEmail(event, ${safeJSON(m.desktopLink)}, ${safeJSON(m.webLink)})" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
+      ${hasLink ? `<a href="${safeHref(m.webLink || m.desktopLink)}" target="_blank" rel="noopener" onclick="event.stopPropagation();return openOutlookEmail(event, ${safeJSON(m.desktopLink)}, ${safeJSON(m.webLink)})" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>${inboxHint}` : ''}
+      ${actionsHtml}
     </div>`;
   }
   if (items.length > 50) html += `<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 50 of ${items.length} messages</div>`;

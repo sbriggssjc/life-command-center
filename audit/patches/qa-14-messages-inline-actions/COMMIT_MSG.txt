@@ -1,0 +1,47 @@
+qa(14): inline triage actions on Messages page flagged tab
+
+Every row on the Messages page had only "Open in Outlook ↗",
+forcing a context switch per message. The Inbox page has the full
+Triage / Promote / Assign / Dismiss action set; this patch wires
+the same set onto the Messages page's flagged tab.
+
+Structural difference from QA-13 (Home Inbox rail): that one
+renders canonical inbox rows directly. The Messages flagged tab
+pulls raw Outlook emails from /api/sync?action=flagged_emails —
+items have an Outlook external_id but no canonical queue UUID. The
+canonical inbox sync runs separately, so at any moment some
+flagged emails have a canonical match and some don't.
+
+Fix in app.js:
+
+  1. New module-level Map `msgCanonicalById` keyed by external_id
+     → { id, status } of the canonical inbox row.
+
+  2. loadMessages also fetches /api/queue-v2?view=inbox&per_page=500
+     and populates the map. Failure is logged but doesn't block the
+     page (graceful degradation back to old behavior).
+
+  3. renderMessages flagged-tab:
+     - Cards with a canonical match render the four-button row
+       (Triage shown only when status='new', matching inboxItemHTML
+       on the Inbox page).
+     - Cards without a match keep just "Open in Outlook ↗" plus a
+       grey "(not yet in inbox queue)" hint so the user knows the
+       actions will appear once the inbox sync canonicalizes.
+
+Recent/Sent tabs unchanged — those items are SF activities, not
+triage queue items, so action buttons would be misleading.
+
+Files changed:
+  • app.js (loadMessages canonical xref + renderMessages flagged-tab actions)
+  • AUDIT_PROGRESS.md (closeout)
+
+Optional follow-up (out of scope):
+  • "Bring to Inbox" button on unmatched flagged cards would let the
+    user manually create the canonical row instead of waiting for
+    the next sync. Requires a small backend endpoint
+    (/api/workflows?action=canonicalize_email taking external_id).
+
+Queued:
+  • QA-15 — Research page LLC + Agency Drift widgets (last item in
+    the deferred queue).
