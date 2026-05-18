@@ -1,0 +1,42 @@
+qa(15): fix Research page widgets being destroyed by parent render
+
+Research page rendered as just "Research · 0 tasks · No research
+tasks match this filter" even though the LLC research queue had
+1,200+ items and the Agency Drift queue had hundreds of rows.
+Both widget renders were wired (Item #2 Phase B on 2026-05-17,
+Fresh audit A-5 on 2026-05-18) but produced no visible output.
+
+Root cause: renderResearchPage (ops.js) called the widget renders
+AT THE TOP. They each prepended a <div> into el via
+`parentEl.insertBefore(widget, parentEl.firstChild)`. Then the
+function continued building the queue-list `html` string and
+finished with `el.innerHTML = html` — which replaced every child
+of el, wiping out the just-rendered widgets.
+
+No console error: the widgets WERE rendering, the parent function
+destroyed them on the next line. The bug was a render-order issue,
+not a missing function.
+
+Fix: restructure renderResearchPage to set el.innerHTML to two
+wrapper divs FIRST — an empty .lcc-research-widgets placeholder
+and a .lcc-research-queue containing the queue-list html — then
+call the widget renders, passing the .lcc-research-widgets wrapper
+so they prepend into it without being overwritten by subsequent
+re-renders.
+
+After:
+  • LLC Research Queue widget renders at the top of the page,
+    listing the top 15 queued LLCs with Open SoS → / Mark found /
+    etc.
+  • Agency Drift widget renders below it, showing agency-name
+    mismatches between property + lease records.
+  • The original research tasks list (0 tasks today) renders
+    below both widgets.
+
+Files changed:
+  • ops.js (renderResearchPage restructure)
+  • AUDIT_PROGRESS.md (closeout)
+
+Deferred queue cleared: QA-13, QA-14, QA-15 were the three items
+deferred at the end of the original 2026-05-18 QA pass. All
+shipped.

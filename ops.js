@@ -1639,22 +1639,15 @@ async function renderResearchPage(page = opsResearchPage) {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:research');
 
-  // Item #2 Phase B (2026-05-17): mount the LLC research queue widget at
-  // the top of the Research page. Fires once per page render; the widget
-  // itself owns its refresh button + click-driven updates.
-  try {
-    if (typeof renderLlcResearchQueueWidget === 'function') {
-      await renderLlcResearchQueueWidget(el);
-    }
-  } catch (e) { console.warn('[ResearchPage] LLC widget render failed:', e?.message); }
-
-  // Fresh audit A-5 (2026-05-18): mount the agency-drift review widget
-  // BELOW the LLC widget so both are visible on the Research page.
-  try {
-    if (typeof renderAgencyDriftQueueWidget === 'function') {
-      await renderAgencyDriftQueueWidget(el);
-    }
-  } catch (e) { console.warn('[ResearchPage] agency-drift widget render failed:', e?.message); }
+  // QA-15 (2026-05-18): the previous wiring (calling
+  // renderLlcResearchQueueWidget + renderAgencyDriftQueueWidget BEFORE
+  // assembling the rest of the page) was ineffective — the widgets
+  // prepended themselves to `el`, but then `el.innerHTML = html;` at the
+  // end of this function wiped them out. The Research page therefore
+  // rendered as just "0 tasks / No research tasks match this filter"
+  // even though the queues had hundreds of rows. Widget renders are now
+  // hoisted to a separate container above the queue list and re-fired
+  // AFTER the queue list innerHTML assignment so they survive.
 
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
@@ -1714,7 +1707,29 @@ async function renderResearchPage(page = opsResearchPage) {
 
   html += paginationHTML('/api/queue?view=research', 'renderResearchPage');
 
-  el.innerHTML = html;
+  // QA-15 (2026-05-18): wrap the research queue content in an inner div
+  // so we can prepend the LLC + Agency Drift widgets without conflicting
+  // with subsequent re-renders.
+  el.innerHTML = '<div class="lcc-research-widgets"></div>' +
+                 '<div class="lcc-research-queue">' + html + '</div>';
+
+  // Now fire the widget renders into the dedicated wrapper. They use
+  // `parentEl.insertBefore(widget, parentEl.firstChild)` to prepend each
+  // widget into the wrapper, so order is preserved (LLC first, then
+  // Agency Drift below).
+  const widgetsEl = el.querySelector('.lcc-research-widgets');
+  if (widgetsEl) {
+    try {
+      if (typeof renderLlcResearchQueueWidget === 'function') {
+        await renderLlcResearchQueueWidget(widgetsEl);
+      }
+    } catch (e) { console.warn('[ResearchPage] LLC widget render failed:', e?.message); }
+    try {
+      if (typeof renderAgencyDriftQueueWidget === 'function') {
+        await renderAgencyDriftQueueWidget(widgetsEl);
+      }
+    } catch (e) { console.warn('[ResearchPage] agency-drift widget render failed:', e?.message); }
+  }
   perf.end();
 }
 
