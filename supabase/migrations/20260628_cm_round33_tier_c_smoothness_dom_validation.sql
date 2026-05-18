@@ -1,0 +1,91 @@
+-- =====================================================================
+-- Round 33 Tier C — Smoothness + DOM data validation. Six view fixes.
+-- View-only PR (no renderer/code changes).
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-18)
+-- ---------------------------------------------------------------------
+--
+-- SMOOTHNESS (cap-by-term cohort lines are "boxy")
+--
+-- 1) cm_dialysis_sold_cap_by_term_dot — layered a 3-month CENTERED
+--    moving average on top of the 12-month TTM cohort averages from
+--    master_m. User: "the movement of the chart is very boxy and
+--    doesn't align with the smooth movement we have in the Excel
+--    version we assembled". Effective smoothing window ≈ 14 months
+--    without losing year-over-year movement.
+--
+-- 2) cm_gov_sold_cap_by_term_dot — same 3-month MA wrap. Gov per-
+--    cohort sales are even thinner than dia so the boxiness was more
+--    pronounced.
+--
+-- 3) cm_dialysis_asking_cap_by_term_m — same 3-month MA wrap on top
+--    of the 12-month TTM cohort averages. User: "These are smoother
+--    but still not like what's in our Excel version".
+--
+-- SMOOTHNESS (NM_vs_Market line still jitters)
+--
+-- 4) cm_gov_nm_vs_market_q — widened NM TTM window 12mo → 24mo. The
+--    R31 T3 12-month TTM rewrite cut the jitter substantially but
+--    NM-brokered gov sales are thin enough (3-8 per 12mo window)
+--    that month-over-month steps were still visible. 24-month window
+--    + n>=5 gate cuts step amplitude in half. Non-NM cohort stays at
+--    12mo (plenty of samples).
+--
+-- 5) cm_dialysis_nm_vs_market_q — same fix as gov.
+--
+-- DOM DATA VALIDATION (DOM way too long)
+--
+-- The dia DOM_Ask, Avail_by_Tenant, and Active_DOM_PC views all had
+-- a 3650-day (10-year) cap on `days_on_market`. Investigation: ~38%
+-- of sales 2024+ have DOM > 2 years (some 4000+ days = 11+ years).
+-- These are stale-listing artifacts — a property was listed in 2014,
+-- taken off market, RE-LISTED with the same listing_id years later,
+-- then sold. The 10-year cap was letting these contaminate the
+-- average DOM into the 800-1200 range.
+--
+-- 6) cm_dialysis_dom_pct_ask_m — DOM cap 3650 → 730 days. Avg DOM
+--    pulled from ~900 → ~270-450 days. Median is 352 days (typical).
+--    User: "DOM seems way longer than what we typically see".
+--
+-- 7) cm_gov_dom_pct_ask_m — gate-query DOM cap 1095 → 730 for parity.
+--    (Note: actual avg_dom value comes from
+--    cm_gov_market_quarterly_master_m_mat which has its own 1095-day
+--    cap. Tightening that requires refreshing the materialized view;
+--    deferred to Tier D where we touch master_m_mat anyway.)
+--
+-- 8) cm_dialysis_available_by_tenant — DOM cap 3650 → 730 in the
+--    AVG filter. User: "Confirm the accuracy of the DOM data and
+--    formulas as those numbers are significantly higher than what we
+--    typically see. Surely there's some errors in here."
+--
+-- 9) cm_dialysis_dom_price_change_active_m — DOM cap 3650 → 730 in
+--    both the total and core (10+ year) filters. User: "DOM seems
+--    way longer than what we typically see. Should be a measure of
+--    all properties actively marketed at the time of the reporting
+--    period". The view already correctly measures period_end -
+--    listing_date for active listings (cm_dialysis_active_listings_m
+--    enforces 'not sold, not off-market' at each anchor); only the
+--    cap was wrong.
+--
+-- ---------------------------------------------------------------------
+-- VERIFICATION (post-fix)
+-- ---------------------------------------------------------------------
+--   Sold_Cap_by_Term dia recent 14mo: smooth uptrend visible 0.0577
+--   → 0.0703 (was 4-month plateaus before).
+--
+--   NM_vs_Market gov 2023-2026: gentle uptrend NM 0.074 → 0.082
+--   (was choppy ~±0.005 month-over-month).
+--
+--   DOM_Ask dia post-fix recent: 250-450 days (was 877-1160).
+--   Active_DOM_PC dia post-fix: 421-529 total / 407-528 core
+--   (was probably 900+ before).
+--
+-- ---------------------------------------------------------------------
+-- ROUND 33 REMAINING (deferred PRs)
+-- ---------------------------------------------------------------------
+--   Tier D — Excel format-match (Inventory_Backlog, Market_Turnover,
+--            Renewal_Rate, Term_Rate, Renewal_Growth)
+--   Tier E — Add Rent_Price_PSF for dia + Core_Cap_Dot trendline review
+--   Tier F — Val_Index formula confirmation + structural items
+-- =====================================================================
