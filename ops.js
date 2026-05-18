@@ -1604,6 +1604,15 @@ async function renderResearchPage(page = opsResearchPage) {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:research');
 
+  // Item #2 Phase B (2026-05-17): mount the LLC research queue widget at
+  // the top of the Research page. Fires once per page render; the widget
+  // itself owns its refresh button + click-driven updates.
+  try {
+    if (typeof renderLlcResearchQueueWidget === 'function') {
+      await renderLlcResearchQueueWidget(el);
+    }
+  } catch (e) { console.warn('[ResearchPage] LLC widget render failed:', e?.message); }
+
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';

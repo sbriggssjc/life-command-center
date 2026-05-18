@@ -1242,6 +1242,206 @@ window.lccSortListByKey = lccSortListByKey;
  *     [{key:'value',label:'Value'},{key:'date',label:'Date'},{key:'completeness',label:'Completeness'}],
  *     'onGovSalesSortChange');
  */
+// ============================================================================
+// LLC RESEARCH QUEUE WIDGET — Item #2 Phase B (2026-05-17)
+// Renders at the top of the Research page (mounted from ops.js). Lists
+// top-N queued LLC research entries from dia.llc_research_queue with
+// property context + state-aware SoS portal links + inline resolve
+// actions ("Mark found" + "No match").
+// ============================================================================
+
+// State-aware SoS / corporations portal URLs. Fall through to a Google
+// search query when the state isn't in this map.
+const _LCC_SOS_PORTALS = {
+  AL: 'https://arc-sos.state.al.us/CGI/CORPNAME.MBR/INPUT',
+  AZ: 'https://ecorp.azcc.gov/EntitySearch/Index',
+  CA: 'https://bizfileonline.sos.ca.gov/search/business',
+  CO: 'https://www.coloradosos.gov/biz/BusinessEntityCriteriaExt.do',
+  DE: 'https://icis.corp.delaware.gov/Ecorp/EntitySearch/NameSearch.aspx',
+  FL: 'https://search.sunbiz.org/Inquiry/CorporationSearch/ByName',
+  GA: 'https://ecorp.sos.ga.gov/BusinessSearch',
+  IL: 'https://www.ilsos.gov/corporatellc/',
+  IN: 'https://bsd.sos.in.gov/publicbusinesssearch',
+  KY: 'https://web.sos.ky.gov/ftshow/(S())/default.aspx',
+  MA: 'https://corp.sec.state.ma.us/CorpWeb/CorpSearch/CorpSearch.aspx',
+  MD: 'https://egov.maryland.gov/businessexpress/entitysearch',
+  MI: 'https://cofs.lara.state.mi.us/SearchApi/Search/Search',
+  MN: 'https://mblsportal.sos.state.mn.us/Business/Search',
+  MO: 'https://bsd.sos.mo.gov/BusinessEntity/BESearch.aspx?SearchType=0',
+  NC: 'https://www.sosnc.gov/online_services/search/by_title/_Business_Registration',
+  NJ: 'https://www.njportal.com/dor/businessrecords/',
+  NV: 'https://www.nvsos.gov/sosentitysearch/',
+  NY: 'https://apps.dos.ny.gov/publicInquiry/',
+  OH: 'https://businesssearch.ohiosos.gov/',
+  OR: 'https://sos.oregon.gov/business/Pages/find.aspx',
+  PA: 'https://www.corporations.pa.gov/search/CorpSearch',
+  TN: 'https://tnbear.tn.gov/Ecommerce/FilingSearch.aspx',
+  TX: 'https://mycpa.cpa.state.tx.us/coa/Index.html',
+  VA: 'https://sccefile.scc.virginia.gov/Find/Business',
+  WA: 'https://ccfs.sos.wa.gov/#/AdvancedSearch',
+  WI: 'https://www.wdfi.org/apps/CorpSearch/Search.aspx',
+};
+
+function _lccSosPortalUrl(state, searchName) {
+  const st = String(state || '').toUpperCase().trim();
+  if (st && _LCC_SOS_PORTALS[st]) return _LCC_SOS_PORTALS[st];
+  const q = encodeURIComponent('"' + (searchName || '') + '" ' + (st ? st + ' ' : '') + 'secretary of state LLC filing');
+  return 'https://www.google.com/search?q=' + q;
+}
+
+function _lccFormatLlcValue(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return '—';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(v >= 10e6 ? 0 : 1) + 'M';
+  if (v >= 1e3) return '$' + Math.round(v / 1e3) + 'K';
+  return '$' + Math.round(v);
+}
+
+async function loadLlcResearchQueue(limit) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  const url = '/api/admin?_route=llc-research-queue&limit=' + (limit || 15);
+  try {
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    if (typeof lccReportError === 'function') {
+      lccReportError('Load LLC research queue', e, { tier: 'warn' });
+    } else {
+      console.warn('[LLC Research] load failed:', e.message);
+    }
+    return { ok: false, items: [], total: 0 };
+  }
+}
+window.loadLlcResearchQueue = loadLlcResearchQueue;
+
+async function renderLlcResearchQueueWidget(parentEl) {
+  if (!parentEl) return;
+  // Insert (or replace) a dedicated wrapper above the existing
+  // #researchContent contents.
+  let widget = parentEl.querySelector('.lcc-llc-research-widget');
+  if (!widget) {
+    widget = document.createElement('div');
+    widget.className = 'lcc-llc-research-widget';
+    parentEl.insertBefore(widget, parentEl.firstChild);
+  }
+  widget.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+  const snap = await loadLlcResearchQueue(15);
+  if (!snap || !snap.ok) {
+    widget.innerHTML = '<div class="widget-error"><div class="err-msg">LLC research queue unavailable.</div><button class="retry-btn" onclick="(async()=>{const el=document.getElementById(&quot;researchContent&quot;);if(el)await renderLlcResearchQueueWidget(el);})()">Retry</button></div>';
+    return;
+  }
+
+  const items = Array.isArray(snap.items) ? snap.items : [];
+  const parts = [];
+  parts.push('<div class="lcc-llc-research-header">');
+  parts.push(  '<div class="lcc-llc-research-title">LLC Research Queue <span class="lcc-llc-research-count">' + items.length + '</span></div>');
+  parts.push(  '<button type="button" class="nba-refresh-btn" title="Refresh" onclick="(async()=>{const el=document.getElementById(&quot;researchContent&quot;);if(el)await renderLlcResearchQueueWidget(el);})()">↻</button>');
+  parts.push('</div>');
+
+  if (items.length === 0) {
+    parts.push('<div class="lcc-llc-research-empty">Queue is clear — no LLCs awaiting research.</div>');
+    widget.innerHTML = parts.join('');
+    return;
+  }
+
+  parts.push('<div class="lcc-llc-research-list">');
+  items.forEach((row, idx) => {
+    const queueId = Number(row.queue_id);
+    const propId = Number(row.property_id);
+    const searchName = String(row.search_name || '').trim() || '(no name)';
+    const guessedSt = String(row.guessed_state || row.property_state || '').toUpperCase();
+    const propAddr = [row.property_address, row.property_city, row.property_state].filter(Boolean).join(', ');
+    const valStr = _lccFormatLlcValue(row.rev_value);
+    const tenant = row.tenant || '';
+    const sosUrl = _lccSosPortalUrl(guessedSt, searchName);
+    const cmpChip = (row.completeness_band || row.completeness_score != null)
+      ? lccCompletenessChip(row.completeness_score, row.completeness_band)
+      : '';
+    parts.push('<div class="lcc-llc-research-row" data-queue-id="' + queueId + '">');
+    parts.push(  '<div class="lcc-llc-research-rank">#' + (idx + 1) + '</div>');
+    parts.push(  '<div class="lcc-llc-research-body">');
+    parts.push(    '<div class="lcc-llc-research-name">' + esc(searchName) + (guessedSt ? ' <span class="lcc-llc-research-state">(' + esc(guessedSt) + ')</span>' : '') + '</div>');
+    if (propAddr) {
+      parts.push(  '<div class="lcc-llc-research-addr">' + esc(propAddr) + (tenant ? ' — ' + esc(tenant) : '') + '</div>');
+    }
+    parts.push(    '<div class="lcc-llc-research-meta">');
+    parts.push(      '<span class="lcc-llc-research-val">' + esc(valStr) + '</span>');
+    if (cmpChip) parts.push(    cmpChip);
+    if (row.attempts != null) parts.push('<span class="lcc-llc-research-attempts">' + Number(row.attempts) + ' attempt' + (Number(row.attempts) === 1 ? '' : 's') + '</span>');
+    parts.push(    '</div>');
+    parts.push(  '</div>');
+    parts.push(  '<div class="lcc-llc-research-actions">');
+    parts.push(    '<a href="' + esc(sosUrl) + '" target="_blank" rel="noopener" class="lcc-llc-research-btn">Open SoS →</a>');
+    parts.push(    '<button type="button" class="lcc-llc-research-btn lcc-llc-research-btn-primary" onclick="_lccLlcResearchMarkFound(' + queueId + ', &quot;' + esc(guessedSt) + '&quot;)">Mark found</button>');
+    parts.push(    '<button type="button" class="lcc-llc-research-btn" onclick="_lccLlcResearchMarkNoMatch(' + queueId + ')">No match</button>');
+    parts.push(  '</div>');
+    parts.push('</div>');
+    void propId; // referenced in suppressed code path — keep linter happy
+  });
+  parts.push('</div>');
+
+  widget.innerHTML = parts.join('');
+}
+window.renderLlcResearchQueueWidget = renderLlcResearchQueueWidget;
+
+async function _lccLlcResearchResolve(queue_id, status, extraBody) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const r = await fetch('/api/admin?_route=resolve-llc-research', {
+      method: 'POST', headers,
+      body: JSON.stringify(Object.assign({ queue_id, status }, extraBody || {})),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    if (typeof lccReportError === 'function') {
+      lccReportError('Resolve LLC research', e);
+    } else {
+      console.warn('[LLC Research] resolve failed:', e.message);
+    }
+    return { ok: false, error: e.message };
+  }
+}
+
+async function _lccLlcResearchMarkFound(queue_id, guessedState) {
+  if (typeof asyncPrompt !== 'function') {
+    if (typeof showToast === 'function') showToast('Prompt helper unavailable — use Studio to set found_filing_id', 'warn');
+    return;
+  }
+  const filingId = await asyncPrompt('Found filing ID (e.g. SoS file number):', '');
+  if (filingId == null || !String(filingId).trim()) return;
+  const filingState = guessedState || (typeof asyncPrompt === 'function'
+    ? await asyncPrompt('Filing state (2-letter, e.g. CA):', guessedState || '')
+    : null);
+  const out = await _lccLlcResearchResolve(queue_id, 'completed', {
+    found_filing_id:    String(filingId).trim(),
+    found_filing_state: filingState ? String(filingState).trim().toUpperCase() : null,
+  });
+  if (out.ok && typeof showToast === 'function') showToast('Marked resolved', 'ok');
+  // Re-render the widget to remove the resolved row
+  const el = document.getElementById('researchContent');
+  if (el) renderLlcResearchQueueWidget(el);
+}
+window._lccLlcResearchMarkFound = _lccLlcResearchMarkFound;
+
+async function _lccLlcResearchMarkNoMatch(queue_id) {
+  let confirmed = true;
+  if (typeof asyncConfirm === 'function') {
+    confirmed = await asyncConfirm('Mark this LLC as "no match"? It will not appear in the queue again.');
+  }
+  if (!confirmed) return;
+  const out = await _lccLlcResearchResolve(queue_id, 'no_match', {});
+  if (out.ok && typeof showToast === 'function') showToast('Marked no_match', 'ok');
+  const el = document.getElementById('researchContent');
+  if (el) renderLlcResearchQueueWidget(el);
+}
+window._lccLlcResearchMarkNoMatch = _lccLlcResearchMarkNoMatch;
+
 function lccRenderSortToggle(table, defaultKey, keys, onChangeFnName) {
   const active = lccGetListSort(table, defaultKey);
   const parts = [];

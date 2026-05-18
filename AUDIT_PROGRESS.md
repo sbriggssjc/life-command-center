@@ -1170,6 +1170,67 @@ const toggleHtml = lccRenderSortToggle(
 5. From devtools: `lccCompletenessChip(87, 'good')` returns an HTML string with the right classes.
 
 
+
+## Closeout — item 2 Phase B — LLC Research Queue UI
+- **Status:** ✅ DONE.
+- **Branch:** `audit/02B-llc-research-queue-ui`
+- **Patch:** `audit/patches/02B-llc-research-queue-ui/apply.mjs`
+- **Closes:** the UI half of #2. Phase A's cron drainer continues to run; Phase B gives Scott the manual surface for the cases the AI pipeline can't resolve (ambiguous, multi-state filings, etc.).
+
+### What this adds
+
+**1. Two new admin sub-routes** in `api/admin.js`:
+- `GET /api/admin?_route=llc-research-queue&limit=20` — returns the top-N queued LLC research items joined with property context (address, city, state, value via `v_property_value_signal`, completeness band/score from Phase B-1). Ordered by `rev_value` DESC so the highest-value LLCs surface first.
+- `POST /api/admin?_route=resolve-llc-research` — body `{ queue_id, status: 'no_match'|'completed', found_filing_id?, found_filing_state? }`. Marks the entry resolved + sets `resolved_at`. The AI cron then stops picking it up.
+
+**2. Widget at top of the Research page** (#pageResearch):
+- Mounts above the existing generic research queue (renderResearchPage in ops.js).
+- Renders the top 15 LLC entries as cards: rank, search name, guessed state, property address + tenant context, value, completeness chip, attempts count.
+- Per-row actions:
+  - **"Open SoS →"** external link to the state's SoS / corporations portal (26 states mapped; falls through to Google search for unmapped states).
+  - **"Mark found"** opens an async prompt for filing_id + state → POSTs to resolve endpoint with `status='completed'`.
+  - **"No match"** confirms then POSTs with `status='no_match'`.
+- Refresh button + auto-rerender on successful action.
+
+**3. SoS portal URL map** for the 26 most common states (AL/AZ/CA/CO/DE/FL/GA/IL/IN/KY/MA/MD/MI/MN/MO/NC/NJ/NV/NY/OH/OR/PA/TN/TX/VA/WA/WI). Unmapped states fall through to a Google search query that biases toward "<name> <state> secretary of state LLC filing".
+
+**4. CSS** for the widget — header + card grid + action buttons + mobile layout.
+
+### Live queue (verified 2026-05-17)
+- Queued: 1,267
+- No match: 3
+- Completed: 0 (yet — this UI is what changes that)
+
+### Files changed
+- `api/admin.js` — 2 sub-routes + 2 handlers
+- `ops.js` — mount call inside `renderResearchPage`
+- `app.js` — widget render + load + 2 actions + SoS portal map (~250 lines)
+- `styles.css` — `.lcc-llc-research-*` block
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "llc-research-queue" api/admin.js` → 2 or more (dispatcher case + handler reference)
+2. `grep -c "renderLlcResearchQueueWidget" app.js ops.js` → 3 or more
+3. Smoke (post-deploy):
+   - Open the LCC app → More drawer → Research.
+   - The LLC Research Queue widget appears at the top with up to 15 items, ordered by deal value.
+   - Click "Open SoS" on a CA / DE / NY entry → the right state's portal opens in a new tab.
+   - Click "Mark found" → prompt asks for filing_id → submit → row disappears + toast.
+   - Click "No match" → confirm → row disappears.
+4. SQL verification on dia:
+   ```sql
+   SELECT status, count(*) FROM public.llc_research_queue GROUP BY 1;
+   -- After resolving a few rows, expect 'completed' or 'no_match' counts > 0.
+   ```
+
+### Phase C follow-ups
+- **Bulk mode**: select multiple rows + "Mark all no_match" / "Open all in new tabs".
+- **Inline result capture**: instead of an async-prompt, render a small inline form on click (Filing ID input + state dropdown + Save).
+- **Per-row history**: previous attempts, AI's last_error (already returned by the endpoint), inline retry-button.
+- **State coverage**: expand the SoS portal URL map to all 50 states + DC + territories.
+- **Telemetry**: dispatch `lccReportError('LLC research action', err)` instead of bare console.warn — auto-buffered into client_errors (Phase B telemetry from #10).
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

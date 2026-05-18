@@ -95,6 +95,8 @@ export default withErrorHandler(async function handler(req, res) {
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
+    case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
+    case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -2957,6 +2959,136 @@ async function handleClientErrorReport(req, res) {
   } catch (err) {
     console.warn('[client-error] handler threw:', err?.message || err);
     return res.status(200).json({ ok: false, inserted: 0, error: 'exception' });
+  }
+}
+
+// ============================================================================
+// LLC RESEARCH QUEUE — Item #2 Phase B (2026-05-17)
+//
+// GET  /api/admin?_route=llc-research-queue&limit=20
+//   Returns top-N queued LLC research items joined with property context.
+//
+// POST /api/admin?_route=resolve-llc-research
+//   Body: { queue_id, status: 'no_match'|'completed',
+//           found_filing_id?, found_filing_state? }
+//   Marks an entry as resolved. `completed` sets resolved_at to now().
+// ============================================================================
+
+async function handleLlcResearchQueueList(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+    // Pull queue rows first
+    const qRes = await domainQuery('dialysis', 'GET',
+      'llc_research_queue' +
+      '?status=eq.queued' +
+      '&select=queue_id,property_id,search_name,guessed_state,attempts,last_attempt_at,last_error,created_at' +
+      '&order=created_at.asc' +
+      '&limit=' + limit
+    );
+    if (!qRes.ok) {
+      return res.status(502).json({ error: 'queue_fetch_failed', detail: qRes.data });
+    }
+    const rows = Array.isArray(qRes.data) ? qRes.data : [];
+    if (rows.length === 0) {
+      return res.status(200).json({ ok: true, items: [], total: 0 });
+    }
+
+    // Fetch property context for each queue row (single batched query)
+    const propIds = Array.from(new Set(rows.map(r => r.property_id).filter(Boolean)));
+    let propsById = {};
+    if (propIds.length > 0) {
+      const pRes = await domainQuery('dialysis', 'GET',
+        'properties?property_id=in.(' + propIds.join(',') + ')' +
+        '&select=property_id,address,city,state,zip_code,tenant,operator,chain_canonical,latest_sale_price,current_value_estimate,annual_rent,completeness_band,completeness_score'
+      );
+      if (pRes.ok && Array.isArray(pRes.data)) {
+        for (const p of pRes.data) propsById[p.property_id] = p;
+      }
+    }
+
+    // Pull value signal for ranking
+    let valueById = {};
+    if (propIds.length > 0) {
+      const vRes = await domainQuery('dialysis', 'GET',
+        'v_property_value_signal?property_id=in.(' + propIds.join(',') + ')&select=property_id,rev_value'
+      );
+      if (vRes.ok && Array.isArray(vRes.data)) {
+        for (const v of vRes.data) valueById[v.property_id] = Number(v.rev_value) || 0;
+      }
+    }
+
+    const items = rows.map(r => {
+      const prop = propsById[r.property_id] || null;
+      const rev_value = valueById[r.property_id] || 0;
+      return {
+        queue_id:           r.queue_id,
+        property_id:        r.property_id,
+        search_name:        r.search_name,
+        guessed_state:      r.guessed_state,
+        attempts:           r.attempts,
+        last_attempt_at:    r.last_attempt_at,
+        last_error:         r.last_error,
+        created_at:         r.created_at,
+        property_address:   prop?.address || null,
+        property_city:      prop?.city || null,
+        property_state:     prop?.state || null,
+        property_zip:       prop?.zip_code || null,
+        tenant:             prop?.tenant || prop?.operator || prop?.chain_canonical || null,
+        completeness_band:  prop?.completeness_band || null,
+        completeness_score: prop?.completeness_score != null ? Number(prop.completeness_score) : null,
+        rev_value,
+      };
+    });
+
+    // Sort by rev_value DESC so highest-value research surfaces first
+    items.sort((a, b) => (b.rev_value || 0) - (a.rev_value || 0));
+
+    return res.status(200).json({ ok: true, items, total: items.length });
+  } catch (err) {
+    console.error('[llc-research-queue]', err?.message || err);
+    return res.status(500).json({ error: 'llc_research_queue_failed', message: err?.message });
+  }
+}
+
+async function handleResolveLlcResearch(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const queueId = Number(body.queue_id);
+  const status  = String(body.status || '').toLowerCase();
+  if (!Number.isFinite(queueId)) return res.status(400).json({ error: 'queue_id (number) required' });
+  if (!['no_match', 'completed'].includes(status)) {
+    return res.status(400).json({ error: "status must be 'no_match' or 'completed'" });
+  }
+
+  const patch = { status };
+  if (status === 'completed') {
+    patch.resolved_at = new Date().toISOString();
+    if (body.found_filing_id)    patch.found_filing_id    = String(body.found_filing_id).slice(0, 200);
+    if (body.found_filing_state) patch.found_filing_state = String(body.found_filing_state).slice(0, 4);
+  } else {
+    // no_match — still mark resolved_at so we can age out and re-queue later
+    patch.resolved_at = new Date().toISOString();
+    if (body.last_error) patch.last_error = String(body.last_error).slice(0, 500);
+  }
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+    const r = await domainQuery('dialysis', 'PATCH',
+      'llc_research_queue?queue_id=eq.' + queueId, patch);
+    if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
+    return res.status(200).json({ ok: true, queue_id: queueId, status, patch });
+  } catch (err) {
+    console.error('[resolve-llc-research]', err?.message || err);
+    return res.status(500).json({ error: 'resolve_failed', message: err?.message });
   }
 }
 

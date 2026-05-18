@@ -274,6 +274,33 @@ input, select { font-family: inherit; }
 .lcc-sort-toggle-btn.active { background: var(--accent2); color: #fff; }
 .lcc-sort-toggle-btn:hover:not(.active) { background: var(--s1); color: var(--text1); }
 
+/* LLC Research Queue widget — Item #2 Phase B (2026-05-17) */
+.lcc-llc-research-widget { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 18px; }
+.lcc-llc-research-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.lcc-llc-research-title { font-size: 15px; font-weight: 700; color: var(--text1); display: inline-flex; align-items: center; gap: 8px; }
+.lcc-llc-research-count { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--accent2); color: #fff; font-weight: 700; }
+.lcc-llc-research-empty { font-size: 13px; color: var(--text2); font-style: italic; padding: 8px 4px; }
+.lcc-llc-research-list { display: grid; gap: 6px; }
+.lcc-llc-research-row { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 9px 10px; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; }
+.lcc-llc-research-rank { font-size: 12px; font-weight: 700; color: var(--text2); text-align: center; }
+.lcc-llc-research-body { min-width: 0; }
+.lcc-llc-research-name { font-size: 13px; font-weight: 700; color: var(--text1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lcc-llc-research-state { font-weight: 500; color: var(--text2); font-size: 11px; }
+.lcc-llc-research-addr { font-size: 11px; color: var(--text2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lcc-llc-research-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
+.lcc-llc-research-val { font-size: 11px; font-weight: 700; color: var(--text1); }
+.lcc-llc-research-attempts { font-size: 10px; color: var(--text3); }
+.lcc-llc-research-actions { display: inline-flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.lcc-llc-research-btn { font-size: 11px; padding: 5px 10px; border: 1px solid var(--border); background: var(--s1); color: var(--text); border-radius: 6px; cursor: pointer; text-decoration: none; font-weight: 600; white-space: nowrap; transition: background 0.15s, border-color 0.15s, color 0.15s; }
+.lcc-llc-research-btn:hover { border-color: var(--accent); color: var(--accent); }
+.lcc-llc-research-btn-primary { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+.lcc-llc-research-btn-primary:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (max-width: 720px) {
+  .lcc-llc-research-row { grid-template-columns: 24px 1fr; gap: 8px; padding: 8px; }
+  .lcc-llc-research-actions { grid-column: 1 / -1; padding-top: 6px; }
+  .lcc-llc-research-btn { font-size: 10px; padding: 4px 8px; }
+}
+
 /* Next-action bar — detail panel (Item #8 Phase A, 2026-05-17) */
 .next-action-bar { position: sticky; bottom: 0; z-index: 3; background: var(--s1); border-top: 1px solid var(--border); padding: 10px 14px; padding-bottom: calc(10px + var(--safe-bottom, 0px)); display: flex; align-items: center; gap: 10px; cursor: pointer; transition: background 0.15s; }
 .next-action-bar:hover { background: color-mix(in srgb, var(--accent2) 6%, var(--s1)); }
