@@ -2149,7 +2149,17 @@ async function renderMetricsPage() {
     html += metricCardHTML('In Progress', c.in_progress || 0, 'active work');
     html += metricCardHTML('Completed (7d)', c.completed_week || 0, 'this week', 'green');
     html += metricCardHTML('Research', c.research_active || 0, 'active tasks');
-    html += metricCardHTML('Sync Errors', c.sync_errors || 0, 'connectors', c.sync_errors > 0 ? 'red' : 'green');
+    // QA-10 (2026-05-18): prefer the live connector-status error count
+    // (summary.error from /api/sync?action=health) over the stale-prone
+    // work_counts.sync_errors row count. Reason: a connector can be in
+    // status='error' (failing right now) without any rows in the
+    // sync_errors log table, and vice-versa. The connector-status count
+    // is what the Pipeline banner uses, so this makes Metrics agree with
+    // it. Falls back to c.sync_errors if sync-health endpoint failed.
+    const liveSyncErrors = (syncHealthRes.ok && syncHealthRes.data?.summary)
+      ? (syncHealthRes.data.summary.error || 0)
+      : (c.sync_errors || 0);
+    html += metricCardHTML('Sync Errors', liveSyncErrors, 'connectors in error state', liveSyncErrors > 0 ? 'red' : 'green');
     html += '</div>';
     if (c.refreshed_at) {
       html += `<div class="widget" style="margin-top:12px"><div class="q-item-meta">Counts refreshed ${freshnessHTML(c.refreshed_at)}</div></div>`;
@@ -2285,7 +2295,11 @@ async function renderSyncHealthPage() {
     html += '<div class="metrics-grid">';
     html += metricCardHTML('Healthy', summary.healthy || 0, 'connectors');
     html += metricCardHTML('Degraded', summary.degraded || 0, 'connectors', (summary.degraded || 0) > 0 ? 'yellow' : 'green');
-    html += metricCardHTML('Errors', unresolvedErrors.length, 'unresolved sync issues', unresolvedErrors.length > 0 ? 'red' : 'green');
+    // QA-10 (2026-05-18): show connector-status errors here (matches Pipeline
+    // banner). Sync-log row count (unresolvedErrors.length) lives in the
+    // "Recent Errors" widget below — keeping both as a single tile conflated
+    // two different concepts and made every surface disagree with itself.
+    html += metricCardHTML('Errors', summary.error || 0, 'connectors in error state', (summary.error || 0) > 0 ? 'red' : 'green');
     html += metricCardHTML(
       'Outbound Success',
       summary.outbound_success_rate_24h != null ? Math.round(summary.outbound_success_rate_24h * 100) + '%' : '--',

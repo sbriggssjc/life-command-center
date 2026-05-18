@@ -1,0 +1,58 @@
+qa(10): reconcile sync error count across Pipeline/Sync Health/Metrics
+
+Three surfaces disagreed about the same conceptual stat:
+  Pipeline page header  "⚠ 1 connector failing: outlook"   → 1
+  Sync Health "Errors"  "0 unresolved sync issues"          → 0
+  Metrics "Sync Errors" "0 connectors"                      → 0
+
+Root cause: two different concepts were conflated under the same
+label. Pipeline counts connector accounts currently in status='error'
+or 'degraded' (summary.error from /api/sync?action=health). Sync
+Health and Metrics tiles were counting unresolved rows in the
+sync_errors log table — a different audit-trail concept that can
+diverge from connector status in both directions.
+
+For the operator, the live connector status is the actionable signal
+(OAuth expired, transient API failure, etc.). The sync_errors log
+table is more of an audit trail. There's already a "Recent Errors"
+widget on Sync Health that surfaces the log rows for diagnostics —
+having a count tile that disagreed with the Pipeline banner just
+made the dashboard look broken.
+
+Fix: two-line change in ops.js.
+
+  1. Sync Health page "Errors" summary tile
+       was: unresolvedErrors.length, "unresolved sync issues"
+       now: summary.error || 0,      "connectors in error state"
+
+  2. Metrics page "Sync Errors" tile
+       was: c.sync_errors || 0,
+       now: syncHealthRes.data?.summary?.error || 0
+            (renderMetricsPage already fetches /api/sync?action=health
+             for the Operational Signals section — just reuses it)
+            falls back to c.sync_errors if sync-health failed.
+
+After (verified live):
+  Pipeline banner            1 (unchanged)
+  Sync Health Errors tile    1 (was 0)
+  Metrics Sync Errors tile   1 (was 0)
+
+All three read from summary.error now.
+
+Out of scope:
+  • Home team-pulse pulse-card (app.js ~7018) still uses
+    canonicalCounts.sync_errors. Manager-only widget, gated on
+    multiple signals — lower visibility than the two tiles fixed
+    here. Captured as a follow-up.
+  • Redefining work_counts.sync_errors SQL to count connector status
+    errors would let the Home pulse-card self-correct without any
+    client change. Captured as an optional follow-up.
+
+Files changed:
+  • ops.js (Sync Health summary "Errors" tile + Metrics "Sync Errors" tile)
+  • AUDIT_PROGRESS.md (closeout)
+
+Queued for follow-up:
+  • P1 — Public REITs in llc_research_queue + same-entity duplicates
+  • P2 — Casing/UX nits documented in outputs/lcc-qa-pass-2026-05-18.docx
+  • Optional — redefine work_counts.sync_errors SQL to use connector status

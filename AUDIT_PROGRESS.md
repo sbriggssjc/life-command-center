@@ -2032,3 +2032,51 @@ Before the fix: same call with `property_id=eq.{N}` → HTTP 400.
 - **P1** Public REITs + same-entity duplicates in `llc_research_queue`
 - **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
 
+
+
+## QA pass #10 — Sync error count reconciliation ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-10-sync-error-reconcile`
+- **Patch:** `audit/patches/qa-10-sync-error-reconcile/apply.mjs`
+
+### The conflict (before)
+| Surface | Stat | Value | Source |
+|---|---|---|---|
+| Pipeline page header | "⚠ 1 connector failing: outlook" | **1** | `connectors.filter(c => c.status==='error'\|\|'degraded').length` |
+| Sync Health "Errors" tile | "0 unresolved sync issues" | **0** | `unresolved_errors.length` from `/api/sync?action=health` |
+| Metrics "Sync Errors" tile | "0 connectors" | **0** | `work_counts.sync_errors` row count |
+
+### Root cause
+Two distinct concepts under the same label:
+1. **Connector status errors** — accounts in `status='error'` right now. Lives in `summary.error` from `/api/sync?action=health`. What Pipeline shows.
+2. **Sync log error rows** — rows in the `sync_errors` table that aren't resolved. Lives in `unresolved_errors[]` from the same endpoint and is also rolled up into `work_counts.sync_errors`. What Sync Health and Metrics were showing.
+
+These diverge regularly: a connector can be `status='error'` (OAuth expired, etc.) with zero rows in `sync_errors` because no sync attempt logged, and vice-versa. The actionable signal for the operator is connector status.
+
+### Fix
+Two-line change in `ops.js`:
+1. **Sync Health page "Errors" tile** — uses `summary.error` instead of `unresolvedErrors.length`. The `unresolved_errors[]` list still renders below in the "Recent Errors" widget for diagnostics.
+2. **Metrics page "Sync Errors" tile** — uses `syncHealthRes.data.summary.error` (the page already fetches sync-health for the Operational Signals section). Falls back to `c.sync_errors` if sync-health fetch failed.
+
+### After (verified live)
+| Surface | Value | Source |
+|---|---|---|
+| Pipeline banner | 1 | connectors filter (unchanged) |
+| Sync Health "Errors" tile | 1 | `summary.error` |
+| Metrics "Sync Errors" tile | 1 | `summary.error` (with fallback) |
+
+Verified via Chrome MCP on the live session: `summary.error: 1`, one outlook connector in `status='error'` with `last_error: "object is not iterable (cannot read property Symbol(Symbol.iterator))"`.
+
+### Out of scope
+- The Home team-pulse `pulse-card` (`app.js` line ~7018) still uses `canonicalCounts.sync_errors`. It only renders for managers AND only when at least one of open_actions / open_escalations / sync_errors / in_progress is > 0. Fixing it requires loading sync-health into Home's render flow. Lower priority because the widget is manager-only and gated on multiple signals.
+- Redefining `work_counts.sync_errors` SQL to count connector status errors would let the Home pulse-card self-correct without client changes — captured as an optional follow-up.
+
+### Files changed
+- `ops.js` — two tile fixes
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Queued for follow-up
+- **P1** Public REITs + same-entity duplicates in `llc_research_queue`
+- **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
+- **Optional** redefine `work_counts.sync_errors` SQL to use connector status
+
