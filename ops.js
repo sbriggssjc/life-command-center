@@ -1613,6 +1613,14 @@ async function renderResearchPage(page = opsResearchPage) {
     }
   } catch (e) { console.warn('[ResearchPage] LLC widget render failed:', e?.message); }
 
+  // Fresh audit A-5 (2026-05-18): mount the agency-drift review widget
+  // BELOW the LLC widget so both are visible on the Research page.
+  try {
+    if (typeof renderAgencyDriftQueueWidget === 'function') {
+      await renderAgencyDriftQueueWidget(el);
+    }
+  } catch (e) { console.warn('[ResearchPage] agency-drift widget render failed:', e?.message); }
+
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
