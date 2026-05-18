@@ -1,0 +1,37 @@
+audit(item-8/phase-b2): next-action dispatcher — agency_drift handler
+
+Extends the per-gap_type dispatcher (Phase B) to handle the
+agency_drift gap_types on the sticky next-action bar.
+
+Affected gap_types (gov-only):
+  agency_drift:agency_disagreement                  (808 cases)
+  agency_drift:lease_agency_but_property_agency_null (46 cases)
+
+Workflow when user clicks "Use lease value →" / "Fill from lease →":
+  1. govQuery v_gap_agency_drift for this property's drift row
+  2. asyncConfirm with the proposed new agency value
+  3. POST /api/admin?_route=resolve-agency-drift (endpoint from A-5)
+  4. showToast on success, hide the bar (gap resolved)
+
+Reuses the resolve endpoint shipped in A-5 — no new backend code.
+Lets Scott resolve drift inline on a single property without leaving
+the detail panel (the Agency Drift widget on Research page still
+handles the queue/batch view).
+
+Per-action dispatcher coverage after this patch:
+  missing_recorded_owner             "Open SoS →"        (B)
+  llc_research_pending               "Open SoS →"        (B)
+  agency_drift:agency_disagreement   "Use lease value →" (B-2)
+  agency_drift:..._agency_null       "Fill from lease →" (B-2)
+  lease_tenant_drift                 "Take action →"     (A)
+  orphan_sale_owner                  "Take action →"     (A)
+  stale_active_listing               "Take action →"     (A)
+  cms_chain_drift:*                  "Take action →"     (A)
+
+Files changed:
+  • detail.js          — 3 anchored edits
+  • AUDIT_PROGRESS.md  — closeout
+
+Phase B-3 candidates: orphan_sale_owner (single-row backlink),
+lease_tenant_drift (back-fill from lease), cms_chain_drift (use
+CMS chain value).
