@@ -1,0 +1,43 @@
+audit(item-8/phase-b3): next-action dispatcher — orphan_sale_owner
+
+Single-row version of the A-1 bulk orphan-sale backfill, wired to the
+sticky next-action bar. When a property's top NBA gap is
+orphan_sale_owner, the bar reads "Backlink sale →" instead of "Take
+action →".
+
+Click flow:
+  1. asyncConfirm with a clear explanation of the safety check
+  2. POST /api/admin?_route=resolve-orphan-sale { sale_id, property_id,
+     domain }
+  3. Server verifies sale_id is the most-recent for its property
+     (matches A-1's safety check). 409 with the actual most-recent
+     sale_id if not — UI surfaces a friendly warn toast.
+  4. Server fetches property.recorded_owner_id. 409 with a friendly
+     error if NULL ("resolve missing_recorded_owner first").
+  5. PATCH sales_transactions.recorded_owner_id from the property.
+     Labeled 'resolveOrphanSale' for telemetry.
+  6. Toast "Sale backlinked to owner", hide bar.
+
+Remaining gap counts after A-1's bulk backfill:
+  gov orphan_sale_owner NBA: 1,029
+  dia orphan_sale_owner NBA: 31
+
+Each can now be closed in 2 clicks from the property's detail panel.
+
+Files changed:
+  • api/admin.js     — dispatcher case + handleResolveOrphanSale
+  • detail.js        — dispatch spec + click branch + resolve helper
+  • AUDIT_PROGRESS.md
+
+Per-action dispatcher coverage:
+  missing_recorded_owner            "Open SoS →"        (B)
+  llc_research_pending              "Open SoS →"        (B)
+  agency_drift:agency_disagreement  "Use lease value →" (B-2)
+  agency_drift:..._agency_null      "Fill from lease →" (B-2)
+  orphan_sale_owner                 "Backlink sale →"   (B-3)  ← this patch
+  lease_tenant_drift                "Take action →"     (A)
+  stale_active_listing              "Take action →"     (A)
+  cms_chain_drift:*                 "Take action →"     (A)
+
+Phase B-4 candidates: lease_tenant_drift + cms_chain_drift one-click
+PATCHes (parallel the agency_drift pattern but on properties.tenant).

@@ -1411,6 +1411,11 @@ function _udNextActionDispatchFor(gapType) {
   if (t === 'agency_drift:lease_agency_but_property_agency_null') {
     return { label: 'Fill from lease →', metaSuffix: 'fills properties.agency from active lease' };
   }
+  // Item #8 Phase B-3 (2026-05-18): orphan_sale_owner — one-click backlink
+  // of the most-recent sale to the property's current recorded_owner.
+  if (t === 'orphan_sale_owner') {
+    return { label: 'Backlink sale →', metaSuffix: "attributes sale to property's current owner" };
+  }
   // Other gap types: existing tab-switch UX
   return { label: 'Take action →', metaSuffix: 'opens ' + _udNextActionTabForGap(t) };
 }
@@ -1549,6 +1554,70 @@ async function _udNextActionResolveAgencyDrift(gapType) {
 }
 window._udNextActionResolveAgencyDrift = _udNextActionResolveAgencyDrift;
 
+// Item #8 Phase B-3 (2026-05-18): single-row version of the A-1 bulk
+// orphan-sale backfill. Triggered from the next-action bar when the top
+// gap is orphan_sale_owner.
+async function _udNextActionResolveOrphanSale() {
+  const prop = (_udCache && _udCache.property) || {};
+  const next = (_udCache && _udCache.nextAction) || {};
+  const propertyId = Number(prop.property_id);
+  // gap_pk for orphan_sale_owner IS the sale_id (text-form per the view).
+  const saleId = next.gap_pk || null;
+  const domain = _udCache && _udCache.db === 'dia' ? 'dialysis' :
+                 (_udCache && _udCache.db === 'gov' ? 'government' : null);
+
+  if (!Number.isFinite(propertyId) || !saleId || !domain) {
+    if (typeof showToast === 'function') showToast('Missing property_id / sale_id / domain', 'error');
+    return;
+  }
+
+  let confirmed = true;
+  if (typeof asyncConfirm === 'function') {
+    confirmed = await asyncConfirm("Backlink this sale to the property's current recorded_owner? Only works for the most-recent sale per property; earlier sales need ownership_history resolution.");
+  }
+  if (!confirmed) return;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const res = await fetch('/api/admin?_route=resolve-orphan-sale', {
+      method: 'POST', headers,
+      body: JSON.stringify({ sale_id: saleId, property_id: propertyId, domain }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (payload && payload.error === 'not_most_recent_sale') {
+        if (typeof showToast === 'function') {
+          showToast('Earlier sale — needs ownership_history resolution (most-recent sale_id: ' + payload.most_recent_sale_id + ')', 'warn');
+        }
+      } else if (payload && payload.error === 'no_owner_to_attribute') {
+        if (typeof showToast === 'function') {
+          showToast('Property has no recorded_owner yet — resolve missing_recorded_owner first', 'warn');
+        }
+      } else {
+        throw new Error('HTTP ' + res.status);
+      }
+      return;
+    }
+    if (typeof showToast === 'function') showToast('Sale backlinked to owner', 'ok');
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Resolve orphan sale from bar', e);
+    return;
+  }
+
+  // Hide the bar; the gap is resolved.
+  if (_udCache) {
+    _udCache.nextAction = null;
+    _setUdCache(_udCache);
+  }
+  const bar = document.getElementById('detailNextActionBar');
+  if (bar) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+  }
+}
+window._udNextActionResolveOrphanSale = _udNextActionResolveOrphanSale;
+
 function _udNextActionClick(gapType) {
   // Item #8 Phase B (2026-05-18): dispatch by gap_type. SoS-portal opens
   // for owner-research gaps; everything else falls through to tab-switch.
@@ -1587,6 +1656,14 @@ function _udNextActionClick(gapType) {
   // from #A-5.
   if (t === 'agency_drift:agency_disagreement' || t === 'agency_drift:lease_agency_but_property_agency_null') {
     _udNextActionResolveAgencyDrift(gapType).catch(e => console.warn('[NextAction] agency_drift resolve failed:', e?.message));
+    return;
+  }
+
+  // Item #8 Phase B-3 (2026-05-18): orphan_sale_owner — single-row
+  // version of the A-1 bulk backfill. Safety: server-side checks that
+  // sale is the most-recent for its property before PATCHing.
+  if (t === 'orphan_sale_owner') {
+    _udNextActionResolveOrphanSale().catch(e => console.warn('[NextAction] orphan_sale resolve failed:', e?.message));
     return;
   }
 
