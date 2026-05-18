@@ -2218,3 +2218,40 @@ Recent/Sent tabs unchanged — those items are SF activities, not triage queue i
 ### Queued
 - **QA-15** — Research page LLC + Agency Drift widgets (last item in the deferred queue).
 
+
+
+## QA pass #15 — Research page widgets render fix ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-15-research-widgets-render-fix`
+- **Patch:** `audit/patches/qa-15-research-widgets-render-fix/apply.mjs`
+
+### Symptom
+Research page rendered as just "Research · 0 tasks · No research tasks match this filter" despite the LLC research queue having 1,200+ items and the Agency Drift queue having hundreds of rows. The widget renders were wired up (Item #2 Phase B on 2026-05-17, Fresh audit A-5 on 2026-05-18) but produced no visible output.
+
+### Root cause
+`renderResearchPage` (`ops.js`) called the two widget render functions, which prepend a widget into `el` via `parentEl.insertBefore(widget, parentEl.firstChild)`. Then the function continued building the queue-list `html` string and finished with `el.innerHTML = html` — which replaced every child of `el`, wiping out the just-rendered widgets. No console error: the widgets WERE rendering successfully; the parent function destroyed them on the next line.
+
+### Fix
+Restructure to render the widgets AFTER the `el.innerHTML` assignment:
+```js
+el.innerHTML =
+  '<div class="lcc-research-widgets"></div>' +
+  '<div class="lcc-research-queue">' + html + '</div>';
+const widgetsEl = el.querySelector('.lcc-research-widgets');
+if (widgetsEl) {
+  if (typeof renderLlcResearchQueueWidget === 'function') {
+    await renderLlcResearchQueueWidget(widgetsEl);
+  }
+  if (typeof renderAgencyDriftQueueWidget === 'function') {
+    await renderAgencyDriftQueueWidget(widgetsEl);
+  }
+}
+```
+
+### Files changed
+- `ops.js` — `renderResearchPage` restructure
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Deferred queue cleared
+QA-13 (Home Inbox inline actions), QA-14 (Messages page inline actions), and QA-15 (this) were the three items deferred at the end of the original 2026-05-18 QA pass. All shipped.
+
