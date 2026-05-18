@@ -1647,3 +1647,39 @@ The Agency Drift widget on the Research page already lets Scott batch-resolve th
 - **lease_tenant_drift** — one-click back-fill of `properties.tenant` from the active lease (parallels agency_drift).
 - **cms_chain_drift:cms_chain_but_property_tenant_null** — one-click "use CMS chain value" (parallels agency_drift but writes `properties.tenant` from `cms_chain`).
 
+
+
+## Closeout — item 8 Phase B-3 ✅ — next-action dispatcher: orphan_sale_owner
+- **Status:** ✅ DONE.
+- **Branch:** `audit/08B3-next-action-orphan-sale`
+- **Patch:** `audit/patches/08B3-next-action-orphan-sale/apply.mjs`
+
+### What this adds
+Single-row version of the A-1 bulk orphan-sale backfill, wired to the sticky next-action bar. When a property's top NBA gap is `orphan_sale_owner`, the bar's CTA reads "Backlink sale →" instead of "Take action →". Click → confirm → PATCH → toast → bar hides.
+
+Safety mirrors A-1: the new admin endpoint verifies that the sale_id is the most-recent for its property before PATCHing. If not, returns 409 with the actual most-recent sale_id so the UI can explain why ("Earlier sale — needs ownership_history resolution; most-recent sale_id: X"). Also returns a friendly error if the property has no `recorded_owner_id` yet (resolve `missing_recorded_owner` first).
+
+### New endpoint
+`POST /api/admin?_route=resolve-orphan-sale` with body `{ sale_id, property_id, domain }`. Labeled `resolveOrphanSale` for telemetry.
+
+### Remaining gap counts (after A-1)
+- gov `orphan_sale_owner` NBA: 1,029
+- dia `orphan_sale_owner` NBA: 31
+
+Each row can now be closed in 2 clicks from the property's detail panel as Scott navigates the NBA queue.
+
+### Files changed
+- `api/admin.js` — dispatcher case + `handleResolveOrphanSale` handler
+- `detail.js` — 3 anchored edits (dispatch spec, click branch, resolve helper)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Per-action dispatcher coverage after this patch
+- missing_recorded_owner → "Open SoS →" (B)
+- llc_research_pending → "Open SoS →" (B)
+- agency_drift:agency_disagreement → "Use lease value →" (B-2)
+- agency_drift:lease_agency_but_property_agency_null → "Fill from lease →" (B-2)
+- **orphan_sale_owner → "Backlink sale →"** (B-3, this patch)
+- lease_tenant_drift → "Take action →" (tab-switch, candidate for B-4)
+- stale_active_listing → "Take action →" (tab-switch)
+- cms_chain_drift:* → "Take action →" (tab-switch, candidate for B-4)
+

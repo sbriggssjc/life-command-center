@@ -100,6 +100,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'agency-drift-queue':      return handleAgencyDriftQueueList(req, res);
     case 'resolve-agency-drift':    return handleResolveAgencyDrift(req, res);
     case 'write-failures-rollup':   return handleWriteFailuresRollup(req, res);
+    case 'resolve-orphan-sale':     return handleResolveOrphanSale(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -3289,6 +3290,91 @@ async function handleWriteFailuresRollup(req, res) {
   } catch (err) {
     console.error('[write-failures-rollup]', err?.message || err);
     return res.status(500).json({ error: 'rollup_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// RESOLVE ORPHAN SALE — Item #8 Phase B-3 (2026-05-18)
+//
+// POST /api/admin?_route=resolve-orphan-sale
+//   Body: { sale_id, property_id, domain: 'government'|'dialysis' }
+//
+// Single-row version of the A-1 bulk backfill. Attributes one specific
+// orphan sale to its property's current recorded_owner_id, BUT only when
+// the sale is the most-recent for its property (same safety check as A-1).
+//
+// Earlier sales need ownership_history resolution and are out of scope —
+// returns 409 with the actual most-recent sale_id so the UI can explain
+// why the attribution was refused.
+// ============================================================================
+async function handleResolveOrphanSale(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const saleId     = body.sale_id;
+  const propertyId = Number(body.property_id);
+  const domain     = String(body.domain || '').toLowerCase();
+  if (!saleId)                     return res.status(400).json({ error: 'sale_id required' });
+  if (!Number.isFinite(propertyId)) return res.status(400).json({ error: 'property_id (number) required' });
+  if (!['government', 'dialysis'].includes(domain)) {
+    return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+  }
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+
+    // 1. Find the most-recent sale for this property. Order by sale_date
+    //    DESC NULLS LAST, then sale_id DESC as a deterministic tiebreaker
+    //    (matches the A-1 ordering).
+    const rankRes = await domainQuery(domain, 'GET',
+      'sales_transactions?property_id=eq.' + propertyId +
+      '&order=sale_date.desc.nullslast,sale_id.desc' +
+      '&select=sale_id&limit=1'
+    );
+    if (!rankRes.ok || !rankRes.data?.length) {
+      return res.status(404).json({ error: 'no sales for this property' });
+    }
+    const mostRecentId = rankRes.data[0].sale_id;
+    if (String(mostRecentId) !== String(saleId)) {
+      return res.status(409).json({
+        error: 'not_most_recent_sale',
+        message: 'Earlier sales need ownership_history resolution. Only the most-recent sale per property can be auto-backlinked.',
+        most_recent_sale_id: mostRecentId,
+      });
+    }
+
+    // 2. Fetch the property's current recorded_owner_id.
+    const propRes = await domainQuery(domain, 'GET',
+      'properties?property_id=eq.' + propertyId + '&select=recorded_owner_id,recorded_owner_name&limit=1'
+    );
+    if (!propRes.ok || !propRes.data?.length) {
+      return res.status(404).json({ error: 'property not found' });
+    }
+    const ownerId = propRes.data[0].recorded_owner_id;
+    const ownerName = propRes.data[0].recorded_owner_name;
+    if (!ownerId) {
+      return res.status(409).json({
+        error: 'no_owner_to_attribute',
+        message: 'Property has no recorded_owner_id yet. Resolve missing_recorded_owner first.',
+      });
+    }
+
+    // 3. PATCH the sale.
+    const r = await domainQuery(domain, 'PATCH',
+      'sales_transactions?sale_id=eq.' + encodeURIComponent(saleId),
+      { recorded_owner_id: ownerId, updated_at: new Date().toISOString() },
+      undefined, { label: 'resolveOrphanSale' });
+    if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
+
+    return res.status(200).json({
+      ok: true, sale_id: saleId, property_id: propertyId,
+      recorded_owner_id: ownerId, recorded_owner_name: ownerName || null,
+    });
+  } catch (err) {
+    console.error('[resolve-orphan-sale]', err?.message || err);
+    return res.status(500).json({ error: 'resolve_failed', message: err?.message });
   }
 }
 
