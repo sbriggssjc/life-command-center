@@ -1029,6 +1029,68 @@ The Phase A view (`v_property_completeness`) computes CASE expressions over ~15-
 - **Phase B-3 — List sort UI.** Add a "Sort by: Value · Date · Completeness" toggle to gov + dia list views, with localStorage persistence. Plus a visible completeness band chip in list rows.
 
 
+
+## Closeout — item 6 Phase B-2 — NBA queue completeness weighting
+- **Status:** ✅ DONE (B-2 of 3). B-3 (list-sort UI) queued as follow-up.
+- **Branch:** `audit/06B2-nba-completeness-weighting`
+- **Patch:** `audit/patches/06B2-nba-completeness-weighting/apply.mjs`
+- **Closes:** the NBA-weighting half of B-15.
+
+### What this adds
+The `v_next_best_action` view on both dia + gov now multiplies the per-gap-type `gap_value` by a completeness factor sourced from the persisted `properties.completeness_band` column (Phase B-1).
+
+| Band | Multiplier | Rationale |
+|---|---|---|
+| excellent (90+) | 1.50x | Closing this gap finishes the underwriting |
+| good (70–89)    | 1.25x | Closing this gap brings it close to done |
+| fair (40–69)    | 1.00x | Neutral (unchanged from previous behavior) |
+| poor (<40)      | 0.80x | Many other gaps remain; less leverage |
+| NULL band       | 1.00x | Defensive (any property without persisted band) |
+
+### API surface changes
+- `gap_value` is now the **weighted** value. Ranking + sorting reflect this.
+- New column `raw_gap_value` preserves the pre-weighting figure for transparency.
+- New column `completeness_band` exposed so the UI can render a band chip.
+- New column `completeness_score` exposed for precise sort tiebreaks.
+- Existing `/api/admin?_route=next-best-action` cross-domain merge sorts by `gap_value` DESC → picks up the weighting automatically with **zero code change**.
+- NBA Home rail (renders `gap_value` as the deal value) continues to work.
+
+### Live verification (gov top 5 after this patch)
+```
+#1 missing_recorded_owner   fair       weighted=$990M   raw=$990M  1.0x
+#2 agency_drift:disagreement excellent weighted=$778M   raw=$519M  +1.5x
+#3 llc_research_pending     excellent  weighted=$569M   raw=$379M  +1.5x
+#4 orphan_sale_owner        excellent  weighted=$479M   raw=$319M  +1.5x
+#5 orphan_sale_owner        excellent  weighted=$479M   raw=$319M  +1.5x
+```
+The $990M raw outlier (fair-band) stays #1, but the rest of the top 5 are all **excellent-band** properties that got promoted by the 1.5x multiplier — exactly the desired effect.
+
+### Files changed
+- `supabase/migrations/dialysis/20260517280000_dia_nba_completeness_weighting.sql` (already applied via MCP)
+- `supabase/migrations/government/20260517280000_gov_nba_completeness_weighting.sql` (already applied via MCP)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification queries
+```sql
+-- Confirm the new columns are exposed
+SELECT column_name FROM information_schema.columns
+ WHERE table_schema='public' AND table_name='v_next_best_action'
+ ORDER BY ordinal_position;
+-- Should include: gap_value, raw_gap_value, completeness_band, completeness_score
+
+-- Spot-check the weighting math
+SELECT rank, completeness_band, gap_value::bigint AS weighted, raw_gap_value::bigint AS raw,
+       round((gap_value / NULLIF(raw_gap_value,0))::numeric, 2) AS multiplier
+  FROM public.v_next_best_action ORDER BY rank LIMIT 15;
+-- multiplier column should show 0.80 / 1.00 / 1.25 / 1.50 depending on band.
+```
+
+### Phase B-3 follow-up (the last piece of Item #6 Phase B)
+- "Sort by: Value · Date · Completeness" toggle on dia + gov list views, with localStorage persistence keyed by table.
+- Completeness-band chip visible inline in list rows.
+- Now cheap because the persisted column from B-1 is indexed.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
