@@ -1629,13 +1629,13 @@ function buildChartConfig(chart, brand) {
     case 'lease_termination_rate': {
       // Round 9 — Originally area (Termination Rate %) + line (Outside
       // Firm count).
-      // Round 31 Tier 2 — Restructured to match master Excel "Term_Rate"
-      // chart in `Copy Government Master Document.xlsx` > 'All Charts'
-      // > chart 4: two bar series (counts), no rate %, no dual axis.
-      //   Series 0: "Leases In Firm Term (TTM)"     — total - outside
-      //   Series 1: "Leases Outside Firm (TTM)"     — outside_firm_term
-      // User: "Data_Term_Rate - Review the formatting of the chart in
-      // our Excel and update".
+      // Round 31 Tier 2 — Restructured to two bar series (counts).
+      // Round 33 Tier D — Re-inspected the master Excel chart:
+      // type=col, grouping=STACKED (overlap=100), not grouped/clustered.
+      // R31 T2a rendered side-by-side; master shows In Firm + Outside
+      // stacked into a single total bar. Match master.
+      //   Series 0 (bottom): "Leases In Firm Term (TTM)"
+      //   Series 1 (top):    "Leases Outside Firm (TTM)"
       const outsideFirm = rows.map(r =>
         r.leases_outside_firm_term != null ? Number(r.leases_outside_firm_term) : null
       );
@@ -1645,6 +1645,9 @@ function buildChartConfig(chart, brand) {
         if (total == null || outside == null) return null;
         return Math.max(0, total - outside);
       });
+      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
       return {
         type: 'bar',
         data: {
@@ -1654,15 +1657,17 @@ function buildChartConfig(chart, brand) {
               data: inFirm,
               backgroundColor: palette[0],            // NM navy
               borderColor: palette[0],
-              borderRadius: 1, yAxisID: 'y', order: 1 },
+              borderRadius: 1, yAxisID: 'y',
+              stack: 'leases' },
             { type: 'bar', label: 'Leases Outside Firm (TTM)',
               data: outsideFirm,
               backgroundColor: palette[1],            // sky
               borderColor: palette[1],
-              borderRadius: 1, yAxisID: 'y', order: 2 },
+              borderRadius: 1, yAxisID: 'y',
+              stack: 'leases' },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+        options: opts,
       };
     }
 
@@ -1739,65 +1744,30 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'renewal_rent_growth': {
-      // Round 10 — PDF gov p.32 left-chart styling:
-      //   • Light-blue bars: Avg Renewal Rent / SF (left $ axis)
-      //   • Dark-navy whisker bars: Upper/Lower Quartile range (left $ axis)
-      //     Implemented as a floating-bar dataset (data: [low, high] pairs),
-      //     narrow categoryPercentage so it reads as a vertical whisker on
-      //     top of the wider light-blue bar.
-      //   • Dark-navy dots: 5-Year Renewal Rent CAGR (right % axis)
-      //     Scatter points at the bar center with no connecting line.
-      //
-      // Prior Round 1-9 layout was 4 stacked lines (avg / TTM / U-quartile
-      // dashed / L-quartile dashed) — the PDF style was always the goal.
-      // Round 26 — widened axes to fit gov data:
-      //   left axis $0–$45 → $0–$70 (gov avg_renewal_rent_psf hits $65.49)
-      //   right axis -4%–8% → -5%–12% (gov cagr_5yr hits 10.68%)
-      // User: "we need to adjust the y-axis so we can see all the data.
-      // Also, we're missing a good amount of the data for the renewal
-      // rate CAGR."
-      const opts = comboOpts({
-        yLeftFormat:  AXIS_FORMAT_CURRENCY,
-        yLeftRange:   { min: 0, max: 70 },
-        yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-        yRightRange:  { min: -0.05, max: 0.12 },
-      });
+      // Round 10 — Originally a 3-series combo (bar + quartile whisker
+      // + CAGR dots).
+      // Round 33 Tier D — Re-inspected the master Excel chart 14
+      // ('Renewal Rent/SF'): grouping=clustered, single bar series
+      // 'Renewal Rent/SF' (currency format). No quartile whisker,
+      // no CAGR overlay — those live on the separate CPI_CAGR chart.
+      // Simplify to match master.
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            // Wide light-blue bar — quarterly avg renewal rent PSF
-            { type: 'bar', label: 'Avg Renewal Rent / SF',
+            { type: 'bar', label: 'Renewal Rent / SF',
               data: rows.map(r => r.avg_renewal_rent_psf),
               backgroundColor: PDF_COLORS.cap_mid, // sky #62B5E5
+              borderColor: PDF_COLORS.cap_mid,
               borderRadius: 1,
-              barPercentage: 0.85, categoryPercentage: 0.9,
-              yAxisID: 'y', order: 3 },
-            // Narrow navy floating-bar — quartile range (low→high pairs)
-            { type: 'bar', label: 'Upper/Lower Quartile',
-              data: rows.map(r => {
-                const lo = r.lower_quartile_rpsf;
-                const hi = r.upper_quartile_rpsf;
-                return (lo != null && hi != null) ? [Number(lo), Number(hi)] : null;
-              }),
-              backgroundColor: PDF_COLORS.cap_short,  // navy
-              borderColor: PDF_COLORS.cap_short,
-              borderRadius: 0,
-              barPercentage: 0.20,  categoryPercentage: 0.6,
-              yAxisID: 'y', order: 1 },
-            // Navy dots — 5-yr renewal CAGR on right axis. Scatter via
-            // line type with showLine:false + visible point markers.
-            { type: 'line', label: '5-Yr Renewal Rent CAGR',
-              data: rows.map(r => r.cagr_5yr),
-              borderColor: PDF_COLORS.cap_short, backgroundColor: PDF_COLORS.cap_short,
-              showLine: false,
-              pointRadius: 4, pointHoverRadius: 5,
-              pointStyle: 'circle',
-              yAxisID: 'y1', order: 0 },
+              barPercentage: 0.85, categoryPercentage: 0.9 },
           ],
         },
-        options: opts,
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_CURRENCY,
+          yAxisRange:  { min: 0, max: 70 },  // gov rent PSF tops at ~$65
+        }),
       };
     }
 
