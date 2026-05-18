@@ -1722,3 +1722,54 @@ The `cms_chain_drift:operator_transition_candidate` variant (~2,522 rows) STAYS 
 - **dia**: missing_recorded_owner (SoS open) + llc_research_pending (SoS open) + orphan_sale_owner (backlink) + lease_tenant_drift (PATCH) + cms_chain_drift:null_tenant (PATCH) = 5 of 6 dia gap types one-click resolvable. Only operator_transition_candidate stays as tab-switch.
 - **gov**: missing_recorded_owner (SoS open) + llc_research_pending (SoS open) + agency_drift:* (PATCH × 2) + orphan_sale_owner (backlink) = 5 of 5 gov gap types covered. Stale_active_listing stays as tab-switch (the "re-verify" action is judgment-heavy).
 
+
+
+## QA pass #1 — allowlist showstopper ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-01-allowlist-missing-views`
+- **Patch:** `audit/patches/qa-01-allowlist-missing-views/apply.mjs`
+
+### Discovery
+Discovered during the in-browser QA pass (2026-05-18). After opening the deployed app and clicking into a property's NBA row, the completeness rail and next-action bar were both rendered as DOM elements but `display: none` because `_udCache.completeness` and `_udCache.nextAction` were both `null`.
+
+Tracing back: the frontend's `govQuery('v_property_completeness', ...)` returned `{data:[], count:0}`. At the SQL level, the view returns 1 row for the same property (verified via MCP). At PostgREST level, the view permits `anon` + `authenticated` reads (verified via `SET LOCAL ROLE`).
+
+Root cause: the proxy layer in `api/_shared/allowlist.js` enforces a hard allowlist of table/view names. Unlisted names get a silent empty response (NOT a 4xx, so `lccReportError` doesn't fire). Every view created during the sprint was missing from the allowlist.
+
+### Affected views (both domains)
+| View | Used by | Domain |
+|---|---|---|
+| v_property_completeness | Item #6 completeness rail | gov + dia |
+| v_next_best_action | Item #8 next-action bar (detail panel) | gov + dia |
+| v_property_value_signal | NBA value FK | gov + dia |
+| v_gap_agency_drift | A-5 widget + #8 B-2 dispatcher | gov |
+| v_gap_lease_tenant_drift | #8 B-4 dispatcher | dia |
+| v_gap_chain_drift | #8 B-4 dispatcher | dia |
+| v_gap_orphan_sale_owner | NBA orphan branch | gov + dia |
+| llc_research_queue | NBA llc branch | dia |
+
+### Why the NBA Home rail still worked
+The Home rail uses `/api/admin?_route=next-best-action` which calls `domainQuery` server-side, **bypassing the allowlist**. That code path is the one with the working DB access. The detail-panel features and per-property lookups use `govQuery` / `diaQuery` browser-side → hit the proxy → hit the allowlist → silent empty.
+
+### Fix
+Single file edit: adds the 6–7 missing views to `GOV_READ_TABLES` + `DIA_READ_TABLES` in `api/_shared/allowlist.js`.
+
+After Railway redeploys:
+- The completeness rail will populate on every property detail panel.
+- The next-action bar will populate on every property detail panel.
+- Per-action workflows (B / B-2 / B-3 / B-4) will be able to look up source values before PATCHing.
+- The Agency Drift widget on the Research page will populate.
+
+### Files changed
+- `api/_shared/allowlist.js` — 2 additions (gov + dia READ allowlists)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Other QA findings (queued, not in this patch)
+- **NBA dia query times out** (Postgres 57014 statement_timeout). Home rail's `/api/admin` cross-domain fan-out shows `"by_domain":{"dialysis":{"ok":false,"status":500,"error":"canceling statement due to statement timeout"}}`. The user sees only gov rows + a "⚠ partial" indicator. The v_next_best_action view on dia needs query-plan tuning (likely the LEFT JOIN to v_property_value_signal × 5,000+ rows + the agency-drift-style window functions). Tracked separately.
+- **"Open Activities = 0" vs "View all 7396 items"** — Home page stat-card vs My Work list count disagree. One of them is wrong.
+- **LLC research queue contains public REITs** (Brandywine Realty Trust appears as #9 + #10 on the NBA rail). SoS portal lookups will return nothing for these. Need either (a) a REIT/public-company filter, or (b) the "Open SoS" button knowing to redirect to SEC EDGAR for known public entities.
+- **Same entity duplicated in queue** ("Brandywine Realty Trust" #9 vs "Brandywine Realty Trust JV MSD Partners" #10) — needs LLC-name dedupe.
+- **Agency: "Dod"** mixed-case (should be DOD / DoD).
+- **Detail panel header wraps awkwardly** ("General / Services / Administration / – Arlington, VA" on 4 lines).
+- **Inbox cards** (Home + Inbox page) have only "Open in Outlook ↗" — no inline "Mark processed" / "Promote to property" actions. Forces a tab-switch per email.
+
