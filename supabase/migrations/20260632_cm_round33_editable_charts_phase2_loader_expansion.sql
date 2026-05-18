@@ -1,0 +1,106 @@
+-- =====================================================================
+-- Round 33 Editable Charts Phase 2 — extend cm-template-loader Charts
+-- sheet column coverage from B-O (14 cols) to B-BM (35 cols mapped).
+--
+-- NO Supabase view changes. Code + tooling + docs only.
+--
+-- ---------------------------------------------------------------------
+-- BACKGROUND
+-- ---------------------------------------------------------------------
+-- PR #819 flipped the dia export default to master_template assuming
+-- the loader was fully implemented. ~25+ charts rendered blank
+-- because the loader only populated columns B-O of the Charts sheet,
+-- but the 37 chart objects in the master template reference data
+-- across columns B-BM and 5 other sheets.
+--
+-- PR #820 reverted the default. This PR is the proper fix.
+--
+-- ---------------------------------------------------------------------
+-- THIS PR DELIVERS (Phase 2)
+-- ---------------------------------------------------------------------
+-- 1. scripts/cm-inventory-master-template-charts.py — Python script
+--    that walks every chart object in the dia master template and
+--    extracts (chart_id, type, series_title, sheet, col, rows). Run
+--    locally to regenerate when the template changes.
+--
+-- 2. docs/cm/editable-charts-plan.md — full inventory + phased plan
+--    covering all 6 sheets the template charts reference (Charts,
+--    Available Comps, Core Cap Chart, Market Size, Sheet1, Rent
+--    Survey, Competition) + view extensions needed for derived
+--    metrics.
+--
+-- 3. docs/cm/dia-master-template-chart-inventory.txt — auto-generated
+--    output of the inventory script. Saved at the time of this PR
+--    so reviewers can read the chart-by-chart breakdown without
+--    re-running the script.
+--
+-- 4. api/_shared/cm-template-loader.js — extended
+--    CHARTS_SHEET_COLUMNS array from 14 to 35 entries. New entries
+--    (all from existing cm_dialysis_market_quarterly_master_m, no
+--    new view columns required):
+--      S  10-Year Treasury Yields    → treasury_10y_yield
+--      T  Low Assumed Loan Constant  → low_loan_constant
+--      U  High Assumed Loan Constant → high_loan_constant
+--      W  NM Cap Rate (ttm)          → nm_avg_cap_ttm
+--      X  Non-NM Cap Rate (ttm)      → non_nm_avg_cap_ttm
+--      AB 10+ Year Cap (ttm)         → cap_10plus_year
+--      AD 12+ Year Cap (ttm)         → cap_12plus_year
+--      AE 8 to 12 Year Cap (ttm)     → cap_8to12_year
+--      AF 6 to 8 Year Cap (ttm)      → cap_6to8_year
+--      AG 5 or Less Year Cap (ttm)   → cap_5orless_year
+--      AK Days on Market (ttm)       → avg_dom
+--      AL % of Ask                   → pct_of_ask
+--      AM Last Ask (ttm)             → avg_last_ask_cap
+--      AO Bid-Ask Spread             → avg_bid_ask_spread
+--      AP Price Change (ttm)         → pct_price_change_all
+--      AQ 10+ Year Ask (ttm)         → last_ask_cap_long_term
+--      AR 10+ Year Price Change (ttm) → pct_price_change_long_term
+--      BE YOY Change (%)             → yoy_change_pct (duplicate)
+--      BK Individual Count (ttm)     → private_count
+--      BL Fund Count (ttm)           → institutional_count
+--      BM REIT Count (ttm)           → reit_count
+--
+-- 5. The XLSX dimension ref auto-expands now (was hard-coded B2:O*).
+--    Derives the last column from the CHARTS_SHEET_COLUMNS array so
+--    future column additions update the dimension automatically.
+--
+-- ---------------------------------------------------------------------
+-- DO NOT RE-FLIP THE DEFAULT YET
+-- ---------------------------------------------------------------------
+-- The dia default stays on 'data_tabs' until we verify a populated
+-- master_template export passes a visual smoke test. The Excel-
+-- chart-object data wiring is mechanical, but Excel rendering
+-- behavior with empty cells in unmapped columns needs to be checked
+-- with a real download. Plan:
+--   1. Merge this PR
+--   2. Generate ?layout=master_template export
+--   3. Open in Excel, verify how many of the 37 charts now have data
+--   4. If majority render correctly, flip the default (one-line PR)
+--   5. If gaps remain, plan Phase 3 (cross-view joins for DOM /
+--      inventory flow / Available Comps / Core Cap Chart / Market
+--      Size sheets)
+--
+-- ---------------------------------------------------------------------
+-- PHASES STILL TO COME
+-- ---------------------------------------------------------------------
+-- Phase 3 — populate other sheets referenced by chart objects:
+--   - Available Comps (per-listing scatter, chart 1)
+--   - Core Cap Chart (per-sale scatter, chart 2)
+--   - Market Size (term-bucket cross-section, charts 26, 30, 32, 33)
+--   - Sheet1 (DOM scatter, chart 34)
+--   - Rent Survey (rent quartile lines, chart 35)
+--   - Competition (tenant pies, charts 36, 37)
+--
+-- Phase 4 — view extensions for derived metrics:
+--   - 90-day rolling cap (Charts column Q, AC)
+--   - Pace/trend metrics (Charts column Z, AA, V)
+--   - Tenant-specific caps FMC + DVA (Charts column AH, AI)
+--   - Cash/Leveraged return indexes (Charts column BF, BG)
+--   - Inventory flow cross-view join (Charts column AU, AV, AW)
+--   - Rent PSF (Charts column BB) — currently per-chair only
+--   - Valuation Index (Charts column BD)
+--
+-- Phase 5 — gov master_template path
+--   gov-master-template.xlsx exists (32 chart objects, 10 sheets).
+--   Needs its own loader + sheet-injection helpers.
+-- =====================================================================
