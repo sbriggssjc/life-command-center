@@ -6534,11 +6534,29 @@ function renderRecentEmails() {
       const bodyPreview = (item.body || item.body_preview || '').substring(0, 120).replace(/\n/g, ' ');
       const links = outlookLinks(item);
       const hasLink = !!(links.desktop || links.web);
+      // QA-13 (2026-05-18): mirror the Inbox page action set on the Home rail
+      // so the operator can Triage / Promote / Assign / Dismiss without
+      // navigating away. All four handlers live in ops.js as top-level
+      // declarations (= window globals), and the card has a card-wide
+      // navTo('pageInbox') so each button stops propagation. Triage is only
+      // offered when status==='new', matching inboxItemHTML() in ops.js.
+      const idEnc = encodeURIComponent(item.id || '');
+      const titleArg = jsStringArg(item.title || item.subject || 'Untitled');
+      const showTriage = item.id && item.status === 'new';
+      const showActions = !!item.id;
+      const actionsHtml = showActions ? `
+        <div class="email-actions" onclick="event.stopPropagation()" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          ${showTriage ? `<button class="q-action" style="font-size:11px;padding:3px 8px" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${idEnc}'))">Triage</button>` : ''}
+          <button class="q-action primary" style="font-size:11px;padding:3px 8px" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${idEnc}'))">Promote</button>
+          <button class="q-action" style="font-size:11px;padding:3px 8px" onclick="quickReassign(decodeURIComponent('${idEnc}'),'inbox',${titleArg})">Assign</button>
+          <button class="q-action danger" style="font-size:11px;padding:3px 8px" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${idEnc}'))">Dismiss</button>
+        </div>` : '';
       html += `<div class="email-card canonical-inbox-item" onclick="navTo('pageInbox')">
         <div class="email-subj">${title}</div>
         <div class="email-from"><span>${source}</span><span>${date}</span></div>
         ${bodyPreview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(bodyPreview)}</div>` : ''}
         ${hasLink ? `<a href="${safeHref(links.web || links.desktop)}" target="_blank" rel="noopener" onclick="event.stopPropagation();return openOutlookEmail(event, ${safeJSON(links.desktop)}, ${safeJSON(links.web)})" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
+        ${actionsHtml}
       </div>`;
     }
     const total = canonicalInbox.pagination?.total || 0;

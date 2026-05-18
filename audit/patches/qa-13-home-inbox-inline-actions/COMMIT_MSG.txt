@@ -1,0 +1,37 @@
+qa(13): mirror Inbox page action set onto Home rail cards
+
+The Home rail's inbox cards offered only "Open in Outlook ↗", so
+every triage action required navigating to either Outlook or the
+dedicated Inbox page. With 7,400+ flagged emails sitting in inbox,
+the click-economy cost made the Home preview essentially read-only.
+
+Fix: renderRecentEmails in app.js (canonical-inbox path) now ends
+each card with the same four buttons used by inboxItemHTML on the
+Inbox page:
+
+  • Triage   — _opsBtnGuard(this, triageSingle, id)  (only when status='new')
+  • Promote  — _opsBtnGuard(this, promoteSingle, id)
+  • Assign   — quickReassign(id, 'inbox', title)
+  • Dismiss  — _opsBtnGuard(this, dismissSingle, id)
+
+All five helpers (triageSingle / promoteSingle / dismissSingle /
+quickReassign / _opsBtnGuard, plus jsStringArg) are top-level
+function declarations in ops.js, so they're available as window
+globals from any app.js runtime context.
+
+The button row is wrapped in <div onclick="event.stopPropagation()">
+so the card-level navTo('pageInbox') doesn't fire when a button is
+clicked.
+
+The legacy fallback path (raw flagged emails straight from the edge
+function, no canonical queue row) keeps the existing "Open in
+Outlook ↗" only — those items don't have a database-backed id and
+can't be triaged without canonicalization.
+
+Files changed:
+  • app.js (renderRecentEmails canonical-inbox path)
+  • AUDIT_PROGRESS.md (closeout)
+
+Queued for follow-up:
+  • QA-14 — Messages page inline actions
+  • QA-15 — Research page LLC + Agency Drift widgets
