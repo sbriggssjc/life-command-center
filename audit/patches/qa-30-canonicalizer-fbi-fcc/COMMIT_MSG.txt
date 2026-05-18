@@ -1,0 +1,36 @@
+QA-30 (P3 cleanup): expand canonicalize_agency for FBI hyphen variant + FCC
+
+QA-28's Chrome probe surfaced three federal misses the post-QA-24
+canonicalizer didn't catch:
+- "Federal Bureau-Investigation" (1 prop) — hyphen separator, no "of"
+- "Federal Communications Commission" (1 prop) — FCC not in map
+- "FCC" (2 props) — FCC not in map
+
+Fix:
+- FBI regex broadened: federal\s+bureau\s+of\s+investigation
+  -> federal\s+bureau[\s-]+(of[\s-]+)?investigation
+  (accepts space or hyphen between bureau/of/investigation, makes "of"
+  optional). Matches all variants.
+- FCC added as new line: \m(fcc|federal\s+communications\s+commission)\M
+
+Re-canonicalization UPDATE applied to properties.agency_canonical.
+
+Verified live (Supabase MCP, 2026-05-18):
+  FBI                                135 props (was 135 + 1 new)
+  Federal Bureau of Investigation      1 -> FBI
+  Federal Bureau-Investigation         1 -> FBI (NEW)
+  FCC                                  2 -> FCC (NEW)
+  Federal Communications Commission    1 -> FCC (NEW)
+
+FBI bucket gained 1 property. FCC is a new canonical category with 3.
+
+"Federal Building" left alone (single property, ambiguous — could be
+GSA-managed or building name not tenant agency).
+
+Files changed:
+- supabase/migrations/government/20260518240000_gov_qa30_canonicalize_agency_fbi_hyphen_fcc.sql
+- AUDIT_PROGRESS.md (closeout)
+
+No frontend. No Edge Function. No allowlist changes.
+
+Patch: audit/patches/qa-30-canonicalizer-fbi-fcc/
