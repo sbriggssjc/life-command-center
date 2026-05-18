@@ -1,0 +1,64 @@
+qa(06): materialize v_property_value_signal to fix dia NBA timeout
+
+Home NBA rail header was showing "⚠ partial · 10 shown · 65 total open"
+because /api/admin?_route=next-best-action returned
+by_domain.dialysis.ok=false with status=500 and
+error="canceling statement due to statement timeout" (Postgres 57014).
+Operator only ever saw gov rows on the most important rail.
+
+Root cause: v_next_best_action UNIONs six gap branches and LEFT JOINs
+each one to v_property_value_signal. v_property_value_signal was a
+regular VIEW with four correlated subqueries per property
+(sales_transactions / available_listings / leases lookups + a nested
+curr_cap subquery). For 15,219 properties × 6 union branches that's
+~365K subquery executions per call. EXPLAIN ANALYZE clocked the top
+50 rows at 75,141 ms — well past the authenticated role's
+statement_timeout.
+
+Fix:
+  • New matview mv_property_value_signal (body byte-for-byte identical
+    to the old view).
+  • Unique index mv_property_value_signal_pkey on property_id (required
+    for REFRESH … CONCURRENTLY).
+  • CREATE OR REPLACE VIEW v_property_value_signal AS
+      SELECT property_id, rev_value FROM mv_property_value_signal
+    — preserves the OID so v_next_best_action and any other consumers
+    don't need to be touched.
+  • Cron refresh-mv-property-value-signal at "50 6 * * *", between the
+    existing 06:10 and 06:40 refreshes. CONCURRENTLY so readers aren't
+    blocked.
+
+After (verified live):
+  • EXPLAIN ANALYZE execution time   75,141 ms → 632 ms  (~120× faster)
+  • /api/admin?_route=next-best-action round-trip:  timeout → 141 ms
+  • Home rail header:    "10 shown · 65 total open · ⚠ partial"
+                       → "10 shown · 130 total open"  (no ⚠)
+  • by_domain.dialysis.ok:  false → true
+
+Migration applied live via Supabase MCP on 2026-05-18; this commit
+ships the SQL to the repo so a fresh clone replays to the same state.
+
+Caveats:
+  • rev_value is now refreshed once daily at 06:50 UTC. Acceptable for
+    a sort key whose gap weights are coarse bands ($1M / $3M / $5M /
+    $10M), not exact dollars.
+  • On-demand refresh available: REFRESH MATERIALIZED VIEW
+    CONCURRENTLY public.mv_property_value_signal;
+  • Storage cost: ~450 KB (one row per property × ~30 bytes).
+  • Pattern consistent with existing mv_* + refresh-* cron jobs.
+
+Files changed:
+  • supabase/migrations/dialysis/20260518130000_dia_qa06_mv_property_value_signal.sql
+  • AUDIT_PROGRESS.md (closeout)
+
+Queued for follow-up (separate patches):
+  • P0 — govQuery('property_intel') 403 (gov has no such table; should
+    be v_property_intel)
+  • P0 — govQuery('v_ownership_chain') 400 (gov view has no
+    property_id column)
+  • P1 — "Open Activities" stat conflict (Home vs Pipeline vs Metrics)
+  • P1 — Sync error count contradicts itself (Pipeline / Metrics /
+    Sync Health pages)
+  • P1 — Public REITs in llc_research_queue + same-entity duplicates
+  • P2 — Casing/UX nits documented in
+    outputs/lcc-qa-pass-2026-05-18.docx
