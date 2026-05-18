@@ -611,7 +611,23 @@ async function renderInboxTriage() {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:inbox_triage');
 
-  const res = await opsApi(`/api/inbox?action=list&status=${opsInboxFilter === 'all' ? '' : opsInboxFilter}&limit=100`);
+  // QA-18 (2026-05-18): fetch work_counts in parallel so the header can show
+  // "Showing 100 of 7,420" instead of just "100 items". Without this the
+  // Inbox header disagreed with the Metrics page (which uses inbox_new
+  // from work_counts) by ~7,000.
+  const [res, countsRes] = await Promise.all([
+    opsApi(`/api/inbox?action=list&status=${opsInboxFilter === 'all' ? '' : opsInboxFilter}&limit=100`),
+    opsApi('/api/queue-v2?view=work_counts'),
+  ]);
+  const workCounts = countsRes.ok ? (countsRes.data || {}) : {};
+  // Choose the right total based on the current filter.
+  const filterToCountKey = { new: 'inbox_new', triaged: 'inbox_triaged', all: 'inbox_new' };
+  // 'all' shows everything; we don't have a single field for "new + triaged"
+  // so approximate by inbox_new + inbox_triaged when filter is 'all'.
+  const totalForFilter = opsInboxFilter === 'all'
+    ? ((workCounts.inbox_new || 0) + (workCounts.inbox_triaged || 0))
+    : (workCounts[filterToCountKey[opsInboxFilter]] || 0);
+  window._inboxCanonicalTotal = totalForFilter;
 
   if (!res.ok) {
     el.innerHTML = `<div class="ops-empty">Could not load inbox.<br><small>${esc(res.error)}</small></div>`;
@@ -659,7 +675,19 @@ async function renderInboxTriage() {
 
   opsInboxSelected.clear();
 
-  const displayCount = opsInboxData.length + (window._inboxEmailTotal && opsInboxData.length > 0 && opsInboxData[0]._edge_source ? ` of ${window._inboxEmailTotal}` : '');
+  // QA-18 (2026-05-18): prefer canonical total from work_counts, fall back
+  // to the edge-source-fallback total, fall back to just the page count.
+  const onPage = opsInboxData.length;
+  const canonicalTotal = window._inboxCanonicalTotal || 0;
+  const edgeTotal = window._inboxEmailTotal || 0;
+  let displayCount;
+  if (canonicalTotal > onPage) {
+    displayCount = `Showing ${onPage.toLocaleString()} of ${canonicalTotal.toLocaleString()}`;
+  } else if (edgeTotal > onPage && opsInboxData.length > 0 && opsInboxData[0]._edge_source) {
+    displayCount = `${onPage} of ${edgeTotal.toLocaleString()}`;
+  } else {
+    displayCount = String(onPage);
+  }
   let html = '';
   html += `<div class="ops-header">
     <h2>Inbox <span style="font-size:13px;color:var(--text2);font-weight:400">${displayCount} items</span></h2>
