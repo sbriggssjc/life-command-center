@@ -1216,15 +1216,20 @@ async function exportWorkbook(req, res) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  // 5a. Opt-in: dialysis can request the binary master template injection via
-  //     ?layout=master_template. That path ships the user's actual master
-  //     XLSX shell with all 37 chart objects intact. Default is the cleaner
-  //     ExcelJS chart-per-tab layout (per user feedback: "I'm good with the
-  //     font and layout you had in the previous versions with a chart per
-  //     tab… so our marketing team can just export the data on demand.")
+  // 5a. Dialysis: master template path is now the DEFAULT (Round 33).
+  //     Marketing team feedback 2026-05-18: "the charts in the Excel
+  //     export are PNG images or graphics and not editable charts like
+  //     what's in our Excel version." The master template path ships
+  //     the actual master XLSX shell with all 37 chart objects intact
+  //     — natively editable in Excel (right-click → Edit Data /
+  //     Format Chart Area). The legacy ExcelJS chart-per-tab layout
+  //     with embedded PNG images stays available as opt-OUT via
+  //     ?layout=data_tabs (used by some integrations expecting that
+  //     specific tab structure).
   //
   // Diagnostic header X-CM-Workbook-Path tells the caller which path fired.
-  const layout = req.query.layout || 'data_tabs';
+  const layoutDefault = (vertical === 'dialysis') ? 'master_template' : 'data_tabs';
+  const layout = req.query.layout || layoutDefault;
   const masterEligible = (vertical === 'dialysis' && layout === 'master_template');
   const masterHasRows = Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0;
 
