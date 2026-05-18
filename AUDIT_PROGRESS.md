@@ -1773,3 +1773,77 @@ After Railway redeploys:
 - **Detail panel header wraps awkwardly** ("General / Services / Administration / – Arlington, VA" on 4 lines).
 - **Inbox cards** (Home + Inbox page) have only "Open in Outlook ↗" — no inline "Mark processed" / "Promote to property" actions. Forces a tab-switch per email.
 
+
+
+## QA pass #2 — Edge Function allowlist + rail null-crash ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-02-allowlist-edge-rail-fix`
+- **Patch:** `audit/patches/qa-02-allowlist-edge-rail-fix/apply.mjs`
+
+### Discovery (2026-05-18 in-browser QA pass)
+After QA-01 (the Express-side allowlist fix) merged, the detail panel
+was still broken in production. Re-tracing the request showed the
+frontend calls `/api/gov-query`, which `vercel.json` rewrites to
+`/api/admin?_route=edge-data&_source=gov`, which proxies to
+`https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/data-query`.
+The Edge Function has its OWN allowlist (`supabase/functions/data-query/index.ts`)
+which was missing every sprint-era view. QA-01 fixed the wrong file.
+
+### What was actually deployed
+Edge Function v14 to project `zqzrriwuavgrquhisnoa`, with these added
+to both `GOV_READ_TABLES` and `DIA_READ_TABLES`:
+
+| View | Used by |
+|---|---|
+| v_property_completeness | Item #6 completeness rail |
+| v_next_best_action | Item #8 next-action bar (detail panel) |
+| v_property_value_signal | NBA value FK |
+| v_gap_agency_drift | A-5 widget + #8 B-2 dispatcher (gov only) |
+| v_gap_lease_tenant_drift | #8 B-4 dispatcher (dia only) |
+| v_gap_chain_drift | #8 B-4 dispatcher (dia only) |
+| v_gap_orphan_sale_owner | NBA orphan branch |
+| llc_research_queue | NBA llc branch |
+
+### QA-04 — completeness-rail null-crash (paired fix)
+Once the cache populated, the rail still didn't render. Root cause was
+in `detail.js`: `v_property_completeness` returns `missing_fields` as a
+positional array (one slot per catalog field). Fields the property HAS
+populated are encoded as `null` rather than dropped. The chip renderer
+read `f.key` without filtering, crashing on the first null. Fixed with
+`missing = missing.filter(f => f && typeof f === 'object' && f.key)`.
+
+### Three-layer verification (captured live)
+- **SQL** (Supabase MCP): `v_property_completeness` returns 17,459 rows for gov.
+- **PostgREST** (anon): row visible for property_id=3198.
+- **Frontend pre-fix** (`govQuery` via fetch interceptor): `403 Read access denied for table: v_property_completeness`.
+- **Frontend post-deploy**: `_udCache.completeness = {score:57, band:"fair", missing_fields:[…6 fields…]}`, `_udCache.nextAction = {gap_type:"missing_recorded_owner", gap_value:990M}`.
+- **Rail render**: 6 chips ("Recorded owner +14", "Tenant agency +10", "RBA +8", "Latest sale price +5", "Federal headcount +3", "Build-to-suit flag +3").
+- **NAB render**: "Research recorded owner for 1200 New Jersey Ave SE", CTA "Open SoS →", meta "$990M value · opens Secretary of State portal".
+
+### Files changed
+- `supabase/functions/data-query/index.ts` — already in tree (matches deployed v14 state)
+- `detail.js` — QA-04 null-filter (line ~1321)
+- `api/admin.js` — one-line comment near `DATA_QUERY_EDGE_URL` so the next person doesn't redeploy to the wrong Supabase project
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Why QA-01's edits to api/_shared/allowlist.js are no-ops in prod
+`api/_shared/allowlist.js` belongs to the Express server (Railway path).
+The deployed Vercel frontend calls `/api/gov-query` which goes through
+`api/admin.js` → Edge Function. `allowlist.js` is never imported on that
+code path. QA-01's edits don't hurt — but they also don't fix prod.
+Worth a future cleanup pass to either retire the Express stack or
+factor the allowlists out of both into a shared JSON.
+
+### Queued for separate patches
+- **P0** dia `v_next_best_action` Postgres 57014 timeout
+- **P0** `govQuery('property_intel')` (gov has no such table; use `v_property_intel`)
+- **P0** `govQuery('v_ownership_chain')` with `property_id` filter (column doesn't exist on gov)
+- **P1** "Open Activities" stat reconciliation across Home / Pipeline / Metrics
+- **P1** Sync error count contradicts itself (Pipeline vs Metrics vs Sync Health)
+- **P1** Public REITs in `llc_research_queue` (Brandywine Realty Trust at NBA #9 + #10)
+- **P1** Same-entity duplicates in `llc_research_queue`
+- **P2** Casing: "Dod", "Ave Se", lowercase "townebank" cluster label
+- **P2** Calendar zero-duration events ("5:40 AM – 5:40 AM")
+- **P2** Home inbox cards lack inline actions
+- **P2** AI Copilot FAB has no visible label / aria-label
+

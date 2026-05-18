@@ -1591,6 +1591,13 @@ async function handleTreasury(req, res) {
 // ============================================================================
 // EDGE FUNCTION PROXIES — Phase 4b: Pure edge-first routing
 // No local fallback — edge functions are the source of truth
+//
+// QA-02 (2026-05-18) reminder: the LIVE data-query Edge Function is on
+// the Dialysis_DB project (zqzrriwuavgrquhisnoa), NOT on LCC Opps
+// (xengecqvemvfknjvbvrq) which also has a data-query function. When
+// updating the allowlist in supabase/functions/data-query/index.ts, the
+// redeploy target is the project in the URL below. Deploying to the
+// wrong project will silently no-op against production traffic.
 // ============================================================================
 
 const DATA_QUERY_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/data-query';

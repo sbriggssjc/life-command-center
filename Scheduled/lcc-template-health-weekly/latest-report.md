@@ -1,16 +1,16 @@
 # LCC Template Health Report
 
-**Week of:** May 4, 2026
+**Week of:** May 18, 2026
 **Lookback window:** 120 days
 **Run mode:** Live API call to `https://life-command-center-nine.vercel.app/api/operations?_route=draft&action=health` with `X-LCC-Key` from `.env.local`. HTTP 200, payload parsed cleanly.
 
-> Note: scheduled task asked for the report at `C:\Users\scott\OneDrive\Documents\Claude\Scheduled\lcc-template-health-weekly\latest-report.md`, but that folder isn't in the session's connected mounts. Same as last week, the report was written to the LCC workspace path. To restore the OneDrive destination, connect that folder to Cowork or update the SKILL.md to write here permanently.
+> Note: scheduled task asked for the report at `C:\Users\scott\OneDrive\Documents\Claude\Scheduled\lcc-template-health-weekly\latest-report.md`, but that folder isn't in the session's connected mounts. Same as the last three weeks, the report was written to the LCC workspace path. To restore the OneDrive destination, connect that folder to Cowork or update the SKILL.md to write here permanently.
 
 ---
 
 ## Executive Summary
 
-Third consecutive week with no change. The endpoint is healthy and returning a clean payload, but no broker sends have been recorded in the last 120 days, so the refinement loop still has nothing to score. All 14 active templates are flagged `stale`; zero need revision; zero are underperforming.
+Fourth consecutive week with no change. The endpoint is healthy and returning a clean payload, but no broker sends have been recorded in the last 120 days, so the refinement loop still has nothing to score. All 14 active templates are flagged `stale`; zero need revision; zero are underperforming.
 
 | Metric | This week | Last week | Notes |
 |---|---|---|---|
@@ -26,9 +26,11 @@ Third consecutive week with no change. The endpoint is healthy and returning a c
 
 ## What needs attention this week
 
-Nothing in the templates themselves. The recurring action item — unchanged from the last two reports — is **start sending**. Without `template_sends` rows, every metric (`avg_edit_distance_pct`, `open_rate_pct`, `reply_rate_pct`, `deal_advance_rate_pct`) is `null` and the health evaluator has nothing to flag.
+Nothing in the templates themselves. The recurring action item — unchanged from the last three reports — is **start sending**. Without `template_sends` rows, every metric (`avg_edit_distance_pct`, `open_rate_pct`, `reply_rate_pct`, `deal_advance_rate_pct`) is `null` and the health evaluator has nothing to flag.
 
 If sends *are* happening but in Outlook directly, the missing piece is calling `record_send` so a row lands in `template_sends`. Without that, this report stays "all stale" indefinitely.
+
+At four weeks of identical output, it may be worth either (a) shipping the `record_send` instrumentation so future reports have something to evaluate, or (b) dialling this scheduled task down to monthly until volume returns — running it weekly only re-confirms the same null state.
 
 Suggested first templates to wire into a real cadence (same as prior weeks):
 

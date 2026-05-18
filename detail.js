@@ -1314,6 +1314,11 @@ function _udRenderCompletenessRail() {
   if (!Array.isArray(cmp.missing_fields) && typeof cmp.missing_fields === 'string') {
     try { missing = JSON.parse(cmp.missing_fields) || []; } catch (_) { missing = []; }
   }
+  // QA-04 (2026-05-18): The v_property_completeness view emits null entries
+  // inside missing_fields[] for fields the property HAS populated (the array
+  // is positionally aligned to the field catalog rather than dense). Filter
+  // them out — they would crash the chip renderer on f.key.
+  missing = missing.filter(f => f && typeof f === 'object' && f.key);
   // Top 6 highest-weight missing fields (already weight-sorted by the view).
   const top = missing.slice(0, 6);
 
