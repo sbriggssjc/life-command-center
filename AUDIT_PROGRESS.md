@@ -2185,3 +2185,36 @@ The legacy fallback path (raw flagged emails from the edge function, no canonica
 - **QA-14** Messages page inline actions (every row currently has only "Open in Outlook ↗").
 - **QA-15** Research page — wire the LLC + Agency Drift widgets onto pageResearch.
 
+
+
+## QA pass #14 — Messages page inline actions ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-14-messages-inline-actions`
+- **Patch:** `audit/patches/qa-14-messages-inline-actions/apply.mjs`
+
+### Symptom
+Every row on the Messages page had only "Open in Outlook ↗", forcing a context switch per message. The Inbox page has the full action set; the redundant Messages flagged tab did not.
+
+### Structural difference from QA-13
+The Home Inbox rail (QA-13) renders canonical inbox rows directly — each item already has a queue UUID and `status`. The Messages page's `flagged` tab pulls raw Outlook emails from `/api/sync?action=flagged_emails` — those items have an Outlook `external_id` but no canonical queue UUID. The canonical inbox sync runs separately, so at any given moment some flagged emails have a canonical match and some don't.
+
+### Fix
+`app.js`:
+1. New module-level `Map msgCanonicalById` keyed by `external_id` → `{ id, status }`.
+2. `loadMessages` also fetches `/api/queue-v2?view=inbox&per_page=500` and populates the map.
+3. `renderMessages` flagged-tab path:
+   - Cards with a canonical match render the four-button row (Triage shown only when `status === 'new'`).
+   - Cards without a match keep just "Open in Outlook ↗" plus a grey hint "(not yet in inbox queue)".
+
+Recent/Sent tabs unchanged — those items are SF activities, not triage queue items.
+
+### Files changed
+- `app.js` (loadMessages + renderMessages flagged-tab)
+- `AUDIT_PROGRESS.md` (this closeout)
+
+### Optional follow-up (out of scope here)
+- "Bring to Inbox" button on unmatched flagged cards — would need a small backend endpoint (`/api/workflows?action=canonicalize_email` taking external_id) to manually create the canonical row instead of waiting for the next sync.
+
+### Queued
+- **QA-15** — Research page LLC + Agency Drift widgets (last item in the deferred queue).
+
