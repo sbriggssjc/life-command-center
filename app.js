@@ -1604,6 +1604,102 @@ function _lccAgencyDriftOpenDetail(property_id) {
 }
 window._lccAgencyDriftOpenDetail = _lccAgencyDriftOpenDetail;
 
+// ============================================================================
+// WRITE FAILURES DASHBOARD WIDGET — Phase C (2026-05-18)
+//
+// Mounts on the Sync Health page below the connector cards. Surfaces the
+// last 24h of silent-write failures captured by Item #5 Phase A's
+// ingest_write_failures table. Helps Scott see at a glance "what's
+// silently broken right now".
+// ============================================================================
+
+function _lccFmtFreshness(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '';
+  const diff = Date.now() - t;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  return Math.floor(diff / 86400000) + 'd ago';
+}
+
+async function loadWriteFailuresRollup(hours) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const r = await fetch('/api/admin?_route=write-failures-rollup&hours=' + (hours || 24), { headers });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    if (typeof lccReportError === 'function') {
+      lccReportError('Load write-failures rollup', e, { tier: 'warn' });
+    }
+    return { ok: false, totals: { total: 0 }, top_combos: [] };
+  }
+}
+window.loadWriteFailuresRollup = loadWriteFailuresRollup;
+
+async function renderWriteFailuresWidget(parentEl) {
+  if (!parentEl) return;
+  let widget = parentEl.querySelector('.lcc-wf-widget');
+  if (!widget) {
+    widget = document.createElement('div');
+    widget.className = 'lcc-wf-widget';
+    parentEl.appendChild(widget);
+  }
+  widget.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+  const snap = await loadWriteFailuresRollup(24);
+  if (!snap || !snap.ok) {
+    widget.innerHTML = '<div class="widget-error"><div class="err-msg">Write-failures rollup unavailable.</div><button class="retry-btn" onclick="(async()=>{const el=document.getElementById(&quot;syncHealthContent&quot;);if(el)await renderWriteFailuresWidget(el);})()">Retry</button></div>';
+    return;
+  }
+
+  const t = snap.totals || {};
+  const combos = Array.isArray(snap.top_combos) ? snap.top_combos : [];
+  const parts = [];
+  parts.push('<div class="lcc-wf-header">');
+  parts.push(  '<div class="lcc-wf-title">Silent-Write Failures <span class="lcc-wf-window">last 24h</span></div>');
+  parts.push(  '<button type="button" class="nba-refresh-btn" title="Refresh" onclick="(async()=>{const el=document.getElementById(&quot;syncHealthContent&quot;);if(el)await renderWriteFailuresWidget(el);})()">↻</button>');
+  parts.push('</div>');
+
+  // Stats row
+  parts.push('<div class="lcc-wf-stats">');
+  parts.push(  '<div class="lcc-wf-stat"><div class="lcc-wf-stat-num">' + (t.total || 0).toLocaleString() + '</div><div class="lcc-wf-stat-label">Total</div></div>');
+  parts.push(  '<div class="lcc-wf-stat"><div class="lcc-wf-stat-num">' + (t.labeled || 0).toLocaleString() + '</div><div class="lcc-wf-stat-label">Labeled</div></div>');
+  parts.push(  '<div class="lcc-wf-stat ' + ((t.unlabeled || 0) > 0 ? 'lcc-wf-stat-warn' : '') + '"><div class="lcc-wf-stat-num">' + (t.unlabeled || 0).toLocaleString() + '</div><div class="lcc-wf-stat-label">Unlabeled</div></div>');
+  parts.push(  '<div class="lcc-wf-stat"><div class="lcc-wf-stat-num">' + (t.distinct_labels || 0).toLocaleString() + '</div><div class="lcc-wf-stat-label">Distinct labels</div></div>');
+  parts.push('</div>');
+
+  // Table
+  if (combos.length === 0) {
+    parts.push('<div class="lcc-wf-empty">No silent-write failures in the last 24h. ✓</div>');
+  } else {
+    parts.push('<div class="lcc-wf-table-wrap">');
+    parts.push('<table class="lcc-wf-table"><thead><tr>');
+    parts.push(  '<th>Label</th><th>Path</th><th>Status</th><th class="num">Count</th><th>Last seen</th>');
+    parts.push('</tr></thead><tbody>');
+    combos.forEach(c => {
+      const labelStr = c.label || '(unlabeled)';
+      const cls = c.label ? 'lcc-wf-row' : 'lcc-wf-row lcc-wf-row-unlabeled';
+      const sample = c.sample_detail ? ' title="' + esc(c.sample_detail) + '"' : '';
+      parts.push('<tr class="' + cls + '"' + sample + '>');
+      parts.push(  '<td class="lcc-wf-label">' + esc(labelStr) + '</td>');
+      parts.push(  '<td class="lcc-wf-path">' + esc(c.path || '') + '</td>');
+      parts.push(  '<td class="lcc-wf-status">' + (c.http_status != null ? c.http_status : '') + '</td>');
+      parts.push(  '<td class="lcc-wf-count num">' + (c.count || 0).toLocaleString() + '</td>');
+      parts.push(  '<td class="lcc-wf-when">' + esc(_lccFmtFreshness(c.latest_at)) + '</td>');
+      parts.push('</tr>');
+    });
+    parts.push('</tbody></table>');
+    parts.push('</div>');
+  }
+
+  widget.innerHTML = parts.join('');
+}
+window.renderWriteFailuresWidget = renderWriteFailuresWidget;
+
 function lccRenderSortToggle(table, defaultKey, keys, onChangeFnName) {
   const active = lccGetListSort(table, defaultKey);
   const parts = [];

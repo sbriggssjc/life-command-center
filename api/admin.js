@@ -99,6 +99,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
     case 'agency-drift-queue':      return handleAgencyDriftQueueList(req, res);
     case 'resolve-agency-drift':    return handleResolveAgencyDrift(req, res);
+    case 'write-failures-rollup':   return handleWriteFailuresRollup(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -3206,6 +3207,88 @@ async function handleResolveAgencyDrift(req, res) {
   } catch (err) {
     console.error('[resolve-agency-drift]', err?.message || err);
     return res.status(500).json({ error: 'resolve_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// WRITE FAILURES ROLLUP — Phase C (2026-05-18)
+//
+// GET /api/admin?_route=write-failures-rollup&hours=24
+//   Returns:
+//     {
+//       ok: true,
+//       window_hours,
+//       totals: { total, labeled, unlabeled, distinct_labels },
+//       top_combos: [{ label, path, http_status, count, latest_at, sample_detail }]
+//     }
+//   top_combos limited to 25 rows ordered by count DESC.
+// ============================================================================
+async function handleWriteFailuresRollup(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const hours = Math.min(parseInt(req.query.hours, 10) || 24, 168);
+
+  try {
+    const { opsQuery } = await import('./_shared/ops-db.js');
+    const cutoff = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    // Pull recent failures with bounded payload (cap at 5000 rows for stats).
+    const r = await opsQuery('GET',
+      'ingest_write_failures?occurred_at=gte.' + encodeURIComponent(cutoff) +
+      '&select=label,path,http_status,occurred_at,error_detail' +
+      '&order=occurred_at.desc' +
+      '&limit=5000'
+    );
+    if (!r.ok) return res.status(502).json({ error: 'rollup_fetch_failed', detail: r.data });
+
+    const rows = Array.isArray(r.data) ? r.data : [];
+    const labelsSeen = new Set();
+    let labeled = 0;
+    let unlabeled = 0;
+    const buckets = new Map();
+    for (const row of rows) {
+      if (row.label) { labeled++; labelsSeen.add(row.label); } else { unlabeled++; }
+      const key = (row.label || '(unlabeled)') + '|' + (row.path || '') + '|' + (row.http_status || '');
+      let b = buckets.get(key);
+      if (!b) {
+        b = {
+          label: row.label || null,
+          path: row.path || null,
+          http_status: row.http_status || null,
+          count: 0,
+          latest_at: row.occurred_at,
+          sample_detail: null,
+        };
+        buckets.set(key, b);
+      }
+      b.count++;
+      if (row.occurred_at > b.latest_at) b.latest_at = row.occurred_at;
+      if (!b.sample_detail && row.error_detail) {
+        try {
+          const det = typeof row.error_detail === 'string' ? row.error_detail : JSON.stringify(row.error_detail);
+          b.sample_detail = det.length > 240 ? det.slice(0, 237) + '...' : det;
+        } catch (_) {}
+      }
+    }
+    const top_combos = Array.from(buckets.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 25);
+
+    return res.status(200).json({
+      ok: true,
+      window_hours: hours,
+      totals: {
+        total:           rows.length,
+        labeled,
+        unlabeled,
+        distinct_labels: labelsSeen.size,
+      },
+      top_combos,
+    });
+  } catch (err) {
+    console.error('[write-failures-rollup]', err?.message || err);
+    return res.status(500).json({ error: 'rollup_failed', message: err?.message });
   }
 }
 
