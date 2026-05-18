@@ -118,23 +118,60 @@ const STYLE_CURRENCY = 25;
 const STYLE_PCT_INT  = 26;
 const STYLE_PCT_2DP  = 29;
 
-// Column-to-key map for the Phase-1 master coverage (B-O = 14 columns).
-// Keep parallel to cm_dialysis_market_quarterly_master_m view's column shape.
+// Column-to-key map for the dia master template Charts sheet.
+// Originally Phase 1 (B-O = 14 cols, R31). Phase 2 (R33) extends to BM
+// covering every column the 37 chart objects reference that has a
+// direct counterpart in cm_dialysis_market_quarterly_master_m.
+//
+// Columns mapped to master_m fields here become live data when the
+// loader runs. Columns NOT mapped (P, Q, R, V, Y, Z, AA, AC, AH, AI,
+// AJ, AN, AS, AT, AU, AV, AW, AX, AY, AZ, BB, BC, BD, BF, BG, BH,
+// BI, BJ) need either derived calculations (90/180-day rolling caps,
+// pace metrics, valuation index) or cross-view joins (DOM, inventory
+// flow) or new view extensions (tenant-specific caps for FMC/DVA,
+// Rent/SF). See docs/cm/editable-charts-plan.md for the full
+// inventory and Phase 3+ scope.
+//
+// Headers exactly match the master template's row-2 inline strings
+// (verified via scripts/cm-inventory-master-template-charts.py) so
+// the chart objects' axis labels + tooltips render correctly.
 const CHARTS_SHEET_COLUMNS = [
-  { col: 'B', header: 'Date',                                  key: 'period_end',                       style: STYLE_DATE,     transform: 'date' },
-  { col: 'C', header: 'Transaction Count (ttm)',               key: 'transaction_count_ttm',            style: STYLE_INTEGER  },
-  { col: 'D', header: 'Transaction Count (ttm) w/o Sumitomo',  key: 'transaction_count_ttm_no_sumitomo',style: STYLE_INTEGER  },
-  { col: 'E', header: 'Avg Deal Size',                         key: 'avg_deal_size',                    style: STYLE_CURRENCY },
-  { col: 'F', header: 'Sales Volume (ttm)',                    key: 'ttm_volume',                       style: STYLE_CURRENCY },
-  { col: 'G', header: 'Y-O-Y Change (%)',                      key: 'yoy_change_pct',                   style: STYLE_PCT_INT  },
-  { col: 'H', header: 'Sales Volume (ttm)',                    key: 'ttm_volume_alt',                   style: STYLE_CURRENCY },
-  { col: 'I', header: 'Quarterly Volume',                      key: 'quarterly_volume',                 style: STYLE_CURRENCY },
-  { col: 'J', header: 'Quarterly Count',                       key: 'quarterly_count',                  style: STYLE_INTEGER  },
-  { col: 'K', header: 'Monthly Volume',                        key: 'monthly_volume',                   style: STYLE_CURRENCY },
-  { col: 'L', header: 'Monthly Count',                         key: 'monthly_count',                    style: STYLE_INTEGER  },
-  { col: 'M', header: 'Upper Quartile (ttm)',                  key: 'upper_quartile_cap_ttm',           style: STYLE_PCT_2DP  },
-  { col: 'N', header: 'Lower Quartile (ttm)',                  key: 'lower_quartile_cap_ttm',           style: STYLE_PCT_2DP  },
-  { col: 'O', header: 'Cap (ttm)',                             key: 'avg_cap_rate_ttm',                 style: STYLE_PCT_2DP  },
+  { col: 'B',  header: 'Date',                                  key: 'period_end',                       style: STYLE_DATE,     transform: 'date' },
+  { col: 'C',  header: 'Transaction Count (ttm)',               key: 'transaction_count_ttm',            style: STYLE_INTEGER  },
+  { col: 'D',  header: 'Transaction Count (ttm) w/o Sumitomo',  key: 'transaction_count_ttm_no_sumitomo',style: STYLE_INTEGER  },
+  { col: 'E',  header: 'Avg Deal Size',                         key: 'avg_deal_size',                    style: STYLE_CURRENCY },
+  { col: 'F',  header: 'Sales Volume (ttm)',                    key: 'ttm_volume',                       style: STYLE_CURRENCY },
+  { col: 'G',  header: 'Y-O-Y Change (%)',                      key: 'yoy_change_pct',                   style: STYLE_PCT_INT  },
+  { col: 'H',  header: 'Sales Volume (ttm)',                    key: 'ttm_volume_alt',                   style: STYLE_CURRENCY },
+  { col: 'I',  header: 'Quarterly Volume',                      key: 'quarterly_volume',                 style: STYLE_CURRENCY },
+  { col: 'J',  header: 'Quarterly Count',                       key: 'quarterly_count',                  style: STYLE_INTEGER  },
+  { col: 'K',  header: 'Monthly Volume',                        key: 'monthly_volume',                   style: STYLE_CURRENCY },
+  { col: 'L',  header: 'Monthly Count',                         key: 'monthly_count',                    style: STYLE_INTEGER  },
+  { col: 'M',  header: 'Upper Quartile (ttm)',                  key: 'upper_quartile_cap_ttm',           style: STYLE_PCT_2DP  },
+  { col: 'N',  header: 'Lower Quartile (ttm)',                  key: 'lower_quartile_cap_ttm',           style: STYLE_PCT_2DP  },
+  { col: 'O',  header: 'Cap (ttm)',                             key: 'avg_cap_rate_ttm',                 style: STYLE_PCT_2DP  },
+  // ---- R33 Phase 2 additions (all from master_m) ----
+  { col: 'S',  header: '10-Year Treasury Yields',               key: 'treasury_10y_yield',               style: STYLE_PCT_2DP  },
+  { col: 'T',  header: 'Low Assumed Loan Constant',             key: 'low_loan_constant',                style: STYLE_PCT_2DP  },
+  { col: 'U',  header: 'High Assumed Loan Constant',            key: 'high_loan_constant',               style: STYLE_PCT_2DP  },
+  { col: 'W',  header: 'NM Cap Rate (ttm)',                     key: 'nm_avg_cap_ttm',                   style: STYLE_PCT_2DP  },
+  { col: 'X',  header: 'Non-NM Cap Rate (ttm)',                 key: 'non_nm_avg_cap_ttm',               style: STYLE_PCT_2DP  },
+  { col: 'AB', header: '10+ Year Cap (ttm)',                    key: 'cap_10plus_year',                  style: STYLE_PCT_2DP  },
+  { col: 'AD', header: '12+ Year Cap (ttm)',                    key: 'cap_12plus_year',                  style: STYLE_PCT_2DP  },
+  { col: 'AE', header: '8 to 12 Year Cap (ttm)',                key: 'cap_8to12_year',                   style: STYLE_PCT_2DP  },
+  { col: 'AF', header: '6 to 8 Year Cap (ttm)',                 key: 'cap_6to8_year',                    style: STYLE_PCT_2DP  },
+  { col: 'AG', header: '5 or Less Year Cap (ttm)',              key: 'cap_5orless_year',                 style: STYLE_PCT_2DP  },
+  { col: 'AK', header: 'Days on Market (ttm)',                  key: 'avg_dom',                          style: STYLE_INTEGER  },
+  { col: 'AL', header: '% of Ask',                              key: 'pct_of_ask',                       style: STYLE_PCT_2DP  },
+  { col: 'AM', header: 'Last Ask (ttm)',                        key: 'avg_last_ask_cap',                 style: STYLE_PCT_2DP  },
+  { col: 'AO', header: 'Bid-Ask Spread',                        key: 'avg_bid_ask_spread',               style: STYLE_PCT_2DP  },
+  { col: 'AP', header: 'Price Change (ttm)',                    key: 'pct_price_change_all',             style: STYLE_PCT_INT  },
+  { col: 'AQ', header: '10+ Year Ask (ttm)',                    key: 'last_ask_cap_long_term',           style: STYLE_PCT_2DP  },
+  { col: 'AR', header: '10+ Year Price Change (ttm)',           key: 'pct_price_change_long_term',       style: STYLE_PCT_INT  },
+  { col: 'BE', header: 'YOY Change (%)',                        key: 'yoy_change_pct',                   style: STYLE_PCT_INT  },
+  { col: 'BK', header: 'Individual Count (ttm)',                key: 'private_count',                    style: STYLE_INTEGER  },
+  { col: 'BL', header: 'Fund Count (ttm)',                      key: 'institutional_count',              style: STYLE_INTEGER  },
+  { col: 'BM', header: 'REIT Count (ttm)',                      key: 'reit_count',                       style: STYLE_INTEGER  },
 ];
 
 function escapeXml(s) {
@@ -167,6 +204,17 @@ function generateChartsSheetXml(rows) {
   const dataRowsStartAt = 3; // master uses row 2 = headers, row 3 = first data
   const lastRow = dataRowsStartAt + rows.length - 1;
 
+  // Compute dimension ref to span the full populated range. R31's
+  // Phase 1 was hard-coded B-O; R33 Phase 2 extends through BM.
+  // Derive from CHARTS_SHEET_COLUMNS so future column additions
+  // update the dimension automatically.
+  const allCols = CHARTS_SHEET_COLUMNS.map(c => c.col);
+  const colSortKey = (a) => a.length === 1
+    ? a.charCodeAt(0)
+    : (a.charCodeAt(0) - 64) * 26 + (a.charCodeAt(1) - 64);
+  const lastCol = allCols.reduce((acc, c) =>
+    colSortKey(c) > colSortKey(acc) ? c : acc, 'B');
+
   // Header row (row 2)
   const headerCells = CHARTS_SHEET_COLUMNS
     .map(c => cellInlineStrXml(`${c.col}2`, c.header))
@@ -191,7 +239,7 @@ function generateChartsSheetXml(rows) {
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <dimension ref="B2:O${lastRow}"/>
+  <dimension ref="B2:${lastCol}${lastRow}"/>
   <sheetViews>
     <sheetView workbookViewId="0"/>
   </sheetViews>

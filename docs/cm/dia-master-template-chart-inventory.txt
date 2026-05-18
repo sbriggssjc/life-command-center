@@ -1,0 +1,99 @@
+# 37 chart objects in dia master template
+
+chart   type           series_title                                   sheet              col   rows          
+--------------------------------------------------------------------------------------------------------------------
+1       scatterChart                                                  Available Comps    M     161-327       
+1       scatterChart                                                  Available Comps    M     332-340       
+2       scatterChart                                                  Core Cap Chart     B     3-630         
+2       scatterChart   DDP                                            Core Cap Chart     B     637-699       
+3       barChart                                                      Charts             C     128-218       
+3       barChart                                                      Charts             E     128-218       
+4       lineChart                                                     Charts             AD    139-218       
+4       lineChart                                                     Charts             AE    139-218       
+4       lineChart                                                     Charts             AF    139-218       
+4       lineChart                                                     Charts             AG    139-218       
+5       areaChart                                                     Charts             F     86-218        
+5       areaChart                                                     Charts             M     86-218        
+5       areaChart                                                     Charts             N     86-218        
+5       areaChart                                                     Charts             O     86-2118       
+6       barChart                                                      Charts             AK    128-218       
+6       barChart                                                      Charts             AL    128-218       
+7       lineChart                                                     Charts             AM    125-218       
+7       lineChart                                                     Charts             AO    125-218       
+8       barChart                                                      Charts             AU    123-218       
+8       barChart                                                      Charts             AV    123-218       
+8       barChart                                                      Charts             AW    123-218       
+9       barChart                                                      Charts             BC    130-218       
+9       barChart                                                      Charts             BB    130-218       
+10      barChart                                                      Charts             BK    130-218       
+10      barChart                                                      Charts             BL    130-218       
+10      barChart                                                      Charts             BM    130-218       
+11      lineChart                                                     Charts             W     155-218       
+11      lineChart                                                     Charts             X     155-218       
+12      doughnutChart                                                 Charts             CH    94-96         
+13      lineChart                                                     Charts             W     155-218       
+13      lineChart                                                     Charts             X     155-218       
+14      barChart                                                      Charts             AP    124-218       
+14      barChart                                                      Charts             AR    124-218       
+14      barChart                                                      Charts             AM    124-218       
+14      barChart                                                      Charts             AQ    124-218       
+15      lineChart                                                     Charts             S     23-218        
+15      lineChart                                                     Charts             S     23-218        
+15      lineChart                                                     Charts             U     23-218        
+15      lineChart                                                     Charts             O     23-218        
+16      lineChart                                                     Charts             G     38-218        
+17      barChart                                                      Charts             I     38-218        
+18      barChart                                                      Charts             BE    32-218        
+18      barChart                                                      Charts             BD    32-218        
+19      lineChart                                                     Charts             BF    19-218        
+19      lineChart                                                     Charts             BG    19-218        
+20      lineChart                                                     Charts             Q     75-218        
+20      lineChart                                                     Charts             O     75-218        
+20      lineChart                                                     Charts             AB    75-218        
+20      lineChart                                                     Charts             AC    75-218        
+21      barChart                                                      Charts             Z     28-218        
+21      barChart                                                      Charts             AA    28-218        
+21      barChart                                                      Charts             V     27-218        
+22      doughnutChart                                                 Charts             CI    94-96         
+23      lineChart                                                     Charts             AH    69-218        
+23      lineChart                                                     Charts             AI    69-218        
+24      barChart                                                      Charts             D     15-218        
+25      lineChart                                                     Charts             AB    75-218        
+25      lineChart                                                     Charts             AC    75-218        
+26      barChart                                                      Market Size        C     51-54         
+26      barChart                                                      Market Size        D     51-54         
+26      barChart                                                      Market Size        E     51-54         
+26      barChart                                                      Market Size        F     51-54         
+26      barChart                                                      Market Size        G     51-54         
+27      barChart                                                      -                  -     -             
+27      barChart                                                      -                  -     -             
+27      barChart                                                      -                  -     -             
+27      barChart                                                      -                  -     -             
+28      lineChart                                                     -                  -     -             
+28      lineChart                                                     -                  -     -             
+28      lineChart                                                     -                  -     -             
+28      lineChart                                                     -                  -     -             
+29      barChart                                                      -                  -     -             
+29      barChart                                                      -                  -     -             
+29      barChart                                                      -                  -     -             
+29      barChart                                                      -                  -     -             
+30      lineChart                                                     Market Size        C     71-210        
+30      lineChart                                                     Market Size        D     71-210        
+30      lineChart                                                     Market Size        E     71-210        
+30      lineChart                                                     Market Size        F     71-210        
+31      barChart                                                      -                  -     -             
+31      barChart                                                      -                  -     -             
+31      barChart                                                      -                  -     -             
+31      barChart                                                      -                  -     -             
+32      pieChart                                                      Market Size        C     65-68         
+33      barChart                                                      Market Size        E     65-68         
+33      barChart                                                      Market Size        D     65-68         
+34      scatterChart                                                  Sheet1             Q     4-233         
+34      scatterChart                                                  Sheet1             R     4-233         
+34      scatterChart                                                  Sheet1             T     4-18          
+35      lineChart                                                     Rent Survey        I     3-36          
+35      lineChart                                                     Rent Survey        J     3-36          
+35      lineChart                                                     Rent Survey        H     3-36          
+35      lineChart                                                     Rent Survey        K     3-36          
+36      pieChart                                                      Competition        N     23-36         
+37      pieChart                                                      Competition        N     42-55         
