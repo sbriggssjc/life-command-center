@@ -1,0 +1,49 @@
+audit(item-2/phase-b): LLC Research Queue UI
+
+Phase A (shipped earlier) added the pg_cron job that drains the LLC
+research queue via the AI pipeline. Phase B gives Scott the manual
+surface to power through the cases the AI can't resolve (ambiguous
+names, multi-state filings, etc.).
+
+Three pieces:
+
+1. Two new admin sub-routes:
+   • GET  /api/admin?_route=llc-research-queue
+     → top-N queued LLC entries joined with property context
+       (address, city, state, value, completeness band/score).
+       Ordered by rev_value DESC.
+   • POST /api/admin?_route=resolve-llc-research
+     → body { queue_id, status: 'no_match'|'completed',
+              found_filing_id?, found_filing_state? }
+       Marks resolved + sets resolved_at.
+
+2. Widget at top of the Research page (mounted from ops.js
+   renderResearchPage):
+   • Top 15 LLC entries as cards with rank, search name, guessed
+     state, property address + tenant context, value, completeness
+     chip, attempts.
+   • Per-row "Open SoS →" link (26-state portal map; Google
+     fallback for the rest).
+   • Per-row "Mark found" (async prompt for filing_id) + "No match"
+     (async confirm).
+   • Refresh button + auto-rerender on action.
+
+3. CSS for the widget header + card grid + action buttons + mobile.
+
+Live queue as of merge:
+  • queued:    1,267
+  • no_match:  3
+  • completed: 0
+
+Files changed:
+  • api/admin.js   — 2 sub-routes + 2 handlers
+  • ops.js         — mount call inside renderResearchPage
+  • app.js         — widget render + load + 2 actions + SoS map
+  • styles.css     — .lcc-llc-research-* block
+  • AUDIT_PROGRESS.md
+
+Phase C follow-ups (deferred):
+  • Bulk mode (select N rows + bulk action).
+  • Inline result-capture form (avoid the async-prompt step).
+  • Expand SoS portal map to all 50 states + DC.
+  • Per-row history + retry.
