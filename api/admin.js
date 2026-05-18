@@ -3117,12 +3117,16 @@ async function handleAgencyDriftQueueList(req, res) {
   if (!user) return;
 
   const limit = Math.min(parseInt(req.query.limit, 10) || 15, 100);
+  // Phase B (2026-05-18): `kind` chooses between the two drift_kind
+  // surfaces. Default preserves A-5 behavior.
+  const ALLOWED_KINDS = new Set(['agency_disagreement', 'lease_agency_but_property_agency_null']);
+  const kind = ALLOWED_KINDS.has(String(req.query.kind || '')) ? String(req.query.kind) : 'agency_disagreement';
 
   try {
     const { domainQuery } = await import('./_shared/domain-db.js');
     const gRes = await domainQuery('government', 'GET',
       'v_gap_agency_drift' +
-      '?drift_kind=eq.agency_disagreement' +
+      '?drift_kind=eq.' + encodeURIComponent(kind) +
       '&select=property_id,prop_agency,prop_agency_canonical,lease_tenant_agency,lease_tenant_agency_full,property_value,drift_kind' +
       '&order=property_value.desc.nullslast' +
       '&limit=' + limit
@@ -3163,7 +3167,7 @@ async function handleAgencyDriftQueueList(req, res) {
       };
     });
 
-    return res.status(200).json({ ok: true, items, total: items.length });
+    return res.status(200).json({ ok: true, items, total: items.length, kind });
   } catch (err) {
     console.error('[agency-drift-queue]', err?.message || err);
     return res.status(500).json({ error: 'agency_drift_queue_failed', message: err?.message });

@@ -308,6 +308,10 @@ input, select { font-family: inherit; }
 .lcc-agency-drift-versus-arrow { color: var(--text3); font-weight: 700; }
 .lcc-agency-drift-versus-lease { color: var(--text1); padding: 2px 7px; background: color-mix(in srgb, var(--green, #22c55e) 14%, var(--s1)); border: 1px solid color-mix(in srgb, var(--green, #22c55e) 38%, transparent); border-radius: 999px; font-weight: 600; }
 
+/* Agency drift Phase B (2026-05-18): "Missing" mode + filter toggle */
+.lcc-agency-drift-blank { font-style: italic; color: var(--text3) !important; background: var(--s2) !important; border-color: var(--border) !important; }
+.lcc-adrift-controls { display: inline-flex; align-items: center; gap: 8px; }
+
 /* Next-action bar — detail panel (Item #8 Phase A, 2026-05-17) */
 .next-action-bar { position: sticky; bottom: 0; z-index: 3; background: var(--s1); border-top: 1px solid var(--border); padding: 10px 14px; padding-bottom: calc(10px + var(--safe-bottom, 0px)); display: flex; align-items: center; gap: 10px; cursor: pointer; transition: background 0.15s; }
 .next-action-bar:hover { background: color-mix(in srgb, var(--accent2) 6%, var(--s1)); }
