@@ -2394,3 +2394,42 @@ Lesson: page-level QA needs to exercise tab clicks too, not just default-open ta
 - `detail.js` — `_udIsPlaceholderTenant` split + filter call site update
 - `AUDIT_PROGRESS.md` — this closeout
 
+
+
+## QA pass #21 — Contacts negative-date clamp ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-21-contacts-negative-date-clamp`
+- **Patch:** `audit/patches/qa-21-contacts-negative-date-clamp/apply.mjs`
+
+### Symptom (QA pass #4)
+12+ contacts on the Contacts page first-page render showed e.g. "-123d ago", "-189d ago", "-4d ago" for last-activity timestamps. Sync glitches (Salesforce bridge writing a future modified_date or timezone mismatches) were producing future timestamps on contact records.
+
+### Root cause
+`contacts-ui.js` `relativeDate(dateStr)` had:
+```js
+const days = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+if (days === 0) return 'Today';
+if (days === 1) return 'Yesterday';
+if (days < 7) return days + 'd ago';
+```
+When `d` is in the future, `days` is negative; the third branch returns `"-123d ago"` because `-123 < 7`.
+
+### Fix
+One-line guard at the top of `relativeDate`:
+```js
+if (days < 0) return 'Recent';
+```
+
+### Other freshness helpers — already correct (verified)
+- `formatDate` (app.js) — handles negatives via "In Xd" / "Tomorrow"
+- `_lccFmtFreshness` (app.js) — first branch `< 60000` ms catches negatives
+- `relDate` (ops.js) — handles both directions for due-dates
+- `freshnessLabel` (ops.js) — first branch `< 5` min catches negatives
+
+### Files changed
+- `contacts-ui.js` — relativeDate negative clamp
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Deferred follow-up
+- **QA-22:** investigate the upstream sync writing future timestamps to contact records. Salesforce bridge is the likely culprit; ingest-side guard would prevent the bad data from landing in the first place.
+
