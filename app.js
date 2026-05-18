@@ -1146,6 +1146,122 @@ document.addEventListener('visibilitychange', () => {
 window.lccFlushErrors = _lccFlushClientErrors;
 window.lccErrorBuffer = () => _lccErrBuffer.slice();
 
+// ============================================================================
+// LIST SORT + COMPLETENESS CHIPS — Item #6 Phase B-3 + Item #9 Phase B
+// (2026-05-17)
+//
+// Generic helpers for any list tab to adopt. See AUDIT_PROGRESS.md item-6-B-3
+// closeout for the per-tab migration pattern.
+// ============================================================================
+
+/** Render a colored band chip for a completeness score/band. Pure HTML. */
+function lccCompletenessChip(scoreOrBand, maybeBand) {
+  // Tolerate both shapes:  (score, band)  or  ({score, band})  or  (band)
+  let score = null, band = null;
+  if (typeof scoreOrBand === 'object' && scoreOrBand !== null) {
+    score = scoreOrBand.score != null ? scoreOrBand.score : scoreOrBand.completeness_score;
+    band  = scoreOrBand.band  != null ? scoreOrBand.band  : scoreOrBand.completeness_band;
+  } else if (typeof scoreOrBand === 'string' && !maybeBand) {
+    band = scoreOrBand;
+  } else {
+    score = scoreOrBand;
+    band  = maybeBand;
+  }
+  const b = String(band || 'unknown').toLowerCase();
+  const cls = ['excellent', 'good', 'fair', 'poor'].includes(b) ? b : 'unknown';
+  const text = b === 'unknown' ? '—' : b.toUpperCase();
+  const tip = score != null
+    ? 'Completeness ' + score + '/100 · ' + b
+    : 'Completeness: ' + b;
+  return '<span class="lcc-cmp-chip lcc-cmp-chip-' + cls + '" title="' + esc(tip) + '">' + esc(text) + '</span>';
+}
+window.lccCompletenessChip = lccCompletenessChip;
+
+/** Read the user's sort preference for a given table (defaults to defaultKey). */
+function lccGetListSort(table, defaultKey) {
+  try {
+    const stored = localStorage.getItem('lcc.sort.' + table);
+    if (stored) return stored;
+  } catch (_) {}
+  return defaultKey || 'value';
+}
+window.lccGetListSort = lccGetListSort;
+
+/** Persist a sort preference + fire a callback (typically a re-render). */
+function lccSetListSort(table, key, onChange) {
+  try { localStorage.setItem('lcc.sort.' + table, key); } catch (_) {}
+  if (typeof onChange === 'function') {
+    try { onChange(key); } catch (e) { console.warn('[lccSetListSort] onChange threw:', e); }
+  }
+}
+window.lccSetListSort = lccSetListSort;
+
+/**
+ * In-memory sort. `specs` is { key: { field, dir, nulls } | (a,b) => number }.
+ * Pass a function for custom compare; otherwise field+dir+nulls drives a
+ * stable sort. Returns a new array (does not mutate input).
+ *
+ * Example specs:
+ *   {
+ *     value:       { field: 'sold_price', dir: 'desc', nulls: 'last' },
+ *     date:        { field: 'sale_date',  dir: 'desc', nulls: 'last' },
+ *     completeness:{ field: 'completeness_score', dir: 'desc', nulls: 'last' }
+ *   }
+ */
+function lccSortListByKey(rows, key, specs) {
+  if (!Array.isArray(rows) || !specs || !specs[key]) return rows ? rows.slice() : [];
+  const spec = specs[key];
+  if (typeof spec === 'function') return rows.slice().sort(spec);
+  const field = spec.field;
+  const dir   = (spec.dir || 'desc').toLowerCase() === 'asc' ? 1 : -1;
+  const nulls = (spec.nulls || 'last').toLowerCase(); // 'last' | 'first'
+  return rows.slice().sort((a, b) => {
+    const av = a == null ? null : a[field];
+    const bv = b == null ? null : b[field];
+    const an = av == null || av === '' || (typeof av === 'number' && isNaN(av));
+    const bn = bv == null || bv === '' || (typeof bv === 'number' && isNaN(bv));
+    if (an && bn) return 0;
+    if (an) return nulls === 'first' ? -1 : 1;
+    if (bn) return nulls === 'first' ?  1 : -1;
+    // Numeric vs string comparisons handled naturally by JS:
+    if (av < bv) return -1 * dir;
+    if (av > bv) return  1 * dir;
+    return 0;
+  });
+}
+window.lccSortListByKey = lccSortListByKey;
+
+/**
+ * Render the sort-toggle DOM. `keys` is an array of `{ key, label }` pairs.
+ * `onChangeFnName` is the global function name to call when the user picks
+ * a different sort (must be on window). Returns HTML — caller injects into
+ * their tab header.
+ *
+ * Example:
+ *   lccRenderSortToggle('gov_sales_comps', 'value',
+ *     [{key:'value',label:'Value'},{key:'date',label:'Date'},{key:'completeness',label:'Completeness'}],
+ *     'onGovSalesSortChange');
+ */
+function lccRenderSortToggle(table, defaultKey, keys, onChangeFnName) {
+  const active = lccGetListSort(table, defaultKey);
+  const parts = [];
+  parts.push('<div class="lcc-sort-toggle" data-lcc-sort-table="' + esc(table) + '">');
+  parts.push(  '<span class="lcc-sort-toggle-label">Sort</span>');
+  parts.push(  '<div class="lcc-sort-toggle-group">');
+  for (const k of (keys || [])) {
+    const isActive = k.key === active ? ' active' : '';
+    const fn = String(onChangeFnName || '').replace(/[^A-Za-z0-9_$]/g, '');
+    const click = fn
+      ? ' onclick="lccSetListSort(&quot;' + esc(table) + '&quot;, &quot;' + esc(k.key) + '&quot;, window.' + fn + ')"'
+      : ' onclick="lccSetListSort(&quot;' + esc(table) + '&quot;, &quot;' + esc(k.key) + '&quot;)"';
+    parts.push(  '<button type="button" class="lcc-sort-toggle-btn' + isActive + '" data-lcc-sort-key="' + esc(k.key) + '"' + click + '>' + esc(k.label || k.key) + '</button>');
+  }
+  parts.push(  '</div>');
+  parts.push('</div>');
+  return parts.join('');
+}
+window.lccRenderSortToggle = lccRenderSortToggle;
+
 (function _lccWireGlobalErrorHandlers() {
   if (window._lccGlobalErrorsWired) return;
   window._lccGlobalErrorsWired = true;
@@ -6355,6 +6471,12 @@ function renderNextBestActionPanel() {
     parts.push(  '<div class="nba-tag-stack">');
     parts.push(    '<span class="nba-sev-chip nba-sev-' + esc(sev) + '-chip">' + esc(sev.toUpperCase()) + '</span>');
     parts.push(    '<span class="nba-domain-tag ' + dom.cls + '">' + dom.code + '</span>');
+    // Item #6 Phase B-3 (2026-05-17): completeness band chip — surfaces which
+    // properties are near-finished underwritings so Scott can prioritize
+    // those gap closures visually (already weighted in the rank via B-2).
+    if (row.completeness_band || row.completeness_score != null) {
+      parts.push(  lccCompletenessChip(row.completeness_score, row.completeness_band));
+    }
     parts.push(  '</div>');
     parts.push(  '<div class="nba-body">');
     parts.push(    '<div class="nba-label" title="' + esc(label) + '">' + esc(label) + '</div>');
