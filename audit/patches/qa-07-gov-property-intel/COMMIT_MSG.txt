@@ -1,0 +1,44 @@
+qa(07): mirror property_intel to gov for pipeline-stage persistence
+
+Console showed govQuery property_intel: HTTP 403 "Read access denied
+for table: property_intel" on every gov property detail panel open.
+Symptom: clicking a pipeline-stage chip on a gov property looked like
+it worked — the in-memory pill flipped color, the toast fired,
+the SF opportunity upsert went out — but the next reload reverted to
+the heuristic-inferred stage. Operator couldn't actually move a gov
+property through the pipeline.
+
+Root cause: detail.js's pipeline-stage feature was always written to
+be domain-agnostic (_udRenderPipelinePill, _udHydratePipelineStage,
+_udAdvancePipelineStage all dispatch on _udCache.db). But the original
+2026-04-16 property_intel migration explicitly says "Target: Dialysis
+domain Supabase" — the table never existed on the gov database, and
+property_intel was never in GOV_READ_TABLES / GOV_WRITE_TABLES.
+
+Fix:
+  • Mirror property_intel to gov (scknotsqkcheojiaewwh): same schema
+    as dia (PK on property_id, index on pipeline_stage, RLS + anon
+    SELECT policy + authenticated SELECT/INSERT/UPDATE grant).
+  • Add "property_intel" to both GOV_READ_TABLES and GOV_WRITE_TABLES
+    in supabase/functions/data-query/index.ts.
+  • Redeploy as Edge Function v15 on zqzrriwuavgrquhisnoa.
+
+Verified live (2026-05-18):
+  • window.govQuery('property_intel', 'property_id,pipeline_stage',
+    { filter: 'property_id=eq.3198', limit: 1 })
+    → { count: 0, dataLen: 0 }     ← no more 403
+  • window.diaQuery('property_intel', …) unchanged, still works
+  • Console 403s per gov detail open: 1 → 0
+
+Files changed:
+  • supabase/migrations/government/20260518140000_gov_qa07_property_intel.sql
+  • supabase/functions/data-query/index.ts (property_intel in both gov sets)
+  • AUDIT_PROGRESS.md (closeout)
+
+Queued for follow-up:
+  • P0 — govQuery('v_ownership_chain') 400 (gov view has no
+    property_id column; frontend filter is dia-shaped)
+  • P1 — "Open Activities" stat conflict (Home vs Pipeline vs Metrics)
+  • P1 — Sync error count contradicts itself
+  • P1 — Public REITs in llc_research_queue + same-entity duplicates
+  • P2 — Casing/UX nits documented in outputs/lcc-qa-pass-2026-05-18.docx
