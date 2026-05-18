@@ -1,0 +1,49 @@
+audit(item-10/phase-a): global error visibility
+
+Closes audit findings C-5, C-6, C-9, C-10. The last HIGH-severity item
+in the Top 10 audit list.
+
+Before this patch:
+  • Uncaught JS errors and unhandled promise rejections vanished
+    silently into the console. Users saw "nothing happened."
+  • `.toast.ok` was used in 8+ places in contacts-ui.js without a
+    matching CSS class — those toasts rendered neutral.
+  • No rate-limiting on toasts — a runaway error loop could spam the
+    user.
+
+This patch adds:
+
+  1. .toast.ok and .toast.warn CSS tiers (and a .toast-tag chip style)
+     so all four severity levels render correctly.
+
+  2. lccReportError(label, err, options) — central error-reporting
+     helper:
+       • console.error/warn/info with full context + short error code
+         (e.g. [LCC E-4F2A]).
+       • Tiered user-facing toast (error | warn | info | ok).
+       • Rate-limited per label (max 1 toast / 10s). Suppressed errors
+         still console-log normally.
+       • Options: tier, userMessage override, silent, code.
+       • Diagnostic accessor: window.lccErrorStats() for devtools.
+
+  3. Global handlers wired on first load:
+       • window.addEventListener('error', ...)  → captures uncaught JS.
+       • window.addEventListener('unhandledrejection', ...) → captures
+         the silent-failure mode that was previously invisible.
+     Both route through lccReportError.
+
+Adoption guide: any ad-hoc `console.warn + showToast` pattern in the
+~50 places that have one can migrate to `lccReportError('label', err)`
+for the same UX, rate-limited and ready for Phase B telemetry.
+
+Files changed:
+  • styles.css  — .toast.ok, .toast.warn, .toast-tag
+  • app.js      — lccReportError + global handlers + lccErrorStats
+  • AUDIT_PROGRESS.md
+
+Phase B deferred:
+  • POST captured errors to a client_errors table on LCC Opps for
+    historical aggregation + alerting.
+  • Migrate the ~50 existing ad-hoc console.warn+showToast call sites.
+  • Extend .widget-error retry pattern to every list-loader catch.
+  • Sourcemap symbolication for readable production stack traces.

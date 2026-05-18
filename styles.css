@@ -464,6 +464,12 @@ body.compact .greeting { font-size: 18px; }
 .toast.error { border-color: var(--red); }
 .toast.warning { border-color: var(--yellow); }
 .toast.info { border-color: var(--accent); }
+/* Item #10 Phase A (2026-05-17): missing tier styles. .ok was used in 8+ */
+/* places in contacts-ui.js without a matching CSS class — toasts rendered */
+/* neutral. .warn is an alias for the existing .warning. */
+.toast.ok { border-color: var(--green, #22c55e); }
+.toast.warn { border-color: var(--yellow); }
+.toast .toast-tag { display: inline-block; margin-right: 8px; padding: 1px 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text2); background: var(--s2); border: 1px solid var(--border); border-radius: 4px; vertical-align: middle; }
 
 /* Pill filters */
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
