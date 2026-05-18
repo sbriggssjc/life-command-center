@@ -1,0 +1,48 @@
+QA-29 (P2): three dia fixes from QA pass #8 Chrome probe
+
+Three small fixes found while probing the live dia home dashboard in
+Chrome after QA-24..28 shipped. All frontend-only.
+
+Fix 1 - Top States widget: state names invisible.
+The "Top States" card showed ranks and counts but blank state-name
+cells. DOM had "CA"/"TX"/"NY" correctly. Root cause: the state-name
+cell had flex:1 with no min-width while sibling cells took 20+80+50px
++ 3×8px gap = 174px fixed, leaving 0px for the flex cell in narrow
+cards. Fix: shrink bar 80→50, gap 8→6, give state cell min-width:32px.
+
+Fix 2 - Financial estimates "108.6% of clinics".
+The card subtext read "9,273 of 8,535 clinics (108.6%)" — impossible.
+Live SQL confirmed clinic_financial_estimates has 9,273 distinct
+medicare_ids but only 8,511 match current medicare_clinics inventory;
+762 estimates reference clinics that have since been removed from CMS.
+Fix: cross-reference `best` (deduped estimates) against
+diaData.inventoryChanges to count only currently-tracked clinics.
+Post-fix coverage will be 8,511 / 8,535 = 99.7% (real). Stale estimates
+remain in the DB for historical use but are excluded from the headline.
+
+Fix 3 - Unprospected Owners modal footer mismatch.
+Tile headline said "532 of 1232 active owners" but modal footer said
+"Showing top 100 of 250" because the diaQuery's row-limit of 250 was
+being used as the footer denominator instead of the real total. Fix:
+bumped dia query limit 250→1000 (covers current 532) and stashed the
+true count on window._diaUnprospectedTotal. Modal footer now reads
+"Showing top 100 of 532 unprospected owners". Mirrored the same
+stash+footer pattern to gov.js so both modals are consistent (gov has
+7,372 unprospected, footer adds "(250 fetched)" when truncation
+applies).
+
+Verified live (Supabase MCP, 2026-05-18):
+  9,273 distinct medicare_ids in clinic_financial_estimates
+  8,535 distinct medicare_ids in medicare_clinics
+  8,511 overlap
+    762 stale estimates (no matching clinic)
+
+Files changed:
+- dialysis.js (Top States CSS, financial estimates dedup,
+  Unprospected Owners limit/stash/footer)
+- gov.js (Unprospected Owners stash/footer mirror)
+- AUDIT_PROGRESS.md (closeout)
+
+No SQL. No Edge Function. No allowlist changes.
+
+Patch: audit/patches/qa-29-dia-fixpack/

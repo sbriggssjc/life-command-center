@@ -4403,6 +4403,9 @@ function renderGovOverview() {
         totalOwnersWithProps = ownerRows.length;
       }
       window._govTopUnprospected = topUnprospected;
+      // QA-29 (2026-05-18): stash the TRUE count so the modal footer reads
+      // "of 7,372" instead of "of 250" (the query limit). See dia parallel.
+      window._govUnprospectedTotal = missingSF;
 
       // Query gov-specific sf_activities table for recent activity, join on sf_account_id
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
@@ -5313,6 +5316,9 @@ function buildGovPipelineTable(allLeads) {
 // window._govTopUnprospected (rows from v_prospect_targets).
 window._govShowProspectTargets = function() {
   const rows = window._govTopUnprospected || [];
+  // QA-29 (2026-05-18): footer uses the true total (not rows.length, which
+  // is capped at the query limit).
+  const trueTotal = window._govUnprospectedTotal || rows.length;
   if (!rows.length) {
     alert('Loading prospect targets — try again in a moment.');
     return;
@@ -5356,7 +5362,7 @@ window._govShowProspectTargets = function() {
           <tbody>${tableRows}</tbody>
         </table>
       </div>
-      <div style="padding:12px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);background:var(--s2)">Showing top ${top.length} of ${rows.length}. To add an owner to your SF prospecting list, look them up in Salesforce and link the account ID via the owner detail panel.</div>
+      <div style="padding:12px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);background:var(--s2)">Showing top ${top.length} of ${trueTotal} unprospected owners${rows.length < trueTotal ? ' (' + rows.length + ' fetched)' : ''}. To add an owner to your SF prospecting list, look them up in Salesforce and link the account ID via the owner detail panel.</div>
     </div>`;
   document.body.appendChild(modal);
 };
