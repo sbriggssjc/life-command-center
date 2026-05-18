@@ -1,0 +1,35 @@
+QA-32 (P3 cleanup): remove test artifacts accidentally committed in QA-31
+
+QA-31's `git add -A` picked up 4 synthetic test files I left behind
+during the truncation-bug investigation:
+
+  audit/edit-tool-test.js              (0 bytes, truncated dialysis.js copy)
+  audit/lcc-newline-test.txt           (3,000 lines, LF vs CRLF test)
+  audit/lcc-trunc-test-virtiofs.txt    (8,000 lines / 752KB, large-write test)
+  audit/lcc-write-test.txt             (1,000 lines, smoke test)
+
+All are synthetic test data — no real code, docs, or config. They
+served only to produce audit/SANDBOX_TOOLING_NOTES.md (which IS
+intentional and stays).
+
+QA-31's commit showed 12,348 line insertions instead of the ~250 real
+ones because of these leftovers. This patch deletes them via git rm
+and adds a small .gitignore entry to prevent recurrence.
+
+Net diff: ~12,000 line deletions + a few-line .gitignore addition.
+
+The mount blocks rm from the Cowork sandbox, so the cleanup couldn't
+happen in the QA-31 session — only Scott's Windows-side git rm works.
+This patch's apply.mjs runs on Windows where unlink is permitted.
+
+Files removed:
+- audit/edit-tool-test.js
+- audit/lcc-newline-test.txt
+- audit/lcc-trunc-test-virtiofs.txt
+- audit/lcc-write-test.txt
+
+Files changed:
+- .gitignore (add audit/lcc-*-test*.txt)
+- AUDIT_PROGRESS.md (closeout)
+
+Patch: audit/patches/qa-32-cleanup-test-artifacts/
