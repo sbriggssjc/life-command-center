@@ -1,0 +1,73 @@
+qa(11): filter public REITs + dedupe llc_research_queue
+
+Brandywine Realty Trust (NYSE: BDN) — a publicly traded REIT — was
+sitting on the NBA rail as rank #9 + #10, also as "Brandywine Realty
+Trust JV MSD Partners". Public REITs file with the SEC, not state
+Secretary-of-State portals, so the queue's primary action
+("Open SoS →") was a dead end. Same-entity rows with different
+suffix permutations also clogged the queue (Realty Income Corp /
+Realty Income CORP / Realty Income Corporation as three separate
+rows, etc.).
+
+Fix: structural changes to llc_research_queue on both projects.
+
+  1. Expand status CHECK to include 'skipped_public_reit' and
+     'skipped_dupe'.
+
+  2. New IMMUTABLE helpers:
+     - llc_normalize_name(text): lowercase + strip common entity
+       suffixes (LLC, Inc, Corp, Trust, Partners, JV, Joint Venture,
+       Holdings, Properties, Realty, REIT, etc.) + punctuation,
+       collapse whitespace.
+     - llc_is_public_reit(text): LIKE match against a curated 37-entry
+       list of publicly traded REITs and the two major dialysis
+       operators (DaVita, Fresenius).
+
+  3. New columns:
+     - is_public_reit BOOLEAN DEFAULT FALSE
+     - normalized_name TEXT GENERATED ALWAYS AS
+       (llc_normalize_name(search_name)) STORED
+     - llc_research_queue_normalized_idx partial index on
+       (normalized_name) WHERE normalized_name IS NOT NULL.
+
+  4. Backfill: rows matching the public-REIT list → status =
+     'skipped_public_reit'. Within remaining 'queued' rows, the row
+     with the smallest (created_at, queue_id) per normalized_name
+     stays; the rest become 'skipped_dupe'.
+
+  5. BEFORE INSERT/UPDATE trigger applies the same logic to future
+     rows so the queue stays clean.
+
+v_next_best_action already filters status='queued', so the skipped
+rows are naturally excluded from the NBA rail with no view change.
+
+Live impact (verified):
+
+  dia (zqzrriwuavgrquhisnoa)
+    queued:              1,267 → 1,215   (-52)
+    skipped_public_reit: 0     → 10
+    skipped_dupe:        0     → 42
+
+  gov (scknotsqkcheojiaewwh)
+    queued:              254   → 249    (-5)
+    skipped_public_reit: 0     → 5
+    skipped_dupe:        0     → 0      (no dupes on gov today)
+
+  Total dead-end rows removed: 57.
+
+Files changed:
+  • supabase/migrations/dialysis/20260518150000_dia_qa11_llc_queue_public_reit_dedupe.sql
+  • supabase/migrations/government/20260518150000_gov_qa11_llc_queue_public_reit_dedupe.sql
+  • AUDIT_PROGRESS.md (closeout)
+
+Caveats:
+  • Public-REIT list is curated, not exhaustive. Extend by appending
+    to the VALUES list in llc_is_public_reit.
+  • Normalizer doesn't strip common abbreviations (Hldgs, Mgmt,
+    Cap Prtnrs, …) so a few collision pairs survive. Fixable
+    iteratively as more are observed.
+
+Queued for follow-up:
+  • P2 — Casing/UX nits documented in outputs/lcc-qa-pass-2026-05-18.docx
+  • Optional — SEC EDGAR CTA routing for is_public_reit=true rows
+  • Optional — extend the normalizer with common abbreviations
