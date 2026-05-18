@@ -1403,6 +1403,14 @@ function _udNextActionDispatchFor(gapType) {
   if (t === 'missing_recorded_owner' || t === 'llc_research_pending') {
     return { label: 'Open SoS →', metaSuffix: 'opens Secretary of State portal' };
   }
+  // Item #8 Phase B-2 (2026-05-18): agency_drift gap_types get an
+  // inline "Use lease value" PATCH workflow.
+  if (t === 'agency_drift:agency_disagreement') {
+    return { label: 'Use lease value →', metaSuffix: 'patches properties.agency from active lease' };
+  }
+  if (t === 'agency_drift:lease_agency_but_property_agency_null') {
+    return { label: 'Fill from lease →', metaSuffix: 'fills properties.agency from active lease' };
+  }
   // Other gap types: existing tab-switch UX
   return { label: 'Take action →', metaSuffix: 'opens ' + _udNextActionTabForGap(t) };
 }
@@ -1458,6 +1466,89 @@ function _udRenderNextActionBar() {
 }
 window._udRenderNextActionBar = _udRenderNextActionBar;
 
+// Item #8 Phase B-2 (2026-05-18): orchestrate the agency_drift resolve.
+async function _udNextActionResolveAgencyDrift(gapType) {
+  const prop = (_udCache && _udCache.property) || {};
+  const propertyId = Number(prop.property_id);
+  if (!Number.isFinite(propertyId)) {
+    if (typeof showToast === 'function') showToast('Could not identify property_id', 'error');
+    return;
+  }
+  if (_udCache.db !== 'gov') {
+    if (typeof showToast === 'function') showToast('Agency drift only applies to gov properties', 'warn');
+    return;
+  }
+  const driftKind = String(gapType).replace(/^agency_drift:/, '');
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+
+  // 1. Fetch the v_gap_agency_drift row for this property to get the
+  //    lease's tenant_agency / tenant_agency_full.
+  let leaseAgency = null;
+  let leaseAgencyFull = null;
+  try {
+    const r = await govQuery('v_gap_agency_drift', '*', {
+      filter: 'property_id=eq.' + propertyId + '&drift_kind=eq.' + encodeURIComponent(driftKind),
+      limit: 1,
+    });
+    const rows = Array.isArray(r) ? r : (r?.data || []);
+    if (!rows.length) {
+      if (typeof showToast === 'function') showToast('No active drift row found — refresh and try again', 'warn');
+      return;
+    }
+    leaseAgency = rows[0].lease_tenant_agency || null;
+    leaseAgencyFull = rows[0].lease_tenant_agency_full || null;
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Fetch agency drift row', e);
+    return;
+  }
+
+  if (!leaseAgency && !leaseAgencyFull) {
+    if (typeof showToast === 'function') showToast('Lease has no tenant_agency to apply', 'warn');
+    return;
+  }
+
+  // 2. Confirm with the user.
+  const display = leaseAgencyFull || leaseAgency;
+  let confirmed = true;
+  if (typeof asyncConfirm === 'function') {
+    confirmed = await asyncConfirm('Set properties.agency to "' + display + '" from the lease?');
+  }
+  if (!confirmed) return;
+
+  // 3. POST to the resolve endpoint shipped in A-5.
+  try {
+    const res = await fetch('/api/admin?_route=resolve-agency-drift', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        property_id:          propertyId,
+        resolution:           'use_lease',
+        new_agency_canonical: leaseAgency || null,
+        new_agency_full:      leaseAgencyFull || null,
+      }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (typeof showToast === 'function') showToast('Updated agency from lease', 'ok');
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Resolve agency drift from bar', e);
+    return;
+  }
+
+  // 4. Hide the bar (the gap is resolved; next view will show whatever
+  //    is next-best-action for this property).
+  if (_udCache) {
+    _udCache.nextAction = null;
+    _setUdCache(_udCache);
+  }
+  const bar = document.getElementById('detailNextActionBar');
+  if (bar) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+  }
+}
+window._udNextActionResolveAgencyDrift = _udNextActionResolveAgencyDrift;
+
 function _udNextActionClick(gapType) {
   // Item #8 Phase B (2026-05-18): dispatch by gap_type. SoS-portal opens
   // for owner-research gaps; everything else falls through to tab-switch.
@@ -1488,6 +1579,14 @@ function _udNextActionClick(gapType) {
       console.warn('[NextAction] window.open failed:', e?.message);
     }
     console.debug('[NextAction] click', gapType, '-> SoS portal', url);
+    return;
+  }
+
+  // Item #8 Phase B-2 (2026-05-18): agency_drift gap_types route to a
+  // one-click "Use lease value" PATCH that reuses the resolve endpoint
+  // from #A-5.
+  if (t === 'agency_drift:agency_disagreement' || t === 'agency_drift:lease_agency_but_property_agency_null') {
+    _udNextActionResolveAgencyDrift(gapType).catch(e => console.warn('[NextAction] agency_drift resolve failed:', e?.message));
     return;
   }
 
