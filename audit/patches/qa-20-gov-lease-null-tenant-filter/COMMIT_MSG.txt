@@ -1,0 +1,48 @@
+qa(20): allow null-tenant gov leases through the dedupe filter
+
+Every gov property's Rent Roll tab showed "No lease data available
+for Rent Roll" — even when the property had a real GSA lease with
+annual rent, start date, expiration date, etc. Operations tab also
+showed "AGENCY (SHORT) —" because the agency rendering reads from
+the same lease cache.
+
+Root cause: _udFilterAndDedupeLeases in detail.js filters out leases
+where _udIsPlaceholderTenant(l.tenant) is true. The original
+function returned `true` for null tenant — which was the right call
+for dia (buyer-estimated rows have placeholder strings like "TBD"
+in tenant). But gov leases legitimately store the agency in
+`guarantor` / `tenant_agency` and leave `tenant` itself NULL.
+
+For property 3198 (1200 New Jersey Ave SE, GSA-tenanted, lease
+LDC01477):
+  • v_lease_detail returns 1 row: tenant=null, guarantor='GSA',
+    annual_rent=$48.3M, lease_start=2006-10-20.
+  • Frontend fetch succeeded (HTTP 200, dataLen=1).
+  • Filter dropped the row silently.
+  • _udCache.leases ended up as [].
+
+Fix: split _udIsPlaceholderTenant into two predicates.
+
+  _udIsPlaceholderTenant      — null returns true (used by SORT TIER
+                                so a real-tenant row still wins when
+                                both exist).
+  _udIsKnownPlaceholderTenant — null returns false. Only flags the
+                                explicit placeholder strings (TBD,
+                                Unknown, BuyerEst, etc.). Used by
+                                the FILTER so null tenants survive
+                                when they're legitimate data.
+
+Verified live: _udCache.leases.length on prop 3198: 0 → 1.
+Rent Roll tab renders the GSA lease. Operations tab shows "GSA".
+
+Affects every gov property detail panel — not just the one tested.
+Dia properties with real-string tenants are unaffected; the filter
+still catches "TBD" / "Unknown" / "BuyerEst" placeholders correctly.
+
+Lesson: QA passes #1-3 verified the panel header, completeness
+rail, and next-action bar but never clicked through the Rent Roll
+or Operations tabs. Tab-click coverage matters.
+
+Files changed:
+  • detail.js (_udIsPlaceholderTenant split + filter call site)
+  • AUDIT_PROGRESS.md (closeout)

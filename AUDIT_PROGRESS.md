@@ -2360,3 +2360,37 @@ When canonicalizing column data, audit every consuming view for read-time normal
 
 Both migrations applied live via Supabase MCP on 2026-05-18.
 
+
+
+## QA pass #20 — gov lease null-tenant filter fix ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-20-gov-lease-null-tenant-filter`
+- **Patch:** `audit/patches/qa-20-gov-lease-null-tenant-filter/apply.mjs`
+
+### Symptom (discovered in QA pass #4)
+Every gov property's Rent Roll tab showed "No lease data available for Rent Roll" even when the property had a real GSA lease. Operations tab also showed "AGENCY (SHORT) —". The lease fetch succeeded (HTTP 200, dataLen: 1) but the row was dropped before reaching the cache.
+
+### Root cause
+`_udFilterAndDedupeLeases` in `detail.js` filters out leases where `_udIsPlaceholderTenant(l.tenant)` is true. The original function returned `true` for `null` — which made sense for dia (buyer-estimated rows have placeholder strings in tenant). But gov leases legitimately store the agency in `guarantor` / `tenant_agency` and leave `tenant` itself `null`. The filter silently dropped every gov lease row.
+
+### Fix
+Split into two predicates:
+- `_udIsPlaceholderTenant` — null returns true (used by the SORT TIER so real-tenant rows win when both exist).
+- `_udIsKnownPlaceholderTenant` — null returns false; only flags explicit placeholders (TBD, Unknown, BuyerEst, …). Used by the FILTER so null tenants survive.
+
+### Live verification
+| Surface | Before | After |
+|---|---|---|
+| `_udCache.leases.length` on property 3198 | 0 | 1 |
+| Rent Roll tab | "No lease data available" | renders the GSA lease |
+| Operations tab "AGENCY (SHORT)" | — | GSA |
+
+### Why this slipped past QA passes #1-3
+None of the earlier passes clicked through the Rent Roll or Operations tabs — they verified header, completeness rail, next-action bar. The bug was confined to surfaces that only render when those tabs are activated.
+
+Lesson: page-level QA needs to exercise tab clicks too, not just default-open tabs.
+
+### Files changed
+- `detail.js` — `_udIsPlaceholderTenant` split + filter call site update
+- `AUDIT_PROGRESS.md` — this closeout
+

@@ -3062,8 +3062,28 @@ const _UD_PLACEHOLDER_DATA_SOURCES = new Set([
   'buyer_est', 'sales_comp_est'
 ]);
 
+// QA-20 (2026-05-18): _udIsPlaceholderTenant used to return true for null
+// tenant. That broke government leases — GSA-tenanted properties typically
+// store the agency in `guarantor` / `tenant_agency` and leave `tenant`
+// itself NULL. The filter at _udFilterAndDedupeLeases then dropped those
+// rows entirely, so every gov property detail panel's Rent Roll tab
+// showed "No lease data available" even when v_lease_detail returned a
+// real row with annual_rent, lease_start, expiration, etc.
+//
+// Split into two predicates:
+//   _udIsPlaceholderTenant       — for ranking/sorting (null is still
+//                                  back-of-the-line so a real-tenant row
+//                                  wins when both exist).
+//   _udIsKnownPlaceholderTenant  — only flags the explicit placeholder
+//                                  strings (TBD, Unknown, BuyerEst, etc.).
+//                                  Used by the filter so null tenants
+//                                  survive when they're the only row.
 function _udIsPlaceholderTenant(t) {
   if (t == null) return true;
+  return _udIsKnownPlaceholderTenant(t);
+}
+function _udIsKnownPlaceholderTenant(t) {
+  if (t == null) return false;
   const s = String(t).trim();
   if (!s) return true;
   const lo = s.toLowerCase();
@@ -3108,8 +3128,11 @@ function _udFilterAndDedupeLeases(leases) {
     // Filter 1: explicit buyer-estimate data_source
     const ds = String(l?.data_source || '').toLowerCase();
     if (_UD_PLACEHOLDER_DATA_SOURCES.has(ds)) continue;
-    // Filter 2: placeholder tenant string
-    if (_udIsPlaceholderTenant(l?.tenant)) continue;
+    // Filter 2: placeholder tenant string (TBD, Unknown, BuyerEst, …).
+    // QA-20: only KNOWN placeholders — null/empty tenants are allowed
+    // through because gov leases legitimately leave tenant=null and put
+    // the agency in guarantor/tenant_agency instead.
+    if (_udIsKnownPlaceholderTenant(l?.tenant)) continue;
 
     const tenantKey = String(l.tenant).trim().toLowerCase();
     const startKey = l.lease_start || '1900-01-01';
