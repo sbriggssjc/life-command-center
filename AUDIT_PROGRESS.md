@@ -925,6 +925,74 @@ The real next step is an **enrichment pipeline**, not a reconciliation. Options:
 Item #3 Phase B is **re-classified as deferred to Phase C** with this explanatory note. The current state is: 13,338 dia properties remain NULL-owner; they surface correctly in the NBA queue as `missing_recorded_owner` gaps awaiting external enrichment.
 
 
+
+## Closeout — item 10 Phase B — client_errors telemetry loop
+- **Status:** ✅ DONE
+- **Branch:** `audit/10B-client-errors-telemetry`
+- **Patch:** `audit/patches/10B-client-errors-telemetry/apply.mjs`
+- **Closes:** Item #10 telemetry half — completes the loop started in Phase A.
+
+### What this adds
+
+**1. New table** `public.client_errors` on LCC Opps (applied via MCP). Companion to `ingest_write_failures` (server-side). Columns:
+```
+id, workspace_id, user_email, user_agent, url, label, tier,
+code, message, stack, detail, occurred_at, reported_at
+```
+Plus 3 indexes (label/time, workspace/time, tier/time) and a convenience view `v_client_error_rollup` for 24h volume-by-label aggregation.
+
+**2. New admin sub-route** `POST /api/admin?_route=client-error`:
+- Accepts `{ batch: [...] }` of up to 50 error records.
+- Normalizes + clamps each row (label ≤ 200 chars, stack ≤ 4000, message ≤ 2000, etc.).
+- Validates `tier` against the CHECK list.
+- Returns 200 even on partial-insert failure so the client doesn't retry-loop.
+
+**3. Browser-side buffer + flush** in `app.js`:
+- `lccReportError` now queues each error into a buffer.
+- Drain happens automatically every 30s, on `beforeunload`, on `visibilitychange → visible`, or immediately when the buffer hits 10 entries.
+- Only tiers `'error'` and `'warn'` are reported (info/ok stay local).
+- Uses `fetch(..., { keepalive: true })` so errors survive page unload.
+- Skips POST when no `workspace_id` is set (pre-auth boot) and holds the buffer for the next flush, capped at 100 to prevent OOM.
+
+**4. Diagnostic accessors** added to `window`:
+- `window.lccFlushErrors()` — force an immediate flush from devtools.
+- `window.lccErrorBuffer()` — snapshot of the pending queue.
+- `window.lccErrorStats()` — Phase A's rate-limit stats accessor (unchanged).
+
+### Files changed
+- `supabase/migrations/20260517260000_lcc_client_errors_table.sql` — new migration (already applied via MCP, committed for repo provenance)
+- `api/admin.js` — dispatcher case + handler `handleClientErrorReport`
+- `app.js` — buffer + flush + lccReportError telemetry hook
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "_lccQueueClientError" app.js` → 2 or more
+2. `grep -c "handleClientErrorReport" api/admin.js` → 2 or more
+3. `grep -c "case 'client-error'" api/admin.js` → 1
+4. Smoke (in devtools after deploy):
+   ```js
+   setTimeout(() => { throw new Error('telemetry smoke'); }, 0);
+   await new Promise(r => setTimeout(r, 200));
+   lccFlushErrors();
+   ```
+5. On LCC Opps via Studio:
+   ```sql
+   SELECT * FROM public.client_errors ORDER BY id DESC LIMIT 5;
+   -- Should show a row with label='JS error', message containing 'telemetry smoke',
+   -- tier='error', and user_email/workspace_id populated.
+   ```
+6. Volume rollup:
+   ```sql
+   SELECT * FROM public.v_client_error_rollup LIMIT 10;
+   ```
+
+### Phase C follow-ups
+- Sweep the ~50 ad-hoc `console.warn + showToast` sites and migrate them to `lccReportError` so they also feed the new telemetry table.
+- Add a Settings page widget that surfaces the user's recent error volume and links to clear / report.
+- Build a "top errors this week" admin dashboard reading from `v_client_error_rollup`.
+- Optional: server-side alerting when a label's volume exceeds a threshold within a window (cron + Slack webhook).
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
