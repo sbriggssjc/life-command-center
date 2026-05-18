@@ -1,0 +1,61 @@
+QA-25 (P2): reframe "Missing SF Link" widget into actionable "Unprospected Owners" queue
+
+The widget read 97% missing on gov and 79% on dia. The number looked like
+a data-quality alarm but was misleading on two coupled axes — and a name-
+matching backfill was structurally impossible.
+
+(a) STUB POLLUTION. The widget counted ALL true_owners, including 6,303
+    gov + 2,580 dia rows that own ZERO properties (44.7% and 75.4% of
+    each domain). These are residue from the LLC research queue and from
+    property merges/deletes. They inflated the denominator without
+    representing anything actionable.
+
+(b) WRONG FRAME. "Missing SF Link" implies the link exists in SF and the
+    join broke. It doesn't. salesforce_accounts on dia (5,004 rows) is
+    Scott's CRM contact book, not an owner universe. Gov has no
+    salesforce_accounts table at all. Diagnostic queries:
+
+      - Exact lowercase-trim name matches between 2,722 unlinked dia
+        owners and 5,004 SF accounts: 0
+      - Top 18 unlinked owners by prop count: best pg_trgm fuzzy match
+        similarity is 0.23 - 0.55 (every match is a different company)
+
+    The owners aren't "missing a link." They're unprospected BD targets
+    (SMBC Leasing 104 props, Elliott Bay Capital 65, MassMutual 57,
+    Realty Income Corporation 25, Healthcare Realty Trust 7; Boyd
+    Watterson Global 31, Prologis L.P. 24, Highwoods Realty 21, etc.).
+
+Fix (omnibus):
+
+1. New v_prospect_targets view (gov + dia): owners with >=1 property
+   and no SF link, ordered by prop_count. Dia excludes is_operator_not_owner.
+
+2. Widget reframe in gov.js + dialysis.js: "Missing SF Link" ->
+   "Unprospected Owners". Numerator AND denominator filtered to active
+   owners. Subtext changed to "active owners - click to view BD targets".
+   Card now clickable.
+
+3. Prospect modal: top-100 sortable list opens on click with owner name,
+   property count, state, and contact status.
+
+4. Edge Function v16 redeployed to dia project (zqzrriwuavgrquhisnoa)
+   with v_prospect_targets in both GOV_READ_TABLES and DIA_READ_TABLES.
+
+Verified live:
+  - Dia view: SMBC Leasing 104 props at top
+  - Gov view: Boyd Watterson Global 31 props at top
+
+Lesson: when a dashboard metric reads like a data-quality alarm but the
+underlying matching can't possibly succeed, the metric is the bug, not
+the data. Reframing the widget converts the same number from a complaint
+into a BD queue.
+
+Files changed:
+- supabase/migrations/dialysis/20260518230000_dia_qa25_v_prospect_targets.sql
+- supabase/migrations/government/20260518230000_gov_qa25_v_prospect_targets.sql
+- supabase/functions/data-query/index.ts (both allowlists)
+- dialysis.js (widget reframe + _diaShowProspectTargets modal handler)
+- gov.js (widget reframe + _govShowProspectTargets modal handler)
+- AUDIT_PROGRESS.md (closeout)
+
+Patch: audit/patches/qa-25-unprospected-owners-widget/
