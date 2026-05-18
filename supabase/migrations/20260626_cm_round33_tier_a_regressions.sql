@@ -1,0 +1,64 @@
+-- =====================================================================
+-- Round 33 Tier A — Regressions / quick fixes from the 2026-05-18
+-- Capital Markets Notes batch.
+--
+-- This PR is renderer-and-catalog only (no Supabase view migrations
+-- — those are in subsequent Tier B / C / D PRs).
+--
+-- ---------------------------------------------------------------------
+-- CATALOG CHANGE (LCC Opps)
+-- ---------------------------------------------------------------------
+-- DELETE FROM cm_chart_catalog
+--   WHERE chart_template_id = 'available_cap_dispersion_by_term';
+--
+-- The R32 split (price chart + new cap-dispersion chart) was a misread
+-- of the user feedback. User explicitly wanted the cap-dispersion
+-- dots BACK on the same chart as the avg-price bar: "Missing all cap
+-- rate data" + "remove the n=2 from the labels" (re: dia
+-- Avail_by_Term_Summary) and "the cap rate portion of our charts are
+-- missing and we want to remove the count from the labels for
+-- average deal size/price" (re: gov Avail_by_Firm_Term).
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-chart-image-renderer.js:
+--   • available_by_term_summary (dia) — restored 5-series combo
+--     (Avg Price bar + 4 cap dots: Avg / Upper Q / Median / Lower Q).
+--     Right axis 4-9%. Price label no longer shows "(n=N)" count.
+--   • available_by_firm_term_summary (gov) — same restore.
+--   • Removed the standalone available_cap_dispersion_by_term case.
+--   • available_cap_rate_dot_plot — vertical-aware x-axis title:
+--     dia "Lease Term (Years)", gov "Firm Lease Term (Years)".
+--     User: "for dialysis, we don't use firm lease term; just lease
+--     term".
+--
+-- capital-markets.js:
+--   • Removed the available_cap_dispersion_by_term synth composer.
+--   • Updated available_by_term_summary synth composer comment.
+--   • available_cap_rate_dot_plot — same vertical-aware axis title fix
+--     for the in-app render.
+--
+-- api/_shared/cm-excel-export.js:
+--   • Removed CHART_COLUMNS schema for available_cap_dispersion_by_term.
+--   • Removed TAB_NAMES entry for available_cap_dispersion_by_term.
+--
+-- test/fixtures/cm-catalog-snapshot.json:
+--   • Refreshed from live catalog (63 templates, down from 64).
+--   • cm-export-bundle-audit test 5/5 pass post-refresh.
+--
+-- ---------------------------------------------------------------------
+-- Round 33 remaining tiers (deferred to subsequent PRs)
+-- ---------------------------------------------------------------------
+--   Tier B — Extend Sold_Cap_by_Term / Ask_Cap_by_Term / Core_Cap_Dot
+--            back as far as data allows (~2010+)
+--   Tier C — Smoothness / data validation (Sold_Cap_by_Term boxy,
+--            NM_vs_Market not smooth enough, DOM_Ask >100% of ask,
+--            Avail_by_Tenant + Active_DOM_PC DOM too long)
+--   Tier D — Excel format-match: Inventory_Backlog, Market_Turnover,
+--            Renewal_Rate, Term_Rate, Renewal_Growth
+--   Tier E — Add Rent_Price_PSF for dia (alongside per-chair); Core_Cap_Dot
+--            trendline review
+--   Tier F — Structural/source-data items + Val_Index formula
+--            confirmation against master Excel
+-- =====================================================================

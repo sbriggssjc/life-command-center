@@ -1047,6 +1047,10 @@
 
       case 'available_cap_rate_dot_plot': {
         // Round 30 — Single dot series (removed NM split per user).
+        // Round 33 — Dia x-axis title "Firm Lease Term" → "Lease Term"
+        // ("for dialysis, we don't use firm lease term; just lease term").
+        const govLikeAxis = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+        const axisTitle = govLikeAxis ? 'Firm Lease Term (Years)' : 'Lease Term (Years)';
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
         const allDots = (chart.rows || [])
@@ -1081,7 +1085,7 @@
         ];
         const opts = commonChartOptions('percent_basis_points');
         opts.scales.x = { type: 'linear', position: 'bottom', min: xMin, max: xMax,
-          title: { display: true, text: 'Firm Lease Term (Years)',
+          title: { display: true, text: axisTitle,
             color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 10 } },
           ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 } },
           grid: { color: 'rgba(0,0,0,0.05)' } };
