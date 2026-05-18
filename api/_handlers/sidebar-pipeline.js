@@ -4891,21 +4891,30 @@ async function stageGovCompForSalesforce(propertyId, entity, metadata) {
   const buyerContact = (metadata.contacts || []).find(c => c.role === 'buyer');
   const sellerContact = (metadata.contacts || []).find(c => c.role === 'seller');
 
+  // Fresh audit A-3 (2026-05-18): rewritten to match the real
+  // sf_comps_staging schema. The old payload (address/sale_price/
+  // sale_date/buyer_name/seller_name/square_feet/sync_status) didn't
+  // match any columns — PostgREST 400'd every write with PGRST204
+  // "Could not find the 'address' column" (178 silent 4xx/24h).
+  // Real columns: street/sold_price/sold_date/building_sf/...
+  // Buyer + seller names stash in raw_row (jsonb) since the table
+  // has no dedicated columns for them.
   await domainQuery('government', 'POST', 'sf_comps_staging', {
-    address:        entity.address || null,
-    city:           entity.city    || null,
-    state:          entity.state   || null,
-    sale_date:      saleDate,
-    sale_price:     parseCurrency(mostRecentSale.sale_price),
-    cap_rate:       parseCapRateDecimal(mostRecentSale.cap_rate),
-    buyer_name:     cleanSalesPartyValue(buyerContact?.name || mostRecentSale.buyer),
-    seller_name:    cleanSalesPartyValue(sellerContact?.name || mostRecentSale.seller),
-    square_feet:    parseSF(metadata.square_footage),
-    property_id:    propertyId,
-    data_source:    'costar_sidebar',
-    sync_status:    'pending',
-    created_at:     new Date().toISOString(),
-  });
+    street:             entity.address || null,
+    city:               entity.city    || null,
+    state:              entity.state   || null,
+    sold_date:          saleDate,
+    sold_price:         parseCurrency(mostRecentSale.sale_price),
+    sold_cap_rate:      parseCapRateDecimal(mostRecentSale.cap_rate),
+    building_sf:        parseSF(metadata.square_footage),
+    linked_property_id: propertyId,
+    source_system:      'costar_sidebar',
+    process_status:     'pending',
+    raw_row: {
+      buyer_name:  cleanSalesPartyValue(buyerContact?.name || mostRecentSale.buyer),
+      seller_name: cleanSalesPartyValue(sellerContact?.name || mostRecentSale.seller),
+    },
+  }, { label: 'autoStageGovComp' });
 }
 
 /**
@@ -7491,6 +7500,20 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
       updated_at:         new Date().toISOString(),
     };
 
+    // Fresh audit A-3 (2026-05-18): the gov_reject_dateless_active_lease
+    // trigger correctly blocks active-lease writes with both dates NULL
+    // (98 silent 4xx/24h). Honor the trigger's intent by skipping the
+    // write up-front. Existing leases (UPDATE branch below) are fine — the
+    // trigger only rejects new active rows lacking both dates.
+    if (!existing.ok || !existing.data?.length) {
+      if (!commence && !expire) {
+        console.log('[upsertGovernmentLeases] skipped dateless active lease ' +
+          'property=' + propertyId + ' tenant_agency=' + JSON.stringify(tenantAgency) +
+          ' — both dates NULL; gov_reject_dateless_active_lease would reject.');
+        continue;
+      }
+    }
+
     if (existing.ok && existing.data?.length) {
       const leaseId = existing.data[0].lease_id;
       await domainPatch('government',
@@ -7519,7 +7542,8 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
       continue;
     }
 
-    const r = await domainQuery('government', 'POST', 'leases', payload);
+    const r = await domainQuery('government', 'POST', 'leases', payload,
+      { label: 'upsertGovernmentLeases:insert' });
     if (r.ok) {
       const created = Array.isArray(r.data) ? r.data[0] : r.data;
       const newLeaseId = created?.lease_id || null;

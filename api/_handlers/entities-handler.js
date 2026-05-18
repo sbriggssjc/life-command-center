@@ -726,7 +726,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
             p_off_market_reason: off_market_reason || null,
             p_notes: notes || null,
             p_verified_by: user.id || null,
-          });
+          }, { label: 'entitiesHandler:recordListingCheck' });
           if (!rpcRes.ok) {
             results.push({ listing_id: l.listing_id, ok: false, error: rpcRes.data });
             continue;

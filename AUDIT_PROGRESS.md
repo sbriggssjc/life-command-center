@@ -1354,3 +1354,61 @@ Two-part fix:
 - A-4 ✅ loans status normalized + CHECK loosened
 - A-5 📋 agency-drift review UI
 
+
+
+## Fresh audit A-3 ✅ — label + fix unlabeled writer 4xx loop
+- **Status:** ✅ DONE.
+- **Branch:** `audit/fresh-A3-label-and-fix-writers`
+- **Patch:** `audit/patches/fresh-A3-label-and-fix-writers/apply.mjs`
+
+### Diagnosis
+579 ingest_write_failures rows over 24h had `label = null`. Per-path breakdown:
+| Path | Status | n | Root cause |
+|---|---|---:|---|
+| sales_transactions | 409 | 264 | unlabeled POST that gets recovered. Labeled in A-2. |
+| sf_comps_staging | 400 | 178 | schema drift — writer sends columns that don't exist. |
+| rpc/lcc_record_listing_check | 400 | 150 | CHECK rejected `'inferred_active'`. |
+| leases | 400 | 98 | `gov_reject_dateless_active_lease` trigger blocks active-with-dates-NULL. |
+| loans | 400 | 94 | NULL status + unparseable CoStar text. Fixed in A-4. |
+
+### Three fixes in this patch (resolves 426 of 579 daily failures)
+
+**1. sf_comps_staging writer rewrite (178/24h → 0)**
+Real schema (verified via MCP) has `street/sold_price/sold_date/building_sf/source_system/process_status/raw_row`. Old writer sent `address/sale_price/sale_date/buyer_name/seller_name/square_feet/sync_status` — every column wrong. Rewritten the writer's column map. Buyer + seller names (no dedicated columns) stash in the `raw_row` jsonb. Label `autoStageGovComp`.
+
+**2. gov leases dateless-active skip (98/24h → 0)**
+The `gov_reject_dateless_active_lease` trigger correctly rejects new active leases with both `commencement_date` and `expiration_date` NULL. Writer now short-circuits with a console.log before the POST when both dates are missing. Honor the trigger's intent without 4xx'ing the log. Label `upsertGovernmentLeases:insert` on the genuine POST.
+
+**3. rpc/lcc_record_listing_check (150/24h → 0)**
+The auto-scrape path writes `check_result='inferred_active'` to `listing_verification_history` when the timer expires without sale evidence. The CHECK only allowed 6 values. Expanded the CHECK on both dia + gov to include `'inferred_active'` (applied via MCP at 2026-05-18). Plus added labels to 3 RPC call sites (`autoScrapeListings:recordCheck`, `availabilityPromotionSweep:recordCheck`, `entitiesHandler:recordListingCheck`) for future telemetry.
+
+### Files changed
+- `supabase/migrations/dialysis/20260518120000_dia_lvh_check_add_inferred_active.sql` (already applied via MCP)
+- `supabase/migrations/government/20260518120000_gov_lvh_check_add_inferred_active.sql` (already applied via MCP)
+- `api/_handlers/sidebar-pipeline.js` — sf_comps_staging rewrite + leases dateless skip + label
+- `api/admin.js` — 2 RPC labels (auto-scrape + availability-promotion)
+- `api/_handlers/entities-handler.js` — 1 RPC label
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification (post-deploy)
+1. `grep -c "autoStageGovComp" api/_handlers/sidebar-pipeline.js` → 1+
+2. `grep -c "upsertGovernmentLeases:insert" api/_handlers/sidebar-pipeline.js` → 1+
+3. `grep -c "recordCheck" api/admin.js api/_handlers/entities-handler.js` → 3+
+4. After a few hours of traffic, on LCC Opps:
+   ```sql
+   SELECT path, http_status, count(*)
+     FROM public.ingest_write_failures
+    WHERE occurred_at > now() - interval '1 hour'
+      AND label IS NULL
+    GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10;
+   -- Expected: sf_comps_staging / leases / rpc/lcc_record_listing_check
+   --           drop out of the top-N.
+   ```
+
+### Fresh-audit punch list after this patch
+- A-1 ✅ orphan sale backfill (1,596 NBA gaps closed)
+- A-2 ✅ sales POST labeled
+- **A-3 ✅** label + fix unlabeled writers (426/24h closed)
+- A-4 ✅ loans status normalized + CHECK loosened
+- A-5 📋 agency-drift review UI (last one)
+

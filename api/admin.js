@@ -531,13 +531,14 @@ async function handleAutoScrapeListings(req, res) {
           p_listing_id: l.listing_id,
           p_method: 'auto_scrape',
           p_check_result: checkResult,
+          // Fresh audit A-3 (2026-05-18): label inserted via opts below
           p_asking_price: null,
           p_cap_rate: null,
           p_source_url: null,
           p_off_market_reason: offMarketReason,
           p_notes: notes,
           p_verified_by: user.id || null,
-        });
+        }, { label: 'autoScrapeListings:recordCheck' });
         if (!rpcRes.ok) {
           summary.errors.push({
             stage: 'rpc', listing_id: l.listing_id,
@@ -746,7 +747,7 @@ async function handleAvailabilityPromotionSweep(req, res) {
           p_effective_at: best.sale_date,
           p_notes: `availability-promotion-sweep: matched sales_transactions sale_id=${best.sale_id} on ${best.sale_date} (was unverified_assumed_off)`,
           p_verified_by: user.id || null,
-        });
+        }, { label: 'availabilityPromotionSweep:recordCheck' });
         if (!rpcRes.ok) {
           summary.errors.push({
             stage: 'rpc', listing_id: l.listing_id,
