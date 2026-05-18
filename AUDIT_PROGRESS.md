@@ -1988,3 +1988,47 @@ Before the fix: same call with `property_id=eq.{N}` → HTTP 400.
 - **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
 - **Optional** uniformity cleanup — add `property_id` to gov `v_ownership_chain` so the frontend can use the same filter shape across domains (not required, but would remove the dispatch).
 
+
+
+## QA pass #9 — Open Activities stat reconciliation ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-09-open-activities-stat-reconcile`
+- **Patch:** `audit/patches/qa-09-open-activities-stat-reconcile/apply.mjs`
+
+### The conflict (before)
+| Surface | Stat | Value | What it actually counted |
+|---|---|---|---|
+| Home | "Open Activities" | 0 | `work_counts.open_actions` (correct, but ambiguously labeled) |
+| Home | "Flagged Emails" | 3,569 | Raw Outlook flag count |
+| Pipeline | "My Work · 23 items" | 23 | First 100 `flagged_email` rows after dedup |
+| Metrics | "INBOX · 7,402 needs triage" | 7,402 | `work_counts.inbox_new` |
+| Inbox page | "100 items" | 100 | Same flagged_email source, paginated |
+
+### Tight-scope fix
+1. **`ops.js` `renderMyWork`** — drops `source_type='flagged_email'` / `item_type='inbox'` rows from the My Work list before dedup. Records `window._opsMyWorkInboxDropped` so the empty state can surface the dropped count.
+2. **`ops.js` `renderMyWorkList`** empty state — when the queue is empty after the filter and N emails were dropped, the empty-state copy now says "No action items assigned to you / N flagged emails sitting in Inbox — triage there to promote them into actions." with an Open Inbox CTA.
+3. **`index.html`** — adds `title="Promoted / assigned action items only — does not include raw flagged emails. See the Flagged Emails stat (next card) for the triage queue."` to the `#statActivities` stat-card on Home.
+
+### After
+| Surface | Stat | Meaning | Consistent? |
+|---|---|---|---|
+| Home "Open Activities" | promoted/assigned actions only (tooltip) | matches Pipeline | ✓ |
+| Home "Flagged Emails" | raw Outlook flag count (separate concept) | no overlap | ✓ |
+| Pipeline "My Work" | true actions only, raw emails excluded | matches Home | ✓ |
+| Metrics "INBOX · needs triage" | `work_counts.inbox_new` | separate concept | ✓ |
+| Inbox page count | same source as Metrics | matches Metrics | ✓ |
+
+### Caveats / out of scope
+- The 3,569 (Home Flagged Emails) vs 7,402 (Metrics INBOX) gap is a separate issue: different sources (Outlook flag API vs canonical inbox_new). They will not agree until the inbox sync catches up. Not addressed here.
+- Stat labels were not renamed — the tooltip is the minimum-blast-radius substitute. A future "medium scope" pass could rename to "Actions Assigned" / "Inbox to Triage" / etc.
+
+### Files changed
+- `ops.js` — filter in `renderMyWork`, empty-state hint in `renderMyWorkList`
+- `index.html` — tooltip on #statActivities
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Queued for follow-up
+- **P1** Sync error count contradicts itself (Pipeline header / Metrics tile / Sync Health page)
+- **P1** Public REITs + same-entity duplicates in `llc_research_queue`
+- **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
+
