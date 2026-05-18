@@ -1,0 +1,44 @@
+QA-28 (P2): filter private-business "Federal" entities out of Agency Breakdown
+
+After QA-24's canonicalization, the chart's top entries were clean (VA
+ranked #1 as it should) but the long tail still had ~826 properties
+polluting the bottom rows under names like "Campco Federal Credit Union"
+(162 props), "10 Federal Self Storage" (154), "First Federal Lakewood"
+(141), "Digital Federal Credit Union" (130). These are private
+businesses with "Federal" in the name, not federal tenants. The
+canonicalize_agency() function correctly returned NULL for them, but
+the frontend fell back to the raw .agency string.
+
+Live scope (2026-05-18): 13 distinct non-federal "Federal" strings. The
+top 7 patterns account for 826 properties. Three legitimate-federal
+entries the canonicalizer missed (FBI hyphen variant, FCC, Federal
+Building) are noted but left for a future canonicalizer-expansion pass.
+
+Fix: pure frontend change in gov.js.
+
+1. New _govIsPrivateFederalNamedEntity(name) helper — case-insensitive
+   regex classifier:
+   - federal credit union
+   - federal savings / federal bank
+   - ^first federal
+   - self storage / self-storage anywhere
+   - ^<digits> federal (covers "10 Federal Self Storage")
+   - ^federal way (Federal Way is a WA city name)
+
+2. Agency Breakdown forEach rolls private-named rows into the Unknown
+   bucket. The chart now focuses on real federal/state/local government
+   tenants.
+
+3. distinctAgencies count excludes the same private names.
+
+Properties remain in the database — only the breakdown chart filters
+them. Other surfaces (sales comps, ownership history) still use the
+data normally.
+
+Files changed:
+- gov.js (helper + Agency Breakdown filter)
+- AUDIT_PROGRESS.md (closeout)
+
+No SQL changes. No Edge Function changes. No allowlist changes.
+
+Patch: audit/patches/qa-28-private-federal-name-filter/

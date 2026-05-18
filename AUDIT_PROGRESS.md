@@ -2699,3 +2699,47 @@ The QA-25 dia "Unprospected Owners" widget's denominator was previously capped a
 
 No SQL changes. No Edge Function changes. No allowlist changes.
 
+
+
+## QA pass #28 — Private "Federal" name filter on Agency Breakdown ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-28-private-federal-name-filter`
+- **Patch:** `audit/patches/qa-28-private-federal-name-filter/apply.mjs`
+- **Severity:** P2 cleanup.
+
+### Symptom
+After QA-24's canonicalization, the Agency Breakdown chart's TOP entries were correct (VA ranked #1) but the long tail had ~826 properties polluting the bottom rows under names like "Campco Federal Credit Union" (162 props), "10 Federal Self Storage" (154), "First Federal Lakewood" (141). These are private businesses with "Federal" in the name, not federal tenants.
+
+### Diagnosis
+13 distinct non-federal "Federal" strings live on gov (2026-05-18). The canonicalize_agency() function correctly returned NULL for all of them, but the frontend fell back to the raw .agency string — so they appeared in the chart as their own buckets.
+
+### Fix
+Pure frontend change in `gov.js`:
+
+1. `_govIsPrivateFederalNamedEntity(name)` helper — case-insensitive regex:
+   - `federal credit union`
+   - `federal savings` / `federal bank`
+   - `^first federal`
+   - `self storage` / `self-storage` anywhere
+   - `^<digits> federal` (covers "10 Federal Self Storage")
+   - `^federal way` (Federal Way is a WA city name)
+
+2. Agency Breakdown `forEach` rolls private-named rows into the Unknown bucket instead of the long-tail chart.
+
+3. `distinctAgencies` count excludes the same private names.
+
+826 properties filtered out of the breakdown. Three remaining legitimate-federal misses noted for future canonicalizer expansion (FBI hyphen variant, FCC, Federal Building).
+
+### Why filter, not delete?
+Properties remain in the database — only the breakdown chart filters them. Other surfaces (sales comps, ownership history) still use the data normally. Reversible.
+
+### Out of scope
+- Canonicalizer fixes for FBI/FCC/Federal Building (single-property each, future pass)
+- Ingest-side `is_private_entity` column (premature at 826 rows)
+
+### Files changed
+- `gov.js` — `_govIsPrivateFederalNamedEntity` helper + Agency Breakdown filter
+- `AUDIT_PROGRESS.md` — this closeout
+
+No SQL changes. No Edge Function changes. No allowlist changes.
+
