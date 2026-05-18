@@ -2255,3 +2255,42 @@ if (widgetsEl) {
 ### Deferred queue cleared
 QA-13 (Home Inbox inline actions), QA-14 (Messages page inline actions), and QA-15 (this) were the three items deferred at the end of the original 2026-05-18 QA pass. All shipped.
 
+
+
+## QA pass #16+17 — financial estimates keyset + ownership-chain fallback ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-16-17-financial-keyset-and-ownership-chain-fallback`
+- **Patch:** `audit/patches/qa-16-17-financial-keyset-and-ownership-chain-fallback/apply.mjs`
+
+### Discovery
+Surfaced in QA pass #2 (post-QA-15 fresh walkthrough). Console showed two persistent errors on every page reload:
+
+```
+diaQuery clinic_financial_estimates: HTTP 500 (statement_timeout 57014)
+govQuery v_ownership_chain: HTTP 400 (column property_id does not exist)
+```
+
+### QA-16 — dia clinic_financial_estimates statement_timeout (P0)
+36,538 `is_latest=true` rows lazy-paginated 1000 at a time using OFFSET. Page 30 alone took 1,356 ms; the last few pages tripped statement_timeout. Frontend already had `count=false` set — pure OFFSET-seek cost.
+
+**Fix:**
+1. New partial keyset index `idx_cfe_latest_keyset ON clinic_financial_estimates(estimate_id) WHERE is_latest=true`.
+2. `dialysis.js` lazy loader switched from OFFSET to keyset pagination (`order=estimate_id.asc`, `filter2=estimate_id=gt.<last_seen>`).
+
+**Verified:** representative page now executes in **4.5 ms** (was 1,356 ms — ~300× speedup). Full 37-page load ≈ 170 ms total (was ~24 s and frequently timing out).
+
+### QA-17 — gov v_ownership_chain fallback (P0)
+QA-08 fixed `_udOwnerBeginProspecting` but missed a second caller in the main fetch path. `detail.js` line ~228 had `leaseNumber ? lease_number=eq.X : mainFilter` — when `leaseNumber` was null and `db==='gov'`, fallback was `property_id=eq.X`, which 400s on gov (column does not exist).
+
+**Fix:** on gov, no fallback — skip the chain fetch when `leaseNumber` is missing and return `{ data: [], count: 0 }`. No useful chain rows exist for a non-leased gov property anyway.
+
+### Files changed
+- `supabase/migrations/dialysis/20260518170000_dia_qa16_cfe_latest_keyset_index.sql`
+- `dialysis.js` — clinic_financial_estimates keyset pagination
+- `detail.js` — gov chain fetch fallback
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Remaining queued from QA pass #2
+- **P2** Address full Title-casing — "240 w 5th ave" still appears lowercase in the Agency Drift widget. QA-12 only handled direction suffixes (Se/Sw/Ne/Nw), not the street name.
+- **P2** Inbox header reads "100 items" but Metrics says "7,420 needs triage" — header should be "Showing 100 of 7,420" to match Messages convention.
+
