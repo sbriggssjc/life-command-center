@@ -1,0 +1,58 @@
+-- =====================================================================
+-- Round 33 — Editable Excel charts (marketing team feedback)
+-- "the charts in the Excel export are PNG images or graphics and not
+--  editable charts like what's in our Excel version."
+--
+-- NO Supabase view changes in this batch. Code-only.
+--
+-- ---------------------------------------------------------------------
+-- CONTEXT: two export paths already exist
+-- ---------------------------------------------------------------------
+-- The dialysis export endpoint already has two paths:
+--
+--   A. data_tabs path (current default): ExcelJS builds the workbook
+--      from scratch, embeds chart PNGs rendered by QuickChart. Each
+--      Data_* tab gets a chart image + a data table. Charts are NOT
+--      editable in Excel.
+--
+--   B. master_template path (opt-in via ?layout=master_template):
+--      Loads assets/cm-templates/dialysis-master-template.xlsx (the
+--      user's actual master XLSX shell with 37 pre-wired chart
+--      objects) and replaces only the data cells. Chart objects pass
+--      through byte-for-byte, so they remain natively editable in
+--      Excel (right-click → Edit Data / Format Chart Area).
+--
+-- ---------------------------------------------------------------------
+-- FIX (this PR — code-only)
+-- ---------------------------------------------------------------------
+-- api/capital-markets.js: switched dialysis default from 'data_tabs'
+-- → 'master_template'. Marketing team now gets natively editable
+-- charts by default. The legacy data_tabs path stays available as an
+-- opt-OUT via ?layout=data_tabs (used by callers that depend on the
+-- specific Data_* tab + chart-image structure).
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED — gov master_template wiring (P2)
+-- ---------------------------------------------------------------------
+-- gov-master-template.xlsx (928KB, 32 chart objects, 10 worksheets:
+-- Sold / Ownership / Inventory / All Charts / SSA Charts / Rent
+-- Survey / Top Buyers / Top Sellers / Competition / FRPP-Leased) is
+-- already in assets/cm-templates/ but unused. To match the dia setup
+-- for gov requires:
+--   1. buildGovMasterWorkbook() in api/_shared/cm-template-loader.js
+--   2. generateGovAllChartsSheetXml() + generateGovSsaChartsSheetXml()
+--      that populate the cell ranges the gov chart objects reference
+--      ('All Charts'!$D$6:$D$159 for Transactions TTM, etc.)
+--   3. Route from api/capital-markets.js so gov defaults to
+--      master_template too
+--
+-- Tracked as a separate follow-up PR.
+--
+-- ---------------------------------------------------------------------
+-- ROUND 33 REMAINING
+-- ---------------------------------------------------------------------
+--   Tier E — Add Rent_Price_PSF chart for dia (alongside per-chair);
+--            Core_Cap_Dot trendline review vs master
+--   Tier F — Val_Index formula confirmation; structural items
+--   Gov master_template wiring (P2 above)
+-- =====================================================================
