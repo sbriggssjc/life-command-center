@@ -2160,3 +2160,28 @@ Brandywine Realty Trust (NYSE: BDN) appeared on the live NBA rail as rank #9 + #
 - Messages page inline actions
 - Research page LLC + Agency Drift widgets
 
+
+
+## QA pass #13 — Home Inbox rail inline actions ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-13-home-inbox-inline-actions`
+- **Patch:** `audit/patches/qa-13-home-inbox-inline-actions/apply.mjs`
+
+### Symptom
+The Home rail's inbox cards offered only "Open in Outlook ↗" — every triage action required navigating to either Outlook or the dedicated Inbox page. With 7,400+ flagged emails, this click-economy cost made the Home rail's inbox preview essentially read-only.
+
+### Fix
+`renderRecentEmails` (`app.js`) — canonical-inbox path — now ends each card with the same four buttons used by `inboxItemHTML` on the Inbox page: **Triage** (only when status==='new'), **Promote** (primary), **Assign**, **Dismiss**. All four handlers (`triageSingle`, `promoteSingle`, `dismissSingle`, `quickReassign`, plus `_opsBtnGuard` and `jsStringArg`) are top-level declarations in `ops.js` and reachable as globals from `app.js` runtime contexts.
+
+The button row is wrapped in `<div onclick="event.stopPropagation()">` so the card-level `navTo('pageInbox')` doesn't fire when a button is clicked.
+
+The legacy fallback path (raw flagged emails from the edge function, no canonical queue row) keeps the existing "Open in Outlook ↗" link only.
+
+### Files changed
+- `app.js` — `renderRecentEmails` canonical-inbox path
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Queued for follow-up
+- **QA-14** Messages page inline actions (every row currently has only "Open in Outlook ↗").
+- **QA-15** Research page — wire the LLC + Agency Drift widgets onto pageResearch.
+
