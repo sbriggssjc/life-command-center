@@ -695,18 +695,59 @@ function unwrapTenantValue(raw) {
  * Round 76eq: every fallback path goes through unwrapTenantValue() to
  * defend against AI-stringified-array input.
  */
+// Round 76fh (2026-05-18): when RCA emits a property with no tenants
+// table, the tenant identity often appears only inside sale comment
+// strings — "100% occ.;Office - Sub property; Tenants: single tenant
+// -- GSA - Immigration & Customs Enforcement; part of 12 property
+// portfolio". Extract the dash-delimited tenant from the most recent
+// sale's comments so the downstream classifier + agency writer still
+// have a name to work with.
+function extractTenantFromSalesHistoryComments(salesHistory) {
+  if (!Array.isArray(salesHistory) || salesHistory.length === 0) return null;
+  // Sort newest-first so the current tenant wins over historical ones.
+  const sorted = [...salesHistory].sort((a, b) => {
+    const ad = a?.sale_date ? new Date(a.sale_date).getTime() : 0;
+    const bd = b?.sale_date ? new Date(b.sale_date).getTime() : 0;
+    return bd - ad;
+  });
+  // RCA's sale comment phrasing:
+  //   Tenants: single tenant -- <name>
+  //   Tenants: multi-tenant -- <name>; <name>
+  //   Tenants: anchor -- <name>
+  // Conservative: capture only the first dash-delimited token (up to the
+  // next semicolon / period / newline). Strip any "and N others" tail.
+  const TENANT_RE = /\bTenants?\s*:\s*(?:single\s+tenant|multi[- ]tenant|anchor|major\s+tenants?|principal\s+tenant)?\s*--\s*([^;.\n]+)/i;
+  for (const ev of sorted) {
+    if (!ev?.comments) continue;
+    const m = String(ev.comments).match(TENANT_RE);
+    if (m && m[1]) {
+      const name = m[1]
+        .replace(/\s+and\s+\d+\s+others?$/i, '')
+        .replace(/\s+\(.*?\)$/, '') // strip trailing parenthetical
+        .trim();
+      if (name.length >= 3 && name.length <= 120) return name;
+    }
+  }
+  return null;
+}
+
 function selectPrimaryTenant(metadata, domain) {
   const tenants = metadata.tenants || [];
   if (tenants.length === 0) {
+    // Round 76fh: include sales_history.comments fallback before giving up.
     return unwrapTenantValue(metadata.tenant_name)
       || unwrapTenantValue(metadata.primary_tenant)
+      || extractTenantFromSalesHistoryComments(metadata.sales_history)
       || null;
   }
   const priorityRe = domain === 'government' ? GOV_TENANT_PRIORITY : MEDICAL_TENANT_PRIORITY;
   const match = tenants.find(t => t.name && priorityRe.test(t.name));
   if (match) return match.name;
   // Fall back to first (largest by SF) tenant
-  return tenants[0]?.name || unwrapTenantValue(metadata.tenant_name) || null;
+  return tenants[0]?.name
+    || unwrapTenantValue(metadata.tenant_name)
+    || extractTenantFromSalesHistoryComments(metadata.sales_history)
+    || null;
 }
 
 /**
@@ -867,6 +908,23 @@ function classifyDomain(metadata, entityFields) {
     }
   }
 
+  // Round 76fh (2026-05-18): include sales_history[].comments and entities_text.
+  // RCA Property Details pages don't always render a Tenants section; when
+  // they don't, the tenant name often only appears inside sale comments like
+  // "100% occ.;Office - Sub property; Tenants: single tenant -- GSA -
+  // Immigration & Customs Enforcement; part of 12 property portfolio". The
+  // 1530 Commonwealth Business Dr / GSA-ICE capture (LCC entity adb366b9)
+  // classified as no_domain because the searchText omitted these comments
+  // even though every one of the 4 sales_history entries had the GSA tag.
+  // Same defense for entities_text — lender/buyer narratives sometimes carry
+  // government affiliations the structured field set misses.
+  if (Array.isArray(metadata.sales_history)) {
+    for (const ev of metadata.sales_history) {
+      if (ev?.comments) textParts.push(String(ev.comments).substring(0, 300));
+      if (ev?.entities_text) textParts.push(String(ev.entities_text).substring(0, 200));
+    }
+  }
+
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
 
   // ── Diagnostic: log classifier inputs for debugging ──
@@ -941,6 +999,14 @@ function classifyAllApplicableDomains(metadata, entityFields) {
   if (Array.isArray(metadata.pdf_extracted_texts)) {
     for (const pdf of metadata.pdf_extracted_texts) {
       if (pdf && pdf.text) textParts.push(pdf.text.substring(0, 500));
+    }
+  }
+  // Round 76fh: same sales_history sweep as classifyDomain so multi-domain
+  // detection on RCA captures without a tenants table behaves identically.
+  if (Array.isArray(metadata.sales_history)) {
+    for (const ev of metadata.sales_history) {
+      if (ev?.comments) textParts.push(String(ev.comments).substring(0, 300));
+      if (ev?.entities_text) textParts.push(String(ev.entities_text).substring(0, 200));
     }
   }
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();

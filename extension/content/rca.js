@@ -119,6 +119,8 @@
     }
 
     // Owners — capture the primary owner as a contact + as recorded_owner_name
+    // (NOTE: tenants[] fallback from sale comments runs LATER, after
+    // extractPropertyHistory has populated data.sales_history below.)
     const ownerEl = document.querySelector('#owners .owner .name a, #owners .owner .name');
     if (ownerEl) {
       const ownerName = textOf(ownerEl);
@@ -136,6 +138,42 @@
 
     // Financing — current loans
     extractFinancing(data);
+
+    // Round 76fh (2026-05-18): tenant-from-comments fallback. RCA Property
+    // Details pages don't always render a Tenants section. When they don't
+    // but the sale comments DO carry "Tenants: single tenant -- <name>"
+    // text, synthesize a tenants[] entry so the LCC classifier + agency
+    // writer don't fall through to no_domain. Concrete case (1530
+    // Commonwealth Business Dr / GSA-ICE Tallahassee): the page has 4
+    // refinance/sale rows, each with "Tenants: single tenant -- GSA -
+    // Immigration & Customs Enforcement" in the comments column, but no
+    // table.tenants block, so data.tenants stayed [] and the classifier
+    // returned no_domain. Pull the most-recent sale's tenant token —
+    // dash-delimited, semicolon-terminated — and promote it.
+    if (data.tenants.length === 0 && Array.isArray(data.sales_history)) {
+      const sorted = [...data.sales_history].sort((a, b) => {
+        const ad = a && a.sale_date ? new Date(a.sale_date).getTime() : 0;
+        const bd = b && b.sale_date ? new Date(b.sale_date).getTime() : 0;
+        return bd - ad;
+      });
+      const TENANT_RE = /\bTenants?\s*:\s*(?:single\s+tenant|multi[- ]tenant|anchor|major\s+tenants?|principal\s+tenant)?\s*--\s*([^;.\n]+)/i;
+      for (const ev of sorted) {
+        if (!ev || !ev.comments) continue;
+        const m = String(ev.comments).match(TENANT_RE);
+        if (m && m[1]) {
+          const name = m[1]
+            .replace(/\s+and\s+\d+\s+others?$/i, '')
+            .replace(/\s+\(.*?\)$/, '')
+            .trim();
+          if (name.length >= 3 && name.length <= 120) {
+            data.tenants.push({ name, _source: 'sales_history_comments' });
+            if (!data.tenant_name) data.tenant_name = name;
+            console.log('[lcc-rca] Round 76fh: tenant synthesized from sale comments:', name);
+            break;
+          }
+        }
+      }
+    }
 
     return data;
   }
