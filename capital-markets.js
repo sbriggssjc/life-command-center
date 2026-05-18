@@ -724,11 +724,12 @@
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
       case 'lease_termination_rate': {
-        // Round 31 Tier 2 — Restructured to match master Excel
-        // Term_Rate format: 2 bars of TTM counts (In Firm + Outside
-        // Firm), no termination-rate %, no dual axis. Mirrors server
-        // renderer rewrite.
+        // Round 31 Tier 2 — Restructured to 2 bars of TTM counts.
+        // Round 33 Tier D — Master Excel chart is STACKED (overlap=100,
+        // grouping=stacked), not grouped side-by-side. Mirror that.
         const opts = commonChartOptions('integer_count');
+        opts.scales.x.stacked = true;
+        opts.scales.y.stacked = true;
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
         datasets = [
@@ -739,11 +740,11 @@
               return Math.max(0, t - o);
             }),
             backgroundColor: navy, borderColor: navy,
-            borderRadius: 1, yAxisID: 'y', order: 1 },
+            borderRadius: 1, yAxisID: 'y', stack: 'leases' },
           { type: 'bar', label: 'Leases Outside Firm (TTM)',
             data: chart.rows.map(r => r.leases_outside_firm_term),
             backgroundColor: sky, borderColor: sky,
-            borderRadius: 1, yAxisID: 'y', order: 2 },
+            borderRadius: 1, yAxisID: 'y', stack: 'leases' },
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
@@ -807,30 +808,16 @@
         return new Chart(canvas, { type: 'bar', data: { labels: yearLabels, datasets }, options: opts });
       }
       case 'renewal_rent_growth': {
-        // Round 27 — mirrors Round 26 axis widening. left $0–$70 to fit
-        // gov avg_renewal_rent_psf max $65.49; right -5%–12% to fit
-        // gov cagr_5yr max 10.68%.
+        // Round 33 Tier D — Simplified to single-bar format matching
+        // master Excel chart 14 ('Renewal Rent/SF'). Removed quartile
+        // overlay + CAGR line (CAGR lives on the separate CPI_CAGR chart).
+        const sky = brandColor('nm_sky', '#62B5E5');
         const opts = commonChartOptions('currency_per_sf');
         opts.scales.y.min = 0; opts.scales.y.max = 70;
-        opts.scales.y1 = {
-          position: 'right', min: -0.05, max: 0.12,
-          ticks: { color: brandColor('nm_axis', '#6A748C'),
-                   font: { family: 'Calibri, sans-serif', size: 9 },
-                   callback: tickFormatterFor('percent_one_decimal') },
-          grid: { display: false },
-        };
         datasets = [
-          { type: 'bar',  label: 'TTM Avg Renewal Rent/SF', data: chart.rows.map(r => r.ttm_avg_renewal_rent_psf),
-            backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
-          { type: 'line', label: 'Upper Quartile', data: chart.rows.map(r => r.upper_quartile_rpsf),
-            borderColor: palette[4], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [4,3], yAxisID: 'y' },
-          { type: 'line', label: 'Lower Quartile', data: chart.rows.map(r => r.lower_quartile_rpsf),
-            borderColor: palette[4], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 0, borderWidth: 1, borderDash: [4,3], yAxisID: 'y' },
-          { type: 'line', label: '5-Year CAGR', data: chart.rows.map(r => r.cagr_5yr),
-            borderColor: palette[1], backgroundColor: 'transparent',
-            tension: 0.3, pointRadius: 2, borderWidth: 2, yAxisID: 'y1' },
+          { type: 'bar',  label: 'Renewal Rent / SF',
+            data: chart.rows.map(r => r.avg_renewal_rent_psf),
+            backgroundColor: sky, borderColor: sky, borderRadius: 1, yAxisID: 'y' },
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }

@@ -1,0 +1,53 @@
+-- =====================================================================
+-- Round 33 Tier D — Excel format-match (Inventory_Backlog,
+-- Market_Turnover, Term_Rate, Renewal_Rate, Renewal_Growth).
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE VIEW CHANGES (applied 2026-05-18)
+-- ---------------------------------------------------------------------
+-- 1) cm_dialysis_inventory_backlog_m: generate_series end clamped
+--    CURRENT_DATE → cm_last_completed_quarter_end(). User: "data issue
+--    with the most recent quarters having a few data points way out
+--    of balance with the rest."
+--    Root cause: a data bulk-load in April-May 2026 set listing_date
+--    on ~750 historical listings to the upload date, spiking added_ttm
+--    in the post-quarter-end months. Clamping the view to the last
+--    completed quarter (the standard cm pattern) hides those.
+--
+-- 2) cm_gov_inventory_backlog_m: same clamp for parity.
+--
+-- 3) cm_dialysis_market_turnover_m + cm_gov_market_turnover_m: same
+--    clamp pattern for consistency across all market-activity views.
+--
+-- ---------------------------------------------------------------------
+-- LCC CODE CHANGES (api/_shared/cm-chart-image-renderer.js,
+-- capital-markets.js)
+-- ---------------------------------------------------------------------
+-- 4) lease_termination_rate (Term_Rate, gov) — Re-inspected master
+--    Excel chart 4 ('Copy Government Master Document.xlsx' > 'All
+--    Charts' > chart 4): type=col, grouping=STACKED (overlap=100),
+--    NOT grouped/clustered. R31 T2a rendered as side-by-side grouped;
+--    R33 fixes to fully stacked (In Firm + Outside stack into a single
+--    total bar per period). User: "Same with this one, still not
+--    matching".
+--
+-- 5) renewal_rent_growth (Renewal_Growth, gov) — Re-inspected master
+--    Excel chart 14 ('Renewal Rent/SF'): grouping=clustered, SINGLE
+--    bar series 'Renewal Rent/SF' (currency format). The R10 + R26
+--    3-series combo (rent bar + quartile whisker + CAGR dots) had
+--    more analytical depth than the master but didn't match the
+--    style. CAGR lives on the separate CPI_CAGR chart already.
+--    Simplified to single bar to match master. User: "the chart style
+--    does not match what's in our Excel version".
+--
+-- 6) lease_renewal_rate (Renewal_Rate, gov) — Verified: already 5-series
+--    stacked (First Gen / Renewed / Succ-Super / Expired / Terminated)
+--    matching master Excel chart 3. No change needed.
+--
+-- ---------------------------------------------------------------------
+-- ROUND 33 REMAINING
+-- ---------------------------------------------------------------------
+--   Tier E — Add Rent_Price_PSF chart for dia (alongside per-chair),
+--            Core_Cap_Dot trendline review
+--   Tier F — Val_Index formula confirmation, structural items
+-- =====================================================================
