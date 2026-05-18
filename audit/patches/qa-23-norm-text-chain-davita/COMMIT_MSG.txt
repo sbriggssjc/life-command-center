@@ -1,0 +1,53 @@
+qa(23): chain canonicalize_davita_brand into norm_text (dia)
+
+QA-22 backfilled properties.tenant (2,531 "Davita" → "DaVita") but
+the detail panel header on dia properties STILL read "Davita
+Lakewood Community Dialysis Center". QA pass #6 verification
+caught this.
+
+Root cause: v_property_detail__base builds page_title from
+COALESCE over four sources:
+
+  COALESCE(norm_text(pl.tenant),               -- leases LATERAL
+           norm_text(pmc.facility_name),       -- medicare_clinics LATERAL
+           norm_text(p.tenant::text),          -- properties.tenant ← QA-22 fixed only this
+           norm_text(p.address))
+
+The first two LATERAL sources had thousands of "Davita" rows that
+QA-22 didn't touch:
+  • leases.tenant: 2,348 rows
+  • medicare_clinics.facility_name: 6 rows
+
+The QA-19 norm_text trusts mixed-case input as-is (correct, to not
+clobber canonical data), so the bad casing flowed through unchanged.
+
+Fix: chain canonicalize_davita_brand onto norm_text's output —
+applies to ALL paths (trusted-mixed-case AND smart-title-case).
+Idempotent (DaVita stays DaVita), cheap (one regex_replace per
+call), and IMMUTABLE-safe.
+
+One function changed → 4 dependent views auto-fixed:
+  • v_property_detail
+  • v_lease_detail
+  • v_ownership_current
+  • v_ownership_chain
+
+No table backfills needed — existing rows aren't mutated, just
+displayed correctly on every read.
+
+Verified live (property 38564):
+  Before: page_title = "Davita Lakewood Community Dialysis Center
+                       – Lakewood, WA"
+  After:  page_title = "DaVita Lakewood Community Dialysis Center
+                       – Lakewood, WA"
+
+Lesson: when a view's column is built via COALESCE over multiple
+upstream sources, fixing one source isn't enough. View-level
+canonicalization (in norm_text) is more robust than chasing each
+upstream column individually.
+
+Files changed:
+  • supabase/migrations/dialysis/20260518210000_dia_qa23_norm_text_chain_davita_brand.sql
+  • AUDIT_PROGRESS.md (closeout)
+
+Migration applied live via Supabase MCP on 2026-05-18.
