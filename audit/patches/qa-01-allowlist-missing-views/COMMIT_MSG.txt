@@ -1,0 +1,49 @@
+qa(01): allowlist missing-views fix (SHOWSTOPPER)
+
+Discovered during the in-browser QA pass on 2026-05-18. Every detail-
+panel feature shipped this sprint was silently broken in the UI:
+
+  • Item #6 completeness rail        — hidden because cache was NULL
+  • Item #8 next-action bar          — hidden because cache was NULL
+  • Item #8 B-2 agency_drift dispatch — never fires, lookup returns []
+  • Item #8 B-3 orphan_sale dispatch  — never fires, lookup returns []
+  • Item #8 B-4 tenant_drift dispatch — never fires, lookup returns []
+  • Item A-5 Agency Drift widget     — widget renders but is empty
+
+Root cause: api/_shared/allowlist.js enforces a strict allowlist of
+table/view names. Unlisted names get a SILENT empty {data:[], count:0}
+response (NOT a 4xx), so lccReportError doesn't fire and the rails just
+quietly hide themselves. Every view we created during the sprint
+(v_property_completeness, v_next_best_action, v_gap_agency_drift,
+v_gap_lease_tenant_drift, v_gap_chain_drift, v_gap_orphan_sale_owner,
+v_property_value_signal, llc_research_queue) was missing from
+GOV_READ_TABLES / DIA_READ_TABLES.
+
+Why the NBA Home rail still worked: it calls /api/admin?_route=next-
+best-action which uses domainQuery server-side, bypassing the
+allowlist. The Home surface was the only feature with the working
+data path.
+
+Fix: single-file addition of 6–7 view names to each domain's read
+allowlist.
+
+Verified via Chrome MCP:
+  • At SQL level (via Supabase MCP): all views return correct data
+    for the test property.
+  • At PostgREST level (via SET LOCAL ROLE authenticated):
+    auth_sees=1 for v_property_completeness on the test property.
+  • At frontend level (via govQuery): {data:[], count:0} because
+    the proxy refuses to forward the request — the smoking gun.
+
+Files changed:
+  • api/_shared/allowlist.js
+  • AUDIT_PROGRESS.md
+
+Queued for follow-up (separate patches):
+  • NBA dia query times out (Postgres 57014) — needs view tuning
+  • Open Activities = 0 vs My Work = 7,396 stat conflict
+  • LLC research queue contains public REITs (Brandywine Realty Trust)
+  • LLC research queue has same-entity duplicates
+  • Inbox cards lack inline "Mark processed" / "Promote" actions
+  • Agency casing "Dod" should be "DOD" / "DoD"
+  • Detail panel header wraps awkwardly (4 lines for one agency name)
