@@ -1,0 +1,51 @@
+audit(item-5/phase-b): provenance integrity — D-13 fix + gating
+
+Phase B of Item #5 (silent-write provenance integrity). Phase A landed
+earlier as `08846cc` (ingest_write_failures table + domainQuery
+instrumentation surfacing the silent failures).
+
+D-13 — ownership_research_queue silent-write loop
+
+Verified via MCP 2026-05-17: production schema of the queue table is
+the AI-pipeline shape (lead_id, task_type, task_status, ai_prompt,
+ai_response, ai_confidence, etc.) but two writers in
+sidebar-pipeline.js POST the legacy column set (property_id, address,
+city, state, recorded_owner_*, source, priority, status). Every POST
+4xx'd silently — surfaced by Phase A's instrumentation.
+
+Resolution: neutralize the writers (audit doc option (b)). The Python
+AI pipeline already covers both use cases:
+  • task_type='contact_discovery'  for first-name-only brokers
+  • task_type='entity_resolution'  for unknown true_owner from a
+    known recorded_owner
+
+Two writers fixed:
+  • sidebar-pipeline.js:1851 BROKER_FIRSTNAME_ONLY enqueue → no-op
+    with debug log.
+  • sidebar-pipeline.js:2684 autoEnqueueOwnerResearch body → no-op
+    with debug log (caller at line 2349 still invokes it; function
+    now returns immediately).
+
+pushProvenance gating
+
+Added optional 7th parameter `writeResult` to pushProvenance. When
+provided and writeResult.ok === false, the push is skipped. Backwards
+compatible — existing call sites continue to work unchanged.
+
+One sample migration in this patch: parcel_records PATCH at line ~3590
+now passes the PATCH result through to pushProvenance so a 4xx
+upstream no longer records phantom provenance. Remaining ~30 call
+sites left for a Phase C sweep.
+
+Discovery — Item #3 Phase B (dia owner backfill) re-scoped
+Verified that all 13,338 NULL-owner dia properties have zero owner
+signal anywhere in the database (no ownership_history,
+no deed_records, no sales_transactions, no latest_deed_grantee text,
+no assessed_owner text). reconcilePropertyOwnership has nothing to
+reconcile from. Item #3 Phase B re-classified as Phase C with an
+explanatory note. Resolution requires an external enrichment pipeline
+(SoS / county recorder / commercial API), not a reconciliation.
+
+Files changed:
+  • api/_handlers/sidebar-pipeline.js
+  • AUDIT_PROGRESS.md
