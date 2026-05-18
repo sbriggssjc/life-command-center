@@ -1,0 +1,42 @@
+qa(21): clamp negative "Xd ago" on Contacts page to "Recent"
+
+12+ contacts on the visible Contacts page were showing "-123d ago",
+"-189d ago", "-4d ago" for last-activity timestamps. Sync glitches
+(Salesforce bridge writing future modified_date, timezone mismatches)
+were producing future timestamps on contact records, and the
+relativeDate helper in contacts-ui.js had no guard for negative
+deltas — it fell through to "${days}d ago" which produces the
+nonsensical "-123d ago" string.
+
+Root cause in contacts-ui.js:
+
+  const days = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return days + 'd ago';    // ← catches days = -123
+  …
+
+Fix: one-line guard.
+
+  if (days < 0) return 'Recent';
+
+"Recent" matches the existing freshness vocabulary used by
+_lccFmtFreshness ("Just now") and freshnessLabel ("Just now") which
+already handle future timestamps correctly because their first
+branches check for sub-minute / sub-5-min deltas.
+
+Verified by inspection: relativeDate is the only freshness helper
+that mis-handled negatives. formatDate (app.js) uses "In Xd",
+relDate (ops.js) is designed for due-dates with both-direction
+support, and _lccFmtFreshness / freshnessLabel return "Just now"
+for any sub-threshold delta (including negatives).
+
+Files changed:
+  • contacts-ui.js (relativeDate negative clamp)
+  • AUDIT_PROGRESS.md (closeout)
+
+Deferred follow-up:
+  • QA-22 — investigate the upstream sync writing future timestamps
+    (Salesforce bridge?). Ingest-side guard would prevent bad data
+    from landing in the first place. This patch is render-side
+    defense only.

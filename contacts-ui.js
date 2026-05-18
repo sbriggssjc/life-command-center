@@ -263,6 +263,11 @@ function relativeDate(dateStr) {
   const d = new Date(dateStr);
   const now = new Date();
   const days = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+  // QA-21 (2026-05-18): clamp negative deltas. Sync glitches (Salesforce
+  // bridge writing a future modified_date, etc.) produced 12+ "-123d ago"
+  // / "-189d ago" displays on the Contacts page. Treat them as "Recent"
+  // rather than confusing the operator with a negative day count.
+  if (days < 0) return 'Recent';
   if (days === 0) return 'Today';
   if (days === 1) return 'Yesterday';
   if (days < 7) return days + 'd ago';
