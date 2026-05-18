@@ -104,6 +104,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     fallback.lessor_name ||
     '(Loading...)';
   const loc = (fallback.city || '') + (fallback.city && fallback.state ? ', ' : '') + (fallback.state || '');
+  // QA-12 (2026-05-18): page_title often embeds the city already
+  // ("1200 New Jersey Ave SE – Washington, DC"). Showing the subtitle
+  // when the title contains it produces "Washington, DC" twice. Drop
+  // the subtitle when it's a substring of the title.
+  const locForSubtitle = (loc && title && title.toLowerCase().includes(loc.toLowerCase())) ? '' : loc;
 
   const headerEl = document.getElementById('detailHeader');
   const tabsEl = document.getElementById('detailTabs');
@@ -114,7 +119,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
         <div class="detail-title">${esc(title)}</div>
-        <div class="detail-subtitle">${esc(loc)}</div>
+        ${locForSubtitle ? `<div class="detail-subtitle">${esc(locForSubtitle)}</div>` : ''}
       </div>
       <button class="detail-action-btn" id="consolidateBtn"
         title="Find duplicate properties + same-tenant clusters"
@@ -464,6 +469,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     if (synthProperty) {
       const realTitle = synthProperty.page_title || synthProperty.facility_name || fallback.tenant_operator || fallback.agency || synthProperty.address || fallback.address || '(Unknown)';
       const loc2 = (synthProperty.city || '') + (synthProperty.state ? ', ' + synthProperty.state : '');
+      // QA-12 (2026-05-18): drop the city subtitle when the title already
+      // embeds it (page_title often does), so the panel doesn't show
+      // "Washington, DC" twice in a row.
+      const loc2ForSubtitle = (loc2 && realTitle && realTitle.toLowerCase().includes(loc2.toLowerCase())) ? '' : loc2;
+      const subtitleSuffix = synthProperty.county ? (loc2ForSubtitle ? ' · ' : '') + esc(synthProperty.county) + ' County' : '';
       // "Not a Lead" button for dia-clinic records (dismiss from clinic lead pipeline)
       const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
@@ -472,7 +482,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         <div class="detail-header-info">
           <div style="flex:1">
             <div class="detail-title">${esc(realTitle)}</div>
-            <div class="detail-subtitle">${esc(loc2)}${synthProperty.county ? ' · ' + esc(synthProperty.county) + ' County' : ''}</div>
+            ${(loc2ForSubtitle || subtitleSuffix) ? `<div class="detail-subtitle">${esc(loc2ForSubtitle)}${subtitleSuffix}</div>` : ''}
             ${_udKeyFields(db, synthProperty, ownership)}
           </div>
           ${dismissBtn}
