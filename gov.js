@@ -166,25 +166,26 @@ async function govWriteService(endpoint, data) {
 
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
 async function govQueryAll(table, select, params = {}) {
-  // QA-26 (2026-05-18): parallelize page fetches. Was serial — 1000-row pages
-  // fetched one-at-a-time. For properties (17k rows = 18 pages × ~400ms each)
-  // that's 7s of round-trips for a query the DB itself executes in 95ms.
-  // The fix: fetch page 0 with count=exact, then issue all remaining pages
-  // in parallel via Promise.all. Drops 18 serial round-trips to 2 sequential
-  // waits (first page + parallel batch).
-  const pageSize = 1000;
-  const firstPage = await govQuery(table, select, { ...params, limit: pageSize, offset: 0, count: true });
-  const firstData = firstPage.data || [];
-  const total = firstPage.count || firstData.length;
-  if (total <= pageSize) return { data: firstData, count: total };
-  const pages = [];
-  for (let off = pageSize; off < total; off += pageSize) {
-    pages.push(govQuery(table, select, { ...params, limit: pageSize, offset: off, count: false }));
+  // QA-33 (2026-05-18): reverted to serial pagination. QA-26's parallel fix
+  // caused 194-second full loads and unresponsive browser because ~60
+  // concurrent HTTP requests overwhelm Vercel/Supabase/browser. Going back
+  // to one-at-a-time pagination — slower but predictable. A throttled-
+  // parallel approach (concurrency=4) is the better long-term fix; deferred.
+  let all = [], offset = 0;
+  const pageSize = 1000;  // PostgREST max-rows cap
+  const maxTime = 120000; // 2-minute total timeout
+  const start = Date.now();
+  while (true) {
+    if (Date.now() - start > maxTime) {
+      console.warn('govQueryAll(' + table + ') total timeout after ' + Math.round((Date.now() - start) / 1000) + 's — returning ' + all.length + ' rows');
+      break;
+    }
+    const result = await govQuery(table, select, { ...params, limit: pageSize, offset, count: false });
+    all = all.concat(result.data || []);
+    if ((result.data || []).length < pageSize) break;
+    offset += pageSize;
   }
-  const others = await Promise.all(pages);
-  let all = firstData;
-  for (const p of others) all = all.concat(p.data || []);
-  return { data: all, count: total };
+  return { data: all, count: all.length };
 }
 
 // ============================================================================
@@ -281,22 +282,14 @@ let _govDataLoading = false;
 // every batch to come back with len < pageSize on the first call, exiting the
 // loop after a single page and silently truncating the result. Round 76el.
 async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 1000) {
-  // QA-26 (2026-05-18): parallel pagination — same fix as govQueryAll. First
-  // page is fetched with count=exact to learn the total, then all remaining
-  // pages are issued via Promise.all. For full-table reads (properties at
-  // 17k rows, prospect_leads at 11k, sales_transactions at 7.7k) this cuts
-  // 12–18 serial round-trips down to 1 + parallel batch.
-  const firstPage = await govQuery(table, columns, { ...options, limit: pageSize, offset: 0, count: true });
-  const firstData = firstPage.data || [];
-  const total = firstPage.count || firstData.length;
-  if (total <= pageSize) return firstData;
-  const pages = [];
-  for (let off = pageSize; off < total; off += pageSize) {
-    pages.push(govQuery(table, columns, { ...options, limit: pageSize, offset: off, count: false }));
+  // QA-33 (2026-05-18): reverted to serial pagination. See govQueryAll comment.
+  let all = [], offset = 0;
+  while (true) {
+    const batch = await govQuery(table, columns, { ...options, limit: pageSize, offset, count: false });
+    all = all.concat(batch.data || []);
+    if (!batch.data || batch.data.length < pageSize) break;
+    offset += pageSize;
   }
-  const others = await Promise.all(pages);
-  let all = firstData;
-  for (const p of others) all = all.concat(p.data || []);
   return all;
 }
 
@@ -346,7 +339,7 @@ async function loadGovData() {
         // Intel card needs all of these; the auto-resolve sweep keys on
         // intel_status + the no-handle bucket. Round 76em.
         'property_id,lease_number,location_code,address,city,state,zip_code,' +
-        'agency,agency_full_name,government_type,' +
+        'agency,agency_canonical,agency_full_name,government_type,' +
         'rba,sf_leased,year_built,year_renovated,land_acres,' +
         'lease_commencement,lease_expiration,firm_term_remaining,term_remaining,firm_term_years,total_term_years,' +
         'gross_rent,gross_rent_psf,noi,noi_psf,estimated_value,' +
@@ -4354,18 +4347,15 @@ function renderGovOverview() {
   // Lazy-load ownership coverage metrics (Section 12)
   (async () => {
     try {
-      // QA-26 (2026-05-18): parallelize the three independent table reads
-      // (ownership_history, true_owners, v_prospect_targets). Previously these
-      // were awaited sequentially — for ownership_history alone that's 14
-      // round-trips × ~400ms (now parallel-paginated post-QA-26-fix, but the
-      // outer Promise.all keeps Step 1/2/3 from blocking each other anyway).
-      const [ownHistory, ownerRes, ptResSettled] = await Promise.all([
-        govQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' }),
-        govQueryAll('true_owners', 'true_owner_id,name,sf_account_id'),
-        govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
+      // QA-33 (2026-05-18): reverted to sequential awaits. The Promise.all
+      // wrapper was fine on its own, but combined with parallel pagination
+      // inside govQueryAll, it amplified the browser-overload symptom.
+      // Sequential is slower but predictable.
+      const ownHistory = await govQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' });
+      const ownerRes = await govQueryAll('true_owners', 'true_owner_id,name,sf_account_id');
+      const ptResSettled = await govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
           .then(r => ({ ok: true, value: r }))
-          .catch(err => ({ ok: false, err }))
-      ]);
+          .catch(err => ({ ok: false, err }));
 
       // 1. Ownership depth: properties with 3+ ownership records = deep chain
       const ownRows = ownHistory.data || ownHistory || [];

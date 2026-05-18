@@ -2876,3 +2876,49 @@ The Cowork virtiofs mount blocks `rm` from the sandbox, so cleanup couldn't happ
 
 No code. No SQL. No Edge Function. Cleanup-only.
 
+
+
+## QA pass #33 — Hotfix: agency_canonical in SELECT + revert QA-26 parallel pagination ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-33-agency-canonical-select-and-revert-parallel`
+- **Patch:** `audit/patches/qa-33-agency-canonical-select-and-revert-parallel/apply.mjs`
+- **Severity:** P1 hotfix.
+
+### Symptom 1 — QA-24 is dead code
+Chrome verification (2026-05-18) found the Agency Breakdown chart still showing the pre-QA-24 fragmented state: VA in 3 buckets, SSA split, USDA split. Live JS probe: every VA row has `agency: "VETERANS AFFAIRS"` and `agency_canonical` field absent entirely from the payload.
+
+### Diagnosis 1
+The properties SELECT in `_loadPaginatedQuery('properties', ...)` lists ~30 columns. `agency_canonical` is not one of them. The QA-24 frontend change uses `p.agency_canonical || p.agency` in groupBy — `p.agency_canonical` is always `undefined`, so the chart groups by raw `.agency`.
+
+### Fix 1
+Added `'agency_canonical'` to the SELECT (between `agency` and `agency_full_name`). One-line change. The QA-24 SQL migration stays — `agency_canonical` is correctly populated in the DB for every property.
+
+### Symptom 2 — QA-26 parallel pagination is a perf regression
+Live timings on gov dashboard (2026-05-18):
+- `govConnected = true`: ~3 s
+- `govDataLoaded = true` (Phase 1): ~18 s (was supposed to be ~1.5 s)
+- Full load (Phase 2 + ownership coverage): **~194 s**
+- Browser unresponsive mid-load — screenshot tool timed out for ~60 s
+
+### Diagnosis 2
+QA-26 issued ~60 concurrent HTTP requests at startup. Overwhelms Vercel edge worker pool, Supabase PostgREST connection pool, and the browser's response-parsing thread.
+
+### Fix 2
+Reverted three pieces:
+- `govQueryAll` → serial while-loop with 120s timeout fuse
+- `_loadPaginatedQuery` → serial while-loop
+- Ownership-coverage block → sequential awaits
+
+Slower than parallel-when-it-works, but predictable. A throttled-parallel approach (concurrency=4) is the better long-term fix — captured as follow-up.
+
+### Not in this patch
+- QA-24 SQL migration stays (still correct)
+- QA-25/28/29/30 unaffected
+- QA-27 (dia parallel) NOT reverted yet — need to probe dia separately
+
+### Files changed
+- `gov.js` — `agency_canonical` to SELECT; revert parallel-pagination helpers and ownership-coverage block
+- `AUDIT_PROGRESS.md` — this closeout
+
+No SQL. No Edge Function. No allowlist changes.
+
