@@ -730,6 +730,50 @@ cms_chain_drift:*        → Operations
   `activity_events` and re-fetches the next-action.
 
 
+
+## Closeout — item 9 Phase A — Value-weighted sort on lists
+- **Status:** ✅ DONE (Phase A) / ⏸️ DEFERRED (Phase B: sort UI + per-user persistence)
+- **Branch:** `audit/09-value-weighted-sort`
+- **Patch:** `audit/patches/09-value-weighted-sort/apply.mjs`
+- **Closes:** B-3 (HIGH) — list defaults to chronological sort, burying valuable records.
+
+### Default sort changes
+| List | Before | After |
+|---|---|---|
+| gov sales_transactions | sale_date.desc | sold_price.desc.nullslast, sale_date.desc.nullslast |
+| gov portfolioProperties | (no order, insertion order) | estimated_value.desc.nullslast, gross_rent.desc.nullslast, rba.desc.nullslast |
+| dia sales_transactions | sale_date.desc.nullslast | sold_price.desc.nullslast, sale_date.desc.nullslast |
+
+### Why these three
+- The first list a broker scans on either domain is the comps tab. Sorting comps by transaction date buries the biggest sales under recent retail-level deals. Bumping sold_price to primary makes the highest-impact comps the first thing you see.
+- gov portfolioProperties had no explicit order at all — properties came back in insertion order (effectively random for legacy data). The value cascade surfaces holdings with the largest estimated_value first, falling back through gross_rent, then RBA so partially-populated rows still rank meaningfully.
+
+### Lists deliberately NOT changed in Phase A
+| List | Reason |
+|---|---|
+| gov available_listings | "Fresh-first" sort is explicit per existing comment — freshly staged OMs (with NULL asking_price) should surface for review. Keeps listing_date primary. |
+| prospect_leads | Already sorts by priority_score.desc — value-weighted by design. |
+| ownership_history | Already sorts by estimated_value.desc. |
+| gsa_lease_events / gsa_snapshots / research_queue_outcomes | Chronological by nature; date sort is correct. |
+
+### Files changed
+- `gov.js` — sales_transactions + portfolioProperties sort
+- `dialysis.js` — sales_transactions sort
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "sold_price.desc.nullslast" gov.js dialysis.js` → 2 or more total
+2. `grep -c "estimated_value.desc.nullslast" gov.js` → 1 or more
+3. Smoke: open the Government → Sales tab. Top row is now the biggest sale in dollar terms (not the most recent). Same on Dialysis → Sales.
+4. Smoke: open Government → portfolio (or wherever portfolioProperties surfaces). Top rows are now properties with the highest estimated_value (e.g., the largest government holdings, not whichever was inserted first).
+
+### Deferred to Phase B
+- Per-list sort UI ("Sort by: Value · Date · Completeness") — closes the second half of B-15 originally paired with Item #6.
+- localStorage sort-preference persistence keyed by table.
+- Value column visible + clickable to toggle sort direction.
+- v_sales_comps / lease comps lists get the same treatment.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

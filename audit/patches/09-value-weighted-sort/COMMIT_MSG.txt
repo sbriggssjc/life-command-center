@@ -1,0 +1,38 @@
+audit(item-9/phase-a): value-weighted sort on lists
+
+Closes audit finding B-3 (HIGH): list defaults were chronological /
+insertion-order, burying high-value records under recent noise.
+
+Three targeted default-sort upgrades:
+
+  • gov sales_transactions
+      sale_date.desc
+    → sold_price.desc.nullslast, sale_date.desc.nullslast
+
+  • gov portfolioProperties (previously had NO order — insertion order)
+    + add cascade: estimated_value.desc.nullslast, gross_rent.desc.nullslast,
+      rba.desc.nullslast
+
+  • dia sales_transactions
+      sale_date.desc.nullslast
+    → sold_price.desc.nullslast, sale_date.desc.nullslast
+
+Lists deliberately not changed (each kept for documented reasons):
+
+  • available_listings — "fresh-first" is explicit intent so freshly
+    staged OMs (NULL asking_price) surface for review.
+  • prospect_leads — already sorts by priority_score.desc.
+  • ownership_history — already sorts by estimated_value.desc.
+  • Chronological tables (events, snapshots) — date sort is correct
+    by nature.
+
+Files changed:
+  • gov.js
+  • dialysis.js
+  • AUDIT_PROGRESS.md
+
+Phase B deferred:
+  • Per-list "Sort by: Value · Date · Completeness" UI toggle.
+  • localStorage sort-preference persistence keyed by table.
+  • Value column visible + clickable to toggle sort direction.
+  • v_sales_comps / lease comps lists get the same treatment.
