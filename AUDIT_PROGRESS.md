@@ -2810,3 +2810,36 @@ FBI bucket gained 1 property. FCC is a new canonical agency category with 3 prop
 
 No frontend. No Edge Function. No allowlist changes. Migration applied live via Supabase MCP on 2026-05-18.
 
+
+
+## QA pass #31 — sandbox tooling notes (Edit-tool truncation doc) ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-31-sandbox-tooling-notes`
+- **Patch:** `audit/patches/qa-31-sandbox-tooling-notes/apply.mjs`
+- **Doc:** `audit/SANDBOX_TOOLING_NOTES.md`
+- **Severity:** P3 doc.
+
+### Symptom
+During QA-29 the Cowork Edit tool silently truncated dialysis.js (615KB) and gov.js (506KB), each by 9,369+ bytes from the end. The truncation included the QA-25 modal handler that was already deployed and working live. Caught only because apply.mjs sentinel checks failed.
+
+### Diagnosis (confirmed 2026-05-18)
+The Cowork sandbox exposes Windows C:\ to the Linux VM via virtiofs/FUSE. The Edit tool's atomic-write pattern is unreliable on this mount for files >~500KB: edit content is applied correctly, but trailing bytes are silently dropped.
+
+Reproduced in controlled test:
+- File: dialysis.js, 614,710 bytes / 10,928 lines
+- Operation: one Edit tool call adding 15 chars near line 10920
+- Result: file size unchanged at 614,710 bytes, lost 3 lines from end, tail truncated mid-string
+
+### Workaround
+Documented in `audit/SANDBOX_TOOLING_NOTES.md`:
+- For files >500KB, route edits through Python via `mcp__workspace__bash` instead of Edit tool. Python writes are reliable on this mount (tested with 752KB writes).
+- Post-edit verification: `wc -l` + `tail -3` must show valid content.
+- Recovery: `git show HEAD:<file> > <file>` (regular git checkout fails because the mount blocks unlinks).
+
+### Files changed
+- `audit/SANDBOX_TOOLING_NOTES.md` — new documentation
+- `audit/patches/qa-31-sandbox-tooling-notes/` — patch package
+- `AUDIT_PROGRESS.md` — this closeout
+
+No code. No SQL. No Edge Function. No allowlist changes. Doc-only.
+
