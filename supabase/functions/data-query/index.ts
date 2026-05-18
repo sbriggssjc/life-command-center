@@ -40,6 +40,12 @@ const GOV_READ_TABLES = new Set([
   "v_gap_agency_drift",
   "v_gap_orphan_sale_owner",
   "llc_research_queue",
+  // QA-07 (2026-05-18): property_intel mirrored to gov for pipeline-stage
+  // tracking. Frontend (_udHydratePipelineStage) calls govQuery('property_intel')
+  // for gov-domain properties; before this it 403'd silently because the
+  // table only existed on dia. Gov migration:
+  // supabase/migrations/government/20260518140000_gov_qa07_property_intel.sql
+  "property_intel",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -66,6 +72,10 @@ const GOV_WRITE_TABLES = new Set([
   // Intel auto-resolve sweep (true_junk_stub bucket on properties.intel_status).
   // Backed by government-lease/sql/20260508_gov_intel_status_and_auto_resolve.sql.
   "rpc/gov_auto_resolve_intel",
+  // QA-07 (2026-05-18): pipeline-stage writes (_udAdvancePipelineStage)
+  // upsert property_intel.pipeline_stage. Gov migration:
+  // supabase/migrations/government/20260518140000_gov_qa07_property_intel.sql
+  "property_intel",
 ]);
 
 const DIA_READ_TABLES = new Set([

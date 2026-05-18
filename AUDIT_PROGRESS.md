@@ -1904,3 +1904,39 @@ Materialize `v_property_value_signal`:
 - **P1** Public REITs + same-entity duplicates in `llc_research_queue`
 - **P2** Casing/UX nits captured in the QA report
 
+
+
+## QA pass #7 — gov property_intel mirror ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-07-gov-property-intel`
+- **Patch:** `audit/patches/qa-07-gov-property-intel/apply.mjs`
+- **Migration:** `supabase/migrations/government/20260518140000_gov_qa07_property_intel.sql`
+
+### Symptom
+Console showed `govQuery property_intel: HTTP 403 {error: Read access denied for table: property_intel}` on every gov property detail panel open. The pipeline-stage chip click on gov properties looked like it worked (in-memory pill flipped color, "Pipeline stage → X" toast fired, SF opportunity upsert went out), but the next reload reverted to the heuristic-inferred stage.
+
+### Root cause
+The frontend pipeline-stage feature in `detail.js` was always written to be domain-agnostic — `_udRenderPipelinePill`, `_udHydratePipelineStage`, and `_udAdvancePipelineStage` dispatch on `_udCache.db`. But the original 2026-04-16 `property_intel` migration explicitly says "Target: Dialysis domain Supabase". The table never existed on the gov database, and `property_intel` was never in `GOV_READ_TABLES` / `GOV_WRITE_TABLES`.
+
+### Fix
+1. Created `property_intel` on gov (`scknotsqkcheojiaewwh`) mirroring the dia schema — primary key on `property_id`, index on `pipeline_stage`, RLS enabled, anon SELECT policy, authenticated SELECT/INSERT/UPDATE grant.
+2. Added `property_intel` to both `GOV_READ_TABLES` and `GOV_WRITE_TABLES` in the Edge Function.
+3. Redeployed as Edge Function v15 on `zqzrriwuavgrquhisnoa`.
+
+### Verified live (2026-05-18)
+- `window.govQuery('property_intel', 'property_id,pipeline_stage', { filter: 'property_id=eq.3198', limit: 1 })` → `{count: 0, dataLen: 0}` (no more 403; empty because nothing has been persisted yet).
+- `window.diaQuery('property_intel', …)` continues to work unchanged.
+- Console errors per gov detail open: 1× 403 → 0.
+
+### Files changed
+- `supabase/migrations/government/20260518140000_gov_qa07_property_intel.sql` — applied live via MCP
+- `supabase/functions/data-query/index.ts` — `property_intel` added to both gov sets (matches deployed v15)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Queued for follow-up
+- **P0** `govQuery('v_ownership_chain')` 400 — gov view has no `property_id` column
+- **P1** "Open Activities" stat conflict
+- **P1** Sync error count contradicts itself
+- **P1** Public REITs + same-entity duplicates in `llc_research_queue`
+- **P2** Casing/UX nits documented in `outputs/lcc-qa-pass-2026-05-18.docx`
+
