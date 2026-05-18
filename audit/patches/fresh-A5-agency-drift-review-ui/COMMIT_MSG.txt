@@ -1,0 +1,42 @@
+audit(fresh/A-5): agency-drift review UI
+
+Closes the last fresh-audit finding. Surfaces the 807 gov
+agency_drift:agency_disagreement cases (204 excellent-band) in a
+Research-page widget paralleling the LLC Research widget from #2B.
+
+Three pieces:
+
+1. Two new admin sub-routes:
+   • GET  /api/admin?_route=agency-drift-queue&limit=15
+     → top-N v_gap_agency_drift rows (drift_kind=
+       'agency_disagreement') joined with property context.
+       Ordered by property_value DESC.
+   • POST /api/admin?_route=resolve-agency-drift
+     → body { property_id, resolution:'use_lease',
+              new_agency_canonical?, new_agency_full? }
+       Patches gov.properties.agency / agency_canonical /
+       agency_full_name. Labeled 'resolveAgencyDrift'.
+
+2. Widget mounts BELOW the LLC Research widget on the Research page.
+   Per row: address + city + state, side-by-side chips
+   (property.agency red-tinted vs lease.tenant_agency green-tinted),
+   value chip + completeness band, and two actions:
+   • "Use lease value" — confirm → PATCH → row disappears.
+   • "Open detail"     — opens openUnifiedDetail('gov', {property_id}).
+
+3. CSS mostly reuses .lcc-llc-research-* classes; adds the
+   side-by-side versus chip styles.
+
+Fresh audit punch list — fully closed:
+  A-1 ✅ orphan sale backfill (1,596 NBA gaps closed)
+  A-2 ✅ sales POST labeled
+  A-3 ✅ label + fix unlabeled writers (426/24h closed)
+  A-4 ✅ loans status normalized + CHECK loosened
+  A-5 ✅ agency-drift review UI
+
+Files changed:
+  • api/admin.js                — 2 sub-routes + 2 handlers
+  • ops.js                      — mount call inside renderResearchPage
+  • app.js                      — widget render + load + 2 actions
+  • styles.css                  — .lcc-agency-drift-* styles
+  • AUDIT_PROGRESS.md           — closeout + Phase C carry-forward

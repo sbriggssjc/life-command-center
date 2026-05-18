@@ -97,6 +97,8 @@ export default withErrorHandler(async function handler(req, res) {
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
+    case 'agency-drift-queue':      return handleAgencyDriftQueueList(req, res);
+    case 'resolve-agency-drift':    return handleResolveAgencyDrift(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -3089,6 +3091,116 @@ async function handleResolveLlcResearch(req, res) {
     return res.status(200).json({ ok: true, queue_id: queueId, status, patch });
   } catch (err) {
     console.error('[resolve-llc-research]', err?.message || err);
+    return res.status(500).json({ error: 'resolve_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// AGENCY DRIFT QUEUE — Fresh audit A-5 (2026-05-18)
+//
+// GET  /api/admin?_route=agency-drift-queue&limit=15
+//   Returns top-N gov v_gap_agency_drift rows where drift_kind=
+//   'agency_disagreement', ordered by property value DESC (most
+//   valuable disagreement first). Includes property context.
+//
+// POST /api/admin?_route=resolve-agency-drift
+//   Body: { property_id, resolution: 'use_lease', new_agency_canonical?,
+//           new_agency_full? }
+//   Patches gov.properties.agency / agency_canonical / agency_full_name
+//   to the lease tenant value. Closes the drift outright on next view
+//   refresh.
+// ============================================================================
+
+async function handleAgencyDriftQueueList(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 15, 100);
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+    const gRes = await domainQuery('government', 'GET',
+      'v_gap_agency_drift' +
+      '?drift_kind=eq.agency_disagreement' +
+      '&select=property_id,prop_agency,prop_agency_canonical,lease_tenant_agency,lease_tenant_agency_full,property_value,drift_kind' +
+      '&order=property_value.desc.nullslast' +
+      '&limit=' + limit
+    );
+    if (!gRes.ok) return res.status(502).json({ error: 'queue_fetch_failed', detail: gRes.data });
+
+    const rows = Array.isArray(gRes.data) ? gRes.data : [];
+    if (rows.length === 0) return res.status(200).json({ ok: true, items: [], total: 0 });
+
+    // Hydrate property context (address, city, state, completeness_band).
+    const propIds = Array.from(new Set(rows.map(r => r.property_id).filter(Boolean)));
+    let propsById = {};
+    if (propIds.length > 0) {
+      const pRes = await domainQuery('government', 'GET',
+        'properties?property_id=in.(' + propIds.join(',') + ')' +
+        '&select=property_id,address,city,state,completeness_band,completeness_score'
+      );
+      if (pRes.ok && Array.isArray(pRes.data)) {
+        for (const p of pRes.data) propsById[p.property_id] = p;
+      }
+    }
+
+    const items = rows.map(r => {
+      const prop = propsById[r.property_id] || null;
+      return {
+        property_id:            r.property_id,
+        prop_agency:            r.prop_agency,
+        prop_agency_canonical:  r.prop_agency_canonical,
+        lease_tenant_agency:    r.lease_tenant_agency,
+        lease_tenant_agency_full: r.lease_tenant_agency_full,
+        property_value:         Number(r.property_value) || 0,
+        drift_kind:             r.drift_kind,
+        property_address:       prop?.address || null,
+        property_city:          prop?.city || null,
+        property_state:         prop?.state || null,
+        completeness_band:      prop?.completeness_band || null,
+        completeness_score:     prop?.completeness_score != null ? Number(prop.completeness_score) : null,
+      };
+    });
+
+    return res.status(200).json({ ok: true, items, total: items.length });
+  } catch (err) {
+    console.error('[agency-drift-queue]', err?.message || err);
+    return res.status(500).json({ error: 'agency_drift_queue_failed', message: err?.message });
+  }
+}
+
+async function handleResolveAgencyDrift(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const propertyId = Number(body.property_id);
+  const resolution = String(body.resolution || '').toLowerCase();
+  if (!Number.isFinite(propertyId)) return res.status(400).json({ error: 'property_id (number) required' });
+  if (resolution !== 'use_lease') {
+    return res.status(400).json({ error: "resolution must be 'use_lease' (only supported value in Phase A)" });
+  }
+
+  const patch = {};
+  if (body.new_agency_canonical) patch.agency_canonical = String(body.new_agency_canonical).slice(0, 200);
+  if (body.new_agency_full)      patch.agency_full_name = String(body.new_agency_full).slice(0, 500);
+  if (body.new_agency_canonical) patch.agency          = String(body.new_agency_canonical).slice(0, 200);
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'no agency fields to update' });
+  }
+  patch.updated_at = new Date().toISOString();
+
+  try {
+    const { domainQuery } = await import('./_shared/domain-db.js');
+    const r = await domainQuery('government', 'PATCH',
+      'properties?property_id=eq.' + propertyId, patch,
+      undefined, { label: 'resolveAgencyDrift' });
+    if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
+    return res.status(200).json({ ok: true, property_id: propertyId, patch });
+  } catch (err) {
+    console.error('[resolve-agency-drift]', err?.message || err);
     return res.status(500).json({ error: 'resolve_failed', message: err?.message });
   }
 }

@@ -1442,6 +1442,137 @@ async function _lccLlcResearchMarkNoMatch(queue_id) {
 }
 window._lccLlcResearchMarkNoMatch = _lccLlcResearchMarkNoMatch;
 
+// ============================================================================
+// AGENCY DRIFT QUEUE WIDGET — Fresh audit A-5 (2026-05-18)
+//
+// Mirrors the LLC Research widget. Lists gov properties where the lease's
+// tenant_agency disagrees with properties.agency, ordered by property
+// value DESC. Each row shows both values side-by-side with a "Use lease
+// value" button that PATCHes the property to the lease value.
+// ============================================================================
+
+async function loadAgencyDriftQueue(limit) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const r = await fetch('/api/admin?_route=agency-drift-queue&limit=' + (limit || 15), { headers });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    if (typeof lccReportError === 'function') {
+      lccReportError('Load agency-drift queue', e, { tier: 'warn' });
+    }
+    return { ok: false, items: [], total: 0 };
+  }
+}
+window.loadAgencyDriftQueue = loadAgencyDriftQueue;
+
+async function renderAgencyDriftQueueWidget(parentEl) {
+  if (!parentEl) return;
+  let widget = parentEl.querySelector('.lcc-agency-drift-widget');
+  if (!widget) {
+    widget = document.createElement('div');
+    widget.className = 'lcc-agency-drift-widget lcc-llc-research-widget';
+    // Mount after the LLC widget (if present) so the order is LLC → drift.
+    const llc = parentEl.querySelector('.lcc-llc-research-widget:not(.lcc-agency-drift-widget)');
+    if (llc && llc.nextSibling) parentEl.insertBefore(widget, llc.nextSibling);
+    else if (llc) parentEl.appendChild(widget);
+    else parentEl.insertBefore(widget, parentEl.firstChild);
+  }
+  widget.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+  const snap = await loadAgencyDriftQueue(15);
+  if (!snap || !snap.ok) {
+    widget.innerHTML = '<div class="widget-error"><div class="err-msg">Agency-drift queue unavailable.</div><button class="retry-btn" onclick="(async()=>{const el=document.getElementById(&quot;researchContent&quot;);if(el)await renderAgencyDriftQueueWidget(el);})()">Retry</button></div>';
+    return;
+  }
+
+  const items = Array.isArray(snap.items) ? snap.items : [];
+  const parts = [];
+  parts.push('<div class="lcc-llc-research-header">');
+  parts.push(  '<div class="lcc-llc-research-title">Agency Drift Queue <span class="lcc-llc-research-count">' + items.length + '</span></div>');
+  parts.push(  '<button type="button" class="nba-refresh-btn" title="Refresh" onclick="(async()=>{const el=document.getElementById(&quot;researchContent&quot;);if(el)await renderAgencyDriftQueueWidget(el);})()">↻</button>');
+  parts.push('</div>');
+
+  if (items.length === 0) {
+    parts.push('<div class="lcc-llc-research-empty">No agency disagreements found. Clean.</div>');
+    widget.innerHTML = parts.join('');
+    return;
+  }
+
+  parts.push('<div class="lcc-llc-research-list">');
+  items.forEach((row, idx) => {
+    const propId = Number(row.property_id);
+    const propAddr = [row.property_address, row.property_city, row.property_state].filter(Boolean).join(', ');
+    const valStr = _lccFormatLlcValue(row.property_value);
+    const propAgency = String(row.prop_agency_canonical || row.prop_agency || '(blank)').trim();
+    const leaseAgency = String(row.lease_tenant_agency_full || row.lease_tenant_agency || '(blank)').trim();
+    const cmpChip = (row.completeness_band || row.completeness_score != null)
+      ? lccCompletenessChip(row.completeness_score, row.completeness_band)
+      : '';
+    parts.push('<div class="lcc-llc-research-row lcc-agency-drift-row" data-property-id="' + propId + '">');
+    parts.push(  '<div class="lcc-llc-research-rank">#' + (idx + 1) + '</div>');
+    parts.push(  '<div class="lcc-llc-research-body">');
+    parts.push(    '<div class="lcc-llc-research-name">' + esc(propAddr || 'property #' + propId) + '</div>');
+    parts.push(    '<div class="lcc-agency-drift-versus">');
+    parts.push(      '<span class="lcc-agency-drift-versus-prop"  title="properties.agency">' + esc(propAgency) + '</span>');
+    parts.push(      '<span class="lcc-agency-drift-versus-arrow">vs</span>');
+    parts.push(      '<span class="lcc-agency-drift-versus-lease" title="lease.tenant_agency">' + esc(leaseAgency) + '</span>');
+    parts.push(    '</div>');
+    parts.push(    '<div class="lcc-llc-research-meta">');
+    parts.push(      '<span class="lcc-llc-research-val">' + esc(valStr) + '</span>');
+    if (cmpChip) parts.push(cmpChip);
+    parts.push(    '</div>');
+    parts.push(  '</div>');
+    parts.push(  '<div class="lcc-llc-research-actions">');
+    parts.push(    '<button type="button" class="lcc-llc-research-btn lcc-llc-research-btn-primary" onclick="_lccAgencyDriftUseLease(' + propId + ', &quot;' + esc(row.lease_tenant_agency || '') + '&quot;, &quot;' + esc(row.lease_tenant_agency_full || '') + '&quot;)">Use lease value</button>');
+    parts.push(    '<button type="button" class="lcc-llc-research-btn" onclick="_lccAgencyDriftOpenDetail(' + propId + ')">Open detail</button>');
+    parts.push(  '</div>');
+    parts.push('</div>');
+  });
+  parts.push('</div>');
+
+  widget.innerHTML = parts.join('');
+}
+window.renderAgencyDriftQueueWidget = renderAgencyDriftQueueWidget;
+
+async function _lccAgencyDriftUseLease(property_id, leaseCanonical, leaseFull) {
+  let confirmed = true;
+  if (typeof asyncConfirm === 'function') {
+    confirmed = await asyncConfirm('Set this property.agency to "' + (leaseCanonical || leaseFull || '(blank)') + '"?');
+  }
+  if (!confirmed) return;
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  try {
+    const r = await fetch('/api/admin?_route=resolve-agency-drift', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        property_id, resolution: 'use_lease',
+        new_agency_canonical: leaseCanonical || null,
+        new_agency_full:      leaseFull || null,
+      }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (typeof showToast === 'function') showToast('Updated agency from lease', 'ok');
+  } catch (e) {
+    if (typeof lccReportError === 'function') lccReportError('Resolve agency drift', e);
+    else console.warn('[AgencyDrift] resolve failed:', e.message);
+  }
+  const el = document.getElementById('researchContent');
+  if (el) renderAgencyDriftQueueWidget(el);
+}
+window._lccAgencyDriftUseLease = _lccAgencyDriftUseLease;
+
+function _lccAgencyDriftOpenDetail(property_id) {
+  if (typeof openUnifiedDetail === 'function') {
+    try { openUnifiedDetail('gov', { property_id: Number(property_id) }, {}, null); return; }
+    catch (e) { console.warn('[AgencyDrift] openUnifiedDetail failed:', e.message); }
+  }
+  if (typeof navTo === 'function') navTo('pageGov');
+}
+window._lccAgencyDriftOpenDetail = _lccAgencyDriftOpenDetail;
+
 function lccRenderSortToggle(table, defaultKey, keys, onChangeFnName) {
   const active = lccGetListSort(table, defaultKey);
   const parts = [];

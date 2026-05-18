@@ -301,6 +301,13 @@ input, select { font-family: inherit; }
   .lcc-llc-research-btn { font-size: 10px; padding: 4px 8px; }
 }
 
+/* Agency drift widget — Fresh audit A-5 (2026-05-18) */
+.lcc-agency-drift-widget .lcc-llc-research-title { color: var(--accent); }
+.lcc-agency-drift-versus { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 3px; flex-wrap: wrap; }
+.lcc-agency-drift-versus-prop  { color: var(--text2); padding: 2px 7px; background: color-mix(in srgb, var(--red, #ef4444) 12%, var(--s1)); border: 1px solid color-mix(in srgb, var(--red, #ef4444) 35%, transparent); border-radius: 999px; }
+.lcc-agency-drift-versus-arrow { color: var(--text3); font-weight: 700; }
+.lcc-agency-drift-versus-lease { color: var(--text1); padding: 2px 7px; background: color-mix(in srgb, var(--green, #22c55e) 14%, var(--s1)); border: 1px solid color-mix(in srgb, var(--green, #22c55e) 38%, transparent); border-radius: 999px; font-weight: 600; }
+
 /* Next-action bar — detail panel (Item #8 Phase A, 2026-05-17) */
 .next-action-bar { position: sticky; bottom: 0; z-index: 3; background: var(--s1); border-top: 1px solid var(--border); padding: 10px 14px; padding-bottom: calc(10px + var(--safe-bottom, 0px)); display: flex; align-items: center; gap: 10px; cursor: pointer; transition: background 0.15s; }
 .next-action-bar:hover { background: color-mix(in srgb, var(--accent2) 6%, var(--s1)); }

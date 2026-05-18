@@ -1412,3 +1412,57 @@ The auto-scrape path writes `check_result='inferred_active'` to `listing_verific
 - A-4 ✅ loans status normalized + CHECK loosened
 - A-5 📋 agency-drift review UI (last one)
 
+
+
+## Fresh audit A-5 ✅ — agency-drift review UI
+- **Status:** ✅ DONE — the last fresh-audit finding.
+- **Branch:** `audit/fresh-A5-agency-drift-review-ui`
+- **Patch:** `audit/patches/fresh-A5-agency-drift-review-ui/apply.mjs`
+
+### What this adds
+A second widget on the Research page (below LLC Research) that surfaces the 807 gov agency_drift:agency_disagreement cases — properties where `properties.agency` disagrees with the active lease's `tenant_agency`. Of those, 204 are excellent-band; closing each one finishes a near-complete underwriting in seconds.
+
+**Per row layout:**
+- Property address + city + state
+- Side-by-side chips: `property.agency` (red-tinted) vs `lease.tenant_agency` (green-tinted)
+- Value chip + completeness band chip
+- Two actions:
+  - **"Use lease value"** — async-confirm prompt → PATCH `gov.properties.agency / agency_canonical / agency_full_name` to the lease tenant value. The drift naturally resolves on the next view refresh.
+  - **"Open detail"** — opens the unified property detail panel (`openUnifiedDetail('gov', { property_id })`) for full context.
+
+### Two new admin sub-routes
+- `GET /api/admin?_route=agency-drift-queue&limit=15` — top-N rows from `v_gap_agency_drift?drift_kind=eq.agency_disagreement` joined with property context, ordered by `property_value DESC`.
+- `POST /api/admin?_route=resolve-agency-drift` — body `{ property_id, resolution:'use_lease', new_agency_canonical?, new_agency_full? }`. Patches three columns on the property. Labeled `resolveAgencyDrift` for telemetry.
+
+### Files changed
+- `api/admin.js` — 2 sub-routes + 2 handlers
+- `ops.js` — second mount call inside renderResearchPage
+- `app.js` — widget render + load + 2 actions
+- `styles.css` — `.lcc-agency-drift-*` styles (mostly reuses LLC widget classes)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification (post-Railway redeploy)
+1. Open the LCC app → More drawer → **Research**. Two widgets stacked: LLC Research at top, Agency Drift below.
+2. Each agency-drift card shows side-by-side red/green chips for the two agency values. Click **Use lease value** → toast confirms; row disappears; backend PATCH'd the property.
+3. SQL spot-check on gov:
+   ```sql
+   SELECT count(*) FROM public.v_gap_agency_drift WHERE drift_kind='agency_disagreement';
+   -- After resolving a few rows, expect this count to drop.
+   ```
+
+### Fresh audit punch list — fully closed
+- A-1 ✅ orphan sale backfill (1,596 NBA gaps closed)
+- A-2 ✅ sales POST labeled
+- A-3 ✅ label + fix unlabeled writers (426/24h closed)
+- A-4 ✅ loans status normalized + CHECK loosened
+- **A-5 ✅** agency-drift review UI
+
+### Phase C / follow-up backlog (unchanged from prior closeout)
+- **Item #3 Phase C** — external enrichment pipeline for 13,131 NULL-owner properties (SoS / county / commercial API).
+- **Item #8 Phase B** — per-action inline workflows on the next-action bar.
+- **Sort/chip helper adoption per tab** — sales, listings, portfolio, prospects, ops, loans.
+- **pushProvenance gating sweep** — adopt the gating pattern across remaining ~30 call sites.
+- **client_errors consumption** — migrate ~50 ad-hoc `console.warn + showToast` sites to `lccReportError`.
+- **ingest_write_failures admin dashboard** — Settings widget showing recent failure rates.
+- **Agency-drift Phase B** — bulk mode ("Resolve all where lease + property_canonical share root word"), 'lease_agency_but_property_agency_null' handler (the easier sibling of disagreement).
+
