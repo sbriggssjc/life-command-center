@@ -1,0 +1,53 @@
+audit(fresh/A-3): label + fix unlabeled writer 4xx loop
+
+579 ingest_write_failures rows over 24h had label=null. Per-path
+breakdown showed 426 of them are addressable in this patch:
+
+  sf_comps_staging        400 × 178/24h  — schema drift
+  rpc/lcc_record_         400 × 150/24h  — CHECK rejected 'inferred_active'
+  listing_check
+  leases                  400 ×  98/24h  — dateless-active trigger
+
+(The remaining 264 are sales_transactions 409s already labeled by
+A-2, and 94 loans rejections already fixed by A-4 — both will drop
+out of the unlabeled bucket once those patches deploy.)
+
+Three fixes in this patch:
+
+1. sf_comps_staging writer rewrite
+   Real schema: street/sold_price/sold_date/building_sf/source_system/
+   process_status/raw_row.
+   Old writer sent: address/sale_price/sale_date/buyer_name/seller_name/
+   square_feet/sync_status (every column wrong, every POST 400'd
+   with PGRST204 "could not find the 'address' column").
+   Rewritten the column map; buyer + seller stash in raw_row jsonb.
+   Label: 'autoStageGovComp'.
+
+2. gov leases dateless-active skip
+   The gov_reject_dateless_active_lease trigger correctly rejects
+   active leases with both dates NULL. Writer now short-circuits
+   when both dates are missing — log + continue. Label on the
+   genuine POST: 'upsertGovernmentLeases:insert'.
+
+3. rpc/lcc_record_listing_check
+   The auto-scrape path writes check_result='inferred_active' when
+   the timer expires without sale evidence. The CHECK only allowed
+   6 values. Expanded on both dia + gov via MCP. Plus labeled 3 RPC
+   call sites: autoScrapeListings:recordCheck,
+   availabilityPromotionSweep:recordCheck,
+   entitiesHandler:recordListingCheck.
+
+Files changed:
+  • supabase/migrations/dialysis/20260518120000_dia_lvh_check_add_inferred_active.sql
+  • supabase/migrations/government/20260518120000_gov_lvh_check_add_inferred_active.sql
+  • api/_handlers/sidebar-pipeline.js
+  • api/admin.js
+  • api/_handlers/entities-handler.js
+  • AUDIT_PROGRESS.md
+
+Fresh-audit punch list after this patch:
+  A-1 ✅ orphan sale backfill (1,596 NBA gaps closed)
+  A-2 ✅ sales POST labeled
+  A-3 ✅ label + fix unlabeled writers (426/24h closed)
+  A-4 ✅ loans status normalized + CHECK loosened
+  A-5 📋 agency-drift review UI (last one)
