@@ -2323,3 +2323,40 @@ Backfill gated on `address ~ '\m[a-z]+\M'` so mixed-case names (McMillan) aren't
 ### What's next
 Every P0/P1/P2 item from the original QA pass and QA pass #2 is now resolved. Suggest running another fresh walkthrough — patterns from this session suggest the next layer will be either more performance corners or long-tail data-integrity nits.
 
+
+
+## QA pass #19 — norm_text preserves abbreviations ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-19-norm-text-preserve-abbreviations`
+- **Patch:** `audit/patches/qa-19-norm-text-preserve-abbreviations/apply.mjs`
+
+### Symptom (discovered in QA pass #3)
+Detail panel header on property 3198 read "1200 New Jersey Ave Se – Washington, DC" — the "Se" should be "SE". The underlying `properties.address` had been canonicalized to "1200 New Jersey Ave SE" by QA-12. But `v_property_detail` wraps the address column in `norm_text(p.address)`, and norm_text was doing `initcap(trim(s))` — clobbering the SE back to Se on every read.
+
+Same pattern in `v_lease_detail`, `v_ownership_current`, `v_ownership_chain`. Four views silently undoing the QA-12+QA-18 canonicalization at read time.
+
+### Fix
+Redefine `norm_text` with a two-branch policy:
+1. Mixed-case input → trust the upstream, just trim.
+2. All-upper or all-lower → smart title-case using the same logic as `titlecase_address` from QA-18, with an expanded abbreviation preserve-set (direction codes + ~50 federal agency acronyms + dia-specific codes on the dia migration).
+
+### Regression tests (verified live on gov)
+- "1200 NEW JERSEY AVE SE" → "1200 New Jersey Ave SE"
+- "1200 New Jersey Ave SE" → "1200 New Jersey Ave SE" (untouched)
+- "GSA HEADQUARTERS"        → "GSA Headquarters"
+- "po box 123"              → "PO Box 123"
+- "WASHINGTON"              → "Washington"
+
+### Live verification
+Detail panel header on property 3198: "1200 New Jersey Ave Se – Washington, DC" → "**1200 New Jersey Ave SE – Washington, DC**".
+
+### Lesson
+When canonicalizing column data, audit every consuming view for read-time normalization helpers (norm_text, initcap, lower, upper, custom canonicalizers) — they will silently override column-level fixes. The QA-12 + QA-18 column backfills were correct; the read-time wrapper was the actual bug.
+
+### Files changed
+- `supabase/migrations/government/20260518190000_gov_qa19_norm_text_preserve_abbreviations.sql`
+- `supabase/migrations/dialysis/20260518190000_dia_qa19_norm_text_preserve_abbreviations.sql`
+- `AUDIT_PROGRESS.md` — this closeout
+
+Both migrations applied live via Supabase MCP on 2026-05-18.
+

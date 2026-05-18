@@ -1,0 +1,61 @@
+qa(19): norm_text trusts mixed case + preserves agency/direction abbreviations
+
+QA-12 + QA-18 canonicalized properties.address across ~11K rows in
+both DBs ("Ave Se" → "Ave SE", "main street" → "Main Street", etc.).
+The detail panel header still rendered "1200 New Jersey Ave Se"
+because v_property_detail wraps every text column in norm_text(),
+and norm_text was doing `initcap(trim(s))` — stripping "SE" back to
+"Se" on every read.
+
+Same pattern in v_lease_detail, v_ownership_current, and
+v_ownership_chain. Four views silently undoing the QA-12 + QA-18
+canonicalization at read time.
+
+Fix: redefine norm_text with a two-branch policy.
+
+  1. Mixed-case input (has at least one upper AND one lower char):
+     trust the upstream, just trim. Most canonicalized data lands
+     here untouched.
+
+  2. All-upper or all-lower input (legacy ingest from upstream
+     pipelines that captured raw UPPERCASE county-recorder data):
+     smart title-case using the same logic as titlecase_address
+     from QA-18, with an expanded abbreviation preserve-set:
+       • Direction codes: N, S, E, W, NE, NW, SE, SW
+       • USPS: PO, POB
+       • Federal agency acronyms: GSA, IRS, DOJ, FBI, VA, USPS, DOD,
+         HHS, FDA, NIH, CDC, DOL, DOC, DHS, ICE, CBP, USCIS, TSA,
+         USSS, ATF, DEA, USMS, BOP, HUD, DOT, FAA, FEMA, OPM, SEC,
+         BLS, NRC, NLRB, EEOC, EPA, NOAA, USGS, USDA, DOE, USACE,
+         NASA, USAF, USMC, USCG, LSC, UHT, OSHA, FCC, FTC, SBA, NSF,
+         GAO, DHA
+       • Dia-specific (dia migration only): DVA, FMC, NPI, CMS,
+         ESRD, QIP, CKD
+
+Regression tests (verified live on gov):
+  norm_text('1200 NEW JERSEY AVE SE')    → "1200 New Jersey Ave SE"
+  norm_text('1200 New Jersey Ave SE')    → "1200 New Jersey Ave SE"
+  norm_text('GSA HEADQUARTERS')          → "GSA Headquarters"
+  norm_text('po box 123')                → "PO Box 123"
+  norm_text('WASHINGTON')                → "Washington"
+
+Live impact (verified in browser):
+  Detail panel header on property 3198:
+    Before: "1200 New Jersey Ave Se – Washington, DC"
+    After:  "1200 New Jersey Ave SE – Washington, DC"
+
+Fixes rendering on every detail panel for both domains plus every
+read through v_lease_detail / v_ownership_current / v_ownership_chain.
+
+Lesson: when canonicalizing data, audit every consuming view for
+read-time normalization (norm_text, initcap, lower, upper, custom
+canonicalizers) — they will silently override column-level fixes.
+The QA-12 + QA-18 backfills were correct; the read-time wrapper was
+the actual bug.
+
+Files changed:
+  • supabase/migrations/government/20260518190000_gov_qa19_norm_text_preserve_abbreviations.sql
+  • supabase/migrations/dialysis/20260518190000_dia_qa19_norm_text_preserve_abbreviations.sql
+  • AUDIT_PROGRESS.md (closeout)
+
+Both migrations applied live via Supabase MCP on 2026-05-18.
