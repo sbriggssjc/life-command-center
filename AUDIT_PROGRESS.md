@@ -845,6 +845,86 @@ Same UX, rate-limited, console-logged with code tag, ready for Phase B telemetry
 - Sourcemap symbolication so production stack traces are readable.
 
 
+
+## Closeout — item 5 Phase B — provenance integrity (D-13 + gating)
+- **Status:** ✅ DONE (Phase B) — Phase A landed earlier as `08846cc` (ingest_write_failures table + domainQuery instrumentation).
+- **Branch:** `audit/05B-provenance-integrity-phase-b`
+- **Patch:** `audit/patches/05B-provenance-integrity-phase-b/apply.mjs`
+- **Closes:** D-13 (ownership_research_queue silent-write loop) + pushProvenance gating mechanism.
+
+### D-13 — what was broken
+Production schema of `public.ownership_research_queue` on gov (verified via MCP 2026-05-17):
+```
+research_id, lead_id, task_type (NOT NULL), task_status, priority_score,
+ai_prompt, ai_response, ai_confidence, ai_sources, human_verified,
+human_notes, verified_by, verified_at, created_at, completed_at, retry_count
+```
+
+Two writers in `api/_handlers/sidebar-pipeline.js` (lines ~1851 and ~2684) POSTed these columns:
+```
+property_id, address, city, state, recorded_owner_id, recorded_owner_name,
+source, priority, status, created_at
+```
+
+**None match.** Every POST has 4xx'd silently since the table was migrated to the AI-pipeline shape. Phase A's instrumentation surfaced this as a recurring `ingest_write_failures` row.
+
+### D-13 — resolution
+Per the audit doc's option (b): **neutralize the writers** rather than rewrite to a parallel path. The Python AI pipeline already covers both cases via the `lead_id`-based queue:
+- `task_type='contact_discovery'` for first-name-only brokers
+- `task_type='entity_resolution'` for properties with unknown true_owner
+
+Both sidebar writers now log a `[sidebar-pipeline] D-13: skipped` debug line and return. The few thousand `ingest_write_failures` rows this surface generated will stop appearing.
+
+### pushProvenance gating
+Phase B adds an OPTIONAL 7th parameter `writeResult` to `pushProvenance`:
+```js
+function pushProvenance(provCollect, table, recordPk, fields, confidence, source, writeResult) {
+  // Gate: if a writeResult was supplied and it explicitly failed, skip.
+  if (writeResult && writeResult.ok === false) return;
+  // ... existing logic
+}
+```
+
+**Backwards compatible** — existing call sites continue to work unchanged. New call sites can adopt the pattern:
+```js
+const patchRes = await domainPatch(...);
+pushProvenance(provCollect, 'table', id, fields, undefined, undefined, patchRes);
+```
+
+One concrete migration in this patch: the `parcel_records` PATCH in `upsertPublicRecords` at line ~3590 now passes the PATCH result through to `pushProvenance`, so a 4xx PATCH no longer records phantom provenance.
+
+### Files changed
+- `api/_handlers/sidebar-pipeline.js` — pushProvenance signature + 2 writer neutralizations + 1 sample gating migration
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "D-13:" api/_handlers/sidebar-pipeline.js` → 4 or more (in-code comments)
+2. `grep -c "writeResult" api/_handlers/sidebar-pipeline.js` → 2 or more (signature + sample call site)
+3. `grep -c "ownership_research_queue" api/_handlers/sidebar-pipeline.js` → expected to drop from 4 to 0 (writers removed)
+4. After deploy: a fresh CoStar capture with first-name-only brokers + an unknown true_owner should produce `[sidebar-pipeline] D-13: skipped` console lines, NOT new `ingest_write_failures` rows for ownership_research_queue.
+
+### Phase C follow-ups (deferred)
+- Sweep the remaining ~30 `pushProvenance` call sites and pass their upstream `r`/`patchRes`/etc. through to enable gating across the file.
+- Consider promoting the `writeResult` gate to a default-required parameter once the sweep is complete (would surface any remaining ungated call sites at compile time via a lint rule).
+
+### Discovery — Item #3 Phase B (dia owner backfill) re-scoped to Phase C
+Verified via MCP 2026-05-17 that **all 13,338 NULL-owner dia properties** have:
+- 0 ownership_history rows with recorded_owner_id populated
+- 0 deed_records rows
+- 0 sales_transactions rows
+- 0 latest_deed_grantee text
+- 0 assessed_owner text
+
+`reconcilePropertyOwnership` (Phase A) has nothing to reconcile from — running it as a backfill would be a no-op for all 13,338. Item #3 Phase B as originally scoped is unsolvable with existing data.
+
+The real next step is an **enrichment pipeline**, not a reconciliation. Options:
+- Build a deferred SoS / county-recorder ingest that pulls deed grantee data by property address + state, then runs through the existing ownership reconciliation.
+- Bulk manual research via the existing LLC research queue UI (Item #2 Phase B — also deferred).
+- Integrate a commercial property-records API (CoreLogic, ATTOM Data, etc.) for the gap.
+
+Item #3 Phase B is **re-classified as deferred to Phase C** with this explanatory note. The current state is: 13,338 dia properties remain NULL-owner; they surface correctly in the NBA queue as `missing_recorded_owner` gaps awaiting external enrichment.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.
