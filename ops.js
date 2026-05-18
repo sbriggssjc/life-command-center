@@ -488,8 +488,19 @@ function renderMyWorkList(el, connectors) {
     items.forEach(item => { html += queueItemHTML(item, 'my_work'); });
   }
 
-  // Pagination controls (if using v2)
-  html += paginationHTML('/api/queue?view=my_work', 'renderMyWork');
+  // Pagination controls (if using v2).
+  // QA-22 (2026-05-18): renderMyWork's actual fetch URL is
+  // '/api/queue?view=my_work&limit=100' (or '&page=N&per_page=25' when
+  // paginating) — those are the keys that get pagination metadata stored
+  // in opsPagination[]. The previous bare '/api/queue?view=my_work' key
+  // pulled stale data populated by a different load path, displaying
+  // "Page 1 of 298 (7432 items)" alongside a "0 items" list. Suppress the
+  // pager entirely when there are no items to page through (the
+  // my_work canonical queue is < 100 items in practice so the &limit=100
+  // path returns the full set in one shot).
+  if (opsMyWorkData.length >= 100) {
+    html += paginationHTML('/api/queue?view=my_work&limit=100', 'renderMyWork');
+  }
 
   el.innerHTML = html;
 }

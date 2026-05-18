@@ -6747,7 +6747,11 @@ function renderDailyBriefingPanel() {
   html += '<div class="db-kpis">';
   html += `<div class="db-kpi"><span>Open</span><strong>${Number(tsOpen || 0).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Inbox New</span><strong>${Number(wc.inbox_new || 0).toLocaleString()}</strong></div>`;
-  html += `<div class="db-kpi"><span>Sync Errors</span><strong>${Number(wc.sync_errors || 0).toLocaleString()}</strong></div>`;
+  // QA-22 (2026-05-18): prefer the live sync-health summary.error over
+  // work_counts.sync_errors (same fix pattern as QA-10's Metrics tile).
+  // window._lccLiveSyncErrors is populated by loadDailyBriefingData.
+  const _qaLiveSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : (wc.sync_errors || 0);
+  html += `<div class="db-kpi"><span>Sync Errors</span><strong>${Number(_qaLiveSyncErr).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Overdue</span><strong>${Number(tsOverdue || 0).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Due Today</span><strong>${Number(tsDueToday || 0).toLocaleString()}</strong></div>`;
   html += '</div>';
@@ -6811,9 +6815,24 @@ async function loadDailyBriefingData(force = false) {
   if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
 
   try {
-    const res = await fetch(`/api/daily-briefing?action=snapshot&role_view=${encodeURIComponent(roleView)}`, { headers });
+    // QA-22 (2026-05-18): also fetch live sync-health so the Daily Briefing
+    // "Sync Errors" tile shows the connector-status error count (matches the
+    // Pipeline banner, Metrics tile, Sync Health tile after QA-10) rather
+    // than the stale work_counts.sync_errors row count. Same fix pattern as
+    // QA-10's Metrics fix — Daily Briefing was just on a different render
+    // path that QA-10 didn't touch.
+    const [res, syncRes] = await Promise.all([
+      fetch(`/api/daily-briefing?action=snapshot&role_view=${encodeURIComponent(roleView)}`, { headers }),
+      fetch('/api/sync?action=health').catch(() => null),
+    ]);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     dailyBriefingSnapshot = await res.json();
+    if (syncRes && syncRes.ok) {
+      try {
+        const syncData = await syncRes.json();
+        window._lccLiveSyncErrors = syncData?.summary?.error || 0;
+      } catch (_) { /* leave undefined → renderer falls back */ }
+    }
   } catch (e) {
     console.warn('[DailyBriefing] Load failed:', e.message);
     dailyBriefingSnapshot = null;
@@ -7003,11 +7022,16 @@ function renderTeamPulse() {
   const el = document.getElementById('teamPulseContent');
   if (!widget || !el) return;
 
-  // Only show for managers/owners with meaningful canonical data
+  // Only show for managers/owners with meaningful canonical data.
+  // QA-22 (2026-05-18): also gate on live sync-health connector errors so
+  // the widget appears when only that signal is non-zero (stale
+  // canonicalCounts.sync_errors meant the widget was hidden when only the
+  // live count was non-zero).
   const isManager = LCC_USER.role === 'owner' || LCC_USER.role === 'manager';
+  const liveSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : 0;
   const hasData = canonicalCounts && (
     (canonicalCounts.open_actions || 0) > 0 || (canonicalCounts.open_escalations || 0) > 0 ||
-    (canonicalCounts.sync_errors || 0) > 0 || (canonicalCounts.in_progress || 0) > 0
+    (canonicalCounts.sync_errors || 0) > 0 || liveSyncErr > 0 || (canonicalCounts.in_progress || 0) > 0
   );
   if (!isManager || !hasData) {
     widget.style.display = 'none';
@@ -7032,9 +7056,13 @@ function renderTeamPulse() {
     <div class="pulse-label">Escalations</div>
   </div>`;
 
-  // Sync errors
-  html += `<div class="pulse-card${(c.sync_errors || 0) > 0 ? ' attention' : ''}" onclick="navTo('pageSyncHealth')">
-    <div class="pulse-val">${c.sync_errors || 0}</div>
+  // Sync errors. QA-22 (2026-05-18): prefer live connector-status count
+  // (window._lccLiveSyncErrors populated by loadDailyBriefingData) over the
+  // stale-prone work_counts.sync_errors row count. Matches the QA-10 fix
+  // applied to the Metrics + Sync Health pages.
+  const _qaSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : (c.sync_errors || 0);
+  html += `<div class="pulse-card${_qaSyncErr > 0 ? ' attention' : ''}" onclick="navTo('pageSyncHealth')">
+    <div class="pulse-val">${_qaSyncErr}</div>
     <div class="pulse-label">Sync Errors</div>
   </div>`;
 

@@ -1,0 +1,70 @@
+qa(22): Daily Briefing sync-errors + DaVita branding + Pipeline pager
+
+Three findings from QA pass #5 bundled into one patch.
+
+(a) Daily Briefing + Home team-pulse showing "Sync Errors 0"
+
+  Same root cause as QA-10's Metrics + Sync Health fix, but on a
+  different render path (renderDailyBriefingPanel + renderTeamPulse)
+  that QA-10 didn't touch. The Daily Briefing tile reads
+  wc.sync_errors (from work_counts MV — stale-prone) instead of
+  the live connector-status error count.
+
+  Fix in app.js:
+    • loadDailyBriefingData now fetches /api/sync?action=health in
+      parallel with the daily-briefing snapshot. Stashes
+      summary.error on window._lccLiveSyncErrors.
+    • Daily Briefing "Sync Errors" db-kpi tile + Home team-pulse
+      "Sync Errors" pulse-card both prefer the live value, falling
+      back to wc.sync_errors only when the sync-health fetch
+      failed.
+    • Team-pulse gate also updated — the widget was hidden when
+      canonicalCounts.sync_errors was 0 even though the live count
+      was non-zero. Gate now ORs in liveSyncErr.
+
+  After QA-22 every "sync errors" surface agrees on summary.error:
+    Pipeline banner, Sync Health tile, Metrics tile (QA-10)
+    Daily Briefing tile, Home team-pulse (QA-22)
+
+(b) "Davita" → "DaVita" brand canonicalization (dia data fix)
+
+  properties.tenant had:
+    • 2,531 rows with "Davita …" prefix (title-cased upstream)
+    • 115 rows with "DAVITA" (all-caps, county recorder dumps)
+    • 1,798 rows already canonical "DaVita"
+
+  Brand is "DaVita" (NYSE: DVA). Detail panel header on ~30% of
+  the dialysis book showed "Davita Lakewood Community Dialysis
+  Center" etc.
+
+  Fix: new IMMUTABLE canonicalize_davita_brand(text) helper that
+  regex-replaces (davita|DAVITA|Davita) → "DaVita" on whole-word
+  boundaries. One-shot backfill + BEFORE INSERT/UPDATE trigger so
+  future ingests stay canonical.
+
+  Verified live: 2,531 bad rows → 0; canonical "DaVita" prefix
+  count went 1,798 → 4,329.
+
+  Gov has no `tenant` column (uses `agency` instead) so no gov-side
+  migration needed.
+
+(c) Pipeline My Work pager mismatch
+
+  Pipeline page header showed "View My Work 0 items" (correct after
+  QA-09) but the pager below showed "Page 1 of 298 (7432 items)" —
+  the 7,432 was the canonical-inbox count from a totally different
+  load. paginationHTML('/api/queue?view=my_work', …) key didn't
+  match the actual fetch URL '/api/queue?view=my_work&limit=100',
+  so it pulled stale data from a different slot.
+
+  Fix in ops.js: use the correct pager key + don't render the pager
+  at all when opsMyWorkData.length < 100 (no pagination needed).
+
+Files changed:
+  • supabase/migrations/dialysis/20260518200000_dia_qa22_davita_brand_casing.sql
+  • app.js (loadDailyBriefingData parallel sync-health + render-site
+    + team-pulse gate)
+  • ops.js (Pipeline pager key + threshold)
+  • AUDIT_PROGRESS.md (closeout)
+
+Migration applied live via Supabase MCP on 2026-05-18.

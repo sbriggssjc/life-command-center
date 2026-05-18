@@ -2433,3 +2433,31 @@ if (days < 0) return 'Recent';
 ### Deferred follow-up
 - **QA-22:** investigate the upstream sync writing future timestamps to contact records. Salesforce bridge is the likely culprit; ingest-side guard would prevent the bad data from landing in the first place.
 
+
+
+## QA pass #22 — Daily Briefing + DaVita + Pipeline pager ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-22-daily-briefing-davita-pager`
+- **Patch:** `audit/patches/qa-22-daily-briefing-davita-pager/apply.mjs`
+- **Migration:** `supabase/migrations/dialysis/20260518200000_dia_qa22_davita_brand_casing.sql`
+
+### (a) Daily Briefing + Home team-pulse: Sync Errors 0
+Same root cause as QA-10 but on a different render path. `loadDailyBriefingData` now fetches `/api/sync?action=health` in parallel and stashes `summary.error` on `window._lccLiveSyncErrors`. Both the Daily Briefing "Sync Errors" db-kpi tile AND the Home team-pulse "Sync Errors" pulse-card now prefer the live value. Team-pulse gate also updated so the widget shows when only the live count is non-zero.
+
+### (b) "Davita" → "DaVita" branding (data fix, dia)
+`properties.tenant` had 2,531 rows with "Davita" prefix + 115 with all-caps "DAVITA". New `canonicalize_davita_brand(text)` helper + backfill + BEFORE INSERT/UPDATE trigger. Live verified: 2,531 → 0 bad rows; canonical "DaVita" count 1,798 → 4,329.
+
+### (c) Pipeline My Work pager mismatch
+Pager key `/api/queue?view=my_work` didn't match the actual fetch URL `/api/queue?view=my_work&limit=100` — pulled stale total from another slot ("Page 1 of 298 (7432 items)" alongside a "0 items" list). Fixed the key + only render the pager when `opsMyWorkData.length >= 100`.
+
+### Summary — sync-error display
+After QA-22 every surface agrees on `summary.error` (1 today):
+- Pipeline banner, Sync Health tile, Metrics tile (QA-10)
+- Daily Briefing tile, Home team-pulse (QA-22, this patch)
+
+### Files changed
+- `supabase/migrations/dialysis/20260518200000_dia_qa22_davita_brand_casing.sql`
+- `app.js` — `loadDailyBriefingData` + Daily Briefing tile + team-pulse pulse-card + team-pulse gate
+- `ops.js` — Pipeline My Work pager key + threshold guard
+- `AUDIT_PROGRESS.md` — this closeout
+
