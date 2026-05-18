@@ -2743,3 +2743,32 @@ Properties remain in the database — only the breakdown chart filters them. Oth
 
 No SQL changes. No Edge Function changes. No allowlist changes.
 
+
+
+## QA pass #29 — Dia fixpack from QA pass #8 Chrome probe ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-29-dia-fixpack`
+- **Patch:** `audit/patches/qa-29-dia-fixpack/apply.mjs`
+- **Severity:** P2 — three small fixes found in QA pass #8 Chrome probe.
+
+### Fix 1 — Top States widget: state names invisible
+DOM had "CA"/"TX"/"NY" correctly but the visual card showed blank state cells. Root cause: state-name cell had `flex:1` with no min-width while sibling cells took 20+80+50px + 3×8px gaps = 174px fixed, leaving 0px for the flex cell. Fix: shrink bar 80→50px, gap 8→6px, give state cell `min-width:32px`.
+
+### Fix 2 — Financial estimates "108.6% of clinics"
+The card subtext read "9,273 of 8,535 clinics (108.6%)" — impossible. Live SQL confirmed:
+- 9,273 distinct medicare_ids in `clinic_financial_estimates`
+- 8,535 distinct in `medicare_clinics` (current CMS inventory)
+- 8,511 overlap; 762 estimates reference clinics that have been removed from CMS
+
+Fix: cross-reference `best` against `diaData.inventoryChanges` to count only currently-tracked clinics. Post-fix coverage = 8,511 / 8,535 = 99.7%. Stale estimates remain in DB but are excluded from headline.
+
+### Fix 3 — Unprospected Owners modal footer mismatch
+Tile headline correctly said "532 of 1232 active owners" but modal footer said "Showing top 100 of 250" because the diaQuery's row-limit (250) was used as the footer denominator. Fix: bumped dia query limit 250→1000, stashed the true count on `window._diaUnprospectedTotal`, modal footer now reads "Showing top 100 of 532". Mirrored to gov.js for consistency.
+
+### Files changed
+- `dialysis.js` — Top States CSS, financial estimates dedup, Unprospected Owners limit + stash + footer
+- `gov.js` — Unprospected Owners stash + footer mirror
+- `AUDIT_PROGRESS.md` — this closeout
+
+No SQL changes. No Edge Function changes. No allowlist changes.
+

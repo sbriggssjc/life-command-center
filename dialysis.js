@@ -917,10 +917,16 @@ function renderDiaOverview() {
       let topUnprospected = [];
       try {
         // QA-27 (2026-05-18): use includeCount so unprospectedOwners reflects
-        // the TRUE total (not capped at limit=250). On dia v_prospect_targets
-        // returns 532 rows; before QA-27 the count fell back to ptRows.length
-        // which was 250 even when the real count was higher.
-        const ptRes = await diaQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,last_contact_date,prospecting_status', { order: 'prop_count.desc.nullslast', limit: 250, includeCount: true });
+        // the TRUE total (not capped at the query limit). On dia
+        // v_prospect_targets returns ~532 rows; before QA-27 the count fell
+        // back to ptRows.length which was 250 even when the real count was
+        // higher.
+        // QA-29 (2026-05-18): bumped the row limit from 250 -> 1000 so the
+        // modal table contains the full set instead of just the top 250.
+        // The modal's "Showing top 100 of N" footer was misleading
+        // ("100 of 250" while the headline showed 532). With limit=1000
+        // the rows array IS the full set, so the footer is accurate.
+        const ptRes = await diaQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,last_contact_date,prospecting_status', { order: 'prop_count.desc.nullslast', limit: 1000, includeCount: true });
         const ptRows = ptRes.data || [];
         unprospectedOwners = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
         topUnprospected = ptRows;
@@ -935,7 +941,13 @@ function renderDiaOverview() {
         totalOwnersWithProps = ownerRows.length;
       }
       // Stash for the modal (opened on card click)
+      // QA-29 (2026-05-18): stash the TRUE count alongside the row array so
+      // the modal footer can read it (was showing "top 100 of 250" instead
+      // of "top 100 of 532"). The modal's _diaShowProspectTargets reads
+      // window._diaTopUnprospected - keeping it array-shaped for backward
+      // compatibility but stashing the count on a sibling global.
       window._diaTopUnprospected = topUnprospected;
+      window._diaUnprospectedTotal = unprospectedOwners;
 
       // ── Update DOM ──
       const _fmtPct = (n, d) => d > 0 ? Math.round(n / d * 100) + '%' : '—';
@@ -1471,11 +1483,17 @@ function renderTopStatesRankedCard(topStates) {
   h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States</div>';
   topStates.forEach(([st, cnt], i) => {
     const barW = Math.round((cnt / maxCount) * 100);
-    h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-      <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
-      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st}</div>
-      <div style="width:80px;flex-shrink:0;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#22d3ee;border-radius:4px"></div></div>
-      <div style="width:50px;font-size:10px;color:#22d3ee;text-align:right;font-weight:600">${fmtN(cnt)}</div>
+    // QA-29 (2026-05-18): state-name cell was getting 0 width because the
+    // sum of fixed widths (rank 20 + bar 80 + count 50 + 3x8 gap = 174px)
+    // exceeded the card's grid column. The cell had `flex:1` but no
+    // min-width, so it shrank to invisibility. Fix: give state name an
+    // explicit min-width of 32px (enough for "CA"/"TX") and shrink the
+    // bar from 80px to 50px so all four cells fit in narrow cards.
+    h += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <div style="width:14px;flex-shrink:0;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
+      <div style="min-width:32px;flex:1;font-size:11px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st}</div>
+      <div style="width:50px;flex-shrink:0;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#22d3ee;border-radius:4px"></div></div>
+      <div style="width:54px;flex-shrink:0;font-size:10px;color:#22d3ee;text-align:right;font-weight:600">${fmtN(cnt)}</div>
     </div>`;
   });
   h += '</div>';
@@ -1499,7 +1517,23 @@ function renderFinancialMetricsInner() {
       byClinic[id] = e;
     }
   });
-  const best = Object.values(byClinic);
+  // QA-29 (2026-05-18): filter out estimates for medicare_ids that no
+  // longer exist in CMS inventory. The dia DB has 9,273 distinct
+  // medicare_ids in clinic_financial_estimates but only 8,535 active
+  // clinics in medicare_clinics - 762 of those estimates are for
+  // clinics that have since been removed from CMS inventory. Without
+  // this filter the "X of Y clinics" subtext would show 9,273/8,535 =
+  // 108.6% which is nonsensical. We use the inventory-changes feed
+  // (already loaded by loadDiaData) as the source of currently-tracked
+  // clinic IDs; if not loaded yet, the original Object.values(byClinic)
+  // is used so the card still renders.
+  const _currentClinicIds = (typeof diaData !== 'undefined' && Array.isArray(diaData.inventoryChanges))
+    ? new Set(diaData.inventoryChanges.map(c => c.clinic_id).filter(Boolean))
+    : null;
+  const allEstimatedRows = Object.values(byClinic);
+  const best = _currentClinicIds && _currentClinicIds.size > 0
+    ? allEstimatedRows.filter(e => _currentClinicIds.has(e.medicare_id))
+    : allEstimatedRows;
   const withRev = best.filter(e => e.estimated_annual_revenue > 0);
   const withProfit = best.filter(e => e.estimated_annual_profit > 0);
   // estimated_ebitda is NULL in clinic_financial_estimates; v_cms_data maps
@@ -10736,6 +10770,10 @@ window.infoCard = infoCard;
 // window._diaTopUnprospected (rows from v_prospect_targets).
 window._diaShowProspectTargets = function() {
   const rows = window._diaTopUnprospected || [];
+  // QA-29 (2026-05-18): footer uses the true total (not rows.length, which
+  // is capped at the query limit). Falls back to rows.length if total isn't
+  // stashed.
+  const trueTotal = window._diaUnprospectedTotal || rows.length;
   if (!rows.length) {
     alert('Loading prospect targets — try again in a moment.');
     return;
@@ -10779,7 +10817,7 @@ window._diaShowProspectTargets = function() {
           <tbody>${tableRows}</tbody>
         </table>
       </div>
-      <div style="padding:12px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);background:var(--s2)">Showing top ${top.length} of ${rows.length}. To add an owner to your SF prospecting list, look them up in Salesforce and link the account ID via the owner detail panel.</div>
+      <div style="padding:12px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);background:var(--s2)">Showing top ${top.length} of ${trueTotal} unprospected owners${rows.length < trueTotal ? ' (' + rows.length + ' fetched)' : ''}. To add an owner to your SF prospecting list, look them up in Salesforce and link the account ID via the owner detail panel.</div>
     </div>`;
   document.body.appendChild(modal);
 };
