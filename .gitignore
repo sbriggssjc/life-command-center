@@ -20,3 +20,8 @@ scripts/availability-checker-samples.results.json
 # `supabase functions deploy`; encodes the operator's machine state
 # (linked project ref, CLI version cache) and shouldn't be in git.
 supabase/.temp/
+
+
+# QA-32: prevent truncation-investigation artifacts from leaking back
+audit/lcc-*-test*.txt
+audit/edit-tool-test.*

@@ -2843,3 +2843,36 @@ Documented in `audit/SANDBOX_TOOLING_NOTES.md`:
 
 No code. No SQL. No Edge Function. No allowlist changes. Doc-only.
 
+
+
+## QA pass #32 — Clean up QA-31 test artifacts ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/qa-32-cleanup-test-artifacts`
+- **Patch:** `audit/patches/qa-32-cleanup-test-artifacts/apply.mjs`
+- **Severity:** P3 cleanup.
+
+### Symptom
+QA-31's commit showed 12,348 line insertions instead of the ~250 real ones because `git add -A` picked up 4 synthetic test files I left behind during the truncation-bug investigation:
+- `audit/edit-tool-test.js` (0 bytes)
+- `audit/lcc-newline-test.txt` (3,000 lines)
+- `audit/lcc-trunc-test-virtiofs.txt` (8,000 lines / 752KB)
+- `audit/lcc-write-test.txt` (1,000 lines)
+
+The Cowork virtiofs mount blocks `rm` from the sandbox, so cleanup couldn't happen in-session. This patch runs Windows-side where unlink is permitted.
+
+### Fix
+- `git rm` each of the 4 test files (via `apply.mjs` execSync calls)
+- Add `.gitignore` entries for `audit/lcc-*-test*.txt` + `audit/edit-tool-test.*` to prevent recurrence
+
+### Files removed
+- `audit/edit-tool-test.js`
+- `audit/lcc-newline-test.txt`
+- `audit/lcc-trunc-test-virtiofs.txt`
+- `audit/lcc-write-test.txt`
+
+### Files changed
+- `.gitignore` — new audit-test-artifact rules
+- `AUDIT_PROGRESS.md` — this closeout
+
+No code. No SQL. No Edge Function. Cleanup-only.
+
