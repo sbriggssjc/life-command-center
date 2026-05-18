@@ -672,6 +672,64 @@ Run the migration via Supabase Studio SQL Editor on LCC Opps (project `xengecqve
 4. Try the inbox-feedback "approve" / "reject" / "no_match" buttons on a staged item → no CHECK violation; status updates correctly.
 
 
+
+## Closeout — item 8 Phase A — Sticky next-action bar on detail.js
+- **Status:** ✅ DONE
+- **Branch:** `audit/08-detail-next-action-bar`
+- **Patch:** `audit/patches/08-detail-next-action-bar/apply.mjs`
+- **Closes:** B-9 (no surfaced next action on a record) + B-10 (no value-weighted action prompt per record).
+
+### What this adds
+- Sticky horizontal bar pinned to the bottom of every property detail panel.
+- Shows the property's single top-ranked open gap from `v_next_best_action`:
+  severity chip, suggested action text, value estimate, and the tab where the
+  action lives.
+- Click anywhere on the bar (or the "Take action →" button) → switches to the
+  relevant tab so Scott can act inline.
+- Auto-hides when the property has no open gap (the completeness rail at the
+  top handles the "fully populated" state).
+- Border-top color stripe matches severity (CRIT red / HIGH orange / MED
+  yellow / LOW grey).
+
+### Companion to Item #6
+- **Completeness rail** (top of panel) — what's *missing* for this property.
+- **Next-action bar** (bottom of panel) — what to *do first* right now.
+- Together they sandwich the property data and give a constant action prompt.
+
+### Gap type → tab mapping
+```
+missing_recorded_owner   → Ownership & CRM
+llc_research_pending     → Ownership & CRM
+lease_tenant_drift       → Rent Roll
+orphan_sale_owner        → Deal History
+stale_active_listing     → Overview
+cms_chain_drift:*        → Operations
+```
+
+### Files changed
+- `index.html` — bar mount inside `#detailPanel`
+- `styles.css` — `.next-action-bar` + `.nab-*` (sticky bottom + severity colors)
+- `detail.js` — fetch `v_next_best_action` (idx 7 in parallel Promise.all),
+  attach to `_udCache`, renderer + click handler, close-detail hook
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. `grep -c "v_next_best_action" detail.js` → 1 or more
+2. `grep -c "_udRenderNextActionBar" detail.js` → 3 or more (definition + window export + call site)
+3. `grep -c "next-action-bar" index.html` → 1
+4. `grep -c ".nab-cta" styles.css` → 1 or more
+5. Smoke: open a property with a missing recorded owner. Sticky bar appears
+   at the bottom of the panel with the "Research recorded owner for ..."
+   text and a "Take action →" button. Click → Ownership & CRM tab activates.
+
+### Deferred to follow-ups
+- Per-action inline workflows (e.g., open SoS lookup directly from the bar
+  for `missing_recorded_owner` rather than just routing to the tab).
+- Render multi-step action sequences for properties with several queued gaps.
+- "Mark complete" affordance on the bar that records the action in
+  `activity_events` and re-fetches the next-action.
+
+
 # Sprint preflight — 2026-05-17
 
 - **Working tree state at start:** 477 line-ending-only diffs + 2 real diffs (`docs/architecture/sf_file_backfill_flow6_next_steps.md` added, `supabase/functions/intake-salesforce-files/index.ts` 1-line edit). Untracked: audit preview JPGs, `docs/architecture/sf_connected_app_setup.md`. 1 unpushed commit `f967172` (Nixpacks fix) — auto-cleared between sessions.

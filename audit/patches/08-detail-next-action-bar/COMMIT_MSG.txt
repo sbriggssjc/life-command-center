@@ -1,0 +1,38 @@
+audit(item-8/phase-a): sticky next-action bar on detail.js
+
+Companion to the Item #6 completeness rail:
+  • Completeness rail (top)    — what is MISSING for this property
+  • Next-action bar  (bottom)  — what to DO FIRST right now
+
+For each property opened in the unified detail panel, fetches the single
+top-ranked open gap from v_next_best_action (already live on dia + gov)
+and renders it as a sticky bar pinned to the bottom of the panel.
+
+The bar shows:
+  • Severity chip (CRIT/HIGH/MED/LOW, color-coded)
+  • Suggested action text (from view.suggested_action)
+  • Meta line: value estimate · target tab
+  • Primary "Take action →" CTA
+  • Border-top stripe color-coded by severity
+
+Click anywhere on the bar (or the CTA button) → switches to the tab where
+the action lives:
+  missing_recorded_owner   → Ownership & CRM
+  llc_research_pending     → Ownership & CRM
+  lease_tenant_drift       → Rent Roll
+  orphan_sale_owner        → Deal History
+  stale_active_listing     → Overview
+  cms_chain_drift:*        → Operations
+
+Auto-hides when the property has no open gap.
+
+Files changed:
+  • index.html  — #detailNextActionBar mount inside #detailPanel
+  • styles.css  — .next-action-bar + .nab-* (sticky bottom + severity)
+  • detail.js   — fetch v_next_best_action (idx 7 in Promise.all),
+                   attach to _udCache.nextAction, renderer + click +
+                   close-detail hook
+  • AUDIT_PROGRESS.md
+
+Closes B-9 (no surfaced next action on a record) + B-10 (no
+value-weighted action prompt per record).
