@@ -1,0 +1,55 @@
+qa(09): reconcile Open Activities stat across Home/Pipeline/Metrics
+
+Five different numbers on the dashboard all looked like they meant
+"how many things does Scott have to do?", but each measured something
+different:
+
+  Home  "Open Activities"     0       work_counts.open_actions
+  Home  "Flagged Emails"      3,569   raw Outlook flag count
+  Pipeline "My Work · 23"     23      first 100 flagged_email rows,
+                                      then deduped on title+source+date
+  Metrics "INBOX needs triage" 7,402  work_counts.inbox_new
+  Inbox page                  100     same flagged_email source, paged
+
+The 23 was a coincidence of dedup math over the first 100 raw email
+rows pulled by /api/queue?view=my_work. Those items belong on the
+Inbox page, not in the action queue. Pipeline was incorrectly
+treating raw flagged emails as if they were promoted action items.
+
+Tight-scope fix:
+  • ops.js renderMyWork: drop source_type='flagged_email' /
+    item_type='inbox' rows after the fetch, before dedup. Stash the
+    dropped count in window._opsMyWorkInboxDropped.
+  • ops.js renderMyWorkList: empty-state copy reads the dropped count
+    and surfaces it: "No action items assigned to you / N flagged
+    emails sitting in Inbox — triage there to promote them into
+    actions." [Open Inbox]
+  • index.html: title= tooltip on #statActivities clarifies "Promoted
+    / assigned action items only — does not include raw flagged
+    emails. See the Flagged Emails stat (next card) for the triage
+    queue."
+
+After:
+  • Pipeline "My Work" agrees with Home "Open Activities" (action
+    items only).
+  • Home "Flagged Emails", Metrics "INBOX needs triage", Inbox-page
+    count remain separate concepts but are no longer mislabeled as
+    "activities".
+  • The previously-confusing 0 on Pipeline now reads as a productive
+    "you have N emails to triage — go do that".
+
+Out of scope: the 3,569 vs 7,402 gap (different sources for the
+inbox count — Outlook flag API vs canonical work_counts) is real but
+unrelated. Renaming the labels themselves is the "medium scope"
+option, also out of scope.
+
+Files changed:
+  • ops.js (renderMyWork filter + renderMyWorkList empty state)
+  • index.html (#statActivities tooltip)
+  • AUDIT_PROGRESS.md (closeout)
+
+Queued for follow-up:
+  • P1 — Sync error count contradicts itself (Pipeline header /
+    Metrics tile / Sync Health page)
+  • P1 — Public REITs + same-entity duplicates in llc_research_queue
+  • P2 — Casing/UX nits documented in outputs/lcc-qa-pass-2026-05-18.docx

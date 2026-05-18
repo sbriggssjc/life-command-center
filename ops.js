@@ -352,7 +352,19 @@ async function renderMyWork(page) {
   }
 
   opsMyWorkData = qRes.data?.items || qRes.data || [];
-  // Deduplicate inbox items by title + source_type + date composite key
+  // QA-09 (2026-05-18): exclude raw flagged-email / inbox triage rows from
+  // "My Work". They belong on the Inbox page, not in the action queue —
+  // mixing them here is why Pipeline ("23 items") used to disagree with
+  // Home ("Open Activities: 0") and Metrics ("INBOX: 7,402 needs triage").
+  // Track the dropped count so the empty state can surface it.
+  const inboxDropped = opsMyWorkData.filter(item =>
+    item.source_type === 'flagged_email' || item.item_type === 'inbox'
+  ).length;
+  opsMyWorkData = opsMyWorkData.filter(item =>
+    item.source_type !== 'flagged_email' && item.item_type !== 'inbox'
+  );
+  window._opsMyWorkInboxDropped = inboxDropped;
+  // Deduplicate remaining items by title + source_type + date composite key
   {
     const seen = new Set();
     opsMyWorkData = opsMyWorkData.filter(item => {
@@ -455,11 +467,18 @@ function renderMyWorkList(el, connectors) {
         );
       }
     } else {
+      // QA-09: surface the dropped inbox-triage count so the empty state
+      // doesn't look like data is missing. "Open Activities: 0" on Home is
+      // the same definition — they don't include raw flagged emails.
+      const inboxDropped = window._opsMyWorkInboxDropped || 0;
+      const inboxHint = inboxDropped > 0
+        ? `${inboxDropped.toLocaleString()} flagged email${inboxDropped === 1 ? '' : 's'} sitting in Inbox — triage there to promote them into actions.`
+        : (connectors.length ? 'Sync your connectors or promote inbox items to populate your queue.' : 'Set up connectors to start receiving work items.');
       html += emptyStateHTML(
         '<path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/>',
-        'No work items yet',
-        connectors.length ? 'Sync your connectors or promote inbox items to populate your queue.' : 'Set up connectors to start receiving work items.',
-        connectors.length ? 'Go to Inbox' : 'Set up connectors',
+        'No action items assigned to you',
+        inboxHint,
+        connectors.length ? 'Open Inbox' : 'Set up connectors',
         connectors.length ? "navTo('pageInbox')" : "navTo('pageSyncHealth')"
       );
     }
