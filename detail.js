@@ -223,10 +223,20 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       propFilter ? qFn('v_ownership_current', '*', { filter: propFilter, limit: 1 }) : Promise.resolve({ data: [], count: 0 }),
     ];
 
-    // Ownership chain — Gov uses lease_number, Dia uses property_id
+    // Ownership chain — Gov uses lease_number, Dia uses property_id.
+    // QA-17 (2026-05-18): on gov, fall back to NO chain fetch when
+    // lease_number is missing — the previous fallback to `mainFilter`
+    // would pass property_id=eq.X to v_ownership_chain on gov, which
+    // 400s with "column v_ownership_chain.property_id does not exist".
+    // No useful chain rows are available for a gov property without a
+    // lease number anyway, so an empty array is the right result.
     if (db === 'gov') {
-      const chainFilter = leaseNumber ? `lease_number=eq.${encodeURIComponent(leaseNumber)}` : mainFilter;
-      promises.push(qFn('v_ownership_chain', '*', { filter: chainFilter, order: 'transfer_date.desc', limit: 50 }));
+      if (leaseNumber) {
+        const chainFilter = `lease_number=eq.${encodeURIComponent(leaseNumber)}`;
+        promises.push(qFn('v_ownership_chain', '*', { filter: chainFilter, order: 'transfer_date.desc', limit: 50 }));
+      } else {
+        promises.push(Promise.resolve({ data: [], count: 0 }));
+      }
     } else {
       promises.push(qFn('v_ownership_chain', '*', { filter: propFilter || mainFilter, order: 'transfer_date.desc', limit: 50 }));
     }

@@ -766,17 +766,35 @@ function renderDiaOverview() {
     (async () => {
       try {
         // Load latest primary estimates (highest-confidence per clinic)
-        const selectCols = 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score';
+        // QA-16 (2026-05-18): pull estimate_id so we can keyset-paginate
+        // instead of OFFSET-paginating. With 36,538 rows of is_latest, the
+        // old OFFSET=30000 page took 1.4s on the database alone — adding
+        // PostgREST + Edge Function overhead per request, the last few
+        // pages routinely tripped statement_timeout (57014). Keyset
+        // pagination is O(1) per page regardless of position.
+        const selectCols = 'estimate_id,medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score';
         const PAGE = 1000;
-        let all = [], pg = 0;
-        while (true) {
-          const batch = await diaQuery('clinic_financial_estimates', selectCols, {
+        let all = [], lastSeenId = '';
+        let safety = 0; // hard cap, just in case
+        while (safety++ < 100) {
+          // Keyset filter: estimate_id > lastSeenId (works because estimate_id
+          // is the PK and the order by estimate_id below is stable).
+          // Edge Function applyFilter supports "&"-joined filter expressions
+          // via the multi-part form, but for simplicity we keep is_latest in
+          // `filter` and pass the keyset bound as `filter2`.
+          const params = {
             filter: 'is_latest=eq.true',
-            limit: PAGE, offset: pg * PAGE,
-          });
-          all = all.concat(batch || []);
-          if (!batch || batch.length < PAGE) break;
-          pg++;
+            order: 'estimate_id.asc',
+            limit: PAGE,
+            count: 'false',
+          };
+          if (lastSeenId) params.filter2 = 'estimate_id=gt.' + encodeURIComponent(lastSeenId);
+          const batch = await diaQuery('clinic_financial_estimates', selectCols, params);
+          if (!batch || !batch.length) break;
+          all = all.concat(batch);
+          if (batch.length < PAGE) break;
+          lastSeenId = batch[batch.length - 1].estimate_id;
+          if (!lastSeenId) break; // defensive: shouldn't happen with order=estimate_id.asc
         }
         diaFinancialEstimates = all;
         // Debug source breakdown
