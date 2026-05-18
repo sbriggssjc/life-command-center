@@ -2316,6 +2316,15 @@ async function renderSyncHealthPage() {
 
   // Append perf dashboard for managers
   setTimeout(appendPerfToSyncHealth, 100);
+
+  // Phase C (2026-05-18): mount the silent-write-failures widget at the
+  // bottom of the Sync Health page. Surfaces ingest_write_failures
+  // rollup so silent failures are visible in-app instead of only in Studio.
+  try {
+    if (typeof renderWriteFailuresWidget === 'function') {
+      await renderWriteFailuresWidget(el);
+    }
+  } catch (e) { console.warn('[SyncHealth] write-failures widget render failed:', e?.message); }
 }
 
 async function triggerSync(connectorType) {

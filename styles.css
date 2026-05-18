@@ -312,6 +312,37 @@ input, select { font-family: inherit; }
 .lcc-agency-drift-blank { font-style: italic; color: var(--text3) !important; background: var(--s2) !important; border-color: var(--border) !important; }
 .lcc-adrift-controls { display: inline-flex; align-items: center; gap: 8px; }
 
+/* Write failures dashboard widget — Phase C (2026-05-18) */
+.lcc-wf-widget { margin-top: 24px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--s1); }
+.lcc-wf-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.lcc-wf-title { font-size: 15px; font-weight: 700; color: var(--text1); display: inline-flex; align-items: center; gap: 8px; }
+.lcc-wf-window { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; background: var(--s2); border: 1px solid var(--border); border-radius: 999px; }
+.lcc-wf-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.lcc-wf-stat { padding: 10px 12px; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; }
+.lcc-wf-stat-num { font-size: 22px; font-weight: 800; color: var(--text1); line-height: 1.1; }
+.lcc-wf-stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-top: 2px; }
+.lcc-wf-stat-warn { border-color: color-mix(in srgb, var(--yellow, #eab308) 50%, var(--border)); }
+.lcc-wf-stat-warn .lcc-wf-stat-num { color: var(--yellow, #eab308); }
+.lcc-wf-empty { font-size: 13px; color: var(--text2); padding: 24px; text-align: center; font-style: italic; }
+.lcc-wf-table-wrap { overflow-x: auto; }
+.lcc-wf-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lcc-wf-table th { text-align: left; padding: 8px 10px; color: var(--text2); font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; font-size: 10px; border-bottom: 1px solid var(--border); }
+.lcc-wf-table th.num { text-align: right; }
+.lcc-wf-table td { padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); color: var(--text); }
+.lcc-wf-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.lcc-wf-row:hover { background: color-mix(in srgb, var(--accent2) 6%, transparent); }
+.lcc-wf-row-unlabeled .lcc-wf-label { color: var(--text3); font-style: italic; }
+.lcc-wf-label { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcc-wf-path { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 11px; color: var(--text2); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcc-wf-status { font-variant-numeric: tabular-nums; color: var(--text2); }
+.lcc-wf-count { font-weight: 700; color: var(--text1); }
+.lcc-wf-when { color: var(--text3); white-space: nowrap; }
+@media (max-width: 720px) {
+  .lcc-wf-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lcc-wf-table { font-size: 11px; }
+  .lcc-wf-path { max-width: 160px; }
+}
+
 /* Next-action bar — detail panel (Item #8 Phase A, 2026-05-17) */
 .next-action-bar { position: sticky; bottom: 0; z-index: 3; background: var(--s1); border-top: 1px solid var(--border); padding: 10px 14px; padding-bottom: calc(10px + var(--safe-bottom, 0px)); display: flex; align-items: center; gap: 10px; cursor: pointer; transition: background 0.15s; }
 .next-action-bar:hover { background: color-mix(in srgb, var(--accent2) 6%, var(--s1)); }

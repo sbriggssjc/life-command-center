@@ -1,0 +1,32 @@
+audit(phase-c): silent-write failures dashboard widget
+
+Closes the in-app observability loop on the telemetry built over
+this sprint (Item #5 Phase A ingest_write_failures + Item #10 Phase B
+client_errors + fresh audit A-3 labeled writers).
+
+Today Scott has to query Supabase Studio to see "what's quietly
+failing right now". This patch adds a widget on the Sync Health page
+that surfaces it inline:
+
+  • Stats row (4 cards): Total / Labeled / Unlabeled / Distinct labels
+  • Top 25 failing combos table: label · path · http_status · count
+                                 · last seen (with tooltip showing
+                                 sample error_detail)
+  • Empty state ("No silent-write failures in the last 24h ✓") when
+    the system is quiet.
+
+Backend:
+  GET /api/admin?_route=write-failures-rollup&hours=24
+    → { totals: {total, labeled, unlabeled, distinct_labels},
+        top_combos: [{label, path, http_status, count, latest_at,
+                      sample_detail}, ...] }
+
+Mount: bottom of the Sync Health page via a single
+renderWriteFailuresWidget(el) call inside renderSyncHealthPage().
+
+Files changed:
+  • api/admin.js   — dispatcher case + handler
+  • app.js         — widget render + load + freshness formatter
+  • ops.js         — mount call
+  • styles.css     — .lcc-wf-* block
+  • AUDIT_PROGRESS.md

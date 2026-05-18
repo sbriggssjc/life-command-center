@@ -1505,3 +1505,43 @@ Active mode is persisted in `localStorage.lcc.adrift.kind`. The POST resolve end
 - `lease_agency_but_property_agency_null`: 46
 - (7,293 NULL drift_kind rows are not surfaced — they're properties with non-disagreeing data)
 
+
+
+## Phase C — Silent-write failures dashboard ✅
+- **Status:** ✅ DONE.
+- **Branch:** `audit/phase-c-write-failures-dashboard`
+- **Patch:** `audit/patches/phase-c-write-failures-dashboard/apply.mjs`
+
+### What this adds
+Closes the in-app observability loop on the silent-write telemetry. Today Scott has to query Supabase Studio to see "what's quietly failing"; this widget surfaces it on the Sync Health page.
+
+**Widget contents:**
+- **Stats row** (4 cards): Total / Labeled / Unlabeled / Distinct labels
+- **Top 25 failing combos** table: label · path · http_status · count · last seen
+- **Empty state** ("No silent-write failures in the last 24h ✓") when nothing's broken
+
+**Backend**: new admin sub-route `GET /api/admin?_route=write-failures-rollup&hours=24` returning a JSON rollup of `ingest_write_failures` over the last N hours (capped at 5,000 rows for stats).
+
+**Mount**: bottom of the Sync Health page (`#syncHealthContent`), via a hook in `renderSyncHealthPage` after the existing connectors render.
+
+### Files changed
+- `api/admin.js` — dispatcher case + `handleWriteFailuresRollup`
+- `app.js` — `renderWriteFailuresWidget` + `loadWriteFailuresRollup` + `_lccFmtFreshness`
+- `ops.js` — single `renderWriteFailuresWidget(el)` mount call inside `renderSyncHealthPage`
+- `styles.css` — `.lcc-wf-*` block (stats grid, table styles, dark-mode aware)
+- `AUDIT_PROGRESS.md` — this closeout
+
+### Verification
+1. Open the LCC app → More drawer → **Sync Health**.
+2. Scroll past the existing connector cards. Below them: "Silent-Write Failures (last 24h)" widget.
+3. Stats row shows current numbers. With all the labeling work from A-2/A-3/A-4 deployed, the "Unlabeled" count should be low (target: <30).
+4. Table shows the top 25 label/path/status combos with counts. Hover a row for a sample error_detail tooltip.
+5. After a few days clean: the widget shows "No silent-write failures in the last 24h ✓".
+
+### Phase C punch list — still pending
+- Sort/chip helper adoption per tab (deferred — v_sales_comps matview needs completeness columns added first)
+- Item #8 Phase B — per-action inline workflows on next-action bar
+- client_errors consumption sweep (~50 call sites)
+- pushProvenance gating sweep (~30 call sites)
+- Item #3 Phase C — external enrichment pipeline (13,131 orphans)
+
