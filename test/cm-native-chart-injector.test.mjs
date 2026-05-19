@@ -166,8 +166,23 @@ test('NATIVE_CHART_TEMPLATES: P7 scatter charts registered', () => {
   ]) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
+});
+
+test('NATIVE_CHART_TEMPLATES: P8 floating-bar / box-whisker charts registered', () => {
+  for (const id of [
+    'bid_ask_spread',
+    'bid_ask_spread_monthly',
+    'rent_psf_box_quarterly',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+  // ppsf_box_quarterly DEFERRED — no CHART_COLUMNS schema
+  assert.ok(
+    !NATIVE_CHART_TEMPLATES.has('ppsf_box_quarterly'),
+    'ppsf_box_quarterly should remain on the PNG path (deferred — no data schema)'
+  );
   // rent_by_year_built DEFERRED — whisker+median+avg composite, needs
-  // floating-bar builder (P8).
+  // helper-column plumbing (IQR width = upper_q − lower_q).
   assert.ok(
     !NATIVE_CHART_TEMPLATES.has('rent_by_year_built'),
     'rent_by_year_built should remain on the PNG path (deferred — composite shape)'
@@ -552,6 +567,85 @@ test('buildInjectionSpec: available_cap_rate_dot_plot — term-based scatter (x=
   assert.equal(out.spec.series[0].yCol, 'B', 'y = cap_rate');
 });
 
+test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line', () => {
+  // Quarterly tab has no avg_last_ask_cap → renderer uses single-line.
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'subspecialty',       col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+    { key: 'pct_price_change',   col: 'D' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread',
+    tabName: 'Data_Bid_Ask',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'line');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.valCol, 'C', 'line = avg_bid_ask_spread');
+});
+
+test('buildInjectionSpec: bid_ask_spread_monthly builds floating-bar via invisible-base stack', () => {
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'subspecialty',       col: 'B' },
+    { key: 'n_with_spread',      col: 'C' },
+    { key: 'avg_bid_ask_spread', col: 'D' },
+    { key: 'pct_price_change',   col: 'E' },
+    { key: 'avg_last_ask_cap',   col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread_monthly',
+    tabName: 'Data_Bid_Ask_Monthly',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'stacked-bar');
+  assert.equal(out.spec.series.length, 2, 'invisible base + visible band');
+  // Series 0 = invisible base (last_ask = col F)
+  assert.equal(out.spec.series[0].valCol, 'F', 'base series = avg_last_ask_cap');
+  assert.equal(out.spec.series[0].noFill, true, 'base series is invisible');
+  // Series 1 = visible spread band (col D)
+  assert.equal(out.spec.series[1].valCol, 'D', 'top series = avg_bid_ask_spread');
+  assert.equal(out.spec.series[1].color, '62B5E5', 'visible band is sky');
+  assert.ok(!out.spec.series[1].noFill, 'top series visible');
+});
+
+test('buildInjectionSpec: rent_psf_box_quarterly builds 3-line quartile band', () => {
+  const cols = [
+    { key: 'period_end',          col: 'A' },
+    { key: 'subspecialty',        col: 'B' },
+    { key: 'n_leases',            col: 'C' },
+    { key: 'rent_min',            col: 'D' },
+    { key: 'rent_lower_quartile', col: 'E' },
+    { key: 'rent_median',         col: 'F' },
+    { key: 'rent_upper_quartile', col: 'G' },
+    { key: 'rent_max',            col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'rent_psf_box_quarterly',
+    tabName: 'Data_Rent_Box',
+    cols, dataStart: 5, dataEnd: 40,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.series.length, 3, '3-line quartile chart');
+  assert.deepEqual(
+    out.spec.series.map(s => s.valCol),
+    ['E', 'F', 'G'],
+    'series: lower_q / median / upper_q'
+  );
+  assert.deepEqual(
+    out.spec.series.map(s => s.color),
+    ['62B5E5', '003DA5', '62B5E5'],
+    'lower=sky, median=navy bold, upper=sky'
+  );
+});
+
 test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   // Build a tiny workbook with a Data_Lease_Renewal tab + 5 series columns
   const wb = new ExcelJS.Workbook();
@@ -802,4 +896,72 @@ test('injectNativeCharts: scatter chart renders correct xy XML', async () => {
   assert.match(chartXml, /<a:alpha val="55000"\/>/, 'marker fill has alpha (semi-transparent dot)');
   // No connecting line on the dot series
   assert.match(chartXml, /<c:smooth val="0"\/>/, 'smooth=0');
+});
+
+test('injectNativeCharts: floating-bar (invisible base) renders correct stacked XML', async () => {
+  // Build a tiny workbook with avg_last_ask_cap + avg_bid_ask_spread cols
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Bid_Ask_Monthly');
+  sheet.getCell('A4').value = 'Month End';
+  sheet.getCell('D4').value = 'Spread';
+  sheet.getCell('F4').value = 'Last Ask Cap';
+  for (let i = 0; i < 8; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`D${5 + i}`).value = 0.0025 + i * 0.0001;  // spread ~25 bps
+    sheet.getCell(`F${5 + i}`).value = 0.065 + i * 0.0008;   // last ask ~6.5%
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Bid_Ask_Monthly',
+    spec: {
+      type: 'stacked-bar',
+      tabName: 'Data_Bid_Ask_Monthly',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 12,
+      series: [
+        // Invisible base
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '003DA5', noFill: true },
+        // Visible band
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '62B5E5' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Stacked bar structure confirmed
+  assert.match(chartXml, /<c:barChart>/, 'is a barChart');
+  assert.match(chartXml, /<c:grouping val="stacked"\/>/, 'grouping=stacked (floats over invisible base)');
+
+  // 2 series total
+  assert.equal((chartXml.match(/<c:ser>/g) || []).length, 2, '2 series (base + band)');
+
+  // First series (index 0) is the invisible base — should have <a:noFill/>
+  // for both fill AND line border
+  const ser0Match = chartXml.match(/<c:ser>\s*<c:idx val="0"\/>[\s\S]*?<\/c:ser>/);
+  assert.ok(ser0Match, 'series 0 found');
+  assert.match(ser0Match[0], /<a:noFill\/>/, 'invisible base has <a:noFill/>');
+  // The invisible series must NOT have solidFill with a color — that
+  // would defeat the floating-bar trick.
+  assert.ok(
+    !/<a:solidFill>\s*<a:srgbClr/.test(ser0Match[0]),
+    'invisible base has no solidFill color block'
+  );
+  // And the line border is also noFill (no visible outline)
+  assert.match(ser0Match[0], /<a:ln>\s*<a:noFill\/>\s*<\/a:ln>/, 'invisible base has no line border');
+
+  // Series 1 (the visible band) still has the sky color
+  const ser1Match = chartXml.match(/<c:ser>\s*<c:idx val="1"\/>[\s\S]*?<\/c:ser>/);
+  assert.match(ser1Match[0], /srgbClr val="62B5E5"/, 'visible band = sky');
+  // Visible series must NOT have the noFill flag
+  assert.ok(!/<a:noFill\/>/.test(ser1Match[0]), 'visible band has no noFill');
+
+  // Each series references its own column
+  assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$F\$5:\$F\$12/, 'base refs F (last_ask)');
+  assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$D\$5:\$D\$12/, 'band refs D (spread)');
 });

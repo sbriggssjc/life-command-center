@@ -1,0 +1,133 @@
+-- =====================================================================
+-- Round 34 P8 — migrate floating-bar / box-whisker charts to native
+-- Excel chart XML. Builds on the R34 P7 scatter migration (PR #829).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (3 added; total now 22)
+-- ---------------------------------------------------------------------
+--   1. bid_ask_spread            (quarterly: simple line — single column)
+--   2. bid_ask_spread_monthly    (monthly:  floating bar via invisible base)
+--   3. rent_psf_box_quarterly    (box-whisker → 3-line quartile band)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildStackedBarChartXml now supports a per-series `noFill: true`
+--     flag — emits <a:noFill/> for both the fill block and the line
+--     border. This is the trick that makes one stacked segment
+--     invisible, which is how Excel's standard chart engine produces
+--     a floating-bar visual.
+--   • NATIVE_CHART_TEMPLATES expanded from 19 → 22
+--   • buildInjectionSpec adds three switch cases:
+--
+--     bid_ask_spread (quarterly):
+--       Data tab has only avg_bid_ask_spread + pct_price_change (no
+--       avg_last_ask_cap). Renderer falls back to a single-line chart;
+--       native version mirrors that — singleSeries('line', 'avg_bid_ask_spread').
+--
+--     bid_ask_spread_monthly:
+--       Data tab has avg_last_ask_cap (col F) AND avg_bid_ask_spread (col D).
+--       Floating-bar visual = [last_ask, last_ask + spread] decomposes
+--       naturally to a stacked column:
+--         • Series 0 (invisible, noFill=true): col F = last_ask
+--         • Series 1 (visible sky):            col D = spread
+--       Total stacked height = last_ask + spread, so the visible band
+--       floats from last_ask up to last_ask+spread. No helper cells
+--       needed because both endpoints exist in the data tab.
+--
+--     rent_psf_box_quarterly:
+--       PDF box-whisker visual is IQR shaded box + median line. Native
+--       Excel can't easily express a floating shaded fill between two
+--       lines without a derived "IQR width" helper column. Pragmatic
+--       fallback: 3-line quartile band chart with median emphasized.
+--         • Series 0 (sky):  rent_lower_quartile
+--         • Series 1 (navy): rent_median
+--         • Series 2 (sky):  rent_upper_quartile
+--       Preserves all the data; user can manually add a Series Fill
+--       between the two sky lines in Excel if they want the band back.
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • NATIVE_CHART_TEMPLATES registration check for the 3 new templates
+--     + negative checks for the 2 deferred (ppsf_box_quarterly,
+--     rent_by_year_built)
+--   • buildInjectionSpec tests:
+--       - bid_ask_spread → line, valCol = avg_bid_ask_spread
+--       - bid_ask_spread_monthly → stacked-bar, 2 series, series[0]
+--         has noFill=true and points at avg_last_ask_cap, series[1]
+--         points at avg_bid_ask_spread with sky color
+--       - rent_psf_box_quarterly → multi-line, 3 series, cols E/F/G
+--         (lower_q / median / upper_q) with colors sky / navy / sky
+--   • End-to-end XML test for the floating-bar:
+--       - Chart is barChart with grouping=stacked
+--       - Series 0 has <a:noFill/> on BOTH fill block AND line border
+--       - Series 0 does NOT have a solidFill color (so the trick works)
+--       - Series 1 has the sky srgbClr fill and NO noFill markers
+--       - Each series references its own column on the data tab
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 65 CM tests pass (up from 60 in P7).
+--
+-- End-to-end smoke build produced 3 charts:
+--   chart1 (bid_ask_spread):           lineChart, 1 series
+--   chart2 (bid_ask_spread_monthly):   barChart stacked, 2 series, 2 noFill markers
+--   chart3 (rent_psf_box_quarterly):   lineChart, 3 series
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Check response header: X-CM-Native-Charts should reach ~19-22
+-- 3. In Excel, right-click these tabs' charts — "Edit Data" +
+--    "Format Chart Area" should be ENABLED:
+--       Data_Bid_Ask            (single sky line — spread basis points)
+--       Data_Bid_Ask_Monthly    (floating sky band from last_ask up to
+--                                last_ask + spread; invisible base
+--                                hides the bar segment from 0)
+--       Data_Rent_PSF_Box       (3-line quartile band, navy median +
+--                                two sky quartile lines)
+-- 4. For Data_Bid_Ask_Monthly: confirm the "Bid-Ask Spread" series
+--    sits in the right vertical band on the cap-rate scale (NOT
+--    starting at 0). If users want a different view, they can right-
+--    click the invisible base series in Edit Data and re-color it.
+-- 5. For Data_Rent_PSF_Box: confirm 3 distinct lines; user can add
+--    a series fill manually if they want the IQR shaded band back.
+--
+-- ---------------------------------------------------------------------
+-- KNOWN GAPS / DEFERRED
+-- ---------------------------------------------------------------------
+-- ppsf_box_quarterly — chart_template_id exists but has no CHART_COLUMNS
+--   schema in cm-excel-export.js (only the footer caption is wired up).
+--   Migrate after adding the data-tab column schema. Once that's in,
+--   the same buildInjectionSpec case as rent_psf_box_quarterly applies.
+--
+-- rent_by_year_built — composite shape (IQR floating bar + median dot
+--   + avg dot). Needs helper-column plumbing for the IQR width
+--   (upper_q − lower_q), then a stacked-bar + scatter-marker combo.
+--   Plus the avg/median dots over a categorical year axis. P8.5
+--   candidate after the helper-column infrastructure lands.
+--
+-- Trendlines on the scatter dot plots (P7.5) — same helper-column
+--   pattern would unlock these.
+--
+-- ---------------------------------------------------------------------
+-- NEXT
+-- ---------------------------------------------------------------------
+-- P8.5 (helper-column infrastructure):
+--   • cm-excel-export.js helper-column writer: lets buildInjectionSpec
+--     declaratively request a derived column on the data tab (formula
+--     or precomputed value), with that column appended after the
+--     normal CHART_COLUMNS entries.
+--   • Unlocks rent_by_year_built, ppsf_box_quarterly (after schema),
+--     and the scatter trendlines from P7.
+--
+-- P9 (remaining odd shapes):
+--   • Any chart_template_ids still on the PNG path get one-off
+--     treatment — likely a small handful of complex composites
+--     (lease_structures lookup table, rent_heat_map choropleth,
+--     anything per-spec).
+-- =====================================================================
