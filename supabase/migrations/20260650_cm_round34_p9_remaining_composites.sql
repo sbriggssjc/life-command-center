@@ -1,0 +1,146 @@
+-- =====================================================================
+-- Round 34 P9 — migrate the final composite shape, rent_by_year_built.
+-- Builds on the R34 P7.5 scatter-trendlines work (PR #832).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (1 added; total now 23)
+-- ---------------------------------------------------------------------
+--   rent_by_year_built  composite: IQR floating bar + median dot + avg
+--                       diamond over year x-axis (gov only)
+--
+-- This is the LAST chart template on the PNG path for the active
+-- catalog. With this PR, every chart_template_id that actually renders
+-- in a real export is now a native editable Excel chart.
+--
+-- ---------------------------------------------------------------------
+-- ppsf_box_quarterly — NOT MIGRATED (not in active catalog)
+-- ---------------------------------------------------------------------
+-- ppsf_box_quarterly was DELETED from the runtime catalog in Round 6h
+-- (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql,
+-- applied 2026-05-09). No view ever shipped, no exports ever produced
+-- this chart_template_id. The static JSON catalog
+-- (public/reports/cm_chart_catalog.json) still lists it but the DB
+-- catalog is the runtime source of truth.
+--
+-- If ppsf_box_quarterly is revived in the future, it can reuse the
+-- rent_psf_box_quarterly switch case with renamed keys
+-- (rent_lower_quartile → lower_quartile, etc.) — same shape exactly.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildComboChartXml line series now support visible markers via
+--     per-series flags:
+--       - showMarker: true        → markers visible, no connecting line
+--       - markerShape: 'circle'   default; also 'diamond', 'square',
+--                                 'triangle' (OOXML symbol values)
+--       - markerSize: 5           default; bumps to 7 for the avg
+--                                 diamond per the PDF renderer
+--     When showMarker=true, the series's <a:ln> becomes <a:noFill/>
+--     (no line) and the per-series <c:marker> emits the symbol with
+--     the series color as both fill and outline. The lineChart-level
+--     <c:marker val="..."/> is set to 1 if ANY line series has
+--     showMarker=true.
+--   • NATIVE_CHART_TEMPLATES expanded from 22 → 23
+--   • buildInjectionSpec adds a switch case for rent_by_year_built:
+--
+--       catCol  = year (col A) — categorical x-axis
+--       barSeries[0] (noFill=true):   lower_quartile_rpsf (col E)
+--       barSeries[1] (visible sky):   iqr_width helper (col G)
+--                                      = upper_q − lower_q
+--       lineSeries[0] (sky circle, no line):  median_rpsf (col C)
+--       lineSeries[1] (navy diamond, no line): avg_rpsf  (col B)
+--       barGrouping  = 'stacked'
+--       sharedAxis   = true (markers + bars on same currency axis)
+--
+--     Colors mirror cm-chart-image-renderer.js around line 1804:
+--       Median  → sky    (PDF_COLORS.cap_mid)
+--       Avg     → navy   (PDF_COLORS.cap_short)
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • NATIVE_CHART_TEMPLATES registration check for the final template
+--   • Existing ppsf_box_quarterly assertion updated — the deferred
+--     comment now correctly reflects that it's not in the runtime
+--     catalog (not just "no schema yet")
+--   • buildInjectionSpec test for rent_by_year_built verifies:
+--       - type=combo, barGrouping=stacked, sharedAxis=true
+--       - 2 bar series (invisible base + visible IQR helper)
+--       - 2 line series (median sky circle, avg navy diamond)
+--       - helperCols declares iqr_width with getValue computing
+--         upper_q − lower_q, with null guard
+--   • End-to-end XML test for the marker-only line series:
+--       - lineChart global <c:marker val="1"/> (any series has markers)
+--       - Series 2 has <c:symbol val="circle"/> + size 5 + sky color
+--       - Series 3 has <c:symbol val="diamond"/> + size 7 + navy color
+--       - Both line series have <a:ln><a:noFill/> (no connecting line)
+--       - 4 series with unique idx [0, 1, 2, 3]
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 73 CM tests pass (up from 70 in P7.5).
+--
+-- End-to-end smoke build with synthetic data confirmed:
+--   spec.type: combo
+--   barGrouping: stacked  sharedAxis: true
+--   barSeries: E(invisible)/G
+--   lineSeries: C(circle@5)/B(diamond@7)
+--   helper: iqr_width, row 5 = 13 (= upper_q 28 - lower_q 15)
+--   Chart XML: stacked=true globalMarker=true valAxes=1
+--   Markers: circle=true diamond=true
+--   All 4 column refs (B/C/E/G) present in the XML
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh gov export (rent_by_year_built is gov-only)
+-- 2. Check response header X-CM-Native-Charts: should reach 22-23
+--    depending on applicable templates
+-- 3. Open Data_Rent_Year_Built — confirm a new "IQR Width" column past
+--    the regular n_leases col
+-- 4. The chart should show:
+--    • Sky-blue floating bars from lower to upper quartile per decade
+--    • Sky circle dots at the median value
+--    • Navy diamond dots at the average value
+-- 5. Right-click chart → "Edit Data" should be enabled. Editing the
+--    IQR Width column should update the bar height live.
+--
+-- ---------------------------------------------------------------------
+-- ROUND 34 COMPLETE
+-- ---------------------------------------------------------------------
+-- With this PR, every chart_template_id in the active catalog is now
+-- a native editable Excel chart object:
+--
+--   P2 — volume_ttm_by_quarter (scaffold)
+--   P3 — cap_rate_ttm, transaction_count, avg_deal_size, yoy_volume_change,
+--        market_turnover, quarterly_volume_bars (simple line + bar)
+--   P4 — lease_renewal_rate, buyer_pool_monthly_count (stacked bar)
+--   P5 — cap_rate_by_lease_term, nm_vs_market_cap, sold_cap_by_term_dot_plot,
+--        asking_cap_by_term_dot_plot (multi-line cohort)
+--   P6 — dom_and_pct_of_ask + monthly, case_for_renewal,
+--        available_market_size_combo (combo dual-axis)
+--   P7 — core_cap_rate_dot_plot, available_cap_rate_dot_plot (scatter xy)
+--   P7.5 — both scatter charts gain trendlines (rolling-avg + regression)
+--   P8 — bid_ask_spread + monthly, rent_psf_box_quarterly (floating bar /
+--        box-whisker fallback)
+--   P8.5 — helper-column infrastructure; rent_psf_box_quarterly upgraded
+--        to proper IQR floating bar + median line
+--   P9 — rent_by_year_built (this PR)
+--
+-- Total: 23 native chart_template_ids covering every shape used in
+-- the dia/gov/national_st exports. The PNG renderer path remains
+-- available as a fallback when buildInjectionSpec returns null (e.g.
+-- when a required data column is missing), but in normal operation
+-- exports now ship 100% editable charts.
+--
+-- ---------------------------------------------------------------------
+-- NEXT
+-- ---------------------------------------------------------------------
+-- Round 34 closes here. Open items remain on other tracks:
+--   • R33 Tier E1: Add Rent_Price_PSF chart for dia (data-shape work)
+--   • R33 Tier E2: Core_Cap_Dot trendline review vs master Excel
+--   • R33 Tier F1: Val_Index formula confirmation against master Excel
+-- =====================================================================

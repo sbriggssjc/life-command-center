@@ -357,7 +357,12 @@ ${seriesXml}
  * @param {number} spec.dataStart     1-indexed first data row
  * @param {number} spec.dataEnd       1-indexed last data row (inclusive)
  * @param {Array}  spec.barSeries     List of { titleCol, titleRow, valCol, color, [noFill] }
- * @param {Array}  spec.lineSeries    List of { titleCol, titleRow, valCol, color }
+ * @param {Array}  spec.lineSeries    List of { titleCol, titleRow, valCol, color,
+ *                                    [showMarker], [markerShape], [markerSize] }
+ *        With showMarker=true the series renders as markers only (no
+ *        connecting line) — used for median/avg dot overlays on
+ *        rent_by_year_built. markerShape: 'circle' (default), 'diamond',
+ *        'square', 'triangle'. markerSize defaults to 5.
  * @param {'clustered'|'stacked'} [spec.barGrouping]  Default 'clustered'.
  *        'stacked' lets the combo express a floating-bar visual (invisible
  *        base + visible band) with a line series overlaid on the same axis.
@@ -397,9 +402,38 @@ function buildComboChartXml(spec) {
 
   // Line series idx continues from where bar series ended so each
   // series in the chart has a unique index (Excel relies on this).
+  //
+  // P9 — per-series `showMarker: true` flag converts the series from
+  // "line, no markers" to "markers only, no line" (used for median/avg
+  // dot overlays on the rent_by_year_built whisker visual). Optional
+  // markerShape: 'circle' | 'diamond' | 'square' | 'triangle' (default
+  // 'circle') and markerSize (default 5).
   const lineXml = lineSeries.map((s, i) => {
     const idx = barSeries.length + i;
     const color = (s.color || '003DA5').replace('#', '');
+    if (s.showMarker) {
+      const shape = s.markerShape || 'circle';
+      const size = s.markerSize || 5;
+      return `        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:ln><a:noFill/></a:ln>
+          </c:spPr>
+          <c:marker>
+            <c:symbol val="${shape}"/>
+            <c:size val="${size}"/>
+            <c:spPr>
+              <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
+              <a:ln><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
+            </c:spPr>
+          </c:marker>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+    }
     return `        <c:ser>
           <c:idx val="${idx}"/>
           <c:order val="${idx}"/>
@@ -436,7 +470,7 @@ ${barXml}
         <c:grouping val="standard"/>
         <c:varyColors val="0"/>
 ${lineXml}
-        <c:marker val="0"/>
+        <c:marker val="${lineSeries.some(s => s.showMarker) ? 1 : 0}"/>
         <c:axId val="1"/>
         <c:axId val="${lineAxId}"/>
       </c:lineChart>
@@ -832,12 +866,15 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //       all data; drops the shaded IQR fill — user can add it manually).
   'bid_ask_spread',                 // (a) quarterly: only spread col present → simple line fallback
   'bid_ask_spread_monthly',         // (a) monthly: invisible(last_ask) + visible(spread) stacked bar
-  'rent_psf_box_quarterly',         // (b) 3-line quartile chart (lower_q / median / upper_q)
-  // Deferred: ppsf_box_quarterly — no CHART_COLUMNS schema, footer caption only.
-  //   Same shape as rent_psf_box once a data tab schema is added.
-  // Deferred: rent_by_year_built — whisker + median + avg dot composite.
-  //   Needs helper-column plumbing for the IQR width (upper_q − lower_q),
-  //   then a stacked-bar + scatter-marker combo. P8.5 candidate.
+  'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
+  // P9 — composite: IQR floating bar + median (circle) + avg (diamond)
+  //      dot markers over a year x-axis. Uses helper col for IQR width.
+  'rent_by_year_built',
+  // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
+  // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
+  // — no view ever shipped, no exports ever produced it. The static JSON
+  // catalog still lists it but the DB catalog is the runtime source of
+  // truth. Nothing to migrate.
 ]);
 
 /**
@@ -1438,6 +1475,77 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             getValue: (row) => {
               const lo = row.rent_lower_quartile;
               const hi = row.rent_upper_quartile;
+              return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
+            },
+          },
+        ],
+      };
+    }
+
+    // P9 — composite: IQR floating bar + median dot + avg diamond over
+    //      a year x-axis. Final PNG-only template to migrate.
+    case 'rent_by_year_built': {
+      // Renderer at cm-chart-image-renderer.js ~line 1774:
+      //   • Whisker bar: floating [lower_quartile_rpsf, upper_quartile_rpsf]
+      //     (pale sky 25% fill with sky border, narrow barPercentage 0.18)
+      //   • Median dot: scatter (sky circle, radius 5)
+      //   • Avg dot:    scatter (navy diamond, radius 6)
+      //
+      // Native decomposition (combo chart, stacked bar + markers-only line):
+      //   • barSeries[0] invisible base:  rent_lower_quartile_rpsf
+      //   • barSeries[1] visible sky band: iqr_width helper col
+      //                                     = upper_q − lower_q
+      //   • lineSeries[0] sky circle marker, no line: median_rpsf
+      //   • lineSeries[1] navy diamond marker, no line: avg_rpsf
+      //
+      // Year x-axis is categorical. barGrouping='stacked' + sharedAxis=true
+      // so all series live on the same currency value axis.
+      const yearCol  = findCol('year');
+      const avgCol   = findCol('avg_rpsf');
+      const medCol   = findCol('median_rpsf');
+      const upperCol = findCol('upper_quartile_rpsf');
+      const lowerCol = findCol('lower_quartile_rpsf');
+      if (!yearCol || !avgCol || !medCol || !upperCol || !lowerCol) return null;
+
+      // Helper col lands at cols.length + 1 (col G after the 6 regular cols).
+      const iqrCol = String.fromCharCode(65 + cols.length);
+
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: yearCol,
+          dataStart, dataEnd,
+          barGrouping: 'stacked',
+          sharedAxis: true,
+          barSeries: [
+            // Invisible base — lifts the floating IQR bar off 0
+            { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
+              color: '003DA5', noFill: true },
+            // Visible IQR band (sky)
+            { titleCol: iqrCol, titleRow: headerRow, valCol: iqrCol,
+              color: sky },
+          ],
+          lineSeries: [
+            // Median dot — sky circle marker, no connecting line
+            { titleCol: medCol, titleRow: headerRow, valCol: medCol,
+              color: sky, showMarker: true, markerShape: 'circle', markerSize: 5 },
+            // Avg dot — navy diamond marker, no connecting line
+            { titleCol: avgCol, titleRow: headerRow, valCol: avgCol,
+              color: navy, showMarker: true, markerShape: 'diamond', markerSize: 7 },
+          ],
+          anchor: standardAnchor,
+        },
+        helperCols: [
+          {
+            key: 'iqr_width',
+            header: 'IQR Width',
+            format: 'currency_per_sf',
+            width: 14,
+            getValue: (row) => {
+              const lo = row.lower_quartile_rpsf;
+              const hi = row.upper_quartile_rpsf;
               return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
             },
           },

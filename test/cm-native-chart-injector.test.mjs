@@ -176,17 +176,19 @@ test('NATIVE_CHART_TEMPLATES: P8 floating-bar / box-whisker charts registered', 
   ]) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
-  // ppsf_box_quarterly DEFERRED — no CHART_COLUMNS schema
+  // ppsf_box_quarterly was DELETED from the runtime catalog in Round 6h
+  // (supabase migration 20260601_*_round6h.sql). No view, no export rows,
+  // nothing to migrate. Leaving it out of NATIVE_CHART_TEMPLATES is
+  // correct — the static JSON catalog is stale documentation.
   assert.ok(
     !NATIVE_CHART_TEMPLATES.has('ppsf_box_quarterly'),
-    'ppsf_box_quarterly should remain on the PNG path (deferred — no data schema)'
+    'ppsf_box_quarterly is not in the runtime catalog (dropped in Round 6h)'
   );
-  // rent_by_year_built DEFERRED — whisker+median+avg composite, needs
-  // helper-column plumbing (IQR width = upper_q − lower_q).
-  assert.ok(
-    !NATIVE_CHART_TEMPLATES.has('rent_by_year_built'),
-    'rent_by_year_built should remain on the PNG path (deferred — composite shape)'
-  );
+});
+
+test('NATIVE_CHART_TEMPLATES: P9 final composite (rent_by_year_built) registered', () => {
+  assert.ok(NATIVE_CHART_TEMPLATES.has('rent_by_year_built'),
+    'rent_by_year_built should be migrated');
 });
 
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
@@ -723,6 +725,65 @@ test('buildInjectionSpec: bid_ask_spread_monthly builds floating-bar via invisib
   assert.ok(!out.spec.series[1].noFill, 'top series visible');
 });
 
+test('buildInjectionSpec: rent_by_year_built builds IQR + median + avg combo (P9)', () => {
+  // 6-col data tab per cm-excel-export.js CHART_COLUMNS:
+  //   A=year, B=avg_rpsf, C=median_rpsf, D=upper_quartile_rpsf,
+  //   E=lower_quartile_rpsf, F=n_leases
+  // Helper col lands at G.
+  const cols = [
+    { key: 'year',                col: 'A' },
+    { key: 'avg_rpsf',            col: 'B' },
+    { key: 'median_rpsf',         col: 'C' },
+    { key: 'upper_quartile_rpsf', col: 'D' },
+    { key: 'lower_quartile_rpsf', col: 'E' },
+    { key: 'n_leases',            col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'rent_by_year_built',
+    tabName: 'Data_Rent_Year_Built',
+    cols, dataStart: 5, dataEnd: 20,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.catCol, 'A', 'x-axis = year (col A)');
+  assert.equal(out.spec.barGrouping, 'stacked');
+  assert.equal(out.spec.sharedAxis, true, 'markers + bars on same currency axis');
+
+  // 2 bar series: invisible base (lower_q) + visible IQR helper
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.barSeries[0].valCol, 'E', 'base = lower_quartile_rpsf');
+  assert.equal(out.spec.barSeries[0].noFill, true, 'base is invisible');
+  assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = iqr_width helper (col G)');
+  assert.equal(out.spec.barSeries[1].color, '62B5E5', 'band = sky');
+
+  // 2 line series: median (sky circle) + avg (navy diamond), markers only
+  assert.equal(out.spec.lineSeries.length, 2);
+  assert.equal(out.spec.lineSeries[0].valCol, 'C', 'median = median_rpsf');
+  assert.equal(out.spec.lineSeries[0].color, '62B5E5');
+  assert.equal(out.spec.lineSeries[0].showMarker, true);
+  assert.equal(out.spec.lineSeries[0].markerShape, 'circle');
+  assert.equal(out.spec.lineSeries[1].valCol, 'B', 'avg = avg_rpsf');
+  assert.equal(out.spec.lineSeries[1].color, '003DA5');
+  assert.equal(out.spec.lineSeries[1].showMarker, true);
+  assert.equal(out.spec.lineSeries[1].markerShape, 'diamond', 'avg uses diamond marker');
+
+  // Helper col
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'iqr_width');
+  const v = out.helperCols[0].getValue({
+    lower_quartile_rpsf: 22.5,
+    upper_quartile_rpsf: 38.7,
+  });
+  assert.ok(Math.abs(v - 16.2) < 0.001, `getValue returns ${v}, expected ~16.2`);
+  // Null guard
+  assert.equal(
+    out.helperCols[0].getValue({ lower_quartile_rpsf: null, upper_quartile_rpsf: 30 }),
+    null,
+    'returns null when input is null'
+  );
+});
+
 test('buildInjectionSpec: rent_psf_box_quarterly builds IQR box-whisker combo (P8.5 upgrade)', () => {
   // 8-column data tab schema (per cm-excel-export.js CHART_COLUMNS).
   // Helper column lands at col I (= cols.length + 1).
@@ -1093,6 +1154,82 @@ test('injectNativeCharts: floating-bar (invisible base) renders correct stacked 
   // Each series references its own column
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$F\$5:\$F\$12/, 'base refs F (last_ask)');
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$D\$5:\$D\$12/, 'band refs D (spread)');
+});
+
+test('injectNativeCharts: line series with showMarker renders correct XML (P9)', async () => {
+  // End-to-end: stacked combo with a markers-only overlay (median + avg dots).
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Rent_Year_Built');
+  sheet.getCell('A4').value = 'Year';
+  sheet.getCell('B4').value = 'Avg RPSF';
+  sheet.getCell('C4').value = 'Median RPSF';
+  sheet.getCell('E4').value = 'Lower Q';
+  sheet.getCell('G4').value = 'IQR Width';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = 1990 + i * 5;
+    sheet.getCell(`B${5 + i}`).value = 25 + i;
+    sheet.getCell(`C${5 + i}`).value = 23 + i;
+    sheet.getCell(`E${5 + i}`).value = 18 + i;
+    sheet.getCell(`G${5 + i}`).value = 12;  // iqr width
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Rent_Year_Built',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_Rent_Year_Built',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 10,
+      barGrouping: 'stacked',
+      sharedAxis: true,
+      barSeries: [
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5', noFill: true },
+        { titleCol: 'G', titleRow: 4, valCol: 'G', color: '62B5E5' },
+      ],
+      lineSeries: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '62B5E5',
+          showMarker: true, markerShape: 'circle', markerSize: 5 },
+        { titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5',
+          showMarker: true, markerShape: 'diamond', markerSize: 7 },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  assert.match(chartXml, /<c:barChart>/, 'has barChart');
+  assert.match(chartXml, /<c:lineChart>/, 'has lineChart');
+
+  // Global marker toggle is ENABLED when any series has markers
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(lineBlock, /<c:marker val="1"\/>/, 'global marker toggle is on');
+
+  // Both line series have visible markers, no connecting line
+  // Series 2 (median, idx 2) — circle markers
+  const ser2 = chartXml.match(/<c:ser>\s*<c:idx val="2"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser2, /<c:symbol val="circle"\/>/, 'median = circle markers');
+  assert.match(ser2, /<c:size val="5"\/>/, 'median marker size 5');
+  assert.match(ser2, /<a:ln>\s*<a:noFill\/>\s*<\/a:ln>/, 'median has NO connecting line');
+  assert.match(ser2, /srgbClr val="62B5E5"/, 'median = sky');
+
+  // Series 3 (avg, idx 3) — diamond markers
+  const ser3 = chartXml.match(/<c:ser>\s*<c:idx val="3"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser3, /<c:symbol val="diamond"\/>/, 'avg = diamond markers');
+  assert.match(ser3, /<c:size val="7"\/>/, 'avg marker size 7');
+  assert.match(ser3, /<a:ln>\s*<a:noFill\/>\s*<\/a:ln>/, 'avg has NO connecting line');
+  assert.match(ser3, /srgbClr val="003DA5"/, 'avg = navy');
+
+  // Stacked bar block has 2 series; first is invisible
+  const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
+  assert.match(barBlock, /<c:grouping val="stacked"\/>/);
+  // 4 series total — unique idx values across both blocks
+  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  assert.deepEqual(idxs, [0, 1, 2, 3], 'series idx unique across blocks');
 });
 
 test('injectNativeCharts: scatter with trendline (P7.5) renders correct XML', async () => {
