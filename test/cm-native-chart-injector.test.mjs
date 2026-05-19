@@ -250,6 +250,189 @@ test('NATIVE_CHART_TEMPLATES: R36 P3 bar + multi-scatter composites registered',
   }
 });
 
+test('R37 P1: line chart cat axis emits quarter-format numFmt by default', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('B5').value = 'Series';
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2024, i * 3, 31);
+    sheet.getCell(`B${6 + i}`).value = 100 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 9,
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Cat axis has the quarter-format numFmt
+  const catAxBlock = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  assert.match(catAxBlock, /<c:numFmt formatCode="q&quot;Q-&quot;yyyy" sourceLinked="0"\/>/,
+    'cat axis emits quarter-format numFmt (renders dates as "1Q-2024")');
+  // Val axis stays unformatted (we don't touch it in P1)
+  const valAxBlock = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.ok(!/<c:numFmt/.test(valAxBlock), 'val axis untouched');
+});
+
+test('R37 P1: stacked-bar and multi-line builders emit cat numFmt', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`B${5 + i}`).value = 50 + i;
+    sheet.getCell(`C${5 + i}`).value = 30 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [
+    {
+      tabName: 'Data_Test',
+      spec: {
+        type: 'stacked-bar', tabName: 'Data_Test', catCol: 'A',
+        dataStart: 5, dataEnd: 8,
+        series: [
+          { titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5' },
+          { titleCol: 'C', titleRow: 4, valCol: 'C', color: '62B5E5' },
+        ],
+        anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+      },
+    },
+    {
+      tabName: 'Data_Test',
+      spec: {
+        type: 'multi-line', tabName: 'Data_Test', catCol: 'A',
+        dataStart: 5, dataEnd: 8,
+        series: [
+          { titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5' },
+        ],
+        anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+      },
+    },
+  ]);
+  const zip = await JSZip.loadAsync(result);
+  for (const fname of ['chart1.xml', 'chart2.xml']) {
+    const xml = await zip.file('xl/charts/' + fname).async('string');
+    const catAx = xml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+    assert.match(catAx, /<c:numFmt formatCode="q&quot;Q-&quot;yyyy"/,
+      `${fname} cat axis has quarter numFmt`);
+  }
+});
+
+test('R37 P1: catAxNumFmt override works for year-axis templates', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = 2020 + i;
+    sheet.getCell(`B${5 + i}`).value = 10 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 8,
+      catAxNumFmt: '0',  // plain integer for year axes
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  const catAxBlock = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  assert.match(catAxBlock, /<c:numFmt formatCode="0"/, 'plain integer fmt for year axis');
+  assert.ok(!/q&quot;Q-&quot;yyyy/.test(catAxBlock), 'no quarter fmt');
+});
+
+test('R37 P1: catAxNumFmt empty string suppresses numFmt entirely', async () => {
+  // Horizontal-bar charts (state rankings) should not emit a numFmt
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  ['CA', 'TX', 'NY'].forEach((s, i) => {
+    sheet.getCell(`A${5 + i}`).value = s;
+    sheet.getCell(`B${5 + i}`).value = 100 - i * 10;
+  });
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'bar', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 7,
+      color: '003DA5', horizontal: true,
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  const catAxBlock = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  assert.ok(!/<c:numFmt/.test(catAxBlock),
+    'horizontal-bar (state rankings) has no cat numFmt — text categories');
+});
+
+test('buildInjectionSpec: year-axis templates set catAxNumFmt to "0"', () => {
+  // case_for_renewal
+  const cfr = buildInjectionSpec({
+    chart_template_id: 'case_for_renewal',
+    tabName: 'Data_Case_For_Renewal',
+    cols: [
+      { key: 'year', col: 'A' },
+      { key: 'commencement_count', col: 'B' },
+      { key: 'avg_rent_per_sf', col: 'C' },
+      { key: 'total_lsf', col: 'D' },
+    ],
+    dataStart: 5, dataEnd: 30,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(cfr.spec.catAxNumFmt, '0', 'case_for_renewal uses integer year format');
+
+  // rent_by_year_built
+  const rby = buildInjectionSpec({
+    chart_template_id: 'rent_by_year_built',
+    tabName: 'Data_Rent_Year_Built',
+    cols: [
+      { key: 'year',                col: 'A' },
+      { key: 'avg_rpsf',            col: 'B' },
+      { key: 'median_rpsf',         col: 'C' },
+      { key: 'upper_quartile_rpsf', col: 'D' },
+      { key: 'lower_quartile_rpsf', col: 'E' },
+      { key: 'n_leases',            col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 20,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(rby.spec.catAxNumFmt, '0', 'rent_by_year_built uses integer year format');
+
+  // buyer_class_pct_by_year
+  const bcp = buildInjectionSpec({
+    chart_template_id: 'buyer_class_pct_by_year',
+    tabName: 'Data_Buyer_Pool',
+    cols: [
+      { key: 'year',                 col: 'A' },
+      { key: 'subspecialty',         col: 'B' },
+      { key: 'private_volume',       col: 'C' },
+      { key: 'reit_volume',          col: 'D' },
+      { key: 'cross_border_volume',  col: 'E' },
+      { key: 'institutional_volume', col: 'F' },
+      { key: 'private_pct',          col: 'G' },
+      { key: 'reit_pct',             col: 'H' },
+      { key: 'cross_border_pct',     col: 'I' },
+      { key: 'institutional_pct',    col: 'J' },
+    ],
+    dataStart: 5, dataEnd: 20,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5',
+                        nm_blue_mid: '#265AB2', nm_pale: '#E0E8F4' } },
+  });
+  assert.equal(bcp.spec.catAxNumFmt, '0', 'buyer_class_pct_by_year uses integer year format');
+});
+
 test('NATIVE_CHART_TEMPLATES: R36 P4 unblocks 3 previously-deferred templates', () => {
   for (const id of ['lease_termination_rate', 'net_lease_spread', 'rent_heat_map']) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
