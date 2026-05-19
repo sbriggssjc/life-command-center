@@ -1,0 +1,92 @@
+-- =====================================================================
+-- Round 35 P3 — migrate the 2 final simple-shape templates from the
+-- post-R34 audit. Builds on R35 P2 (PR #836).
+--
+-- Code-only. NO Supabase view changes. NO new machinery — both
+-- templates reuse existing builders.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 39)
+-- ---------------------------------------------------------------------
+--   1. buyer_class_pct_by_year     annual stacked bar (4 series)
+--   2. renewal_rent_growth         single-bar Renewal Rent / SF
+--
+-- After this PR, only the 2 complex composites remain on the PNG path:
+--   • cost_of_capital
+--   • volume_cap_quartile_combo
+-- Both deferred to R35 P4 because they need new machinery (range bar
+-- + 2 lines for cost_of_capital, and area + range bars + dots for
+-- volume_cap_quartile_combo).
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • NATIVE_CHART_TEMPLATES expanded 37 → 39
+--   • buildInjectionSpec adds 2 switch cases:
+--
+--     buyer_class_pct_by_year:
+--       Annual stacked bar — capital sources as % of pool by year.
+--       4 series totaling 100%:
+--         Private        navy    palette[0] = #003DA5
+--         Public REITs   mid-blue palette[2] = #265AB2 (nm_blue_mid)
+--         Cross-Border   sky     palette[1] = #62B5E5
+--         Institutional  pale    palette[3] = #E0E8F4 (nm_pale)
+--       catCol=year (categorical, not period_end).
+--       Reuses 'stacked-bar' dispatch.
+--
+--     renewal_rent_growth:
+--       Single-bar Renewal Rent / SF in sky (R33 Tier D simplified
+--       this from a 3-series combo to match master Excel chart 14).
+--       Uses singleSeries() helper → 'bar' dispatch.
+--
+-- ---------------------------------------------------------------------
+-- KNOWN DEFERRED VISUAL DETAILS
+-- ---------------------------------------------------------------------
+-- buyer_class_pct_by_year — the PNG renderer adds per-data-point
+-- datalabels (white text on navy/mid-blue bars, dark text on sky/pale
+-- bars) using <c:dPt> with per-segment color logic that would need
+-- chartjs-datalabels equivalent in OpenXML. Defer; native chart has
+-- no in-bar labels but is fully editable. Users can right-click any
+-- series → Format Data Labels in Excel to add them manually.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 96 CM tests pass (up from 93 in R35 P2).
+--
+-- New tests verify:
+--   - Registration for both templates
+--   - buyer_class_pct_by_year produces 4-series stacked bar with
+--     correct year x-axis (col A) and pct columns (G/H/I/J)
+--   - Color order: navy / mid-blue / sky / pale per renderer
+--   - renewal_rent_growth produces single bar referencing
+--     avg_renewal_rent_psf (col B) with sky color
+--
+-- End-to-end smoke build confirmed:
+--   chart1 (buyer_class_pct_by_year): barChart, 4 series, grouping=stacked
+--   chart2 (renewal_rent_growth):     barChart, 1 series, grouping=clustered
+--                                     (single-bar uses clustered grouping)
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. X-CM-Native-Charts should reach ~34-39 depending on vertical
+-- 3. Right-click charts on:
+--      Data_Buyer_Pool         (4-series stacked bar, year x-axis)
+--      Data_Renewal_Rent_Growth (single sky bar)
+-- 4. "Edit Data" should be enabled. The stacked bar should show 4
+--    bands totaling 100% per year — navy (Private), mid-blue (REITs),
+--    sky (Cross-Border), pale (Institutional).
+--
+-- ---------------------------------------------------------------------
+-- ROUND 35 STATUS
+-- ---------------------------------------------------------------------
+-- P1 — 6 multi-line templates  ✓ shipped (PR #835)
+-- P2 — 7 combo + 2 clustered-bar templates  ✓ shipped (PR #836)
+-- P3 — buyer_class_pct_by_year + renewal_rent_growth  ← this PR
+-- P4 — cost_of_capital + volume_cap_quartile_combo  (deferred)
+--
+-- After P4, 100% of active-catalog chart_template_ids will be native.
+-- =====================================================================

@@ -928,6 +928,9 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //   Clustered bar (no line — renderer's line series isn't in data tab):
   'inventory_backlog',              // 2 bars: No. Added (sky) + No. Sold (navy)
   'pace_of_cap_rate_expansion',     // 2 bars: pace_all (navy) + pace_core (sky)
+  // R35 P3 — final 2 simple-shape missed templates from audit.
+  'buyer_class_pct_by_year',        // annual stacked bar (Private / REIT / Cross-Border / Institutional)
+  'renewal_rent_growth',            // single-bar Renewal Rent / SF
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -1999,6 +2002,60 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           anchor: standardAnchor,
         },
       };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R35 P3 — final 2 simple-shape missed templates (post-R34 audit).
+    // ────────────────────────────────────────────────────────────────
+
+    case 'buyer_class_pct_by_year': {
+      // Annual stacked bar — capital sources as % of pool by year.
+      // Renderer at cm-chart-image-renderer.js line ~1244 stacks 4
+      // series totaling 100%:
+      //   Private        navy           palette[0]
+      //   Public REITs   mid-blue       palette[2] = #265AB2
+      //   Cross-Border   sky            palette[1]
+      //   Institutional  pale           palette[3] = #E0E8F4
+      //
+      // X-axis is `year` (categorical), not period_end.
+      //
+      // The per-data-point datalabels (white text on navy/mid-blue bars,
+      // dark text on sky/pale bars) the renderer adds aren't trivially
+      // expressible in native chart XML — defer; native chart will have
+      // no in-bar labels but is fully editable. Users can right-click
+      // a series → Format Data Labels in Excel to add them manually.
+      const yearCol = findCol('year');
+      const privCol = findCol('private_pct');
+      const reitCol = findCol('reit_pct');
+      const cbCol   = findCol('cross_border_pct');
+      const instCol = findCol('institutional_pct');
+      if (!yearCol || !privCol || !reitCol || !cbCol || !instCol) return null;
+      const blueMid = (palette.nm_blue_mid || '#265AB2').replace('#', '');
+      const pale    = (palette.nm_pale     || '#E0E8F4').replace('#', '');
+      return {
+        tabName,
+        spec: {
+          type: 'stacked-bar',
+          tabName,
+          catCol: yearCol,
+          dataStart, dataEnd,
+          series: [
+            { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy    },  // Private
+            { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid },  // Public REITs
+            { titleCol: cbCol,   titleRow: headerRow, valCol: cbCol,   color: sky     },  // Cross-Border
+            { titleCol: instCol, titleRow: headerRow, valCol: instCol, color: pale    },  // Institutional
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'renewal_rent_growth': {
+      // R33 Tier D simplified this from a 3-series combo to a single-
+      // series bar matching master Excel chart 14 ('Renewal Rent/SF').
+      // Sky bars, currency Y-axis. The quartile whisker + CAGR dots
+      // were moved to cpi_vs_renewal_cagr in R33 Tier D.
+      return singleSeries('bar', 'avg_renewal_rent_psf', sky);
     }
 
     default:

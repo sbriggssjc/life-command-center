@@ -224,6 +224,63 @@ test('NATIVE_CHART_TEMPLATES: R35 P2 missed combo + clustered-bar templates regi
   }
 });
 
+test('NATIVE_CHART_TEMPLATES: R35 P3 final simple-shape templates registered', () => {
+  for (const id of ['buyer_class_pct_by_year', 'renewal_rent_growth']) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: buyer_class_pct_by_year builds 4-series annual stacked bar', () => {
+  const cols = [
+    { key: 'year',                 col: 'A' },
+    { key: 'subspecialty',         col: 'B' },
+    { key: 'private_volume',       col: 'C' },
+    { key: 'reit_volume',          col: 'D' },
+    { key: 'cross_border_volume',  col: 'E' },
+    { key: 'institutional_volume', col: 'F' },
+    { key: 'private_pct',          col: 'G' },
+    { key: 'reit_pct',             col: 'H' },
+    { key: 'cross_border_pct',     col: 'I' },
+    { key: 'institutional_pct',    col: 'J' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'buyer_class_pct_by_year',
+    tabName: 'Data_Buyer_Pool',
+    cols, dataStart: 5, dataEnd: 20,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5',
+                        nm_blue_mid: '#265AB2', nm_pale: '#E0E8F4' } },
+  });
+  assert.equal(out.spec.type, 'stacked-bar');
+  assert.equal(out.spec.catCol, 'A', 'year is x-axis (not period_end)');
+  assert.equal(out.spec.series.length, 4);
+  assert.deepEqual(out.spec.series.map(s => s.valCol),
+    ['G', 'H', 'I', 'J'], 'pct columns: private/reit/cross/institutional');
+  assert.deepEqual(out.spec.series.map(s => s.color),
+    ['003DA5', '265AB2', '62B5E5', 'E0E8F4'],
+    'navy / mid-blue / sky / pale');
+});
+
+test('buildInjectionSpec: renewal_rent_growth is a single-bar chart (R33 Tier D simplification)', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'renewal_rent_growth',
+    tabName: 'Data_Renewal_Rent_Growth',
+    cols: [
+      { key: 'period_end',              col: 'A' },
+      { key: 'avg_renewal_rent_psf',    col: 'B' },
+      { key: 'ttm_avg_renewal_rent_psf', col: 'C' },
+      { key: 'upper_quartile_rpsf',     col: 'D' },
+      { key: 'lower_quartile_rpsf',     col: 'E' },
+      { key: 'cagr_5yr',                col: 'F' },
+      { key: 'renewal_count',           col: 'G' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'bar');
+  assert.equal(out.spec.valCol, 'B', 'bar = avg_renewal_rent_psf');
+  assert.equal(out.spec.color, '62B5E5', 'sky');
+});
+
 test('buildInjectionSpec: txn_count_avg_deal_combo builds standard combo', () => {
   const out = buildInjectionSpec({
     chart_template_id: 'txn_count_avg_deal_combo',
