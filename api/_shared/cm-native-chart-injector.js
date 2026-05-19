@@ -2040,6 +2040,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           barGrouping: 'stacked',
           sharedAxis: true,
+          // R37 P2 — rent PSF $5-$50 (renderer line ~1161)
+          yLeftRange:   { min: 5, max: 50 },
+          yLeftNumFmt:  VAL_FMT_CURRENCY,
           barSeries: [
             // Invisible base — lifts the visible bar off the 0 line
             { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
@@ -2108,6 +2111,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           // R37 P1 — year x-axis (integer 1990, 1995, etc.), not quarter date.
           catAxNumFmt: '0',
+          // R37 P2 — gov rent PSF 0-70 (renderer line ~1769)
+          yLeftRange:  { min: 0, max: 70 },
+          yLeftNumFmt: VAL_FMT_CURRENCY,
           barGrouping: 'stacked',
           sharedAxis: true,
           barSeries: [
@@ -2176,6 +2182,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           catCol: periodCol,
           dataStart, dataEnd,
           swapAxes: true,  // line on LEFT, bars on RIGHT (matches PDF)
+          // R37 P2 — formats: LEFT integer (valuation index 200-400),
+          // RIGHT percent (YoY %). Renderer auto-pins right to ±yoyMax
+          // dynamically per dataset; native leaves auto-scale so the
+          // value adapts. Format settings make ticks legible.
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
             // YoY % Change — sky color, no per-point amber treatment
             // (can be added later via <c:dPt> color overrides if needed)
@@ -2210,6 +2222,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
+          // R37 P2 — cap quartile chart uses CAP_RATE_RANGE 5-10% (renderer ~808)
+          yAxisRange: CAP_RATE_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
               color: '7E6BAD', dashed: true },  // purple
@@ -2239,6 +2254,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
+          // R37 P2 — cap by credit uses CAP_RATE_RANGE 5-10% (renderer ~1538)
+          yAxisRange: CAP_RATE_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy   },
             { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky    },
@@ -2260,6 +2278,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
+          // R37 P2 — percent 1dp matches renderer
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: cpiCol,  titleRow: headerRow, valCol: cpiCol,  color: sky  },
             { titleCol: cagrCol, titleRow: headerRow, valCol: cagrCol, color: navy },
@@ -2282,6 +2302,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
+          // R37 P2 — percent 1dp (renderer line ~1586)
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: ffCol,  titleRow: headerRow, valCol: ffCol,  color: navy },
             { titleCol: t10Col, titleRow: headerRow, valCol: t10Col, color: sky  },
@@ -2304,6 +2326,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
+          // R37 P2 — percent 1dp (renderer line ~1240)
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
             { titleCol: lvgMidCol, titleRow: headerRow, valCol: lvgMidCol, color: sky  },
@@ -2331,6 +2355,10 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
+          // R37 P2 — CAP_RATE_TIGHT_RANGE 5-8% (renderer line ~1382)
+          // quartile data lives 5.3-7.7%; tighter axis shows movement.
+          yAxisRange: CAP_RATE_TIGHT_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol,
               color: COLOR_LIGHT_BLUE },                          // total upper, solid light
@@ -2366,6 +2394,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — left integer count, right compact currency for avg deal
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightNumFmt: VAL_FMT_CURRENCY_M,
           barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky }],
           lineSeries: [{ titleCol: avgCol, titleRow: headerRow, valCol: avgCol, color: navy }],
           anchor: standardAnchor,
@@ -2387,6 +2418,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — rent/chair $0-16K, price/chair $0-250K (renderer ~2390)
+          yLeftRange:   { min: 0, max: 16000 },
+          yLeftNumFmt:  VAL_FMT_CURRENCY,
+          yRightRange:  { min: 0, max: 250000 },
+          yRightNumFmt: VAL_FMT_CURRENCY,
           barSeries:  [{ titleCol: rentCol,  titleRow: headerRow, valCol: rentCol,  color: sky  }],
           lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy }],
           anchor: standardAnchor,
@@ -2407,6 +2443,10 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — rent/SF $0-50 (renderer ~2431); price/SF auto-scale
+          yLeftRange:   { min: 0, max: 50 },
+          yLeftNumFmt:  VAL_FMT_CURRENCY,
+          yRightNumFmt: VAL_FMT_CURRENCY,
           barSeries:  [{ titleCol: rentCol,  titleRow: headerRow, valCol: rentCol,  color: sky  }],
           lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy }],
           anchor: standardAnchor,
@@ -2433,6 +2473,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — left DOM days integer, right % change 0dp
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightNumFmt: VAL_FMT_PERCENT_0DP,
           barSeries: [
             // Total Market DOM — pale/sky fill
             { titleCol: domTotCol, titleRow: headerRow, valCol: domTotCol, color: '9DC3E6' },
@@ -2471,6 +2514,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           catCol: periodCol,
           dataStart, dataEnd,
           swapAxes: true,  // lines LEFT, bars RIGHT (PDF p.35/p.22)
+          // R37 P2 — left = cap rate (% 2dp), right = price change % (% 0dp).
+          // Renderer pins per-vertical (dia 4.75-9.25% left, 0-70% right;
+          // gov 5.5-9.5% left, 0-8% right). The spec builder doesn't have
+          // vertical signal — leave range auto-scale, just set formats.
+          yLeftNumFmt:  VAL_FMT_PERCENT_2DP,
+          yRightNumFmt: VAL_FMT_PERCENT_0DP,
           barSeries: [
             { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '4CB582' },  // sage
             { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '7E6BAD' },  // light purple
@@ -2500,6 +2549,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — integer count
+          valAxNumFmt: VAL_FMT_INTEGER,
           series: [
             { titleCol: addedCol, titleRow: headerRow, valCol: addedCol, color: sky  },
             { titleCol: soldCol,  titleRow: headerRow, valCol: soldCol,  color: navy },
@@ -2525,6 +2576,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — percent change ±3% pin (renderer line ~1970)
+          yAxisRange: { min: -0.025, max: 0.035 },
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: allCol,  titleRow: headerRow, valCol: allCol,  color: navy },
             { titleCol: coreCol, titleRow: headerRow, valCol: coreCol, color: sky  },
@@ -2571,6 +2625,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           // R37 P1 — year x-axis (integer 2017, 2018, etc.), not quarter date.
           catAxNumFmt: '0',
+          // R37 P2 — pct stack totals 100% (renderer line ~1249 sets max=1.0)
+          yAxisRange:  { min: 0, max: 1 },
+          valAxNumFmt: VAL_FMT_PERCENT_0DP,
           series: [
             { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy    },  // Private
             { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid },  // Public REITs
@@ -2587,7 +2644,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       // series bar matching master Excel chart 14 ('Renewal Rent/SF').
       // Sky bars, currency Y-axis. The quartile whisker + CAGR dots
       // were moved to cpi_vs_renewal_cagr in R33 Tier D.
-      return singleSeries('bar', 'avg_renewal_rent_psf', sky);
+      // R37 P2 — rent PSF $0-70 (renderer line ~1769)
+      return singleSeries('bar', 'avg_renewal_rent_psf', sky, {
+        yAxisRange: { min: 0, max: 70 },
+        valAxNumFmt: VAL_FMT_CURRENCY,
+      });
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -2632,6 +2693,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           barGrouping: 'stacked',
           sharedAxis: true,  // band + lines all on the same val axis (0-10%)
+          // R37 P2 — cost-of-capital 0-10% (renderer line ~1213)
+          yLeftRange:  { min: 0, max: 0.10 },
+          yLeftNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
             // Invisible base — lifts the band off 0 up to low_loan_constant
             { titleCol: lowCol,  titleRow: headerRow, valCol: lowCol,
@@ -2692,6 +2756,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — LEFT axis = volume $ (compact M format); RIGHT axis
+          // = cap rate 5.0-10.5% (renderer line ~1481, widened from 5-9%
+          // because gov upper-q hits 10.08%).
+          yLeftNumFmt:  VAL_FMT_CURRENCY_M,
+          yRightRange:  { min: 0.050, max: 0.105 },
+          yRightNumFmt: VAL_FMT_PERCENT_2DP,
           areaSeries: {
             titleCol: volCol, titleRow: headerRow, valCol: volCol,
             fillColor: pale,     // pale blue fill
@@ -2755,6 +2825,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           color: navy,
           horizontal: true,
+          // R37 P2 — integer lease count
+          valAxNumFmt: VAL_FMT_INTEGER,
           anchor: standardAnchor,
         },
       };
@@ -2776,6 +2848,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           color: navy,
           horizontal: true,
+          // R37 P2 — compact currency for $B/$M volume
+          valAxNumFmt: VAL_FMT_CURRENCY_M,
           anchor: standardAnchor,
         },
       };
@@ -2909,6 +2983,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — integer count of leases (renderer ~1648)
+          valAxNumFmt: VAL_FMT_INTEGER,
           series: [
             // Bottom: In Firm Term (computed helper col), navy
             { titleCol: inFirmCol,  titleRow: headerRow, valCol: inFirmCol,
@@ -2956,6 +3032,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — cap rate percent
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
             { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },
@@ -2985,6 +3063,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           color: navy,
           horizontal: true,
+          // R37 P2 — rent PSF currency
+          valAxNumFmt: VAL_FMT_CURRENCY,
           anchor: standardAnchor,
         },
       };

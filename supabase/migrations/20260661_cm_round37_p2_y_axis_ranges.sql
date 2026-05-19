@@ -1,0 +1,124 @@
+-- =====================================================================
+-- Round 37 P2 — pin Y-axis ranges + add value-format per template.
+-- User feedback 2026-05-19, item #3: "axis formatting has changed on
+-- most charts, adjust".
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- New OOXML constants in cm-native-chart-injector.js mirroring the
+-- PNG renderer's AXIS_FORMAT_* objects:
+--   VAL_FMT_PERCENT_2DP  = '0.00%'
+--   VAL_FMT_PERCENT_1DP  = '0.0%'
+--   VAL_FMT_PERCENT_0DP  = '0%'
+--   VAL_FMT_CURRENCY     = '$#,##0'
+--   VAL_FMT_CURRENCY_M   = '$#,##0,,"M"'   (millions)
+--   VAL_FMT_CURRENCY_K   = '$#,##0,"K"'    (thousands)
+--   VAL_FMT_INTEGER      = '#,##0'
+--
+-- Shared range constants matching renderer:
+--   CAP_RATE_RANGE          { min: 0.05,  max: 0.10  }  (5-10%)
+--   CAP_RATE_TIGHT_RANGE    { min: 0.05,  max: 0.08  }
+--   CAP_RATE_BID_ASK_RANGE  { min: 0.055, max: 0.100 }
+--   CAP_RATE_DOT_RANGE      { min: 0.04,  max: 0.12  }
+--   CAP_RATE_COHORT_RANGE   { min: 0.04,  max: 0.11  }
+--   PCT_OF_ASK_RANGE        { min: 0.85,  max: 1.05  }
+--
+-- New helpers:
+--   valAxScalingFrag(range)  — emits <c:scaling> with optional <c:min>/<c:max>
+--   valAxNumFmtFrag(numFmt)  — emits <c:numFmt>, empty if no fmt
+--
+-- Every builder with <c:valAx> blocks now reads:
+--   spec.yAxisRange / spec.valAxNumFmt              (single-axis charts)
+--   spec.yLeftRange / spec.yLeftNumFmt              (combo/area-combo LEFT)
+--   spec.yRightRange / spec.yRightNumFmt            (combo/area-combo RIGHT)
+--   spec.xAxisRange / spec.xAxisNumFmt              (scatter X — both axes are valAx)
+--
+-- Backward compatible — when these are omitted, Excel auto-scales as
+-- before.
+--
+-- ---------------------------------------------------------------------
+-- PER-TEMPLATE RANGES + FORMATS PORTED FROM RENDERER
+-- ---------------------------------------------------------------------
+-- Y-axis range pinning (matches `cm-chart-image-renderer.js` settings):
+--
+--   cap_rate_ttm_by_quarter        CAP_RATE_RANGE (5-10%)
+--   cap_rate_top_bottom_quartile   CAP_RATE_RANGE
+--   cap_rate_by_credit             CAP_RATE_RANGE
+--   nm_vs_market_cap               5.25-9.25% (tightened)
+--   cap_rate_by_lease_term         CAP_RATE_COHORT_RANGE (4-11%)
+--   bid_ask_spread_monthly         CAP_RATE_BID_ASK_RANGE (5.5-10%)
+--   asking_cap_quartiles_active    CAP_RATE_TIGHT_RANGE (5-8%)
+--   core_cap_rate_dot_plot         CAP_RATE_DOT_RANGE (4-12%)
+--   available_cap_rate_dot_plot    CAP_RATE_DOT_RANGE
+--   cost_of_capital                0-10%
+--   pace_of_cap_rate_expansion     -2.5% to +3.5%
+--   available_market_size_combo    RIGHT 5.5-7.5%
+--   volume_cap_quartile_combo      RIGHT 5.0-10.5%
+--   dom_and_pct_of_ask (+ monthly) RIGHT PCT_OF_ASK_RANGE (85-105%)
+--   buyer_class_pct_by_year        0-100% (pct stack)
+--   rent_psf_box_quarterly         LEFT $5-$50
+--   rent_by_year_built             LEFT $0-$70
+--   rent_and_price_per_chair       LEFT $0-$16K, RIGHT $0-$250K
+--   rent_and_price_psf             LEFT $0-$50
+--   renewal_rent_growth            $0-$70
+--
+-- Y-axis number formats applied to all 51 templates so values display
+-- correctly (percent as %, currency as $, integers as 1,234).
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT PINNED
+-- ---------------------------------------------------------------------
+-- A few templates use dynamic ranges (renderer auto-pins ±10% padding
+-- per dataset) — those stay auto-scaled in native Excel since the
+-- builder doesn't have access to data values at spec-build time:
+--
+--   valuation_index         right YoY % range (renderer pins to ±yoyMax)
+--   case_for_renewal        right rent PSF range (renderer auto-fits)
+--   seller_sentiment (+ M)  left + right ranges differ per vertical
+--   inventory_backlog       integer count (auto-fits)
+--   txn_count_avg_deal_combo both axes (auto-fits)
+--
+-- All these get number formats so values display correctly even
+-- without range pinning — Excel's auto-scale handles the range.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 127 CM tests pass (up from 123 in R37 P1).
+--
+-- New tests verify:
+--   • Line chart emits <c:min>/<c:max> + <c:numFmt> when yAxisRange + valAxNumFmt set
+--   • Combo chart emits independent left + right scaling/format
+--   • Scatter chart emits x + y range/format independently
+--   • buildInjectionSpec ports renderer ranges to specs (nm_vs_market_cap,
+--     dom_and_pct_of_ask, core_cap_rate_dot_plot, buyer_class_pct_by_year)
+--
+-- All 123 prior tests still pass — backward compatible (when range
+-- and numFmt are omitted, behavior is identical to R37 P1).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open any cap-rate chart (Data_Cap_Avg, Data_NM_vs_Market,
+--    Data_Cap_by_Term, etc.) — Y-axis should now:
+--    • Be tightly pinned around the data (5-10% range, not 0-100%)
+--    • Display as percent (5.0%, 6.0%, 7.0%) not decimal (0.05, 0.06, 0.07)
+-- 3. Open Data_DOM_Ask — left axis = DOM days (integer), right axis =
+--    % of Ask pinned 85-105% (matches PDF p.33/p.20)
+-- 4. Open Data_Vol_Cap_Combo — left axis = $M (compact), right axis =
+--    cap rate 5-10.5%
+-- 5. Open Data_Buyer_Pool (annual stacked) — Y-axis pinned 0-100% with
+--    percent format
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S COMING IN R37 P3 + P4
+-- ---------------------------------------------------------------------
+-- P3 — peak/trough/most-recent data labels via <c:dLbls> + <c:dLbl idx=...>.
+--      Most complex of the 4 items.
+-- P4 — Supabase view extensions for the 4 charts cropped to 2014+
+--      (Inventory_Backlog, Market_Turnover, Active_Cap_Quart, Active_DOM_PC).
+-- =====================================================================
