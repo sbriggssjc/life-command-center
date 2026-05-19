@@ -1,0 +1,80 @@
+-- =====================================================================
+-- Round 33 Editable Charts — re-flip dia default + null out stale sheets
+--
+-- Code-only PR. Follows PR #821 (Phase 2 loader column expansion).
+--
+-- ---------------------------------------------------------------------
+-- CONTEXT
+-- ---------------------------------------------------------------------
+-- After PR #821 expanded the loader's Charts sheet coverage from 14
+-- to 35 columns, I inspected the 5 OTHER sheets the master template
+-- chart objects reference. Findings:
+--
+--   Available Comps    1 cell  → empty (chart 1 scatter shows nothing)
+--   Core Cap Chart     4 cells → near-empty (chart 2 ~2 points)
+--   Market Size        4 rows  → partial (charts 26/30/32/33 sparse)
+--   Sheet1             0 cells → empty (chart 34 DOM scatter blank)
+--   Rent Survey        131 rows hardcoded STALE ~2024 data
+--   Competition        56 rows hardcoded STALE broker leaderboard
+--
+-- The Rent Survey + Competition sheets are the dangerous ones: if we
+-- flipped the default with those left untouched, marketing would see
+-- charts presenting STALE 2024 data as if it were current. Blank is
+-- better than misleading.
+--
+-- ---------------------------------------------------------------------
+-- THIS PR
+-- ---------------------------------------------------------------------
+-- 1. cm-template-loader.js — added generateEmptySheetXml() helper +
+--    NULL OUT sheets 8 (Rent Survey) and 11 (Competition) on every
+--    workbook build. The drawing rId references are preserved so
+--    chart objects anchored on those sheets still load (they just
+--    render blank because the cells are empty).
+--
+-- 2. api/capital-markets.js — RE-FLIP the dia default from data_tabs
+--    back to master_template. Marketing team now gets editable Excel
+--    charts by default.
+--
+-- ---------------------------------------------------------------------
+-- EXPECTED STATE POST-DEPLOY
+-- ---------------------------------------------------------------------
+-- Of the 37 chart objects in the dia master template:
+--
+--   ~22 charts render WITH CURRENT DATA (the bulk of what marketing
+--        uses): TTM Volume + count, Avg Deal Size, YoY, Cap quartile,
+--        Cap by lease term cohorts, NM vs Market, DOM + % of Ask,
+--        Bid-Ask Spread, Last Ask, Price Change, Treasury/Cost of
+--        Capital, buyer-class counts.
+--
+--   ~15 charts render BLANK (honest signal of gaps to be filled in
+--        Phase 3 + 4):
+--          - FMC / DVA tenant-specific caps  (need new view cols)
+--          - Cash + Leveraged Return indexes (need new view cols)
+--          - 90-day rolling cap              (need new view col)
+--          - Pace / trend metrics            (need new view cols)
+--          - Available scatter (chart 1)     (need Phase 3 sheet)
+--          - Core Cap scatter (chart 2)      (need Phase 3 sheet)
+--          - Market Size 4 charts            (need Phase 3 sheet)
+--          - DOM scatter Sheet1              (need Phase 3 sheet)
+--          - Rent Survey                     (need Phase 3 sheet)
+--          - Competition pies                (need Phase 3 sheet)
+--
+--   0 charts show MISLEADING / STALE data.
+--
+-- Marketing can:
+--   - Right-click any populated chart → Edit Data / Format Chart Area
+--     (the whole reason for this work)
+--   - Visually identify which charts are blank to know what's pending
+--
+-- ---------------------------------------------------------------------
+-- PHASE 3 ROADMAP (separate PRs)
+-- ---------------------------------------------------------------------
+--   3a. Populate Market Size sheet (4 cohort columns x 11 metrics) —
+--       biggest impact (4 charts unlocked at once)
+--   3b. Populate Available Comps + Core Cap Chart + Sheet1 (3 scatter
+--       charts) — per-listing/per-sale data
+--   3c. Populate Rent Survey + Competition (3 charts) — broker
+--       leaderboard + rent-by-year-built
+--   3d. Phase 4 view extensions for derived metrics (FMC/DVA caps,
+--       return indexes, 90-day cap, pace, Rent PSF, Valuation Index)
+-- =====================================================================

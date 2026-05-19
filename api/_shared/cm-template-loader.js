@@ -270,6 +270,44 @@ function generateChartsSheetXml(rows) {
  * @param {string} [opts.asOf]              As-of date (informational only)
  * @returns {Promise<Buffer>}
  */
+// Minimal empty-sheet XML. Preserves the drawing rId reference so any
+// chart objects anchored on this sheet still load (they just have no
+// data → render blank). Used to NULL OUT sheets where the template
+// shipped with stale hardcoded data (~2024) that would otherwise be
+// presented to the user as if it were current.
+function generateEmptySheetXml(drawingRId) {
+  const drawingTag = drawingRId ? `  <drawing r:id="${drawingRId}"/>\n` : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1"/>
+  <sheetViews>
+    <sheetView workbookViewId="0"/>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="13.5"/>
+  <sheetData/>
+${drawingTag}</worksheet>`;
+}
+
+// Per-sheet drawing rIds for the dia master template. Determined by
+// inspecting each sheet's xl/worksheets/_rels/sheetN.xml.rels file:
+// the drawing relationship's Id attribute. Hardcoded here so we don't
+// need to re-parse the rels at runtime.
+const DIA_SHEET_DRAWING_RIDS = {
+  // Per scripts/cm-inventory-master-template-charts.py + manual inspection:
+  // Sheet  rId in worksheet.rels  Stale-data status   Action
+  // 1 Sales Comps        n/a (no chart)              ignore
+  // 2 Available Comps    rId1                        nearly empty → leave
+  // 3 Core Cap Chart     rId1                        nearly empty → leave
+  // 4 Available Coverage rId1                        leave
+  // 5 Charts             rId1 (handled separately)
+  // 6 Market Size        rId1                        partial → leave (4 rows)
+  // 7 Sheet1             rId1                        empty → leave
+  // 8 Rent Survey        rId1                        STALE 131 rows → NULL
+  // 11 Competition       rId1                        STALE 56 rows → NULL
+  rent_survey: 'rId1',
+  competition: 'rId1',
+};
+
 export async function buildDialysisMasterWorkbook({ masterRows, subspecialty, asOf } = {}) {
   if (!Array.isArray(masterRows) || masterRows.length === 0) {
     throw new Error('buildDialysisMasterWorkbook: masterRows required (and non-empty)');
@@ -280,11 +318,24 @@ export async function buildDialysisMasterWorkbook({ masterRows, subspecialty, as
 
   const zip = await JSZip.loadAsync(templateBuf);
 
-  // Replace the Charts sheet with our populated version. All other
-  // entries — chart XML, drawings, styles, theme — pass through untouched
-  // so the 37 chart objects stay wired to the cell ranges they reference.
-  const newSheetXml = generateChartsSheetXml(masterRows);
-  zip.file('xl/worksheets/sheet5.xml', newSheetXml);
+  // Replace the Charts sheet (sheet5) with our populated version. All
+  // other entries — chart XML, drawings, styles, theme — pass through
+  // untouched so the 37 chart objects stay wired to the cell ranges
+  // they reference.
+  zip.file('xl/worksheets/sheet5.xml', generateChartsSheetXml(masterRows));
+
+  // R33 Phase 2.5 — NULL OUT the sheets where the template ships
+  // with stale hardcoded data (~2024) that would otherwise present
+  // to the user as if it were current. The user explicitly didn't
+  // want misleading data; blank is better than wrong here.
+  //
+  //   sheet8.xml  = Rent Survey   (131 rows of stale rent-by-year data)
+  //   sheet11.xml = Competition   (56 rows of stale broker leaderboard)
+  //
+  // Charts anchored to these sheets will render blank in Excel —
+  // honest signal to marketing that this data is pending Phase 3.
+  zip.file('xl/worksheets/sheet8.xml',  generateEmptySheetXml(DIA_SHEET_DRAWING_RIDS.rent_survey));
+  zip.file('xl/worksheets/sheet11.xml', generateEmptySheetXml(DIA_SHEET_DRAWING_RIDS.competition));
 
   return await zip.generateAsync({
     type: 'nodebuffer',
