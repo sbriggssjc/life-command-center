@@ -191,6 +191,11 @@ test('NATIVE_CHART_TEMPLATES: P9 final composite (rent_by_year_built) registered
     'rent_by_year_built should be migrated');
 });
 
+test('NATIVE_CHART_TEMPLATES: Tier F1 valuation_index registered', () => {
+  assert.ok(NATIVE_CHART_TEMPLATES.has('valuation_index'),
+    'valuation_index combo should be migrated');
+});
+
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   const baseCols = [
     { key: 'period_end',   col: 'A' },
@@ -725,6 +730,42 @@ test('buildInjectionSpec: bid_ask_spread_monthly builds floating-bar via invisib
   assert.ok(!out.spec.series[1].noFill, 'top series visible');
 });
 
+test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axes (Tier F1)', () => {
+  // 8-col data tab per cm-excel-export.js CHART_COLUMNS:
+  //   A=period_end, B=avg_rent_psf, C=avg_expenses_psf, D=avg_noi_psf,
+  //   E=avg_cap_rate, F=valuation_index, G=yoy_change, H=n_sales
+  const cols = [
+    { key: 'period_end',       col: 'A' },
+    { key: 'avg_rent_psf',     col: 'B' },
+    { key: 'avg_expenses_psf', col: 'C' },
+    { key: 'avg_noi_psf',      col: 'D' },
+    { key: 'avg_cap_rate',     col: 'E' },
+    { key: 'valuation_index',  col: 'F' },
+    { key: 'yoy_change',       col: 'G' },
+    { key: 'n_sales',          col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'valuation_index',
+    tabName: 'Data_Val_Index',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.swapAxes, true, 'line on LEFT, bars on RIGHT (PDF p.17)');
+
+  // Bar series: yoy_change in sky
+  assert.equal(out.spec.barSeries.length, 1);
+  assert.equal(out.spec.barSeries[0].valCol, 'G', 'bars = yoy_change');
+  assert.equal(out.spec.barSeries[0].color, '62B5E5', 'sky');
+
+  // Line series: valuation_index in navy
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'F', 'line = valuation_index');
+  assert.equal(out.spec.lineSeries[0].color, '003DA5', 'navy');
+});
+
 test('buildInjectionSpec: rent_by_year_built builds IQR + median + avg combo (P9)', () => {
   // 6-col data tab per cm-excel-export.js CHART_COLUMNS:
   //   A=year, B=avg_rpsf, C=median_rpsf, D=upper_quartile_rpsf,
@@ -1154,6 +1195,67 @@ test('injectNativeCharts: floating-bar (invisible base) renders correct stacked 
   // Each series references its own column
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$F\$5:\$F\$12/, 'base refs F (last_ask)');
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$D\$5:\$D\$12/, 'band refs D (spread)');
+});
+
+test('injectNativeCharts: combo with swapAxes wires bars to right, line to left (Tier F1)', async () => {
+  // End-to-end: valuation_index-style combo with swapAxes=true.
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Val_Index');
+  sheet.getCell('F4').value = 'Valuation Index';
+  sheet.getCell('G4').value = 'YoY %';
+  for (let i = 0; i < 8; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`F${5 + i}`).value = 250 + i * 5;
+    sheet.getCell(`G${5 + i}`).value = 0.08 - i * 0.005;
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Val_Index',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_Val_Index',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 12,
+      swapAxes: true,
+      barSeries: [
+        { titleCol: 'G', titleRow: 4, valCol: 'G', color: '62B5E5' },
+      ],
+      lineSeries: [
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '003DA5' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  assert.match(chartXml, /<c:barChart>/, 'has barChart');
+  assert.match(chartXml, /<c:lineChart>/, 'has lineChart');
+
+  // Bar block axId pair = 1 (cat) + 3 (right axis, swapped)
+  const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
+  assert.match(barBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="3"\/>/,
+    'bar block: axId 1 + 3 (right axis when swapAxes)');
+
+  // Line block axId pair = 1 (cat) + 2 (left axis, swapped)
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(lineBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="2"\/>/,
+    'line block: axId 1 + 2 (left axis when swapAxes)');
+
+  // Two val axes still present
+  const valAxCount = (chartXml.match(/<c:valAx>/g) || []).length;
+  assert.equal(valAxCount, 2, 'still has two val axes (left + right)');
+
+  // Left axis (axId 2) still has axPos=l, right axis (axId 3) axPos=r
+  const leftAx = chartXml.match(/<c:valAx>\s*<c:axId val="2"\/>[\s\S]*?<\/c:valAx>/)[0];
+  const rightAx = chartXml.match(/<c:valAx>\s*<c:axId val="3"\/>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(leftAx, /<c:axPos val="l"\/>/);
+  assert.match(rightAx, /<c:axPos val="r"\/>/);
+  assert.match(rightAx, /<c:crosses val="max"\/>/);
 });
 
 test('injectNativeCharts: line series with showMarker renders correct XML (P9)', async () => {

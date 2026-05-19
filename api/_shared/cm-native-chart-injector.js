@@ -370,6 +370,11 @@ ${seriesXml}
  *        axis as the bars (axId 2) instead of a secondary right axis (axId 3).
  *        Used for box-whisker visuals where the median line should be on the
  *        same scale as the IQR band.
+ * @param {boolean} [spec.swapAxes] If true, bars use the RIGHT axis (axId 3)
+ *        and line uses the LEFT axis (axId 2). Default puts bars on left,
+ *        line on right. Used for valuation_index where the PDF puts the
+ *        index line on the left and YoY bars on the right.
+ *        Mutually exclusive with sharedAxis.
  * @returns {string} chart XML
  */
 function buildComboChartXml(spec) {
@@ -379,7 +384,12 @@ function buildComboChartXml(spec) {
   // P8.5 — barGrouping + sharedAxis support
   const barGrouping = spec.barGrouping === 'stacked' ? 'stacked' : 'clustered';
   const overlap     = barGrouping === 'stacked' ? 100 : -20;
-  const lineAxId    = spec.sharedAxis ? 2 : 3;
+  // Tier F1 — swapAxes flips which axis each chart block points at.
+  // Default: bars=axId 2 (left), line=axId 3 (right).
+  // swapAxes:  bars=axId 3 (right), line=axId 2 (left).
+  // sharedAxis: both on axId 2 (no axId 3 emitted at all).
+  const barAxId  = (spec.sharedAxis || !spec.swapAxes) ? 2 : 3;
+  const lineAxId = spec.sharedAxis ? 2 : (spec.swapAxes ? 2 : 3);
 
   const barXml = barSeries.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
@@ -464,7 +474,7 @@ ${barXml}
         <c:gapWidth val="60"/>
         <c:overlap val="${overlap}"/>
         <c:axId val="1"/>
-        <c:axId val="2"/>
+        <c:axId val="${barAxId}"/>
       </c:barChart>
       <c:lineChart>
         <c:grouping val="standard"/>
@@ -870,6 +880,12 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // P9 — composite: IQR floating bar + median (circle) + avg (diamond)
   //      dot markers over a year x-axis. Uses helper col for IQR width.
   'rent_by_year_built',
+  // R33 Tier F1 — valuation_index combo (line=index on left axis +
+  //      bars=YoY% change on right axis). Renderer has been producing
+  //      this shape since Round 20 but the template slipped through
+  //      the R34 migration. swapAxes used because the PDF puts the
+  //      line on the LEFT axis (opposite of dom_and_pct_of_ask).
+  'valuation_index',
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -1550,6 +1566,54 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             },
           },
         ],
+      };
+    }
+
+    // R33 Tier F1 — valuation_index combo: navy line (index) on LEFT
+    // axis + sky YoY% bars on RIGHT axis. Matches the renderer at
+    // cm-chart-image-renderer.js line ~1084 (Round 20+).
+    //
+    // swapAxes=true is the key — by default our combo puts bars on
+    // the left axis, but this chart wants line on left, bars on right
+    // (PDF deck p.17).
+    //
+    // The signed-color treatment of YoY bars (sky for gains, amber
+    // for declines) the renderer applies is per-data-point and isn't
+    // easily expressible in native chart XML without per-point <c:dPt>
+    // overrides — same limitation as yoy_volume_change (P3). Native
+    // chart uses all-sky bars; negative values still render correctly,
+    // just without the color highlight.
+    case 'valuation_index': {
+      const periodCol = findCol('period_end');
+      const indexCol  = findCol('valuation_index');
+      // yoy_change column uses fieldKeys coalesce (yoy_change OR
+      // yoy_change_pct). cm-excel-export.js writes whichever the view
+      // emits into the canonical 'yoy_change' column slot — so the
+      // column letter we get back from findCol('yoy_change') is the
+      // right cell range to reference.
+      const yoyCol    = findCol('yoy_change');
+      if (!periodCol || !indexCol || !yoyCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          swapAxes: true,  // line on LEFT, bars on RIGHT (matches PDF)
+          barSeries: [
+            // YoY % Change — sky color, no per-point amber treatment
+            // (can be added later via <c:dPt> color overrides if needed)
+            { titleCol: yoyCol, titleRow: headerRow, valCol: yoyCol,
+              color: sky },
+          ],
+          lineSeries: [
+            // Valuation Index — navy line, no markers
+            { titleCol: indexCol, titleRow: headerRow, valCol: indexCol,
+              color: navy },
+          ],
+          anchor: standardAnchor,
+        },
       };
     }
 
