@@ -124,11 +124,9 @@ test('NATIVE_CHART_TEMPLATES: P4 stacked-bar charts registered', () => {
   ]) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
-  // lease_termination_rate is DEFERRED — computed series not directly stored
-  assert.ok(
-    !NATIVE_CHART_TEMPLATES.has('lease_termination_rate'),
-    'lease_termination_rate should remain on the PNG path (deferred)'
-  );
+  // lease_termination_rate was deferred in P4 (computed series not stored)
+  // but unblocked in R36 P4 via the helper-col infrastructure.
+  // See the R36 P4 registration test below.
 });
 
 test('NATIVE_CHART_TEMPLATES: P5 multi-line charts registered', () => {
@@ -140,12 +138,10 @@ test('NATIVE_CHART_TEMPLATES: P5 multi-line charts registered', () => {
   ]) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
-  // net_lease_spread DEFERRED — renderer references cap_10plus_year which
-  // isn't in the Data_NL_Spread tab.
-  assert.ok(
-    !NATIVE_CHART_TEMPLATES.has('net_lease_spread'),
-    'net_lease_spread should remain on the PNG path (deferred — data-shape mismatch)'
-  );
+  // net_lease_spread was deferred in P5 (renderer references cap_10plus_year
+  // which isn't in the Data_NL_Spread tab) but unblocked in R36 P4 by
+  // matching the renderer's actual visual (2 visible series, not 3).
+  // See the R36 P4 registration test below.
 });
 
 test('NATIVE_CHART_TEMPLATES: P6 combo dual-axis charts registered', () => {
@@ -248,10 +244,114 @@ test('NATIVE_CHART_TEMPLATES: R36 P2 donut charts registered', () => {
   }
 });
 
-test('NATIVE_CHART_TEMPLATES: R36 P3 bar + multi-scatter composites registered (final native)', () => {
+test('NATIVE_CHART_TEMPLATES: R36 P3 bar + multi-scatter composites registered', () => {
   for (const id of ['available_by_term_summary', 'available_by_firm_term_summary']) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
+});
+
+test('NATIVE_CHART_TEMPLATES: R36 P4 unblocks 3 previously-deferred templates', () => {
+  for (const id of ['lease_termination_rate', 'net_lease_spread', 'rent_heat_map']) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+  // Only 2 truly unmigrateable templates remain:
+  for (const id of ['ppsf_box_quarterly', 'lease_structures']) {
+    assert.ok(
+      !NATIVE_CHART_TEMPLATES.has(id),
+      `${id} should remain on the PNG path (blocked — see R36 P4 migration notes)`
+    );
+  }
+});
+
+test('buildInjectionSpec: lease_termination_rate uses helper col for in_firm_term', () => {
+  const cols = [
+    { key: 'period_end',               col: 'A' },
+    { key: 'total_leases_active',      col: 'B' },
+    { key: 'terminated_ttm',           col: 'C' },
+    { key: 'leases_outside_firm_term', col: 'D' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'lease_termination_rate',
+    tabName: 'Data_Term_Rate',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'stacked-bar');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.series.length, 2);
+  // Bottom: helper col (in_firm_term computed) — col E (cols.length + 1)
+  assert.equal(out.spec.series[0].valCol, 'E', 'bottom = helper col (in_firm_term)');
+  assert.equal(out.spec.series[0].color, '003DA5', 'navy');
+  // Top: outside_firm (col D)
+  assert.equal(out.spec.series[1].valCol, 'D', 'top = outside_firm_term');
+  assert.equal(out.spec.series[1].color, '62B5E5', 'sky');
+
+  // Helper col getValue: total - outside, with Math.max(0, ...) guard
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'in_firm_term');
+  assert.equal(
+    out.helperCols[0].getValue({ total_leases_active: 100, leases_outside_firm_term: 30 }),
+    70,
+    '100 - 30 = 70'
+  );
+  // Edge: outside > total clamps to 0 (defensive)
+  assert.equal(
+    out.helperCols[0].getValue({ total_leases_active: 30, leases_outside_firm_term: 50 }),
+    0,
+    'Math.max(0, ...) clamp'
+  );
+  // Null guard
+  assert.equal(
+    out.helperCols[0].getValue({ total_leases_active: null, leases_outside_firm_term: 30 }),
+    null
+  );
+});
+
+test('buildInjectionSpec: net_lease_spread plots the 2 series that exist (cap_10plus_year deferred)', () => {
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'subspecialty',       col: 'B' },
+    { key: 'treasury_10y_yield', col: 'C' },
+    { key: 'avg_cap_rate',       col: 'D' },
+    { key: 'nm_avg_cap',         col: 'E' },
+    { key: 'market_spread',      col: 'F' },
+    { key: 'nm_spread',          col: 'G' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'net_lease_spread',
+    tabName: 'Data_NL_Spread',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.series.length, 2, '2 series — cap_10plus_year not in data tab');
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D'],
+    'treasury + avg_cap_rate');
+  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5'],
+    'sky / navy');
+});
+
+test('buildInjectionSpec: rent_heat_map uses horizontal-bar fallback (same as leased_inv_by_state)', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'rent_heat_map',
+    tabName: 'Data_Rent_Heat_Map',
+    cols: [
+      { key: 'rank_by_rpsf',         col: 'A' },
+      { key: 'state',                col: 'B' },
+      { key: 'avg_rpsf',             col: 'C' },
+      { key: 'median_rpsf',          col: 'D' },
+      { key: 'upper_quartile_rpsf',  col: 'E' },
+      { key: 'lower_quartile_rpsf',  col: 'F' },
+      { key: 'n_leases',             col: 'G' },
+    ],
+    dataStart: 5, dataEnd: 19,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.equal(out.spec.type, 'bar');
+  assert.equal(out.spec.horizontal, true);
+  assert.equal(out.spec.catCol, 'B', 'state on cat axis');
+  assert.equal(out.spec.valCol, 'C', 'avg_rpsf on val axis');
+  assert.equal(out.spec.color, '003DA5');
 });
 
 test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter combo', () => {
