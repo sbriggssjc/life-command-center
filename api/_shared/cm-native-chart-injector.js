@@ -356,22 +356,40 @@ ${seriesXml}
  * @param {string} spec.catCol        Column letter for shared x-axis
  * @param {number} spec.dataStart     1-indexed first data row
  * @param {number} spec.dataEnd       1-indexed last data row (inclusive)
- * @param {Array}  spec.barSeries     List of { titleCol, titleRow, valCol, color }
+ * @param {Array}  spec.barSeries     List of { titleCol, titleRow, valCol, color, [noFill] }
  * @param {Array}  spec.lineSeries    List of { titleCol, titleRow, valCol, color }
+ * @param {'clustered'|'stacked'} [spec.barGrouping]  Default 'clustered'.
+ *        'stacked' lets the combo express a floating-bar visual (invisible
+ *        base + visible band) with a line series overlaid on the same axis.
+ * @param {boolean} [spec.sharedAxis] If true, line series uses the SAME val
+ *        axis as the bars (axId 2) instead of a secondary right axis (axId 3).
+ *        Used for box-whisker visuals where the median line should be on the
+ *        same scale as the IQR band.
  * @returns {string} chart XML
  */
 function buildComboChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const barSeries = spec.barSeries || [];
   const lineSeries = spec.lineSeries || [];
+  // P8.5 — barGrouping + sharedAxis support
+  const barGrouping = spec.barGrouping === 'stacked' ? 'stacked' : 'clustered';
+  const overlap     = barGrouping === 'stacked' ? 100 : -20;
+  const lineAxId    = spec.sharedAxis ? 2 : 3;
 
   const barXml = barSeries.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
+    // P8.5 — `noFill` flag on bar series (invisible base for floating bars)
+    const fillFrag = s.noFill
+      ? `<a:noFill/>`
+      : `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>`;
+    const lineFrag = s.noFill
+      ? `<a:ln><a:noFill/></a:ln>`
+      : '';
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
-          <c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>
+          <c:spPr>${fillFrag}${lineFrag}</c:spPr>
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>`;
@@ -406,11 +424,11 @@ function buildComboChartXml(spec) {
       <c:layout/>
       <c:barChart>
         <c:barDir val="col"/>
-        <c:grouping val="clustered"/>
+        <c:grouping val="${barGrouping}"/>
         <c:varyColors val="0"/>
 ${barXml}
         <c:gapWidth val="60"/>
-        <c:overlap val="-20"/>
+        <c:overlap val="${overlap}"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
       </c:barChart>
@@ -420,7 +438,7 @@ ${barXml}
 ${lineXml}
         <c:marker val="0"/>
         <c:axId val="1"/>
-        <c:axId val="3"/>
+        <c:axId val="${lineAxId}"/>
       </c:lineChart>
       <c:catAx>
         <c:axId val="1"/>
@@ -435,7 +453,7 @@ ${lineXml}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         <c:crossAx val="1"/>
-      </c:valAx>
+      </c:valAx>${spec.sharedAxis ? '' : `
       <c:valAx>
         <c:axId val="3"/>
         <c:scaling><c:orientation val="minMax"/></c:scaling>
@@ -443,7 +461,7 @@ ${lineXml}
         <c:axPos val="r"/>
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
-      </c:valAx>
+      </c:valAx>`}
     </c:plotArea>
     <c:legend>
       <c:legendPos val="b"/>
@@ -1239,37 +1257,67 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
     }
 
     case 'rent_psf_box_quarterly': {
-      // Box-whisker in PDF: IQR shaded box + median line. Excel's
-      // standard charts don't have a built-in floating-fill primitive
-      // we can express without helper columns (upper_q − lower_q).
-      // Pragmatic native rendering: 3-line quartile band chart with
-      // the median emphasized. Same data, no shaded fill — user can
-      // add a fill manually in Excel via Select Data Source if needed.
+      // R34 P8.5 upgrade — proper box-whisker visual now that we have
+      // helper-column infrastructure.
       //
-      // Colors per cm-chart-image-renderer.js (palette[3] sky for IQR
-      // fill, palette[0] navy for median):
-      //   lower_quartile  sky    (top of pale fill)
-      //   median          navy   (bold central line)
-      //   upper_quartile  sky    (bottom of pale fill)
+      // PDF visual: shaded IQR box (lower_q → upper_q) with median line
+      // overlay. Native decomposition:
+      //   • Stacked bar series 0 (invisible, noFill=true):
+      //       val = rent_lower_quartile (lifts the bar off 0)
+      //   • Stacked bar series 1 (visible sky band):
+      //       val = iqr_width helper column = upper_q − lower_q
+      //   • Line series 0 (navy bold):
+      //       val = rent_median (overlay on same val axis)
+      //
+      // The line uses sharedAxis: true so the median plots on the same
+      // scale as the IQR band, NOT on a separate right axis.
       const periodCol = findCol('period_end');
       const lowerCol  = findCol('rent_lower_quartile');
       const medianCol = findCol('rent_median');
       const upperCol  = findCol('rent_upper_quartile');
       if (!periodCol || !lowerCol || !medianCol || !upperCol) return null;
+
+      // IQR width helper column letter — sits one column past the regular
+      // CHART_COLUMNS entries. cm-excel-export.js writes the values.
+      const iqrCol = String.fromCharCode(65 + cols.length);
+
       return {
         tabName,
         spec: {
-          type: 'multi-line',
+          type: 'combo',
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          series: [
-            { titleCol: lowerCol,  titleRow: headerRow, valCol: lowerCol,  color: sky  },
-            { titleCol: medianCol, titleRow: headerRow, valCol: medianCol, color: navy },
-            { titleCol: upperCol,  titleRow: headerRow, valCol: upperCol,  color: sky  },
+          barGrouping: 'stacked',
+          sharedAxis: true,
+          barSeries: [
+            // Invisible base — lifts the visible bar off the 0 line
+            { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
+              color: '003DA5', noFill: true },
+            // Visible IQR band (sky)
+            { titleCol: iqrCol,   titleRow: headerRow, valCol: iqrCol,
+              color: sky },
+          ],
+          lineSeries: [
+            // Median line over the band
+            { titleCol: medianCol, titleRow: headerRow, valCol: medianCol,
+              color: navy },
           ],
           anchor: standardAnchor,
         },
+        helperCols: [
+          {
+            key: 'iqr_width',
+            header: 'IQR Width',
+            format: 'currency_per_sf',
+            width: 14,
+            getValue: (row) => {
+              const lo = row.rent_lower_quartile;
+              const hi = row.rent_upper_quartile;
+              return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
+            },
+          },
+        ],
       };
     }
 

@@ -614,7 +614,9 @@ test('buildInjectionSpec: bid_ask_spread_monthly builds floating-bar via invisib
   assert.ok(!out.spec.series[1].noFill, 'top series visible');
 });
 
-test('buildInjectionSpec: rent_psf_box_quarterly builds 3-line quartile band', () => {
+test('buildInjectionSpec: rent_psf_box_quarterly builds IQR box-whisker combo (P8.5 upgrade)', () => {
+  // 8-column data tab schema (per cm-excel-export.js CHART_COLUMNS).
+  // Helper column lands at col I (= cols.length + 1).
   const cols = [
     { key: 'period_end',          col: 'A' },
     { key: 'subspecialty',        col: 'B' },
@@ -632,17 +634,35 @@ test('buildInjectionSpec: rent_psf_box_quarterly builds 3-line quartile band', (
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'multi-line');
-  assert.equal(out.spec.series.length, 3, '3-line quartile chart');
-  assert.deepEqual(
-    out.spec.series.map(s => s.valCol),
-    ['E', 'F', 'G'],
-    'series: lower_q / median / upper_q'
-  );
-  assert.deepEqual(
-    out.spec.series.map(s => s.color),
-    ['62B5E5', '003DA5', '62B5E5'],
-    'lower=sky, median=navy bold, upper=sky'
+  assert.equal(out.spec.type, 'combo', 'upgraded from multi-line to combo');
+  assert.equal(out.spec.barGrouping, 'stacked', 'bars are stacked (floating bar)');
+  assert.equal(out.spec.sharedAxis, true, 'median line uses same axis as bars');
+
+  // Stacked bar series — invisible base + visible IQR band
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.barSeries[0].valCol, 'E', 'base = rent_lower_quartile');
+  assert.equal(out.spec.barSeries[0].noFill, true, 'base is invisible');
+  assert.equal(out.spec.barSeries[1].valCol, 'I', 'band = iqr_width helper (col I, past 8 regular cols)');
+  assert.equal(out.spec.barSeries[1].color, '62B5E5', 'band = sky');
+
+  // Median line on the same axis
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'F', 'line = rent_median');
+  assert.equal(out.spec.lineSeries[0].color, '003DA5', 'median = navy');
+
+  // Helper column declared
+  assert.ok(Array.isArray(out.helperCols), 'returns helperCols');
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'iqr_width');
+  assert.equal(out.helperCols[0].header, 'IQR Width');
+  // getValue computes hi - lo
+  const v = out.helperCols[0].getValue({ rent_lower_quartile: 18.5, rent_upper_quartile: 31.2 });
+  assert.ok(Math.abs(v - 12.7) < 0.001, `getValue returns ${v}, expected ~12.7`);
+  // Null guard
+  assert.equal(
+    out.helperCols[0].getValue({ rent_lower_quartile: null, rent_upper_quartile: 31 }),
+    null,
+    'returns null when input is null'
   );
 });
 
@@ -964,4 +984,87 @@ test('injectNativeCharts: floating-bar (invisible base) renders correct stacked 
   // Each series references its own column
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$F\$5:\$F\$12/, 'base refs F (last_ask)');
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$D\$5:\$D\$12/, 'band refs D (spread)');
+});
+
+test('injectNativeCharts: stacked-combo box-whisker (P8.5) renders correct XML', async () => {
+  // End-to-end: tab with lower_q (E), median (F), upper_q (G) + a helper
+  // col I (iqr_width). Combo with stacked bars + shared-axis line.
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Rent_Box');
+  sheet.getCell('E4').value = 'Lower Q';
+  sheet.getCell('F4').value = 'Median';
+  sheet.getCell('G4').value = 'Upper Q';
+  sheet.getCell('I4').value = 'IQR Width';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`E${5 + i}`).value = 18 + i * 0.5;
+    sheet.getCell(`F${5 + i}`).value = 28 + i * 0.7;
+    sheet.getCell(`G${5 + i}`).value = 38 + i * 0.6;
+    sheet.getCell(`I${5 + i}`).value = (38 + i * 0.6) - (18 + i * 0.5);
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Rent_Box',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_Rent_Box',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 10,
+      barGrouping: 'stacked',
+      sharedAxis: true,
+      barSeries: [
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5', noFill: true },
+        { titleCol: 'I', titleRow: 4, valCol: 'I', color: '62B5E5' },
+      ],
+      lineSeries: [
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '003DA5' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Both blocks present
+  assert.match(chartXml, /<c:barChart>/, 'has barChart');
+  assert.match(chartXml, /<c:lineChart>/, 'has lineChart');
+
+  // Bar block is STACKED (not clustered) and overlap=100
+  const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
+  assert.match(barBlock, /<c:grouping val="stacked"\/>/, 'bar grouping=stacked');
+  assert.match(barBlock, /<c:overlap val="100"\/>/, 'overlap=100');
+
+  // Line block uses axId 1+2 (SHARED axis), not 1+3
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(lineBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="2"\/>/, 'line shares val axis 2 with bars');
+  assert.ok(!/axId val="3"/.test(lineBlock), 'line does NOT use axId 3 (no secondary axis)');
+
+  // Only ONE valAx block (no right axis when sharedAxis=true)
+  const valAxCount = (chartXml.match(/<c:valAx>/g) || []).length;
+  assert.equal(valAxCount, 1, 'one valAx (sharedAxis suppresses the right axis)');
+
+  // Series 0 (invisible base) — noFill markers
+  const ser0 = chartXml.match(/<c:ser>\s*<c:idx val="0"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser0, /<a:noFill\/>/, 'base series has noFill (invisible)');
+
+  // Series 1 (visible IQR band) — sky
+  const ser1 = chartXml.match(/<c:ser>\s*<c:idx val="1"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser1, /srgbClr val="62B5E5"/, 'band = sky');
+
+  // Series 2 (median line) — navy
+  const ser2 = chartXml.match(/<c:ser>\s*<c:idx val="2"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser2, /srgbClr val="003DA5"/, 'median = navy');
+
+  // 3 series total, unique idx values (0/1/2)
+  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  assert.deepEqual(idxs, [0, 1, 2], 'series idx unique across bar+line blocks');
+
+  // Each series points at the right cell range
+  assert.match(chartXml, /'Data_Rent_Box'!\$E\$5:\$E\$10/, 'base refs E (lower_q)');
+  assert.match(chartXml, /'Data_Rent_Box'!\$I\$5:\$I\$10/, 'band refs I (helper iqr_width)');
+  assert.match(chartXml, /'Data_Rent_Box'!\$F\$5:\$F\$10/, 'line refs F (median)');
 });

@@ -1374,6 +1374,7 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // The endpoint post-processes the workbook buffer with
     // injectNativeCharts() to swap the PNG for a real Excel chart object
     // anchored at the same location.
+    let totalColsForAutoFilter = cols.length;
     if (NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)) {
       const colsWithLetter = cols.map((c, i) => ({
         ...c,
@@ -1391,13 +1392,69 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         // dia vs gov cohorts the same way the renderer does.
         rows: chart.rows || [],
       });
-      if (spec) nativeInjections.push(spec);
+      if (spec) {
+        nativeInjections.push(spec);
+
+        // R34 P8.5 — write declarative helper columns. Templates that
+        // need derived data (e.g. IQR width = upper_q − lower_q for
+        // box-whisker; rolling-avg trendlines for scatter dot plots)
+        // declare them via spec.helperCols and reference the helper
+        // column letters in their spec. We write them here as plain
+        // values (computed from row data), in additional columns to
+        // the right of the regular CHART_COLUMNS entries.
+        const helpers = Array.isArray(spec.helperCols) ? spec.helperCols : [];
+        if (helpers.length > 0) {
+          // Write helper column headers — same styling as regular headers
+          helpers.forEach((h, hi) => {
+            const colIdx = cols.length + hi + 1;
+            const hCell = sheet.getRow(headerRow_n).getCell(colIdx);
+            hCell.value = h.header || h.key;
+            hCell.font = { name: fonts.title_family, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+            hCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex(palette.nm_navy) } };
+            hCell.alignment = { vertical: 'middle', horizontal: 'left' };
+            hCell.border = { bottom: { style: 'medium', color: { argb: 'FF' + hex(palette.nm_navy) } } };
+            // Column width + format
+            const col = sheet.getColumn(colIdx);
+            col.width = h.width || 14;
+            if (h.format && FMT[h.format]) col.numFmt = FMT[h.format];
+          });
+
+          // Write helper values for each data row by calling getValue(row, idx, rows)
+          (chart.rows || []).forEach((row, rIdx) => {
+            const xlsxRowIdx = dataStart + rIdx;
+            const r = sheet.getRow(xlsxRowIdx);
+            helpers.forEach((h, hi) => {
+              const colIdx = cols.length + hi + 1;
+              let v;
+              try {
+                v = h.getValue ? h.getValue(row, rIdx, chart.rows) : null;
+              } catch (_e) {
+                v = null;
+              }
+              const cell = r.getCell(colIdx);
+              cell.value = (v == null || Number.isNaN(v)) ? null : v;
+              cell.font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
+              if (h.format && FMT[h.format]) cell.numFmt = FMT[h.format];
+              // Match zebra striping
+              if (xlsxRowIdx % 2 === 1) {
+                cell.fill = {
+                  type: 'pattern',
+                  pattern: 'solid',
+                  fgColor: { argb: 'FF' + hex(palette.nm_pale) },
+                };
+              }
+            });
+          });
+
+          totalColsForAutoFilter = cols.length + helpers.length;
+        }
+      }
     }
 
     // Auto-filter on the header row (location depends on chart-image layout)
     sheet.autoFilter = {
       from: { row: headerRow_n, column: 1 },
-      to:   { row: headerRow_n, column: cols.length },
+      to:   { row: headerRow_n, column: totalColsForAutoFilter },
     };
 
     // Print setup for marketing handoff
