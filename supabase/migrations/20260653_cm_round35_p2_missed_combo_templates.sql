@@ -1,0 +1,117 @@
+-- =====================================================================
+-- Round 35 P2 — migrate 7 more missed templates from the post-R34 audit.
+-- Builds on R35 P1 (PR #835).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (7 added; total now 37)
+-- ---------------------------------------------------------------------
+-- Standard combo (bars LEFT axis, line RIGHT axis):
+--   1. txn_count_avg_deal_combo   1-bar count + 1-line avg deal $
+--   2. rent_and_price_per_chair   1-bar rent + 1-line price (dia)
+--   3. rent_and_price_psf         1-bar rent + 1-line price (gov)
+--   4. dom_price_change_active    2 DOM bars + 2 % change lines (dashed core)
+--
+-- Swapped combo (lines LEFT, bars RIGHT — PDF p.35/p.22):
+--   5. seller_sentiment           2 cap lines + 2 price-change % bars
+--   6. seller_sentiment_monthly   same shape, monthly cadence
+--
+-- Clustered bar (no line — renderer's "line" series isn't in data tab):
+--   7. inventory_backlog          2 bars: Added sky + Sold navy
+--   8. pace_of_cap_rate_expansion 2 bars: pace_all navy + pace_core sky
+--
+-- ---------------------------------------------------------------------
+-- NEW MACHINERY
+-- ---------------------------------------------------------------------
+-- buildStackedBarChartXml gains a `grouping` option:
+--   • Default 'stacked'   — overlap=100, all R34 P4 / P8 callers keep
+--                           their existing behavior unchanged
+--   • 'clustered'         — overlap=-20, side-by-side bars per category
+--
+-- New dispatch type `'clustered-bar'` in injectNativeCharts —
+-- shares the buildStackedBarChartXml implementation but forces
+-- grouping='clustered'. Used by inventory_backlog and
+-- pace_of_cap_rate_expansion which the renderer emits as multi-bar
+-- single-axis charts.
+--
+-- buildComboChartXml line series now support `dashed: true` (emits
+-- <a:prstDash val="dash"/>). Used for dom_price_change_active where
+-- the core 10+yr price-change line is dashed to distinguish it from
+-- the solid total-market line of the same color (#1F4E79 dark blue).
+--
+-- ---------------------------------------------------------------------
+-- PER-TEMPLATE NOTES
+-- ---------------------------------------------------------------------
+-- pace_of_cap_rate_expansion — renderer references pace_cost for a 3rd
+-- amber line but the data tab schema doesn't include it. Same pattern
+-- as net_lease_spread, fed_funds_vs_treasury, cash_leveraged_returns:
+-- native chart plots only the series that exist in the data.
+--
+-- seller_sentiment & monthly use swapAxes=true so the cap-rate lines
+-- land on the LEFT axis and the price-change bars on the RIGHT axis,
+-- matching dialysis PDF p.35 + gov p.22. Colors mirror the renderer:
+--   Bars: sage (sentiment_bar_all) + light purple (sentiment_bar_long)
+--   Lines: navy (palette[0]) + sky (palette[1])
+--
+-- dom_price_change_active uses literal hex #1F4E79 (dark blue) for
+-- both line series, mirroring cm-chart-image-renderer.js line ~1393.
+-- The core 10+yr line is dashed; both lines on the right axis.
+--
+-- ---------------------------------------------------------------------
+-- TESTS — 93 CM TESTS PASS (up from 83)
+-- ---------------------------------------------------------------------
+-- Registration check for all 8 new templates.
+--
+-- buildInjectionSpec tests for each shape verify:
+--   • Standard combo: txn_count_avg_deal_combo (default axes, navy/sky)
+--   • Dia + gov shared shape: rent_and_price_per_chair vs rent_and_price_psf
+--   • 4-series combo with dashed: dom_price_change_active
+--   • Swapped combo: seller_sentiment (swapAxes=true confirmed)
+--   • Monthly column-layout variant: seller_sentiment_monthly picks up
+--     correct cols by findCol() regardless of quarterly vs monthly schema
+--   • Clustered bar (no line): inventory_backlog + pace_of_cap_rate_expansion
+--
+-- End-to-end XML tests verify:
+--   • clustered-bar dispatch produces grouping=clustered + overlap=-20
+--     (NOT stacked + 100), no <a:noFill/> invisible-base markers
+--   • Combo with dashed=true emits exactly ONE <a:prstDash val="dash"/>
+--
+-- End-to-end smoke build with synthetic data confirmed all 8 charts
+-- produce correct XML:
+--   Charts 1-6 (combos): each has 1 barChart + 1 lineChart block, 2 valAxes
+--   Chart 4 (dom_price_change_active): 1 dashed prstDash marker
+--   Charts 7-8 (clustered-bar): 1 barChart block only, 1 valAx, no lineChart
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. X-CM-Native-Charts should reach ~32-37 depending on vertical
+-- 3. Right-click charts on the following tabs — "Edit Data" should
+--    now be ENABLED (previously greyed out as PNG):
+--      Data_Txn_AvgDeal_Combo   (1-bar + 1-line, default axes)
+--      Data_Rent_Price_Chair    (1-bar + 1-line, dia)
+--      Data_Rent_Price_PSF      (1-bar + 1-line, gov)
+--      Data_Active_DOM_PC       (2-bar + 2-line, core line DASHED)
+--      Data_Sentiment           (2-line LEFT + 2-bar RIGHT, swapped axes)
+--      Data_Sentiment_M         (same swapped shape, monthly)
+--      Data_Inventory_Backlog   (2 clustered bars, no line)
+--      Data_Pace_Cap_Expand     (2 clustered bars, no line)
+-- 4. For seller_sentiment: verify cap-rate lines plot against LEFT axis
+--    (percent 5-9%) and price-change bars against RIGHT axis (percent
+--    0-70% dia, 0-8% gov).
+--
+-- ---------------------------------------------------------------------
+-- REMAINING POST-AUDIT BACKLOG (R35 P3-P4)
+-- ---------------------------------------------------------------------
+-- P3 — Stacked + single bar (2 templates):
+--   buyer_class_pct_by_year (annual stacked bar, 4 series capital sources)
+--   renewal_rent_growth (single bar after R33 Tier D simplification)
+--
+-- P4 — Complex composites (2 templates, may need new machinery):
+--   cost_of_capital (gray range bar + 2 lines, similar to bid_ask_spread_monthly
+--                    but with the floating bar fully visible)
+--   volume_cap_quartile_combo (4-layer: area + range bars + dots —
+--                              most complex shape in the catalog)
+-- =====================================================================

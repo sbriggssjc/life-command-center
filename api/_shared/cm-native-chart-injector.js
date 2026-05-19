@@ -217,6 +217,15 @@ function buildStackedBarChartXml(spec) {
         </c:ser>`;
   }).join('\n');
 
+  // R35 P2 — also serves the 'clustered-bar' dispatch type.
+  // grouping='stacked' (default) gives the original stacked-column visual
+  // with overlap=100. grouping='clustered' gives side-by-side bars per
+  // category with overlap=-20 — used for inventory_backlog and
+  // pace_of_cap_rate_expansion which the renderer emits as multi-bar
+  // single-axis charts.
+  const grouping = spec.grouping === 'clustered' ? 'clustered' : 'stacked';
+  const overlap  = grouping === 'clustered' ? -20 : 100;
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
@@ -225,11 +234,11 @@ function buildStackedBarChartXml(spec) {
       <c:layout/>
       <c:barChart>
         <c:barDir val="col"/>
-        <c:grouping val="stacked"/>
+        <c:grouping val="${grouping}"/>
         <c:varyColors val="0"/>
 ${seriesXml}
         <c:gapWidth val="60"/>
-        <c:overlap val="100"/>
+        <c:overlap val="${overlap}"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
       </c:barChart>
@@ -418,6 +427,11 @@ function buildComboChartXml(spec) {
   // dot overlays on the rent_by_year_built whisker visual). Optional
   // markerShape: 'circle' | 'diamond' | 'square' | 'triangle' (default
   // 'circle') and markerSize (default 5).
+  //
+  // R35 P2 — per-series `dashed: true` flag emits <a:prstDash val="dash"/>
+  // (matches the renderer's borderDash). Used for dom_price_change_active
+  // where the core 10+yr price-change line is dashed to distinguish it
+  // from the solid total-market line of the same color.
   const lineXml = lineSeries.map((s, i) => {
     const idx = barSeries.length + i;
     const color = (s.color || '003DA5').replace('#', '');
@@ -444,12 +458,13 @@ function buildComboChartXml(spec) {
           <c:smooth val="0"/>
         </c:ser>`;
     }
+    const dashFrag = s.dashed ? `<a:prstDash val="dash"/>` : '';
     return `        <c:ser>
           <c:idx val="${idx}"/>
           <c:order val="${idx}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
           <c:spPr>
-            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:round/></a:ln>
+            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
           <c:marker><c:symbol val="none"/></c:marker>
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
@@ -730,6 +745,11 @@ export async function injectNativeCharts(buffer, injections) {
     let chartXml;
     if (spec.type === 'stacked-bar') {
       chartXml = buildStackedBarChartXml(spec);
+    } else if (spec.type === 'clustered-bar') {
+      // R35 P2 — shares the builder with stacked-bar but forces
+      // grouping='clustered'. Used for inventory_backlog and
+      // pace_of_cap_rate_expansion (multi-bar single-axis charts).
+      chartXml = buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
     } else if (spec.type === 'bar') {
       chartXml = buildSingleBarChartXml(spec);
     } else if (spec.type === 'multi-line') {
@@ -896,6 +916,18 @@ export const NATIVE_CHART_TEMPLATES = new Set([
                                     // the data tab; native plots the 2 series that exist)
   'cash_leveraged_returns',         // 2-line: cash_return navy / leveraged_mid sky
   'asking_cap_quartiles_active',    // 4-line: total upper/lower + core upper/lower (dashed)
+  // R35 P2 — 7 missed combo + clustered-bar templates from audit.
+  //   Standard combo (bars left, line right):
+  'txn_count_avg_deal_combo',       // 1 bar (count) + 1 line (avg deal $)
+  'rent_and_price_per_chair',       // 1 bar (rent/chair) + 1 line (price/chair) — dia
+  'rent_and_price_psf',             // 1 bar (rent/SF) + 1 line (price/SF) — gov
+  'dom_price_change_active',        // 2 bars (DOM) + 2 lines (% change, 1 dashed)
+  //   Swapped combo (lines left, bars right):
+  'seller_sentiment',               // 2 lines (cap rate) left + 2 bars (% change) right
+  'seller_sentiment_monthly',       // same shape, monthly cadence
+  //   Clustered bar (no line — renderer's line series isn't in data tab):
+  'inventory_backlog',              // 2 bars: No. Added (sky) + No. Sold (navy)
+  'pace_of_cap_rate_expansion',     // 2 bars: pace_all (navy) + pace_core (sky)
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -1775,6 +1807,194 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
               color: COLOR_LIGHT_BLUE, dashed: true },            // core upper, dashed light
             { titleCol: loCorCol, titleRow: headerRow, valCol: loCorCol,
               color: COLOR_DARK_BLUE, dashed: true },             // core lower, dashed dark
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R35 P2 — 7 missed combo + clustered-bar templates (post-R34 audit).
+    // ────────────────────────────────────────────────────────────────
+
+    // Standard combo: bars LEFT axis, line RIGHT axis (default).
+    case 'txn_count_avg_deal_combo': {
+      // Master deck p.8 (dia) / p.17 (gov):
+      //   Bar: TTM transaction count (left integer axis)
+      //   Line: Avg deal size $ (right currency axis)
+      const periodCol = findCol('period_end');
+      const cntCol    = findCol('ttm_count');
+      const avgCol    = findCol('avg_deal_size');
+      if (!periodCol || !cntCol || !avgCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky }],
+          lineSeries: [{ titleCol: avgCol, titleRow: headerRow, valCol: avgCol, color: navy }],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'rent_and_price_per_chair': {
+      // Dialysis counterpart to gov rent_and_price_psf — bars=rent/chair
+      // (left $), line=price/chair (right $). Both TTM rolling.
+      const periodCol = findCol('period_end');
+      const rentCol   = findCol('rent_per_chair');
+      const priceCol  = findCol('price_per_chair');
+      if (!periodCol || !rentCol || !priceCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barSeries:  [{ titleCol: rentCol,  titleRow: headerRow, valCol: rentCol,  color: sky  }],
+          lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy }],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'rent_and_price_psf': {
+      // Master deck p.9 (gov): bars=rent/SF (left $), line=price/SF (right $).
+      const periodCol = findCol('period_end');
+      const rentCol   = findCol('rent_psf');
+      const priceCol  = findCol('price_psf');
+      if (!periodCol || !rentCol || !priceCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barSeries:  [{ titleCol: rentCol,  titleRow: headerRow, valCol: rentCol,  color: sky  }],
+          lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy }],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'dom_price_change_active': {
+      // 4 series — 2 DOM bars (left) + 2 price-change % lines (right).
+      // Both lines share the same color (#1F4E79 dark blue) with the
+      // core variant DASHED per renderer line ~1393. Bar colors per
+      // renderer: avg_dom_total=palette[3] (pale/sky), avg_dom_core=palette[1] (sky).
+      const periodCol = findCol('period_end');
+      const domTotCol = findCol('avg_dom_total');
+      const domCorCol = findCol('avg_dom_core');
+      const pctTotCol = findCol('pct_price_change_total');
+      const pctCorCol = findCol('pct_price_change_core');
+      if (!periodCol || !domTotCol || !domCorCol || !pctTotCol || !pctCorCol) return null;
+      const DARK_BLUE = '1F4E79';
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barSeries: [
+            // Total Market DOM — pale/sky fill
+            { titleCol: domTotCol, titleRow: headerRow, valCol: domTotCol, color: '9DC3E6' },
+            // 10+ Year Core DOM — sky fill
+            { titleCol: domCorCol, titleRow: headerRow, valCol: domCorCol, color: sky },
+          ],
+          lineSeries: [
+            // Total Market % change — dark blue solid
+            { titleCol: pctTotCol, titleRow: headerRow, valCol: pctTotCol, color: DARK_BLUE },
+            // 10+ Year Core % change — dark blue dashed (matches asking_cap_quartiles_active idiom)
+            { titleCol: pctCorCol, titleRow: headerRow, valCol: pctCorCol, color: DARK_BLUE, dashed: true },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // Swapped combo: lines LEFT axis, bars RIGHT axis (PDF p.35/p.22).
+    case 'seller_sentiment':
+    case 'seller_sentiment_monthly': {
+      // 4 series — 2 cap-rate lines (LEFT) + 2 price-change % bars (RIGHT).
+      // Renderer colors per line ~1057:
+      //   Bars: PDF_COLORS.sentiment_bar_all (sage), sentiment_bar_long (light purple)
+      //   Lines: palette[0] navy (all), palette[1] sky (8+yr)
+      const periodCol = findCol('period_end');
+      const barAllCol = findCol('pct_price_change_all');
+      const barLongCol = findCol('pct_price_change_long_term');
+      const lineAllCol = findCol('last_ask_cap_all');
+      const lineLongCol = findCol('last_ask_cap_long_term');
+      if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          swapAxes: true,  // lines LEFT, bars RIGHT (PDF p.35/p.22)
+          barSeries: [
+            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '4CB582' },  // sage
+            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '7E6BAD' },  // light purple
+          ],
+          lineSeries: [
+            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: navy },
+            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: sky  },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // Clustered bar — multi-bar single-axis (renderer's "line" series
+    // isn't in the data tab schema; native plots just the bars).
+    case 'inventory_backlog': {
+      // 2 bars: No. Added (sky) + No. Sold (navy). Single axis (integer).
+      // Renderer uses commonOpts (not comboOpts) — no secondary axis.
+      const periodCol = findCol('period_end');
+      const addedCol  = findCol('added_ttm');
+      const soldCol   = findCol('sold_ttm');
+      if (!periodCol || !addedCol || !soldCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'clustered-bar',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            { titleCol: addedCol, titleRow: headerRow, valCol: addedCol, color: sky  },
+            { titleCol: soldCol,  titleRow: headerRow, valCol: soldCol,  color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'pace_of_cap_rate_expansion': {
+      // 2 bars: pace_all (navy) + pace_core (sky). Renderer also wants
+      // a 3rd amber line (pace_cost) but the data tab schema doesn't
+      // include it — same pattern as net_lease_spread + fed_funds_vs_treasury.
+      // Plot the 2 bars that exist.
+      const periodCol = findCol('period_end');
+      const allCol    = findCol('pace_all');
+      const coreCol   = findCol('pace_core');
+      if (!periodCol || !allCol || !coreCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'clustered-bar',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            { titleCol: allCol,  titleRow: headerRow, valCol: allCol,  color: navy },
+            { titleCol: coreCol, titleRow: headerRow, valCol: coreCol, color: sky  },
           ],
           anchor: standardAnchor,
         },
