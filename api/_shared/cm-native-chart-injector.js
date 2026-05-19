@@ -585,6 +585,82 @@ ${lineXml}
  * @param {Array}  spec.series        List of { titleCol, titleRow, xCol, yCol, color }
  * @returns {string} chart XML
  */
+/**
+ * Generate a doughnut chart — a single ring with N segments, no axes.
+ * Each data row is one segment; the colors[] array maps to segments
+ * positionally via per-point <c:dPt> blocks.
+ *
+ * OpenXML differences from every other chart type:
+ *   • <c:doughnutChart> instead of barChart/lineChart/etc.
+ *   • NO axes at all — donut is a special radial chart type
+ *   • <c:cat> uses <c:strRef> (text labels) instead of <c:numRef>
+ *   • Per-segment colors emitted as <c:dPt> blocks inside the series
+ *   • <c:holeSize val="55"/> sets the donut hole percentage (matches
+ *     renderer's cutout: '55%')
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName        Data_* tab name
+ * @param {string} spec.titleCol       Column letter for series title cell
+ * @param {number} spec.titleRow       Row index for series title cell
+ * @param {string} spec.catCol         Column letter for segment labels (text)
+ * @param {string} spec.valCol         Column letter for segment values
+ * @param {number} spec.dataStart      1-indexed first data row
+ * @param {number} spec.dataEnd        1-indexed last data row (inclusive)
+ * @param {string[]} spec.colors       Hex colors, one per segment (in row order).
+ *                                     Excess colors are ignored, missing ones
+ *                                     fall back to navy.
+ * @param {number} [spec.holeSize]     Donut hole % (default 55, range 10-90).
+ * @returns {string} chart XML
+ */
+function buildDoughnutChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const segmentCount = (spec.dataEnd - spec.dataStart) + 1;
+  const colors = spec.colors || [];
+  // Emit one <c:dPt> per segment with its hex color
+  const dPtXml = Array.from({ length: segmentCount }, (_, i) => {
+    const color = (colors[i] || '003DA5').replace('#', '');
+    return `          <c:dPt>
+            <c:idx val="${i}"/>
+            <c:bubble3D val="0"/>
+            <c:spPr>
+              <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
+              <a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln>
+            </c:spPr>
+          </c:dPt>`;
+  }).join('\n');
+
+  const holeSize = Math.max(10, Math.min(90, spec.holeSize || 55));
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:doughnutChart>
+        <c:varyColors val="1"/>
+        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${spec.titleCol}$${spec.titleRow}</c:f></c:strRef></c:tx>
+${dPtXml}
+          <c:cat><c:strRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${spec.valCol}$${spec.dataStart}:$${spec.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+        </c:ser>
+        <c:firstSliceAng val="0"/>
+        <c:holeSize val="${holeSize}"/>
+      </c:doughnutChart>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="r"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 function buildScatterChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const seriesXml = spec.series.map((s, i) => {
@@ -978,6 +1054,9 @@ export async function injectNativeCharts(buffer, injections) {
       chartXml = buildAreaComboChartXml(spec);
     } else if (spec.type === 'scatter') {
       chartXml = buildScatterChartXml(spec);
+    } else if (spec.type === 'doughnut') {
+      // R36 P2 — single-ring pie/donut chart with per-segment colors.
+      chartXml = buildDoughnutChartXml(spec);
     } else {
       // 'line' (default) and any future shapes that don't have their own
       // builder yet fall back to the line builder.
@@ -1052,6 +1131,7 @@ export {
   buildComboChartXml,
   buildAreaComboChartXml,
   buildScatterChartXml,
+  buildDoughnutChartXml,
   buildDrawingXml,
 };
 
@@ -1162,6 +1242,9 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // the editable visual that ships.
   'leased_inventory_by_state',      // top-N states by lease_count (gov)
   'sources_of_capital',             // top-N buyer states by 15-yr volume (gov)
+  // R36 P2 — donut charts (single ring, N segments, no axes).
+  'available_by_tenant_count_donut',  // count share by tenant (DaVita/FMC/US Renal/Other)
+  'available_by_tenant_volume_donut', // volume share by tenant — same shape
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -2475,6 +2558,48 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           color: navy,
           horizontal: true,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R36 P2 — donut charts (single ring, N segments, no axes).
+    // Each data row is one tenant segment; the renderer at
+    // cm-chart-image-renderer.js line ~435 uses these PDF colors:
+    //   idx 0 = DaVita      navy   (cap_short)
+    //   idx 1 = FMC         sky    (cap_mid)
+    //   idx 2 = US Renal    sage   (cap_mid_long)
+    //   idx 3 = Other       gray   (cap_outside_firm)
+    // Doughnut hole cutout = 55% to match cutout: '55%' in renderer.
+    // ────────────────────────────────────────────────────────────────
+    case 'available_by_tenant_count_donut':
+    case 'available_by_tenant_volume_donut': {
+      const isVolume = chart_template_id === 'available_by_tenant_volume_donut';
+      const tenantCol = findCol('tenant');
+      const valCol    = findCol(isVolume ? 'volume_available' : 'count_active');
+      if (!tenantCol || !valCol) return null;
+      // PDF segment colors (positional — DaVita first, FMC second, etc.).
+      // Excess rows get the "Other" gray. The data tab arrives pre-sorted
+      // from the view (per the renderer's expectation).
+      const SEGMENT_COLORS = ['003DA5', '62B5E5', '4CB582', '6A748C'];
+      // Build a per-row color array sized to the data range. Anything
+      // past the 4 known segments falls back to the "Other" gray so
+      // unknown tenants don't crash the chart.
+      const rowCount = (dataEnd - dataStart) + 1;
+      const colors = Array.from({ length: rowCount }, (_, i) =>
+        SEGMENT_COLORS[i] || '6A748C'
+      );
+      return {
+        tabName,
+        spec: {
+          type: 'doughnut',
+          tabName,
+          titleCol: valCol, titleRow: headerRow,
+          catCol: tenantCol, valCol,
+          dataStart, dataEnd,
+          colors,
+          holeSize: 55,
           anchor: standardAnchor,
         },
       };

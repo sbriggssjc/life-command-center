@@ -242,6 +242,127 @@ test('NATIVE_CHART_TEMPLATES: R36 P1 horizontal-bar state rankings registered', 
   }
 });
 
+test('NATIVE_CHART_TEMPLATES: R36 P2 donut charts registered', () => {
+  for (const id of ['available_by_tenant_count_donut', 'available_by_tenant_volume_donut']) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: available_by_tenant_count_donut builds 4-segment doughnut', () => {
+  const cols = [
+    { key: 'tenant',       col: 'A' },
+    { key: 'count_active', col: 'B' },
+    { key: 'period_end',   col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_tenant_count_donut',
+    tabName: 'Data_Avail_by_Tenant',
+    cols, dataStart: 5, dataEnd: 8,  // 4 segments
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.type, 'doughnut');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.valCol, 'B', 'count_active is the value column');
+  assert.equal(out.spec.dataStart, 5);
+  assert.equal(out.spec.dataEnd, 8);
+  assert.equal(out.spec.holeSize, 55);
+  // 4 colors per segment: navy / sky / sage / gray
+  assert.deepEqual(out.spec.colors,
+    ['003DA5', '62B5E5', '4CB582', '6A748C'],
+    'DaVita / FMC / US Renal / Other');
+});
+
+test('buildInjectionSpec: available_by_tenant_volume_donut uses volume_available column', () => {
+  const cols = [
+    { key: 'tenant',           col: 'A' },
+    { key: 'volume_available', col: 'B' },
+    { key: 'period_end',       col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_tenant_volume_donut',
+    tabName: 'Data_Avail_by_Tenant_Vol',
+    cols, dataStart: 5, dataEnd: 8,
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.type, 'doughnut');
+  assert.equal(out.spec.valCol, 'B', 'volume_available is the value column');
+});
+
+test('buildInjectionSpec: doughnut extra segments past 4 fall back to gray', () => {
+  // 6 rows of tenants — first 4 get the known colors, last 2 get gray
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_tenant_count_donut',
+    tabName: 'Data_Avail_by_Tenant',
+    cols: [
+      { key: 'tenant',       col: 'A' },
+      { key: 'count_active', col: 'B' },
+      { key: 'period_end',   col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 10,  // 6 segments
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.colors.length, 6);
+  assert.deepEqual(out.spec.colors,
+    ['003DA5', '62B5E5', '4CB582', '6A748C', '6A748C', '6A748C']);
+});
+
+test('injectNativeCharts: doughnut chart emits correct OOXML structure', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Avail_by_Tenant');
+  sheet.getCell('A4').value = 'Tenant';
+  sheet.getCell('B4').value = 'Count Available';
+  ['DaVita', 'FMC', 'US Renal', 'Other'].forEach((tenant, i) => {
+    sheet.getCell(`A${5 + i}`).value = tenant;
+    sheet.getCell(`B${5 + i}`).value = 50 - i * 10;
+  });
+  const base = await wb.xlsx.writeBuffer();
+
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Avail_by_Tenant',
+    spec: {
+      type: 'doughnut',
+      tabName: 'Data_Avail_by_Tenant',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 8,
+      colors: ['003DA5', '62B5E5', '4CB582', '6A748C'],
+      holeSize: 55,
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // doughnut chart present
+  assert.match(chartXml, /<c:doughnutChart>/, 'is a doughnut chart');
+  assert.match(chartXml, /<c:holeSize val="55"\/>/, 'hole size 55%');
+
+  // NO axes at all (donut is axis-free)
+  assert.ok(!/<c:catAx>/.test(chartXml), 'no cat axis');
+  assert.ok(!/<c:valAx>/.test(chartXml), 'no val axis');
+
+  // 4 per-point color blocks
+  const dPtCount = (chartXml.match(/<c:dPt>/g) || []).length;
+  assert.equal(dPtCount, 4, '4 segment dPt blocks');
+  for (const color of ['003DA5', '62B5E5', '4CB582', '6A748C']) {
+    assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `${color} segment present`);
+  }
+
+  // <c:cat> uses strRef (text labels) not numRef
+  assert.match(chartXml, /<c:cat><c:strRef><c:f>'Data_Avail_by_Tenant'!\$A\$5:\$A\$8/,
+    'cat uses strRef for tenant names');
+  // <c:val> uses numRef as usual
+  assert.match(chartXml, /<c:val><c:numRef><c:f>'Data_Avail_by_Tenant'!\$B\$5:\$B\$8/,
+    'val uses numRef for counts');
+
+  // <c:varyColors val="1"/> (donut conventionally varies colors per segment)
+  assert.match(chartXml, /<c:varyColors val="1"\/>/);
+
+  // Legend at right (donut convention)
+  assert.match(chartXml, /<c:legendPos val="r"\/>/);
+});
+
 test('buildInjectionSpec: leased_inventory_by_state builds horizontal bar', () => {
   const out = buildInjectionSpec({
     chart_template_id: 'leased_inventory_by_state',
