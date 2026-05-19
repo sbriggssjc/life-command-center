@@ -1269,7 +1269,26 @@ async function exportWorkbook(req, res) {
     chartImages,
   });
 
-  const buffer = await wb.xlsx.writeBuffer();
+  let buffer = await wb.xlsx.writeBuffer();
+
+  // R34 — Post-process to inject native Excel chart objects for any
+  // chart_template_ids in NATIVE_CHART_TEMPLATES. The workbook builder
+  // already skipped the PNG embed for those, so the only chart users
+  // see on those tabs is the editable native one.
+  const injections = wb.nativeInjections || [];
+  if (injections.length > 0) {
+    try {
+      const { injectNativeCharts } = await import('./_shared/cm-native-chart-injector.js');
+      buffer = await injectNativeCharts(Buffer.from(buffer), injections);
+      console.log(`[exportWorkbook] injected ${injections.length} native chart(s): ${injections.map(i => i.tabName).join(', ')}`);
+      res.setHeader('X-CM-Native-Charts', String(injections.length));
+    } catch (e) {
+      console.error(`[exportWorkbook] native-chart injection failed: ${e?.message || e}`);
+      // Fall back to PNG-less workbook for the migrated tabs (not ideal
+      // but better than crashing the export). Tab will just lack a chart.
+    }
+  }
+
   return res.status(200).send(Buffer.from(buffer));
 }
 
