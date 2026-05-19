@@ -446,6 +446,91 @@ ${lineXml}
 </c:chartSpace>`;
 }
 
+/**
+ * Generate a scatter (xy) chart with N point-cloud series. Each series
+ * specifies independent x and y column letters; rows in the data range
+ * are plotted as (x, y) points with no connecting line by default.
+ *
+ * Used for true point clouds — `core_cap_rate_dot_plot` (one dot per
+ * closed sale: x=sale_date, y=cap_rate) and `available_cap_rate_dot_plot`
+ * (one dot per active listing: x=firm_term_years, y=asking_cap_rate).
+ *
+ * OpenXML differences from the categorical charts above:
+ *   • <c:scatterChart> + <c:scatterStyle val="marker"/> (no line)
+ *   • Series use <c:xVal>/<c:yVal> instead of <c:cat>/<c:val>
+ *   • Both axes are val axes (axId 1 + 2, both <c:valAx>) — there's
+ *     no cat axis because x is continuous.
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName       Data_* tab name
+ * @param {number} spec.dataStart     1-indexed first data row
+ * @param {number} spec.dataEnd       1-indexed last data row (inclusive)
+ * @param {Array}  spec.series        List of { titleCol, titleRow, xCol, yCol, color }
+ * @returns {string} chart XML
+ */
+function buildScatterChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const seriesXml = spec.series.map((s, i) => {
+    const color = (s.color || '003DA5').replace('#', '');
+    // Marker shape: filled circle, no border emphasis (mirrors
+    // chart.js pointStyle:'circle' + pointRadius:3 from the renderer).
+    // <c:size val="5"/> ≈ pointRadius 3-4 in pixels. <c:symbol val="circle"/>.
+    return `        <c:ser>
+          <c:idx val="${i}"/>
+          <c:order val="${i}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:ln w="22225" cap="rnd"><a:noFill/></a:ln>
+          </c:spPr>
+          <c:marker>
+            <c:symbol val="circle"/>
+            <c:size val="5"/>
+            <c:spPr>
+              <a:solidFill><a:srgbClr val="${color}"><a:alpha val="55000"/></a:srgbClr></a:solidFill>
+              <a:ln w="3175"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
+            </c:spPr>
+          </c:marker>
+          <c:xVal><c:numRef><c:f>'${sheet}'!$${s.xCol}$${spec.dataStart}:$${s.xCol}$${spec.dataEnd}</c:f></c:numRef></c:xVal>
+          <c:yVal><c:numRef><c:f>'${sheet}'!$${s.yCol}$${spec.dataStart}:$${s.yCol}$${spec.dataEnd}</c:f></c:numRef></c:yVal>
+          <c:smooth val="0"/>
+        </c:ser>`;
+  }).join('\n');
+
+  // Both axes are valAx (continuous). Axis IDs 1 (x, bottom) + 2 (y, left).
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:scatterChart>
+        <c:scatterStyle val="marker"/>
+        <c:varyColors val="0"/>
+${seriesXml}
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:scatterChart>
+      <c:valAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:valAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -560,6 +645,8 @@ export async function injectNativeCharts(buffer, injections) {
       chartXml = buildMultiLineChartXml(spec);
     } else if (spec.type === 'combo') {
       chartXml = buildComboChartXml(spec);
+    } else if (spec.type === 'scatter') {
+      chartXml = buildScatterChartXml(spec);
     } else {
       // 'line' (default) and any future shapes that don't have their own
       // builder yet fall back to the line builder.
@@ -632,6 +719,7 @@ export {
   buildStackedBarChartXml,
   buildMultiLineChartXml,
   buildComboChartXml,
+  buildScatterChartXml,
   buildDrawingXml,
 };
 
@@ -683,6 +771,15 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   'dom_and_pct_of_ask_monthly',     // same shape, monthly cadence
   'case_for_renewal',               // bar: commencement_count + line: avg_rent_per_sf
   'available_market_size_combo',    // bar×2 (count_total/core) + line×2 (avg_cap_total/core)
+  // P7 — scatter (xy) charts — one dot per data row
+  'core_cap_rate_dot_plot',         // x=sale_date, y=cap_rate (closed sales)
+  'available_cap_rate_dot_plot',    // x=firm_term_years, y=asking_cap (active listings)
+  // Deferred: rent_by_year_built (whisker+median+avg composite — needs
+  //   floating-bar builder, same family as bid_ask_spread). P8 candidate.
+  // Deferred: trendlines on the cap-rate dot plots (12-mo rolling avg /
+  //   linear regression). The renderer computes them in JS from the
+  //   data; native chart needs the trendline values pre-computed into
+  //   helper columns on the data tab. Plumbing for P7.5.
 ]);
 
 /**
@@ -1019,6 +1116,54 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy   },
             { titleCol: capCoreCol, titleRow: headerRow, valCol: capCoreCol, color: 'D97706' },
           ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // P7 — scatter (xy) charts — one point per data row, no connecting line
+    case 'core_cap_rate_dot_plot': {
+      // Closed-sale scatter: x = period_end (sale date), y = cap_rate.
+      // Renderer also adds a 12-mo rolling-avg trendline (computed in JS),
+      // but that requires a derived helper column on the data tab —
+      // deferred. Native chart shows just the dot cloud.
+      const xCol = findCol('period_end');
+      const yCol = findCol('cap_rate');
+      if (!xCol || !yCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'scatter',
+          tabName,
+          dataStart, dataEnd,
+          series: [{
+            titleCol: yCol, titleRow: headerRow,
+            xCol, yCol,
+            color: sky,  // sky w/ alpha — matches renderer rgba(98,181,229,0.55)
+          }],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'available_cap_rate_dot_plot': {
+      // Active-listing scatter: x = firm_term_years, y = cap_rate.
+      // Renderer adds a linear regression trendline — deferred (see
+      // core_cap_rate_dot_plot above).
+      const xCol = findCol('firm_term_years');
+      const yCol = findCol('cap_rate');
+      if (!xCol || !yCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'scatter',
+          tabName,
+          dataStart, dataEnd,
+          series: [{
+            titleCol: yCol, titleRow: headerRow,
+            xCol, yCol,
+            color: sky,
+          }],
           anchor: standardAnchor,
         },
       };

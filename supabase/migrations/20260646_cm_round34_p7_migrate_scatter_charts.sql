@@ -1,0 +1,113 @@
+-- =====================================================================
+-- Round 34 P7 — migrate scatter (xy) charts to native Excel chart XML
+-- Builds on the R34 P6 combo dual-axis migration (PR #828).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 19)
+-- ---------------------------------------------------------------------
+--   1. core_cap_rate_dot_plot       scatter (x=sale_date, y=cap_rate)
+--   2. available_cap_rate_dot_plot  scatter (x=firm_term_years, y=cap_rate)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildScatterChartXml(spec) — emits <c:scatterChart> with
+--     <c:scatterStyle val="marker"/> (no connecting line). Different
+--     OpenXML shape than the categorical chart builders:
+--       - Series use <c:xVal>/<c:yVal> instead of <c:cat>/<c:val>
+--       - Both axes are <c:valAx> (no <c:catAx>) — both x and y are
+--         continuous numeric (or date) scales
+--       - Markers configured as filled circle with semi-transparent
+--         fill (<a:alpha val="55000"/>) to match the renderer's
+--         rgba(98,181,229,0.55) dots
+--   • injectNativeCharts dispatches spec.type === 'scatter'
+--   • NATIVE_CHART_TEMPLATES expanded from 17 → 19
+--
+-- Spec wiring (both templates: single dot series, no trendline):
+--   core_cap_rate_dot_plot:
+--     xCol = period_end (sale date, col A)
+--     yCol = cap_rate (col B)
+--     Excel will plot dates as a continuous time scale on the x-axis.
+--   available_cap_rate_dot_plot:
+--     xCol = firm_term_years (col C, continuous numeric)
+--     yCol = cap_rate (col B)
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • Registration check for the 2 new templates + negative check
+--     that rent_by_year_built stays deferred (composite shape)
+--   • buildInjectionSpec tests verify xCol/yCol wiring per template:
+--     core uses period_end as x, available uses firm_term_years as x.
+--   • End-to-end XML test:
+--       - <c:scatterChart> + <c:scatterStyle val="marker"/>
+--       - Series have <c:xVal> AND <c:yVal> (not cat/val)
+--       - No <c:catAx>; exactly 2 <c:valAx> blocks
+--       - Marker fill includes <a:alpha val="55000"/> (semi-transparent)
+--       - smooth=0 (no curve smoothing on the markers)
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 60 CM tests pass (up from 56 in P6).
+--
+-- End-to-end build produced 2 scatter charts:
+--   chart1 (core_cap_rate_dot_plot):
+--     scatter=true catAx=false valAxes=2 series=1 xVal=true yVal=true alpha=true
+--   chart2 (available_cap_rate_dot_plot):
+--     scatter=true catAx=false valAxes=2 series=1 xVal=true yVal=true alpha=true
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Check response header: X-CM-Native-Charts should reach 16-19
+-- 3. In Excel, right-click these tabs' charts — "Edit Data" +
+--    "Format Chart Area" should be ENABLED:
+--       Data_Core_Cap_Dot     (closed-sale dot cloud, time x-axis)
+--       Data_Avail_Cap_Dot    (active-listing dot cloud, term x-axis)
+-- 4. Verify the dots are semi-transparent sky-blue circles (matches
+--    the PDF renderer's rgba(98,181,229,0.55) overlap-friendly fill).
+--
+-- ---------------------------------------------------------------------
+-- KNOWN GAPS
+-- ---------------------------------------------------------------------
+-- 1. Trendlines NOT included.
+--    The PNG renderer overlays a 12-month rolling-average trendline
+--    (core_cap_rate_dot_plot) or a linear-regression trendline
+--    (available_cap_rate_dot_plot) computed in JS at render time.
+--    These values aren't stored on the data tab — to add them to a
+--    native chart we'd need to write derived helper columns at export
+--    time, then add a second series referencing those cells.
+--
+--    Plumbing for P7.5:
+--      a) Compute the trendline values in cm-excel-export.js right
+--         before writing data rows.
+--      b) Write them to an extra column (F or G) on the data tab.
+--      c) Add a `trendCol` field to the scatter spec.
+--      d) Update buildScatterChartXml to emit a second <c:ser> with
+--         showLine + smooth turned on, no markers.
+--
+-- 2. rent_by_year_built DEFERRED.
+--    This template is a whisker+median+avg composite: floating bar
+--    (lower_q → upper_q range) + scatter dots for median + avg. The
+--    floating-bar shape isn't supported by any builder yet. Same
+--    family as bid_ask_spread, bid_ask_spread_monthly,
+--    rent_psf_box_quarterly — all need a buildFloatingBarChartXml
+--    helper. Grouping them into P8.
+--
+-- ---------------------------------------------------------------------
+-- NEXT (R34 P8)
+-- ---------------------------------------------------------------------
+-- Floating-bar / box-whisker charts (~3-4 templates):
+--   • bid_ask_spread / bid_ask_spread_monthly  floating bar (last_ask →
+--                                              last_ask + spread) + dot
+--   • rent_psf_box_quarterly                   floating bar (IQR) +
+--                                              median line + min/max whiskers
+--   • ppsf_box_quarterly                       same shape as rent_psf
+--   • rent_by_year_built                       deferred from P7
+-- All share a pattern: floating bar = [low, high] data pairs in a
+-- <c:barChart> with <c:grouping val="standard"/> (single series with
+-- 2-value points). Plus optional scatter dots for median/avg overlays.
+-- =====================================================================
