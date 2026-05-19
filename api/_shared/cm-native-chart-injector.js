@@ -117,6 +117,123 @@ function valAxNumFmtFrag(numFmt) {
 }
 
 // ----------------------------------------------------------------------------
+// R37 P3 — peak/trough/most-recent data labels
+// ----------------------------------------------------------------------------
+// User feedback 2026-05-19, item #2: "most of the data labels are gone
+// (lowest, highest and most recent)". The PNG renderer adds annotation
+// labels via buildAnnotations(rows, getter, formatter) that mark the
+// max/min/last data points with formatted bubbles. Native chart XML
+// needs <c:dLbls> + per-point <c:dLbl idx="N"/> blocks to achieve the
+// equivalent.
+
+// Format helpers matching cm-chart-image-renderer.js fmt* functions
+const fmtPct1Native        = (v) => (Number(v) * 100).toFixed(1) + '%';
+const fmtPct2Native        = (v) => (Number(v) * 100).toFixed(2) + '%';
+const fmtCurrencyMNative   = (v) => '$' + (Number(v) / 1_000_000).toFixed(1) + 'M';
+const fmtCurrencyNative    = (v) => '$' + Math.round(Number(v)).toLocaleString('en-US');
+const fmtCurrencyKNative   = (v) => '$' + Math.round(Number(v) / 1000) + 'K';
+const fmtIndexNative       = (v) => Number(v).toFixed(1);
+const fmtCurrencyPerSfNative = (v) => '$' + Number(v).toFixed(2);
+
+// Map a named formatter string to its function. Used in the buildInjectionSpec
+// switch cases so per-template config stays declarative.
+const ANNOTATION_FORMATTERS = {
+  pct1:          fmtPct1Native,
+  pct2:          fmtPct2Native,
+  currency:      fmtCurrencyNative,
+  currency_m:    fmtCurrencyMNative,
+  currency_k:    fmtCurrencyKNative,
+  currency_psf:  fmtCurrencyPerSfNative,
+  index:         fmtIndexNative,
+};
+
+/**
+ * Given an array of rows + a value-extraction function, return the
+ * indices and formatted labels for the max, min, and last data points.
+ * Mirrors cm-chart-image-renderer.js buildAnnotations.
+ *
+ * @param {Array} rows
+ * @param {Function} getter (row) => number|null
+ * @param {Function} formatter (number) => string
+ * @returns {Array<{idx: number, text: string}>} 0..3 label entries
+ */
+function buildAnnotationsForSpec(rows, getter, formatter) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  // Filter to (idx, val) where val is a finite number
+  const points = rows
+    .map((r, i) => ({ idx: i, val: getter(r) }))
+    .filter(p => p.val != null && Number.isFinite(Number(p.val)));
+  if (points.length < 3) return [];
+
+  let maxP = points[0], minP = points[0];
+  for (const p of points) {
+    if (Number(p.val) > Number(maxP.val)) maxP = p;
+    if (Number(p.val) < Number(minP.val)) minP = p;
+  }
+  const lastP = points[points.length - 1];
+
+  const out = [];
+  // Last (primary callout — emit first so it's deterministically present)
+  out.push({ idx: lastP.idx, text: formatter(lastP.val) });
+  // Max — emit only if distinct from last
+  if (maxP.idx !== lastP.idx) {
+    out.push({ idx: maxP.idx, text: formatter(maxP.val) });
+  }
+  // Min — emit only if distinct from both
+  if (minP.idx !== lastP.idx && minP.idx !== maxP.idx) {
+    out.push({ idx: minP.idx, text: formatter(minP.val) });
+  }
+  return out;
+}
+
+/**
+ * Emit a single <c:dLbl> block overriding one data point with a custom
+ * text label. The other points in the series get no label (via the
+ * surrounding <c:dLbls> showXxx=0 defaults).
+ */
+function dLblXml(idx, text) {
+  return `          <c:dLbl>
+            <c:idx val="${idx}"/>
+            <c:tx>
+              <c:rich>
+                <a:bodyPr wrap="none" anchor="ctr"/>
+                <a:lstStyle/>
+                <a:p>
+                  <a:r>
+                    <a:rPr lang="en-US" b="1" sz="900"/>
+                    <a:t>${escapeXml(text)}</a:t>
+                  </a:r>
+                </a:p>
+              </c:rich>
+            </c:tx>
+            <c:showLegendKey val="0"/>
+            <c:showVal val="0"/>
+            <c:showCatName val="0"/>
+            <c:showSerName val="0"/>
+            <c:showPercent val="0"/>
+            <c:showBubbleSize val="0"/>
+          </c:dLbl>`;
+}
+
+/**
+ * Emit a <c:dLbls> block with per-point overrides and "no label by
+ * default" settings on the rest. Returns empty string if no points.
+ */
+function dLblsXml(points) {
+  if (!Array.isArray(points) || points.length === 0) return '';
+  const lbls = points.map(p => dLblXml(p.idx, p.text)).join('\n');
+  return `        <c:dLbls>
+${lbls}
+          <c:showLegendKey val="0"/>
+          <c:showVal val="0"/>
+          <c:showCatName val="0"/>
+          <c:showSerName val="0"/>
+          <c:showPercent val="0"/>
+          <c:showBubbleSize val="0"/>
+        </c:dLbls>`;
+}
+
+// ----------------------------------------------------------------------------
 // Chart XML builders (one per supported chart type)
 // ----------------------------------------------------------------------------
 
@@ -142,6 +259,8 @@ function buildSingleLineChartXml(spec) {
   // R37 P2 — pin val axis range + format from spec (auto-scale if absent)
   const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
   const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
+  // R37 P3 — peak/trough/most-recent data labels
+  const dLblsFrag = dLblsXml(spec.dataLabels);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
@@ -161,6 +280,7 @@ function buildSingleLineChartXml(spec) {
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:round/></a:ln>
           </c:spPr>
           <c:marker><c:symbol val="none"/></c:marker>
+${dLblsFrag}
           <c:cat>
             <c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef>
           </c:cat>
@@ -226,6 +346,8 @@ function buildSingleBarChartXml(spec) {
   // R37 P2 — pin val axis range + format from spec
   const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
   const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
+  // R37 P3 — peak/trough/most-recent data labels
+  const dLblsFrag = dLblsXml(spec.dataLabels);
   // Horizontal bar: orient cat axis maxMin so largest values appear at top
   const catOrientation = horizontal ? 'maxMin' : 'minMax';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -247,6 +369,7 @@ function buildSingleBarChartXml(spec) {
           <c:spPr>
             <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
           </c:spPr>
+${dLblsFrag}
           <c:cat>
             <c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef>
           </c:cat>
@@ -417,6 +540,8 @@ function buildMultiLineChartXml(spec) {
     const dashFrag = s.dashed
       ? `<a:prstDash val="dash"/>`
       : '';
+    // R37 P3 — per-series data labels
+    const dLblsFrag = dLblsXml(s.dataLabels);
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -425,6 +550,7 @@ function buildMultiLineChartXml(spec) {
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
           <c:marker><c:symbol val="none"/></c:marker>
+${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
@@ -559,11 +685,14 @@ function buildComboChartXml(spec) {
       const borderColor = s.borderColor.replace('#', '');
       lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
     }
+    // R37 P3 — per-series data labels (combo bar)
+    const dLblsFrag = dLblsXml(s.dataLabels);
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
           <c:spPr>${fillFrag}${lineFrag}</c:spPr>
+${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>`;
@@ -585,6 +714,8 @@ function buildComboChartXml(spec) {
   const lineXml = lineSeries.map((s, i) => {
     const idx = barSeries.length + i;
     const color = (s.color || '003DA5').replace('#', '');
+    // R37 P3 — per-series data labels (combo line)
+    const dLblsFrag = dLblsXml(s.dataLabels);
     if (s.showMarker) {
       const shape = s.markerShape || 'circle';
       const size = s.markerSize || 5;
@@ -603,6 +734,7 @@ function buildComboChartXml(spec) {
               <a:ln><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
             </c:spPr>
           </c:marker>
+${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
@@ -617,6 +749,7 @@ function buildComboChartXml(spec) {
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
           <c:marker><c:symbol val="none"/></c:marker>
+${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
@@ -794,6 +927,8 @@ function buildScatterChartXml(spec) {
   const yFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
+    // R37 P3 — per-series data labels (scatter)
+    const dLblsFrag = dLblsXml(s.dataLabels);
     // P7.5 — `showLine: true` produces a connected-line series (used for
     // trendline overlays); markers are suppressed so just the line shows.
     // `dashed: true` makes the line dashed (matches the renderer's
@@ -808,6 +943,7 @@ function buildScatterChartXml(spec) {
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
           <c:marker><c:symbol val="none"/></c:marker>
+${dLblsFrag}
           <c:xVal><c:numRef><c:f>'${sheet}'!$${s.xCol}$${spec.dataStart}:$${s.xCol}$${spec.dataEnd}</c:f></c:numRef></c:xVal>
           <c:yVal><c:numRef><c:f>'${sheet}'!$${s.yCol}$${spec.dataStart}:$${s.yCol}$${spec.dataEnd}</c:f></c:numRef></c:yVal>
           <c:smooth val="0"/>
@@ -832,6 +968,7 @@ function buildScatterChartXml(spec) {
               <a:ln w="3175"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
             </c:spPr>
           </c:marker>
+${dLblsFrag}
           <c:xVal><c:numRef><c:f>'${sheet}'!$${s.xCol}$${spec.dataStart}:$${s.xCol}$${spec.dataEnd}</c:f></c:numRef></c:xVal>
           <c:yVal><c:numRef><c:f>'${sheet}'!$${s.yCol}$${spec.dataStart}:$${s.yCol}$${spec.dataEnd}</c:f></c:numRef></c:yVal>
           <c:smooth val="0"/>
@@ -973,6 +1110,8 @@ function buildAreaComboChartXml(spec) {
   const lineXml = lines.map((s, i) => {
     const idx = 1 + bars.length + i;
     const color = (s.color || '003DA5').replace('#', '');
+    // R37 P3 — per-series data labels (area-combo line)
+    const dLblsFrag = dLblsXml(s.dataLabels);
     if (s.showMarker) {
       const shape = s.markerShape || 'circle';
       const size = s.markerSize || 5;
@@ -989,6 +1128,7 @@ function buildAreaComboChartXml(spec) {
               <a:ln><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
             </c:spPr>
           </c:marker>
+${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
@@ -1003,6 +1143,7 @@ function buildAreaComboChartXml(spec) {
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
           <c:marker><c:symbol val="none"/></c:marker>
+${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
@@ -1452,10 +1593,22 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
   // R37 P2 — optional `opts` for per-template axis pinning + format:
   //   opts.yAxisRange:  { min, max } passed straight through to valAx
   //   opts.valAxNumFmt: Excel format string for the y axis (e.g. '0.00%')
+  //
+  // R37 P3 — optional `opts.annotateKey` + `opts.annotateFmt` builds
+  // peak/trough/most-recent labels from `rows` against the named row key,
+  // formatted by one of the keys in ANNOTATION_FORMATTERS.
   const singleSeries = (type, valKeys, color, opts = {}) => {
     const periodCol = findCol('period_end');
     const valCol = findCol(...(Array.isArray(valKeys) ? valKeys : [valKeys]));
     if (!periodCol || !valCol) return null;
+    // R37 P3 — compute data labels from rows if requested
+    let dataLabels;
+    if (opts.annotateKey && opts.annotateFmt && Array.isArray(rows)) {
+      const fmt = ANNOTATION_FORMATTERS[opts.annotateFmt];
+      if (fmt) {
+        dataLabels = buildAnnotationsForSpec(rows, r => r[opts.annotateKey], fmt);
+      }
+    }
     return {
       tabName,
       spec: {
@@ -1466,6 +1619,7 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         color,
         yAxisRange:  opts.yAxisRange,
         valAxNumFmt: opts.valAxNumFmt,
+        dataLabels,
         anchor: standardAnchor,
       },
     };
@@ -1490,8 +1644,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         valAxNumFmt: VAL_FMT_INTEGER,
       });
     case 'avg_deal_size':
+      // R37 P3 — peak/trough/most-recent labels on avg deal size
+      // (renderer line 758: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
       return singleSeries('bar', 'avg_deal_size', navy, {
         valAxNumFmt: VAL_FMT_CURRENCY,
+        annotateKey: 'avg_deal_size',
+        annotateFmt: 'currency_m',
       });
     case 'yoy_volume_change':
       // Renderer uses signed colors (navy positive, lighter negative).
@@ -1503,8 +1661,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         valAxNumFmt: VAL_FMT_PERCENT_0DP,
       });
     case 'market_turnover':
+      // R37 P3 — peak/trough/most-recent labels on turnover rate
+      // (renderer line 2276: buildAnnotations(rows, r => r.turnover_rate, fmtPct1))
       return singleSeries('line', 'turnover_rate', navy, {
         valAxNumFmt: VAL_FMT_PERCENT_1DP,
+        annotateKey: 'turnover_rate',
+        annotateFmt: 'pct1',
       });
     case 'quarterly_volume_bars':
       return singleSeries('bar', 'quarterly_volume', sky, {
@@ -1699,6 +1861,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const domCol    = findCol('avg_dom');
       const pctCol    = findCol('pct_of_ask');
       if (!periodCol || !domCol || !pctCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on pct_of_ask line
+      // (renderer line 914: buildAnnotations(rows, r => r.pct_of_ask, fmtPct1))
+      const pctLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.pct_of_ask, fmtPct1Native)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -1714,7 +1881,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky },
           ],
           lineSeries: [
-            { titleCol: pctCol, titleRow: headerRow, valCol: pctCol, color: navy },
+            { titleCol: pctCol, titleRow: headerRow, valCol: pctCol, color: navy,
+              dataLabels: pctLabels },
           ],
           anchor: standardAnchor,
         },
@@ -1728,6 +1896,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const cntCol  = findCol('commencement_count');
       const rentCol = findCol('avg_rent_per_sf');
       if (!yearCol || !cntCol || !rentCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on rent line
+      // (renderer line 1923: buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year'))
+      const rentLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSfNative)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -1746,7 +1919,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             { titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky },
           ],
           lineSeries: [
-            { titleCol: rentCol, titleRow: headerRow, valCol: rentCol, color: navy },
+            { titleCol: rentCol, titleRow: headerRow, valCol: rentCol, color: navy,
+              dataLabels: rentLabels },
           ],
           anchor: standardAnchor,
         },
@@ -2174,6 +2348,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       // right cell range to reference.
       const yoyCol    = findCol('yoy_change');
       if (!periodCol || !indexCol || !yoyCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on valuation_index navy line
+      // (renderer line 1105: buildAnnotations(rows, r => r.valuation_index, fmtIndex))
+      const indexLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.valuation_index, fmtIndexNative)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -2197,7 +2376,7 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           lineSeries: [
             // Valuation Index — navy line, no markers
             { titleCol: indexCol, titleRow: headerRow, valCol: indexCol,
-              color: navy },
+              color: navy, dataLabels: indexLabels },
           ],
           anchor: standardAnchor,
         },
@@ -2273,6 +2452,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const cpiCol    = findCol('cpi_change');
       const cagrCol   = findCol('gsa_renewal_cagr');
       if (!periodCol || !cpiCol || !cagrCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on the navy GSA renewal CAGR line
+      // (renderer line 1561: buildAnnotations(rows, r => r.gsa_renewal_cagr, fmtPct1))
+      const cagrLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.gsa_renewal_cagr, fmtPct1Native)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -2282,7 +2466,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: cpiCol,  titleRow: headerRow, valCol: cpiCol,  color: sky  },
-            { titleCol: cagrCol, titleRow: headerRow, valCol: cagrCol, color: navy },
+            { titleCol: cagrCol, titleRow: headerRow, valCol: cagrCol, color: navy,
+              dataLabels: cagrLabels },
           ],
           anchor: standardAnchor,
         },
@@ -2387,6 +2572,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const cntCol    = findCol('ttm_count');
       const avgCol    = findCol('avg_deal_size');
       if (!periodCol || !cntCol || !avgCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on avg deal line
+      // (renderer line 2348: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
+      const avgLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.avg_deal_size, fmtCurrencyMNative)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -2398,7 +2588,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           yLeftNumFmt:  VAL_FMT_INTEGER,
           yRightNumFmt: VAL_FMT_CURRENCY_M,
           barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky }],
-          lineSeries: [{ titleCol: avgCol, titleRow: headerRow, valCol: avgCol, color: navy }],
+          lineSeries: [{ titleCol: avgCol, titleRow: headerRow, valCol: avgCol, color: navy,
+                         dataLabels: avgLabels }],
           anchor: standardAnchor,
         },
       };
@@ -2411,6 +2602,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const rentCol   = findCol('rent_per_chair');
       const priceCol  = findCol('price_per_chair');
       if (!periodCol || !rentCol || !priceCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on the price/chair line
+      // (renderer line 2393: buildAnnotations(rows, r => r.price_per_chair, fmtCurrencyK))
+      const priceLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.price_per_chair, fmtCurrencyKNative)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -2424,7 +2620,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           yRightRange:  { min: 0, max: 250000 },
           yRightNumFmt: VAL_FMT_CURRENCY,
           barSeries:  [{ titleCol: rentCol,  titleRow: headerRow, valCol: rentCol,  color: sky  }],
-          lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy }],
+          lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy,
+                         dataLabels: priceLabels }],
           anchor: standardAnchor,
         },
       };
@@ -2436,6 +2633,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const rentCol   = findCol('rent_psf');
       const priceCol  = findCol('price_psf');
       if (!periodCol || !rentCol || !priceCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on price/SF line
+      // (renderer line 2433: buildAnnotations(rows, r => r.price_psf, $rounded))
+      const priceLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.price_psf, fmtCurrencyNative)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -2448,7 +2650,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           yLeftNumFmt:  VAL_FMT_CURRENCY,
           yRightNumFmt: VAL_FMT_CURRENCY,
           barSeries:  [{ titleCol: rentCol,  titleRow: headerRow, valCol: rentCol,  color: sky  }],
-          lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy }],
+          lineSeries: [{ titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: navy,
+                         dataLabels: priceLabels }],
           anchor: standardAnchor,
         },
       };
@@ -2506,6 +2709,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const lineAllCol = findCol('last_ask_cap_all');
       const lineLongCol = findCol('last_ask_cap_long_term');
       if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
+      // R37 P3 — peak/trough/most-recent labels on the all-cap navy line
+      // (renderer line 1041: buildAnnotations(rows, r => r.last_ask_cap_all, fmtPct2))
+      const capLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.last_ask_cap_all, fmtPct2Native)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -2525,7 +2733,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '7E6BAD' },  // light purple
           ],
           lineSeries: [
-            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: navy },
+            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: navy,
+              dataLabels: capLabels },
             { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: sky  },
           ],
           anchor: standardAnchor,
@@ -2684,6 +2893,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const bandCol = String.fromCharCode(65 + cols.length);  // helper col letter
       const GRAY = '6A748C';  // nm_axis
 
+      // R37 P3 — peak/trough/most-recent labels on the navy avg_cap_rate line
+      // (renderer line 1217: buildAnnotations(rows, r => r.avg_cap_rate, fmtPct2))
+      const capLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.avg_cap_rate, fmtPct2Native)
+        : undefined;
+
       return {
         tabName,
         spec: {
@@ -2707,7 +2922,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           ],
           lineSeries: [
             { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
-            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },
+            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy,
+              dataLabels: capLabels },
           ],
           anchor: standardAnchor,
         },
@@ -2749,6 +2965,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       const iqrCol = String.fromCharCode(65 + cols.length);  // helper col letter
       const pale = (palette.nm_pale || '#E0E8F4').replace('#', '');
 
+      // R37 P3 — peak/trough/most-recent labels on the navy cap-rate dots
+      // (renderer line 1489: buildAnnotations(rows, r => r.cap_rate, fmtPct2))
+      const capLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.cap_rate, fmtPct2Native)
+        : undefined;
+
       return {
         tabName,
         spec: {
@@ -2779,7 +3001,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           lineSeries: [
             // Avg cap rate dots — navy circle markers, no connecting line
             { titleCol: capCol, titleRow: headerRow, valCol: capCol,
-              color: navy, showMarker: true, markerShape: 'circle', markerSize: 5 },
+              color: navy, showMarker: true, markerShape: 'circle', markerSize: 5,
+              dataLabels: capLabels },
           ],
           anchor: standardAnchor,
         },

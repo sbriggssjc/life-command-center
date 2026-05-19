@@ -2943,3 +2943,331 @@ test('injectNativeCharts: stacked-combo box-whisker (P8.5) renders correct XML',
   assert.match(chartXml, /'Data_Rent_Box'!\$I\$5:\$I\$10/, 'band refs I (helper iqr_width)');
   assert.match(chartXml, /'Data_Rent_Box'!\$F\$5:\$F\$10/, 'line refs F (median)');
 });
+
+// ============================================================================
+// R37 P3 — peak/trough/most-recent data labels via <c:dLbls> + <c:dLbl idx=...>
+//
+// User feedback item #2: "most of the data labels are gone (lowest, highest
+// and most recent)." Mirrors cm-chart-image-renderer.js buildAnnotations.
+// ============================================================================
+
+test('R37 P3: line chart emits <c:dLbls> when spec.dataLabels is provided', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('A4').value = 'Period';
+  sheet.getCell('B4').value = 'Value';
+  sheet.getCell('B5').value = 'Value';
+  for (let i = 0; i < 10; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${6 + i}`).value = (i + 1) * 0.01;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 15,
+      color: '003DA5',
+      dataLabels: [
+        { idx: 9, text: '10.0%' },  // last
+        { idx: 0, text: '1.0%' },   // min
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // dLbls block present
+  assert.match(chartXml, /<c:dLbls>/, 'line chart emits <c:dLbls>');
+  // Two <c:dLbl> entries
+  const dLblCount = (chartXml.match(/<c:dLbl>/g) || []).length;
+  assert.equal(dLblCount, 2, 'two per-point label overrides emitted');
+  // Idx values
+  assert.match(chartXml, /<c:idx val="9"\/>/, 'last-point idx');
+  assert.match(chartXml, /<c:idx val="0"\/>/, 'min-point idx');
+  // Label text content escaped
+  assert.match(chartXml, /<a:t>10\.0%<\/a:t>/, 'last text rendered');
+  assert.match(chartXml, /<a:t>1\.0%<\/a:t>/, 'min text rendered');
+});
+
+test('R37 P3: bar chart emits <c:dLbls> when spec.dataLabels is provided', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${5 + i}`).value = 1_000_000 * (i + 1);
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'bar', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 10,
+      color: '003DA5',
+      dataLabels: [{ idx: 5, text: '$6.0M' }],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:dLbls>/, 'bar chart emits <c:dLbls>');
+  assert.match(chartXml, /<a:t>\$6\.0M<\/a:t>/, 'label rendered with $ escaped');
+});
+
+test('R37 P3: combo line series accepts per-series dataLabels independently', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${5 + i}`).value = 50 + i;
+    sheet.getCell(`C${5 + i}`).value = 0.85 + i * 0.01;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'combo', tabName: 'Data_Test',
+      catCol: 'A', dataStart: 5, dataEnd: 10,
+      barSeries: [
+        { titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' },
+      ],
+      lineSeries: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5',
+          dataLabels: [{ idx: 5, text: '90.0%' }] },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Only ONE <c:dLbls> block — on the line series, not the bar series
+  const dLblsCount = (chartXml.match(/<c:dLbls>/g) || []).length;
+  assert.equal(dLblsCount, 1, 'only line series has dLbls (bar has none)');
+  assert.match(chartXml, /<a:t>90\.0%<\/a:t>/, 'line label rendered');
+
+  // Label sits inside the lineChart block, not the barChart block
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(lineBlock, /<c:dLbls>/, 'dLbls inside lineChart');
+  const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
+  assert.ok(!/<c:dLbls>/.test(barBlock), 'dLbls NOT inside barChart');
+});
+
+test('R37 P3: multi-line builder accepts per-series dataLabels', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${5 + i}`).value = 0.03 + i * 0.001;
+    sheet.getCell(`C${5 + i}`).value = 0.05 + i * 0.001;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'multi-line', tabName: 'Data_Test',
+      catCol: 'A', dataStart: 5, dataEnd: 10,
+      series: [
+        { titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' },
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5',
+          dataLabels: [{ idx: 5, text: '5.5%' }] },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  const dLblsCount = (chartXml.match(/<c:dLbls>/g) || []).length;
+  assert.equal(dLblsCount, 1, 'only second series has dLbls');
+  assert.match(chartXml, /<a:t>5\.5%<\/a:t>/);
+});
+
+test('R37 P3: scatter series accepts dataLabels (xy chart)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = i + 1;
+    sheet.getCell(`B${5 + i}`).value = 0.05 + i * 0.005;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'scatter', tabName: 'Data_Test',
+      dataStart: 5, dataEnd: 10,
+      series: [
+        { titleCol: 'B', titleRow: 4, xCol: 'A', yCol: 'B', color: '003DA5',
+          dataLabels: [{ idx: 5, text: '7.5%' }] },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:dLbls>/, 'scatter series emits dLbls');
+  assert.match(chartXml, /<a:t>7\.5%<\/a:t>/);
+});
+
+test('R37 P3: dataLabels omitted → no <c:dLbls> emitted (backward compat)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('B5').value = 'Series';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${6 + i}`).value = 100 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 11,
+      color: '003DA5',
+      // No dataLabels
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.ok(!/<c:dLbls>/.test(chartXml), 'no dLbls emitted when omitted');
+});
+
+test('R37 P3: buildInjectionSpec wires data labels from rows (avg_deal_size)', () => {
+  const rows = [];
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      period_end: new Date(2025, i, 31).toISOString(),
+      avg_deal_size: 5_000_000 + i * 250_000,
+    });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'avg_deal_size',
+    tabName: 'Data_Avg_Deal_Size',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'avg_deal_size', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 16,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    rows,
+  });
+  assert.ok(spec.spec.dataLabels, 'avg_deal_size attaches dataLabels');
+  assert.ok(spec.spec.dataLabels.length >= 1, 'has at least last-point label');
+  // last is row index 11 (12th row) with value 5.0M + 11*0.25M = 7.75M
+  const last = spec.spec.dataLabels.find(l => l.idx === 11);
+  assert.ok(last, 'last-point label present at idx 11');
+  assert.match(last.text, /^\$/, 'currency format');
+  assert.match(last.text, /M$/, 'compact M suffix');
+});
+
+test('R37 P3: buildInjectionSpec wires data labels (dom_and_pct_of_ask on line series)', () => {
+  const rows = [];
+  for (let i = 0; i < 10; i++) {
+    rows.push({
+      period_end: new Date(2025, i, 31).toISOString(),
+      avg_dom: 80 + i,
+      pct_of_ask: 0.92 + i * 0.005,  // monotonic increasing
+    });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_dom', col: 'C' },
+      { key: 'median_dom', col: 'D' },
+      { key: 'pct_of_ask', col: 'E' },
+    ],
+    dataStart: 5, dataEnd: 14,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    rows,
+  });
+  // Bar series has no labels; line series (pct_of_ask) does
+  assert.ok(!spec.spec.barSeries[0].dataLabels, 'bar series has no labels');
+  assert.ok(spec.spec.lineSeries[0].dataLabels, 'line series (pct_of_ask) has labels');
+  // last is at idx 9 with value 0.92 + 9*0.005 = 0.965 → formatted "96.5%"
+  const last = spec.spec.lineSeries[0].dataLabels.find(l => l.idx === 9);
+  assert.ok(last, 'last-point label present');
+  assert.match(last.text, /%$/, 'percent format');
+});
+
+test('R37 P3: buildInjectionSpec wires data labels (valuation_index navy line)', () => {
+  const rows = [];
+  for (let i = 0; i < 8; i++) {
+    rows.push({
+      period_end: new Date(2025, i, 31).toISOString(),
+      valuation_index: 250 + i * 5,
+      yoy_change: 0.05 - i * 0.005,
+    });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'valuation_index',
+    tabName: 'Data_Val_Index',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'valuation_index', col: 'B' },
+      { key: 'yoy_change', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 12,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    rows,
+  });
+  // Bar series (yoy_change) has no labels; line series (valuation_index) does
+  assert.ok(!spec.spec.barSeries[0].dataLabels, 'YoY bars have no labels');
+  assert.ok(spec.spec.lineSeries[0].dataLabels, 'valuation_index line has labels');
+  // index format = one decimal
+  const last = spec.spec.lineSeries[0].dataLabels.find(l => l.idx === 7);
+  assert.ok(last);
+  assert.match(last.text, /^\d+\.\d$/, 'index format like 285.0');
+});
+
+test('R37 P3: buildInjectionSpec skips dataLabels when rows missing', () => {
+  // Same template but no rows — should not crash, should not attach labels.
+  const spec = buildInjectionSpec({
+    chart_template_id: 'avg_deal_size',
+    tabName: 'Data_Avg_Deal_Size',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'avg_deal_size', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 16,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    // no rows
+  });
+  assert.ok(!spec.spec.dataLabels, 'no labels when rows missing');
+});
+
+test('R37 P3: buildAnnotations returns fewer than 3 entries when peaks coincide', () => {
+  // Strictly monotonic data — max == last, so we should get 2 entries (last + min)
+  const rows = [];
+  for (let i = 0; i < 8; i++) {
+    rows.push({
+      period_end: new Date(2025, i, 31).toISOString(),
+      avg_deal_size: 1_000_000 * (i + 1),  // strictly increasing
+    });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'avg_deal_size',
+    tabName: 'Data_Avg_Deal_Size',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'avg_deal_size', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 12,
+    brand: { palette: {} },
+    rows,
+  });
+  // last (idx 7, val 8M) — equals max, so only 2 distinct: last + min
+  assert.equal(spec.spec.dataLabels.length, 2,
+    'monotonic data → max==last → 2 labels (last + min)');
+  const idxs = spec.spec.dataLabels.map(l => l.idx).sort((a, b) => a - b);
+  assert.deepEqual(idxs, [0, 7], 'min at idx 0, last at idx 7');
+});

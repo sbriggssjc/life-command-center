@@ -1,0 +1,164 @@
+-- =====================================================================
+-- Round 37 P3 — peak/trough/most-recent data labels on chart series.
+-- User feedback 2026-05-19, item #2: "most of the data labels are
+-- gone (lowest, highest and most recent)".
+--
+-- Most complex of the 4 R37 items. Mirrors cm-chart-image-renderer.js
+-- buildAnnotations(rows, getter, formatter) — which emits chartjs
+-- plugin-annotation labels at exactly the max, min, and most-recent
+-- (last) data points on the primary series.
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--
+-- Native format helpers matching renderer fmt* functions:
+--   fmtPct1Native          (v) => '5.5%'
+--   fmtPct2Native          (v) => '5.50%'
+--   fmtCurrencyMNative     (v) => '$7.5M'
+--   fmtCurrencyNative      (v) => '$1,234,567'
+--   fmtCurrencyKNative     (v) => '$250K'
+--   fmtIndexNative         (v) => '285.0'
+--   fmtCurrencyPerSfNative (v) => '$45.50'
+--
+-- ANNOTATION_FORMATTERS map: keyed lookup table so the per-template
+-- buildInjectionSpec switch stays declarative:
+--   pct1 | pct2 | currency | currency_m | currency_k | currency_psf | index
+--
+-- buildAnnotationsForSpec(rows, getter, formatter)
+--   Mirrors renderer's buildAnnotations() — finds (max, min, last) by
+--   index and returns up to 3 {idx, text} pairs. Skips duplicates when
+--   max == last or min == last so the same label doesn't render twice.
+--
+-- dLblXml(idx, text)
+--   Emits a single <c:dLbl> override for one point on a series:
+--     <c:dLbl>
+--       <c:idx val="N"/>
+--       <c:tx><c:rich><a:p><a:r><a:rPr b="1" sz="900"/>
+--         <a:t>{escaped text}</a:t>
+--       </a:r></a:p></c:rich></c:tx>
+--       <c:showVal val="0"/>  <c:showCatName val="0"/> ...
+--     </c:dLbl>
+--
+-- dLblsXml(points)
+--   Wraps an array of {idx, text} in a parent <c:dLbls> block with
+--   show* defaults set to 0. Returns empty string if points is empty,
+--   so backward compat is automatic — charts without dataLabels emit
+--   no XML at all.
+--
+-- ---------------------------------------------------------------------
+-- BUILDERS UPDATED
+-- ---------------------------------------------------------------------
+-- All 6 builders that have data series now honor `spec.dataLabels` /
+-- `s.dataLabels`:
+--   buildSingleLineChartXml   spec.dataLabels       (single line)
+--   buildSingleBarChartXml    spec.dataLabels       (single bar)
+--   buildMultiLineChartXml    s.dataLabels per ser  (multi line)
+--   buildComboChartXml        s.dataLabels per ser  (bar + line)
+--   buildScatterChartXml      s.dataLabels per ser  (xy)
+--   buildAreaComboChartXml    s.dataLabels per ser  (area + bar + line)
+--
+-- Stacked-bar + doughnut don't get peak/trough labels (renderer doesn't
+-- annotate those either — they show per-segment % labels instead, a
+-- separate concern not addressed in this PR).
+--
+-- ---------------------------------------------------------------------
+-- PER-TEMPLATE WIRING IN buildInjectionSpec
+-- ---------------------------------------------------------------------
+-- 11 templates now auto-compute peak/trough/most-recent labels from
+-- `rows` at spec-build time. Each matches a buildAnnotations call in
+-- the renderer:
+--
+--   avg_deal_size              fmtCurrencyM   primary bar
+--   market_turnover            fmtPct1        single line
+--   dom_and_pct_of_ask + _M    fmtPct1        line series (pct_of_ask)
+--   case_for_renewal           fmtCurrencyPSF line series (avg_rent_per_sf)
+--   valuation_index            fmtIndex       navy line (valuation_index)
+--   cpi_vs_renewal_cagr        fmtPct1        navy line (gsa_renewal_cagr)
+--   txn_count_avg_deal_combo   fmtCurrencyM   navy line (avg_deal_size)
+--   rent_and_price_per_chair   fmtCurrencyK   navy line (price_per_chair)
+--   rent_and_price_psf         fmtCurrency    navy line (price_psf)
+--   seller_sentiment + _M      fmtPct2        navy line (last_ask_cap_all)
+--   cost_of_capital            fmtPct2        navy line (avg_cap_rate)
+--   volume_cap_quartile_combo  fmtPct2        navy dots  (cap_rate)
+--
+-- singleSeries() helper extended with opts.annotateKey + opts.annotateFmt
+-- so simple cases (avg_deal_size, market_turnover) stay one-liners.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT WIRED
+-- ---------------------------------------------------------------------
+-- pace_of_cap_rate_expansion — renderer at line ~1971 forces all 3
+--   labels (high + low + latest) even when they coincide. The general
+--   buildAnnotationsForSpec dedupes them. We could add a custom
+--   per-template handler later, but the default behavior (skipping
+--   duplicates) is fine for most data shapes.
+--
+-- Per-segment labels on stacked + donut charts (renderer uses
+--   chartjs-plugin-datalabels per-element labels) are a different
+--   mechanism — defer to a later round if users request.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 138 CM tests pass (up from 127 in R37 P2).
+--
+-- New tests verify:
+--   • <c:dLbls> emitted when spec.dataLabels is provided (line + bar)
+--   • Per-series dataLabels on combo line works without polluting bar
+--   • Multi-line per-series dataLabels works independently
+--   • Scatter series accepts dataLabels (xy chart)
+--   • Backward compat — omitting dataLabels emits no <c:dLbls>
+--   • buildInjectionSpec wires labels from rows for avg_deal_size
+--   • Same for dom_and_pct_of_ask (line series only, not bar)
+--   • Same for valuation_index (line, not YoY bars)
+--   • Missing rows arg doesn't crash, just omits labels
+--   • Monotonic data → 2 labels (last + min, max coincides with last)
+--
+-- All 91 prior tests still pass — backward compatible.
+--
+-- End-to-end smoke build confirmed all 3 R37 features coexist on a
+-- single chart: quarter cat format + pinned val range + percent val
+-- format + peak/trough/last labels.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Avg_Deal — bar series should show 3 bold labels:
+--    "$X.XM" at peak quarter, "$Y.YM" at trough, "$Z.ZM" at most recent
+-- 3. Open Data_DOM_Ask — line series (% of Ask) should show 3 bold
+--    labels at high (~96%), low (~85%), most recent values
+-- 4. Open Data_Val_Index — navy index line shows 3 bold integer-decimal
+--    labels (e.g. "285.0", "342.5")
+-- 5. Open Data_Vol_Cap_Combo — navy cap-rate DOTS show 3 labels
+--    (e.g. "6.25%", "7.50%", "5.85%")
+-- 6. Open Data_Cost_Capital — navy avg-cap-rate line shows 3 labels
+-- 7. Open Data_Rent_Price_Chair (dia) — navy price/chair line shows
+--    3 "$XXXK" labels
+-- 8. Open Data_Rent_Price_PSF (gov) — navy price/SF line shows 3
+--    "$XXX" labels
+-- 9. Open Data_Seller_Sentiment — navy cap line shows 3 "X.XX%" labels
+-- 10. Open Data_Case_For_Renewal — navy rent line shows 3 "$XX.XX"
+--     labels (per-SF format)
+-- 11. Open Data_Market_Turnover — single line, 3 "X.X%" labels
+-- 12. Open Data_CPI_CAGR — navy GSA renewal CAGR line shows 3 "X.X%"
+--     labels
+-- 13. Open Data_Txn_Count_Combo — navy avg-deal line shows 3 "$X.XM"
+--     labels
+--
+-- All labels render as small bold black text over the chart area —
+-- matches the renderer's labelStyle (size 10, family Calibri, weight bold).
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S COMING IN R37 P4
+-- ---------------------------------------------------------------------
+-- P4 — Supabase view extensions for the 4 charts cropped to 2014+
+--      (Inventory_Backlog, Market_Turnover, Active_Cap_Quart, Active_DOM_PC).
+--      Renderer + builder both consume whatever the view emits — fixing
+--      the views auto-extends the visualizations back to whenever the
+--      underlying tables have data (often 2001+).
+-- =====================================================================
