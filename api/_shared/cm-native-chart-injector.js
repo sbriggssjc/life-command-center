@@ -198,11 +198,20 @@ function buildStackedBarChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
+    // P8 — `noFill` flag makes a series transparent. Used to build
+    // floating-bar visuals: invisible base stack + visible top stack.
+    // <a:noFill/> on the fill + <a:noFill/> on the line border.
+    const fillFrag = s.noFill
+      ? `<a:noFill/>`
+      : `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>`;
+    const lineFrag = s.noFill
+      ? `<a:ln><a:noFill/></a:ln>`
+      : '';
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
-          <c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>
+          <c:spPr>${fillFrag}${lineFrag}</c:spPr>
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>`;
@@ -774,12 +783,23 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // P7 — scatter (xy) charts — one dot per data row
   'core_cap_rate_dot_plot',         // x=sale_date, y=cap_rate (closed sales)
   'available_cap_rate_dot_plot',    // x=firm_term_years, y=asking_cap (active listings)
-  // Deferred: rent_by_year_built (whisker+median+avg composite — needs
-  //   floating-bar builder, same family as bid_ask_spread). P8 candidate.
   // Deferred: trendlines on the cap-rate dot plots (12-mo rolling avg /
   //   linear regression). The renderer computes them in JS from the
   //   data; native chart needs the trendline values pre-computed into
   //   helper columns on the data tab. Plumbing for P7.5.
+  // P8 — floating-bar / box-whisker family. Two strategies:
+  //   (a) Floating bar via stacked-bar with invisible base, where the
+  //       data tab naturally carries both [bottom, height] columns.
+  //   (b) Render box-whisker as a multi-line quartile chart (preserves
+  //       all data; drops the shaded IQR fill — user can add it manually).
+  'bid_ask_spread',                 // (a) quarterly: only spread col present → simple line fallback
+  'bid_ask_spread_monthly',         // (a) monthly: invisible(last_ask) + visible(spread) stacked bar
+  'rent_psf_box_quarterly',         // (b) 3-line quartile chart (lower_q / median / upper_q)
+  // Deferred: ppsf_box_quarterly — no CHART_COLUMNS schema, footer caption only.
+  //   Same shape as rent_psf_box once a data tab schema is added.
+  // Deferred: rent_by_year_built — whisker + median + avg dot composite.
+  //   Needs helper-column plumbing for the IQR width (upper_q − lower_q),
+  //   then a stacked-bar + scatter-marker combo. P8.5 candidate.
 ]);
 
 /**
@@ -1164,6 +1184,90 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             xCol, yCol,
             color: sky,
           }],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // P8 — floating-bar / box-whisker family
+    case 'bid_ask_spread': {
+      // Quarterly bid-ask only carries avg_bid_ask_spread (no last_ask).
+      // Renderer falls back to a single-line chart with palette[3] fill;
+      // mirror that as a plain line chart in the native version.
+      return singleSeries('line', 'avg_bid_ask_spread', navy);
+    }
+
+    case 'bid_ask_spread_monthly': {
+      // Monthly tab has both avg_last_ask_cap AND avg_bid_ask_spread, so
+      // we can build a TRUE floating-bar visual:
+      //
+      //   Visible band = [last_ask, last_ask + spread]
+      //
+      // Decompose into a stacked bar where:
+      //   • Bottom series (invisible): val = avg_last_ask_cap (last_ask)
+      //   • Top series (visible sky):  val = avg_bid_ask_spread (the band width)
+      //
+      // The total stacked height = last_ask + spread, exactly matching
+      // the PDF's floating-bar top. The invisible base hides the bar
+      // segment from 0 to last_ask so only the spread band shows.
+      //
+      // Native Excel can read it as a stacked column chart — users can
+      // re-style the bottom series back to visible if they want a
+      // stacked-from-zero view instead of the floating band.
+      const periodCol  = findCol('period_end');
+      const lastAskCol = findCol('avg_last_ask_cap');
+      const spreadCol  = findCol('avg_bid_ask_spread');
+      if (!periodCol || !lastAskCol || !spreadCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'stacked-bar',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            // Invisible base — gets the chart off 0 up to last_ask
+            { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol,
+              color: '003DA5', noFill: true },
+            // Visible spread band — sky fill, sits on top of the invisible base
+            { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,
+              color: sky },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'rent_psf_box_quarterly': {
+      // Box-whisker in PDF: IQR shaded box + median line. Excel's
+      // standard charts don't have a built-in floating-fill primitive
+      // we can express without helper columns (upper_q − lower_q).
+      // Pragmatic native rendering: 3-line quartile band chart with
+      // the median emphasized. Same data, no shaded fill — user can
+      // add a fill manually in Excel via Select Data Source if needed.
+      //
+      // Colors per cm-chart-image-renderer.js (palette[3] sky for IQR
+      // fill, palette[0] navy for median):
+      //   lower_quartile  sky    (top of pale fill)
+      //   median          navy   (bold central line)
+      //   upper_quartile  sky    (bottom of pale fill)
+      const periodCol = findCol('period_end');
+      const lowerCol  = findCol('rent_lower_quartile');
+      const medianCol = findCol('rent_median');
+      const upperCol  = findCol('rent_upper_quartile');
+      if (!periodCol || !lowerCol || !medianCol || !upperCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            { titleCol: lowerCol,  titleRow: headerRow, valCol: lowerCol,  color: sky  },
+            { titleCol: medianCol, titleRow: headerRow, valCol: medianCol, color: navy },
+            { titleCol: upperCol,  titleRow: headerRow, valCol: upperCol,  color: sky  },
+          ],
           anchor: standardAnchor,
         },
       };
