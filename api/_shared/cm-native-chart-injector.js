@@ -325,6 +325,127 @@ ${seriesXml}
 </c:chartSpace>`;
 }
 
+/**
+ * Generate a combo (dual-axis) chart with a clustered-bar series group
+ * on the LEFT value axis and a line series group on the RIGHT value
+ * axis, both sharing the same categorical x-axis.
+ *
+ * Used for templates where one metric is a count/level (bars, left axis)
+ * and another is a rate/percent overlay (line, right axis):
+ * dom_and_pct_of_ask, case_for_renewal, available_market_size_combo, etc.
+ *
+ * OpenXML axis wiring:
+ *   axId=1 → shared cat axis (bottom)
+ *   axId=2 → primary value axis (left), used by barChart
+ *   axId=3 → secondary value axis (right), used by lineChart, crosses=max
+ *
+ * Series idx values must be unique across both chart blocks, so line-series
+ * idx continues from where the bar series leave off.
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName       Data_* tab name
+ * @param {string} spec.catCol        Column letter for shared x-axis
+ * @param {number} spec.dataStart     1-indexed first data row
+ * @param {number} spec.dataEnd       1-indexed last data row (inclusive)
+ * @param {Array}  spec.barSeries     List of { titleCol, titleRow, valCol, color }
+ * @param {Array}  spec.lineSeries    List of { titleCol, titleRow, valCol, color }
+ * @returns {string} chart XML
+ */
+function buildComboChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const barSeries = spec.barSeries || [];
+  const lineSeries = spec.lineSeries || [];
+
+  const barXml = barSeries.map((s, i) => {
+    const color = (s.color || '003DA5').replace('#', '');
+    return `        <c:ser>
+          <c:idx val="${i}"/>
+          <c:order val="${i}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+        </c:ser>`;
+  }).join('\n');
+
+  // Line series idx continues from where bar series ended so each
+  // series in the chart has a unique index (Excel relies on this).
+  const lineXml = lineSeries.map((s, i) => {
+    const idx = barSeries.length + i;
+    const color = (s.color || '003DA5').replace('#', '');
+    return `        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:round/></a:ln>
+          </c:spPr>
+          <c:marker><c:symbol val="none"/></c:marker>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+  }).join('\n');
+
+  // Bar block uses primary axes (1=cat, 2=left val).
+  // Line block shares the cat axis (1) but uses the secondary val axis (3).
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+        <c:varyColors val="0"/>
+${barXml}
+        <c:gapWidth val="60"/>
+        <c:overlap val="-20"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:barChart>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${lineXml}
+        <c:marker val="0"/>
+        <c:axId val="1"/>
+        <c:axId val="3"/>
+      </c:lineChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+      <c:valAx>
+        <c:axId val="3"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="r"/>
+        <c:crossAx val="1"/>
+        <c:crosses val="max"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="b"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -437,6 +558,8 @@ export async function injectNativeCharts(buffer, injections) {
       chartXml = buildSingleBarChartXml(spec);
     } else if (spec.type === 'multi-line') {
       chartXml = buildMultiLineChartXml(spec);
+    } else if (spec.type === 'combo') {
+      chartXml = buildComboChartXml(spec);
     } else {
       // 'line' (default) and any future shapes that don't have their own
       // builder yet fall back to the line builder.
@@ -508,6 +631,7 @@ export {
   buildSingleBarChartXml,
   buildStackedBarChartXml,
   buildMultiLineChartXml,
+  buildComboChartXml,
   buildDrawingXml,
 };
 
@@ -554,6 +678,11 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //   spreads. Native chart needs cells that exist; fix the data-shape
   //   mismatch first (either add cap_10plus_year column or update renderer
   //   to use nm_avg_cap as the 3rd series).
+  // P6 — combo dual-axis charts (bar on left axis + line on right axis)
+  'dom_and_pct_of_ask',             // bar: avg_dom (days) + line: pct_of_ask (%)
+  'dom_and_pct_of_ask_monthly',     // same shape, monthly cadence
+  'case_for_renewal',               // bar: commencement_count + line: avg_rent_per_sf
+  'available_market_size_combo',    // bar×2 (count_total/core) + line×2 (avg_cap_total/core)
 ]);
 
 /**
@@ -802,6 +931,93 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           series: [
             { titleCol: nmCol,     titleRow: headerRow, valCol: nmCol,     color: navy },
             { titleCol: marketCol, titleRow: headerRow, valCol: marketCol, color: sky  },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // P6 — combo dual-axis charts (bar series on left axis + line series
+    //      on right axis). Single shared cat axis.
+    case 'dom_and_pct_of_ask':
+    case 'dom_and_pct_of_ask_monthly': {
+      // Bar: avg_dom (sky), Line: pct_of_ask (navy) — matches the
+      // renderer at cm-chart-image-renderer.js line 879.
+      const periodCol = findCol('period_end');
+      const domCol    = findCol('avg_dom');
+      const pctCol    = findCol('pct_of_ask');
+      if (!periodCol || !domCol || !pctCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barSeries: [
+            { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky },
+          ],
+          lineSeries: [
+            { titleCol: pctCol, titleRow: headerRow, valCol: pctCol, color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'case_for_renewal': {
+      // X-axis is `year` (integer), not period_end.
+      // Bar: commencement_count (sky), Line: avg_rent_per_sf (navy).
+      const yearCol = findCol('year');
+      const cntCol  = findCol('commencement_count');
+      const rentCol = findCol('avg_rent_per_sf');
+      if (!yearCol || !cntCol || !rentCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: yearCol,
+          dataStart, dataEnd,
+          barSeries: [
+            { titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky },
+          ],
+          lineSeries: [
+            { titleCol: rentCol, titleRow: headerRow, valCol: rentCol, color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'available_market_size_combo': {
+      // 4-series combo: 2 bars (count_total / count_core_10plus) on left
+      // axis + 2 lines (avg_cap_total / avg_cap_core_10plus) on right axis.
+      // Colors per cm-chart-image-renderer.js line 1294:
+      //   count_total         sky    (palette[3])
+      //   count_core_10plus   sage   (palette[1])
+      //   avg_cap_total       navy   (palette[0])
+      //   avg_cap_core_10plus amber  #D97706
+      const periodCol  = findCol('period_end');
+      const cntTotCol  = findCol('count_total');
+      const cntCoreCol = findCol('count_core_10plus');
+      const capTotCol  = findCol('avg_cap_total');
+      const capCoreCol = findCol('avg_cap_core_10plus');
+      if (!periodCol || !cntTotCol || !cntCoreCol || !capTotCol || !capCoreCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barSeries: [
+            { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky    },
+            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '4CB582' },
+          ],
+          lineSeries: [
+            { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy   },
+            { titleCol: capCoreCol, titleRow: headerRow, valCol: capCoreCol, color: 'D97706' },
           ],
           anchor: standardAnchor,
         },

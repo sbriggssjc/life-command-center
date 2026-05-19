@@ -148,6 +148,17 @@ test('NATIVE_CHART_TEMPLATES: P5 multi-line charts registered', () => {
   );
 });
 
+test('NATIVE_CHART_TEMPLATES: P6 combo dual-axis charts registered', () => {
+  for (const id of [
+    'dom_and_pct_of_ask',
+    'dom_and_pct_of_ask_monthly',
+    'case_for_renewal',
+    'available_market_size_combo',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   const baseCols = [
     { key: 'period_end',   col: 'A' },
@@ -377,6 +388,113 @@ test('buildInjectionSpec: sold_cap_by_term_dot_plot — gov uses cap_5to10 (not 
   );
 });
 
+test('buildInjectionSpec: dom_and_pct_of_ask builds 1-bar + 1-line combo', () => {
+  // Real-world dia DOM tab column shape (Data_DOM_Ask)
+  const cols = [
+    { key: 'period_end',        col: 'A' },
+    { key: 'subspecialty',      col: 'B' },
+    { key: 'avg_dom',           col: 'C' },
+    { key: 'median_dom',        col: 'D' },
+    { key: 'pct_of_ask',        col: 'E' },
+    { key: 'median_pct_of_ask', col: 'F' },
+  ];
+  const brand = { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } };
+  const out = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols, dataStart: 5, dataEnd: 60, brand,
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.barSeries.length, 1, 'one bar series');
+  assert.equal(out.spec.lineSeries.length, 1, 'one line series');
+  assert.equal(out.spec.barSeries[0].valCol, 'C', 'bar = avg_dom');
+  assert.equal(out.spec.lineSeries[0].valCol, 'E', 'line = pct_of_ask');
+  assert.equal(out.spec.barSeries[0].color, '62B5E5', 'bar sky');
+  assert.equal(out.spec.lineSeries[0].color, '003DA5', 'line navy');
+});
+
+test('buildInjectionSpec: dom_and_pct_of_ask_monthly uses same combo shape', () => {
+  const cols = [
+    { key: 'period_end',   col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'n_sales',      col: 'C' },
+    { key: 'avg_dom',      col: 'D' },
+    { key: 'pct_of_ask',   col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask_monthly',
+    tabName: 'Data_DOM_Ask_Monthly',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barSeries[0].valCol, 'D', 'bar = avg_dom (col D in monthly)');
+  assert.equal(out.spec.lineSeries[0].valCol, 'E', 'line = pct_of_ask');
+});
+
+test('buildInjectionSpec: case_for_renewal uses year as x-axis', () => {
+  const cols = [
+    { key: 'year',                col: 'A' },
+    { key: 'commencement_count',  col: 'B' },
+    { key: 'avg_rent_per_sf',     col: 'C' },
+    { key: 'total_lsf',           col: 'D' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'case_for_renewal',
+    tabName: 'Data_Case_For_Renewal',
+    cols, dataStart: 5, dataEnd: 30,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.catCol, 'A', 'x-axis is year (col A) not period_end');
+  assert.equal(out.spec.barSeries[0].valCol, 'B', 'bar = commencement_count');
+  assert.equal(out.spec.lineSeries[0].valCol, 'C', 'line = avg_rent_per_sf');
+});
+
+test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line combo', () => {
+  const cols = [
+    { key: 'period_end',           col: 'A' },
+    { key: 'subspecialty',         col: 'B' },
+    { key: 'count_total',          col: 'C' },
+    { key: 'count_core_10plus',    col: 'D' },
+    { key: 'avg_cap_total',        col: 'E' },
+    { key: 'avg_cap_core_10plus',  col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_market_size_combo',
+    tabName: 'Data_Available_Market',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barSeries.length, 2, '2 bar series');
+  assert.equal(out.spec.lineSeries.length, 2, '2 line series');
+  assert.deepEqual(
+    out.spec.barSeries.map(s => s.valCol),
+    ['C', 'D'],
+    'bars: count_total, count_core_10plus'
+  );
+  assert.deepEqual(
+    out.spec.lineSeries.map(s => s.valCol),
+    ['E', 'F'],
+    'lines: avg_cap_total, avg_cap_core_10plus'
+  );
+  assert.deepEqual(
+    out.spec.barSeries.map(s => s.color),
+    ['62B5E5', '4CB582'],
+    'bar colors: sky / sage'
+  );
+  assert.deepEqual(
+    out.spec.lineSeries.map(s => s.color),
+    ['003DA5', 'D97706'],
+    'line colors: navy / amber'
+  );
+});
+
 test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   // Build a tiny workbook with a Data_Lease_Renewal tab + 5 series columns
   const wb = new ExcelJS.Workbook();
@@ -503,4 +621,74 @@ test('injectNativeCharts: multi-line cohort chart renders correct XML (gov dashe
   assert.match(chartXml, /<c:symbol val="none"\/>/, 'markers off');
   // Legend visible (multi-series)
   assert.match(chartXml, /<c:legend>/, 'has legend');
+});
+
+test('injectNativeCharts: combo chart renders correct dual-axis XML', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_DOM_Ask');
+  sheet.getCell('A4').value = 'Quarter End';
+  sheet.getCell('B4').value = 'Avg DOM';
+  sheet.getCell('C4').value = '% of Ask';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`B${5 + i}`).value = 90 + i * 5;
+    sheet.getCell(`C${5 + i}`).value = 0.96 + i * 0.002;
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_DOM_Ask',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_DOM_Ask',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 10,
+      barSeries: [
+        { titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' },  // sky
+      ],
+      lineSeries: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' },  // navy
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Both chart blocks present, sharing the cat axis
+  assert.match(chartXml, /<c:barChart>/, 'has barChart block');
+  assert.match(chartXml, /<c:lineChart>/, 'has lineChart block');
+
+  // Bar block uses axId 1 (cat) + 2 (left val); line uses 1 + 3 (right val)
+  const barBlock  = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(barBlock,  /<c:axId val="1"\/>[\s\S]*<c:axId val="2"\/>/, 'bar block: axId 1 + 2');
+  assert.match(lineBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="3"\/>/, 'line block: axId 1 + 3');
+
+  // Two val axes — left primary (axPos=l) and right secondary (axPos=r, crosses=max)
+  const leftAx  = chartXml.match(/<c:valAx>\s*<c:axId val="2"\/>[\s\S]*?<\/c:valAx>/);
+  const rightAx = chartXml.match(/<c:valAx>\s*<c:axId val="3"\/>[\s\S]*?<\/c:valAx>/);
+  assert.ok(leftAx,  'left val axis (axId=2) present');
+  assert.ok(rightAx, 'right val axis (axId=3) present');
+  assert.match(leftAx[0],  /<c:axPos val="l"\/>/, 'left axis on left');
+  assert.match(rightAx[0], /<c:axPos val="r"\/>/, 'right axis on right');
+  assert.match(rightAx[0], /<c:crosses val="max"\/>/, 'right axis crosses at max');
+
+  // One bar series + one line series, with unique idx values across both
+  const idxValues = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  assert.deepEqual(idxValues, [0, 1], 'series idx 0 (bar) + 1 (line) — unique across chart');
+
+  // Series reference correct cells
+  assert.match(chartXml, /'Data_DOM_Ask'!\$B\$5:\$B\$10/, 'bar refs B5:B10');
+  assert.match(chartXml, /'Data_DOM_Ask'!\$C\$5:\$C\$10/, 'line refs C5:C10');
+
+  // Legend visible
+  assert.match(chartXml, /<c:legend>/, 'has legend');
+
+  // Bar fill = sky, line stroke = navy
+  assert.match(barBlock,  /srgbClr val="62B5E5"/, 'bar = sky');
+  assert.match(lineBlock, /srgbClr val="003DA5"/, 'line = navy');
 });
