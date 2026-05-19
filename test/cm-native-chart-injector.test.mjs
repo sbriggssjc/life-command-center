@@ -248,6 +248,146 @@ test('NATIVE_CHART_TEMPLATES: R36 P2 donut charts registered', () => {
   }
 });
 
+test('NATIVE_CHART_TEMPLATES: R36 P3 bar + multi-scatter composites registered (final native)', () => {
+  for (const id of ['available_by_term_summary', 'available_by_firm_term_summary']) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter combo', () => {
+  const cols = [
+    { key: 'term_bucket',         col: 'A' },
+    { key: 'n_listings',          col: 'B' },
+    { key: 'avg_price',           col: 'C' },
+    { key: 'avg_cap',             col: 'D' },
+    { key: 'upper_quartile_cap',  col: 'E' },
+    { key: 'median_cap',          col: 'F' },
+    { key: 'lower_quartile_cap',  col: 'G' },
+    { key: 'period_end',          col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_term_summary',
+    tabName: 'Data_Avail_Term',
+    cols, dataStart: 5, dataEnd: 8,  // 4 term buckets
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.catCol, 'A', 'term_bucket is x-axis');
+
+  // 1 bar series — sky avg_price on left axis (default combo)
+  assert.equal(out.spec.barSeries.length, 1);
+  assert.equal(out.spec.barSeries[0].valCol, 'C');
+  assert.equal(out.spec.barSeries[0].color, '62B5E5');
+
+  // 4 marker-only line series — all on the right axis (default combo)
+  assert.equal(out.spec.lineSeries.length, 4);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol),
+    ['D', 'E', 'G', 'F'],
+    'Avg Cap / Upper Q / Lower Q / Median order');
+  assert.deepEqual(out.spec.lineSeries.map(s => s.color),
+    ['003DA5', '7E6BAD', '6A748C', '4CB582'],
+    'navy / purple / gray / sage');
+  // All 4 are markers-only (no connecting line)
+  assert.ok(out.spec.lineSeries.every(s => s.showMarker === true),
+    'all 4 have showMarker=true');
+  assert.ok(out.spec.lineSeries.every(s => s.markerShape === 'diamond'),
+    'all 4 use diamond markers');
+});
+
+test('buildInjectionSpec: available_by_firm_term_summary uses same shape as dia variant', () => {
+  // Gov firm-term variant has the same columns; spec should be identical except tab name
+  const cols = [
+    { key: 'term_bucket',         col: 'A' },
+    { key: 'n_listings',          col: 'B' },
+    { key: 'avg_price',           col: 'C' },
+    { key: 'avg_cap',             col: 'D' },
+    { key: 'upper_quartile_cap',  col: 'E' },
+    { key: 'median_cap',          col: 'F' },
+    { key: 'lower_quartile_cap',  col: 'G' },
+    { key: 'period_end',          col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_firm_term_summary',
+    tabName: 'Data_Avail_Firm_Term',
+    cols, dataStart: 5, dataEnd: 8,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.lineSeries.length, 4);
+  assert.equal(out.spec.barSeries[0].valCol, 'C', 'avg_price on bar');
+});
+
+test('injectNativeCharts: bar + 4-scatter composite renders diamond markers across the right axis', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Avail_Term');
+  sheet.getCell('A4').value = 'Term Bucket';
+  sheet.getCell('C4').value = 'Avg Price';
+  sheet.getCell('D4').value = 'Avg Cap';
+  sheet.getCell('E4').value = 'Upper Q';
+  sheet.getCell('F4').value = 'Median';
+  sheet.getCell('G4').value = 'Lower Q';
+  ['Sub 5', '5-8', '8-12', '12+'].forEach((bucket, i) => {
+    sheet.getCell(`A${5 + i}`).value = bucket;
+    sheet.getCell(`C${5 + i}`).value = 2_000_000 + i * 500_000;
+    sheet.getCell(`D${5 + i}`).value = 0.075 - i * 0.005;
+    sheet.getCell(`E${5 + i}`).value = 0.080 - i * 0.005;
+    sheet.getCell(`F${5 + i}`).value = 0.073 - i * 0.005;
+    sheet.getCell(`G${5 + i}`).value = 0.068 - i * 0.005;
+  });
+  const base = await wb.xlsx.writeBuffer();
+
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Avail_Term',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_Avail_Term',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 8,
+      barSeries: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '62B5E5' },
+      ],
+      lineSeries: [
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5',
+          showMarker: true, markerShape: 'diamond', markerSize: 7 },
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '7E6BAD',
+          showMarker: true, markerShape: 'diamond', markerSize: 7 },
+        { titleCol: 'G', titleRow: 4, valCol: 'G', color: '6A748C',
+          showMarker: true, markerShape: 'diamond', markerSize: 7 },
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '4CB582',
+          showMarker: true, markerShape: 'diamond', markerSize: 7 },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Combo: barChart + lineChart
+  assert.match(chartXml, /<c:barChart>/);
+  assert.match(chartXml, /<c:lineChart>/);
+
+  // Two axes (bars LEFT, lines RIGHT — default combo)
+  const valAxCount = (chartXml.match(/<c:valAx>/g) || []).length;
+  assert.equal(valAxCount, 2);
+
+  // 5 series total (1 bar + 4 lines), unique idx 0..4
+  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  assert.deepEqual(idxs, [0, 1, 2, 3, 4]);
+
+  // 4 diamond markers, NO circles or other shapes
+  const diamondCount = (chartXml.match(/<c:symbol val="diamond"\/>/g) || []).length;
+  assert.equal(diamondCount, 4, '4 diamond markers');
+  // No connecting lines on the marker series — each line has <a:noFill/>
+  // on its <a:ln> (one per line-with-marker series)
+  const noFillLineCount = (chartXml.match(/<a:ln><a:noFill\/><\/a:ln>/g) || []).length;
+  assert.equal(noFillLineCount, 4, '4 markers-only line series (no connecting lines)');
+
+  // Global lineChart marker toggle is ON
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(lineBlock, /<c:marker val="1"\/>/);
+});
+
 test('buildInjectionSpec: available_by_tenant_count_donut builds 4-segment doughnut', () => {
   const cols = [
     { key: 'tenant',       col: 'A' },
