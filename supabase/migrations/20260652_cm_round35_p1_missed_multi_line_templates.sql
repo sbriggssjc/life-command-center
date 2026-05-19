@@ -1,0 +1,130 @@
+-- =====================================================================
+-- Round 35 P1 — migrate 6 missed multi-line templates caught by audit.
+-- Builds on R33 Tier F1 (PR #834).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- WHY THIS PR EXISTS
+-- ---------------------------------------------------------------------
+-- R34 was incorrectly declared "complete" after PR #833. The R33 Tier
+-- F1 follow-up (PR #834) caught one missed template (valuation_index).
+-- A subsequent post-merge audit comparing all chart_template_ids in
+-- cm-chart-image-renderer.js against NATIVE_CHART_TEMPLATES revealed
+-- ~17 additional templates that the renderer ships as PNG but were
+-- never migrated to native chart XML.
+--
+-- This PR migrates the EASIEST batch: 6 multi-line shapes that
+-- reuse the existing buildMultiLineChartXml builder. No new
+-- machinery needed.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (6 added; total now 30)
+-- ---------------------------------------------------------------------
+--   1. cap_rate_top_bottom_quartile   3-line (top_q dashed purple /
+--                                            median bold navy /
+--                                            bottom_q dashed sage)
+--   2. cap_rate_by_credit             3-line (Federal navy /
+--                                            State sky /
+--                                            Municipal sage)
+--   3. cpi_vs_renewal_cagr            2-line (CPI sky /
+--                                            GSA Renewal navy)
+--   4. fed_funds_vs_treasury          2-line (Fed Funds navy /
+--                                            10Y Treasury sky)
+--   5. cash_leveraged_returns         2-line (Cash navy /
+--                                            Leveraged mid sky)
+--   6. asking_cap_quartiles_active    4-line (Total upper/lower solid
+--                                            + Core upper/lower dashed,
+--                                            light/dark blue paired)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • NATIVE_CHART_TEMPLATES expanded 24 → 30
+--   • buildInjectionSpec adds 6 switch cases mapping each template's
+--     data columns to a multi-line spec. Colors mirror the renderer
+--     at cm-chart-image-renderer.js (cap_rate_top_bottom ~780,
+--     cap_rate_by_credit ~1510, cpi_vs_renewal_cagr ~1542,
+--     fed_funds_vs_treasury ~1568, cash_leveraged_returns ~1224,
+--     asking_cap_quartiles_active ~1342).
+--
+-- Per-template notes:
+--   • fed_funds_vs_treasury — renderer also references mortgage_30y_rate
+--     as a 3rd series, but it's not in the data tab CHART_COLUMNS schema.
+--     Native chart plots the 2 series that DO exist (Fed Funds + 10Y
+--     Treasury). Same data-shape mismatch pattern as net_lease_spread.
+--   • cash_leveraged_returns — data tab has 4 columns (cash_return +
+--     leveraged_return_mid/high/low) but the renderer only plots
+--     cash + mid. Native chart matches that (2 series).
+--   • asking_cap_quartiles_active uses literal hex colors (#9DC3E6
+--     light blue / #1F4E79 dark blue) per cm-chart-image-renderer.js
+--     line ~1354 to survive brand-tokens palette overrides — kept
+--     consistent here.
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • Registration check for all 6 new templates
+--   • buildInjectionSpec tests for each verify:
+--       - series count matches the renderer's visible series
+--       - column letters wired correctly
+--       - colors mirror renderer (purple/navy/sage for quartile,
+--         navy/sky/sage for credit, etc.)
+--       - dashed flag set appropriately
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 83 CM tests pass (up from 76 in R33 Tier F1).
+--
+-- End-to-end smoke build with synthetic data confirmed all 6 charts
+-- produce correctly-shaped lineChart XML:
+--   chart1 (cap_rate_top_bottom_quartile): 3 series, 2 dashed
+--   chart2 (cap_rate_by_credit):           3 series, 0 dashed
+--   chart3 (cpi_vs_renewal_cagr):          2 series, 0 dashed
+--   chart4 (fed_funds_vs_treasury):        2 series, 0 dashed
+--   chart5 (cash_leveraged_returns):       2 series, 0 dashed
+--   chart6 (asking_cap_quartiles_active):  4 series, 2 dashed
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. X-CM-Native-Charts should reach ~26-30 depending on vertical
+-- 3. Right-click charts on the following tabs — "Edit Data" should
+--    now be ENABLED (previously greyed out as PNG):
+--      Data_Cap_Quartile          (3-line quartile band)
+--      Data_Cap_by_Credit         (3-line federal/state/muni — gov only)
+--      Data_CPI_CAGR              (2-line CPI vs GSA renewal)
+--      Data_FF_vs_10Y             (2-line yield curve)
+--      Data_Returns_Idx           (2-line cash vs leveraged)
+--      Data_Active_Cap_Quart      (4-line cap quartile by total/core)
+-- 4. Confirm color schemes match the PDF — particularly:
+--      • cap_rate_top_bottom: top + bottom DASHED, median solid
+--      • asking_cap_quartiles_active: total SOLID, core DASHED
+--
+-- ---------------------------------------------------------------------
+-- REMAINING POST-AUDIT BACKLOG (R35 P2-P3+)
+-- ---------------------------------------------------------------------
+-- Combo dual-axis (7 templates) — uses buildComboChartXml:
+--   seller_sentiment / seller_sentiment_monthly
+--   dom_price_change_active
+--   pace_of_cap_rate_expansion
+--   inventory_backlog
+--   txn_count_avg_deal_combo
+--   rent_and_price_per_chair (dia only)
+--   rent_and_price_psf (gov only)
+--
+-- Stacked + single bar (2 templates):
+--   buyer_class_pct_by_year (annual stacked bar)
+--   renewal_rent_growth (single bar after R33 Tier D simplification)
+--
+-- Complex composites (2 templates, may need new machinery):
+--   cost_of_capital (gray range bar + 2 lines, similar to
+--                    bid_ask_spread_monthly but with floating bar)
+--   volume_cap_quartile_combo (4-layer: area + range bars + dots,
+--                              the most complex shape in the catalog)
+--
+-- That's 11 more templates to fully close the migration. P2/P3
+-- can ship in parallel; P4 (cost_of_capital + volume_cap_quartile_combo)
+-- needs design.
+-- =====================================================================

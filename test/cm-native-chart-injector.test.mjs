@@ -196,6 +196,141 @@ test('NATIVE_CHART_TEMPLATES: Tier F1 valuation_index registered', () => {
     'valuation_index combo should be migrated');
 });
 
+test('NATIVE_CHART_TEMPLATES: R35 P1 missed multi-line templates registered', () => {
+  for (const id of [
+    'cap_rate_top_bottom_quartile',
+    'cap_rate_by_credit',
+    'cpi_vs_renewal_cagr',
+    'fed_funds_vs_treasury',
+    'cash_leveraged_returns',
+    'asking_cap_quartiles_active',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: cap_rate_top_bottom_quartile builds 3-line with dashed quartiles', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'subspecialty',    col: 'B' },
+    { key: 'top_quartile',    col: 'C' },
+    { key: 'median',          col: 'D' },
+    { key: 'bottom_quartile', col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_top_bottom_quartile',
+    tabName: 'Data_Cap_Quartile',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.series.length, 3);
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
+  assert.deepEqual(out.spec.series.map(s => s.color),
+    ['7E6BAD', '003DA5', '4CB582'], 'purple / navy / sage');
+  assert.deepEqual(out.spec.series.map(s => !!s.dashed),
+    [true, false, true], 'top + bottom dashed, median solid');
+});
+
+test('buildInjectionSpec: cap_rate_by_credit builds 3-line federal/state/municipal', () => {
+  const cols = [
+    { key: 'period_end',    col: 'A' },
+    { key: 'subspecialty',  col: 'B' },
+    { key: 'federal_cap',   col: 'C' },
+    { key: 'state_cap',     col: 'D' },
+    { key: 'municipal_cap', col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_credit',
+    tabName: 'Data_Cap_by_Credit',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.series.length, 3);
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
+  assert.deepEqual(out.spec.series.map(s => s.color),
+    ['003DA5', '62B5E5', '4CB582'], 'navy / sky / sage');
+});
+
+test('buildInjectionSpec: cpi_vs_renewal_cagr builds 2-line', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'cpi_vs_renewal_cagr',
+    tabName: 'Data_CPI_CAGR',
+    cols: [
+      { key: 'period_end',       col: 'A' },
+      { key: 'cpi_change',       col: 'B' },
+      { key: 'gsa_renewal_cagr', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.series.length, 2);
+  assert.equal(out.spec.series[0].valCol, 'B');
+  assert.equal(out.spec.series[1].valCol, 'C');
+  assert.equal(out.spec.series[0].color, '62B5E5');  // sky
+  assert.equal(out.spec.series[1].color, '003DA5');  // navy
+});
+
+test('buildInjectionSpec: fed_funds_vs_treasury builds 2-line (3rd series deferred — data mismatch)', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'fed_funds_vs_treasury',
+    tabName: 'Data_FF_vs_10Y',
+    cols: [
+      { key: 'period_end',         col: 'A' },
+      { key: 'fed_funds_rate',     col: 'B' },
+      { key: 'treasury_10y_yield', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.series.length, 2, 'only the 2 series in the data tab');
+});
+
+test('buildInjectionSpec: cash_leveraged_returns plots cash + leveraged_mid only', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'cash_leveraged_returns',
+    tabName: 'Data_Returns_Idx',
+    cols: [
+      { key: 'period_end',            col: 'A' },
+      { key: 'cash_return',           col: 'B' },
+      { key: 'leveraged_return_mid',  col: 'C' },
+      { key: 'leveraged_return_high', col: 'D' },
+      { key: 'leveraged_return_low',  col: 'E' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // Renderer only plots 2 of the 4 columns; native matches.
+  assert.equal(out.spec.series.length, 2);
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['B', 'C']);
+});
+
+test('buildInjectionSpec: asking_cap_quartiles_active builds 4-line with paired dashed', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'asking_cap_quartiles_active',
+    tabName: 'Data_Active_Cap_Quart',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'upper_q_total', col: 'C' },
+      { key: 'lower_q_total', col: 'D' },
+      { key: 'upper_q_core',  col: 'E' },
+      { key: 'lower_q_core',  col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.series.length, 4);
+  // Solid lines first (total market), dashed (core 10+ year) after
+  assert.deepEqual(out.spec.series.map(s => !!s.dashed),
+    [false, false, true, true]);
+  // Light blue for upper quartiles (idx 0, 2), dark blue for lower (idx 1, 3)
+  assert.equal(out.spec.series[0].color, '9DC3E6');  // upper total — light
+  assert.equal(out.spec.series[1].color, '1F4E79');  // lower total — dark
+  assert.equal(out.spec.series[2].color, '9DC3E6');  // upper core — light dashed
+  assert.equal(out.spec.series[3].color, '1F4E79');  // lower core — dark dashed
+});
+
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   const baseCols = [
     { key: 'period_end',   col: 'A' },
