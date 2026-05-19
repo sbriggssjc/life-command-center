@@ -1,0 +1,112 @@
+-- =====================================================================
+-- Round 37 P1 — quarter-format date labels on chart cat axes.
+-- User feedback 2026-05-19, item #4: "although our data is rolling
+-- twelve month monthly, we had previously displayed the labels in
+-- year and quarter terms, adjust".
+--
+-- This is the first of 4 PRs responding to the marketing team's review
+-- of the 2026-05-19 exports (NM-CapMarkets-Dialysis-2026-05-19 +
+-- NM-CapMarkets-GovLeased-2026-03-31). Remaining items:
+--   P2 — pin Y-axis ranges per template (item #3)
+--   P3 — peak/trough/most-recent data labels (item #2)
+--   P4 — extend Supabase views to surface pre-2014 data where the
+--        underlying tables have it (item #5; some charts genuinely
+--        need view-level changes)
+--
+-- Item #1 (general formatting/style match) waits on user pointing at
+-- specific reference docs.
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • New constant DEFAULT_CAT_AX_NUM_FMT = 'q"Q-"yyyy' renders dates
+--     like '1Q-2026' on the cat axis, matching the PDF renderer's
+--     `Q1 '26` idiom (periodEndLabel function at line ~203 of the
+--     renderer).
+--   • New helper catAxNumFmtFrag(numFmt) emits the <c:numFmt> element
+--     or empty string if the format is falsy.
+--   • Every builder with a <c:catAx> block now reads spec.catAxNumFmt
+--     (default DEFAULT_CAT_AX_NUM_FMT) and injects the numFmt element
+--     into the catAx block:
+--       buildSingleLineChartXml
+--       buildSingleBarChartXml (with horizontal-bar special case)
+--       buildStackedBarChartXml
+--       buildMultiLineChartXml
+--       buildComboChartXml
+--       buildAreaComboChartXml
+--     buildScatterChartXml and buildDoughnutChartXml don't have a
+--     <c:catAx> block, so no change there.
+--
+--   • Horizontal-bar charts (state-ranking visuals — leased_inventory_by_state,
+--     sources_of_capital, rent_heat_map) default catAxNumFmt to ''
+--     (empty) because their cat values are text state names, not dates.
+--
+-- buildInjectionSpec per-template overrides:
+--   • case_for_renewal:       catAxNumFmt='0' — year integer
+--   • rent_by_year_built:     catAxNumFmt='0' — year integer (decade buckets)
+--   • buyer_class_pct_by_year: catAxNumFmt='0' — year integer
+--   All other templates use the default 'q"Q-"yyyy' format.
+--
+-- For text-axis templates (available_by_term_summary,
+-- available_by_firm_term_summary), the format is emitted but Excel
+-- ignores it on string cells — no visual effect, no warning.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 123 CM tests pass (up from 118 in R36 P4).
+--
+-- New tests:
+--   • Line chart cat axis emits "q\"Q-\"yyyy" by default
+--   • Stacked-bar + multi-line builders both emit it
+--   • catAxNumFmt='0' override works for year-axis templates
+--   • Empty string suppresses numFmt entirely (horizontal-bar)
+--   • buildInjectionSpec sets catAxNumFmt='0' on the 3 year-axis cases
+--
+-- End-to-end smoke build with 6 chart shapes confirmed:
+--   DateLine        numFmt: "q&quot;Q-&quot;yyyy"  (XML-escaped)
+--   DateStacked     numFmt: "q&quot;Q-&quot;yyyy"
+--   DateMulti       numFmt: "q&quot;Q-&quot;yyyy"
+--   DateCombo       numFmt: "q&quot;Q-&quot;yyyy"
+--   YearLine        numFmt: "0"
+--   StateHBar       numFmt: (none)
+--
+-- Excel reads the XML-escaped form correctly and renders cat values
+-- accordingly.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open any time-series chart (Data_Volume_TTM, Data_Cap_Avg, etc.)
+--    — x-axis labels should now read like:
+--       1Q-2020   2Q-2020   3Q-2020   4Q-2020   1Q-2021 ...
+--    instead of the previous default Excel date format.
+-- 3. Open Data_Case_For_Renewal — x-axis should show integer years
+--    (2015, 2016, 2017, ...) not quarter format.
+-- 4. Open Data_Buyer_Pool (annual stacked) — same: integer years.
+-- 5. Open Data_Leased_Inv_State + Data_Rent_Heat_Map + Data_Sources —
+--    state names render as text (no format applied to strings).
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S COMING IN R37 P2-P4
+-- ---------------------------------------------------------------------
+-- P2 — port renderer's per-chart yAxisRange settings (CAP_RATE_RANGE
+--      5-10%, PCT_OF_ASK_RANGE 84-96%, etc.) to native chart specs.
+--      Emit <c:scaling><c:min/><c:max/> on valAx blocks. Addresses
+--      user item #3: "axis formatting has changed on most charts".
+--
+-- P3 — per-template peak/trough/most-recent data labels. Renderer
+--      uses buildAnnotations(rows, getter, formatter) → 3 labels per
+--      primary series. Need to emit <c:dLbls><c:dLbl idx=...> blocks
+--      at spec-build time. Addresses item #2 (most complex of the 4).
+--
+-- P4 — investigate Supabase views for pre-2014 data extension. The
+--      4 chart tabs cropped to start at 2014 are: Inventory_Backlog,
+--      Market_Turnover, Active_Cap_Quart, Active_DOM_PC. Underlying
+--      tables may have older data; need to verify per-table and
+--      extend the views accordingly. Addresses item #5.
+-- =====================================================================

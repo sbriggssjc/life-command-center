@@ -51,6 +51,23 @@ function escapeXml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
+// R37 P1 — default cat-axis date format. Renders 2026-03-31 as "1Q-2026"
+// to match the PDF renderer's `Q1 '26` style (user feedback 2026-05-19:
+// "we had previously displayed the labels in year and quarter terms").
+// Per-template override via spec.catAxNumFmt — set to '0' for year-axis
+// charts (case_for_renewal, buyer_class_pct_by_year, rent_by_year_built),
+// or to '' to suppress the format on text-axis charts (term buckets,
+// state rankings, donuts — those cells hold strings, format would be
+// a no-op but emitting it is cleaner to skip).
+const DEFAULT_CAT_AX_NUM_FMT = 'q"Q-"yyyy';
+
+// Emit <c:numFmt> for a cat axis. Returns empty string if numFmt is
+// falsy or empty.
+function catAxNumFmtFrag(numFmt) {
+  if (numFmt == null || numFmt === '') return '';
+  return `<c:numFmt formatCode="${escapeXml(numFmt)}" sourceLinked="0"/>`;
+}
+
 // ----------------------------------------------------------------------------
 // Chart XML builders (one per supported chart type)
 // ----------------------------------------------------------------------------
@@ -70,6 +87,10 @@ function escapeXml(s) {
 function buildSingleLineChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const color = spec.color || '003DA5';
+  // R37 P1 — quarter-format date labels on cat axis by default.
+  const catFmtFrag = catAxNumFmtFrag(
+    spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
+  );
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
@@ -106,6 +127,7 @@ function buildSingleLineChartXml(spec) {
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${catFmtFrag}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -141,6 +163,14 @@ function buildSingleBarChartXml(spec) {
   const barDir = horizontal ? 'bar' : 'col';
   const catAxPos = horizontal ? 'l' : 'b';
   const valAxPos = horizontal ? 'b' : 'l';
+  // R37 P1 — quarter labels on date cat axes. For horizontal-bar
+  // state rankings (state names = text cat values), default to '' so
+  // no numFmt is emitted (Excel renders strings as-is).
+  const catFmtFrag = catAxNumFmtFrag(
+    spec.catAxNumFmt !== undefined
+      ? spec.catAxNumFmt
+      : (horizontal ? '' : DEFAULT_CAT_AX_NUM_FMT)
+  );
   // Horizontal bar: orient cat axis maxMin so largest values appear at top
   const catOrientation = horizontal ? 'maxMin' : 'minMax';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -179,6 +209,7 @@ function buildSingleBarChartXml(spec) {
         <c:scaling><c:orientation val="${catOrientation}"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="${catAxPos}"/>
+        ${catFmtFrag}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -209,6 +240,10 @@ function buildSingleBarChartXml(spec) {
  */
 function buildStackedBarChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
+  // R37 P1 — quarter labels on date cat axes by default
+  const catFmtFrag = catAxNumFmtFrag(
+    spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
+  );
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // P8 — `noFill` flag makes a series transparent. Used to build
@@ -271,6 +306,7 @@ ${seriesXml}
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${catFmtFrag}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -307,6 +343,10 @@ ${seriesXml}
  */
 function buildMultiLineChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
+  // R37 P1 — quarter labels on date cat axes by default
+  const catFmtFrag = catAxNumFmtFrag(
+    spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
+  );
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
@@ -347,6 +387,7 @@ ${seriesXml}
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${catFmtFrag}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -414,6 +455,10 @@ function buildComboChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const barSeries = spec.barSeries || [];
   const lineSeries = spec.lineSeries || [];
+  // R37 P1 — quarter labels on date cat axes by default
+  const catFmtFrag = catAxNumFmtFrag(
+    spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
+  );
   // P8.5 — barGrouping + sharedAxis support
   const barGrouping = spec.barGrouping === 'stacked' ? 'stacked' : 'clustered';
   const overlap     = barGrouping === 'stacked' ? 100 : -20;
@@ -535,6 +580,7 @@ ${lineXml}
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${catFmtFrag}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -785,6 +831,10 @@ function buildAreaComboChartXml(spec) {
   const area  = spec.areaSeries;
   const bars  = spec.barSeries || [];
   const lines = spec.lineSeries || [];
+  // R37 P1 — quarter labels on date cat axes by default
+  const catFmtFrag = catAxNumFmtFrag(
+    spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
+  );
 
   // Area series (always index 0)
   const areaColor   = (area?.fillColor   || 'E0E8F4').replace('#', '');
@@ -902,6 +952,7 @@ ${lineXml}
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${catFmtFrag}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1558,6 +1609,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: yearCol,
           dataStart, dataEnd,
+          // R37 P1 — year x-axis (integer 2020), not quarter date.
+          catAxNumFmt: '0',
           barSeries: [
             { titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky },
           ],
@@ -1904,6 +1957,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: yearCol,
           dataStart, dataEnd,
+          // R37 P1 — year x-axis (integer 1990, 1995, etc.), not quarter date.
+          catAxNumFmt: '0',
           barGrouping: 'stacked',
           sharedAxis: true,
           barSeries: [
@@ -2365,6 +2420,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: yearCol,
           dataStart, dataEnd,
+          // R37 P1 — year x-axis (integer 2017, 2018, etc.), not quarter date.
+          catAxNumFmt: '0',
           series: [
             { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy    },  // Private
             { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid },  // Public REITs
