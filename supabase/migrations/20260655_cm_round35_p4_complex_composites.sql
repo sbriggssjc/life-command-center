@@ -1,0 +1,153 @@
+-- =====================================================================
+-- Round 35 P4 — migrate the final 2 complex composites. With this PR,
+-- 100% of active-catalog chart_template_ids are native editable Excel
+-- chart objects. Builds on R35 P3 (PR #837).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 41 — FULL COVERAGE)
+-- ---------------------------------------------------------------------
+--   1. cost_of_capital              floating gray range bar + 2 lines
+--                                   (treasury + avg cap), all on single Y axis
+--   2. volume_cap_quartile_combo    area (volume on LEFT) + range bars
+--                                   (cap quartile on RIGHT) + dots
+--                                   (avg cap on RIGHT) — 3-layer composite
+--
+-- ---------------------------------------------------------------------
+-- ROUND 35 STATUS — COMPLETE
+-- ---------------------------------------------------------------------
+-- P1 — 6 multi-line templates                ✓ shipped (PR #835)
+-- P2 — 7 combo + 2 clustered-bar templates   ✓ shipped (PR #836)
+-- P3 — buyer_class_pct + renewal_rent_growth ✓ shipped (PR #837)
+-- P4 — cost_of_capital + volume_cap_quartile_combo  ← this PR
+--
+-- All 17 templates from the post-R34 audit are now native. Combined
+-- with the 24 templates from R34 + Tier F1, the catalog has 41 native
+-- chart_template_ids — every chart that ships in dia/gov/national_st
+-- exports is now editable in Excel.
+--
+-- ---------------------------------------------------------------------
+-- NEW MACHINERY
+-- ---------------------------------------------------------------------
+-- buildStackedBarChartXml + buildComboChartXml bar series gain TWO
+-- new per-series options:
+--   • alpha: string '0'..'100000' applies transparency to the fill
+--     color via <a:alpha val="..."/> nested inside <a:srgbClr>. Used
+--     for the pale gray/sky bands the renderer emits as
+--     rgba(106,116,140,0.12) and rgba(98,181,229,0.25).
+--   • borderColor: hex string emits a distinct <a:ln> border around
+--     the bar that differs from its fill color (e.g. pale gray fill
+--     with solid gray border for cost_of_capital).
+--
+-- New builder buildAreaComboChartXml() — 3-block combo:
+--     plotArea ┬ <c:areaChart>  (axId 1 + 2 — cat + LEFT)
+--              ├ <c:barChart>   (axId 1 + 3 — cat + RIGHT, stacked)
+--              └ <c:lineChart>  (axId 1 + 3 — shared RIGHT axis)
+--
+--     catAx (axId 1, crossAx=2)
+--     valAx (axId 2, axPos=l)  ← area (volume $)
+--     valAx (axId 3, axPos=r, crosses=max)  ← bars + line (cap %)
+--
+-- Spec shape:
+--     {
+--       type: 'area-combo',
+--       catCol, dataStart, dataEnd,
+--       areaSeries: { titleCol, titleRow, valCol, fillColor, borderColor },
+--       barSeries:  [{ ..., noFill | alpha | borderColor }, ...],
+--       lineSeries: [{ ..., showMarker | markerShape | markerSize | dashed }, ...]
+--     }
+--
+-- Block z-order: area drawn first (back), bars middle, line last (front
+-- — dots on top of bars on top of area). Series idx values are unique
+-- across all three blocks: area=0, bars=1..N, lines=N+1..N+M.
+--
+-- ---------------------------------------------------------------------
+-- WIRING DETAIL
+-- ---------------------------------------------------------------------
+-- cost_of_capital reuses the existing 'combo' dispatch (no new type)
+-- with these settings:
+--   barGrouping='stacked', sharedAxis=true
+--   barSeries[0] noFill=true: low_loan_constant (col E)
+--   barSeries[1] color=#6A748C alpha=12000 borderColor=#6A748C:
+--                helper col loan_band_width (col G) = high - low
+--   lineSeries[0] color=sky:  treasury_10y_yield (col B)
+--   lineSeries[1] color=navy: avg_cap_rate (col C)
+--
+-- volume_cap_quartile_combo uses the new 'area-combo' dispatch:
+--   areaSeries: volume_dollars (col C), pale fill, navy border (LEFT axis)
+--   barSeries[0] noFill=true: lower_quartile (col F)
+--   barSeries[1] color=sky alpha=25000 borderColor=sky:
+--                helper col iqr_width (col G) = upper - lower
+--   lineSeries[0] showMarker=true circle markers, navy:
+--                cap_rate (col D) — dots on top of bars
+--
+-- Renderer skips cap_10plus_year for cost_of_capital (col D in the
+-- data tab is unrendered). Native matches.
+--
+-- ---------------------------------------------------------------------
+-- TESTS — 101 CM TESTS PASS (up from 96)
+-- ---------------------------------------------------------------------
+-- Registration check for both templates.
+--
+-- buildInjectionSpec tests for each verify the full spec shape:
+--   • cost_of_capital: combo type, barGrouping=stacked, sharedAxis=true,
+--     2 bars (invisible base + alpha-12000 pale-gray band w/ border),
+--     2 lines (sky treasury + navy cap), helperCols has loan_band_width
+--     with getValue (high - low) and null guard.
+--   • volume_cap_quartile_combo: area-combo type, areaSeries with pale
+--     fill + navy border on volume, 2 bars (invisible base + alpha-25000
+--     sky band w/ sky border), 1 line series (cap_rate dots, navy
+--     circle markers), helperCols has iqr_width.
+--
+-- End-to-end XML tests verify:
+--   • area-combo emits all 3 chart blocks (area + bar + line) with
+--     correct axId pairs (area on LEFT axId 2, bars+line on RIGHT
+--     axId 3, all sharing cat axId 1). 2 valAx blocks with correct
+--     axPos. 4 series total with unique idx [0, 1, 2, 3].
+--   • combo bar series with alpha=12000 + borderColor emits the
+--     expected <a:alpha val="12000"/> nested inside srgbClr AND a
+--     distinct <a:ln> border block.
+--
+-- End-to-end smoke build confirmed:
+--   chart1 (cost_of_capital): bar=1 line=1 series=4 valAxes=1 (shared)
+--                              alpha=1 (12% band) noFill=2 (invisible base)
+--   chart2 (volume_cap_quartile_combo): area=1 bar=1 line=1 series=4
+--                                        valAxes=2 (left + right)
+--                                        alpha=1 (25% IQR band) noFill=3
+--
+-- Helper col values computed correctly (loan_band_width = 0.027 for
+-- the cost_of_capital test data, iqr_width = 0.02 for the synthetic
+-- volume_cap_quartile_combo data).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. X-CM-Native-Charts should reach maximum coverage (36-41 depending
+--    on vertical — every chart_template_id in the catalog applies to
+--    its vertical(s))
+-- 3. Open Data_Cost_Capital — confirm:
+--    • New "Loan Constant Band Width" column past the existing 6 cols
+--    • Pale gray floating band from low_loan to high_loan
+--    • Sky line for 10Y Treasury, navy line for Avg Cap
+--    • All on a single Y axis (percent, 0-10%)
+-- 4. Open Data_Vol_Cap_Combo — confirm:
+--    • New "Quartile Range Width" column past the existing 6 cols
+--    • Pale blue shaded area BEHIND everything for TTM Volume
+--    • Sky floating IQR bars FLOATING in the middle layer
+--    • Navy circle dots ON TOP at avg cap
+--    • Two Y axes: left $ (volume), right % (cap rate)
+-- 5. Right-click either chart → "Edit Data" should be enabled.
+--    Edit a value in either helper column → chart updates live.
+--
+-- ---------------------------------------------------------------------
+-- REMAINING BACKLOG (R33 — product/data decisions, not code work)
+-- ---------------------------------------------------------------------
+-- Tier E1 — Rent_Price_PSF for dia: blocked on product call (dia
+--   clinics rarely transact on $/SF basis per the 2026-05-06 audit).
+--
+-- Tier E2 — Core_Cap_Dot trendline review: P7.5 shipped a 12-mo rolling
+--   avg per-sale; master deck implies a ~63-point monthly-binned shape.
+--   Defer pending user review of the current trendline visual.
+-- =====================================================================

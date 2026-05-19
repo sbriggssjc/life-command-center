@@ -230,6 +230,240 @@ test('NATIVE_CHART_TEMPLATES: R35 P3 final simple-shape templates registered', (
   }
 });
 
+test('NATIVE_CHART_TEMPLATES: R35 P4 complex composites registered (final 2)', () => {
+  for (const id of ['cost_of_capital', 'volume_cap_quartile_combo']) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: cost_of_capital builds sharedAxis combo with pale gray band', () => {
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'treasury_10y_yield', col: 'B' },
+    { key: 'avg_cap_rate',       col: 'C' },
+    { key: 'cap_10plus_year',    col: 'D' },
+    { key: 'low_loan_constant',  col: 'E' },
+    { key: 'high_loan_constant', col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cost_of_capital',
+    tabName: 'Data_Cost_Capital',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barGrouping, 'stacked');
+  assert.equal(out.spec.sharedAxis, true, 'all series on single Y axis');
+
+  // Bar series: invisible base (lower) + visible pale gray band (helper col G)
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.barSeries[0].valCol, 'E', 'base = low_loan_constant');
+  assert.equal(out.spec.barSeries[0].noFill, true, 'base invisible');
+  assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = loan_band_width helper');
+  assert.equal(out.spec.barSeries[1].color, '6A748C', 'pale gray');
+  assert.equal(out.spec.barSeries[1].alpha, '12000', '12% alpha (renderer rgba(...,0.12))');
+  assert.equal(out.spec.barSeries[1].borderColor, '6A748C', 'solid gray border');
+
+  // Lines: treasury (sky) + avg_cap (navy). Renderer skips cap_10plus_year.
+  assert.equal(out.spec.lineSeries.length, 2);
+  assert.equal(out.spec.lineSeries[0].valCol, 'B');
+  assert.equal(out.spec.lineSeries[0].color, '62B5E5');
+  assert.equal(out.spec.lineSeries[1].valCol, 'C');
+  assert.equal(out.spec.lineSeries[1].color, '003DA5');
+
+  // Helper col: loan_band_width = high - low
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'loan_band_width');
+  const v = out.helperCols[0].getValue({
+    low_loan_constant: 0.055, high_loan_constant: 0.082,
+  });
+  assert.ok(Math.abs(v - 0.027) < 1e-9, `getValue returns ${v}, expected ~0.027`);
+});
+
+test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3 layers', () => {
+  const cols = [
+    { key: 'period_end',     col: 'A' },
+    { key: 'subspecialty',   col: 'B' },
+    { key: 'volume_dollars', col: 'C' },
+    { key: 'cap_rate',       col: 'D' },
+    { key: 'upper_quartile', col: 'E' },
+    { key: 'lower_quartile', col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'volume_cap_quartile_combo',
+    tabName: 'Data_Vol_Cap_Combo',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5', nm_pale: '#E0E8F4' } },
+  });
+  assert.equal(out.spec.type, 'area-combo');
+  assert.equal(out.spec.catCol, 'A');
+
+  // Area series: volume_dollars, pale fill, navy border, LEFT axis
+  assert.ok(out.spec.areaSeries, 'has areaSeries');
+  assert.equal(out.spec.areaSeries.valCol, 'C', 'area = volume_dollars');
+  assert.equal(out.spec.areaSeries.fillColor, 'E0E8F4');
+  assert.equal(out.spec.areaSeries.borderColor, '003DA5');
+
+  // Bar series: invisible base (lower_q) + visible pale sky band (iqr helper, col G)
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.barSeries[0].valCol, 'F', 'base = lower_quartile');
+  assert.equal(out.spec.barSeries[0].noFill, true);
+  assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = iqr_width helper');
+  assert.equal(out.spec.barSeries[1].alpha, '25000', '25% alpha (renderer rgba(...,0.25))');
+  assert.equal(out.spec.barSeries[1].borderColor, '62B5E5', 'sky border');
+
+  // Line series: cap_rate dots (navy circles)
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'D', 'line = cap_rate');
+  assert.equal(out.spec.lineSeries[0].color, '003DA5');
+  assert.equal(out.spec.lineSeries[0].showMarker, true);
+  assert.equal(out.spec.lineSeries[0].markerShape, 'circle');
+
+  // Helper col: iqr_width = upper - lower
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'iqr_width');
+  const v = out.helperCols[0].getValue({
+    lower_quartile: 0.055, upper_quartile: 0.082,
+  });
+  assert.ok(Math.abs(v - 0.027) < 1e-9, `getValue returns ${v}, expected ~0.027`);
+});
+
+test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Vol_Cap_Combo');
+  sheet.getCell('A4').value = 'Quarter End';
+  sheet.getCell('C4').value = 'TTM Volume';
+  sheet.getCell('D4').value = 'TTM Cap';
+  sheet.getCell('F4').value = 'Lower Q';
+  sheet.getCell('G4').value = 'IQR Width';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i * 2, 28);
+    sheet.getCell(`C${5 + i}`).value = 500_000_000 + i * 20_000_000;
+    sheet.getCell(`D${5 + i}`).value = 0.062 + i * 0.001;
+    sheet.getCell(`F${5 + i}`).value = 0.055 + i * 0.001;
+    sheet.getCell(`G${5 + i}`).value = 0.015;  // band width
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Vol_Cap_Combo',
+    spec: {
+      type: 'area-combo',
+      tabName: 'Data_Vol_Cap_Combo',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 10,
+      areaSeries: { titleCol: 'C', titleRow: 4, valCol: 'C',
+                    fillColor: 'E0E8F4', borderColor: '003DA5' },
+      barSeries: [
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '62B5E5', noFill: true },
+        { titleCol: 'G', titleRow: 4, valCol: 'G', color: '62B5E5',
+          alpha: '25000', borderColor: '62B5E5' },
+      ],
+      lineSeries: [
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5',
+          showMarker: true, markerShape: 'circle', markerSize: 5 },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // All 3 chart blocks present
+  assert.match(chartXml, /<c:areaChart>/, 'has areaChart block');
+  assert.match(chartXml, /<c:barChart>/, 'has barChart block');
+  assert.match(chartXml, /<c:lineChart>/, 'has lineChart block');
+
+  // Area uses axId 1 + 2 (cat + LEFT)
+  const areaBlock = chartXml.match(/<c:areaChart>[\s\S]*?<\/c:areaChart>/)[0];
+  assert.match(areaBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="2"\/>/,
+    'area block: axId 1 + 2 (LEFT axis)');
+
+  // Bar uses axId 1 + 3 (cat + RIGHT), stacked
+  const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
+  assert.match(barBlock, /<c:grouping val="stacked"\/>/);
+  assert.match(barBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="3"\/>/,
+    'bar block: axId 1 + 3 (RIGHT axis)');
+
+  // Line uses axId 1 + 3 (shared with bars on RIGHT)
+  const lineBlock = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
+  assert.match(lineBlock, /<c:axId val="1"\/>[\s\S]*<c:axId val="3"\/>/,
+    'line block: axId 1 + 3 (shared RIGHT axis with bars)');
+
+  // 2 val axes — left primary (area) + right secondary (bars/line)
+  const valAxCount = (chartXml.match(/<c:valAx>/g) || []).length;
+  assert.equal(valAxCount, 2, 'two val axes (left for area, right for bars+line)');
+
+  // Global marker toggle ON (line series has markers)
+  assert.match(lineBlock, /<c:marker val="1"\/>/, 'global marker toggle on for dots');
+
+  // Bar band has alpha=25000 for the pale fill
+  assert.match(barBlock, /<a:alpha val="25000"\/>/, '25% alpha on visible band');
+
+  // 4 series total — area(0) + bar(1) + bar(2) + line(3)
+  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  assert.deepEqual(idxs, [0, 1, 2, 3], 'series idx unique across area+bar+line blocks');
+
+  // Each series references its own column
+  assert.match(chartXml, /'Data_Vol_Cap_Combo'!\$C\$5:\$C\$10/, 'area refs C (volume)');
+  assert.match(chartXml, /'Data_Vol_Cap_Combo'!\$F\$5:\$F\$10/, 'base refs F (lower_q)');
+  assert.match(chartXml, /'Data_Vol_Cap_Combo'!\$G\$5:\$G\$10/, 'band refs G (helper)');
+  assert.match(chartXml, /'Data_Vol_Cap_Combo'!\$D\$5:\$D\$10/, 'line refs D (cap_rate)');
+});
+
+test('injectNativeCharts: combo bar series alpha + borderColor emit correctly (cost_of_capital style)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Cost_Capital');
+  sheet.getCell('B4').value = '10Y Treasury';
+  sheet.getCell('C4').value = 'Avg Cap';
+  sheet.getCell('E4').value = 'Low LC';
+  sheet.getCell('G4').value = 'Band Width';
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i * 3, 28);
+    sheet.getCell(`B${5 + i}`).value = 0.04 + i * 0.002;
+    sheet.getCell(`C${5 + i}`).value = 0.065 + i * 0.001;
+    sheet.getCell(`E${5 + i}`).value = 0.055 + i * 0.001;
+    sheet.getCell(`G${5 + i}`).value = 0.025;  // band width
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Cost_Capital',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_Cost_Capital',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 8,
+      barGrouping: 'stacked',
+      sharedAxis: true,
+      barSeries: [
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '6A748C', noFill: true },
+        { titleCol: 'G', titleRow: 4, valCol: 'G', color: '6A748C',
+          alpha: '12000', borderColor: '6A748C' },
+      ],
+      lineSeries: [
+        { titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' },
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Series 1 (visible band) has alpha=12000 AND a solid border
+  const ser1 = chartXml.match(/<c:ser>\s*<c:idx val="1"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser1, /<a:alpha val="12000"\/>/, '12% alpha on band');
+  assert.match(ser1, /<a:ln w="9525"><a:solidFill><a:srgbClr val="6A748C"\/>/,
+    'solid gray border distinct from pale fill');
+  // sharedAxis=true → only 1 val axis
+  assert.equal((chartXml.match(/<c:valAx>/g) || []).length, 1);
+});
+
 test('buildInjectionSpec: buyer_class_pct_by_year builds 4-series annual stacked bar', () => {
   const cols = [
     { key: 'year',                 col: 'A' },
