@@ -209,6 +209,275 @@ test('NATIVE_CHART_TEMPLATES: R35 P1 missed multi-line templates registered', ()
   }
 });
 
+test('NATIVE_CHART_TEMPLATES: R35 P2 missed combo + clustered-bar templates registered', () => {
+  for (const id of [
+    'txn_count_avg_deal_combo',
+    'rent_and_price_per_chair',
+    'rent_and_price_psf',
+    'dom_price_change_active',
+    'seller_sentiment',
+    'seller_sentiment_monthly',
+    'inventory_backlog',
+    'pace_of_cap_rate_expansion',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: txn_count_avg_deal_combo builds standard combo', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'txn_count_avg_deal_combo',
+    tabName: 'Data_Txn_Avg_Deal',
+    cols: [
+      { key: 'period_end',    col: 'A' },
+      { key: 'ttm_count',     col: 'B' },
+      { key: 'avg_deal_size', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.swapAxes, undefined, 'standard combo, no swap');
+  assert.equal(out.spec.barSeries[0].valCol, 'B');
+  assert.equal(out.spec.barSeries[0].color, '62B5E5');
+  assert.equal(out.spec.lineSeries[0].valCol, 'C');
+  assert.equal(out.spec.lineSeries[0].color, '003DA5');
+});
+
+test('buildInjectionSpec: rent_and_price_per_chair (dia) + rent_and_price_psf (gov) share shape', () => {
+  // Dia variant
+  const dia = buildInjectionSpec({
+    chart_template_id: 'rent_and_price_per_chair',
+    tabName: 'Data_Rent_Price_Chair',
+    cols: [
+      { key: 'period_end',     col: 'A' },
+      { key: 'subspecialty',   col: 'B' },
+      { key: 'rent_per_chair', col: 'C' },
+      { key: 'price_per_chair', col: 'D' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(dia.spec.barSeries[0].valCol, 'C');   // rent
+  assert.equal(dia.spec.lineSeries[0].valCol, 'D');  // price
+
+  // Gov variant — same shape, just different keys
+  const gov = buildInjectionSpec({
+    chart_template_id: 'rent_and_price_psf',
+    tabName: 'Data_Rent_Price_PSF',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'rent_psf',     col: 'C' },
+      { key: 'price_psf',    col: 'D' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(gov.spec.barSeries[0].valCol, 'C');
+  assert.equal(gov.spec.lineSeries[0].valCol, 'D');
+  // Both produce identical specs except for the data tab columns
+  assert.equal(dia.spec.type, gov.spec.type, 'same shape (combo) for both');
+});
+
+test('buildInjectionSpec: dom_price_change_active builds 2-bar + 2-line with dashed core', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'dom_price_change_active',
+    tabName: 'Data_Active_DOM_PC',
+    cols: [
+      { key: 'period_end',             col: 'A' },
+      { key: 'subspecialty',           col: 'B' },
+      { key: 'avg_dom_total',          col: 'C' },
+      { key: 'avg_dom_core',           col: 'D' },
+      { key: 'pct_price_change_total', col: 'E' },
+      { key: 'pct_price_change_core',  col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barSeries.length, 2, '2 DOM bars');
+  assert.equal(out.spec.lineSeries.length, 2, '2 price-change lines');
+  // Both lines share #1F4E79 (dark blue); core variant dashed
+  assert.equal(out.spec.lineSeries[0].color, '1F4E79');
+  assert.equal(out.spec.lineSeries[1].color, '1F4E79');
+  assert.equal(out.spec.lineSeries[0].dashed || false, false, 'total solid');
+  assert.equal(out.spec.lineSeries[1].dashed, true, 'core dashed');
+});
+
+test('buildInjectionSpec: seller_sentiment uses swapAxes (lines LEFT, bars RIGHT)', () => {
+  const cols = [
+    { key: 'period_end',                 col: 'A' },
+    { key: 'n_all',                      col: 'B' },
+    { key: 'pct_price_change_all',       col: 'C' },
+    { key: 'n_long_term',                col: 'D' },
+    { key: 'pct_price_change_long_term', col: 'E' },
+    { key: 'last_ask_cap_all',           col: 'F' },
+    { key: 'last_ask_cap_long_term',     col: 'G' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment',
+    tabName: 'Data_Sentiment',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.swapAxes, true, 'PDF p.35 puts lines on left, bars on right');
+  // Bars = price change % (sage + light purple)
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['C', 'E']);
+  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['4CB582', '7E6BAD']);
+  // Lines = cap rate (navy + sky)
+  assert.equal(out.spec.lineSeries.length, 2);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['003DA5', '62B5E5']);
+});
+
+test('buildInjectionSpec: seller_sentiment_monthly handles different column layout', () => {
+  // Monthly schema has cols in different positions than quarterly
+  const cols = [
+    { key: 'period_end',                 col: 'A' },
+    { key: 'subspecialty',               col: 'B' },
+    { key: 'n_all',                      col: 'C' },
+    { key: 'n_long_term',                col: 'D' },
+    { key: 'pct_price_change_all',       col: 'E' },
+    { key: 'pct_price_change_long_term', col: 'F' },
+    { key: 'last_ask_cap_all',           col: 'G' },
+    { key: 'last_ask_cap_long_term',     col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment_monthly',
+    tabName: 'Data_Sentiment_M',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // findCol picks up the right cols regardless of position
+  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['E', 'F']);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['G', 'H']);
+  assert.equal(out.spec.swapAxes, true);
+});
+
+test('buildInjectionSpec: inventory_backlog builds 2-series clustered bar (no line)', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'inventory_backlog',
+    tabName: 'Data_Inventory',
+    cols: [
+      { key: 'period_end',       col: 'A' },
+      { key: 'subspecialty',     col: 'B' },
+      { key: 'added_ttm',        col: 'C' },
+      { key: 'sold_ttm',         col: 'D' },
+      { key: 'active_count',     col: 'E' },
+      { key: 'months_of_supply', col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'clustered-bar');
+  assert.equal(out.spec.series.length, 2);
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D']);
+  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5'], 'sky + navy');
+});
+
+test('buildInjectionSpec: pace_of_cap_rate_expansion clusters 2 bars (3rd line series deferred)', () => {
+  // Renderer references pace_cost for a 3rd line, but it's not in
+  // the data tab schema. Native plots the 2 bars that exist.
+  const out = buildInjectionSpec({
+    chart_template_id: 'pace_of_cap_rate_expansion',
+    tabName: 'Data_Pace_Cap_Expand',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'pace_all',   col: 'B' },
+      { key: 'pace_core',  col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'clustered-bar');
+  assert.equal(out.spec.series.length, 2);
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['B', 'C']);
+  assert.deepEqual(out.spec.series.map(s => s.color), ['003DA5', '62B5E5'], 'navy + sky');
+});
+
+test('injectNativeCharts: clustered-bar dispatch produces grouping=clustered XML', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Inventory');
+  sheet.getCell('C4').value = 'No. Added (TTM)';
+  sheet.getCell('D4').value = 'No. Sold (TTM)';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`C${5 + i}`).value = 50 + i * 5;
+    sheet.getCell(`D${5 + i}`).value = 40 + i * 4;
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Inventory',
+    spec: {
+      type: 'clustered-bar',
+      tabName: 'Data_Inventory',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 10,
+      series: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '62B5E5' },
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // barChart with grouping=clustered + overlap=-20 (not stacked + 100)
+  assert.match(chartXml, /<c:grouping val="clustered"\/>/, 'clustered grouping');
+  assert.match(chartXml, /<c:overlap val="-20"\/>/, 'clustered overlap=-20');
+  // 2 series
+  assert.equal((chartXml.match(/<c:ser>/g) || []).length, 2);
+  // Both visible (no noFill markers)
+  assert.ok(!/<a:noFill\/>/.test(chartXml), 'no invisible base in clustered-bar');
+});
+
+test('injectNativeCharts: combo line series respect dashed flag (R35 P2)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Active_DOM_PC');
+  sheet.getCell('A4').value = 'Quarter End';
+  sheet.getCell('C4').value = 'DOM Total';
+  sheet.getCell('E4').value = '% Change Total';
+  sheet.getCell('F4').value = '% Change Core';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`C${5 + i}`).value = 90 + i * 5;
+    sheet.getCell(`E${5 + i}`).value = 0.08 + i * 0.01;
+    sheet.getCell(`F${5 + i}`).value = 0.05 + i * 0.005;
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Active_DOM_PC',
+    spec: {
+      type: 'combo',
+      tabName: 'Data_Active_DOM_PC',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 10,
+      barSeries: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '9DC3E6' },
+      ],
+      lineSeries: [
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '1F4E79' },
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '1F4E79', dashed: true },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Exactly ONE dashed line (the core variant)
+  const dashCount = (chartXml.match(/<a:prstDash val="dash"\/>/g) || []).length;
+  assert.equal(dashCount, 1, 'one dashed line series (the core variant)');
+});
+
 test('buildInjectionSpec: cap_rate_top_bottom_quartile builds 3-line with dashed quartiles', () => {
   const cols = [
     { key: 'period_end',      col: 'A' },
