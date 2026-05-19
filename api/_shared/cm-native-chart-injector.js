@@ -1245,6 +1245,11 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // R36 P2 — donut charts (single ring, N segments, no axes).
   'available_by_tenant_count_donut',  // count share by tenant (DaVita/FMC/US Renal/Other)
   'available_by_tenant_volume_donut', // volume share by tenant — same shape
+  // R36 P3 — bar + 4-scatter composites on categorical x-axis (term buckets).
+  // Reuses the combo machinery with showMarker=true on line series for
+  // the dot overlays (same pattern as rent_by_year_built from R34 P9).
+  'available_by_term_summary',        // dia: Sub 5 / 5-8 / 8-12 / 12+ term cohorts
+  'available_by_firm_term_summary',   // gov: same shape
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -2600,6 +2605,62 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           colors,
           holeSize: 55,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R36 P3 — bar + 4-scatter composites on categorical x-axis.
+    // Renderer at cm-chart-image-renderer.js line ~526 (dia) and
+    // ~2157 (gov firm-term variant). Identical chart shape:
+    //   • 1 sky bar series  — Avg Price (left axis $)
+    //   • 4 dot series      — Avg Cap (navy), Upper Q (purple),
+    //                          Lower Q (gray), Median (sage)
+    //                          all on RIGHT axis (cap rate %)
+    //   • Categorical x-axis = term_bucket (text labels)
+    //
+    // Native version reuses the combo machinery with showMarker=true
+    // on each line series for the dot overlay. Same pattern as
+    // rent_by_year_built (R34 P9).
+    // ────────────────────────────────────────────────────────────────
+    case 'available_by_term_summary':
+    case 'available_by_firm_term_summary': {
+      const termCol     = findCol('term_bucket');
+      const priceCol    = findCol('avg_price');
+      const avgCapCol   = findCol('avg_cap');
+      const upperQCol   = findCol('upper_quartile_cap');
+      const lowerQCol   = findCol('lower_quartile_cap');
+      const medianCol   = findCol('median_cap');
+      if (!termCol || !priceCol || !avgCapCol || !upperQCol || !lowerQCol || !medianCol) {
+        return null;
+      }
+      // Per renderer line ~557-580:
+      //   Avg Cap        navy   (cap_short)        #003DA5
+      //   Upper Quartile purple (cap_long_term)    #7E6BAD
+      //   Lower Quartile gray   (cap_outside_firm) #6A748C
+      //   Median         sage   (cap_mid_long)     #4CB582
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: termCol,
+          dataStart, dataEnd,
+          barSeries: [
+            { titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: sky },
+          ],
+          lineSeries: [
+            // 4 diamond markers on the right axis — order matches renderer
+            { titleCol: avgCapCol,  titleRow: headerRow, valCol: avgCapCol,
+              color: navy,     showMarker: true, markerShape: 'diamond', markerSize: 7 },
+            { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
+              color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+            { titleCol: lowerQCol,  titleRow: headerRow, valCol: lowerQCol,
+              color: '6A748C', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+            { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
+              color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+          ],
           anchor: standardAnchor,
         },
       };

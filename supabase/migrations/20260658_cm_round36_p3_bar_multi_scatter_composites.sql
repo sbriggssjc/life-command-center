@@ -1,0 +1,137 @@
+-- =====================================================================
+-- Round 36 P3 — bar + 4-scatter composites. Closes the post-R35 audit.
+-- Builds on R36 P2 (PR #840).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- 100% NATIVE COVERAGE OF SHIPPABLE CHARTS
+-- ---------------------------------------------------------------------
+-- After this PR, every chart_template_id with a working code path in
+-- cm-chart-image-renderer.js that produces a chart is native — 48
+-- total. The remaining 5 templates in the renderer have documented
+-- blockers and won't migrate without upstream changes:
+--
+--   ppsf_box_quarterly       dropped from runtime catalog Round 6h
+--   lease_termination_rate   computed "In Firm Term" series not in
+--                            data tab (would need helper col)
+--   lease_structures         renderer returns null — table only, no chart
+--   net_lease_spread         renderer references cap_10plus_year which
+--                            isn't in the Data_NL_Spread schema
+--   rent_heat_map            US choropleth blocked on chartjs-chart-geo
+--                            plugin not bundled in QuickChart hosted
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 48)
+-- ---------------------------------------------------------------------
+--   available_by_term_summary       dia: 1 sky bar (avg price, left axis)
+--                                   + 4 diamond markers on right axis
+--                                   (avg cap navy, upper q purple,
+--                                    lower q gray, median sage) over
+--                                   categorical x = term_bucket
+--                                   (Sub 5 / 5-8 / 8-12 / 12+)
+--   available_by_firm_term_summary  gov variant — same chart shape,
+--                                   buckets keyed off firm_term_years
+--                                   (Sub 5 Year Firm / 5-8 / 8-12 / 12+)
+--
+-- ---------------------------------------------------------------------
+-- WIRING DETAIL
+-- ---------------------------------------------------------------------
+-- Both templates share a single switch case (renderer at
+-- cm-chart-image-renderer.js line ~526 dia + line ~2157 gov has
+-- duplicated case bodies — same shape, just different bucket labels
+-- driven by the underlying view). Native chart reuses the existing
+-- combo dispatch with:
+--
+--   barSeries: [{ avg_price (col C), color sky }]
+--   lineSeries: [
+--     { avg_cap (D),  navy   diamond, size 7, showMarker=true },
+--     { upper_q (E),  purple diamond, size 7, showMarker=true },
+--     { lower_q (G),  gray   diamond, size 7, showMarker=true },
+--     { median (F),   sage   diamond, size 7, showMarker=true },
+--   ]
+--   default axes (bars LEFT, markers RIGHT)
+--
+-- Colors mirror renderer line ~557-580 PDF_COLORS:
+--   Avg Cap        cap_short        navy   #003DA5
+--   Upper Quartile cap_long_term    purple #7E6BAD
+--   Lower Quartile cap_outside_firm gray   #6A748C
+--   Median         cap_mid_long     sage   #4CB582
+--
+-- Same pattern as rent_by_year_built (R34 P9). The combo machinery's
+-- showMarker=true gives diamond dots without connecting lines on the
+-- markers-only line series.
+--
+-- ---------------------------------------------------------------------
+-- KNOWN VISUAL DEFER
+-- ---------------------------------------------------------------------
+-- Renderer adds per-bar price labels via chartjs-datalabels (e.g.
+-- "$2.5M" above each bar). Native chart doesn't include those. Users
+-- can right-click the bar series → Add Data Labels in Excel to
+-- recreate manually. The renderer also pins the right-axis range to
+-- 0.04..0.09 (4-9%); native uses auto-scale, which usually works fine
+-- but may differ slightly per dataset.
+--
+-- ---------------------------------------------------------------------
+-- TESTS — 114 CM TESTS PASS (up from 110 in R36 P2)
+-- ---------------------------------------------------------------------
+-- Registration check for both templates.
+--
+-- buildInjectionSpec tests verify:
+--   • Both templates produce type='combo' with 1 bar + 4 markers-only lines
+--   • catCol = term_bucket (col A, categorical)
+--   • Bar = avg_price (col C), sky
+--   • 4 line series in order: avg_cap (D) / upper_q (E) / lower_q (G) /
+--     median (F) — note F+G order matches renderer (median LAST per
+--     line ~575)
+--   • Colors: navy / purple / gray / sage (PDF_COLORS family)
+--   • All 4 have showMarker=true + markerShape='diamond'
+--   • Gov firm-term variant produces identical spec shape
+--
+-- End-to-end XML test verifies:
+--   • barChart + lineChart blocks
+--   • 5 series total with unique idx [0, 1, 2, 3, 4]
+--   • 4 <c:symbol val="diamond"/> markers
+--   • 4 <a:ln><a:noFill/></a:ln> on the markers-only line series
+--     (no connecting lines)
+--   • Global lineChart marker toggle <c:marker val="1"/>
+--   • Two val axes (bars LEFT + lines RIGHT)
+--
+-- End-to-end smoke build confirmed both charts emit:
+--   bar=true line=true series=5 diamonds=4 valAxes=2
+--
+-- Final audit confirms: 53 renderer cases, 48 native, 5 deferred.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. X-CM-Native-Charts should reach 45-48 depending on vertical
+-- 3. Open the term-summary tabs:
+--      Data_Avail_by_Term       (dia) — 4 sky bars + 4×4=16 diamond markers
+--      Data_Avail_by_Firm_Term  (gov) — same shape
+-- 4. Verify in Excel:
+--    • 4 bars on the LEFT axis (currency $)
+--    • 16 diamond markers on the RIGHT axis (percent cap rate)
+--      colored navy/purple/gray/sage by series
+--    • No connecting lines on the markers
+--    • Categories on x-axis are text labels (term buckets), not dates
+-- 5. Right-click → "Edit Data" should be enabled.
+--
+-- ---------------------------------------------------------------------
+-- WHERE THE WORK ENDS
+-- ---------------------------------------------------------------------
+-- Native chart migration is complete for all shippable templates. The
+-- 5 remaining deferred templates each need an upstream change:
+--
+--   ppsf_box_quarterly       — re-add to catalog if needed (was deliberate)
+--   lease_termination_rate   — add 'in_firm_term' helper col to view OR
+--                              compute at export time
+--   lease_structures         — table-only by design; no chart needed
+--   net_lease_spread         — either add cap_10plus_year to data tab
+--                              schema OR change renderer to use nm_avg_cap
+--   rent_heat_map            — wait for self-hosted QuickChart with
+--                              chartjs-chart-geo OR migrate to a
+--                              different chart type (e.g. horizontal
+--                              bars like leased_inventory_by_state)
+-- =====================================================================
