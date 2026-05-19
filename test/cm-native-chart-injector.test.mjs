@@ -350,6 +350,142 @@ test('R37 P1: catAxNumFmt override works for year-axis templates', async () => {
   assert.ok(!/q&quot;Q-&quot;yyyy/.test(catAxBlock), 'no quarter fmt');
 });
 
+test('R37 P2: line chart emits valAx scaling + numFmt when yAxisRange + valAxNumFmt set', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i * 3, 31);
+    sheet.getCell(`B${5 + i}`).value = 0.065 + i * 0.005;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 4, catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 8,
+      yAxisRange: { min: 0.05, max: 0.10 },
+      valAxNumFmt: '0.00%',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  const valAxBlock = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(valAxBlock, /<c:min val="0.05"\/>/, 'min pinned to 0.05');
+  assert.match(valAxBlock, /<c:max val="0.1"\/>/,  'max pinned to 0.1');
+  assert.match(valAxBlock, /<c:numFmt formatCode="0\.00%" sourceLinked="0"\/>/,
+    'percent 2dp number format');
+});
+
+test('R37 P2: combo chart emits independent left + right scaling/format', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i * 3, 31);
+    sheet.getCell(`B${5 + i}`).value = 90 + i * 5;
+    sheet.getCell(`C${5 + i}`).value = 0.92 + i * 0.005;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'combo', tabName: 'Data_Test', catCol: 'A',
+      dataStart: 5, dataEnd: 8,
+      yLeftNumFmt:  '#,##0',
+      yRightRange:  { min: 0.85, max: 1.05 },
+      yRightNumFmt: '0.0%',
+      barSeries:  [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' }],
+      lineSeries: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' }],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  // Left axis (axId 2) has integer format, no range pinning
+  const leftAx = chartXml.match(/<c:valAx>\s*<c:axId val="2"\/>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(leftAx, /<c:numFmt formatCode="#,##0"/, 'left = integer fmt');
+  assert.ok(!/<c:min/.test(leftAx), 'left axis not pinned (auto-scale)');
+  // Right axis (axId 3) has percent format + pinned to 85-105%
+  const rightAx = chartXml.match(/<c:valAx>\s*<c:axId val="3"\/>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(rightAx, /<c:min val="0.85"\/>/);
+  assert.match(rightAx, /<c:max val="1.05"\/>/);
+  assert.match(rightAx, /<c:numFmt formatCode="0\.0%"/);
+});
+
+test('R37 P2: scatter chart emits x + y range/format independently', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = 5 + i;
+    sheet.getCell(`B${5 + i}`).value = 0.07 + i * 0.005;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'scatter', tabName: 'Data_Test',
+      dataStart: 5, dataEnd: 8,
+      yAxisRange: { min: 0.04, max: 0.12 },
+      valAxNumFmt: '0.00%',
+      series: [{ titleCol: 'B', titleRow: 4, xCol: 'A', yCol: 'B', color: '62B5E5' }],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  // Y axis (axId 2) gets the cap range pin + percent fmt
+  const yAx = chartXml.match(/<c:valAx>\s*<c:axId val="2"\/>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(yAx, /<c:min val="0.04"\/>/);
+  assert.match(yAx, /<c:max val="0.12"\/>/);
+  assert.match(yAx, /<c:numFmt formatCode="0\.00%"/);
+});
+
+test('R37 P2: buildInjectionSpec ports renderer ranges/formats to specs', () => {
+  // Spot-check a few representative templates
+  const cols = (keys) => keys.map((k, i) => ({
+    key: k, col: String.fromCharCode(65 + i),
+  }));
+
+  // nm_vs_market_cap pins 5.25-9.25%
+  const nm = buildInjectionSpec({
+    chart_template_id: 'nm_vs_market_cap', tabName: 'Data_NM_vs_Market',
+    cols: cols(['period_end','subspecialty','nm_cap_rate','market_cap_rate']),
+    dataStart: 5, dataEnd: 60, brand: { palette: {} },
+  });
+  assert.equal(nm.spec.yAxisRange.min, 0.0525);
+  assert.equal(nm.spec.yAxisRange.max, 0.0925);
+  assert.equal(nm.spec.valAxNumFmt, '0.00%');
+
+  // dom_and_pct_of_ask pins right axis 85-105%
+  const dom = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask', tabName: 'Data_DOM_Ask',
+    cols: cols(['period_end','subspecialty','avg_dom','median_dom','pct_of_ask']),
+    dataStart: 5, dataEnd: 60, brand: { palette: {} },
+  });
+  assert.deepEqual(dom.spec.yRightRange, { min: 0.85, max: 1.05 });
+  assert.equal(dom.spec.yRightNumFmt, '0.0%');
+  assert.equal(dom.spec.yLeftNumFmt, '#,##0');
+
+  // core_cap_rate_dot_plot pins 4-12% on y
+  const core = buildInjectionSpec({
+    chart_template_id: 'core_cap_rate_dot_plot', tabName: 'Data_Core_Cap_Dot',
+    cols: cols(['period_end','cap_rate','firm_term_years','is_northmarq','sold_price']),
+    dataStart: 5, dataEnd: 500, brand: { palette: {} },
+  });
+  assert.deepEqual(core.spec.yAxisRange, { min: 0.04, max: 0.12 });
+
+  // buyer_class_pct_by_year pins 0-100%
+  const bcp = buildInjectionSpec({
+    chart_template_id: 'buyer_class_pct_by_year', tabName: 'Data_Buyer_Pool',
+    cols: cols(['year','subspecialty','private_volume','reit_volume','cross_border_volume',
+                'institutional_volume','private_pct','reit_pct','cross_border_pct','institutional_pct']),
+    dataStart: 5, dataEnd: 20, brand: { palette: {} },
+  });
+  assert.deepEqual(bcp.spec.yAxisRange, { min: 0, max: 1 });
+  assert.equal(bcp.spec.valAxNumFmt, '0%');
+});
+
 test('R37 P1: catAxNumFmt empty string suppresses numFmt entirely', async () => {
   // Horizontal-bar charts (state rankings) should not emit a numFmt
   const wb = new ExcelJS.Workbook();
