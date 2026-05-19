@@ -1,0 +1,148 @@
+-- =====================================================================
+-- Round 36 P4 — unblock 3 of 5 deferred templates with code-only changes.
+-- Builds on R36 P3 (PR #841).
+--
+-- After R36 P3 declared "complete" with 5 deferred templates, a closer
+-- look revealed 3 of those 5 could be migrated without view changes:
+--
+--   lease_termination_rate   uses the P8.5 helper-col infrastructure to
+--                            compute the "In Firm Term" series at export
+--                            time (was deferred for needing this exact
+--                            mechanism — which exists since P8.5)
+--   net_lease_spread         plots the 2 series that exist in the data
+--                            tab (the renderer's 3rd cap_10plus_year
+--                            series was never visible anyway since it
+--                            isn't in the schema)
+--   rent_heat_map            migrates the horizontal-bar FALLBACK that
+--                            the renderer already produces (chartjs-chart-
+--                            geo plugin is the choropleth blocker but the
+--                            shipped visual is a bar chart)
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (3 added; total now 51)
+-- ---------------------------------------------------------------------
+--   lease_termination_rate   2-series stacked bar with computed bottom
+--                            (in_firm_term = total - outside, helper col)
+--   net_lease_spread         2-line (treasury sky + avg_cap navy);
+--                            renderer's 3rd cap_10plus_year series is
+--                            also missing from the PNG since the data
+--                            tab doesn't have it — native matches that
+--                            visual reality
+--   rent_heat_map            horizontal bar of top-N states by avg_rpsf,
+--                            same pattern as leased_inventory_by_state +
+--                            sources_of_capital (R36 P1)
+--
+-- ---------------------------------------------------------------------
+-- ONLY 2 TEMPLATES REMAIN TRULY UNMIGRATEABLE
+-- ---------------------------------------------------------------------
+-- After this PR, the audit shows just 2 case statements in the renderer
+-- without a NATIVE_CHART_TEMPLATES entry:
+--
+--   ppsf_box_quarterly  — DROPPED from runtime catalog in Round 6h
+--                         (2026-05-09). No view ever shipped, no exports
+--                         ever produced this chart. Static JSON catalog
+--                         still lists it but the DB catalog is the
+--                         runtime source of truth.
+--
+--   lease_structures    — Renderer returns NULL by design (user feedback
+--                         2026-05-09: "Data_Lease_Terms has a chart when
+--                         what's in the PDF is just a table side by
+--                         side"). Tab ships only the data table, no
+--                         chart object at all.
+--
+-- Both are intentional product decisions, not technical blockers.
+-- Native migration is GENUINELY COMPLETE for everything that ships
+-- as a chart.
+--
+-- ---------------------------------------------------------------------
+-- WIRING DETAIL
+-- ---------------------------------------------------------------------
+-- lease_termination_rate:
+--   Renderer (cm-chart-image-renderer.js line ~1629) stacks 2 bars:
+--     Series 0 (bottom, navy): "Leases In Firm Term" = total - outside
+--     Series 1 (top, sky):     "Leases Outside Firm Term"
+--   Helper col 'in_firm_term' (E) computes total - outside with
+--   Math.max(0, ...) clamp and null guard. Stacked-bar spec then
+--   references E as bottom and D (leases_outside_firm_term) as top.
+--
+-- net_lease_spread:
+--   Renderer plots 3 lines (treasury / avg_cap / cap_10plus_year) but
+--   the 3rd column isn't in the data tab. Native chart plots the 2
+--   that exist — exactly what the PNG currently shows (the 3rd line
+--   was always null/empty). Same pattern as fed_funds_vs_treasury,
+--   cash_leveraged_returns, pace_of_cap_rate_expansion (R35 P1 + P2).
+--
+-- rent_heat_map:
+--   Renderer wants a US choropleth but ships a horizontal-bar fallback
+--   while QuickChart doesn't bundle chartjs-chart-geo. Native chart
+--   migrates the fallback (col B = state, col C = avg_rpsf, horizontal=true).
+--   Same as leased_inventory_by_state + sources_of_capital from R36 P1.
+--   If CM_CHOROPLETH_ENABLED ever lands with a self-hosted QuickChart,
+--   the PNG renderer can swap shape; the native chart stays editable.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 118 CM tests pass (up from 114 in R36 P3).
+--
+-- Two pre-existing negative assertions from P4 + P5 (lease_termination_rate
+-- and net_lease_spread should "remain on the PNG path") were UPDATED
+-- since both templates are now native — replaced with commentary
+-- pointing at the new R36 P4 registration test.
+--
+-- New positive assertions verify:
+--   • Registration for all 3 new templates
+--   • Only ppsf_box_quarterly + lease_structures remain unregistered
+--   • lease_termination_rate: stacked-bar with helper col E in_firm_term,
+--     getValue handles Math.max(0, ...) clamp + null guard
+--   • net_lease_spread: 2-series multi-line (sky treasury + navy cap)
+--   • rent_heat_map: horizontal bar (state on cat axis, avg_rpsf on val)
+--
+-- End-to-end smoke confirmed:
+--   chart1 (lease_termination_rate): barChart stacked, 2 series,
+--     helper col writes total - outside (e.g. 100-25=75 for row 5)
+--   chart2 (net_lease_spread):       lineChart, 2 series
+--   chart3 (rent_heat_map):          barChart, barDir=bar (horizontal)
+--
+-- Final audit: 53 renderer cases / 51 native / 2 unmigrateable.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. X-CM-Native-Charts should reach maximum possible coverage
+--    (45-51 depending on which templates apply to the vertical)
+-- 3. Right-click on:
+--      Data_Term_Rate          (gov) — 2-color stacked column, navy
+--                                       "In Firm Term" computed from
+--                                       helper col E, sky "Outside Firm"
+--      Data_NL_Spread          (both) — 2-line chart, sky treasury +
+--                                        navy avg cap
+--      Data_Rent_Heat_Map      (gov) — horizontal bar of top states by
+--                                       avg rent/SF
+-- 4. "Edit Data" should be enabled on all three (previously greyed out
+--    as PNG)
+-- 5. For lease_termination_rate: edit a cell in "Leases In Firm Term
+--    (TTM)" column on the data tab → chart bar segment updates live.
+--    Proves the helper-col + native chart pipeline is end-to-end live.
+--
+-- ---------------------------------------------------------------------
+-- WHERE THE WORK TRULY ENDS
+-- ---------------------------------------------------------------------
+-- Every chart_template_id in cm-chart-image-renderer.js that produces a
+-- chart now has a native Excel chart object equivalent. The only 2
+-- exceptions are intentionally chart-less:
+--
+--   ppsf_box_quarterly — no catalog entry, no rows ever fetched
+--   lease_structures   — renderer returns null, table-only by design
+--
+-- The R33 backlog items E1 (Rent_Price_PSF for dia) and E2 (Core_Cap_Dot
+-- trendline review) remain — both are product/data decisions, not code
+-- work.
+--
+-- Total native chart_template_ids: 51.
+-- Total renderer cases: 53.
+-- Total non-chart renderer cases: 2 (the 2 deferred above).
+-- =====================================================================

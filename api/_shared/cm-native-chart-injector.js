@@ -1250,6 +1250,13 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // the dot overlays (same pattern as rent_by_year_built from R34 P9).
   'available_by_term_summary',        // dia: Sub 5 / 5-8 / 8-12 / 12+ term cohorts
   'available_by_firm_term_summary',   // gov: same shape
+  // R36 P4 — unblock 3 of 5 deferred templates with code-only changes.
+  // After this PR, only ppsf_box_quarterly (dropped from catalog) and
+  // lease_structures (renderer returns null — table only) remain
+  // unmigrateable.
+  'lease_termination_rate',         // helper col in_firm_term = total - outside
+  'net_lease_spread',               // 2-line (3rd cap_10plus_year not in data tab)
+  'rent_heat_map',                  // horizontal-bar fallback (same as leased_inv_by_state)
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -2661,6 +2668,117 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
               color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7 },
           ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R36 P4 — unblock 3 of 5 deferred templates with code-only changes.
+    // The remaining 2 truly can't migrate: ppsf_box_quarterly (dropped
+    // from catalog Round 6h, no view) and lease_structures (renderer
+    // returns null — table only, no chart shape).
+    // ────────────────────────────────────────────────────────────────
+
+    case 'lease_termination_rate': {
+      // Renderer at cm-chart-image-renderer.js ~line 1629 stacks two bars:
+      //   Series 0 (bottom, navy): "Leases In Firm Term" = total - outside
+      //   Series 1 (top, sky):     "Leases Outside Firm Term"
+      //
+      // The "In Firm Term" series is COMPUTED at render time, not stored.
+      // Use the P8.5 helper-col infrastructure to write it as col E on
+      // the data tab, then reference it as the bottom of a stacked bar.
+      const periodCol  = findCol('period_end');
+      const totalCol   = findCol('total_leases_active');
+      const outsideCol = findCol('leases_outside_firm_term');
+      if (!periodCol || !totalCol || !outsideCol) return null;
+
+      // Helper col letter — lands one past the regular CHART_COLUMNS entries
+      const inFirmCol = String.fromCharCode(65 + cols.length);
+
+      return {
+        tabName,
+        spec: {
+          type: 'stacked-bar',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            // Bottom: In Firm Term (computed helper col), navy
+            { titleCol: inFirmCol,  titleRow: headerRow, valCol: inFirmCol,
+              color: navy },
+            // Top: Outside Firm Term (col D), sky
+            { titleCol: outsideCol, titleRow: headerRow, valCol: outsideCol,
+              color: sky },
+          ],
+          anchor: standardAnchor,
+        },
+        helperCols: [{
+          key: 'in_firm_term',
+          header: 'Leases In Firm Term (TTM)',
+          format: 'integer_count',
+          width: 22,
+          getValue: (row) => {
+            const total   = row.total_leases_active;
+            const outside = row.leases_outside_firm_term;
+            if (total == null || outside == null) return null;
+            return Math.max(0, Number(total) - Number(outside));
+          },
+        }],
+      };
+    }
+
+    case 'net_lease_spread': {
+      // Renderer at cm-chart-image-renderer.js ~line 1713 wants 3 lines:
+      //   10Y Treasury Yield (sky)
+      //   Average Cap Rate (TTM) (navy bold)
+      //   10+ Year Cap (TTM) (mid-blue)
+      //
+      // But the 3rd series (`cap_10plus_year`) isn't in the Data_NL_Spread
+      // schema — the renderer plots it as null. Native chart matches that
+      // visual reality by emitting just the 2 series that exist in the
+      // data tab. Same pattern as fed_funds_vs_treasury (R35 P1) and
+      // cash_leveraged_returns (R35 P1).
+      const periodCol = findCol('period_end');
+      const treasCol  = findCol('treasury_10y_yield');
+      const capCol    = findCol('avg_cap_rate');
+      if (!periodCol || !treasCol || !capCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
+            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'rent_heat_map': {
+      // Renderer at cm-chart-image-renderer.js ~line 1832 wants a US
+      // choropleth, but QuickChart's hosted instance doesn't bundle
+      // chartjs-chart-geo. The fallback is a horizontal bar of the
+      // top 15 states by avg_rpsf. Migrate that fallback to native —
+      // same pattern as leased_inventory_by_state + sources_of_capital
+      // (R36 P1).
+      const stateCol = findCol('state');
+      const rpsfCol  = findCol('avg_rpsf');
+      if (!stateCol || !rpsfCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'bar',
+          tabName,
+          titleCol: rpsfCol, titleRow: headerRow,
+          catCol: stateCol, valCol: rpsfCol,
+          dataStart, dataEnd,
+          color: navy,
+          horizontal: true,
           anchor: standardAnchor,
         },
       };
