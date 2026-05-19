@@ -886,6 +886,16 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //      the R34 migration. swapAxes used because the PDF puts the
   //      line on the LEFT axis (opposite of dom_and_pct_of_ask).
   'valuation_index',
+  // R35 P1 — 6 missed multi-line templates caught by post-R34 audit.
+  //   All reuse buildMultiLineChartXml (no new builder needed).
+  'cap_rate_top_bottom_quartile',   // 3-line: top_q dashed / median bold / bottom_q dashed
+  'cap_rate_by_credit',             // 3-line: Federal navy / State sky / Municipal sage
+  'cpi_vs_renewal_cagr',            // 2-line: CPI sky / GSA renewal navy
+  'fed_funds_vs_treasury',          // 2-line: Fed Funds navy / 10Y Treasury sky
+                                    // (renderer references mortgage_30y but it's not in
+                                    // the data tab; native plots the 2 series that exist)
+  'cash_leveraged_returns',         // 2-line: cash_return navy / leveraged_mid sky
+  'asking_cap_quartiles_active',    // 4-line: total upper/lower + core upper/lower (dashed)
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -1611,6 +1621,160 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             // Valuation Index — navy line, no markers
             { titleCol: indexCol, titleRow: headerRow, valCol: indexCol,
               color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R35 P1 — 6 missed multi-line templates (post-R34 audit). All
+    // reuse the existing buildMultiLineChartXml; just need spec wiring.
+    // ────────────────────────────────────────────────────────────────
+
+    case 'cap_rate_top_bottom_quartile': {
+      // 3-line: top_q dashed purple, median solid navy bold, bottom_q
+      // dashed sage. Colors per cm-chart-image-renderer.js line ~780.
+      const periodCol = findCol('period_end');
+      const topCol    = findCol('top_quartile');
+      const medCol    = findCol('median');
+      const botCol    = findCol('bottom_quartile');
+      if (!periodCol || !topCol || !medCol || !botCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName, catCol: periodCol, dataStart, dataEnd,
+          series: [
+            { titleCol: topCol, titleRow: headerRow, valCol: topCol,
+              color: '7E6BAD', dashed: true },  // purple
+            { titleCol: medCol, titleRow: headerRow, valCol: medCol,
+              color: '003DA5' },                // navy
+            { titleCol: botCol, titleRow: headerRow, valCol: botCol,
+              color: '4CB582', dashed: true },  // sage
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'cap_rate_by_credit': {
+      // 3-line: Federal navy bold / State sky / Municipal sage.
+      // Note: state + municipal series will be empty for gov data per
+      // the 2026-05-06 audit (0 state and ~5 municipal sales with caps),
+      // but the chart shape is correct — series will fill in once the
+      // data feed exists.
+      const periodCol = findCol('period_end');
+      const fedCol    = findCol('federal_cap');
+      const stateCol  = findCol('state_cap');
+      const muniCol   = findCol('municipal_cap');
+      if (!periodCol || !fedCol || !stateCol || !muniCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName, catCol: periodCol, dataStart, dataEnd,
+          series: [
+            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy   },
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky    },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582' },  // sage
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'cpi_vs_renewal_cagr': {
+      // 2-line: CPI sky / GSA Renewal navy bold.
+      const periodCol = findCol('period_end');
+      const cpiCol    = findCol('cpi_change');
+      const cagrCol   = findCol('gsa_renewal_cagr');
+      if (!periodCol || !cpiCol || !cagrCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName, catCol: periodCol, dataStart, dataEnd,
+          series: [
+            { titleCol: cpiCol,  titleRow: headerRow, valCol: cpiCol,  color: sky  },
+            { titleCol: cagrCol, titleRow: headerRow, valCol: cagrCol, color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'fed_funds_vs_treasury': {
+      // 2-line in native (renderer adds a 3rd mortgage_30y line that
+      // isn't in the data tab — see net_lease_spread for the same
+      // data-shape mismatch pattern).
+      const periodCol = findCol('period_end');
+      const ffCol     = findCol('fed_funds_rate');
+      const t10Col    = findCol('treasury_10y_yield');
+      if (!periodCol || !ffCol || !t10Col) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName, catCol: periodCol, dataStart, dataEnd,
+          series: [
+            { titleCol: ffCol,  titleRow: headerRow, valCol: ffCol,  color: navy },
+            { titleCol: t10Col, titleRow: headerRow, valCol: t10Col, color: sky  },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'cash_leveraged_returns': {
+      // 2-line: Cash Return navy bold / Leveraged Return (mid) sky.
+      // Renderer plots only these 2 of the 4 columns in the data tab
+      // (leveraged_return_high/low columns exist but aren't rendered).
+      const periodCol  = findCol('period_end');
+      const cashCol    = findCol('cash_return');
+      const lvgMidCol  = findCol('leveraged_return_mid');
+      if (!periodCol || !cashCol || !lvgMidCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName, catCol: periodCol, dataStart, dataEnd,
+          series: [
+            { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
+            { titleCol: lvgMidCol, titleRow: headerRow, valCol: lvgMidCol, color: sky  },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'asking_cap_quartiles_active': {
+      // 4-line: total market (solid) + 10+ year core (dashed), each
+      // with upper_q (light blue) and lower_q (dark blue). Colors per
+      // cm-chart-image-renderer.js line ~1354 (literal hex, palette-
+      // independent so it survives brand-tokens overrides).
+      const COLOR_LIGHT_BLUE = '9DC3E6';
+      const COLOR_DARK_BLUE  = '1F4E79';
+      const periodCol = findCol('period_end');
+      const upTotCol  = findCol('upper_q_total');
+      const loTotCol  = findCol('lower_q_total');
+      const upCorCol  = findCol('upper_q_core');
+      const loCorCol  = findCol('lower_q_core');
+      if (!periodCol || !upTotCol || !loTotCol || !upCorCol || !loCorCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName, catCol: periodCol, dataStart, dataEnd,
+          series: [
+            { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol,
+              color: COLOR_LIGHT_BLUE },                          // total upper, solid light
+            { titleCol: loTotCol, titleRow: headerRow, valCol: loTotCol,
+              color: COLOR_DARK_BLUE },                           // total lower, solid dark
+            { titleCol: upCorCol, titleRow: headerRow, valCol: upCorCol,
+              color: COLOR_LIGHT_BLUE, dashed: true },            // core upper, dashed light
+            { titleCol: loCorCol, titleRow: headerRow, valCol: loCorCol,
+              color: COLOR_DARK_BLUE, dashed: true },             // core lower, dashed dark
           ],
           anchor: standardAnchor,
         },
