@@ -17,7 +17,11 @@ import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 
-import { injectNativeCharts } from '../api/_shared/cm-native-chart-injector.js';
+import {
+  injectNativeCharts,
+  NATIVE_CHART_TEMPLATES,
+  buildInjectionSpec,
+} from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
   const wb = new ExcelJS.Workbook();
@@ -97,4 +101,51 @@ test('injectNativeCharts: returns original buffer when no injections', async () 
   const base = await buildTinyWorkbook();
   const result = await injectNativeCharts(base, []);
   assert.equal(result, base, 'no-op returns the same buffer');
+});
+
+test('NATIVE_CHART_TEMPLATES: P3 simple-shape charts registered', () => {
+  for (const id of [
+    'volume_ttm_by_quarter',         // P2
+    'cap_rate_ttm_by_quarter',       // P3
+    'transaction_count_ttm',
+    'avg_deal_size',
+    'yoy_volume_change',
+    'market_turnover',
+    'quarterly_volume_bars',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: dispatches bar vs line correctly', () => {
+  const baseCols = [
+    { key: 'period_end',   col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'avg_deal_size', col: 'C' },
+  ];
+  const brand = { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } };
+  const args = (chart_template_id, cols) => ({
+    chart_template_id, tabName: 'Data_Test',
+    cols, dataStart: 5, dataEnd: 100, brand,
+  });
+
+  // bar
+  const bar = buildInjectionSpec(args('avg_deal_size', baseCols));
+  assert.equal(bar.spec.type, 'bar');
+  assert.equal(bar.spec.catCol, 'A');
+  assert.equal(bar.spec.valCol, 'C');
+
+  // line — cap_rate_ttm_by_quarter expects ttm_weighted_cap_rate column
+  const lineCols = [
+    { key: 'period_end',             col: 'A' },
+    { key: 'subspecialty',           col: 'B' },
+    { key: 'ttm_weighted_cap_rate',  col: 'C' },
+  ];
+  const line = buildInjectionSpec(args('cap_rate_ttm_by_quarter', lineCols));
+  assert.equal(line.spec.type, 'line');
+  assert.equal(line.spec.valCol, 'C');
+
+  // unknown template returns null
+  const unknown = buildInjectionSpec(args('not_a_real_template', baseCols));
+  assert.equal(unknown, null);
 });

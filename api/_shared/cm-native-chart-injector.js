@@ -122,6 +122,66 @@ function buildSingleLineChartXml(spec) {
 </c:chartSpace>`;
 }
 
+/**
+ * Generate a single-bar chart referencing a categorical x-axis and a
+ * single numeric y-series. Used for transaction count, avg deal size,
+ * YoY change (with optional signed coloring), quarterly volume, etc.
+ */
+function buildSingleBarChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const color = (spec.color || '003DA5').replace('#', '');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+        <c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:tx>
+            <c:strRef><c:f>'${sheet}'!$${spec.titleCol}$${spec.titleRow}</c:f></c:strRef>
+          </c:tx>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
+          </c:spPr>
+          <c:cat>
+            <c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef>
+          </c:cat>
+          <c:val>
+            <c:numRef><c:f>'${sheet}'!$${spec.valCol}$${spec.dataStart}:$${spec.valCol}$${spec.dataEnd}</c:f></c:numRef>
+          </c:val>
+        </c:ser>
+        <c:gapWidth val="60"/>
+        <c:overlap val="-20"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:barChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -226,8 +286,15 @@ export async function injectNativeCharts(buffer, injections) {
     const drawingRels = `xl/drawings/_rels/drawing${nextDrawingId}.xml.rels`;
     const sheetRels   = cleanSheetPath.replace(/^(xl\/worksheets\/)([^.]+)\.xml$/, '$1_rels/$2.xml.rels');
 
-    // 1. Generate chart XML
-    const chartXml = buildSingleLineChartXml(spec);
+    // 1. Generate chart XML — dispatch by spec.type
+    let chartXml;
+    if (spec.type === 'bar') {
+      chartXml = buildSingleBarChartXml(spec);
+    } else {
+      // 'line' (default) and any future shapes that don't have their own
+      // builder yet fall back to the line builder.
+      chartXml = buildSingleLineChartXml(spec);
+    }
     zip.file(chartFile, chartXml);
 
     // 2. Generate drawing XML + its rels (drawing → chart)
@@ -289,7 +356,7 @@ export async function injectNativeCharts(buffer, injections) {
 }
 
 // Re-export for testing
-export { buildSingleLineChartXml, buildDrawingXml };
+export { buildSingleLineChartXml, buildSingleBarChartXml, buildDrawingXml };
 
 // ----------------------------------------------------------------------------
 // Migration registry — which chart_template_ids are now native (editable)
@@ -309,7 +376,15 @@ export { buildSingleLineChartXml, buildDrawingXml };
  * to native chart XML. See task #16 for the full migration plan.
  */
 export const NATIVE_CHART_TEMPLATES = new Set([
+  // P2 (R34) — first migration
   'volume_ttm_by_quarter',
+  // P3 — simple single-series line + bar charts
+  'cap_rate_ttm_by_quarter',
+  'transaction_count_ttm',
+  'avg_deal_size',
+  'yoy_volume_change',
+  'market_turnover',
+  'quarterly_volume_bars',
 ]);
 
 /**
@@ -328,28 +403,67 @@ export const NATIVE_CHART_TEMPLATES = new Set([
  */
 export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart, dataEnd, brand }) {
   const palette = brand?.palette || {};
-  const navy = (palette.nm_navy || '#003DA5').replace('#', '');
+  const navy   = (palette.nm_navy   || '#003DA5').replace('#', '');
+  const sky    = (palette.nm_sky    || '#62B5E5').replace('#', '');
   const headerRow = dataStart - 1;  // header row sits one row above first data row
+  const standardAnchor = { col0: 0, row0: 0, col1: 13, row1: 21 };
 
-  if (chart_template_id === 'volume_ttm_by_quarter') {
-    // Single line chart: period_end on x-axis, ttm_volume on y-axis.
-    const periodCol = cols.find(c => c.key === 'period_end')?.col;
-    const volCol    = cols.find(c => c.key === 'volume_dollars')?.col
-                   || cols.find(c => c.key === 'ttm_volume')?.col;
-    if (!periodCol || !volCol) return null;
+  // Helper: find the column letter for a CHART_COLUMNS key (or first
+  // match from a list of candidate keys).
+  const findCol = (...keys) => {
+    for (const k of keys) {
+      const c = cols.find(c => c.key === k);
+      if (c) return c.col;
+    }
+    return null;
+  };
+
+  // Helper: build a simple single-series chart spec given a chart type,
+  // a value-column key (or list of candidates), and a color. period_end
+  // is always the x-axis.
+  const singleSeries = (type, valKeys, color) => {
+    const periodCol = findCol('period_end');
+    const valCol = findCol(...(Array.isArray(valKeys) ? valKeys : [valKeys]));
+    if (!periodCol || !valCol) return null;
     return {
       tabName,
       spec: {
-        type: 'line',
-        tabName,
-        titleCol: volCol, titleRow: headerRow,
-        catCol: periodCol, valCol: volCol,
+        type, tabName,
+        titleCol: valCol, titleRow: headerRow,
+        catCol: periodCol, valCol,
         dataStart, dataEnd,
-        color: navy,
-        anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+        color,
+        anchor: standardAnchor,
       },
     };
-  }
+  };
 
-  return null;
+  switch (chart_template_id) {
+    // P2 — first migration
+    case 'volume_ttm_by_quarter':
+      // master_m mapper renames ttm_volume → volume_dollars in some places
+      return singleSeries('line', ['volume_dollars', 'ttm_volume'], navy);
+
+    // P3 — simple single-series line + bar charts
+    case 'cap_rate_ttm_by_quarter':
+      return singleSeries('line', 'ttm_weighted_cap_rate', navy);
+    case 'transaction_count_ttm':
+      return singleSeries('bar', ['ttm_count', 'count'], navy);
+    case 'avg_deal_size':
+      return singleSeries('bar', 'avg_deal_size', navy);
+    case 'yoy_volume_change':
+      // Renderer uses signed colors (navy positive, lighter negative).
+      // Native chart XML doesn't easily express per-point conditional
+      // colors — accept navy across the board for now (mirrors most-recent
+      // values; negative bars still render correctly, just without the
+      // red highlight). Could add point-level dPt color overrides later.
+      return singleSeries('bar', 'yoy_change_pct', navy);
+    case 'market_turnover':
+      return singleSeries('line', 'turnover_rate', navy);
+    case 'quarterly_volume_bars':
+      return singleSeries('bar', 'quarterly_volume', sky);
+
+    default:
+      return null;
+  }
 }
