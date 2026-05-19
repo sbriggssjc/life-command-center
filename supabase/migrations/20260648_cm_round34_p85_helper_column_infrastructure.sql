@@ -1,0 +1,140 @@
+-- =====================================================================
+-- Round 34 P8.5 — helper-column infrastructure for native chart specs.
+-- Builds on the R34 P8 floating-bar migration (PR #830).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- INFRASTRUCTURE
+-- ---------------------------------------------------------------------
+-- buildInjectionSpec now optionally returns:
+--   {
+--     tabName, spec,
+--     helperCols: [
+--       { key, header, format, width, getValue: (row, idx, rows) => ... },
+--       ...
+--     ]
+--   }
+--
+-- cm-excel-export.js writes those helper columns to the right of the
+-- regular CHART_COLUMNS entries (one column per helper, in declaration
+-- order). The helper-col letter is deterministic — sits one past the
+-- last regular col — so buildInjectionSpec can compute it as
+--   String.fromCharCode(65 + cols.length)
+-- and reference that letter in its spec.
+--
+-- Helper columns are styled the same as regular data columns
+-- (navy header, body font, zebra-striped data rows) and Excel's
+-- AutoFilter range extends to include them.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildComboChartXml now supports:
+--       - spec.barGrouping: 'clustered' (default) | 'stacked'
+--       - spec.sharedAxis:  false (default — line on right axis 3) | true
+--                           (line on same axis as bars, axId 2)
+--       - per-series noFill flag on bar series (invisible base pattern,
+--         same flag already supported in buildStackedBarChartXml from P8)
+--   • Combo bars use overlap=100 when stacked, -20 when clustered.
+--   • When sharedAxis=true, the right valAx (axId=3) is suppressed so
+--     the chart only has one value axis. The line series uses axId=2
+--     instead of axId=3.
+--
+-- api/_shared/cm-excel-export.js:
+--   • After running the regular data-write loop, if buildInjectionSpec
+--     returned helperCols, append them as additional columns:
+--       - Write header on row headerRow_n
+--       - Write each row's computed value via h.getValue(row, idx, rows)
+--       - Apply per-helper width + numFmt
+--       - Zebra-stripe odd rows
+--   • Auto-filter range now includes helper columns.
+--
+-- ---------------------------------------------------------------------
+-- FIRST CONSUMER — rent_psf_box_quarterly upgraded
+-- ---------------------------------------------------------------------
+-- P8 shipped this template as a 3-line quartile band (pragmatic fallback
+-- because we couldn't express the IQR shaded fill without a helper col).
+--
+-- P8.5 upgrades it to a TRUE box-whisker visual:
+--   • Stacked bar series 0 (invisible, noFill=true):
+--       val = rent_lower_quartile (col E)
+--   • Stacked bar series 1 (visible sky band):
+--       val = iqr_width helper column (col I) = upper_q − lower_q
+--   • Line series 0 (navy bold):
+--       val = rent_median (col F)
+--   • barGrouping = 'stacked', sharedAxis = true so the median line
+--     sits over the IQR band on the SAME val axis (matches PDF).
+--
+-- The IQR width is exposed as a regular data column (col I) on
+-- Data_Rent_PSF_Box. Users can see and edit it like any other
+-- column — Excel will recompute the chart if they change it.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 66 CM tests pass (up from 65 in P8).
+--
+-- Updated buildInjectionSpec test for rent_psf_box_quarterly now asserts
+-- the combo shape + helper-col declaration. New end-to-end test
+-- ('stacked-combo box-whisker') verifies the chart XML has:
+--   - <c:barChart> with grouping=stacked, overlap=100
+--   - <c:lineChart> with axId 1 + 2 (shared axis)
+--   - exactly ONE valAx block (no right axis when sharedAxis=true)
+--   - 3 series with unique idx values [0, 1, 2]
+--   - series 0 noFill (invisible base)
+--   - series references the right cells incl. helper col I
+--
+-- End-to-end smoke build with synthetic data confirmed:
+--   - Helper col I gets the header "IQR Width" and the computed value
+--     (e.g. upper_q 38 - lower_q 18 = 20 in row 5)
+--   - Chart XML references col I correctly
+--   - 2 noFill markers (invisible base fill + invisible base line border)
+--   - 1 valAx (shared axis confirmed)
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Rent_PSF_Box (or whatever the rent_psf_box_quarterly
+--    tab is named in your vertical)
+-- 3. Confirm the data tab has a NEW column past the usual ones:
+--    "IQR Width" with values = upper_q - lower_q
+-- 4. The chart should render as a sky-blue floating bar (IQR range)
+--    with a navy median line through it. Right-click chart →
+--    "Edit Data" should be enabled.
+-- 5. Try editing a value in the "IQR Width" column — the chart
+--    should update live (proves it's a real native chart, not a PNG).
+-- 6. X-CM-Native-Charts header stays at 22 — same count, but
+--    rent_psf_box_quarterly is now the upgraded visual.
+--
+-- ---------------------------------------------------------------------
+-- ENABLED FOLLOW-UPS
+-- ---------------------------------------------------------------------
+-- The helper-column infrastructure unlocks:
+--
+-- P7.5 (scatter trendlines):
+--   • core_cap_rate_dot_plot — add a trendline_12mo_rolling helper col
+--     computed from rows (sliding 6-month window mean), then add a
+--     2nd scatter series with showLine=true pointing at it.
+--   • available_cap_rate_dot_plot — same pattern with a linear
+--     regression helper col (2 dots: at xMin, xMax).
+--
+-- P9 (rent_by_year_built):
+--   • Helper col iqr_width = upper_q - lower_q
+--   • Stacked bar (invisible lower_q + visible IQR width sky band)
+--   • Scatter markers overlaid for median (sky) + avg (navy diamond)
+--
+-- P9 (ppsf_box_quarterly):
+--   • Needs a CHART_COLUMNS schema entry first
+--   • Then reuse the rent_psf_box_quarterly switch case with renamed keys
+--
+-- ---------------------------------------------------------------------
+-- NEXT
+-- ---------------------------------------------------------------------
+-- P9 candidates (in order of usefulness):
+--   1. ppsf_box_quarterly       — one-line schema fix + switch case
+--   2. core_cap_rate_dot_plot trendline + available_cap_rate trendline
+--   3. rent_by_year_built       — composite with scatter overlay
+-- =====================================================================
