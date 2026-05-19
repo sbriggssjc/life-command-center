@@ -1,0 +1,115 @@
+-- =====================================================================
+-- Round 36 P2 — donut charts for tenant-share visuals.
+-- Builds on R36 P1 (PR #839).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 46)
+-- ---------------------------------------------------------------------
+--   available_by_tenant_count_donut    Count share by tenant
+--                                      (DaVita / FMC / US Renal / Other)
+--   available_by_tenant_volume_donut   Volume share by tenant (same shape)
+--
+-- ---------------------------------------------------------------------
+-- NEW MACHINERY
+-- ---------------------------------------------------------------------
+-- buildDoughnutChartXml(spec) — emits <c:doughnutChart>, a special
+-- radial chart type with NO axes. Unique OOXML constructs:
+--   • <c:doughnutChart> (not bar/line/scatter/area)
+--   • Per-segment colors via <c:dPt> blocks INSIDE the series (one
+--     dPt per segment with its own <a:solidFill>); needed because
+--     donut charts don't accept varyColors-from-palette in the same
+--     way bar charts do
+--   • <c:cat> uses <c:strRef> (text labels) instead of <c:numRef>
+--   • <c:holeSize val="55"/> matches the renderer's cutout: '55%'
+--   • No <c:catAx> / <c:valAx> at all — donut is axis-free
+--   • Legend at right (donut convention; chart space is shaped wide)
+--   • Each segment has a white 19050-EMU border so adjacent slices
+--     don't bleed together visually
+--
+-- New dispatch type: 'doughnut' → buildDoughnutChartXml.
+--
+-- ---------------------------------------------------------------------
+-- WIRING DETAIL
+-- ---------------------------------------------------------------------
+-- Both templates share a single switch case (renderer also shares one
+-- case at cm-chart-image-renderer.js line ~435). Differs only by which
+-- value column is used: count_active vs volume_available.
+--
+-- Segment colors (positional — DaVita first, FMC second, etc., matches
+-- the view's expected sort order):
+--   idx 0 = DaVita      navy   #003DA5 (cap_short)
+--   idx 1 = FMC         sky    #62B5E5 (cap_mid)
+--   idx 2 = US Renal    sage   #4CB582 (cap_mid_long)
+--   idx 3 = Other       gray   #6A748C (cap_outside_firm)
+--
+-- Excess rows past the 4 known segments fall back to gray ("Other"
+-- bucket color). If a future view returns a 5th tenant, it'll render
+-- as gray until SEGMENT_COLORS gains an explicit entry.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 110 CM tests pass (up from 105 in R36 P1).
+--
+-- New tests verify:
+--   • Registration for both templates
+--   • buildInjectionSpec produces type='doughnut' + correct catCol /
+--     valCol for count vs volume variants, 4 colors in the navy-sky-
+--     sage-gray order
+--   • >4 segments → extra rows fall back to gray
+--   • End-to-end XML:
+--       <c:doughnutChart> + <c:holeSize val="55"/>
+--       NO <c:catAx> / <c:valAx>
+--       4 <c:dPt> blocks (one per segment, with its srgbClr)
+--       <c:cat> uses <c:strRef> not <c:numRef>
+--       <c:varyColors val="1"/>, legend at right
+--
+-- End-to-end smoke build confirmed:
+--   chart1 (count_donut):  donut=true dPts=4 holeSize=55% noAxes=true
+--   chart2 (volume_donut): donut=true dPts=4 holeSize=55% noAxes=true
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia export (both templates are dialysis-only)
+-- 2. X-CM-Native-Charts should reach ~43-46 depending on vertical
+-- 3. Open Data_Avail_by_Tenant (count) and Data_Avail_by_Tenant_Vol —
+--    confirm:
+--    • Ring donut with hole in the middle (~55% cutout)
+--    • Navy segment for DaVita, sky for FMC, sage for US Renal,
+--      gray for Other
+--    • Legend on the right with all 4 segments labeled
+-- 4. Right-click → "Edit Data" should be enabled
+-- 5. Note: the renderer ALSO adds per-segment value+share-% labels
+--    (e.g. "$136.7M / 42.3%") via chartjs-datalabels. Native chart
+--    doesn't include those labels — users can right-click the
+--    series → "Add Data Labels" → "Format Data Labels" → check
+--    Category Name + Percentage to recreate manually.
+--
+-- ---------------------------------------------------------------------
+-- REMAINING BACKLOG (R36 P3)
+-- ---------------------------------------------------------------------
+-- Bar + multi-scatter composites on categorical x-axis (2 templates):
+--   available_by_term_summary       1 bar (Avg Price) + 4 scatter
+--                                   (Avg Cap / Upper Q / Lower Q /
+--                                    Median), x = term_bucket
+--   available_by_firm_term_summary  Same shape, gov variant
+--
+-- May reuse the area-combo machinery from R35 P4 (treat the area as
+-- empty / skip it), with bars on LEFT axis and 4 scatter-like dot
+-- series sharing the RIGHT axis. The wrinkle is that scatter normally
+-- uses xVal/yVal pairs (continuous x); here the x is categorical
+-- (term bucket names). May need to use line-with-markers (no
+-- connecting line) instead of true scatter — which the combo line
+-- series already supports via showMarker=true.
+--
+-- After R36 P3 lands, only the 5 intentionally deferred templates
+-- remain — all with documented blockers:
+--   ppsf_box_quarterly (dropped from catalog)
+--   lease_termination_rate (computed series not in data tab)
+--   lease_structures (renderer returns null — table only)
+--   net_lease_spread (cap_10plus_year not in data tab)
+--   rent_heat_map (choropleth blocked on chartjs-chart-geo)
+-- =====================================================================
