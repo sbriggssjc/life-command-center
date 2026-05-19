@@ -1,0 +1,355 @@
+// ============================================================================
+// Capital Markets — Native Excel chart injection
+// Life Command Center
+//
+// Post-processes an ExcelJS-built workbook buffer to inject native Excel
+// chart objects in place of PNG images on the Data_* tabs. ExcelJS v4
+// doesn't support writing native charts; this module uses JSZip to inject
+// the chart XML, drawing XML, rels, and content-types entries directly.
+//
+// Same technique cm-template-loader.js uses for the dia master template's
+// Charts sheet, but applied per-tab to the data_tabs workbook layout.
+//
+// Usage:
+//   const buf = await wb.xlsx.writeBuffer();
+//   const newBuf = await injectNativeCharts(buf, [
+//     { tabName: 'Data_Volume_TTM', spec: { type: 'line', ... } },
+//     ...
+//   ]);
+//   return newBuf;
+//
+// Each spec describes one chart anchored on its tab's data range. The
+// builder is small and intentionally limited — start with a few chart
+// types, expand by type group as we migrate more chart_template_ids.
+// ============================================================================
+
+import JSZip from 'jszip';
+
+// ----------------------------------------------------------------------------
+// Excel XML namespace constants
+// ----------------------------------------------------------------------------
+
+const NS_CHART     = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
+const NS_DRAWINGML = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const NS_REL       = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const NS_SS_DRAW   = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
+
+const CT_CHART = 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml';
+const CT_DRAWING = 'application/vnd.openxmlformats-officedocument.drawing+xml';
+
+const REL_DRAWING = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing';
+const REL_CHART = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart';
+const REL_SHEET = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet';
+
+// ----------------------------------------------------------------------------
+// XML helpers
+// ----------------------------------------------------------------------------
+
+function escapeXml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// ----------------------------------------------------------------------------
+// Chart XML builders (one per supported chart type)
+// ----------------------------------------------------------------------------
+
+/**
+ * Generate a single-line chart referencing a categorical x-axis (e.g.
+ * period_end labels) and a single numeric y-series.
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName        Data_* tab name (sheet name in workbook)
+ * @param {string} spec.titleCell      Cell ref for series label (e.g. "B5")
+ * @param {string} spec.catRange       Range for category axis values (e.g. "A6:A305")
+ * @param {string} spec.valRange       Range for series numeric values (e.g. "B6:B305")
+ * @param {string} [spec.color]        Series color hex without # (e.g. "003DA5")
+ * @returns {string} chart XML
+ */
+function buildSingleLineChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const color = spec.color || '003DA5';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:tx>
+            <c:strRef><c:f>'${sheet}'!$${spec.titleCol || 'B'}$${spec.titleRow || 5}</c:f></c:strRef>
+          </c:tx>
+          <c:spPr>
+            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:round/></a:ln>
+          </c:spPr>
+          <c:marker><c:symbol val="none"/></c:marker>
+          <c:cat>
+            <c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef>
+          </c:cat>
+          <c:val>
+            <c:numRef><c:f>'${sheet}'!$${spec.valCol}$${spec.dataStart}:$${spec.valCol}$${spec.dataEnd}</c:f></c:numRef>
+          </c:val>
+          <c:smooth val="0"/>
+        </c:ser>
+        <c:marker val="0"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:lineChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
+// ----------------------------------------------------------------------------
+// Drawing XML (anchors a chart to a cell range on its tab)
+// ----------------------------------------------------------------------------
+
+/**
+ * Generate a drawing.xml that anchors a single chart to a cell range.
+ * Anchor: top-left at (col0, row0), bottom-right at (col1, row1) — both
+ * zero-indexed.
+ */
+function buildDrawingXml({ chartRelId, anchor }) {
+  const a = anchor || { col0: 0, row0: 0, col1: 13, row1: 21 };
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
+  <xdr:twoCellAnchor editAs="oneCell">
+    <xdr:from>
+      <xdr:col>${a.col0}</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>${a.row0}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:from>
+    <xdr:to>
+      <xdr:col>${a.col1}</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>${a.row1}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:to>
+    <xdr:graphicFrame macro="">
+      <xdr:nvGraphicFramePr>
+        <xdr:cNvPr id="2" name="Chart 1"/>
+        <xdr:cNvGraphicFramePr/>
+      </xdr:nvGraphicFramePr>
+      <xdr:xfrm>
+        <a:off x="0" y="0"/>
+        <a:ext cx="0" cy="0"/>
+      </xdr:xfrm>
+      <a:graphic>
+        <a:graphicData uri="${NS_CHART}">
+          <c:chart r:id="${chartRelId}"/>
+        </a:graphicData>
+      </a:graphic>
+    </xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>`;
+}
+
+// ----------------------------------------------------------------------------
+// Main entry: inject native charts into an ExcelJS-built workbook buffer
+// ----------------------------------------------------------------------------
+
+/**
+ * @param {Buffer} buffer       ExcelJS-built workbook buffer
+ * @param {Array}  injections   List of { tabName, spec } records
+ * @returns {Promise<Buffer>}   New buffer with native charts injected
+ */
+export async function injectNativeCharts(buffer, injections) {
+  if (!Array.isArray(injections) || injections.length === 0) return buffer;
+
+  const zip = await JSZip.loadAsync(buffer);
+
+  // Locate the workbook's sheet name → file mapping by parsing
+  // xl/workbook.xml + xl/_rels/workbook.xml.rels.
+  const wbXml = await zip.file('xl/workbook.xml').async('string');
+  const wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  const ctXml = await zip.file('[Content_Types].xml').async('string');
+
+  const sheetNameToRid = {};
+  for (const m of wbXml.matchAll(/<sheet[^>]*name="([^"]+)"[^>]*r:id="(rId\d+)"/g)) {
+    sheetNameToRid[m[1]] = m[2];
+  }
+  const ridToTarget = {};
+  for (const m of wbRels.matchAll(/<Relationship\s+(.*?)\s*\/>/g)) {
+    const idM = m[1].match(/Id="([^"]+)"/);
+    const tM  = m[1].match(/Target="([^"]+)"/);
+    if (idM && tM) ridToTarget[idM[1]] = tM[1];
+  }
+
+  // Find next available numeric IDs for new chart/drawing files
+  const existingCharts = Object.keys(zip.files).filter(n => /^xl\/charts\/chart\d+\.xml$/.test(n));
+  const existingDrawings = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  let nextChartId = existingCharts.length + 1;
+  let nextDrawingId = existingDrawings.length + 1;
+
+  // Collect content-types overrides to append
+  const newOverrides = [];
+
+  for (const { tabName, spec } of injections) {
+    const rid = sheetNameToRid[tabName];
+    if (!rid) {
+      console.warn(`[cm-native-chart-injector] no rId for tab ${tabName}`);
+      continue;
+    }
+    const sheetTarget = ridToTarget[rid];
+    if (!sheetTarget) {
+      console.warn(`[cm-native-chart-injector] no target for rId ${rid}`);
+      continue;
+    }
+    // Resolve to xl/worksheets/sheetN.xml
+    const sheetPath = sheetTarget.startsWith('/') ? sheetTarget.slice(1) : `xl/${sheetTarget}`;
+    const cleanSheetPath = sheetPath.replace(/^xl\//, '').startsWith('worksheets/')
+      ? `xl/${sheetPath.replace(/^xl\//, '')}`
+      : sheetPath;
+
+    const chartFile   = `xl/charts/chart${nextChartId}.xml`;
+    const drawingFile = `xl/drawings/drawing${nextDrawingId}.xml`;
+    const drawingRels = `xl/drawings/_rels/drawing${nextDrawingId}.xml.rels`;
+    const sheetRels   = cleanSheetPath.replace(/^(xl\/worksheets\/)([^.]+)\.xml$/, '$1_rels/$2.xml.rels');
+
+    // 1. Generate chart XML
+    const chartXml = buildSingleLineChartXml(spec);
+    zip.file(chartFile, chartXml);
+
+    // 2. Generate drawing XML + its rels (drawing → chart)
+    zip.file(drawingFile, buildDrawingXml({ chartRelId: 'rId1', anchor: spec.anchor }));
+    zip.file(drawingRels, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${REL_CHART}" Target="../charts/chart${nextChartId}.xml"/>
+</Relationships>`);
+
+    // 3. Update sheet's rels to include the drawing reference
+    let sheetRelsXml = await (zip.file(sheetRels)?.async('string')) || `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+    // Find next rId for this sheet's rels
+    const usedRids = Array.from(sheetRelsXml.matchAll(/Id="rId(\d+)"/g)).map(m => Number(m[1]));
+    const sheetRelNextId = usedRids.length ? Math.max(...usedRids) + 1 : 1;
+    const drawingRid = `rId${sheetRelNextId}`;
+    const newRel = `<Relationship Id="${drawingRid}" Type="${REL_DRAWING}" Target="../drawings/drawing${nextDrawingId}.xml"/>`;
+    sheetRelsXml = sheetRelsXml.replace('</Relationships>', `${newRel}</Relationships>`);
+    zip.file(sheetRels, sheetRelsXml);
+
+    // 4. Update sheet XML to reference the drawing (insert <drawing r:id="..."/>
+    // before </worksheet>). If a <drawing/> already exists (PNG image was on
+    // this sheet), append the new chart drawing as a SECOND drawing entry —
+    // Excel will render both. Caller is responsible for omitting the PNG if
+    // they want the chart to replace it.
+    let sheetXml = await zip.file(cleanSheetPath).async('string');
+    if (!sheetXml.includes(`<drawing r:id="${drawingRid}"/>`)) {
+      // Excel requires only ONE <drawing/> element per sheet. If an existing
+      // drawing tag is present (from a PNG image), we leave it alone and
+      // rely on the caller having NOT embedded the PNG for migrated charts.
+      // If no drawing exists yet, insert ours before </worksheet>.
+      if (!/<drawing\s+r:id="[^"]+"\s*\/>/.test(sheetXml)) {
+        sheetXml = sheetXml.replace('</worksheet>', `  <drawing r:id="${drawingRid}"/>\n</worksheet>`);
+        zip.file(cleanSheetPath, sheetXml);
+      } else {
+        console.warn(`[cm-native-chart-injector] ${tabName} already has a drawing element — caller should suppress PNG for migrated charts`);
+      }
+    }
+
+    // 5. Track content-types overrides
+    newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
+    newOverrides.push(`<Override PartName="/${drawingFile}" ContentType="${CT_DRAWING}"/>`);
+
+    nextChartId++;
+    nextDrawingId++;
+  }
+
+  // 6. Update [Content_Types].xml with all new overrides at once
+  if (newOverrides.length) {
+    const updatedCt = ctXml.replace('</Types>', `${newOverrides.join('')}</Types>`);
+    zip.file('[Content_Types].xml', updatedCt);
+  }
+
+  return await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
+}
+
+// Re-export for testing
+export { buildSingleLineChartXml, buildDrawingXml };
+
+// ----------------------------------------------------------------------------
+// Migration registry — which chart_template_ids are now native (editable)
+// vs. still PNG-embedded
+// ----------------------------------------------------------------------------
+
+/**
+ * Set of chart_template_ids that the export pipeline should:
+ *   1. SKIP when embedding PNG chart images (so we don't get both)
+ *   2. INCLUDE in the injectNativeCharts call after the workbook builds
+ *
+ * Each entry needs a corresponding `INJECTION_SPECS` builder below that
+ * knows how to map a chart_template_id + the export's column layout into
+ * a chart spec (which sheet, which cell ranges, what color, etc.).
+ *
+ * Grow this set as more chart_template_ids are migrated from PNG-embed
+ * to native chart XML. See task #16 for the full migration plan.
+ */
+export const NATIVE_CHART_TEMPLATES = new Set([
+  'volume_ttm_by_quarter',
+]);
+
+/**
+ * Build an injection spec for a chart_template_id given the workbook's
+ * actual column layout for that tab. Returns null for unsupported types
+ * (caller will fall back to PNG).
+ *
+ * @param {object} args
+ * @param {string} args.chart_template_id
+ * @param {string} args.tabName
+ * @param {Array<{key:string, col:string}>} args.cols  CHART_COLUMNS entry for this template (already mapped to A/B/C... columns)
+ * @param {number} args.dataStart     1-indexed row where data begins
+ * @param {number} args.dataEnd       1-indexed row where data ends (inclusive)
+ * @param {object} args.brand         Brand tokens (palette, fonts)
+ * @returns {object|null} injection spec or null if no builder registered
+ */
+export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart, dataEnd, brand }) {
+  const palette = brand?.palette || {};
+  const navy = (palette.nm_navy || '#003DA5').replace('#', '');
+  const headerRow = dataStart - 1;  // header row sits one row above first data row
+
+  if (chart_template_id === 'volume_ttm_by_quarter') {
+    // Single line chart: period_end on x-axis, ttm_volume on y-axis.
+    const periodCol = cols.find(c => c.key === 'period_end')?.col;
+    const volCol    = cols.find(c => c.key === 'volume_dollars')?.col
+                   || cols.find(c => c.key === 'ttm_volume')?.col;
+    if (!periodCol || !volCol) return null;
+    return {
+      tabName,
+      spec: {
+        type: 'line',
+        tabName,
+        titleCol: volCol, titleRow: headerRow,
+        catCol: periodCol, valCol: volCol,
+        dataStart, dataEnd,
+        color: navy,
+        anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+      },
+    };
+  }
+
+  return null;
+}

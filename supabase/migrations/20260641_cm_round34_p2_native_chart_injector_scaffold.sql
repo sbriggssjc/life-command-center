@@ -1,0 +1,93 @@
+-- =====================================================================
+-- Round 34 P2 — Native chart-XML injection scaffold + 1st migrated
+-- chart (volume_ttm_by_quarter) end-to-end.
+--
+-- Code-only PR. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- USER REQUEST
+-- ---------------------------------------------------------------------
+-- "I like the format of the Excel export with the single chart per
+--  tab we had going. I just want those exported charts to be editable
+--  and not PNG graphics. Take the most recent versions of the PNG
+--  exports and make that conversion and then continue with improving
+--  our charts."
+--
+-- ---------------------------------------------------------------------
+-- THE CHALLENGE
+-- ---------------------------------------------------------------------
+-- ExcelJS v4 doesn't support WRITING native Excel charts — only
+-- reading them. The data_tabs path's `sheet.addImage(png)` has no
+-- `sheet.addChart()` equivalent.
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- Post-process the ExcelJS-built workbook buffer with JSZip and
+-- inject chart XML files referencing each Data_* tab's cell ranges.
+-- Same technique cm-template-loader.js uses for the master template's
+-- Charts sheet, applied per-tab to the data_tabs layout.
+--
+-- ---------------------------------------------------------------------
+-- THIS PR DELIVERS
+-- ---------------------------------------------------------------------
+-- 1. api/_shared/cm-native-chart-injector.js — new module:
+--    • injectNativeCharts(buffer, injections) — main entry point
+--    • buildSingleLineChartXml(spec) — first chart-type XML builder
+--    • buildDrawingXml({chartRelId, anchor}) — anchors chart on sheet
+--    • NATIVE_CHART_TEMPLATES — Set of migrated chart_template_ids
+--    • buildInjectionSpec({chart_template_id, ...}) — translates a
+--      chart template + workbook column layout to an injection spec
+--
+-- 2. test/cm-native-chart-injector.test.mjs — verifies the XML
+--    structure end-to-end (chart XML, drawing XML, sheet rels,
+--    content-types overrides).
+--
+-- 3. api/_shared/cm-excel-export.js — workbook builder integration:
+--    • Skips PNG embed for any chart_template_id in NATIVE_CHART_TEMPLATES
+--    • Collects injection specs for migrated templates
+--    • Returns specs via wb.nativeInjections property
+--
+-- 4. api/capital-markets.js — endpoint integration:
+--    • After wb.xlsx.writeBuffer(), if wb.nativeInjections is non-empty,
+--      calls injectNativeCharts to swap PNGs for native chart objects
+--    • Falls back gracefully on error (just no chart on those tabs)
+--    • Diagnostic header X-CM-Native-Charts reports the count
+--
+-- 5. FIRST MIGRATED CHART: volume_ttm_by_quarter
+--    • Single-line TTM volume chart on Data_Volume_TTM tab
+--    • Verified end-to-end: workbook generated with 1 chart object +
+--      0 embedded images, chart references correctly point at
+--      'Data_Volume_TTM'!$C$5:$C$28 (volume) and $A$5:$A$28 (period)
+--
+-- ---------------------------------------------------------------------
+-- VERIFICATION (please test post-merge)
+-- ---------------------------------------------------------------------
+-- 1. Download a fresh dia or gov export
+-- 2. Check response header: X-CM-Native-Charts: 1
+-- 3. Open the workbook in Excel
+-- 4. Navigate to Data_Volume_TTM tab
+-- 5. Right-click the chart → "Edit Data" / "Format Chart Area" should
+--    be ENABLED (not greyed out as for PNG images)
+-- 6. Other tabs (Data_Bid_Ask, Data_DOM_Ask, etc.) still show PNGs —
+--    those are migrated in R34 P3+ follow-up PRs
+--
+-- ---------------------------------------------------------------------
+-- ROADMAP — R34 P3+ migrate remaining chart types
+-- ---------------------------------------------------------------------
+-- Group by chart type for efficient builder development. Each group
+-- needs one new XML builder function added to cm-native-chart-injector.js:
+--
+--   - simple line series  (~5 charts: volume_ttm, cap_rate_ttm, etc.)  [P3]
+--   - single bar series   (~5: transaction_count_ttm, avg_deal, ...)  [P3]
+--   - stacked bar         (~3: lease_renewal_rate, buyer_pool, ...)   [P4]
+--   - area (filled line)  (~2: market_turnover, yoy_volume_change)   [P4]
+--   - multi-line          (~5: cap_rate_by_lease_term, nm_vs_market) [P5]
+--   - combo dual-axis     (~5: dom_and_pct_of_ask, sentiment, ...)   [P5]
+--   - scatter             (~3: core_cap_dot, available_cap_dot, ...) [P6]
+--   - floating bar/box    (~2: rent_psf_box, bid_ask_spread)         [P6]
+--
+-- After each group migrates, expected outcome: 5-10 more tabs in the
+-- export show editable Excel charts instead of PNG images. Marketing
+-- can verify post-merge before the next group starts.
+-- =====================================================================

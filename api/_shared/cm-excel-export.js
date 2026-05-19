@@ -23,6 +23,7 @@
 
 import ExcelJS from 'exceljs';
 import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js';
+import { NATIVE_CHART_TEMPLATES, buildInjectionSpec } from './cm-native-chart-injector.js';
 
 // Round 3d — Inline summary blocks under selected chart tabs.
 // Each entry maps a chart_template_id to a metrics array; the worksheet
@@ -960,14 +961,24 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // chartImages is the array returned by renderChartsToImages(), where each
   // entry is { chart_template_id, name, png: Buffer }. When present, each
   // Data_* tab gets the matching PNG anchored at the top.
+  // R34 — chart_template_ids in NATIVE_CHART_TEMPLATES are migrated to
+  // native (editable) Excel charts. Skip the PNG embed for those; the
+  // export endpoint post-processes the workbook buffer with
+  // injectNativeCharts() using the specs we collect in nativeInjections
+  // below.
   const chartImagesById = new Map();
   if (Array.isArray(chartImages)) {
     for (const ci of chartImages) {
-      if (ci?.chart_template_id && ci?.png) {
+      if (ci?.chart_template_id && ci?.png && !NATIVE_CHART_TEMPLATES.has(ci.chart_template_id)) {
         chartImagesById.set(ci.chart_template_id, ci.png);
       }
     }
   }
+
+  // Specs returned alongside the workbook so the export endpoint can
+  // inject native chart XML for migrated chart_template_ids. Each entry
+  // is { tabName, spec } per the injectNativeCharts() contract.
+  const nativeInjections = [];
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Northmarq Capital Markets — LCC';
@@ -1359,6 +1370,26 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       dataRowIdx++;
     }
 
+    // R34 — Collect a native-chart injection spec for migrated templates.
+    // The endpoint post-processes the workbook buffer with
+    // injectNativeCharts() to swap the PNG for a real Excel chart object
+    // anchored at the same location.
+    if (NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)) {
+      const colsWithLetter = cols.map((c, i) => ({
+        ...c,
+        col: String.fromCharCode(65 + i),  // 0→'A', 1→'B', ...
+      }));
+      const spec = buildInjectionSpec({
+        chart_template_id: chart.chart_template_id,
+        tabName,
+        cols: colsWithLetter,
+        dataStart,
+        dataEnd: dataRowIdx - 1,
+        brand,
+      });
+      if (spec) nativeInjections.push(spec);
+    }
+
     // Auto-filter on the header row (location depends on chart-image layout)
     sheet.autoFilter = {
       from: { row: headerRow_n, column: 1 },
@@ -1594,6 +1625,11 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   brandSheet.getCell(`B${fontsHdrRow + 2}`).value = `Body: ${fonts.body_family} (this row)`;
   brandSheet.getCell(`B${fontsHdrRow + 2}`).font = { name: fonts.body_family, size: 10 };
 
+  // R34 — return native-chart injection specs alongside the workbook so
+  // the caller can post-process the buffer with injectNativeCharts.
+  // Backward-compat: legacy property access still works because the
+  // returned object exposes the workbook as both `.wb` and via spread.
+  wb.nativeInjections = nativeInjections;
   return wb;
 }
 
