@@ -567,6 +567,115 @@ test('buildInjectionSpec: available_cap_rate_dot_plot — term-based scatter (x=
   assert.equal(out.spec.series[0].yCol, 'B', 'y = cap_rate');
 });
 
+test('buildInjectionSpec: core_cap_rate_dot_plot — 12-mo rolling-avg trendline (P7.5)', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'cap_rate',        col: 'B' },
+    { key: 'firm_term_years', col: 'C' },
+    { key: 'is_northmarq',    col: 'D' },
+    { key: 'sold_price',      col: 'E' },
+  ];
+  // Synthetic rows spaced ~3 months apart — each row should average over
+  // its ±6 month window. A row in the middle should see ~3-5 neighbors.
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    period_end: new Date(2024, i * 3, 15).toISOString(),
+    cap_rate:   0.060 + i * 0.001,
+    firm_term_years: 8 + i,
+  }));
+  const out = buildInjectionSpec({
+    chart_template_id: 'core_cap_rate_dot_plot',
+    tabName: 'Data_Core_Cap_Dot',
+    cols, dataStart: 5, dataEnd: 14,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    rows,
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.series.length, 2, 'dot cloud + trendline');
+  // Series 0 = dot cloud (sky, no showLine)
+  assert.equal(out.spec.series[0].color, '62B5E5', 'dots = sky');
+  assert.ok(!out.spec.series[0].showLine, 'dots have no connecting line');
+  // Series 1 = trendline (navy, showLine=true, NOT dashed for rolling avg)
+  assert.equal(out.spec.series[1].color, '003DA5', 'trendline = navy');
+  assert.equal(out.spec.series[1].showLine, true, 'trendline shows line');
+  assert.ok(!out.spec.series[1].dashed, 'rolling-avg trendline is solid');
+  // Trendline references helper col (lands at col F = cols.length + 1)
+  assert.equal(out.spec.series[1].yCol, 'F', 'trendline yCol = helper at col F');
+  assert.equal(out.spec.series[1].xCol, 'A', 'trendline shares period_end x');
+
+  // Helper col declared
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'trendline_12mo');
+  // getValue: middle row (idx 5, date 2025-04-15) ± 182 days. Date math
+  // is asymmetric — month lengths mean Oct 15 2024 (idx 3) is exactly
+  // 6mo before but Oct 15 2025 (idx 7) is slightly MORE than 6mo after,
+  // so the window covers idx 3..6 (4 rows) for this specific spacing.
+  const middleRow = rows[5];
+  const v = out.helperCols[0].getValue(middleRow);
+  const expected = (rows[3].cap_rate + rows[4].cap_rate + rows[5].cap_rate + rows[6].cap_rate) / 4;
+  assert.ok(Math.abs(v - expected) < 0.0001, `getValue returns ${v}, expected ~${expected}`);
+  // Edge row (idx 0) — window forward 182 days covers idx 0, 1, 2
+  const v0 = out.helperCols[0].getValue(rows[0]);
+  const expected0 = (rows[0].cap_rate + rows[1].cap_rate + rows[2].cap_rate) / 3;
+  assert.ok(Math.abs(v0 - expected0) < 0.0001, `edge row getValue=${v0}, expected ~${expected0}`);
+});
+
+test('buildInjectionSpec: available_cap_rate_dot_plot — linear regression trendline (P7.5)', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'cap_rate',        col: 'B' },
+    { key: 'firm_term_years', col: 'C' },
+    { key: 'is_northmarq',    col: 'D' },
+    { key: 'last_price',      col: 'E' },
+  ];
+  // Synthetic data: cap = 0.05 + 0.002*term, so m=0.002, b=0.05 exactly.
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    period_end: new Date(2025, 0, 1).toISOString(),
+    cap_rate:   0.05 + 0.002 * (5 + i),
+    firm_term_years: 5 + i,
+  }));
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_cap_rate_dot_plot',
+    tabName: 'Data_Avail_Cap_Dot',
+    cols, dataStart: 5, dataEnd: 14,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    rows,
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.series.length, 2, 'dots + trendline');
+  // Trendline is dashed for linear regression (matches renderer borderDash)
+  assert.equal(out.spec.series[1].showLine, true);
+  assert.equal(out.spec.series[1].dashed, true, 'linear regression line is dashed');
+  assert.equal(out.spec.series[1].yCol, 'F', 'trendline y = helper col F');
+  // x shared with dots = firm_term_years (col C)
+  assert.equal(out.spec.series[1].xCol, 'C');
+
+  // Helper col getValue: y = m*x + b. With perfect linear data m=0.002, b=0.05.
+  // For row with term=10 → expected y = 0.05 + 0.002*10 = 0.07
+  const v = out.helperCols[0].getValue({ firm_term_years: 10 });
+  assert.ok(Math.abs(v - 0.07) < 1e-9, `getValue(term=10) = ${v}, expected 0.07`);
+  const v2 = out.helperCols[0].getValue({ firm_term_years: 15 });
+  assert.ok(Math.abs(v2 - 0.08) < 1e-9, `getValue(term=15) = ${v2}, expected 0.08`);
+});
+
+test('buildInjectionSpec: scatter trendlines skipped when rows empty', () => {
+  // No rows → no helperCols, single-series spec (backward compatible).
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'cap_rate',        col: 'B' },
+    { key: 'firm_term_years', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_cap_rate_dot_plot',
+    tabName: 'Data_Avail_Cap_Dot',
+    cols, dataStart: 5, dataEnd: 6,
+    brand: { palette: {} },
+    rows: [],
+  });
+  assert.ok(out, 'should still produce a spec');
+  assert.equal(out.spec.series.length, 1, 'no trendline series');
+  assert.equal(out.helperCols, undefined, 'no helperCols when trendline data absent');
+});
+
 test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line', () => {
   // Quarterly tab has no avg_last_ask_cap → renderer uses single-line.
   const cols = [
@@ -984,6 +1093,68 @@ test('injectNativeCharts: floating-bar (invisible base) renders correct stacked 
   // Each series references its own column
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$F\$5:\$F\$12/, 'base refs F (last_ask)');
   assert.match(chartXml, /'Data_Bid_Ask_Monthly'!\$D\$5:\$D\$12/, 'band refs D (spread)');
+});
+
+test('injectNativeCharts: scatter with trendline (P7.5) renders correct XML', async () => {
+  // Tab with dots in B/C and a trendline helper in F
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Avail_Cap_Dot');
+  sheet.getCell('B4').value = 'Asking Cap';
+  sheet.getCell('C4').value = 'Firm Term';
+  sheet.getCell('F4').value = 'Linear Trendline';
+  for (let i = 0; i < 8; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2025, 0, 1);
+    sheet.getCell(`B${5 + i}`).value = 0.06 + i * 0.002;
+    sheet.getCell(`C${5 + i}`).value = 5 + i;
+    sheet.getCell(`F${5 + i}`).value = 0.05 + 0.002 * (5 + i);  // m*x+b
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Avail_Cap_Dot',
+    spec: {
+      type: 'scatter',
+      tabName: 'Data_Avail_Cap_Dot',
+      dataStart: 5, dataEnd: 12,
+      series: [
+        // Dots (default markers, no line)
+        { titleCol: 'B', titleRow: 4, xCol: 'C', yCol: 'B', color: '62B5E5' },
+        // Trendline (line, no markers, dashed)
+        { titleCol: 'F', titleRow: 4, xCol: 'C', yCol: 'F', color: '003DA5',
+          showLine: true, dashed: true },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  assert.match(chartXml, /<c:scatterChart>/, 'is a scatterChart');
+  const sers = (chartXml.match(/<c:ser>/g) || []).length;
+  assert.equal(sers, 2, '2 series (dots + trendline)');
+
+  // Series 0 = dots — markers visible, no connecting line (line is noFill)
+  const ser0 = chartXml.match(/<c:ser>\s*<c:idx val="0"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser0, /<c:symbol val="circle"\/>/, 'dot series has circle markers');
+  assert.match(ser0, /<a:alpha val="55000"\/>/, 'dots are semi-transparent');
+  // Dots series has noFill on its <a:ln> block (no connecting line)
+  assert.match(ser0, /<a:ln[^>]*>\s*<a:noFill\/>/, 'dot series line is noFill');
+
+  // Series 1 = trendline — visible navy line, markers OFF, dashed
+  const ser1 = chartXml.match(/<c:ser>\s*<c:idx val="1"\/>[\s\S]*?<\/c:ser>/)[0];
+  assert.match(ser1, /<c:symbol val="none"\/>/, 'trendline markers off');
+  assert.match(ser1, /<a:solidFill>\s*<a:srgbClr val="003DA5"\/>\s*<\/a:solidFill>/, 'trendline solid navy');
+  assert.match(ser1, /<a:prstDash val="dash"\/>/, 'trendline is dashed');
+  // Trendline xVal = col C (shared with dots), yVal = col F (helper)
+  assert.match(ser1, /<c:xVal>[\s\S]*?\$C\$5:\$C\$12[\s\S]*?<\/c:xVal>/, 'trendline xVal = C');
+  assert.match(ser1, /<c:yVal>[\s\S]*?\$F\$5:\$F\$12[\s\S]*?<\/c:yVal>/, 'trendline yVal = F (helper)');
+
+  // The trendline's <a:prstDash> appears exactly once (only series 1, not the dots)
+  const dashCount = (chartXml.match(/<a:prstDash val="dash"\/>/g) || []).length;
+  assert.equal(dashCount, 1, 'exactly one dashed series (the trendline)');
 });
 
 test('injectNativeCharts: stacked-combo box-whisker (P8.5) renders correct XML', async () => {

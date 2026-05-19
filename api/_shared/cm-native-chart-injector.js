@@ -499,9 +499,29 @@ function buildScatterChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
-    // Marker shape: filled circle, no border emphasis (mirrors
-    // chart.js pointStyle:'circle' + pointRadius:3 from the renderer).
-    // <c:size val="5"/> ≈ pointRadius 3-4 in pixels. <c:symbol val="circle"/>.
+    // P7.5 — `showLine: true` produces a connected-line series (used for
+    // trendline overlays); markers are suppressed so just the line shows.
+    // `dashed: true` makes the line dashed (matches the renderer's
+    // borderDash for linear regression trendlines).
+    if (s.showLine) {
+      const dashFrag = s.dashed ? `<a:prstDash val="dash"/>` : '';
+      return `        <c:ser>
+          <c:idx val="${i}"/>
+          <c:order val="${i}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
+          </c:spPr>
+          <c:marker><c:symbol val="none"/></c:marker>
+          <c:xVal><c:numRef><c:f>'${sheet}'!$${s.xCol}$${spec.dataStart}:$${s.xCol}$${spec.dataEnd}</c:f></c:numRef></c:xVal>
+          <c:yVal><c:numRef><c:f>'${sheet}'!$${s.yCol}$${spec.dataStart}:$${s.yCol}$${spec.dataEnd}</c:f></c:numRef></c:yVal>
+          <c:smooth val="0"/>
+        </c:ser>`;
+    }
+    // Default dot-cloud series: visible markers, no connecting line.
+    // Filled circle marker, no border emphasis (mirrors chart.js
+    // pointStyle:'circle' + pointRadius:3 from the renderer).
+    // <c:size val="5"/> ≈ pointRadius 3-4 in pixels.
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -1162,49 +1182,153 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
     // P7 — scatter (xy) charts — one point per data row, no connecting line
     case 'core_cap_rate_dot_plot': {
       // Closed-sale scatter: x = period_end (sale date), y = cap_rate.
-      // Renderer also adds a 12-mo rolling-avg trendline (computed in JS),
-      // but that requires a derived helper column on the data tab —
-      // deferred. Native chart shows just the dot cloud.
+      //
+      // P7.5 — uses the helper-column infrastructure to add a 12-month
+      // rolling-average trendline, matching cm-chart-image-renderer.js
+      // around line 2033. For each row, the helper value is the mean of
+      // cap_rate over all rows whose period_end falls within ±182 days
+      // of the current row's period_end. Plotted as a 2nd scatter series
+      // with showLine=true (line, no markers) in navy.
       const xCol = findCol('period_end');
       const yCol = findCol('cap_rate');
       if (!xCol || !yCol) return null;
-      return {
+
+      // Pre-extract valid (date_ms, cap) pairs so the per-row getValue
+      // doesn't keep re-parsing dates from the rows array.
+      const SIX_MO_MS = 182 * 24 * 60 * 60 * 1000;
+      const validPairs = (rows || [])
+        .map(r => {
+          const t = r.period_end ? new Date(r.period_end).getTime() : NaN;
+          const y = r.cap_rate != null ? Number(r.cap_rate) : NaN;
+          return Number.isFinite(t) && Number.isFinite(y) ? { t, y } : null;
+        })
+        .filter(Boolean);
+      const hasTrendData = validPairs.length > 0;
+
+      // Helper column letter lands at cols.length + 1
+      const trendCol = String.fromCharCode(65 + cols.length);
+
+      const series = [
+        // Dot cloud (sky semi-transparent fill)
+        { titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky },
+      ];
+      if (hasTrendData) {
+        // Trendline (navy connected line, no markers)
+        series.push({
+          titleCol: trendCol, titleRow: headerRow,
+          xCol, yCol: trendCol,
+          color: navy,
+          showLine: true,
+        });
+      }
+
+      const result = {
         tabName,
         spec: {
           type: 'scatter',
           tabName,
           dataStart, dataEnd,
-          series: [{
-            titleCol: yCol, titleRow: headerRow,
-            xCol, yCol,
-            color: sky,  // sky w/ alpha — matches renderer rgba(98,181,229,0.55)
-          }],
+          series,
           anchor: standardAnchor,
         },
       };
+      if (hasTrendData) {
+        result.helperCols = [{
+          key: 'trendline_12mo',
+          header: '12-mo Rolling Avg',
+          format: 'percent_basis_points',
+          width: 18,
+          getValue: (row) => {
+            if (row.period_end == null || row.cap_rate == null) return null;
+            const center = new Date(row.period_end).getTime();
+            if (!Number.isFinite(center)) return null;
+            let sum = 0, n = 0;
+            for (const p of validPairs) {
+              if (p.t >= center - SIX_MO_MS && p.t <= center + SIX_MO_MS) {
+                sum += p.y; n++;
+              }
+            }
+            return n > 0 ? sum / n : null;
+          },
+        }];
+      }
+      return result;
     }
 
     case 'available_cap_rate_dot_plot': {
       // Active-listing scatter: x = firm_term_years, y = cap_rate.
-      // Renderer adds a linear regression trendline — deferred (see
-      // core_cap_rate_dot_plot above).
+      //
+      // P7.5 — uses the helper-column infrastructure to add a linear
+      // regression trendline, matching cm-chart-image-renderer.js around
+      // line 2109. Compute (m, b) via least-squares ONCE across the rows
+      // array; helper getValue is just (m * x + b). The trendline series
+      // is plotted as a 2nd scatter series with showLine=true + dashed
+      // (matches renderer's borderDash: [6, 4]).
       const xCol = findCol('firm_term_years');
       const yCol = findCol('cap_rate');
       if (!xCol || !yCol) return null;
-      return {
+
+      // Compute least-squares m, b once.
+      const validRows = (rows || []).filter(r =>
+        r.cap_rate != null && r.firm_term_years != null
+      );
+      let m = 0, b = 0;
+      if (validRows.length >= 2) {
+        let sx = 0, sy = 0, sxx = 0, sxy = 0;
+        const n = validRows.length;
+        for (const r of validRows) {
+          const x = Number(r.firm_term_years);
+          const y = Number(r.cap_rate);
+          sx += x; sy += y; sxx += x * x; sxy += x * y;
+        }
+        const denom = n * sxx - sx * sx;
+        if (denom !== 0) {
+          m = (n * sxy - sx * sy) / denom;
+          b = (sy - m * sx) / n;
+        }
+      }
+      const hasTrendData = validRows.length >= 2;
+
+      const trendCol = String.fromCharCode(65 + cols.length);
+
+      const series = [
+        { titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky },
+      ];
+      if (hasTrendData) {
+        series.push({
+          titleCol: trendCol, titleRow: headerRow,
+          xCol, yCol: trendCol,
+          color: navy,
+          showLine: true,
+          dashed: true,
+        });
+      }
+
+      const result = {
         tabName,
         spec: {
           type: 'scatter',
           tabName,
           dataStart, dataEnd,
-          series: [{
-            titleCol: yCol, titleRow: headerRow,
-            xCol, yCol,
-            color: sky,
-          }],
+          series,
           anchor: standardAnchor,
         },
       };
+      if (hasTrendData) {
+        result.helperCols = [{
+          key: 'trendline_linear',
+          header: 'Linear Trendline',
+          format: 'percent_basis_points',
+          width: 18,
+          getValue: (row) => {
+            if (row.firm_term_years == null) return null;
+            const x = Number(row.firm_term_years);
+            if (!Number.isFinite(x)) return null;
+            return m * x + b;
+          },
+        }];
+      }
+      return result;
     }
 
     // P8 — floating-bar / box-whisker family
