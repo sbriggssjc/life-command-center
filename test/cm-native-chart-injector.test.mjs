@@ -230,10 +230,100 @@ test('NATIVE_CHART_TEMPLATES: R35 P3 final simple-shape templates registered', (
   }
 });
 
-test('NATIVE_CHART_TEMPLATES: R35 P4 complex composites registered (final 2)', () => {
+test('NATIVE_CHART_TEMPLATES: R35 P4 complex composites registered', () => {
   for (const id of ['cost_of_capital', 'volume_cap_quartile_combo']) {
     assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
+});
+
+test('NATIVE_CHART_TEMPLATES: R36 P1 horizontal-bar state rankings registered', () => {
+  for (const id of ['leased_inventory_by_state', 'sources_of_capital']) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+});
+
+test('buildInjectionSpec: leased_inventory_by_state builds horizontal bar', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'leased_inventory_by_state',
+    tabName: 'Data_Leased_Inv_State',
+    cols: [
+      { key: 'rank_by_rsf',      col: 'A' },
+      { key: 'state',            col: 'B' },
+      { key: 'lease_count',      col: 'C' },
+      { key: 'total_rsf',        col: 'D' },
+      { key: 'total_annual_rent', col: 'E' },
+      { key: 'avg_rent_psf',     col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 19,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.equal(out.spec.type, 'bar');
+  assert.equal(out.spec.horizontal, true, 'flipped to horizontal bar');
+  assert.equal(out.spec.catCol, 'B', 'state on cat axis');
+  assert.equal(out.spec.valCol, 'C', 'lease_count on val axis');
+  assert.equal(out.spec.color, '003DA5', 'navy');
+});
+
+test('buildInjectionSpec: sources_of_capital builds horizontal bar', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'sources_of_capital',
+    tabName: 'Data_Sources',
+    cols: [
+      { key: 'rank_15y',         col: 'A' },
+      { key: 'buyer_state',      col: 'B' },
+      { key: 'total_volume_15y', col: 'C' },
+      { key: 'pct_of_total_15y', col: 'D' },
+      { key: 'deal_count_15y',   col: 'E' },
+    ],
+    dataStart: 5, dataEnd: 19,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.equal(out.spec.type, 'bar');
+  assert.equal(out.spec.horizontal, true);
+  assert.equal(out.spec.catCol, 'B', 'buyer_state on cat axis');
+  assert.equal(out.spec.valCol, 'C', 'total_volume_15y on val axis');
+});
+
+test('injectNativeCharts: horizontal bar emits barDir="bar" + flipped axes', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Leased_Inv_State');
+  sheet.getCell('B4').value = 'State';
+  sheet.getCell('C4').value = 'Lease Count';
+  ['CA', 'TX', 'NY', 'FL', 'IL'].forEach((state, i) => {
+    sheet.getCell(`B${5 + i}`).value = state;
+    sheet.getCell(`C${5 + i}`).value = 500 - i * 50;
+  });
+  const base = await wb.xlsx.writeBuffer();
+
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Leased_Inv_State',
+    spec: {
+      type: 'bar',
+      tabName: 'Data_Leased_Inv_State',
+      titleCol: 'C', titleRow: 4,
+      catCol: 'B', valCol: 'C',
+      dataStart: 5, dataEnd: 9,
+      color: '003DA5',
+      horizontal: true,
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Horizontal bar = barDir="bar" (not "col")
+  assert.match(chartXml, /<c:barDir val="bar"\/>/, 'barDir=bar (horizontal)');
+  // Cat axis on the LEFT (axPos=l), val axis on the BOTTOM (axPos=b)
+  const catAxBlock = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  const valAxBlock = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(catAxBlock, /<c:axPos val="l"\/>/, 'cat axis on the LEFT');
+  assert.match(valAxBlock, /<c:axPos val="b"\/>/, 'val axis on the BOTTOM');
+  // Cat axis flipped to maxMin so largest values appear at top
+  assert.match(catAxBlock, /<c:orientation val="maxMin"\/>/, 'cat axis maxMin (top-N at top)');
+  // Series ref correct cells
+  assert.match(chartXml, /'Data_Leased_Inv_State'!\$B\$5:\$B\$9/, 'cat = state column B');
+  assert.match(chartXml, /'Data_Leased_Inv_State'!\$C\$5:\$C\$9/, 'val = count column C');
 });
 
 test('buildInjectionSpec: cost_of_capital builds sharedAxis combo with pale gray band', () => {

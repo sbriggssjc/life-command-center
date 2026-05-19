@@ -130,6 +130,19 @@ function buildSingleLineChartXml(spec) {
 function buildSingleBarChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const color = (spec.color || '003DA5').replace('#', '');
+  // R36 P1 — `horizontal: true` produces a horizontal bar chart (top-N
+  // state ranking visual). In OOXML this means:
+  //   • <c:barDir val="bar"/> instead of "col"
+  //   • catAx.axPos="l" (categories on the LEFT, listed top-to-bottom)
+  //     For top-N rankings we want the largest at the TOP, so the cat
+  //     axis also flips orientation to maxMin.
+  //   • valAx.axPos="b" (values on the BOTTOM)
+  const horizontal = !!spec.horizontal;
+  const barDir = horizontal ? 'bar' : 'col';
+  const catAxPos = horizontal ? 'l' : 'b';
+  const valAxPos = horizontal ? 'b' : 'l';
+  // Horizontal bar: orient cat axis maxMin so largest values appear at top
+  const catOrientation = horizontal ? 'maxMin' : 'minMax';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
@@ -137,7 +150,7 @@ function buildSingleBarChartXml(spec) {
     <c:plotArea>
       <c:layout/>
       <c:barChart>
-        <c:barDir val="col"/>
+        <c:barDir val="${barDir}"/>
         <c:grouping val="clustered"/>
         <c:varyColors val="0"/>
         <c:ser>
@@ -163,16 +176,16 @@ function buildSingleBarChartXml(spec) {
       </c:barChart>
       <c:catAx>
         <c:axId val="1"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:scaling><c:orientation val="${catOrientation}"/></c:scaling>
         <c:delete val="0"/>
-        <c:axPos val="b"/>
+        <c:axPos val="${catAxPos}"/>
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
-        <c:axPos val="l"/>
+        <c:axPos val="${valAxPos}"/>
         <c:crossAx val="1"/>
       </c:valAx>
     </c:plotArea>
@@ -1139,10 +1152,16 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // R35 P3 — final 2 simple-shape missed templates from audit.
   'buyer_class_pct_by_year',        // annual stacked bar (Private / REIT / Cross-Border / Institutional)
   'renewal_rent_growth',            // single-bar Renewal Rent / SF
-  // R35 P4 — final 2 complex composites. After this PR, 100% of the
-  // active-catalog chart_template_ids are native.
+  // R35 P4 — final 2 complex composites.
   'cost_of_capital',                // 2 lines + floating gray range bar (sharedAxis combo)
   'volume_cap_quartile_combo',      // area + range bars + dots (area-combo)
+  // R36 P1 — horizontal-bar state rankings. Audit caught these in
+  // the renderer (use indexAxis: 'y') but they slipped through R35.
+  // Choropleth/bubble-map upgrade is deferred (chartjs-chart-geo plugin
+  // not bundled in QuickChart hosted); the horizontal-bar fallback is
+  // the editable visual that ships.
+  'leased_inventory_by_state',      // top-N states by lease_count (gov)
+  'sources_of_capital',             // top-N buyer states by 15-yr volume (gov)
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -2404,6 +2423,60 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
           },
         }],
+      };
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R36 P1 — horizontal-bar state-ranking charts. Renderer at
+    // cm-chart-image-renderer.js sets `indexAxis: 'y'` to flip the
+    // bars sideways. Native equivalent uses <c:barDir val="bar"/> and
+    // swaps the catAx/valAx positions.
+    // ────────────────────────────────────────────────────────────────
+
+    case 'leased_inventory_by_state': {
+      // Top-N states ranked by lease_count. Renderer takes the first
+      // 15 rows of the view (already sorted by rank_by_rsf, but the
+      // bar value plotted is lease_count, not RSF — keep that mirror).
+      // Native chart uses col B (state) as cat axis and col C
+      // (lease_count) as the bar values. The data tab already arrives
+      // pre-sorted from the view; if there are >15 rows the chart
+      // shows them all (Excel doesn't auto-trim, but users can filter).
+      const stateCol = findCol('state');
+      const countCol = findCol('lease_count');
+      if (!stateCol || !countCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'bar',
+          tabName,
+          titleCol: countCol, titleRow: headerRow,
+          catCol: stateCol, valCol: countCol,
+          dataStart, dataEnd,
+          color: navy,
+          horizontal: true,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'sources_of_capital': {
+      // Top-N buyer states ranked by 15-yr volume. Renderer takes first
+      // 15 rows (sorted by rank_15y); bar values are total_volume_15y.
+      const stateCol  = findCol('buyer_state');
+      const volumeCol = findCol('total_volume_15y');
+      if (!stateCol || !volumeCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'bar',
+          tabName,
+          titleCol: volumeCol, titleRow: headerRow,
+          catCol: stateCol, valCol: volumeCol,
+          dataStart, dataEnd,
+          color: navy,
+          horizontal: true,
+          anchor: standardAnchor,
+        },
       };
     }
 

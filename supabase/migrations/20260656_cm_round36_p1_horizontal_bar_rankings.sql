@@ -1,0 +1,125 @@
+-- =====================================================================
+-- Round 36 P1 — second audit pass after R35 P4 caught 11 more templates
+-- missing from NATIVE_CHART_TEMPLATES. This PR fixes 2 of them: the
+-- horizontal-bar state-ranking charts.
+--
+-- Builds on R35 P4 (PR #838).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- THE AUDIT GAP I MISSED
+-- ---------------------------------------------------------------------
+-- After R35 P4 declared "full coverage," a fresh comparison of
+--   • every `case '<id>':` in cm-chart-image-renderer.js   (53 total)
+--   • every id in NATIVE_CHART_TEMPLATES                    (42 total)
+-- revealed 11 templates the renderer ships as PNG that weren't in
+-- NATIVE_CHART_TEMPLATES. Categorization:
+--
+--   Intentionally deferred (5 — documented, blocked or out of scope):
+--     ppsf_box_quarterly       dropped from catalog Round 6h
+--     lease_termination_rate   computed series not in data tab (P4)
+--     net_lease_spread         cap_10plus_year not in data tab (P5)
+--     lease_structures         renderer returns null (table-only)
+--     rent_heat_map            choropleth blocked on chartjs-chart-geo
+--
+--   Genuinely shippable (4 — code can land):
+--     leased_inventory_by_state  horizontal bar ← THIS PR
+--     sources_of_capital         horizontal bar ← THIS PR
+--     available_by_tenant_count_donut  donut    [R36 P2]
+--     available_by_tenant_volume_donut donut    [R36 P2]
+--
+--   Complex composites (2 — bar + multi-scatter on categorical axis):
+--     available_by_term_summary       [R36 P3]
+--     available_by_firm_term_summary  [R36 P3]
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 43)
+-- ---------------------------------------------------------------------
+--   leased_inventory_by_state  Top-N states by lease_count (gov)
+--   sources_of_capital         Top-N buyer states by 15-yr volume (gov)
+--
+-- Both are horizontal-bar state rankings. The PDF renders them as US
+-- choropleth / bubble maps, but the QuickChart hosted instance doesn't
+-- bundle chartjs-chart-geo — the renderer falls back to horizontal bars
+-- of the top 15 states. Migrating these to native gives users editable
+-- charts; if a future PR enables CM_CHOROPLETH_ENABLED with a self-
+-- hosted QuickChart, the data tabs already have the right columns to
+-- swap to a different chart type.
+--
+-- ---------------------------------------------------------------------
+-- NEW MACHINERY
+-- ---------------------------------------------------------------------
+-- buildSingleBarChartXml gains `horizontal: true` flag:
+--   • <c:barDir val="bar"/> (was always "col")
+--   • catAx.axPos = "l"  (categories listed on the LEFT, vertically)
+--   • valAx.axPos = "b"  (values on the BOTTOM)
+--   • catAx.orientation = "maxMin" (so top-N rankings appear at the
+--     TOP, not the bottom — Excel's default minMax puts row 5 at
+--     the bottom of a horizontal chart, which feels backwards for
+--     ranked tables)
+--
+-- Backward compatible — when horizontal is omitted the existing
+-- vertical column layout is unchanged.
+--
+-- ---------------------------------------------------------------------
+-- WIRING DETAIL
+-- ---------------------------------------------------------------------
+-- leased_inventory_by_state:
+--   catCol = state (col B)
+--   valCol = lease_count (col C)
+--   color  = navy, horizontal = true
+--
+-- sources_of_capital:
+--   catCol = buyer_state (col B)
+--   valCol = total_volume_15y (col C)
+--   color  = navy, horizontal = true
+--
+-- Renderer slices the top 15 rows; native chart shows all rows in the
+-- data tab. If the view returns more than 15 rows, the chart shows
+-- more — users can filter the data tab to constrain it.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 105 CM tests pass (up from 101 in R35 P4).
+--
+-- New tests verify:
+--   • Registration for both templates
+--   • buildInjectionSpec produces type='bar', horizontal=true,
+--     correct catCol/valCol mapping (B=state, C=value), navy color
+--   • End-to-end XML: <c:barDir val="bar"/>, catAx axPos="l" with
+--     orientation="maxMin", valAx axPos="b", correct cell refs
+--
+-- End-to-end smoke confirmed both charts emit:
+--   barDir=bar, cat axis=l (left), val axis=b (bottom), catOri=maxMin
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh gov export (both templates are gov-only)
+-- 2. X-CM-Native-Charts should reach ~41-43 depending on vertical
+-- 3. Open Data_Leased_Inv_State and Data_Sources — charts should be:
+--    • Horizontal bars (bars extend rightward, not upward)
+--    • State labels vertically on the LEFT side
+--    • Largest value at the TOP of the chart (CA at top, then NY, etc.)
+-- 4. Right-click → "Edit Data" should be enabled
+--
+-- ---------------------------------------------------------------------
+-- REMAINING R36 BACKLOG
+-- ---------------------------------------------------------------------
+-- P2 — donut charts (available_by_tenant_count_donut + volume_donut).
+--      Needs a new buildDoughnutChartXml() builder for <c:doughnutChart>
+--      + per-segment color array. 2 templates.
+--
+-- P3 — bar + scatter on categorical x-axis (available_by_term_summary
+--      + available_by_firm_term_summary). Each has 1 bar series (Avg
+--      Price) on left axis + 4 scatter series (cap quartiles) on right
+--      axis, with category x-axis (term buckets, not period_end).
+--      Could potentially reuse area-combo machinery; needs scatter
+--      series support on categorical x-axis. 2 templates.
+--
+-- After P3, only the 5 deferred templates remain unmigrated — and all
+-- 5 are intentionally deferred (3 data-shape mismatches, 1 no-chart
+-- by design, 1 choropleth blocker).
+-- =====================================================================
