@@ -249,6 +249,82 @@ ${seriesXml}
 </c:chartSpace>`;
 }
 
+/**
+ * Generate a multi-line chart with N series sharing one categorical x-axis.
+ * Same shape as buildSingleLineChartXml but takes a series[] array so each
+ * series gets its own title cell, color, and val column. Useful for cohort
+ * line charts (cap_rate_by_lease_term, nm_vs_market_cap, etc.).
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName      Data_* tab name
+ * @param {string} spec.catCol       Column letter for x-axis categories
+ * @param {number} spec.dataStart    First data row (1-indexed)
+ * @param {number} spec.dataEnd      Last data row (inclusive)
+ * @param {Array}  spec.series       List of { titleCol, titleRow, valCol, color, [dashed] }
+ * @returns {string} chart XML
+ */
+function buildMultiLineChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const seriesXml = spec.series.map((s, i) => {
+    const color = (s.color || '003DA5').replace('#', '');
+    // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
+    // renders <a:prstDash val="dash"/> as a regular dashed stroke.
+    const dashFrag = s.dashed
+      ? `<a:prstDash val="dash"/>`
+      : '';
+    return `        <c:ser>
+          <c:idx val="${i}"/>
+          <c:order val="${i}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
+          </c:spPr>
+          <c:marker><c:symbol val="none"/></c:marker>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+  }).join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${seriesXml}
+        <c:marker val="0"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:lineChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="b"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -359,6 +435,8 @@ export async function injectNativeCharts(buffer, injections) {
       chartXml = buildStackedBarChartXml(spec);
     } else if (spec.type === 'bar') {
       chartXml = buildSingleBarChartXml(spec);
+    } else if (spec.type === 'multi-line') {
+      chartXml = buildMultiLineChartXml(spec);
     } else {
       // 'line' (default) and any future shapes that don't have their own
       // builder yet fall back to the line builder.
@@ -425,7 +503,13 @@ export async function injectNativeCharts(buffer, injections) {
 }
 
 // Re-export for testing
-export { buildSingleLineChartXml, buildSingleBarChartXml, buildStackedBarChartXml, buildDrawingXml };
+export {
+  buildSingleLineChartXml,
+  buildSingleBarChartXml,
+  buildStackedBarChartXml,
+  buildMultiLineChartXml,
+  buildDrawingXml,
+};
 
 // ----------------------------------------------------------------------------
 // Migration registry — which chart_template_ids are now native (editable)
@@ -460,6 +544,16 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // Deferred: lease_termination_rate (rendered "In Firm Term" series is
   //   computed total-outside, not stored — would need an extra data
   //   column or worksheet formula. Defer to P4.5.)
+  // P5 — multi-line cohort charts (no secondary axis)
+  'cap_rate_by_lease_term',        // 4-line cap-rate cohort (dia: 12+/8-12/6-8/≤5; gov: 10+/6-10/<5/Outside)
+  'nm_vs_market_cap',              // 2-line NM vs Market cap rates
+  'sold_cap_by_term_dot_plot',     // 4-line TTM cohort (same shape as cap_rate_by_lease_term)
+  'asking_cap_by_term_dot_plot',   // 4-line active-listings cohort (dia only)
+  // Deferred: net_lease_spread — renderer references cap_10plus_year but
+  //   data tab only writes treasury_10y_yield / avg_cap_rate / nm_avg_cap /
+  //   spreads. Native chart needs cells that exist; fix the data-shape
+  //   mismatch first (either add cap_10plus_year column or update renderer
+  //   to use nm_avg_cap as the 3rd series).
 ]);
 
 /**
@@ -474,9 +568,13 @@ export const NATIVE_CHART_TEMPLATES = new Set([
  * @param {number} args.dataStart     1-indexed row where data begins
  * @param {number} args.dataEnd       1-indexed row where data ends (inclusive)
  * @param {object} args.brand         Brand tokens (palette, fonts)
+ * @param {Array<object>} [args.rows] Optional — actual data rows. Used for
+ *                                    cohort detection on templates that
+ *                                    keep both dia + gov column schemes
+ *                                    in their data tab (e.g. cap_rate_by_lease_term).
  * @returns {object|null} injection spec or null if no builder registered
  */
-export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart, dataEnd, brand }) {
+export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows }) {
   const palette = brand?.palette || {};
   const navy   = (palette.nm_navy   || '#003DA5').replace('#', '');
   const sky    = (palette.nm_sky    || '#62B5E5').replace('#', '');
@@ -602,6 +700,109 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
             valCol: s.col,
             color: s.color,
           })),
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    // P5 — multi-line cohort charts (no secondary axis)
+    case 'cap_rate_by_lease_term':
+    case 'sold_cap_by_term_dot_plot':
+    case 'asking_cap_by_term_dot_plot': {
+      // Renderer detects dialysis vs gov cohorts by sniffing the actual
+      // data rows. Mirror that here so the native chart's series count
+      // matches the PDF visual exactly.
+      //
+      // Cohort palette per cm-chart-image-renderer.js PDF_COLORS:
+      //   cap_long_term     #7E6BAD  (purple)   — longest-term
+      //   cap_mid_long      #4CB582  (sage)     — middle-long
+      //   cap_mid           #62B5E5  (sky)      — middle (dia only)
+      //   cap_short         #003DA5  (navy)     — shortest
+      //   cap_outside_firm  #6A748C  (gray)     — gov only, dashed
+      //
+      // Cohort detection: look for cap_12plus / cap_8to12 / cap_6to8 /
+      // cap_5orless in the actual data. Falls back to checking which
+      // cols are present if rows aren't supplied (helps tests).
+      const periodCol = findCol('period_end');
+      if (!periodCol) return null;
+
+      let hasDialysisCohorts = false;
+      if (Array.isArray(rows) && rows.length) {
+        hasDialysisCohorts = rows.some(r =>
+          r.cap_12plus != null || r.cap_8to12 != null ||
+          r.cap_6to8   != null || r.cap_5orless != null
+        );
+      } else {
+        // No rows supplied (e.g. unit tests) — fall back to schema sniff.
+        // sold_cap_by_term_dot_plot's CHART_COLUMNS includes BOTH cohort
+        // schemes side-by-side, so this falls through to gov-cohorts by
+        // default for those templates. Tests can pass `rows: [{ cap_12plus: x }]`
+        // to force the dia branch explicitly.
+        hasDialysisCohorts = !!findCol('cap_12plus');
+      }
+
+      // Pick the cohort key for the asking-cap variant (dia only — gov
+      // active-listing data doesn't exist per the renderer comment).
+      // sold_cap_by_term and cap_rate_by_lease_term map gov 6-10 to
+      // different column names: sold_cap uses cap_5to10, cap_rate_by_lease_term
+      // uses cap_6to10. Wire each one up specifically.
+      const govSixToTenKey = chart_template_id === 'sold_cap_by_term_dot_plot'
+        ? 'cap_5to10'
+        : 'cap_6to10';
+
+      const seriesDefs = hasDialysisCohorts ? [
+        { key: 'cap_12plus',  color: '7E6BAD' },                       // 12+ purple
+        { key: 'cap_8to12',   color: '4CB582' },                       // 8-12 sage
+        { key: 'cap_6to8',    color: '62B5E5' },                       // 6-8 sky
+        { key: 'cap_5orless', color: '003DA5' },                       // ≤5 navy
+      ] : [
+        { key: 'cap_10plus',       color: '7E6BAD' },                  // 10+ purple
+        { key: govSixToTenKey,     color: '4CB582' },                  // 6-10 sage
+        { key: 'cap_less5',        color: '003DA5' },                  // <5 navy
+        { key: 'cap_outside_firm', color: '6A748C', dashed: true },    // Outside dashed gray
+      ];
+
+      const series = seriesDefs
+        .map(s => ({ ...s, col: findCol(s.key) }))
+        .filter(s => s.col);
+      if (series.length === 0) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: series.map(s => ({
+            titleCol: s.col, titleRow: headerRow,
+            valCol: s.col,
+            color: s.color,
+            dashed: !!s.dashed,
+          })),
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'nm_vs_market_cap': {
+      // 2-series line — NM Average Cap (navy) vs Non-NM Average Cap (sky).
+      // Color order from cm-chart-image-renderer.js around line 707:
+      // palette[0] navy / palette[1] sky.
+      const periodCol = findCol('period_end');
+      const nmCol     = findCol('nm_cap_rate');
+      const marketCol = findCol('market_cap_rate');
+      if (!periodCol || !nmCol || !marketCol) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: [
+            { titleCol: nmCol,     titleRow: headerRow, valCol: nmCol,     color: navy },
+            { titleCol: marketCol, titleRow: headerRow, valCol: marketCol, color: sky  },
+          ],
           anchor: standardAnchor,
         },
       };

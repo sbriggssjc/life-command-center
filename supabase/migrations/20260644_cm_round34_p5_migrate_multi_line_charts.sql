@@ -1,0 +1,120 @@
+-- =====================================================================
+-- Round 34 P5 — migrate multi-line cohort charts to native Excel chart XML
+-- Builds on the R34 P4 stacked-bar migration (PR #826).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (4 added; total now 13)
+-- ---------------------------------------------------------------------
+--   1. cap_rate_by_lease_term         4-line (dia: 12+/8-12/6-8/≤5 OR
+--                                              gov: 10+/6-10/<5/Outside)
+--   2. nm_vs_market_cap               2-line (NM vs Market avg cap)
+--   3. sold_cap_by_term_dot_plot      4-line (same shape as #1)
+--   4. asking_cap_by_term_dot_plot    4-line (dia only)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildMultiLineChartXml(spec) — new XML builder for <c:lineChart>
+--     with N series, optional per-series `dashed` flag (uses
+--     <a:prstDash val="dash"/>), bottom legend, markers off.
+--   • injectNativeCharts dispatches spec.type === 'multi-line'
+--   • NATIVE_CHART_TEMPLATES expanded from 9 → 13
+--   • buildInjectionSpec now accepts an optional `rows` argument so
+--     cohort templates can sniff dia vs gov shape by inspecting the
+--     actual data (mirrors cm-chart-image-renderer.js cohort
+--     detection at line 830 and 2457).
+--
+--   Cohort palette (matches renderer's PDF_COLORS):
+--     cap_long_term     #7E6BAD  purple    — longest cohort
+--     cap_mid_long      #4CB582  sage      — mid-long
+--     cap_mid           #62B5E5  sky       — mid (dia only)
+--     cap_short         #003DA5  navy      — shortest
+--     cap_outside_firm  #6A748C  gray      — gov only, dashed line
+--
+--   Per-template gotchas:
+--     • sold_cap_by_term_dot_plot uses gov column key `cap_5to10`
+--       (vs cap_rate_by_lease_term's `cap_6to10`). Builder dispatches
+--       to the right key per template_id.
+--     • asking_cap_by_term_dot_plot is dia-only; no gov branch.
+--     • nm_vs_market_cap is straight 2-series, no cohort sniffing.
+--
+-- api/_shared/cm-excel-export.js:
+--   • buildInjectionSpec call site now passes `rows: chart.rows`
+--     so cohort templates have data to sniff.
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • NATIVE_CHART_TEMPLATES registration for the 4 P5 templates +
+--     negative check that `net_lease_spread` stays deferred
+--   • buildInjectionSpec tests:
+--       - nm_vs_market_cap → 2 series with navy/sky colors
+--       - cap_rate_by_lease_term dia-row → 4 dia cohorts, no dashed
+--       - cap_rate_by_lease_term gov-row → 4 gov cohorts, last one dashed
+--       - sold_cap_by_term_dot_plot uses cap_5to10 (gov), not cap_6to10
+--   • End-to-end XML test: 4-series lineChart, grouping=standard,
+--     1 dashed series, correct cell-range refs, legend, markers off
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 50 CM tests pass (up from 44 in P4).
+--
+-- End-to-end build with 4 multi-line charts produced:
+--   chart1 (cap_rate_by_lease_term):     lineChart, 4 series (dia G/H/I/J)
+--   chart2 (nm_vs_market_cap):           lineChart, 2 series (C/D)
+--   chart3 (sold_cap_by_term_dot_plot):  lineChart, 4 series (gov G/H/I/J, 1 dashed)
+--   chart4 (asking_cap_by_term_dot_plot): lineChart, 4 series (dia C/D/E/F)
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Check response header: X-CM-Native-Charts should reach 11-13
+--    depending on which templates apply to the vertical
+-- 3. In Excel, right-click these tabs' charts — "Edit Data" +
+--    "Format Chart Area" should be ENABLED:
+--       Data_Cap_by_Term            (4-line cohort)
+--       Data_NM_vs_Market           (2-line NM vs Market)
+--       Data_Sold_Cap_by_Term       (4-line cohort, Outside dashed gov)
+--       Data_Ask_Cap_by_Term        (4-line cohort, dia only)
+-- 4. Verify cohort line colors match the PDF:
+--       12+ / 10+         purple #7E6BAD
+--       8-12 / 6-10/5-10  sage   #4CB582
+--       6-8 (dia only)    sky    #62B5E5
+--       ≤5 / <5           navy   #003DA5
+--       Outside (gov)     gray   #6A748C  dashed
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED: net_lease_spread
+-- ---------------------------------------------------------------------
+-- The renderer (cm-chart-image-renderer.js line 1713) plots 3 lines:
+--   • treasury_10y_yield   ✓ in Data_NL_Spread
+--   • avg_cap_rate         ✓ in Data_NL_Spread
+--   • cap_10plus_year      ✗ NOT in Data_NL_Spread
+--
+-- Native charts can only reference cells that exist in the workbook,
+-- so this template can't migrate until either:
+--   (a) the data tab gains a `cap_10plus_year` column, or
+--   (b) the renderer swaps the 3rd series to `nm_avg_cap` (which IS
+--       in the data tab) so the editable chart can match it.
+--
+-- Either way it's a separate data-shape fix, not part of this PR.
+--
+-- ---------------------------------------------------------------------
+-- NEXT (R34 P6)
+-- ---------------------------------------------------------------------
+-- Combo dual-axis charts — bar series on left axis + line series on
+-- right axis, with separate Y-axis ranges. Templates:
+--   • dom_and_pct_of_ask              bar (DOM days) + line (% of Ask %)
+--   • dom_and_pct_of_ask_monthly      (same shape, monthly cadence)
+--   • case_for_renewal                bar (commencements) + line (rent/SF)
+--   • available_market_size_combo     bar (count) + line (asking cap)
+--   • renewal_rent_growth (R33 D2 simplified to single bar — may skip)
+--
+-- Needs a new buildComboChartXml(spec) that emits both <c:barChart>
+-- and <c:lineChart> blocks sharing the cat axis but with different
+-- val-axis ids (left axis 2, right axis 3). Pattern is well-documented
+-- in OpenXML; one new builder unlocks 4-5 more editable charts.
+-- =====================================================================
