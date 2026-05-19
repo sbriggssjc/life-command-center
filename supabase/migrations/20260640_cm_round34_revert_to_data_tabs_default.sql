@@ -1,0 +1,50 @@
+-- =====================================================================
+-- Round 34 — Revert dia default back to data_tabs.
+--
+-- Code-only PR. One-line change in api/capital-markets.js.
+--
+-- ---------------------------------------------------------------------
+-- WHY REVERT
+-- ---------------------------------------------------------------------
+-- User direction 2026-05-19: "I like the format of the Excel export
+-- with the single chart per tab we had going. I just want those
+-- exported charts to be editable and not PNG graphics. Take the most
+-- recent versions of the PNG exports and make that conversion and
+-- then continue with improving our charts."
+--
+-- The R33 master_template path delivers editable charts but in a
+-- consolidated-sheet layout (the master XLSX shell). User prefers
+-- the original data_tabs format (one chart per tab) and wants the
+-- editable-chart conversion to happen in THAT path instead.
+--
+-- ---------------------------------------------------------------------
+-- THIS PR
+-- ---------------------------------------------------------------------
+-- Revert the dia default flip. Layout is once again 'data_tabs' for
+-- all callers. master_template stays available as opt-in via
+-- ?layout=master_template.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT (separate PRs)
+-- ---------------------------------------------------------------------
+-- The data_tabs path uses ExcelJS to build the workbook + embeds
+-- PNG chart images via sheet.addImage(). ExcelJS v4 does NOT support
+-- writing native Excel charts (only reading). To make the charts
+-- editable I need to manually inject chart XML via JSZip post-
+-- processing (same technique cm-template-loader.js uses for the
+-- master template's Charts sheet).
+--
+-- Substantial per-chart-type work. Plan:
+--   1. R34 P2 — scaffold the chart-XML injection helper + prove on
+--      1 simple chart type (volume_ttm_by_quarter)
+--   2. R34 P3+ — incrementally migrate the remaining ~30
+--      chart_template_ids by type group:
+--        - simple line     (~5 charts)
+--        - single bar      (~5)
+--        - stacked bar     (~3)
+--        - area            (~2)
+--        - multi-line      (~5)
+--        - combo dual-axis (~5)
+--        - scatter         (~3)
+--        - floating box    (~2)
+-- =====================================================================

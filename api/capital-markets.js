@@ -1216,22 +1216,18 @@ async function exportWorkbook(req, res) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  // 5a. Round 33 RE-FLIP — dia default is master_template (editable
-  //     Excel charts). The R33 Phase 2 loader expansion populates 35
-  //     columns of the Charts sheet (~22 of 37 charts render with
-  //     current data). The R33 Phase 2.5 null-out of Rent Survey +
-  //     Competition prevents the remaining sheets from showing
-  //     misleading stale 2024 data — affected charts go blank instead.
-  //     Phase 3 (populating Available Comps / Core Cap Chart / Market
-  //     Size / Sheet1 / Rent Survey / Competition with current data)
-  //     will fill the remaining gaps incrementally.
-  //
-  //     Marketing team gets editable charts by default. The legacy
-  //     PNG-image path stays available as opt-OUT via ?layout=data_tabs.
+  // 5a. Round 34 — Default is back to data_tabs (one chart per tab)
+  //     per user direction: "I like the format of the Excel export
+  //     with the single chart per tab we had going. I just want those
+  //     exported charts to be editable and not PNG graphics." The
+  //     in-flight work is now migrating the data_tabs path's charts
+  //     from PNG-embed to native chart XML one chart_template_id at
+  //     a time. The master_template path stays available as opt-in
+  //     via ?layout=master_template for anyone who wants the
+  //     consolidated-sheet version.
   //
   // Diagnostic header X-CM-Workbook-Path tells the caller which path fired.
-  const layoutDefault = (vertical === 'dialysis') ? 'master_template' : 'data_tabs';
-  const layout = req.query.layout || layoutDefault;
+  const layout = req.query.layout || 'data_tabs';
   const masterEligible = (vertical === 'dialysis' && layout === 'master_template');
   const masterHasRows = Array.isArray(masterMonthlyRows) && masterMonthlyRows.length > 0;
 
