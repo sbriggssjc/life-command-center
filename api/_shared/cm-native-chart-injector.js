@@ -69,6 +69,54 @@ function catAxNumFmtFrag(numFmt) {
 }
 
 // ----------------------------------------------------------------------------
+// R37 P2 — value-axis range pinning + number format
+// ----------------------------------------------------------------------------
+// User feedback 2026-05-19 item #3: "axis formatting has changed on
+// most charts, adjust". The native chart XML I shipped in R34-R36 has
+// no <c:scaling><c:min/><c:max/>, so Excel auto-scales — often into a
+// range that buries the data signal (e.g. cap rates 6-9% on a 0-100%
+// auto axis).
+//
+// Mirror the PNG renderer's per-template yAxisRange settings (defined
+// at the top of cm-chart-image-renderer.js as CAP_RATE_RANGE, etc.).
+
+// OOXML format-code constants — direct equivalents of the renderer's
+// AXIS_FORMAT_* objects, translated to Excel custom number formats.
+const VAL_FMT_PERCENT_2DP = '0.00%';
+const VAL_FMT_PERCENT_1DP = '0.0%';
+const VAL_FMT_PERCENT_0DP = '0%';
+const VAL_FMT_CURRENCY    = '$#,##0';
+const VAL_FMT_CURRENCY_M  = '$#,##0,,"M"';   // millions ($150M)
+const VAL_FMT_CURRENCY_K  = '$#,##0,"K"';    // thousands ($150K)
+const VAL_FMT_INTEGER     = '#,##0';
+
+// Common range constants matching the renderer's shared ranges
+const CAP_RATE_RANGE          = { min: 0.05,  max: 0.10  };
+const CAP_RATE_TIGHT_RANGE    = { min: 0.05,  max: 0.08  };
+const CAP_RATE_BID_ASK_RANGE  = { min: 0.055, max: 0.100 };
+const CAP_RATE_DOT_RANGE      = { min: 0.04,  max: 0.12  };
+const CAP_RATE_COHORT_RANGE   = { min: 0.04,  max: 0.11  };
+const PCT_OF_ASK_RANGE        = { min: 0.85,  max: 1.05  };
+
+// Emit <c:scaling> block with optional min/max. If both are undefined
+// returns the default orientation-only scaling. otherwise embeds the
+// pinned range.
+function valAxScalingFrag(range) {
+  if (!range || (range.min == null && range.max == null)) {
+    return '<c:scaling><c:orientation val="minMax"/></c:scaling>';
+  }
+  const minFrag = range.min != null ? `<c:min val="${range.min}"/>` : '';
+  const maxFrag = range.max != null ? `<c:max val="${range.max}"/>` : '';
+  return `<c:scaling><c:orientation val="minMax"/>${minFrag}${maxFrag}</c:scaling>`;
+}
+
+// Emit <c:numFmt> for a val axis. Returns empty string if no fmt.
+function valAxNumFmtFrag(numFmt) {
+  if (numFmt == null || numFmt === '') return '';
+  return `<c:numFmt formatCode="${escapeXml(numFmt)}" sourceLinked="0"/>`;
+}
+
+// ----------------------------------------------------------------------------
 // Chart XML builders (one per supported chart type)
 // ----------------------------------------------------------------------------
 
@@ -91,6 +139,9 @@ function buildSingleLineChartXml(spec) {
   const catFmtFrag = catAxNumFmtFrag(
     spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
   );
+  // R37 P2 — pin val axis range + format from spec (auto-scale if absent)
+  const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
+  const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
@@ -132,9 +183,10 @@ function buildSingleLineChartXml(spec) {
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${valScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
     </c:plotArea>
@@ -171,6 +223,9 @@ function buildSingleBarChartXml(spec) {
       ? spec.catAxNumFmt
       : (horizontal ? '' : DEFAULT_CAT_AX_NUM_FMT)
   );
+  // R37 P2 — pin val axis range + format from spec
+  const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
+  const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
   // Horizontal bar: orient cat axis maxMin so largest values appear at top
   const catOrientation = horizontal ? 'maxMin' : 'minMax';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -214,9 +269,10 @@ function buildSingleBarChartXml(spec) {
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${valScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="${valAxPos}"/>
+        ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
     </c:plotArea>
@@ -244,6 +300,9 @@ function buildStackedBarChartXml(spec) {
   const catFmtFrag = catAxNumFmtFrag(
     spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
   );
+  // R37 P2 — pin val axis range + format
+  const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
+  const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // P8 — `noFill` flag makes a series transparent. Used to build
@@ -311,9 +370,10 @@ ${seriesXml}
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${valScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
     </c:plotArea>
@@ -347,6 +407,9 @@ function buildMultiLineChartXml(spec) {
   const catFmtFrag = catAxNumFmtFrag(
     spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
   );
+  // R37 P2 — pin val axis range + format
+  const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
+  const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
@@ -392,9 +455,10 @@ ${seriesXml}
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${valScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
     </c:plotArea>
@@ -459,6 +523,16 @@ function buildComboChartXml(spec) {
   const catFmtFrag = catAxNumFmtFrag(
     spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
   );
+  // R37 P2 — pin val axis range + format. Combo has 2 axes:
+  //   left  (axId 2, default holds bars) — yLeftRange / yLeftNumFmt
+  //   right (axId 3, default holds line) — yRightRange / yRightNumFmt
+  // When sharedAxis=true the line uses axId 2 too and there's no right axis,
+  // so yRightRange is ignored. Backward-compat: spec.yAxisRange also accepted
+  // as an alias for yLeftRange (some old templates may have used the simpler name).
+  const leftRangeFrag  = valAxScalingFrag(spec.yLeftRange || spec.yAxisRange);
+  const leftFmtFrag    = valAxNumFmtFrag(spec.yLeftNumFmt || spec.valAxNumFmt);
+  const rightRangeFrag = valAxScalingFrag(spec.yRightRange);
+  const rightFmtFrag   = valAxNumFmtFrag(spec.yRightNumFmt);
   // P8.5 — barGrouping + sharedAxis support
   const barGrouping = spec.barGrouping === 'stacked' ? 'stacked' : 'clustered';
   const overlap     = barGrouping === 'stacked' ? 100 : -20;
@@ -585,16 +659,18 @@ ${lineXml}
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${leftRangeFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${leftFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>${spec.sharedAxis ? '' : `
       <c:valAx>
         <c:axId val="3"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${rightRangeFrag}
         <c:delete val="0"/>
         <c:axPos val="r"/>
+        ${rightFmtFrag}
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
       </c:valAx>`}
@@ -709,6 +785,13 @@ ${dPtXml}
 
 function buildScatterChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
+  // R37 P2 — pin x + y axis ranges + formats. Scatter has both axes as
+  // valAx (x axId=1, y axId=2). xRange/xNumFmt for axis 1 (x), yRange/yNumFmt
+  // for axis 2 (y). yAxisRange aliases yRange for back-compat.
+  const xScalingFrag = valAxScalingFrag(spec.xAxisRange);
+  const xFmtFrag     = valAxNumFmtFrag(spec.xAxisNumFmt);
+  const yScalingFrag = valAxScalingFrag(spec.yAxisRange);
+  const yFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // P7.5 — `showLine: true` produces a connected-line series (used for
@@ -771,16 +854,18 @@ ${seriesXml}
       </c:scatterChart>
       <c:valAx>
         <c:axId val="1"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${xScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${xFmtFrag}
         <c:crossAx val="2"/>
       </c:valAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${yScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${yFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
     </c:plotArea>
@@ -835,6 +920,14 @@ function buildAreaComboChartXml(spec) {
   const catFmtFrag = catAxNumFmtFrag(
     spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT
   );
+  // R37 P2 — pin val axis ranges + formats. Area-combo has 3 axes:
+  //   axId 1 = cat (shared)
+  //   axId 2 = LEFT val (area) — yLeftRange / yLeftNumFmt
+  //   axId 3 = RIGHT val (bars + line) — yRightRange / yRightNumFmt
+  const leftScalingFrag  = valAxScalingFrag(spec.yLeftRange);
+  const leftFmtFrag      = valAxNumFmtFrag(spec.yLeftNumFmt);
+  const rightScalingFrag = valAxScalingFrag(spec.yRightRange);
+  const rightFmtFrag     = valAxNumFmtFrag(spec.yRightNumFmt);
 
   // Area series (always index 0)
   const areaColor   = (area?.fillColor   || 'E0E8F4').replace('#', '');
@@ -957,16 +1050,18 @@ ${lineXml}
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${leftScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${leftFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
       <c:valAx>
         <c:axId val="3"/>
-        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        ${rightScalingFrag}
         <c:delete val="0"/>
         <c:axPos val="r"/>
+        ${rightFmtFrag}
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
       </c:valAx>
@@ -1353,7 +1448,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
   // Helper: build a simple single-series chart spec given a chart type,
   // a value-column key (or list of candidates), and a color. period_end
   // is always the x-axis.
-  const singleSeries = (type, valKeys, color) => {
+  //
+  // R37 P2 — optional `opts` for per-template axis pinning + format:
+  //   opts.yAxisRange:  { min, max } passed straight through to valAx
+  //   opts.valAxNumFmt: Excel format string for the y axis (e.g. '0.00%')
+  const singleSeries = (type, valKeys, color, opts = {}) => {
     const periodCol = findCol('period_end');
     const valCol = findCol(...(Array.isArray(valKeys) ? valKeys : [valKeys]));
     if (!periodCol || !valCol) return null;
@@ -1365,6 +1464,8 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
         catCol: periodCol, valCol,
         dataStart, dataEnd,
         color,
+        yAxisRange:  opts.yAxisRange,
+        valAxNumFmt: opts.valAxNumFmt,
         anchor: standardAnchor,
       },
     };
@@ -1374,26 +1475,41 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
     // P2 — first migration
     case 'volume_ttm_by_quarter':
       // master_m mapper renames ttm_volume → volume_dollars in some places
-      return singleSeries('line', ['volume_dollars', 'ttm_volume'], navy);
+      return singleSeries('line', ['volume_dollars', 'ttm_volume'], navy, {
+        valAxNumFmt: VAL_FMT_CURRENCY,
+      });
 
     // P3 — simple single-series line + bar charts
     case 'cap_rate_ttm_by_quarter':
-      return singleSeries('line', 'ttm_weighted_cap_rate', navy);
+      return singleSeries('line', 'ttm_weighted_cap_rate', navy, {
+        yAxisRange: CAP_RATE_RANGE,           // 5-10% — matches renderer line ~693
+        valAxNumFmt: VAL_FMT_PERCENT_2DP,
+      });
     case 'transaction_count_ttm':
-      return singleSeries('bar', ['ttm_count', 'count'], navy);
+      return singleSeries('bar', ['ttm_count', 'count'], navy, {
+        valAxNumFmt: VAL_FMT_INTEGER,
+      });
     case 'avg_deal_size':
-      return singleSeries('bar', 'avg_deal_size', navy);
+      return singleSeries('bar', 'avg_deal_size', navy, {
+        valAxNumFmt: VAL_FMT_CURRENCY,
+      });
     case 'yoy_volume_change':
       // Renderer uses signed colors (navy positive, lighter negative).
       // Native chart XML doesn't easily express per-point conditional
       // colors — accept navy across the board for now (mirrors most-recent
       // values; negative bars still render correctly, just without the
       // red highlight). Could add point-level dPt color overrides later.
-      return singleSeries('bar', 'yoy_change_pct', navy);
+      return singleSeries('bar', 'yoy_change_pct', navy, {
+        valAxNumFmt: VAL_FMT_PERCENT_0DP,
+      });
     case 'market_turnover':
-      return singleSeries('line', 'turnover_rate', navy);
+      return singleSeries('line', 'turnover_rate', navy, {
+        valAxNumFmt: VAL_FMT_PERCENT_1DP,
+      });
     case 'quarterly_volume_bars':
-      return singleSeries('bar', 'quarterly_volume', sky);
+      return singleSeries('bar', 'quarterly_volume', sky, {
+        valAxNumFmt: VAL_FMT_CURRENCY,
+      });
 
     // P4 — stacked bar charts
     case 'lease_renewal_rate': {
@@ -1532,6 +1648,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — 4-line cohort caps: 4-11% pin (renderer line ~874)
+          yAxisRange: CAP_RATE_COHORT_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: series.map(s => ({
             titleCol: s.col, titleRow: headerRow,
             valCol: s.col,
@@ -1558,6 +1677,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — tightened cap range 5.25-9.25% (renderer line ~718)
+          yAxisRange: { min: 0.0525, max: 0.0925 },
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: nmCol,     titleRow: headerRow, valCol: nmCol,     color: navy },
             { titleCol: marketCol, titleRow: headerRow, valCol: marketCol, color: sky  },
@@ -1584,6 +1706,10 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — left integer days, right percent 85-105% (renderer ~905)
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightRange:  PCT_OF_ASK_RANGE,
+          yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
             { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky },
           ],
@@ -1611,6 +1737,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           dataStart, dataEnd,
           // R37 P1 — year x-axis (integer 2020), not quarter date.
           catAxNumFmt: '0',
+          // R37 P2 — left = lease count integers, right = rent currency.
+          // Renderer auto-pins right around the rent data ±10% — auto-scale
+          // is acceptable here since the rent range varies per dataset.
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightNumFmt: VAL_FMT_CURRENCY,
           barSeries: [
             { titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky },
           ],
@@ -1643,6 +1774,12 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — left integer count, right cap rate 5.5-7.5% pin
+          // (renderer line ~1337 — tightened from 5.5-10.0% so the cap
+          // lines fill the chart frame).
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightRange:  { min: 0.055, max: 0.075 },
+          yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky    },
             { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '4CB582' },
@@ -1705,6 +1842,10 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           type: 'scatter',
           tabName,
           dataStart, dataEnd,
+          // R37 P2 — y axis cap rate 4-12% (renderer line ~2071).
+          // X axis is sale-date — leave auto-scaled (Excel auto-fits date range).
+          yAxisRange: CAP_RATE_DOT_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series,
           anchor: standardAnchor,
         },
@@ -1787,6 +1928,11 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           type: 'scatter',
           tabName,
           dataStart, dataEnd,
+          // R37 P2 — y axis cap rate 4-12% (renderer line ~2142).
+          // X axis is firm_term_years — leave auto-scaled (term distribution
+          // varies per data set; renderer pads ±10% dynamically).
+          yAxisRange: CAP_RATE_DOT_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series,
           anchor: standardAnchor,
         },
@@ -1844,6 +1990,9 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
+          // R37 P2 — cap rate 5.5-10% pin matches renderer's CAP_RATE_BID_ASK_RANGE
+          yAxisRange: CAP_RATE_BID_ASK_RANGE,
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             // Invisible base — gets the chart off 0 up to last_ask
             { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol,
