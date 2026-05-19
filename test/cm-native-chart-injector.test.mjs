@@ -159,6 +159,21 @@ test('NATIVE_CHART_TEMPLATES: P6 combo dual-axis charts registered', () => {
   }
 });
 
+test('NATIVE_CHART_TEMPLATES: P7 scatter charts registered', () => {
+  for (const id of [
+    'core_cap_rate_dot_plot',
+    'available_cap_rate_dot_plot',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+  // rent_by_year_built DEFERRED — whisker+median+avg composite, needs
+  // floating-bar builder (P8).
+  assert.ok(
+    !NATIVE_CHART_TEMPLATES.has('rent_by_year_built'),
+    'rent_by_year_built should remain on the PNG path (deferred — composite shape)'
+  );
+});
+
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   const baseCols = [
     { key: 'period_end',   col: 'A' },
@@ -495,6 +510,48 @@ test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line comb
   );
 });
 
+test('buildInjectionSpec: core_cap_rate_dot_plot — time-based scatter (x=period_end, y=cap_rate)', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'cap_rate',        col: 'B' },
+    { key: 'firm_term_years', col: 'C' },
+    { key: 'is_northmarq',    col: 'D' },
+    { key: 'sold_price',      col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'core_cap_rate_dot_plot',
+    tabName: 'Data_Core_Cap_Dot',
+    cols, dataStart: 5, dataEnd: 500,
+    brand: { palette: { nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'scatter');
+  assert.equal(out.spec.series.length, 1, 'single dot series (trendline deferred)');
+  assert.equal(out.spec.series[0].xCol, 'A', 'x = period_end (sale date)');
+  assert.equal(out.spec.series[0].yCol, 'B', 'y = cap_rate');
+  assert.equal(out.spec.series[0].color, '62B5E5', 'sky color');
+});
+
+test('buildInjectionSpec: available_cap_rate_dot_plot — term-based scatter (x=firm_term_years, y=cap_rate)', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'cap_rate',        col: 'B' },
+    { key: 'firm_term_years', col: 'C' },
+    { key: 'is_northmarq',    col: 'D' },
+    { key: 'last_price',      col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_cap_rate_dot_plot',
+    tabName: 'Data_Avail_Cap_Dot',
+    cols, dataStart: 5, dataEnd: 200,
+    brand: { palette: { nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'scatter');
+  assert.equal(out.spec.series[0].xCol, 'C', 'x = firm_term_years (continuous)');
+  assert.equal(out.spec.series[0].yCol, 'B', 'y = cap_rate');
+});
+
 test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   // Build a tiny workbook with a Data_Lease_Renewal tab + 5 series columns
   const wb = new ExcelJS.Workbook();
@@ -691,4 +748,58 @@ test('injectNativeCharts: combo chart renders correct dual-axis XML', async () =
   // Bar fill = sky, line stroke = navy
   assert.match(barBlock,  /srgbClr val="62B5E5"/, 'bar = sky');
   assert.match(lineBlock, /srgbClr val="003DA5"/, 'line = navy');
+});
+
+test('injectNativeCharts: scatter chart renders correct xy XML', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Avail_Cap_Dot');
+  sheet.getCell('A4').value = 'As of';
+  sheet.getCell('B4').value = 'Asking Cap';
+  sheet.getCell('C4').value = 'Firm Term (yrs)';
+  // 10 sample dots: firm_term_years 5..14, cap_rate 0.060..0.085
+  for (let i = 0; i < 10; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`B${5 + i}`).value = 0.060 + i * 0.0025;
+    sheet.getCell(`C${5 + i}`).value = 5 + i;
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Avail_Cap_Dot',
+    spec: {
+      type: 'scatter',
+      tabName: 'Data_Avail_Cap_Dot',
+      dataStart: 5, dataEnd: 14,
+      series: [{
+        titleCol: 'B', titleRow: 4,
+        xCol: 'C', yCol: 'B',
+        color: '62B5E5',
+      }],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  // Scatter-specific OpenXML constructs
+  assert.match(chartXml, /<c:scatterChart>/, 'is a scatterChart');
+  assert.match(chartXml, /<c:scatterStyle val="marker"\/>/, 'scatterStyle=marker (no line)');
+
+  // Scatter series use xVal/yVal (not cat/val) — verify both refs present
+  assert.match(chartXml, /<c:xVal>[\s\S]*?\$C\$5:\$C\$14[\s\S]*?<\/c:xVal>/, 'xVal points at C5:C14 (firm_term_years)');
+  assert.match(chartXml, /<c:yVal>[\s\S]*?\$B\$5:\$B\$14[\s\S]*?<\/c:yVal>/, 'yVal points at B5:B14 (cap_rate)');
+
+  // Scatter charts should NOT have a cat axis (both axes are valAx)
+  assert.ok(!/<c:catAx>/.test(chartXml), 'no catAx (both axes continuous)');
+  const valAxCount = (chartXml.match(/<c:valAx>/g) || []).length;
+  assert.equal(valAxCount, 2, 'two valAx blocks (x continuous + y continuous)');
+
+  // Marker color (sky) present + alpha attribute for the fill (transparent dot)
+  assert.match(chartXml, /srgbClr val="62B5E5"/, 'sky color present');
+  assert.match(chartXml, /<a:alpha val="55000"\/>/, 'marker fill has alpha (semi-transparent dot)');
+  // No connecting line on the dot series
+  assert.match(chartXml, /<c:smooth val="0"\/>/, 'smooth=0');
 });
