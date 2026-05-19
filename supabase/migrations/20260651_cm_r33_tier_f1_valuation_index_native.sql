@@ -1,0 +1,135 @@
+-- =====================================================================
+-- R33 Tier F1 — migrate valuation_index combo to native Excel chart XML
+-- Closes the long-deferred R33 backlog item. Builds on R34 P9 (PR #833).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- GAP CAUGHT DURING INVESTIGATION
+-- ---------------------------------------------------------------------
+-- valuation_index slipped through the R34 migration entirely. The
+-- renderer (cm-chart-image-renderer.js ~line 1084) has been producing
+-- a combo visual (navy line + sky/amber YoY bars) since Round 20, but
+-- the template was never added to NATIVE_CHART_TEMPLATES — so it has
+-- been rendered as a PNG image in every dia + gov export despite
+-- having all the machinery needed for a native version.
+--
+-- This PR closes that gap. With this PR, valuation_index joins the
+-- 23 R34 templates → 24 total native chart objects.
+--
+-- The original R33 Tier F1 task was framed as "formula confirmation
+-- vs master Excel". The formula itself is unchanged — the Round 20
+-- combo refactor (R33 Tier B Round 20) already aligned with master
+-- deck p.17. What was missing was the editable native chart object.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATE (1 added; total now 24)
+-- ---------------------------------------------------------------------
+--   valuation_index  Combo: navy line (Valuation Index, LEFT axis) +
+--                    sky YoY% bars (RIGHT axis). Matches PDF p.17.
+--
+-- ---------------------------------------------------------------------
+-- NEW MACHINERY
+-- ---------------------------------------------------------------------
+-- buildComboChartXml gains a `swapAxes: true` option:
+--   • Default (swapAxes=false):
+--       bars  → axId 2 (LEFT primary axis)
+--       line  → axId 3 (RIGHT secondary axis, crosses=max)
+--   • swapAxes=true (this PR's first user):
+--       bars  → axId 3 (RIGHT secondary axis)
+--       line  → axId 2 (LEFT primary axis)
+--
+-- The valAx blocks themselves don't change (left axPos=l, right
+-- axPos=r); only the axId values referenced by each chart block
+-- get swapped. Mutually exclusive with sharedAxis (sharedAxis
+-- takes precedence — it suppresses the right axis entirely).
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildComboChartXml honors swapAxes (axId pair swap)
+--   • NATIVE_CHART_TEMPLATES expanded 23 → 24
+--   • buildInjectionSpec adds switch case for valuation_index:
+--       catCol  = period_end (col A)
+--       barSeries[0] sky: yoy_change (col G — fieldKeys-coalesced from
+--                          yoy_change OR yoy_change_pct by cm-excel-export)
+--       lineSeries[0] navy: valuation_index (col F)
+--       swapAxes=true (line LEFT, bars RIGHT — matches PDF p.17)
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • Registration check for valuation_index
+--   • buildInjectionSpec test asserts type=combo, swapAxes=true,
+--     correct col + color mapping for bar and line series
+--   • End-to-end XML test for swapAxes:
+--       - Bar block uses axId 1 + 3 (cat + right)
+--       - Line block uses axId 1 + 2 (cat + left)
+--       - Two val axes still present
+--       - Left axis (axId 2) axPos=l, right axis (axId 3) axPos=r
+--         with crosses=max
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 76 CM tests pass (up from 73 in P9).
+--
+-- End-to-end smoke build with 16 quarters of synthetic data confirmed:
+--   spec.type=combo, swapAxes=true
+--   barSeries: G (yoy_change), sky #62B5E5
+--   lineSeries: F (valuation_index), navy #003DA5
+--   Chart: barChart=true, lineChart=true, valAxes=2
+--   Bar uses axId 3 (right axis), Line uses axId 2 (left axis)
+--   All column refs present
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Response header X-CM-Native-Charts should reach 23-24 depending
+--    on vertical (valuation_index applies to both dia and gov)
+-- 3. Open Data_Val_Index — right-click chart → "Edit Data" + "Format
+--    Chart Area" should be ENABLED (previously greyed out as PNG)
+-- 4. Verify the visual:
+--    • Navy line for "Valuation Index" plotted against the LEFT axis
+--      (integer or currency scale, depending on view)
+--    • Sky bars for "YoY % Change" plotted against the RIGHT axis
+--      (percent scale, signed range)
+-- 5. Try editing one of the YoY % cells in col G — the bar height
+--    should update live (proves it's a real native chart).
+--
+-- ---------------------------------------------------------------------
+-- KNOWN VISUAL DIFFERENCE
+-- ---------------------------------------------------------------------
+-- PNG renderer colors negative YoY bars amber (#D97706) and positive
+-- ones sky (#62B5E5). Native chart uses uniform sky for all bars —
+-- same limitation as yoy_volume_change (P3) since native Excel charts
+-- can't easily express per-data-point colors via solidFill alone.
+-- Per-point coloring would require <c:dPt> overrides for every negative
+-- value at chart-build time. Negative bars still render correctly in
+-- their downward direction, just without the color highlight.
+--
+-- ---------------------------------------------------------------------
+-- REMAINING R33 BACKLOG
+-- ---------------------------------------------------------------------
+-- Tier E1 — Add Rent_Price_PSF chart for dia
+--   Currently blocked: dia clinics rarely transact on $/SF basis
+--   (sale comp value is per-clinic + cap-rate-driven, per the
+--   2026-05-06 audit in migration 20260512_cm_chart_catalog_hygiene).
+--   rent_per_sf has ~33% coverage on dia leases but price_per_sf
+--   doesn't exist for dia. Would need either:
+--     (a) Synthesize price_per_sf from per-clinic price + estimated SF
+--     (b) Ship rent-only single-bar chart instead of the combo
+--     (c) Defer permanently — dia already has rent_and_price_per_chair
+--   This is a product/data-shape decision, not just a code change.
+--
+-- Tier E2 — Core_Cap_Dot trendline review vs master
+--   Native chart now has a 12-month rolling-avg trendline (shipped
+--   in R34 P7.5). Master deck shows a different trendline shape —
+--   the dia master template has TWO scatter series on the Core Cap
+--   Chart sheet (rows 3-630 dot cloud + rows 637-699 "DDP" trend),
+--   suggesting a ~63-point monthly-binned aggregation rather than
+--   per-sale rolling. Possible upgrade path: write monthly-binned
+--   helper rows beneath the per-sale data and reference them as a
+--   2nd scatter series with showLine=true. Defer until user confirms
+--   the current 12-mo rolling avg trendline visual is unacceptable.
+-- =====================================================================
