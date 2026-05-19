@@ -201,12 +201,23 @@ function buildStackedBarChartXml(spec) {
     // P8 — `noFill` flag makes a series transparent. Used to build
     // floating-bar visuals: invisible base stack + visible top stack.
     // <a:noFill/> on the fill + <a:noFill/> on the line border.
+    //
+    // R35 P4 — `alpha` flag (string '0'..'100000') applies a transparency
+    // to the fill color. Used by cost_of_capital for the pale gray
+    // mortgage-constant band (renderer's rgba(106,116,140,0.12) → 12% alpha).
+    // Optional `borderColor` lets the bar have a visible border distinct
+    // from its fill (matches the renderer's idiom of pale fill + solid border).
+    const alphaFrag = s.alpha ? `<a:alpha val="${s.alpha}"/>` : '';
     const fillFrag = s.noFill
       ? `<a:noFill/>`
-      : `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>`;
-    const lineFrag = s.noFill
-      ? `<a:ln><a:noFill/></a:ln>`
-      : '';
+      : `<a:solidFill><a:srgbClr val="${color}">${alphaFrag}</a:srgbClr></a:solidFill>`;
+    let lineFrag = '';
+    if (s.noFill) {
+      lineFrag = `<a:ln><a:noFill/></a:ln>`;
+    } else if (s.borderColor) {
+      const borderColor = s.borderColor.replace('#', '');
+      lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
+    }
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -403,12 +414,19 @@ function buildComboChartXml(spec) {
   const barXml = barSeries.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // P8.5 — `noFill` flag on bar series (invisible base for floating bars)
+    // R35 P4 — `alpha` (string '0'..'100000') + `borderColor` for pale-fill
+    // bars with a distinct border (cost_of_capital mortgage band).
+    const alphaFrag = s.alpha ? `<a:alpha val="${s.alpha}"/>` : '';
     const fillFrag = s.noFill
       ? `<a:noFill/>`
-      : `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>`;
-    const lineFrag = s.noFill
-      ? `<a:ln><a:noFill/></a:ln>`
-      : '';
+      : `<a:solidFill><a:srgbClr val="${color}">${alphaFrag}</a:srgbClr></a:solidFill>`;
+    let lineFrag = '';
+    if (s.noFill) {
+      lineFrag = `<a:ln><a:noFill/></a:ln>`;
+    } else if (s.borderColor) {
+      const borderColor = s.borderColor.replace('#', '');
+      lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
+    }
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -637,6 +655,192 @@ ${seriesXml}
 </c:chartSpace>`;
 }
 
+/**
+ * Generate an area + bar + line combo chart — three chart blocks in one
+ * plot area, sharing the cat axis but using two value axes.
+ *
+ * Used for volume_cap_quartile_combo (PDF p.19 dia / p.11 gov): light
+ * blue shaded area (TTM Volume on left axis) BEHIND vertical range
+ * bars (cap quartile spread) WITH dots (TTM avg cap) on top — all on
+ * one chart with two value axes.
+ *
+ * OpenXML axis wiring:
+ *   axId=1   shared cat axis (bottom)
+ *   axId=2   left val axis  — used by areaChart (large $ values)
+ *   axId=3   right val axis — used by both barChart + lineChart
+ *                              (cap-rate %, crosses=max)
+ *
+ * Block order matters for z-order: area first (back), bars middle,
+ * line last (front, dots on top).
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName
+ * @param {string} spec.catCol         x-axis column
+ * @param {number} spec.dataStart      first data row (1-indexed)
+ * @param {number} spec.dataEnd        last data row (inclusive)
+ * @param {object} spec.areaSeries     { titleCol, titleRow, valCol, fillColor, borderColor }
+ *                                     One area series on the LEFT axis.
+ * @param {Array}  spec.barSeries      List of { titleCol, titleRow, valCol, color, [noFill], [alpha], [borderColor] }
+ *                                     Bar series on the RIGHT axis. Stacked
+ *                                     grouping with overlap=100 — caller is
+ *                                     responsible for emitting an invisible
+ *                                     base + visible band if they want a
+ *                                     floating range bar.
+ * @param {Array}  spec.lineSeries     List of { titleCol, titleRow, valCol, color, [showMarker], [markerShape], [markerSize], [dashed] }
+ *                                     Line series on the RIGHT axis (shared
+ *                                     with bars).
+ * @returns {string} chart XML
+ */
+function buildAreaComboChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const area  = spec.areaSeries;
+  const bars  = spec.barSeries || [];
+  const lines = spec.lineSeries || [];
+
+  // Area series (always index 0)
+  const areaColor   = (area?.fillColor   || 'E0E8F4').replace('#', '');
+  const areaBorder  = (area?.borderColor || '003DA5').replace('#', '');
+  const areaXml = area ? `        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${area.titleCol}$${area.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="${areaColor}"/></a:solidFill>
+            <a:ln w="22225"><a:solidFill><a:srgbClr val="${areaBorder}"/></a:solidFill></a:ln>
+          </c:spPr>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${area.valCol}$${spec.dataStart}:$${area.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+        </c:ser>` : '';
+
+  // Bar series — indices continue from 1 (after area)
+  const barXml = bars.map((s, i) => {
+    const idx = 1 + i;
+    const color = (s.color || '003DA5').replace('#', '');
+    const alphaFrag = s.alpha ? `<a:alpha val="${s.alpha}"/>` : '';
+    const fillFrag = s.noFill
+      ? `<a:noFill/>`
+      : `<a:solidFill><a:srgbClr val="${color}">${alphaFrag}</a:srgbClr></a:solidFill>`;
+    let lineFrag = '';
+    if (s.noFill) {
+      lineFrag = `<a:ln><a:noFill/></a:ln>`;
+    } else if (s.borderColor) {
+      const bc = s.borderColor.replace('#', '');
+      lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${bc}"/></a:solidFill></a:ln>`;
+    }
+    return `        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>${fillFrag}${lineFrag}</c:spPr>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+        </c:ser>`;
+  }).join('\n');
+
+  // Line series — indices continue from (1 + bars.length)
+  const lineXml = lines.map((s, i) => {
+    const idx = 1 + bars.length + i;
+    const color = (s.color || '003DA5').replace('#', '');
+    if (s.showMarker) {
+      const shape = s.markerShape || 'circle';
+      const size = s.markerSize || 5;
+      return `        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:marker>
+            <c:symbol val="${shape}"/>
+            <c:size val="${size}"/>
+            <c:spPr>
+              <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
+              <a:ln><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
+            </c:spPr>
+          </c:marker>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+    }
+    const dashFrag = s.dashed ? `<a:prstDash val="dash"/>` : '';
+    return `        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr>
+            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
+          </c:spPr>
+          <c:marker><c:symbol val="none"/></c:marker>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+  }).join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:areaChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${areaXml}
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:areaChart>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="stacked"/>
+        <c:varyColors val="0"/>
+${barXml}
+        <c:gapWidth val="60"/>
+        <c:overlap val="100"/>
+        <c:axId val="1"/>
+        <c:axId val="3"/>
+      </c:barChart>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${lineXml}
+        <c:marker val="${lines.some(s => s.showMarker) ? 1 : 0}"/>
+        <c:axId val="1"/>
+        <c:axId val="3"/>
+      </c:lineChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+      <c:valAx>
+        <c:axId val="3"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="r"/>
+        <c:crossAx val="1"/>
+        <c:crosses val="max"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="b"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -756,6 +960,9 @@ export async function injectNativeCharts(buffer, injections) {
       chartXml = buildMultiLineChartXml(spec);
     } else if (spec.type === 'combo') {
       chartXml = buildComboChartXml(spec);
+    } else if (spec.type === 'area-combo') {
+      // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
+      chartXml = buildAreaComboChartXml(spec);
     } else if (spec.type === 'scatter') {
       chartXml = buildScatterChartXml(spec);
     } else {
@@ -830,6 +1037,7 @@ export {
   buildStackedBarChartXml,
   buildMultiLineChartXml,
   buildComboChartXml,
+  buildAreaComboChartXml,
   buildScatterChartXml,
   buildDrawingXml,
 };
@@ -931,6 +1139,10 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // R35 P3 — final 2 simple-shape missed templates from audit.
   'buyer_class_pct_by_year',        // annual stacked bar (Private / REIT / Cross-Border / Institutional)
   'renewal_rent_growth',            // single-bar Renewal Rent / SF
+  // R35 P4 — final 2 complex composites. After this PR, 100% of the
+  // active-catalog chart_template_ids are native.
+  'cost_of_capital',                // 2 lines + floating gray range bar (sharedAxis combo)
+  'volume_cap_quartile_combo',      // area + range bars + dots (area-combo)
   // ppsf_box_quarterly was DELETED from the active catalog in Round 6h
   // (supabase migration 20260601_cm_catalog_drop_8_view_less_rows_round6h.sql)
   // — no view ever shipped, no exports ever produced it. The static JSON
@@ -2056,6 +2268,143 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       // Sky bars, currency Y-axis. The quartile whisker + CAGR dots
       // were moved to cpi_vs_renewal_cagr in R33 Tier D.
       return singleSeries('bar', 'avg_renewal_rent_psf', sky);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // R35 P4 — final 2 complex composites. After this case lands, 100%
+    // of active-catalog chart_template_ids are native.
+    // ────────────────────────────────────────────────────────────────
+
+    case 'cost_of_capital': {
+      // Renderer at cm-chart-image-renderer.js ~line 1166 (PDF p.23
+      // dia / p.15 gov):
+      //   • Pale gray floating range bar [low_loan, high_loan]
+      //   • Sky line:  treasury_10y_yield
+      //   • Navy line: avg_cap_rate
+      //   • Single Y-axis (all series in 0-10% range)
+      //
+      // Native decomposition reuses the existing combo with stacked
+      // bars + invisible base + sharedAxis (no right axis):
+      //   barSeries[0] noFill=true: low_loan_constant (col E)
+      //   barSeries[1] visible pale gray w/ darker gray border:
+      //                helper col loan_band_width = high - low (col G)
+      //   lineSeries[0] sky:  treasury_10y_yield (col B)
+      //   lineSeries[1] navy: avg_cap_rate (col C)
+      //
+      // Renderer skips the 3rd "10+ Year Cap" line (cap_10plus_year is
+      // in the data tab but not plotted). Native matches that.
+      const periodCol  = findCol('period_end');
+      const lowCol     = findCol('low_loan_constant');
+      const highCol    = findCol('high_loan_constant');
+      const treasCol   = findCol('treasury_10y_yield');
+      const capCol     = findCol('avg_cap_rate');
+      if (!periodCol || !lowCol || !highCol || !treasCol || !capCol) return null;
+
+      const bandCol = String.fromCharCode(65 + cols.length);  // helper col letter
+      const GRAY = '6A748C';  // nm_axis
+
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          barGrouping: 'stacked',
+          sharedAxis: true,  // band + lines all on the same val axis (0-10%)
+          barSeries: [
+            // Invisible base — lifts the band off 0 up to low_loan_constant
+            { titleCol: lowCol,  titleRow: headerRow, valCol: lowCol,
+              color: GRAY, noFill: true },
+            // Visible band — pale gray fill with solid gray border
+            // (matches renderer's rgba(106,116,140,0.12) fill + #6A748C border)
+            { titleCol: bandCol, titleRow: headerRow, valCol: bandCol,
+              color: GRAY, alpha: '12000', borderColor: GRAY },
+          ],
+          lineSeries: [
+            { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
+            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+        helperCols: [{
+          key: 'loan_band_width',
+          header: 'Loan Constant Band Width',
+          format: 'percent_basis_points',
+          width: 24,
+          getValue: (row) => {
+            const lo = row.low_loan_constant;
+            const hi = row.high_loan_constant;
+            return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
+          },
+        }],
+      };
+    }
+
+    case 'volume_cap_quartile_combo': {
+      // Renderer at cm-chart-image-renderer.js ~line 1426 (PDF p.19
+      // dia / p.11 gov). Three distinct visualization layers:
+      //   1. LIGHT BLUE SHADED AREA (back, left axis $) — TTM volume
+      //   2. PALE SKY FLOATING BARS (middle, right axis %) — Q1-Q3 cap range
+      //   3. NAVY DOTS (front, right axis %) — TTM avg cap rate
+      //
+      // Native decomposition uses the new 'area-combo' dispatch:
+      //   areaSeries: volume_dollars (col C) — pale fill, navy border, LEFT
+      //   barSeries[0] noFill=true:  lower_quartile (col F)
+      //   barSeries[1] pale sky 25% alpha w/ sky border:
+      //                              iqr_width helper (col G) = upper - lower
+      //   lineSeries[0] navy circle markers (no line):
+      //                              cap_rate (col D), shows on top
+      const periodCol  = findCol('period_end');
+      const volCol     = findCol('volume_dollars');
+      const capCol     = findCol('cap_rate');
+      const upperCol   = findCol('upper_quartile');
+      const lowerCol   = findCol('lower_quartile');
+      if (!periodCol || !volCol || !capCol || !upperCol || !lowerCol) return null;
+
+      const iqrCol = String.fromCharCode(65 + cols.length);  // helper col letter
+      const pale = (palette.nm_pale || '#E0E8F4').replace('#', '');
+
+      return {
+        tabName,
+        spec: {
+          type: 'area-combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          areaSeries: {
+            titleCol: volCol, titleRow: headerRow, valCol: volCol,
+            fillColor: pale,     // pale blue fill
+            borderColor: navy,   // navy border on the area edge
+          },
+          barSeries: [
+            // Invisible base — lifts the IQR bar off 0 up to lower_quartile
+            { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
+              color: sky, noFill: true },
+            // Visible IQR band — pale sky 25% alpha w/ solid sky border
+            // (matches renderer's rgba(98,181,229,0.25) fill + sky border)
+            { titleCol: iqrCol, titleRow: headerRow, valCol: iqrCol,
+              color: sky, alpha: '25000', borderColor: sky },
+          ],
+          lineSeries: [
+            // Avg cap rate dots — navy circle markers, no connecting line
+            { titleCol: capCol, titleRow: headerRow, valCol: capCol,
+              color: navy, showMarker: true, markerShape: 'circle', markerSize: 5 },
+          ],
+          anchor: standardAnchor,
+        },
+        helperCols: [{
+          key: 'iqr_width',
+          header: 'Quartile Range Width',
+          format: 'percent_basis_points',
+          width: 22,
+          getValue: (row) => {
+            const lo = row.lower_quartile;
+            const hi = row.upper_quartile;
+            return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
+          },
+        }],
+      };
     }
 
     default:
