@@ -1,0 +1,115 @@
+-- =====================================================================
+-- Round 34 P6 — migrate combo dual-axis charts to native Excel chart XML
+-- Builds on the R34 P5 multi-line migration (PR #827).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (4 added; total now 17)
+-- ---------------------------------------------------------------------
+--   1. dom_and_pct_of_ask              combo: bar avg_dom + line pct_of_ask
+--   2. dom_and_pct_of_ask_monthly      combo: same shape, monthly cadence
+--   3. case_for_renewal                combo: bar commencements + line rent/SF
+--                                      (x-axis is `year`, not period_end)
+--   4. available_market_size_combo     combo: 2 bars (count) + 2 lines (cap)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildComboChartXml(spec) — emits BOTH <c:barChart> and <c:lineChart>
+--     blocks sharing the categorical x-axis but using distinct value-axis
+--     ids. OpenXML axis wiring:
+--       axId=1   shared cat axis (bottom)
+--       axId=2   primary val axis (left), used by barChart
+--       axId=3   secondary val axis (right), used by lineChart, crosses=max
+--     Series idx values are unique across both blocks (bar 0..N, then
+--     line N..N+M) — Excel relies on global uniqueness.
+--   • injectNativeCharts dispatches spec.type === 'combo'
+--   • NATIVE_CHART_TEMPLATES expanded from 13 → 17
+--
+-- Per-template specs:
+--   dom_and_pct_of_ask + _monthly:
+--     bar  = avg_dom        color sky    (palette[3])
+--     line = pct_of_ask     color navy   (palette[0])
+--   case_for_renewal:
+--     catCol = year (not period_end)
+--     bar  = commencement_count  color sky
+--     line = avg_rent_per_sf     color navy
+--   available_market_size_combo:
+--     bars  = count_total (sky)    + count_core_10plus (sage #4CB582)
+--     lines = avg_cap_total (navy) + avg_cap_core_10plus (amber #D97706)
+--
+-- Colors match cm-chart-image-renderer.js so editable charts visually
+-- match the PDF renderer's PNG output.
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • Registration check for the 4 new templates
+--   • buildInjectionSpec tests:
+--       - dom_and_pct_of_ask     → 1 bar (col C) + 1 line (col E)
+--       - dom_and_pct_of_ask_mo  → 1 bar (col D — different layout) + 1 line (col E)
+--       - case_for_renewal       → catCol='A' (year), bar (col B) + line (col C)
+--       - available_market_size  → 2 bars (C/D, sky/sage) + 2 lines (E/F, navy/amber)
+--   • End-to-end XML test:
+--       - chart contains both <c:barChart> and <c:lineChart> blocks
+--       - bar block uses axId 1+2, line block uses axId 1+3
+--       - 2 valAx blocks (left axPos=l axId=2; right axPos=r axId=3 crosses=max)
+--       - series idx values are unique across blocks ([0, 1])
+--       - bar fill = sky, line stroke = navy
+--       - legend present
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 56 CM tests pass (up from 50 in P5).
+--
+-- End-to-end build with all 4 combo charts produced:
+--   chart1 (dom_and_pct_of_ask):        1 bar + 1 line, 2 series, 2 valAxes
+--   chart2 (dom_and_pct_of_ask_monthly): 1 bar + 1 line, 2 series, 2 valAxes
+--   chart3 (case_for_renewal):          1 bar + 1 line, 2 series, 2 valAxes
+--   chart4 (available_market_size_combo): 1 bar + 1 line, 4 series, 2 valAxes
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Check response header: X-CM-Native-Charts should reach 14-17
+--    (depending on vertical)
+-- 3. In Excel, right-click these tabs' charts — "Edit Data" +
+--    "Format Chart Area" should be ENABLED:
+--       Data_DOM_Ask                (1-bar + 1-line)
+--       Data_DOM_Ask_Monthly        (1-bar + 1-line)
+--       Data_Case_For_Renewal       (1-bar + 1-line, year x-axis)
+--       Data_Available_Market       (2-bar + 2-line)
+-- 4. Verify the bars sit on the LEFT axis (count / days) and the lines
+--    sit on the RIGHT axis (% of Ask / cap rate / rent PSF). Native
+--    Excel auto-scales each axis independently — values should fill
+--    their respective panels.
+-- 5. Verify color mapping matches the PDF (sky bars, navy lines for
+--    the simple combos; sky/sage bars + navy/amber lines for the
+--    market_size_combo).
+--
+-- ---------------------------------------------------------------------
+-- KNOWN GAP: y-axis range tightening
+-- ---------------------------------------------------------------------
+-- The PNG renderer tightens specific axis ranges manually (e.g.
+-- PCT_OF_ASK_RANGE = 0.84..0.96 for dom_and_pct_of_ask; rent range
+-- 2x rounded floor/ceil for case_for_renewal; 0.055..0.075 for
+-- available_market_size_combo). Native Excel auto-scales by default.
+-- Auto-scale usually works fine for these data shapes, but if the
+-- visual squashing is noticeable post-deploy we can add explicit
+-- <c:min>/<c:max> elements to the <c:scaling> blocks via per-template
+-- range hints on the spec.
+--
+-- ---------------------------------------------------------------------
+-- NEXT (R34 P7)
+-- ---------------------------------------------------------------------
+-- Scatter charts — true x/y point clouds, not category-based:
+--   • core_cap_rate_dot_plot           closed-sale scatter, cap vs term
+--   • available_cap_rate_dot_plot      active-listing scatter
+--   • rent_by_year_built               rent PSF scatter with whiskers
+-- Needs a new buildScatterChartXml(spec) emitting <c:scatterChart> with
+-- <c:scatterStyle val="marker"/>. Different OpenXML shape than the
+-- categorical charts done so far — series have <c:xVal> + <c:yVal>
+-- instead of <c:cat> + <c:val>.
+-- =====================================================================
