@@ -1386,6 +1386,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         dataStart,
         dataEnd: dataRowIdx - 1,
         brand,
+        // R34 P5 — pass actual data rows so cohort templates
+        // (cap_rate_by_lease_term, *_cap_by_term_dot_plot) can sniff
+        // dia vs gov cohorts the same way the renderer does.
+        rows: chart.rows || [],
       });
       if (spec) nativeInjections.push(spec);
     }

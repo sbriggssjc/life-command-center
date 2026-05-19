@@ -131,6 +131,23 @@ test('NATIVE_CHART_TEMPLATES: P4 stacked-bar charts registered', () => {
   );
 });
 
+test('NATIVE_CHART_TEMPLATES: P5 multi-line charts registered', () => {
+  for (const id of [
+    'cap_rate_by_lease_term',
+    'nm_vs_market_cap',
+    'sold_cap_by_term_dot_plot',
+    'asking_cap_by_term_dot_plot',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  }
+  // net_lease_spread DEFERRED — renderer references cap_10plus_year which
+  // isn't in the Data_NL_Spread tab.
+  assert.ok(
+    !NATIVE_CHART_TEMPLATES.has('net_lease_spread'),
+    'net_lease_spread should remain on the PNG path (deferred — data-shape mismatch)'
+  );
+});
+
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   const baseCols = [
     { key: 'period_end',   col: 'A' },
@@ -225,6 +242,141 @@ test('buildInjectionSpec: buyer_pool_monthly_count builds 3-series stacked-bar',
   );
 });
 
+test('buildInjectionSpec: nm_vs_market_cap builds 2-series multi-line', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'subspecialty',    col: 'B' },
+    { key: 'nm_cap_rate',     col: 'C' },
+    { key: 'market_cap_rate', col: 'D' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'nm_vs_market_cap',
+    tabName: 'Data_NM_vs_Market',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.series.length, 2);
+  assert.deepEqual(
+    out.spec.series.map(s => s.valCol),
+    ['C', 'D'],
+    'series point at nm_cap_rate and market_cap_rate columns'
+  );
+  assert.deepEqual(
+    out.spec.series.map(s => s.color),
+    ['003DA5', '62B5E5'],
+    'NM navy first, Market sky second'
+  );
+});
+
+test('buildInjectionSpec: cap_rate_by_lease_term — dia 4-cohort detection', () => {
+  // Both cohort schemes present in cols (matches the actual data tab).
+  const cols = [
+    { key: 'period_end',       col: 'A' },
+    { key: 'subspecialty',     col: 'B' },
+    { key: 'cap_10plus',       col: 'C' },
+    { key: 'cap_6to10',        col: 'D' },
+    { key: 'cap_less5',        col: 'E' },
+    { key: 'cap_outside_firm', col: 'F' },
+    { key: 'cap_12plus',       col: 'G' },
+    { key: 'cap_8to12',        col: 'H' },
+    { key: 'cap_6to8',         col: 'I' },
+    { key: 'cap_5orless',      col: 'J' },
+  ];
+  // Dialysis-shaped data row → picks the 12+/8-12/6-8/≤5 branch
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_lease_term',
+    tabName: 'Data_Cap_by_Term',
+    cols, dataStart: 5, dataEnd: 50,
+    brand: { palette: {} },
+    rows: [{ cap_12plus: 0.062, cap_8to12: 0.065, cap_6to8: 0.069, cap_5orless: 0.075 }],
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.series.length, 4, '4 dialysis cohorts');
+  assert.deepEqual(
+    out.spec.series.map(s => s.valCol),
+    ['G', 'H', 'I', 'J'],
+    'series point at dia cohort columns (cap_12plus..cap_5orless)'
+  );
+  assert.deepEqual(
+    out.spec.series.map(s => s.color),
+    ['7E6BAD', '4CB582', '62B5E5', '003DA5'],
+    'colors: purple / sage / sky / navy'
+  );
+  // No dashed lines on the dia branch
+  assert.ok(out.spec.series.every(s => !s.dashed), 'no dashed series on dia');
+});
+
+test('buildInjectionSpec: cap_rate_by_lease_term — gov 4-cohort with dashed Outside', () => {
+  const cols = [
+    { key: 'period_end',       col: 'A' },
+    { key: 'subspecialty',     col: 'B' },
+    { key: 'cap_10plus',       col: 'C' },
+    { key: 'cap_6to10',        col: 'D' },
+    { key: 'cap_less5',        col: 'E' },
+    { key: 'cap_outside_firm', col: 'F' },
+    { key: 'cap_12plus',       col: 'G' },
+    { key: 'cap_8to12',        col: 'H' },
+    { key: 'cap_6to8',         col: 'I' },
+    { key: 'cap_5orless',      col: 'J' },
+  ];
+  // Gov-shaped data row → picks the 10+/6-10/<5/Outside branch
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_lease_term',
+    tabName: 'Data_Cap_by_Term',
+    cols, dataStart: 5, dataEnd: 50,
+    brand: { palette: {} },
+    rows: [{ cap_10plus: 0.062, cap_6to10: 0.068, cap_less5: 0.075, cap_outside_firm: 0.085 }],
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.series.length, 4, '4 gov cohorts');
+  assert.deepEqual(
+    out.spec.series.map(s => s.valCol),
+    ['C', 'D', 'E', 'F'],
+    'series point at gov cohort columns'
+  );
+  assert.deepEqual(
+    out.spec.series.map(s => s.color),
+    ['7E6BAD', '4CB582', '003DA5', '6A748C'],
+    'colors: purple / sage / navy / gray'
+  );
+  // Outside Firm (last series, gray) is dashed
+  assert.equal(out.spec.series[3].dashed, true, 'Outside Firm series is dashed');
+  assert.ok(out.spec.series.slice(0, 3).every(s => !s.dashed), 'first 3 series solid');
+});
+
+test('buildInjectionSpec: sold_cap_by_term_dot_plot — gov uses cap_5to10 (not cap_6to10)', () => {
+  // sold_cap_by_term's gov cohort uses cap_5to10 (different from cap_rate_by_lease_term).
+  const cols = [
+    { key: 'period_end',       col: 'A' },
+    { key: 'subspecialty',     col: 'B' },
+    { key: 'cap_12plus',       col: 'C' },
+    { key: 'cap_8to12',        col: 'D' },
+    { key: 'cap_6to8',         col: 'E' },
+    { key: 'cap_5orless',      col: 'F' },
+    { key: 'cap_10plus',       col: 'G' },
+    { key: 'cap_5to10',        col: 'H' },  // ← different key name vs cap_rate_by_lease_term
+    { key: 'cap_less5',        col: 'I' },
+    { key: 'cap_outside_firm', col: 'J' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'sold_cap_by_term_dot_plot',
+    tabName: 'Data_Sold_Cap_by_Term',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: {} },
+    rows: [{ cap_10plus: 0.06, cap_5to10: 0.07, cap_less5: 0.08, cap_outside_firm: 0.09 }],
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.deepEqual(
+    out.spec.series.map(s => s.valCol),
+    ['G', 'H', 'I', 'J'],
+    'series point at gov cohort columns including cap_5to10'
+  );
+});
+
 test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   // Build a tiny workbook with a Data_Lease_Renewal tab + 5 series columns
   const wb = new ExcelJS.Workbook();
@@ -287,5 +439,68 @@ test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   assert.match(chartXml, /'Data_Lease_Renewal'!\$B\$6:\$B\$11/, 'first series points at B6:B11');
   assert.match(chartXml, /'Data_Lease_Renewal'!\$F\$6:\$F\$11/, 'last series points at F6:F11');
   // Legend should be visible for stacked bar (multi-series)
+  assert.match(chartXml, /<c:legend>/, 'has legend');
+});
+
+test('injectNativeCharts: multi-line cohort chart renders correct XML (gov dashed Outside)', async () => {
+  // Build a tiny workbook with a Data_Cap_by_Term tab + gov cohort columns
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Cap_by_Term');
+  sheet.getCell('A4').value = 'Quarter End';
+  sheet.getCell('B4').value = 'Subspecialty';
+  sheet.getCell('C4').value = '10+ Year Cap';
+  sheet.getCell('D4').value = '6-10 Year Cap';
+  sheet.getCell('E4').value = '< 5 Year Cap';
+  sheet.getCell('F4').value = 'Outside Firm Cap';
+  for (let i = 0; i < 8; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 28);
+    sheet.getCell(`B${5 + i}`).value = 'Gov';
+    sheet.getCell(`C${5 + i}`).value = 0.062 + i * 0.001;
+    sheet.getCell(`D${5 + i}`).value = 0.068 + i * 0.001;
+    sheet.getCell(`E${5 + i}`).value = 0.075 + i * 0.0015;
+    sheet.getCell(`F${5 + i}`).value = 0.085 + i * 0.0008;
+  }
+  const base = await wb.xlsx.writeBuffer();
+
+  const injections = [{
+    tabName: 'Data_Cap_by_Term',
+    spec: {
+      type: 'multi-line',
+      tabName: 'Data_Cap_by_Term',
+      catCol: 'A',
+      dataStart: 5, dataEnd: 12,
+      series: [
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '7E6BAD' },                  // 10+
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '4CB582' },                  // 6-10
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5' },                  // <5
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '6A748C', dashed: true },   // Outside
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }];
+
+  const result = await injectNativeCharts(base, injections);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+
+  assert.match(chartXml, /<c:lineChart>/, 'is a lineChart');
+  assert.match(chartXml, /<c:grouping val="standard"\/>/, 'grouping=standard (not stacked)');
+  const serCount = (chartXml.match(/<c:ser>/g) || []).length;
+  assert.equal(serCount, 4, '4 series in multi-line');
+  for (const color of ['7E6BAD', '4CB582', '003DA5', '6A748C']) {
+    assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `color ${color} present`);
+  }
+  // Outside Firm series (dashed) should have <a:prstDash val="dash"/>
+  assert.match(chartXml, /<a:prstDash val="dash"\/>/, 'Outside Firm series is dashed');
+  // Only ONE dashed series — count occurrences
+  const dashCount = (chartXml.match(/<a:prstDash val="dash"\/>/g) || []).length;
+  assert.equal(dashCount, 1, 'exactly one dashed series (Outside Firm)');
+  // Series reference correct ranges
+  assert.match(chartXml, /'Data_Cap_by_Term'!\$C\$5:\$C\$12/, 'first series points at C5:C12');
+  assert.match(chartXml, /'Data_Cap_by_Term'!\$F\$5:\$F\$12/, 'last series points at F5:F12');
+  // Markers off for line cohort series (pointRadius:0 equivalent)
+  assert.match(chartXml, /<c:symbol val="none"\/>/, 'markers off');
+  // Legend visible (multi-series)
   assert.match(chartXml, /<c:legend>/, 'has legend');
 });
