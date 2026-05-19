@@ -1,0 +1,85 @@
+-- =====================================================================
+-- Round 34 P3 — migrate 6 simple line + bar charts to native Excel
+-- chart XML. Builds on the R34 P2 scaffold (PR #824).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (6 added; total now 7)
+-- ---------------------------------------------------------------------
+--   1. cap_rate_ttm_by_quarter   line  → Avg Cap Rate TTM
+--   2. transaction_count_ttm     bar   → TTM Transactions
+--   3. avg_deal_size             bar   → Avg Deal Size $
+--   4. yoy_volume_change         bar   → YoY Change %
+--   5. market_turnover           line  → Turnover Rate
+--   6. quarterly_volume_bars     bar   → Quarterly Volume
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildSingleBarChartXml(spec) — new XML builder for the bar shape
+--     (clustered, single series, signed-zero support, gapWidth=60)
+--   • injectNativeCharts now dispatches by spec.type: 'bar' → barChart,
+--     'line' (default) → lineChart
+--   • NATIVE_CHART_TEMPLATES expanded from 1 → 7
+--   • buildInjectionSpec rewritten as a switch with a singleSeries()
+--     helper that maps a chart_template_id + workbook column layout
+--     into an injection spec. Handles fallback keys (e.g. ttm_volume
+--     vs volume_dollars after master_m mapper renames).
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • Test: NATIVE_CHART_TEMPLATES includes all 7 migrated templates
+--   • Test: buildInjectionSpec dispatches bar vs line correctly +
+--     returns null for unknown templates
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- End-to-end test building all 7 charts together produced a workbook
+-- with:
+--   - 7 chart objects (chart1.xml through chart7.xml)
+--   - 0 embedded PNG images
+--   - Correct chart type per tab (lineChart for line shapes,
+--     barChart for bar shapes)
+--   - Each chart's data refs point at its own Data_* tab
+--
+-- All 40 CM tests pass.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Check response header: X-CM-Native-Charts: should be 7 (or more
+--    if any chart_template_ids from prior phases are inapplicable to
+--    that vertical)
+-- 3. In Excel, right-click each of the following tabs' charts —
+--    "Edit Data" + "Format Chart Area" should be ENABLED:
+--       Data_Volume_TTM
+--       Data_Cap_Avg
+--       Data_Txn_Count
+--       Data_Avg_Deal
+--       Data_YoY_Change
+--       Data_Market_Turnover
+--       Data_Volume_Quarterly
+-- 4. All other tabs still show PNGs — those migrate in P4-P6 follow-ups
+--
+-- ---------------------------------------------------------------------
+-- KNOWN GAP: yoy_volume_change conditional bar colors
+-- ---------------------------------------------------------------------
+-- The PNG renderer colors YoY bars navy (positive) / lighter (negative).
+-- Native Excel charts don't easily express per-data-point conditional
+-- colors via the standard <c:spPr> approach. Skipping for now —
+-- accept all-navy bars in the native chart; negative bars still
+-- render correctly (just no color highlight). Can add per-point
+-- <c:dPt> color overrides in a follow-up if user requests.
+--
+-- ---------------------------------------------------------------------
+-- NEXT (R34 P4)
+-- ---------------------------------------------------------------------
+-- Stacked bar + area shapes:
+--   • lease_renewal_rate         stacked bar (5 series)
+--   • buyer_pool_monthly_count   stacked bar (3 series)
+--   • lease_termination_rate     stacked bar (2 series)
+--   • yoy_volume_change          stays bar (P3) — or upgrade if combo
+-- =====================================================================
