@@ -1,0 +1,105 @@
+-- =====================================================================
+-- Round 34 P7.5 — add trendlines to the scatter dot plots.
+-- Builds on the R34 P8.5 helper-column infrastructure (PR #831).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- UPGRADES (no new templates, just better visuals)
+-- ---------------------------------------------------------------------
+--   1. core_cap_rate_dot_plot       + 12-month rolling-avg trendline
+--   2. available_cap_rate_dot_plot  + linear regression trendline (dashed)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildScatterChartXml now supports per-series `showLine: true` and
+--     `dashed: true` flags. When showLine=true:
+--       - <a:ln> has solidFill (visible line) instead of <a:noFill/>
+--       - Optional <a:prstDash val="dash"/> for the regression line
+--       - <c:marker><c:symbol val="none"/> (markers off)
+--     Default behavior (markers, no line) is unchanged for the dot-cloud
+--     series — backward compatible with the P7 spec shape.
+--   • core_cap_rate_dot_plot switch case:
+--       - Pre-extracts valid {t, y} pairs from rows for fast lookup
+--       - 2nd scatter series with showLine=true, navy, NOT dashed
+--       - helperCols declares `trendline_12mo` with getValue() that
+--         averages cap_rate over rows within ±182 days of each row's
+--         period_end (mirrors cm-chart-image-renderer.js line ~2033)
+--   • available_cap_rate_dot_plot switch case:
+--       - Pre-computes (m, b) via least-squares ONCE over valid rows
+--       - 2nd scatter series with showLine=true, navy, dashed=true
+--         (matches renderer's borderDash: [6, 4])
+--       - helperCols declares `trendline_linear` with getValue(row)
+--         returning m * row.firm_term_years + b (mirrors renderer
+--         line ~2110)
+--   • Both gracefully degrade: if rows.length < 2 (regression needs ≥2)
+--     or rows is empty (rolling-avg has nothing to average), the
+--     trendline series and helperCols are omitted — spec falls back to
+--     the single dot-cloud series. Backward compatible with the P7
+--     no-rows tests.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 70 CM tests pass (up from 66 in P8.5).
+--
+-- New tests verify:
+--   - core_cap_rate_dot_plot rolling-avg getValue with synthetic
+--     3-month-spaced data: middle-row avg over ±6mo window covers
+--     4 neighbors (window asymmetry from month-length math is real
+--     and documented); edge-row avg covers idx 0..2
+--   - available_cap_rate_dot_plot linear regression on perfect
+--     m=0.002 + b=0.05 data — getValue(x=10) = 0.07 ± 1e-9
+--   - Empty rows → no trendline series, no helperCols (backward
+--     compatible single-series scatter)
+--
+-- New end-to-end XML test:
+--   - 2-series scatter
+--   - Series 0 (dots) has <a:noFill/> on <a:ln>, <c:symbol val="circle"/>
+--     with <a:alpha val="55000"/> on the marker fill
+--   - Series 1 (trendline) has <a:solidFill> on <a:ln>, dashed via
+--     <a:prstDash val="dash"/>, <c:symbol val="none"/> markers off
+--   - Trendline xVal shares the dots' x-column, yVal points at helper
+--     col F (= 5 regular cols + 1)
+--   - Exactly ONE dashed series per chart (no false matches on the dots)
+--
+-- End-to-end smoke build with realistic synthetic data confirmed:
+--   - 24 closed sales + 12-mo rolling avg in col F (values track the
+--     ~6% sine wave used as test data)
+--   - 30 active listings + linear regression in col F (values cluster
+--     around the m=0.002 + b=0.05 trend with noise)
+--   - chart1 has scatter+dashed=0 (rolling avg is solid)
+--   - chart2 has scatter+dashed=1 (regression is dashed)
+--   - Both have 1 marker-circle series + 1 marker-none series
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Core_Cap_Dot — confirm a new "12-mo Rolling Avg" column
+--    past the regular ones. The chart shows the dot cloud + a solid
+--    navy line trending through it.
+-- 3. Open Data_Avail_Cap_Dot — confirm "Linear Trendline" column. The
+--    chart shows the dot cloud + a dashed navy regression line.
+-- 4. Right-click either chart → "Edit Data" should be enabled, and
+--    editing a cell in the trendline column should update the line live.
+-- 5. X-CM-Native-Charts header stays at 22 — same template count, just
+--    upgraded visuals.
+--
+-- ---------------------------------------------------------------------
+-- ENABLED FOLLOW-UPS
+-- ---------------------------------------------------------------------
+-- The helper-column infrastructure is now exercised by 3 different
+-- chart families (box-whisker, time-series scatter trendline, regression
+-- scatter trendline). Pattern is well-proven for the remaining work:
+--
+-- P9 candidates:
+--   • ppsf_box_quarterly — needs CHART_COLUMNS schema entry, then
+--     reuse the rent_psf_box_quarterly switch case with renamed keys
+--   • rent_by_year_built — composite: IQR floating bar (helper col
+--     iqr_width) + scatter markers for median + avg over year x-axis.
+--     Year x-axis means a categorical-bar + scatter combo on the same
+--     panel; will likely need a new buildBarWithScatterChartXml builder.
+-- =====================================================================
