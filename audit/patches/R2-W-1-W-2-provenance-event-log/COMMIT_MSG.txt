@@ -1,0 +1,37 @@
+audit(R2-W-1/W-2): provenance event log + canonicalizer source registry
+
+Round 2 findings R2-W-1 (CRITICAL) and R2-W-2 (CRITICAL). QA-22's BEFORE
+trigger silently rewrote 2,646 dia.properties.tenant rows on 2026-05-18 with
+no entry in LCC Opps field_provenance. QA-24 and QA-30 backfill UPDATEs
+silently rewrote 1,221 gov.properties.agency_canonical rows the same day.
+Phase 3 strict-mode rollout was unsound until provenance acknowledged these
+writers.
+
+Three coordinated migrations:
+
+1. LCC Opps: three new rows in field_source_priority at priority=90
+   (record_only) registering qa22_davita_brand_canonicalize,
+   qa24_canonicalize_agency, qa30_canonicalize_agency. Adds a 90-99
+   "post-write normalizer" band to the priority column COMMENT.
+
+2. Dia: public.provenance_event_log (per-DB local audit log) +
+   replaced properties_tenant_brand_canonicalize_trg() with a version that
+   writes an audit row whenever the canonicalizer rewrites NEW.tenant.
+   Historical-marker row for the QA-22 2,646-row UPDATE.
+
+3. Gov: public.provenance_event_log mirror + two historical-marker rows for
+   QA-24 (1,218 rows) and QA-30 (4 rows). No agency_canonical trigger exists
+   today; if one is added later, upgrade it to mirror the dia pattern.
+
+Future work (R2-W-1b/W-2b): lcc-provenance-event-flush cron drains
+provenance_event_log → LCC Opps field_provenance via lcc_merge_field.
+Deferred so we can observe the log table for a tick before bridging.
+
+Forward-compatible. No frontend, no JS, no Edge Function changes.
+
+Files:
+- supabase/migrations/20260519110000_lcc_r2_w1_canonicalizer_source_registry.sql (new)
+- supabase/migrations/dialysis/20260519110000_dia_r2_w1_provenance_event_log_qa22_trigger.sql (new)
+- supabase/migrations/government/20260519110000_gov_r2_w2_provenance_event_log_qa24_qa30_backfill.sql (new)
+- audit/patches/R2-W-1-W-2-provenance-event-log/ (patch package)
+- audit/ROUND_2_FINDINGS_2026-05-19.md (closeout block via apply.mjs)

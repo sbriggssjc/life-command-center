@@ -1,0 +1,45 @@
+audit(R2-X-3): back-write SF id onto dia/gov denormalized columns
+
+Round 2 finding R2-X-3 (HIGH). The Salesforce bridge writes
+external_identities and unified_contacts.sf_* but never PATCHes the
+domain-side denormalized columns dia.contacts.salesforce_id,
+dia.true_owners.salesforce_id, gov.contacts.sf_contact_id, or
+gov.true_owners.sf_account_id. The QA-25 "Unprospected Owners" widget on
+gov filters on sf_account_id IS NULL — every SF-linked owner that lands
+via the bridge is silently mis-classified as unprospected. Same problem
+on dia for any dashboard that filters the denormalized column instead of
+walking external_identities.
+
+Added backwriteSfIdToDomain helper to api/_shared/bridge-handlers-salesforce.js
+that does conservative SELECT-then-PATCH-by-id matching:
+
+- Contact (kind='Contact'): match dia.contacts and gov.contacts by
+  email=ilike.<lower(p.Email)> with <col>=is.null filter and limit=2.
+  Per-domain column: dia uses salesforce_id (Round 76ak), gov uses
+  sf_contact_id.
+
+- Account (kind='Account'): match dia.true_owners and gov.true_owners
+  by canonical_name=ilike.<canonicalized name> with <col>=is.null filter
+  and limit=2. dia column salesforce_id, gov column sf_account_id.
+
+Safety:
+- Never overwrites curated values (<col>=is.null filter)
+- Aborts on multi-match (limit=2 + exactly-1 check)
+- Wrapped in try/catch; never aborts the bridge handler
+- Per-domain summary returned as result.sf_backwrite for audit visibility
+
+Edit applied via Python-via-bash with LF line-ending normalization to
+match HEAD's convention. git diff --stat: 118 insertions, 2 deletions.
+
+Captures four follow-ups:
+- R2-X-3b: collision-review queue when match returns >1 candidate
+- R2-X-3c: SF-id mismatch detection (vs silent skip)
+- R2-X-3d: one-shot historical backfill via the new helper in batch mode
+- R2-X-3e: same pattern for dia.recorded_owners when that column lands
+
+Files:
+- api/_shared/bridge-handlers-salesforce.js (+118 / -2)
+- audit/patches/R2-X-3-sf-id-backwrite/ (patch package)
+- audit/ROUND_2_FINDINGS_2026-05-19.md (closeout via apply.mjs)
+
+No SQL. No Edge Function. No allowlist changes.

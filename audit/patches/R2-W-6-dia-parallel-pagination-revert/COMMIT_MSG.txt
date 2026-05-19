@@ -1,0 +1,33 @@
+audit(R2-W-6): revert diaQueryAll to serial pagination (mirror QA-33)
+
+Round 2 finding R2-W-6 (HIGH). QA-33 reverted gov's parallel-pagination QA-26
+on 2026-05-18 because it caused ~60 concurrent HTTP requests at page-load
+and a 194-second full-load with browser unresponsiveness. The QA-33 closeout
+explicitly flagged "QA-27 (dia parallel) NOT reverted yet — need to probe
+dia separately."
+
+R2-W-6 verification confirmed diaQueryAll still issued every page past the
+first via Promise.all. dia tables are smaller than gov (medicare_clinics 8.5k,
+true_owners 3.4k vs gov's properties 17.5k) so the regression is less
+dramatic, but the failure mode is identical when dashboards stack multiple
+diaQueryAll calls in Promise.all — and loadDiaData does exactly that.
+
+Replaced the parallel implementation with a serial while-loop matching
+govQueryAll's post-QA-33 shape: one page at a time, break when
+rows.length < pageSize, 120-second total-time fuse with console.warn on
+overshoot. Drops the includeCount=true first-page request; callers that
+need a true count (the QA-29 v_prospect_targets reader) keep using diaQuery
+directly with includeCount=true, which is one call, not a fan-out.
+
+Edit applied via Python-via-bash per audit/SANDBOX_TOOLING_NOTES.md (the
+file is 604 KB, above the Edit-tool truncation threshold). Verified
+post-edit: wc -l = 10,936 lines, tail intact, git diff --stat reports
+26 insertions / 18 deletions matching the OLD 21-line / NEW 28-line swap.
+
+Throttled-parallel (concurrency=4) for both govQueryAll and diaQueryAll
+deferred to a future perf round as the long-term shape.
+
+Files:
+- dialysis.js (diaQueryAll body replaced)
+- audit/patches/R2-W-6-dia-parallel-pagination-revert/ (patch package)
+- audit/ROUND_2_FINDINGS_2026-05-19.md (closeout block via apply.mjs)

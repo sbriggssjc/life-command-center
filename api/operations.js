@@ -2779,6 +2779,80 @@ async function handleDraftRoute(req, res) {
       });
     }
 
+    // POST ?action=health-rollup — R2-L-1 (2026-05-19): weekly cron entry point.
+    // Same evaluateTemplateHealth() + flag-and-suggest pass as ?action=health,
+    // PLUS persists a row to template_health_history so trend analysis has a
+    // time-series. Idempotent at the row level (each call inserts one row;
+    // the weekly cron cadence is naturally non-duplicate).
+    if (action === 'health-rollup') {
+      const startedAt = Date.now();
+      const { template_id, lookback_days } = req.body || {};
+      const persistFlag = req.body?.persist !== false;  // default true
+
+      const healthReport = await evaluateTemplateHealth({
+        template_id,
+        lookback_days: lookback_days || 120
+      });
+
+      // Same auto-flag side effect as ?action=health
+      const needsRevision = healthReport.evaluations?.filter(e => e.status === 'needs_revision') || [];
+      for (const t of needsRevision) {
+        await flagTemplateForRevision(
+          t.template_id,
+          t.issues.join('; '),
+          user.id
+        );
+      }
+
+      const revisionSuggestions = [];
+      for (const t of needsRevision) {
+        const suggestion = await generateRevisionSuggestion(t.template_id);
+        if (suggestion.ok && suggestion.analysis) {
+          revisionSuggestions.push(suggestion);
+        }
+      }
+
+      // Persist the rollup if requested (cron always sets persist=true).
+      let historyId = null;
+      if (persistFlag) {
+        try {
+          const totalSends = (healthReport.evaluations || [])
+            .reduce((sum, e) => sum + (e.total_sends || 0), 0);
+          const staleCount = (healthReport.evaluations || [])
+            .filter(e => e.status === 'stale').length;
+          const ins = await opsQuery('POST', 'template_health_history', {
+            lookback_days: lookback_days || 120,
+            template_count: (healthReport.evaluations || []).length,
+            evaluated_count: (healthReport.evaluations || []).filter(e => e.total_sends > 0).length,
+            needs_revision_count: needsRevision.length,
+            stale_count: staleCount,
+            total_sends: totalSends,
+            evaluations: healthReport.evaluations || [],
+            revisions_flagged: needsRevision.length,
+            revision_suggestions: revisionSuggestions.length,
+            run_source: 'lcc-template-health-rollup',
+            run_duration_ms: Date.now() - startedAt,
+            notes: needsRevision.length > 0
+              ? `Auto-flagged ${needsRevision.length} templates for revision (avg-edit-distance > 40%).`
+              : null
+          });
+          if (ins.ok && ins.data?.length) historyId = ins.data[0].id;
+        } catch (err) {
+          // Non-fatal — the cron may have observed-but-not-persisted; the
+          // report still gets returned. Log so the cron health-check sees it.
+          console.warn('[operations] template_health_history insert failed (non-fatal):', err?.message);
+        }
+      }
+
+      return res.status(200).json({
+        ...healthReport,
+        revisions_flagged: needsRevision.length,
+        revision_suggestions: revisionSuggestions,
+        persisted: persistFlag,
+        history_id: historyId
+      });
+    }
+
     // POST ?action=cadence — get cadence state + recommendation for a contact
     if (action === 'cadence') {
       const { entity_id, sf_contact_id, contact_id, property_id, property_address, domain } = req.body || {};

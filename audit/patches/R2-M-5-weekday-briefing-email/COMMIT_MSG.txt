@@ -1,0 +1,30 @@
+audit(R2-M-5): flow spec — weekday daily briefing email
+
+Round 2 finding R2-M-5 (HIGH). Mon-Fri daily briefing only posts to Teams;
+Sat-Sun briefing only sends email. Scott has no surface where he reliably
+sees the briefing every morning — if he starts a weekday in email he never
+sees it.
+
+Doc-only patch: authors a Power Automate flow spec for LCC Weekday
+Briefing Email at docs/architecture/flows/lcc-weekday-briefing-email.md.
+The flow clones the existing LCC Morning Briefing (Sat/Sun) flow, changes
+the Recurrence schedule to Mon-Fri at 12:30 UTC (same wall-clock as the
+Teams flow), and sends via the same /api/briefing-email endpoint the
+Sat/Sun flow already uses — no API change needed.
+
+Includes a fault branch on the HTTP step that posts to the dead-letter
+pane on failure (mitigates R2-M-7 for this flow from day one).
+
+Captures three follow-ups:
+- R2-M-5b: shrink the Teams card to a one-liner linking to the email
+- R2-M-5c: PTO/pause switch
+- R2-M-5d: unify Sat/Sun + weekday flows into one LCC-Briefing-Daily flow
+
+Expected build time per the spec's "How to build" section: ~20 minutes.
+
+Files:
+- docs/architecture/flows/lcc-weekday-briefing-email.md (new)
+- audit/patches/R2-M-5-weekday-briefing-email/ (patch package)
+- audit/ROUND_2_FINDINGS_2026-05-19.md (closeout block via apply.mjs)
+
+No code. No SQL. No allowlist changes.

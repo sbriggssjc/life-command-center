@@ -1,0 +1,30 @@
+audit(R2-M-3): flow spec — Outlook calendar write-back
+
+Round 2 finding R2-M-3 (HIGH). Calendar bridge is unidirectional Outlook
+→ Supabase: existing flows pull events into Supabase hourly, but LCC
+cannot write or update Outlook calendar events. Cadence-engine has a
+meeting-type branch that increments a counter but never creates an actual
+invite.
+
+Doc-only patch: authors a Power Automate flow spec for
+LCC-OutlookCalendarWrite at docs/architecture/flows/lcc-outlook-calendar-write.md.
+The flow accepts an HTTP POST from LCC with meeting details (subject,
+times, attendees, metadata.lcc_cadence_id + lcc_touch), creates the
+Outlook event via shared_outlook Create_calendar_event_(V2), POSTs back
+to LCC with the Outlook event ID, returns 200, and routes failures to
+the dead-letter pane.
+
+Closes R2-M-3 when paired with R2-M-3b (LCC outbound caller) and
+R2-M-3c (callback handler). Both are deferred follow-ups tracked as
+Round 2 sub-findings.
+
+Additional deferred follow-ups captured in the spec:
+- R2-M-3d: conflict-detection prefix (GetEventsCalendarViewV2 + 409)
+- R2-M-3e: bidirectional sync (propagate Outlook cancel/move back to LCC)
+
+Files:
+- docs/architecture/flows/lcc-outlook-calendar-write.md (new)
+- audit/patches/R2-M-3-outlook-calendar-write/ (patch package)
+- audit/ROUND_2_FINDINGS_2026-05-19.md (closeout via apply.mjs)
+
+No code. No SQL. No allowlist changes.

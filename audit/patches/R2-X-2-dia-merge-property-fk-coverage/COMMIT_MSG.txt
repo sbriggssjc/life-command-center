@@ -1,0 +1,27 @@
+audit(R2-X-2): port runtime FK-discovery into dia_merge_property + MV refresh
+
+Round 2 finding R2-X-2 (CRITICAL). Hand-coded UPDATE list in
+dia_merge_property (Round 76be, April 2026) repointed 9 child tables and
+silently stranded every property_id FK added since: loans,
+property_financials (ON DELETE CASCADE — silent row LOSS),
+llc_research_queue, cap_rate_history, property_sale_events, property_intel,
+property_cms_link, lease_extensions, lease_rent_schedule,
+staged_intake_matches, cm_features.
+
+gov_merge_property has used a pg_constraint runtime FK loop since Round 76be.
+This patch ports that pattern to dia and adds a CONCURRENTLY refresh of
+mv_property_value_signal (QA-06) after the FK loop so the dia value-signal
+rail picks up the merge immediately.
+
+Per-child UPDATE wrapped in its own EXCEPTION block — single RLS denial or
+missing-column edge case no longer aborts the whole merge. Pre-flight check
+asserts both keep_id and drop_id exist so call-site typos fail loudly. Return
+JSONB now carries `merge_function_version` so callers can detect the new path.
+
+Forward-compatible: any future child table with a property_id FK is picked
+up automatically — no follow-up merge-function migration needed.
+
+Files:
+- supabase/migrations/dialysis/20260519100000_dia_round_76r2_x2_merge_property_complete_fk_coverage.sql (new)
+- audit/patches/R2-X-2-dia-merge-property-fk-coverage/ (patch package)
+- audit/ROUND_2_FINDINGS_2026-05-19.md (closeout block via apply.mjs)

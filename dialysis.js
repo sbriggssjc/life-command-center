@@ -165,25 +165,33 @@ async function diaQuery(table, select, params = {}) {
   }
 }
 
-// QA-27 (2026-05-18): parallel pagination — mirror of QA-26's govQueryAll
-// fix. First page fetched with includeCount=true; remaining pages issued in
-// parallel via Promise.all. For full-table reads (medicare_clinics 8.5k rows,
-// true_owners 3.4k, etc.) this turns N sequential round-trips into 1 +
-// parallel batch. Wall-clock drops from N × ~400ms to first + slowest_parallel
-// (~800ms-1.2s regardless of N).
+// R2-W-6 (2026-05-19): reverted to serial pagination. QA-27's parallel fix
+// (mirror of QA-26's govQueryAll) caused the same perf cliff that QA-33
+// just rolled back on gov: ~N concurrent HTTP requests at page-load
+// overwhelm Vercel/Supabase/browser. dia tables are smaller than gov
+// (medicare_clinics 8.5k, true_owners 3.4k) so the regression is less
+// dramatic, but the failure mode is identical when dashboards stack
+// multiple diaQueryAll calls in Promise.all. Going back to one-at-a-time
+// pagination — slower but predictable. A throttled-parallel approach
+// (concurrency=4) is the better long-term fix; deferred for both gov + dia.
+// Callers that need a true count (e.g. v_prospect_targets) keep using
+// diaQuery directly with includeCount=true — that single call is fine.
 async function diaQueryAll(table, select, params = {}) {
-  const pageSize = 1000;
-  const firstPage = await diaQuery(table, select, { ...params, limit: pageSize, offset: 0, includeCount: true });
-  const firstData = firstPage.data || [];
-  const total = firstPage.count || firstData.length;
-  if (total <= pageSize) return firstData;
-  const pages = [];
-  for (let off = pageSize; off < total; off += pageSize) {
-    pages.push(diaQuery(table, select, { ...params, limit: pageSize, offset: off }));
+  let all = [];
+  let offset = 0;
+  const pageSize = 1000;  // PostgREST max-rows cap
+  const maxTime = 120000; // 2-minute total timeout fuse
+  const start = Date.now();
+  while (true) {
+    if (Date.now() - start > maxTime) {
+      console.warn('diaQueryAll(' + table + ') total timeout after ' + Math.round((Date.now() - start) / 1000) + 's — returning ' + all.length + ' rows');
+      break;
+    }
+    const rows = await diaQuery(table, select, { ...params, limit: pageSize, offset });
+    all = all.concat(rows || []);
+    if (!rows || rows.length < pageSize) break;
+    offset += pageSize;
   }
-  const others = await Promise.all(pages);
-  let all = firstData;
-  for (const rows of others) all = all.concat(rows || []);
   return all;
 }
 

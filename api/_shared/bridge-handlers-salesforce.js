@@ -19,6 +19,8 @@
 // ============================================================================
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
+import { domainQuery } from './domain-db.js';
+import { normalizeCanonicalName } from './entity-link.js';
 import { resolveExternalUser } from './external-user-mappings.js';
 import { appendActivityEvent } from './activity-events.js';
 
@@ -46,6 +48,96 @@ function truncate(s, max = 4000) {
   if (!s) return s;
   const str = String(s);
   return str.length > max ? str.slice(0, max) + '…[truncated]' : str;
+}
+
+/**
+ * Round 2 R2-X-3 (2026-05-19): back-write the Salesforce id onto dia/gov
+ * denormalized columns. The SF bridge currently writes external_identities
+ * + unified_contacts.sf_* but skips the domain-side columns dia.contacts
+ * .salesforce_id, dia.true_owners.salesforce_id, gov.true_owners
+ * .sf_account_id. Several dashboards (e.g. QA-25 Unprospected Owners)
+ * filter on those columns and silently undercount SF-linked records.
+ *
+ * Match strategy (conservative, best-effort, never throws):
+ *  - Contact: match dia.contacts and gov.contacts by lowercased email.
+ *  - Account: match dia.true_owners and gov.true_owners by canonical name
+ *    (entity-link.normalizeCanonicalName — same helper the rest of LCC
+ *    uses for owner dedup).
+ *  - SELECT first with limit=2, abort if more than 1 candidate (avoid
+ *    cross-tenant collisions). PATCH only when the column is currently
+ *    NULL — never overwrite a curated value.
+ *
+ * Returns a summary object listing per-domain results (rows_patched,
+ * candidates_found, error). Callers can stash this in the bridge result
+ * for audit visibility but should not depend on success — the SF link
+ * via external_identities is the authoritative bridge.
+ */
+async function backwriteSfIdToDomain({ kind, sfId, email, name }) {
+  const summary = { contact: {}, account: {} };
+
+  if (kind === 'Contact' && email && sfId) {
+    const e = String(email).trim().toLowerCase();
+    if (e.includes('@')) {
+      for (const domain of ['dialysis', 'government']) {
+        try {
+          // Each domain has a different denormalized column name:
+          //   dia.contacts.salesforce_id      (Round 76ak)
+          //   gov.contacts.sf_contact_id      (gov-side convention)
+          const col = domain === 'dialysis' ? 'salesforce_id' : 'sf_contact_id';
+          const selectPath = `contacts?email=ilike.${pgFilterVal(e)}&${col}=is.null&select=contact_id,email,${col}&limit=2`;
+          const sel = await domainQuery(domain, 'GET', selectPath);
+          if (!sel.ok) { summary.contact[domain] = { error: sel.error || 'select_failed' }; continue; }
+          const rows = sel.data || [];
+          summary.contact[domain] = { candidates_found: rows.length, rows_patched: 0 };
+          if (rows.length !== 1) continue;
+          const contactId = rows[0].contact_id;
+          const patch = await domainQuery(domain, 'PATCH',
+            `contacts?contact_id=eq.${encodeURIComponent(contactId)}`,
+            { [col]: sfId }
+          );
+          if (patch.ok) summary.contact[domain].rows_patched = 1;
+          else summary.contact[domain].error = patch.error || 'patch_failed';
+        } catch (err) {
+          summary.contact[domain] = { error: String(err?.message || err) };
+        }
+      }
+    }
+  }
+
+  if (kind === 'Account' && name && sfId) {
+    const canon = (normalizeCanonicalName(name) || '').trim();
+    if (canon.length >= 3) {
+      for (const domain of ['dialysis', 'government']) {
+        try {
+          // Both dia and gov use true_owners; column names differ:
+          //   dia.true_owners.salesforce_id  (Round 76ak)
+          //   gov.true_owners.sf_account_id  (QA-25 references)
+          const col = domain === 'dialysis' ? 'salesforce_id' : 'sf_account_id';
+          // PostgREST: filter on a generated normalized column would be ideal;
+          // fall back to ILIKE substring against the raw name with leading +
+          // trailing % so 'XYZ HOLDINGS LP' matches 'Xyz Holdings, LP'.
+          const ilikePat = '%' + canon.replace(/[%_]/g, '') + '%';
+          const selectPath = `true_owners?canonical_name=ilike.${pgFilterVal(ilikePat)}&${col}=is.null&select=true_owner_id,name,${col}&limit=2`;
+          const sel = await domainQuery(domain, 'GET', selectPath);
+          if (!sel.ok) { summary.account[domain] = { error: sel.error || 'select_failed' }; continue; }
+          const rows = sel.data || [];
+          summary.account[domain] = { candidates_found: rows.length, rows_patched: 0 };
+          if (rows.length !== 1) continue;
+          const ownerId = rows[0].true_owner_id;
+          const patch = await domainQuery(domain, 'PATCH',
+            `true_owners?true_owner_id=eq.${encodeURIComponent(ownerId)}`,
+            { [col]: sfId }
+          );
+          if (patch.ok) summary.account[domain].rows_patched = 1;
+          else summary.account[domain].error = patch.error || 'patch_failed';
+        } catch (err) {
+          summary.account[domain] = { error: String(err?.message || err) };
+        }
+      }
+    }
+  }
+
+  return summary;
 }
 
 /**
@@ -209,7 +301,19 @@ export async function handleSalesforceAccountUpsert(job) {
     sfId, sfName: p.Name || null
   });
 
-  return { ok: true, result: { entity_id: entityId, sf_account_id: sfId } };
+  // R2-X-3 (2026-05-19): back-write sf_account_id onto dia.true_owners.salesforce_id
+  // and gov.true_owners.sf_account_id when a canonical-name match is unambiguous.
+  // Best-effort; logs into the result but never aborts the bridge.
+  let sfBackwrite = null;
+  try {
+    sfBackwrite = await backwriteSfIdToDomain({
+      kind: 'Account', sfId, name: p.Name || null
+    });
+  } catch (err) {
+    console.warn('[sf-bridge] backwriteSfIdToDomain (Account) failed:', err?.message);
+  }
+
+  return { ok: true, result: { entity_id: entityId, sf_account_id: sfId, sf_backwrite: sfBackwrite } };
 }
 
 // ---- contact.upsert -------------------------------------------------------
@@ -297,7 +401,19 @@ export async function handleSalesforceContactUpsert(job) {
     }
   }
 
-  return { ok: true, result: { entity_id: entityId, sf_contact_id: sfId, unified_id: unifiedId } };
+  // R2-X-3 (2026-05-19): back-write sf_contact_id onto dia.contacts.salesforce_id
+  // and gov.contacts.sf_contact_id when an email match is unambiguous.
+  // Best-effort; logs into the result but never aborts the bridge.
+  let sfBackwrite = null;
+  try {
+    sfBackwrite = await backwriteSfIdToDomain({
+      kind: 'Contact', sfId, email: p.Email || null
+    });
+  } catch (err) {
+    console.warn('[sf-bridge] backwriteSfIdToDomain (Contact) failed:', err?.message);
+  }
+
+  return { ok: true, result: { entity_id: entityId, sf_contact_id: sfId, unified_id: unifiedId, sf_backwrite: sfBackwrite } };
 }
 
 // ---- opportunity.upsert ---------------------------------------------------
