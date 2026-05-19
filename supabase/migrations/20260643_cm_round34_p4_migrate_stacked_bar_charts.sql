@@ -1,0 +1,112 @@
+-- =====================================================================
+-- Round 34 P4 — migrate stacked-bar charts to native Excel chart XML
+-- Builds on the R34 P3 simple line+bar migration (PR #825).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- NEW NATIVE CHART TEMPLATES (2 added; total now 9)
+-- ---------------------------------------------------------------------
+--   1. lease_renewal_rate          stacked-bar (5 series)
+--   2. buyer_pool_monthly_count    stacked-bar (3 series)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildStackedBarChartXml(spec) — new XML builder for
+--     <c:barChart grouping="stacked" overlap="100"> with N series.
+--     Each series gets its own <c:spPr><a:solidFill> color block,
+--     and the chart includes a bottom legend (multi-series visual
+--     needs the legend so viewers can tell the colors apart).
+--   • injectNativeCharts now dispatches by spec.type:
+--       'stacked-bar' → buildStackedBarChartXml
+--       'bar'         → buildSingleBarChartXml
+--       'line'        → buildSingleLineChartXml (default)
+--   • NATIVE_CHART_TEMPLATES expanded from 7 → 9
+--   • buildInjectionSpec adds two switch cases that map each
+--     template to its renderer-matched color palette:
+--
+--       lease_renewal_rate series colors (matches PDF renderer
+--       around cm-chart-image-renderer.js line ~1602):
+--         First Gen Commencements    pale  #E0E8F4
+--         Renewed Leases             navy  #003DA5
+--         Succ/Super Leases          mid   #265AB2
+--         Expired Leases             sky   #62B5E5
+--         Terminated Leases          amber #D97706
+--
+--       buyer_pool_monthly_count (matches PDF dialysis p.27):
+--         Private        navy  #003DA5
+--         Institutional  sky   #62B5E5
+--         REIT           sage  #4CB582
+--       Cross-Border is excluded — present in the data tab but
+--       the renderer doesn't chart it; the native chart matches
+--       that visual.
+--
+-- test/cm-native-chart-injector.test.mjs:
+--   • NATIVE_CHART_TEMPLATES includes both migrated templates
+--   • NATIVE_CHART_TEMPLATES does NOT include lease_termination_rate
+--     (deferred — see below)
+--   • buildInjectionSpec produces 5-series stack for lease_renewal_rate
+--     with correct color order
+--   • buildInjectionSpec produces 3-series stack for buyer_pool
+--     (Cross-Border excluded)
+--   • End-to-end injectNativeCharts produces a chartN.xml with
+--     barChart, grouping=stacked, overlap=100, 5 <c:ser> blocks,
+--     correct series ranges, and a legend
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 44 CM tests pass (up from 40 in P3).
+--
+-- End-to-end build with two charts produced:
+--   - chart1.xml (lease_renewal): 5 series, grouping=stacked,
+--     references Data_Lease_Renewal
+--   - chart2.xml (buyer_pool):    3 series, grouping=stacked,
+--     references Data_Buyer_Pool
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Check response header: X-CM-Native-Charts: should now reach 8-9
+--    (depending on which templates apply to the vertical)
+-- 3. In Excel, right-click these tabs' charts —
+--    "Edit Data" + "Format Chart Area" should be ENABLED:
+--       Data_Lease_Renewal_Rate      (5-color stacked column)
+--       Data_Buyer_Pool              (3-color stacked column)
+--    plus all P2/P3 tabs:
+--       Data_Volume_TTM, Data_Cap_Avg, Data_Txn_Count,
+--       Data_Avg_Deal, Data_YoY_Change, Data_Market_Turnover,
+--       Data_Volume_Quarterly
+-- 4. Confirm the stacked-bar color order matches the PDF visual
+--    (the renderer's color palette is mirrored exactly).
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED: lease_termination_rate
+-- ---------------------------------------------------------------------
+-- The renderer draws lease_termination_rate as a 2-series stack
+-- (Outside Firm Term, In Firm Term). The "In Firm Term" series is
+-- COMPUTED at render time as (total_terminations - outside_firm_term),
+-- not stored as a column on Data_Lease_Termination. A native chart
+-- can only reference cells that exist in the workbook — so to migrate
+-- this chart we'd need to either:
+--   (a) add an extra "in_firm_term" data column to the export builder, or
+--   (b) write a worksheet formula =B-C into a helper column at export
+--       time, then point the second series at that helper column.
+-- Deferring to P4.5 — small follow-up that needs the workbook builder
+-- to grow a data column.
+--
+-- ---------------------------------------------------------------------
+-- NEXT (R34 P5)
+-- ---------------------------------------------------------------------
+-- Multi-line charts (no secondary axis):
+--   • cap_rate_by_lease_term         (multiple lease-term cohorts)
+--   • nm_vs_market_cap_rate          (NM vs broader market)
+--   • net_lease_spread               (NM cap vs 10Y treasury)
+--   • sold_cap_by_term_dot_plot      (already may be scatter-style)
+--   • asking_cap_by_term_dot_plot
+-- Each needs a buildMultiLineChartXml(spec) that takes a series[] just
+-- like the stacked-bar builder does. Pattern is already proven.
+-- =====================================================================

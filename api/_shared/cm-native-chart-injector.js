@@ -182,6 +182,73 @@ function buildSingleBarChartXml(spec) {
 </c:chartSpace>`;
 }
 
+/**
+ * Generate a stacked column chart with N series sharing one x-axis.
+ * Each series stacks on top of the previous (grouping=stacked, overlap=100).
+ *
+ * @param {object} spec
+ * @param {string} spec.tabName        Data_* tab name
+ * @param {string} spec.catCol         Column letter for x-axis (categories)
+ * @param {number} spec.dataStart      First data row (1-indexed)
+ * @param {number} spec.dataEnd        Last data row (inclusive)
+ * @param {Array}  spec.series         List of { titleCol, titleRow, valCol, color }
+ * @returns {string} chart XML
+ */
+function buildStackedBarChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const seriesXml = spec.series.map((s, i) => {
+    const color = (s.color || '003DA5').replace('#', '');
+    return `        <c:ser>
+          <c:idx val="${i}"/>
+          <c:order val="${i}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
+          <c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
+        </c:ser>`;
+  }).join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="stacked"/>
+        <c:varyColors val="0"/>
+${seriesXml}
+        <c:gapWidth val="60"/>
+        <c:overlap val="100"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:barChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="b"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -288,7 +355,9 @@ export async function injectNativeCharts(buffer, injections) {
 
     // 1. Generate chart XML — dispatch by spec.type
     let chartXml;
-    if (spec.type === 'bar') {
+    if (spec.type === 'stacked-bar') {
+      chartXml = buildStackedBarChartXml(spec);
+    } else if (spec.type === 'bar') {
       chartXml = buildSingleBarChartXml(spec);
     } else {
       // 'line' (default) and any future shapes that don't have their own
@@ -356,7 +425,7 @@ export async function injectNativeCharts(buffer, injections) {
 }
 
 // Re-export for testing
-export { buildSingleLineChartXml, buildSingleBarChartXml, buildDrawingXml };
+export { buildSingleLineChartXml, buildSingleBarChartXml, buildStackedBarChartXml, buildDrawingXml };
 
 // ----------------------------------------------------------------------------
 // Migration registry — which chart_template_ids are now native (editable)
@@ -385,6 +454,12 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   'yoy_volume_change',
   'market_turnover',
   'quarterly_volume_bars',
+  // P4 — stacked bar charts
+  'lease_renewal_rate',          // 5-series stack (First Gen / Renewed / Succ-Super / Expired / Terminated)
+  'buyer_pool_monthly_count',    // 3-series stack (Private / Institutional / REIT — Cross-Border excluded per renderer)
+  // Deferred: lease_termination_rate (rendered "In Firm Term" series is
+  //   computed total-outside, not stored — would need an extra data
+  //   column or worksheet formula. Defer to P4.5.)
 ]);
 
 /**
@@ -462,6 +537,75 @@ export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart
       return singleSeries('line', 'turnover_rate', navy);
     case 'quarterly_volume_bars':
       return singleSeries('bar', 'quarterly_volume', sky);
+
+    // P4 — stacked bar charts
+    case 'lease_renewal_rate': {
+      // 5-series stack matching the renderer's color scheme
+      // (api/_shared/cm-chart-image-renderer.js around line 1602).
+      // First Gen (palette nm_pale ish — light), Renewed (PDF.cap_short navy),
+      // Succ/Super (palette[2] mid blue), Expired (PDF.cap_mid sky),
+      // Terminated (amber #D97706).
+      const periodCol = findCol('period_end');
+      const seriesDefs = [
+        { key: 'first_generation_commencements', color: 'E0E8F4' },  // pale
+        { key: 'renewed_leases',                 color: '003DA5' },  // navy
+        { key: 'succeeding_superseding_leases',  color: '265AB2' },  // mid blue
+        { key: 'expired_leases',                 color: '62B5E5' },  // sky
+        { key: 'terminated_leases',              color: 'D97706' },  // amber
+      ];
+      const series = seriesDefs
+        .map(s => ({ ...s, col: findCol(s.key) }))
+        .filter(s => s.col);
+      if (!periodCol || series.length === 0) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'stacked-bar',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: series.map(s => ({
+            titleCol: s.col, titleRow: headerRow,
+            valCol: s.col,
+            color: s.color,
+          })),
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'buyer_pool_monthly_count': {
+      // 3-series stack per the renderer (PDF dialysis p.27):
+      //   Private (navy) / Institutional+Fund (sky) / REIT (sage green)
+      // Cross-Border column exists in the data tab but the renderer
+      // doesn't chart it — match that here so the editable chart
+      // matches the PDF visual.
+      const periodCol = findCol('period_end');
+      const seriesDefs = [
+        { key: 'private_count',       color: '003DA5' },  // navy — Private
+        { key: 'institutional_count', color: '62B5E5' },  // sky — Institutional/Fund
+        { key: 'reit_count',          color: '4CB582' },  // sage — REIT
+      ];
+      const series = seriesDefs
+        .map(s => ({ ...s, col: findCol(s.key) }))
+        .filter(s => s.col);
+      if (!periodCol || series.length === 0) return null;
+      return {
+        tabName,
+        spec: {
+          type: 'stacked-bar',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          series: series.map(s => ({
+            titleCol: s.col, titleRow: headerRow,
+            valCol: s.col,
+            color: s.color,
+          })),
+          anchor: standardAnchor,
+        },
+      };
+    }
 
     default:
       return null;
