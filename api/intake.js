@@ -1747,6 +1747,11 @@ async function handleCopilotAction(req, res) {
     return res.status(500).json({
       ok: false,
       error: 'copilot_action_exception',
+      // R5-P-1 (2026-05-20): always include a short, non-sensitive error summary
+      // (error name + truncated message, no stack/PII) so copilot-action failures
+      // self-diagnose downstream — e.g. the SF-file bridge records it in
+      // sf_files.process_notes — without needing LCC_ENV=development.
+      error_summary: String((err?.name || 'Error') + ': ' + (err?.message || String(err) || '')).slice(0, 160),
       detail: isDev ? (err?.message || String(err)) : 'Unexpected server error. Contact LCC support with the request id.',
       action_id: req.body?.action_id || null,
       hint: 'If this persists, the underlying handler raised a runtime error. Check LCC logs for the request trace.',
