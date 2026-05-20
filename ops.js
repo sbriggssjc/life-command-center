@@ -1240,6 +1240,17 @@ async function renderProvenanceConflictWidgets() {
       `<button class="ops-filter" onclick="resolveProvConflict(${pid},'junk',null,this)">Mark junk</button>`,
     ].filter(Boolean).join('');
 
+    // Entity-context line: address / tenant / file_name attached by
+    // enrichReviewQueueContext on the API side. Renders directly under
+    // the field title so the reviewer sees what record this is about
+    // before reading attempted/current values.
+    const ctx = r.record_context;
+    const ctxHtml = ctx
+      ? `<div class="q-item-context" style="font-size:13px;color:var(--text);margin-top:2px">
+           ${esc(ctx.label || '')}${ctx.sub ? ` <span style="color:var(--text2)">· ${esc(ctx.sub)}</span>` : ''}
+         </div>`
+      : '';
+
     html += `<div class="q-item" data-prov-row="${pid}">
       <div class="q-item-header">
         <span class="q-item-title">${esc(r.target_table)}.${esc(r.field_name)}</span>
@@ -1250,6 +1261,7 @@ async function renderProvenanceConflictWidgets() {
           <span class="q-badge">record ${esc(r.record_pk_value)}</span>
         </div>
       </div>
+      ${ctxHtml}
       <div class="q-item-meta">
         <span><b>incoming:</b> ${esc(r.attempted_source)} (priority ${esc(String(r.attempted_priority))}) → ${esc(truncate(r.attempted_value))}</span>
         ${r.current_source ? `<span><b>current:</b> ${esc(r.current_source)} (priority ${esc(String(r.current_priority))}) → ${esc(truncate(r.current_value))}</span>` : '<span style="color:var(--text2)"><b>current:</b> none</span>'}
