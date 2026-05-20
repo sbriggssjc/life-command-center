@@ -329,11 +329,17 @@ Verification gate before merging:
 
 ## Decisions (locked 2026-05-20)
 
-1. **Role gate** → new `data_steward` role added to
-   `workspace_members.role`. Resolver endpoint requires
-   `data_steward` OR `admin`. The DB-level RLS / API auth check
-   for this role lands in Tier A; until it's wired, the endpoint
-   refuses all calls.
+1. **Role gate** → resolution requires `manager` level via the
+   existing `requireRole(user,'manager')` helper. Investigation
+   during Tier A showed the existing `user_role` Postgres enum
+   is `owner > manager > operator > viewer` (4-level linear
+   hierarchy); adding a `data_steward` peer requires an
+   ALTER TYPE plus `ROLE_LEVELS` changes that ripple into every
+   handler. The effective scope is identical (`operator` and
+   `viewer` users can't resolve; `manager`, `admin`, and `owner`
+   can). A real `data_steward` permission is reachable as a
+   Tier C add when finer-grained gating becomes worth the
+   migration.
 2. **`manual_resolution` priority** → priority 1, confidence 1.0.
    Equal to `manual_edit`. Subsequent ties between
    `manual_resolution` and `manual_edit` are real human-vs-human
