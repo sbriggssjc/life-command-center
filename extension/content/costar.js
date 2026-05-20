@@ -856,6 +856,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // "2700 S Central Expy" failed validation, which broke findSplitAddressInLines'
     // post-combine validation step on a 2026-04 CoStar capture in McKinney TX.
     const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
+    // Salt Lake City-style grid addresses have no street-type word.
+    // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
+    // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
+    // produce address=null and the sidebar falls back to the empty
+    // "Browse a property…" state.
+    const GRID_STREET_RE = /^\d+(?:-\d+)?\s+(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW)\b/i;
     for (const seg of segments) {
       // Round 76ei: also strip the listing-status prefix off each
       // segment, not just the raw input. CoStar comp tab document.title
@@ -867,8 +873,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Reject pagination patterns like "1 of 2,000 Records"
       if (/^\d+\s+of\s+[\d,]+/i.test(cleaned)) continue;
       // Must start with a number (or number range like 215-225) AND
-      // contain a street-type word
-      if (/^\d+(?:-\d+)?\s/.test(cleaned) && STREET_RE.test(cleaned)) {
+      // either contain a street-type word OR match a grid-style street
+      // (e.g. "5400 S" in Salt Lake City's quadrant numbering).
+      if (/^\d+(?:-\d+)?\s/.test(cleaned)
+          && (STREET_RE.test(cleaned) || GRID_STREET_RE.test(cleaned))) {
         return cleaned;
       }
     }
@@ -892,7 +900,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   }
 
   function findSplitAddressInLines(lines) {
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+)\b\.?/i;
+    // Third alternative covers Salt Lake City-style grid addresses
+    // ("3854 W 5400 S") where the "street" is a directional + grid
+    // number with no St/Ave/Blvd suffix — see parseAddress GRID_STREET_RE.
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     // Round 76di: widened the lookahead from 4 to 20 lines. CoStar's
     // property summary puts stat cards (RBA, AC Lot, Built, Tenancy,
