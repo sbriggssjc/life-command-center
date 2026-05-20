@@ -158,7 +158,84 @@ Pipeline (My Work) → Sync Health. Observations:
   re-auth the Work connector if the token is expired. Note: primary flagged-email intake
   (via Power Automate) is unaffected — dashboard shows 3,591 flagged emails and OMs landing;
   this is the secondary connector-sync path, so MED severity stands.
-- **R5-FE-note — 3× outlook connector registrations.** Two healthy + one errored. Worth
-  confirming whether all three are intended (Work, Personal, + a legacy bare-label
-  `outlook` `3c7be7f6-…` last synced 2026-04-22) or whether the bare-label one is a
-  dedup candidate.
+
+  **ROOT-CAUSE CONFIRMED 2026-05-20 (DB evidence, `connector_accounts` + `sync_jobs` on LCC Opps):**
+  - Three outlook rows: bare `outlook` (`3c7be7f6`, `direct_api`, no config, never used — vestigial),
+    *Personal* (`c5a4a92c`, `power_automate`), *Work (NorthMarq)* (`cc406fc7`, `power_automate`).
+  - **Personal**: 1 `failed` flagged_email job on **2026-04-28** (pre-76bi-fix), then **1 `completed`
+    today (19:10) with 9,990 records** → the Round 76bi guard works; Personal is healthy.
+  - **Work (NorthMarq)**: **7 jobs, all `failed`, 0 completed, 0 records ever**, `last_sync_at` is
+    **NULL** (the `/api/connectors` "2026-05-15" was the last *failed-job* time, not a success).
+    Identical config keys to Personal (`account, sync_calendar, sync_flagged_emails`).
+  - **Therefore this is NOT the 76bi code regression** (same code succeeds for Personal). The Work
+    mailbox's Graph response is a non-array (an auth/consent failure on the NorthMarq tenant is the
+    leading cause — the connector has *never* synced), and the **`ai-copilot/sync/flagged-emails`
+    edge function on dia (`zqzrriwuavgrquhisnoa`) lacks the `Array.isArray` guard** that sync.js
+    L531 has, so it throws "object is not iterable" instead of degrading to 0 records.
+  - **Two independent fixes:** (1) **Re-auth the NorthMarq work mailbox** (Scott — OAuth consent)
+    *if* direct sync of work email is wanted; OR treat this row as **redundant** because work
+    email already flows via the Power Automate `LCC Flagged Email Intake` flow (the OMs in the
+    Inbox panel — Fresenius, DaVita — are work emails) and **deactivate/remove the row** so it
+    stops failing + showing red. (2) **Harden the edge function** with the same non-array guard
+    so an unauthorized/odd Graph response degrades cleanly instead of crashing — robustness fix,
+    independent of the auth decision. **Decision needed from Scott: is the Work direct connector
+    wanted (→ re-auth) or redundant given PA covers work email (→ disable)?**
+
+  **RESOLUTION 2026-05-20 (Scott: "redundant — disable it" + "harden the edge fn"):**
+  - ✅ **DONE — Work connector disabled.** `UPDATE connector_accounts` (id `cc406fc7…`) →
+    `status='disconnected'`, `config.sync_flagged_emails=false`, `config.sync_calendar=false`,
+    `last_error=NULL`, with a `disabled_reason` note in config; `account` config preserved.
+    Fully reversible. Verified live: `/api/connectors` now shows the row `disconnected` with no
+    error and **total connectors-in-error = 0** (was 1) — the "1 connector failing: outlook"
+    banner in Sync Health is cleared. (Note: `resolveConnector` in `api/sync.js` selects outlook
+    by user+workspace `limit=1` and **ignores status**, so the durable disable is the config
+    `sync_*=false` flags, not status alone — both were set.)
+  - ⏸ **DEFERRED (do from source, NOT a blind redeploy) — edge guard.** The
+    `ai-copilot/sync/flagged-emails` handler (dia `zqzrriwuavgrquhisnoa`) should mirror
+    `api/sync.js` L531: wrap the Graph response array in `Array.isArray(...)` before iterating
+    (Graph returns `{ value: [...] }`; on an auth failure it returns a non-array error object →
+    the unguarded `for…of` / spread throws "object is not iterable"). **Not applied this round**
+    because the deployed `ai-copilot` is a single 72KB function shared by SF-sync, calendar,
+    Personal email, data-query, and daily-briefing, its source is **not version-controlled in any
+    mounted repo**, and it's only retrievable as a 31k-token single-line dump — so a
+    modify-and-redeploy from here would be a high-blast-radius blind change with no clean source
+    base or rollback. Recommend Scott locate/checkout the `ai-copilot` source, add the
+    `Array.isArray` guard at the flagged-emails iteration, and `supabase functions deploy
+    ai-copilot`. Now lower priority since the only known trigger (the Work connector) is disabled.
+- **R5-FE-note — 3× outlook connector registrations.** Two healthy + one (Work) now
+  `disconnected`. The legacy bare-label `outlook` `3c7be7f6` (`direct_api`, no config,
+  never synced) is a vestigial dedup candidate — left in place this round.
+
+---
+
+## Part 3 — Key pipeline deep-dive (end-to-end)
+
+### OM intake pipeline (`staged_intake_items` on LCC Opps) — ONE active gap found
+
+Status distribution (2026-05-20): `finalized` 621 (305 in 7d, 47 today — healthy throughput),
+`matched` 64 (all in 7d), `review_required` **2,666** (139 in 7d — large human-triage backlog,
+by-design but worth a triage push), `discarded` 671 (none recent), `failed` **45** (39 in 7d,
+5 today — investigated below).
+
+- **R5-P-1 [HIGH — active] — Salesforce `Comp__c`-seeded OM files never get their file bytes
+  staged → extraction never runs → `failed`.** All 39 recent failures are SF `Comp__c`-seeded
+  intakes (28 dia + 9 gov, **25 distinct deals**) carrying `seed_data.source_content_version_id`
+  + a real `file_name` (e.g. *"Fresenius Medical Care - Pittsboro - NC - OM.pdf"*). Decisive
+  localization via `staged_intake_artifacts` / `staged_intake_extractions`: of the 39, **37 have
+  NO artifact row and NO extraction row** (only 2 ever received a file; those 2 ran extraction and
+  hit the lesser "No valid extractions"). So the break is **upstream of extraction — the OM PDF
+  bytes from the Salesforce ContentVersion are never delivered/staged**; the staged item is created
+  from the SF *reference* only, then marked `failed`, then retried hourly (`_retry_meta.count≥1`),
+  forever failing. **No LCC `api/` code fetches SF `ContentVersion`/`VersionData`** (grep = 0
+  hits), so the file must be delivered by the **Power Automate `SF -> LCC: File Discovery & Move`
+  / `On-demand File`** flow (built ~2026-05-16/17, per R3-M-3d). The flow discovers the file
+  (writes the reference + file_name) but fails to move the actual bytes — **same class as the
+  historical `base64ToBinary` Bug E** (download VersionData base64 → must convert to binary before
+  POSTing to LCC intake). **Fix lives in that PA flow** (inspect the ContentVersion download +
+  the body sent to `/api/intake`): confirm it (a) downloads VersionData, (b) `base64ToBinary()`s
+  it, (c) POSTs it as the artifact, and (d) doesn't create/abandon a staged item when the file
+  step fails. Impact: 25 in-flight deals (Fresenius, DaVita, gov comps) are not flowing into
+  dia/gov property data. **Recommend fixing the flow next.**
+- **R5-P-1b [LOW] — the gov `Comp__c` variant stopped 2026-05-16** (9 items, last May 16), while
+  dia continues failing daily — suggests the gov path may have been partially fixed or simply
+  hasn't re-run; verify when fixing R5-P-1.
