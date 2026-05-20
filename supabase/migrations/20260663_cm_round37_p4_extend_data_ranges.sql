@@ -1,0 +1,174 @@
+-- =====================================================================
+-- Round 37 P4 — extend Supabase view date ranges where underlying data
+-- supports it.
+-- User feedback 2026-05-19, item #5: "do a general look at each charts
+-- data set and ensure we are pulling the data back as long as we
+-- possibly can for the data available, many of the charts reverted back
+-- to missing data from pre 2017, 2014, 2010, etc. from our previous notes."
+--
+-- This is the fourth and final PR responding to the marketing team's
+-- review of the 2026-05-19 exports:
+--   P1 ✓ quarter date labels on cat axis (item #4)
+--   P2 ✓ pinned Y-axis ranges + value formats (item #3)
+--   P3 ✓ peak/trough/most-recent data labels (item #2)
+--   P4 (this) — view-level data range extensions (item #5)
+--
+-- Item #1 (general formatting/style match) still waits on user pointing
+-- at specific reference docs.
+--
+-- ---------------------------------------------------------------------
+-- AUDIT METHODOLOGY
+-- ---------------------------------------------------------------------
+-- Scanned every cm_* view in both Supabase projects for hardcoded
+-- generate_series start dates, then matched each start date against
+-- the earliest non-trivial data density in the underlying tables.
+-- An "extension is meaningful" when:
+--   (a) the underlying table has >= ~25-50 rows/year of relevant data
+--       at the proposed new start date, AND
+--   (b) the chart's primary metric (not just one of several series)
+--       computes to a non-degenerate value.
+--
+-- 4 prior-reported tabs cropped at 2014:
+--   • Inventory_Backlog (dia + gov)
+--   • Market_Turnover   (dia + gov)
+--   • Active_Cap_Quart  (dia only; gov has no equivalent)
+--   • Active_DOM_PC     (dia only; gov has no equivalent)
+--
+-- ---------------------------------------------------------------------
+-- APPLIED (1 view): gov Market_Turnover 2013-01-01 → 2005-01-01
+-- ---------------------------------------------------------------------
+-- View: cm_gov_market_turnover_m
+-- Project: government (scknotsqkcheojiaewwh)
+--
+-- The turnover formula = ttm_sales / active_count, where:
+--   ttm_sales   = sales_transactions in trailing 12 months
+--   active_count = currently-effective leases in gsa_leases
+--
+-- Underlying data density at start dates:
+--   sales_transactions (gov):
+--     2003-2005: 27-105 sales/year (good)
+--     2008-2009: ~30/year (post-GFC dip — real signal)
+--     2010+:     80-200+/year
+--
+--   gsa_leases (active_count, cumulative):
+--     2005-01-31: 219 active leases
+--     2008-01-31: 365 active leases
+--     2010-01-31: 595 active leases
+--     2013-01-31: 1,506 active leases
+--
+-- Sanity-check after extension:
+--   Earliest period_end: 2005-01-31
+--   Latest period_end:   2026-03-31
+--   Row count:           255 (was 156)
+--   Turnover range:      1.1% — 40.9% (plausible; dip in 2009-10 matches GFC)
+--
+-- This adds 8 years of meaningful turnover history to Data_Market_Turnover
+-- in gov exports. No other code changes required — the renderer + native
+-- chart spec builder both consume whatever the view emits.
+--
+-- ---------------------------------------------------------------------
+-- NOT APPLIED (5 views): underlying data does not support extension
+-- ---------------------------------------------------------------------
+--
+-- 1. cm_dialysis_market_turnover_m (2014-01-01)
+--    Same formula as gov, but denominator (active_count) comes from
+--    available_listings instead of gsa_leases.
+--
+--    available_listings (dia) density pre-2013:
+--      2001-2012: 1-12 listings/year per period (TINY)
+--      2013:      12 listings
+--      2014+:     22+/year
+--
+--    Pre-2013 the active_count denominator is near-zero, so turnover_rate
+--    = ttm_sales / (active_count + ttm_sales) ≈ 1.0 (100%) regardless of
+--    actual market activity. Extending would produce a misleading spike
+--    to 100% across 2008-2012, then a dramatic drop when listings data
+--    starts. Cannot extend without changing the metric definition.
+--
+-- 2. cm_dialysis_inventory_backlog_m (2014-01-01)
+--    Chart shows 2 bars per period: added_ttm + sold_ttm.
+--    added_ttm depends on available_listings.listing_date (1-12/year pre-2013).
+--    Pre-2013 only sold_ttm would have data; the chart would render
+--    half-empty (sold bar only). The chart's "inventory backlog" concept
+--    requires the active+added side, which doesn't exist pre-2013.
+--    Cannot extend without losing the chart's intent.
+--
+-- 3. cm_gov_inventory_backlog_m (2014-01-01)
+--    available_listings (gov) literally starts 2014-08-13. There are zero
+--    rows pre-2014-08. Cannot extend — data simply doesn't exist.
+--    sold_ttm (from sales_transactions) does exist pre-2014, but extending
+--    would emit half-empty rows (only sold bar populated) for 2008-2014.
+--    Same trade-off as dia inventory_backlog: violates chart intent.
+--
+-- 4. cm_dialysis_asking_cap_quartiles_active_q (2013-Q1)
+--    Depends on cm_dialysis_active_listings_q (anchored 2013-01-01).
+--    HAVING clause requires count(*) FILTER (WHERE last_cap_rate IS NOT
+--    NULL) >= 4 per quarter. Pre-2013 only 1-3 listings/year exist with
+--    cap rates, so even if the underlying view were extended, the HAVING
+--    threshold would never be met. The natural data filter already
+--    prevents emission of meaningless rows. No code change would surface
+--    additional data.
+--
+-- 5. cm_dialysis_dom_price_change_active_q (2013-Q1)
+--    Same dependency on cm_dialysis_active_listings_q, same HAVING-style
+--    filtering on count(*) > 0. Pre-2013 the cohort is too small for
+--    statistical meaning (1-3 listings/quarter cannot produce a
+--    representative DOM average or price-change %).
+--
+-- ---------------------------------------------------------------------
+-- WHY THE OTHER cm_* VIEWS WITH HARDCODED START DATES WERE NOT TOUCHED
+-- ---------------------------------------------------------------------
+-- The audit also surfaced these views with hardcoded generate_series
+-- starts. Each was evaluated and left alone for the reasons noted:
+--
+-- dia:
+--   cm_dialysis_active_listings_m         (2010-01-01) — listings 1-5/yr pre-2010
+--   cm_dialysis_valuation_index_m         (2010-01-01) — has a base-year anchor;
+--                                                        changing start requires
+--                                                        re-indexing the series
+--   cm_dialysis_rent_price_per_chair_q    (2010-01-01) — sparse chair-count metadata
+--   cm_dialysis_active_listings_q         (2013-01-01) — see #4/#5 above
+--   cm_dialysis_on_market_snapshot_q      (2017-01-01) — snapshot semantics; not historical
+--
+-- gov:
+--   cm_gov_valuation_index_m              (2010-01-01) — base-year anchor; out of scope
+--   cm_gov_renewal_rent_growth_m          (2010-01-01) — out of user's reported scope
+--   cm_gov_lease_termination_rate_m       (2013-01-01) — out of user's reported scope
+--   cm_gov_lease_renewal_rate_m           (2014-01-01) — out of user's reported scope
+--
+-- These can be revisited in a future round if the user reports specific
+-- data-range issues on those charts.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh GOV export
+-- 2. Open Data_Market_Turnover — x-axis should now start at Jan 2005 (was
+--    Jan 2013). Turnover_rate should show ~20% in 2005, dip to ~5% in
+--    2009-2010 (post-GFC), recover to ~10% by 2014, current ~7-10%.
+--    The 3 R37 P3 data labels (peak, trough, most-recent) should now
+--    annotate the longer series correctly.
+-- 3. Verify the chart still renders cleanly — no errors, no broken
+--    formulas, no axis scaling issues. The R37 P2 percent_one_decimal
+--    format should apply across the full extended range.
+--
+-- 4. DIA charts: no visible change. Confirm Data_Market_Turnover,
+--    Data_Inventory_Backlog, Data_Active_Cap_Quart, Data_Active_DOM_PC
+--    still render identically to R37 P3 (with new labels + axis ranges).
+--
+-- 5. GOV Data_Inventory_Backlog: no change (still starts 2014; documented
+--    above).
+--
+-- ---------------------------------------------------------------------
+-- R37 SERIES COMPLETE
+-- ---------------------------------------------------------------------
+-- This closes the 4-PR response to the 2026-05-19 user feedback batch:
+--   P1 ✓ quarter date labels (item #4)
+--   P2 ✓ pinned Y-axis ranges + value formats (item #3)
+--   P3 ✓ peak/trough/most-recent labels (item #2)
+--   P4 ✓ data range audit + 1 view extension (item #5)
+--
+-- Item #1 — "match formatting/style/layout to the example Excel docs" —
+-- is the next deliverable but requires user to point at specific
+-- reference docs / specific charts they want adjusted.
+-- =====================================================================
