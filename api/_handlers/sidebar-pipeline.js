@@ -1737,7 +1737,9 @@ function isJunkContactName(name) {
   if (trimmed.length < 3 || trimmed.length > 80) return true;
 
   // Class A: firm-name suffix patterns. Real person names don't end with these.
-  const firmSuffixRe = /\b(LLC|L\.L\.C\.?|Inc\.?|Corp\.?|Corporation|Companies?|Co\.|Realty,?|Real Estate|Realtors?|Properties|Property|Partners|Investments?|Capital|Holdings?|Advisors?|Management|Brokerage|Brokers|Commercial|Services|Solutions|REIT|Fund(s)?( [IVX]+| [0-9]+)?)\b/i;
+  // R4-6 (2026-05-20): added `Investors` (was missing alongside Investments?)
+  // to catch "LA Investors", "Acme Investors LLC", etc.
+  const firmSuffixRe = /\b(LLC|L\.L\.C\.?|Inc\.?|Corp\.?|Corporation|Companies?|Co\.|Realty,?|Real Estate|Realtors?|Properties|Property|Partners|Investments?|Investors|Capital|Holdings?|Advisors?|Management|Brokerage|Brokers|Commercial|Services|Solutions|REIT|Fund(s)?( [IVX]+| [0-9]+)?)\b/i;
   if (firmSuffixRe.test(trimmed)) return true;
 
   // Class B: well-known brokerage / firm brand markers.
@@ -1748,7 +1750,10 @@ function isJunkContactName(name) {
   if (/\|/.test(trimmed)) return true;
 
   // Class D: section labels and UI noise (anchored).
-  const labelRe = /^(Fund Name|Owner Name|Listing Broker|Buyer Broker|Seller Broker|View More|View Less|Per SF|Public REIT|Equity Funds?|Vice Chairman|Senior Associate|Senior Director|Senior Vice President|Director|Principal|Managing Director|Executive Vice President)$/i;
+  // R4-6 (2026-05-20): added Managing/General/Limited Partner + bare Partner
+  // (CoStar's role-as-name leak; surfaced as "Managing Partner" landing in
+  // contacts.contact_name vs OM's "Nathan Huffman").
+  const labelRe = /^(Fund Name|Owner Name|Listing Broker|Buyer Broker|Seller Broker|View More|View Less|Per SF|Public REIT|Equity Funds?|Vice Chairman|Senior Associate|Senior Director|Senior Vice President|Director|Principal|Managing Director|Executive Vice President|Managing Partner|General Partner|Limited Partner|Partner)$/i;
   if (labelRe.test(trimmed)) return true;
 
   // Class E: narrative sentences (5+ words ending with period, OR
@@ -2692,8 +2697,15 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
           // v_field_provenance_unranked surfaces writes against columns
           // that don't exist on the target table. Same fix as the OM
           // promoter side in PR #498.
-          const capRateDecimal = metadata.cap_rate != null ? Number(metadata.cap_rate) / 100 : null;
-          const askPrice = metadata.list_price || metadata.asking_price || null;
+          // R4-6 (2026-05-20): parse before recording provenance. CoStar
+          // sends prices as strings like "$3,690,000 ($246.00/SF)" and cap
+          // rates as "6.7%". Recording the raw strings produced ~120 fake
+          // same-priority conflicts vs the OM promoter's parsed numerics
+          // ("$3,690,000 ($246.00/SF)" != 3690000, "6.7%" -> NaN -> null).
+          // Both the listing INSERT and the provenance call must operate on
+          // the same parsed values.
+          const capRateDecimal = parseCapRateDecimal(metadata.cap_rate);
+          const askPrice = parseCurrency(metadata.list_price) || parseCurrency(metadata.asking_price) || null;
           const sfInt = parseSF(metadata.square_footage);
           const askPpsf = (askPrice && sfInt)
             ? Math.round((askPrice / sfInt) * 100) / 100
@@ -7593,7 +7605,10 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
       // Round 76ej.r (2026-05-05): record per-tenant gov.leases write to
       // field_provenance so the data-quality dashboard sees multi-tenant
       // coverage. Mirrors the dialysis upsertDomainLeases instrumentation.
-      pushProvenance(provCollect, 'gov.leases', leaseId, {
+      // Writer flush re-prefixes with `${tablePrefix}.`; pass the unqualified
+      // table name so the row lands as `gov.leases`, not `gov.gov.leases`.
+      // (R4-5 2026-05-20: double-schema typo here produced 600+ unranked rows.)
+      pushProvenance(provCollect, 'leases', leaseId, {
         tenant_agency: tenantAgency,
         tenant_agency_full: tenantAgency,
         government_type: govType,
@@ -7617,7 +7632,7 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
         `property=${propertyId} tenant_agency=${JSON.stringify(tenantAgency)} ` +
         `lease_number=${leaseNumber || 'null'}`);
       if (newLeaseId) {
-        pushProvenance(provCollect, 'gov.leases', newLeaseId, {
+        pushProvenance(provCollect, 'leases', newLeaseId, {
           tenant_agency: tenantAgency,
           tenant_agency_full: tenantAgency,
           government_type: govType,
