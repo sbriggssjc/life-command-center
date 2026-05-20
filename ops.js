@@ -68,6 +68,11 @@ let opsResearchFilter = 'active'; // active | completed | all
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
 let opsInboxSelected = new Set();
+// Render-side windowing: cap the DOM render to N rows; "Load more" grows it.
+// opsInboxData stays the full in-memory backlog so counts and selection work
+// over the complete dataset.
+let opsInboxWindow = 50;
+const OPS_INBOX_WINDOW_STEP = 50;
 let opsWorkspaceMembers = [];
 let opsAssignModalState = null;
 let opsEscalateModalState = null;
@@ -710,11 +715,11 @@ async function renderInboxTriage() {
     html += '<div style="padding:8px 12px;margin-bottom:8px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--text2)">Showing flagged emails from Outlook. Run a sync to promote these to your triage queue.</div>';
   }
 
-  // Filter pills
+  // Filter pills — switching filter resets the windowed render
   html += '<div class="ops-filters">';
-  html += filterPill('new', 'New', opsInboxFilter, 'opsInboxFilter', 'renderInboxTriage');
-  html += filterPill('triaged', 'Triaged', opsInboxFilter, 'opsInboxFilter', 'renderInboxTriage');
-  html += filterPill('all', 'All', opsInboxFilter, 'opsInboxFilter', 'renderInboxTriage');
+  html += filterPill('new', 'New', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
+  html += filterPill('triaged', 'Triaged', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
+  html += filterPill('all', 'All', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
   html += '</div>';
 
   // Triage bar with select-all and bulk actions
@@ -756,11 +761,33 @@ async function renderInboxTriage() {
       );
     }
   } else {
-    opsInboxData.forEach((item, idx) => { html += inboxItemHTML(item, idx); });
+    const shown = Math.min(opsInboxWindow, opsInboxData.length);
+    for (let i = 0; i < shown; i++) {
+      html += inboxItemHTML(opsInboxData[i], i);
+    }
+    if (shown < opsInboxData.length) {
+      const remaining = opsInboxData.length - shown;
+      const nextStep = Math.min(OPS_INBOX_WINDOW_STEP, remaining);
+      html += `<div style="padding:12px;text-align:center;color:var(--text3);font-size:12px;background:var(--s2);border-radius:8px;margin-top:10px">
+        <span>Showing ${shown.toLocaleString()} of ${opsInboxData.length.toLocaleString()} loaded</span>
+        <button class="q-action" style="margin-left:12px;font-size:11px;padding:6px 14px;font-weight:600" onclick="opsInboxLoadMore(${OPS_INBOX_WINDOW_STEP})">Load ${nextStep} more</button>
+        <button class="q-action" style="margin-left:6px;font-size:11px;padding:6px 14px" onclick="opsInboxLoadMore(${opsInboxData.length})">Show all</button>
+      </div>`;
+    }
   }
 
   el.innerHTML = html;
   perf.end();
+}
+
+function opsInboxLoadMore(step) {
+  opsInboxWindow = Math.min(opsInboxWindow + (step || OPS_INBOX_WINDOW_STEP), opsInboxData ? opsInboxData.length : opsInboxWindow);
+  renderInboxTriage();
+}
+
+function opsInboxSetFilter() {
+  opsInboxWindow = 50;
+  renderInboxTriage();
 }
 
 function inboxItemHTML(item, idx) {
@@ -1240,6 +1267,17 @@ async function renderProvenanceConflictWidgets() {
       `<button class="ops-filter" onclick="resolveProvConflict(${pid},'junk',null,this)">Mark junk</button>`,
     ].filter(Boolean).join('');
 
+    // Entity-context line: address / tenant / file_name attached by
+    // enrichReviewQueueContext on the API side. Renders directly under
+    // the field title so the reviewer sees what record this is about
+    // before reading attempted/current values.
+    const ctx = r.record_context;
+    const ctxHtml = ctx
+      ? `<div class="q-item-context" style="font-size:13px;color:var(--text);margin-top:2px">
+           ${esc(ctx.label || '')}${ctx.sub ? ` <span style="color:var(--text2)">· ${esc(ctx.sub)}</span>` : ''}
+         </div>`
+      : '';
+
     html += `<div class="q-item" data-prov-row="${pid}">
       <div class="q-item-header">
         <span class="q-item-title">${esc(r.target_table)}.${esc(r.field_name)}</span>
@@ -1250,6 +1288,7 @@ async function renderProvenanceConflictWidgets() {
           <span class="q-badge">record ${esc(r.record_pk_value)}</span>
         </div>
       </div>
+      ${ctxHtml}
       <div class="q-item-meta">
         <span><b>incoming:</b> ${esc(r.attempted_source)} (priority ${esc(String(r.attempted_priority))}) → ${esc(truncate(r.attempted_value))}</span>
         ${r.current_source ? `<span><b>current:</b> ${esc(r.current_source)} (priority ${esc(String(r.current_priority))}) → ${esc(truncate(r.current_value))}</span>` : '<span style="color:var(--text2)"><b>current:</b> none</span>'}
