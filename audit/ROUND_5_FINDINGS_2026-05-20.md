@@ -288,6 +288,49 @@ by-design but worth a triage push), `discarded` 671 (none recent), `failed` **45
     `copilot_action_exception` subset (a minority of OMs) is the open remainder, gated on surfacing
     the inner error (needs the `LCC_ENV=development` toggle — Scott).
 
+  **R5-P-1 follow-ups discovered 2026-05-20 (deploy topology + an incident):**
+  - **Deploy topology — Vercel + TWO Railway services.** The LCC app runs on Vercel
+    (`life-command-center-nine.vercel.app`, what Scott's browser uses) AND Railway (project
+    "handsome-luck": services `life-command-center` → `life-command-center-production.up.railway.app`
+    and `tranquil-delight` → `tranquil-delight-production-633f.up.railway.app`). The Supabase edge
+    functions / PA flows target **Railway `tranquil-delight`** via `LCC_BASE_URL`. Railway runs a
+    custom `server.js` (Express) that **mirrors `vercel.json` rewrites as routes** — and the two
+    drifted: R5-FE-2 added `/api/data-query` to `vercel.json` only, so on Railway `/api/data-query`
+    falls through to the SPA catch-all and returns **HTML 200** (confirmed by server-to-server probe).
+    **server.js must get the same route** — `app.all('/api/data-query', (req,res)=>{ req.query._route='edge-data'; adminHandler(req,res); });` after the dia-query line. Going forward, `vercel.json`
+    and `server.js` are a PAIRED change. (Railway does deploy from git — its `gov.js` carried the
+    R5-FE-1 fix — but a Railway platform build incident on 2026-05-20 left the latest pushes
+    "Queued", so `error_summary` wasn't live on the backend yet.)
+  - **INCIDENT 2026-05-20 — LCC Opps connection-pool exhaustion (resolved by restart).** Mid-session
+    the LCC app stopped loading and login failed with "Failed to fetch". Root cause: **LCC Opps
+    (`xengecqvemvfknjvbvrq`) ran out of DB connections** (`max_connections=60`). Every path timed
+    out — browser auth, browser REST (504), and even admin `SELECT 1` ("Connection terminated due to
+    connection timeout"). dia/gov were unaffected. Contributing load: repeated manual `stage-queued`
+    bridge runs (chasing the R5-P-1 diagnosis) each hold an LCC Opps connection through slow 6 MB
+    PDF/AI extraction, layered on the hourly `sf-files-extract-queued` cron + heavy diagnostic
+    queries. **Resolved** by a Supabase **project restart** (post-restart: 27/60 conns, 0
+    idle-in-txn). **Lessons:** (a) `max_connections=60` is a tight budget — the extraction bridge
+    should cap concurrency / shorten connection hold (or LCC Opps compute should be bumped); (b) do
+    not manually re-trigger `stage-queued` — let the hourly cron drain it. The `error_summary`
+    diagnostic will surface the `copilot_action_exception` cause on the next cron tick without manual
+    triggering.
+
+  **R5-P-1 RESOLVED 2026-05-20.** After the LCC Opps restart + the `server.js` `data-query` route
+  deploy (verified: `tranquil-delight…/api/data-query` now returns 200 JSON, was HTML), a single
+  gentle limit-3 bridge run **extracted all 3 cleanly with zero new failures and no `error_summary`
+  recorded** — i.e. nothing failed. This confirms the `copilot_action_exception` cluster
+  (20:21–20:31) was **collateral damage from the connection-exhaustion incident** (stage-om couldn't
+  write to LCC Opps), not a PDF/extractor bug. With the DB healthy and the route live, extraction
+  succeeds (extracted 40→50 and climbing). The 16 incident-straggler `extract_failed` rows were
+  **re-queued** (file_ids 198,206,210,211,214,225,229,232,234,241,248,262,277,280,281,288) to
+  re-process on the next cron tick; the genuine "No valid extractions" rows were left alone (those
+  are real extractor verdicts, and will now record a clean `error_summary` if they recur). **Net:
+  the SF→LCC OM pipeline is healthy end-to-end** — file move ✅, bridge ✅, route (Railway+Vercel) ✅,
+  extraction ✅, queue draining via the hourly cron. The `error_summary` diagnostic + `server.js`/
+  `vercel.json` route parity remain as permanent improvements. **Open ops follow-ups (not blocking):**
+  cap the extraction bridge's connection hold / bump LCC Opps compute; investigate the secondary
+  Railway service `life-command-center-production` (404s on `/api/data-query` — likely stale).
+
 ### SF → LCC object/activity sync — HEALTHY
 
 Very active and current: `sf_sync_log` has **6,862 rows in the last 24h** (newest 19:01 today)
@@ -314,3 +357,36 @@ Pipelines are healthy except **R5-P-1 (HIGH)** — the SF `Comp__c` OM **file-mo
 Power Automate delivers the reference but not the bytes, stranding 25 deals' OMs before
 extraction. That's the one active fix to pursue next; it's a PA-flow change (inspect the
 ContentVersion download + `base64ToBinary` + the POST to `/api/intake`).
+*(Superseded — see the R5-P-1 RESOLVED note above: file move actually works; the failures were
+LCC-Opps-incident collateral, now drained.)*
+
+---
+
+## Part 4 — UI continuation audit (2026-05-20, post-incident)
+
+Walked with the app fully healthy + logged in. Lighter surfaces all render cleanly with **zero
+console errors**: Today dashboard, gov property detail, Pipeline/My Work, Sync Health, Dialysis
+**Overview** (Database Health 8,535 clinics / 88.1% data / 98.1% property-linked / 94.1% lease;
+action queues 1,438 NPI signals, 162 unlinked, 507 lease-backfill), Dialysis **Search**, and a
+full **dia property detail** (DaVita Jurupa Valley — completeness 91, CMS-linked, all tabs/fields
+populated). The SF→LCC OMs are visibly flowing into the **Inbox panel** as promotable items
+(U.S. Renal Care, Fresenius Pasadena — Salesforce Comp__c, vertical:dia) — R5-P-1 confirmed in-UI.
+
+- **R5-UI-1 [MED — perf/UX] — heavy views freeze the renderer.** Two views hard-froze the browser
+  (CDP screenshot timed out, "renderer unresponsive"), recoverable only by navigating away:
+  - **Dialysis section** loads several large datasets client-side *at once*: `v_npi_inventory_signals`
+    **limit=5000**, `salesforce_activities` **limit=5000**, `research_queue_outcomes` **limit=2000**,
+    plus multiple `limit=1000` views.
+  - **Inbox** view renders the **2,955** flagged-email backlog (`sync?action=flagged_emails&limit=2000`).
+  Both block the main thread on render. **Fix:** server-side pagination + windowed/virtualized list
+  rendering (or cap initial load + lazy-load on scroll) for these two surfaces. The lightweight
+  dashboard previews (Inbox panel, NBA list) are fine — it's the full-list views that choke.
+- **Data quality (read-only checks, gov+dia — improving):**
+  - **gov** (17,606 props): Unknown agency **16.4%** (2,880) — down from the prior audit's ~42%;
+    missing address **32** / city **12** (was a backlog — now negligible); geocoded **89.4%**.
+  - **dia** operator names well-normalized; ~73 rows in minor variants ("Fresenius Medical Care" 25
+    vs "Fresenius"; "US Renal Care" 45 vs "US Renal Care, Inc." 384; 3 DaVita pipe one-offs) — small
+    hygiene item.
+- **Not yet walked (deferred — heavy-view freeze risk):** Inbox triage actions, Contacts/entity
+  dedup, Capital Markets reports, and the More menu. Best revisited *after* the R5-UI-1
+  pagination/virtualization fix so they don't freeze the browser mid-audit.
