@@ -133,11 +133,14 @@ async function govQuery(table, select, params = {}) {
   }
 }
 
-// Gov write service — routes through /api/data-proxy?_route=gov-write
+// Gov write service — routes through /api/gov-write
+// (R5-FE-1, 2026-05-20: was /api/data-proxy?_route=gov-write — data-proxy was
+// absorbed into admin.js and has no rewrite/file, so that route 404'd. The live
+// route is /api/gov-write, which vercel.json rewrites to
+// /api/admin?_route=edge-data&_edgeRoute=gov-write.)
 // Endpoints: 'ownership', 'lead-research', 'financial', 'resolve-pending'
 async function govWriteService(endpoint, data) {
-  const url = new URL('/api/data-proxy', window.location.origin);
-  url.searchParams.set('_route', 'gov-write');
+  const url = new URL('/api/gov-write', window.location.origin);
   url.searchParams.set('endpoint', endpoint);
 
   const controller = new AbortController();
