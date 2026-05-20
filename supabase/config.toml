@@ -23,3 +23,10 @@
 
 [functions.availability-checker]
 verify_jwt = false
+
+# intake-salesforce-files authenticates via X-PA-Webhook-Secret (authenticateWebhook),
+# not a Supabase JWT — must stay verify_jwt = false or the gateway 401s the hourly
+# sf-files-extract-queued cron + the PA SF→LCC file flows with UNAUTHORIZED_NO_AUTH_HEADER.
+# (Pinned 2026-05-20 after a bare `functions deploy` re-enabled the CLI default and broke it.)
+[functions.intake-salesforce-files]
+verify_jwt = false
