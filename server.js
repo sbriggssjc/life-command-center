@@ -80,6 +80,9 @@ app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.qu
 app.all('/api/gov-write', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-write'; adminHandler(req, res); });
 app.all('/api/gov-evidence', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-evidence'; adminHandler(req, res); });
 app.all('/api/dia-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'dia'; adminHandler(req, res); });
+// R5-FE-2 (2026-05-20): mirror the vercel.json /api/data-query rewrite on Railway.
+// detail.js contact/ownership/Add-Contact lookups carry their own _source=gov|dia, so do NOT bake _source here.
+app.all('/api/data-query', (req, res) => { req.query._route = 'edge-data'; adminHandler(req, res); });
 
 // actions rewrites
 app.all('/api/activities', (req, res) => { req.query._route = 'activities'; actionsHandler(req, res); });
