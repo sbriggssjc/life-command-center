@@ -181,7 +181,57 @@ function cleanSalesPartyValue(name) {
     console.warn(`[isJunkSalesParty] Stripping junk party name: "${trimmed}"`);
     return null;
   }
-  return trimmed;
+  return sanitizeOwnerName(trimmed);
+}
+
+// R5-DQ-2 (2026-05-20): strip trailing " by <Brokerage>" suffix that
+// occasionally leaks in via CoStar comp scrapes — the same regex lives
+// in dia.dia_strip_broker_suffix() (migration
+// 20260520230000_dia_r5_dq_*). Without this guard, the same Tsoumpas-
+// type entity gets stored as N variants ("Foo LLC by Northmarq",
+// "Foo LLC by CBRE", "Foo LLC") and the dedup loop fails to merge them.
+const BROKER_SUFFIX_RE = new RegExp(
+  '\\s+by\\s+(' +
+    'northmarq|cbre|jll|colliers( international)?|newmark|' +
+    'cushman( & wakefield)?|marcus( & millichap)?|matthews( real estate)?|' +
+    'matthews|berkadia|hanley|capital pacific|nai( [a-z]+)?|' +
+    'stream realty|kw commercial|trinity|avison( young)?|' +
+    'stan johnson( company)?|sjc' +
+  ')\\.?\\s*$',
+  'i'
+);
+function sanitizeOwnerName(name) {
+  if (name === null || name === undefined) return null;
+  const trimmed = String(name).trim();
+  if (!trimmed) return null;
+  const stripped = trimmed.replace(BROKER_SUFFIX_RE, '').trim();
+  if (stripped !== trimmed) {
+    console.log(`[sanitizeOwnerName] Stripped broker suffix: "${trimmed}" → "${stripped}"`);
+  }
+  return stripped || null;
+}
+
+// R5-DQ-3 (2026-05-20): OM section-header / table-of-contents tokens
+// that leak into property.address when AI extraction grabs a layout
+// label instead of the street line. Mirrors the dia_v_data_quality
+// 'duplicate_property_address' / OM-junk address audit. Returns true
+// when the address must NOT be used to create a property record.
+const OM_JUNK_ADDRESS_RE = new RegExp(
+  '\\b(' +
+    'lease summary|investment (highlights|summary)|financials|rent roll|' +
+    'table of contents|offering memorandum|offering|executive summary|' +
+    'recent changes|view property video|exclusively listed?|' +
+    'property highlights|tenant highlights|sale highlights|' +
+    'about the (owner|seller|buyer|building|tenant|property)|' +
+    'marketing brochure|broker package|new listing alert' +
+  ')\\b',
+  'i'
+);
+function isJunkAddress(addr) {
+  if (!addr) return false;
+  const s = String(addr).trim();
+  if (!s) return false;
+  return OM_JUNK_ADDRESS_RE.test(s);
 }
 
 async function recordFieldProvenance(args) {
@@ -2851,6 +2901,18 @@ async function upsertDomainProperty(domain, entity, metadata) {
     if (metadata.address) metadata.address = address;
   }
   if (!address) return null;
+
+  // R5-DQ-3 (2026-05-20): reject OM section-header / table-of-contents
+  // residue that AI extraction grabbed instead of a street line. Without
+  // this guard the sidebar creates a junk-address property (e.g.
+  // "2 Lease Summary 110 Enterprise Dr") and then has to be merged into
+  // the canonical record manually. Better to skip the write entirely so
+  // the canonical address path runs against the next CoStar capture.
+  if (isJunkAddress(address)) {
+    _lastDomainPropertyError = `junk_address_rejected:${address}`;
+    console.warn(`[upsertDomainProperty] Refusing to write OM-junk address: "${address}" (${domain})`);
+    return null;
+  }
 
   // Round 76y (2026-04-27): trust the matcher's authoritative property_id
   // when present. handleIntakePromote stamps metadata.matcher_property_id
@@ -6660,6 +6722,12 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
 
   // Helper to find-or-create a recorded owner by name
   async function ensureRecordedOwner(name, address) {
+    // R5-DQ-2 (2026-05-20): strip " by <Brokerage>" suffix BEFORE the
+    // existing normalizer so the same entity captured by two different
+    // brokers (or the same broker with/without the suffix) resolves to
+    // one recorded_owners row. Same logic mirrored in
+    // dia.dia_strip_broker_suffix() (migration 20260520230000).
+    name = sanitizeOwnerName(name);
     if (!name) return null;
     const normalizedName = normalizeOwnerName(name);
 
