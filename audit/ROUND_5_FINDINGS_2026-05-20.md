@@ -239,3 +239,30 @@ by-design but worth a triage push), `discarded` 671 (none recent), `failed` **45
 - **R5-P-1b [LOW] — the gov `Comp__c` variant stopped 2026-05-16** (9 items, last May 16), while
   dia continues failing daily — suggests the gov path may have been partially fixed or simply
   hasn't re-run; verify when fixing R5-P-1.
+
+### SF → LCC object/activity sync — HEALTHY
+
+Very active and current: `sf_sync_log` has **6,862 rows in the last 24h** (newest 19:01 today)
+and `salesforce` wrote **19,302 `field_provenance`** rows in 24h (R5 Part 1). The SF→LCC data
+path is alive and flowing.
+
+- **R5-P-2 [LOW — confirm deprecation] — `sf_sync_queue` find/link worker idle since 2026-04-29.**
+  468 `done` / 1 `failed`, all activity Apr 24–29, nothing since. This is the old `LCCSFFlow1`
+  1-minute find/link queue. Given SF→LCC is otherwise very active, this queue looks **superseded**
+  (analogous to `propagation_worker.py` — R5-note) by the newer May-16/17 `SF -> LCC: Object Sync`
+  family, not broken. Confirm it's intentionally retired (and retire the 1-min worker flow if so,
+  to stop an empty poll), or re-enable its feeder if find/link is still wanted.
+
+### Sidebar capture (CoStar / RCA / CREXi) — HEALTHY
+
+`costar_sidebar` 12,642 + `rca_sidebar` 10,381 `field_provenance` writes in 24h (R5 Part 1);
+fresh CREXi capture (`5820 Road 68, Pasco WA`) landed live during the drive. No silent-drop
+signal. Full table coverage (properties, listings, leases, sales, contacts, public records,
+deeds, loans) per the Phase 2.2 instrumentation. No action.
+
+### Part 3 summary
+
+Pipelines are healthy except **R5-P-1 (HIGH)** — the SF `Comp__c` OM **file-move** step in
+Power Automate delivers the reference but not the bytes, stranding 25 deals' OMs before
+extraction. That's the one active fix to pursue next; it's a PA-flow change (inspect the
+ContentVersion download + `base64ToBinary` + the POST to `/api/intake`).
