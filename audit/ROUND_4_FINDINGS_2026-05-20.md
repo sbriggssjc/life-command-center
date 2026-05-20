@@ -197,13 +197,55 @@ intentional). Registry currently has 1,393 rules; 868,698 provenance rows logged
 
 ## R4-6. 🟧 REVIEW · [MEDIUM] Self-learning loop logs conflicts but doesn't close them
 
-`v_field_provenance_conflicts` = **485** open same-priority disagreements pending
-review on LCC Opps. Directly answers the audit question "is the loop closing or
-just logging?" — **it's logging, not closing.** Conflicts are detected and queued
-but there's no review/resolution mechanism draining them, so they accumulate.
-**Action:** add a conflict-resolution surface (UI panel or a periodic
-auto-resolver for clear cases) so the self-learning loop actually self-corrects
-rather than just recording disagreements.
+`v_field_provenance_conflicts` = **485** open conflicts on LCC Opps. The audit
+question "is the loop closing or just logging?" — **it's logging, not closing.**
+
+### Collaborative review (2026-05-20) — root cause is deeper than "missing precedence"
+Reviewed the conflict clusters + concrete values with Scott. The 485 collapse onto
+a few source-pair relationships, dominated by **rca_sidebar vs costar_sidebar** and
+**om_extraction vs costar_sidebar** (tenant, contact role, broker name/email,
+prices, cap rates, lease dates). Two structural causes:
+
+1. **Enforcement rollout stalled (the real blocker).** The precedence rules largely
+   *exist and are sensible* — e.g. `dia.properties.tenant` is already om=45 < rca=50
+   < costar=65. But `enforce_mode` is almost entirely **`record_only`** (a few
+   `warn`, rare `strict`). Per the Phase-3 "gradual rollout" plan
+   (`data_quality_self_learning_loop.md`), these were meant to advance
+   record_only → warn → strict, but never did. In `record_only` the merge *records*
+   the disagreement and lets the lower-priority write land anyway → conflicts
+   accumulate (many historical, from before the rules were refined; `field_provenance`
+   is append-only so they persist).
+2. **CoStar sidebar capture-quality bugs** (separate, sidebar-parser finding): CoStar
+   grabs titles-as-names (`contacts.contact_name` = "Managing Partner"), unparsed
+   price strings (`"$3,690,000 ($246.00/SF)"` vs clean `3690000`), and nulls — which
+   is *why* om/rca should outrank it for those fields.
+
+### Scott's precedence decisions (2026-05-20)
+- **OM vs CoStar → field-by-field:** OM wins deal economics + parties (price, cap,
+  tenant, broker name/email, contact_name); CoStar wins `role` (it's richer:
+  "buyer_broker,listing_broker"). Mostly already encoded (om < costar); confirm role.
+- **CoStar vs RCA → field-by-field:** RCA wins contact-identity fields
+  (address/city/state/phone/email/name/company); CoStar wins property attributes
+  (year_built, address, parcel, source_url) + role.
+- **Email vs OM → OM wins** for lease terms (expiration/start/renewal_options).
+  NOTE: currently these are a true tie (both priority 35) — this is the one set that
+  genuinely needs a priority change (bump om above email_intake).
+
+### Resolution plan (deliberate, staged — NOT done inline; touches live governance)
+1. **Adjust the few rankings** that don't match the decisions (chiefly email_intake
+   vs om_extraction lease fields: make om win; confirm `role` → costar).
+2. **Complete the Phase-3 enforcement rollout** for the decided fields: flip
+   `enforce_mode` record_only → `warn` (observe the JS-side warnings for a cycle) →
+   `strict` (block lower-priority writes). Staged, per the original plan.
+3. **Re-arbitrate the existing 485:** for conflicts where the current domain value is
+   from the now-losing source, backfill the winning source's value, then resolve the
+   conflict-log rows. (Touches live dia/gov values — do carefully, reversibly.)
+4. **Fix the CoStar sidebar parser** (titles-as-names, unparsed price strings) — a
+   `sidebar-pipeline.js` `isJunk*`-style guard, parallel to the existing filters.
+
+This is a focused next-round project (governance + live-data changes), not an
+end-of-session inline edit. Confirm lcc_merge_field's exact conflict-assignment +
+enforce_mode interaction before flipping modes.
 
 ## ✅ Verified / cleared this sweep
 
@@ -226,6 +268,40 @@ rather than just recording disagreements.
   anon/publishable key cannot reach sensitive tables via PostgREST on dia/gov,
   (b) SECURITY DEFINER functions pin `search_path`. Not triaged in this round.
 
+## R4-7. ✅ HEALTHY · domain DB integrity deep-dive (cap-rate / geocode / sales / leases)
+
+Closed the integrity gap flagged earlier. Both domain DBs are fundamentally sound:
+
+| Check | dia | gov |
+|---|---|---|
+| Properties geocoded (lat+lng) | 13,012 / 15,120 = **86%** | 15,742 / 17,599 = **89%** |
+| sales_transactions with NULL sale_date | **0** | **0** |
+| cap_rate_history outside [0.005, 0.30] guardrail | **0** / 8,126 | **0** / 2,804 |
+| Properties with multiple active/current leases | **0** | 482 (informational) |
+
+Notes:
+- **Geocode coverage is strong** (86% / 89%) — the `lcc-geocode-backfill` cron +
+  Google fallback worked (dia was ~20% pre-fallback per the CLAUDE.md note). The
+  remaining ~11–14% are the chronic Census/Google misses (corrupted legacy
+  addresses); the cron maintains coverage as new rows arrive.
+- **dia multi-active leases = 0** — the R4-3 hygiene-sweep fix already cleared the
+  backlog (was ~1,007 per the prior audit; the sweep superseded the extras).
+- **gov 482 multi-current leases = informational, not a defect** — government
+  buildings are routinely multi-tenant (several agency leases per building); the
+  sweep deliberately only auto-supersedes clear single-winner cases.
+- **Cap-rate guardrails hold** on both DBs — `gov_compute_cap_rate` + triggers drop
+  out-of-range values; nothing slipped through.
+
+`dia.v_data_quality_summary` — the one large backlog is **`duplicate_property_address`
+= 2,789** (the other rows are minor: 195 anchor-rent-no-bump, 372 orphan medicare_id,
+7 no-address, 4,330 "unverified" status flag). That dup-address backlog is exactly
+what the now-fixed **R4-2b auto-merge** attacks — frozen/growing before today (the
+merge never completed), now draining ~100/run hourly. Optional accel: bump the
+auto-merge batch/cadence to clear it faster than the ~1-day natural drain.
+
+No new defects; the integrity audit confirms the data BOVs/OMs depend on is sound,
+and the Round 4 fixes (R4-2b, R4-3) are already paying down the largest backlog.
+
 ## Summary
 
 | ID | Sev | Status | What |
@@ -237,4 +313,5 @@ rather than just recording disagreements.
 | R4-4 | HIGH | 🟥 open (recommended build) | dia/gov health alerts never surfaced |
 | R4-5 | MED | 🟧 review | 163 unranked provenance writer-paths |
 | R4-6 | MED | 🟧 review | 485 provenance conflicts logged, not closed |
+| R4-7 | — | ✅ healthy | domain integrity (geocode 86/89%, cap-rate guardrails hold, dup-address backlog now draining) |
 | advisors | — | deferred | focused RLS/search_path security pass |
