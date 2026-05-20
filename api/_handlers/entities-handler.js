@@ -246,6 +246,40 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       });
     }
 
+    // R4 Phase-4 Tier A: unified review queue. Drives the "Provenance Review
+    // Queue" widget on the Ops page. Returns the rows from
+    // v_field_provenance_review_queue plus per-bucket counts so the UI can
+    // render the bucket-filter chips without a second round trip.
+    if (action === 'quality_provenance_review_queue') {
+      const limit  = Math.min(Math.max(parseInt(req.query.limit, 10)  || 200, 1), 1000);
+      const bucket = req.query.bucket; // optional pre-filter
+      let path = `v_field_provenance_review_queue?` +
+        `select=provenance_id,recorded_at,target_database,target_table,record_pk_value,` +
+        `field_name,attempted_value,attempted_source,attempted_priority,attempted_enforce_mode,` +
+        `current_provenance_id,current_value,current_source,current_priority,` +
+        `decision,decision_reason,row_kind,bucket` +
+        `&order=recorded_at.desc&limit=${limit}`;
+      if (bucket && /^[a-z_]+$/.test(bucket)) {
+        path += `&bucket=eq.${bucket}`;
+      }
+
+      // Fetch the rows (paged) AND a full-set count rollup for the chips.
+      const [rows, rollup] = await Promise.all([
+        opsQuery('GET', path),
+        opsQuery('GET',
+          `v_field_provenance_review_queue?select=bucket&limit=10000`
+        ),
+      ]);
+      const bucketCounts = {};
+      for (const r of (rollup.data || [])) {
+        bucketCounts[r.bucket] = (bucketCounts[r.bucket] || 0) + 1;
+      }
+      return res.status(200).json({
+        rows: rows.data || [],
+        bucket_counts: bucketCounts,
+      });
+    }
+
     // Search by name
     if (action === 'search' && q) {
       const searchTerm = q.replace(/[%_]/g, '').trim();
@@ -909,6 +943,149 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         target: targetEntity,
         source_removed: sourceEntity,
         message: `"${sourceEntity.name}" merged into "${targetEntity.name}". Source entity deleted.`
+      });
+    }
+
+    // R4 Phase-4 Tier A: resolve a single provenance conflict/skip row.
+    //
+    // Body: { provenance_id: <bigint>,
+    //         chosen: 'current'|'attempted'|'custom'|'junk'|'defer',
+    //         custom_value: <any>,   // required iff chosen='custom'
+    //         notes: <string> }      // optional
+    //
+    // Flow:
+    //   1. Validate body + load attempted row from field_provenance
+    //   2. For chosen in {attempted, custom}: call the domain DB's
+    //      lcc_apply_field_resolution RPC; abort early on failure
+    //   3. Call LCC Opps lcc_record_field_resolution to atomically:
+    //      insert resolutions row, insert new manual_resolution
+    //      provenance row (if writing), supersede prior rows.
+    //
+    // Manager role gate. Domain write is reversible via the
+    // before_value in resolutions.domain_write_response.
+    if (req.query.action === 'resolve_provenance_conflict') {
+      if (!requireRole(user, 'manager', workspaceId)) {
+        return res.status(403).json({ error: 'Manager role required to resolve provenance conflicts' });
+      }
+
+      const body = req.body || {};
+      const provenance_id = body.provenance_id;
+      const chosen        = body.chosen;
+      const custom_value  = body.custom_value;
+      const notes         = body.notes || null;
+
+      const VALID_CHOSEN = new Set(['current','attempted','custom','junk','defer']);
+      if (!Number.isFinite(Number(provenance_id))) {
+        return res.status(400).json({ error: 'provenance_id (bigint) is required' });
+      }
+      if (!VALID_CHOSEN.has(chosen)) {
+        return res.status(400).json({ error: `chosen must be one of ${[...VALID_CHOSEN].join(', ')}` });
+      }
+      if (chosen === 'custom' && (custom_value === undefined)) {
+        return res.status(400).json({ error: 'custom_value is required when chosen=custom' });
+      }
+
+      // 1. Load the attempted row from LCC Opps
+      const fpRes = await opsQuery('GET',
+        `field_provenance?id=eq.${Number(provenance_id)}&select=id,target_database,target_table,record_pk_value,field_name,value,source,decision&limit=1`
+      );
+      if (!fpRes.ok || !fpRes.data?.length) {
+        return res.status(404).json({ error: 'provenance row not found' });
+      }
+      const fp = fpRes.data[0];
+
+      if (!['conflict','skip'].includes(fp.decision)) {
+        return res.status(409).json({ error: `row no longer resolvable (decision=${fp.decision})`, decision: fp.decision });
+      }
+
+      // 2. Compute chosen_value + decide whether a domain write is needed.
+      //    - 'current'  : no domain write; resolver picks the current value.
+      //    - 'attempted': write the attempted value (fp.value) to the domain DB.
+      //    - 'custom'   : write the reviewer-typed value.
+      //    - 'junk'     : no domain write; flag attempted as junk.
+      //    - 'defer'    : no domain write; queue re-review in 7d.
+      let chosen_value_jsonb = null;
+      let needsDomainWrite = false;
+      if (chosen === 'attempted') {
+        chosen_value_jsonb = fp.value;        // field_provenance.value is already JSONB
+        needsDomainWrite = true;
+      } else if (chosen === 'custom') {
+        chosen_value_jsonb = custom_value;    // serialized as JSONB through the RPC call
+        needsDomainWrite = true;
+      }
+
+      // 3. Domain DB write (if needed)
+      let domainWriteOk = null;
+      let domainWriteResponse = null;
+      if (needsDomainWrite) {
+        // Map LCC's target_database -> domain key + strip schema prefix from target_table
+        let domain = null;
+        let unqualifiedTable = fp.target_table;
+        if (fp.target_database === 'dia_db' && fp.target_table.startsWith('dia.')) {
+          domain = 'dialysis';
+          unqualifiedTable = fp.target_table.slice('dia.'.length);
+        } else if (fp.target_database === 'gov_db' && fp.target_table.startsWith('gov.')) {
+          domain = 'government';
+          unqualifiedTable = fp.target_table.slice('gov.'.length);
+        } else {
+          return res.status(400).json({
+            error: 'Domain DB writes only supported for dia_db / gov_db with schema-prefixed target_table',
+            target_database: fp.target_database, target_table: fp.target_table,
+          });
+        }
+
+        const rpcRes = await domainQuery(domain, 'POST', 'rpc/lcc_apply_field_resolution', {
+          p_target_table: unqualifiedTable,
+          p_record_pk:    String(fp.record_pk_value),
+          p_field_name:   fp.field_name,
+          p_new_value:    chosen_value_jsonb,
+          p_workspace_id: workspaceId,
+          p_resolved_by:  user.id,
+        }, {}, { label: 'resolve_provenance_conflict' });
+
+        domainWriteResponse = rpcRes.data;
+        domainWriteOk = !!(rpcRes.ok && rpcRes.data && rpcRes.data.ok);
+
+        if (!domainWriteOk) {
+          // Surface the domain envelope so the UI can show the specific error
+          // (schema_ok=false / row-not-found / SQL error) without guessing.
+          return res.status(502).json({
+            error: 'Domain DB write failed',
+            domain, target_table: unqualifiedTable,
+            field_name: fp.field_name, record_pk: fp.record_pk_value,
+            domain_write_response: rpcRes.data,
+          });
+        }
+      }
+
+      // 4. Atomic LCC-side resolution write
+      const recordRes = await opsQuery('POST', 'rpc/lcc_record_field_resolution', {
+        p_attempted_provenance_id: Number(provenance_id),
+        p_chosen:                  chosen,
+        p_chosen_value:            chosen_value_jsonb,
+        p_workspace_id:            workspaceId,
+        p_resolved_by:             user.id,
+        p_decision_notes:          notes,
+        p_domain_write_ok:         domainWriteOk,
+        p_domain_write_response:   domainWriteResponse,
+      });
+      if (!recordRes.ok) {
+        return res.status(500).json({
+          error: 'Failed to record resolution on LCC Opps',
+          detail: recordRes.data,
+          // domain write already succeeded (if any); operator will need to inspect
+          domain_write_ok: domainWriteOk,
+          domain_write_response: domainWriteResponse,
+        });
+      }
+      const resolution_id = Array.isArray(recordRes.data) ? recordRes.data[0] : recordRes.data;
+
+      return res.status(200).json({
+        ok: true,
+        resolution_id,
+        chosen,
+        domain_write_ok: domainWriteOk,
+        domain_write_response: domainWriteResponse,
       });
     }
 

@@ -1136,97 +1136,131 @@ async function renderDataQualityPage() {
   }
 }
 
-// ─── Provenance conflicts panel (Phase 3) ────────────────────────────────
-// Surfaces field_provenance rows where a write was skipped or conflicted
-// AND the rule is in warn or strict enforce_mode. Useful before flipping
-// rules to strict — see exactly which fields are being attempted-to-be-
-// overwritten by lower-priority sources.
-let _provFilter = 'all'; // 'all' | 'skip' | 'conflict'
+// ─── Provenance Review Queue (Phase 4 Tier A) ─────────────────────────────
+// Surfaces v_field_provenance_review_queue rows for human resolution, plus
+// the legacy "unranked fields" surface. Replaces the older read-only
+// conflicts panel: each row has Keep current / Use incoming / Defer / Junk
+// / Custom buttons that call POST /api/entities?action=resolve_provenance_conflict.
+// Buckets default to the 212 actionable items (still_tied +
+// conflicting_source_now_wins); warn/strict skip rows are accessible via
+// the chip filter but not surfaced first.
+const _provDefaultBuckets = new Set(['still_tied','conflicting_source_now_wins','current_source_now_wins']);
+let _provBucket = 'actionable';  // 'actionable' (the default set) | 'all' | <bucket_name>
+
 async function renderProvenanceConflictWidgets() {
   const host = document.getElementById('provenanceConflictWidgets');
   if (!host) return;
 
-  const res = await opsApi('/api/entities?action=quality_provenance&limit=200');
-  if (!res.ok) {
-    host.innerHTML = `<div class="widget"><div class="widget-title">Provenance Conflicts</div><div class="ops-empty">Could not load provenance data.<br><small>${esc(res.error)}</small></div></div>`;
+  // Pull both surfaces in parallel: the new review queue + the legacy
+  // unranked-fields summary (still useful as a schema-drift indicator).
+  const [queueRes, legacyRes] = await Promise.all([
+    opsApi('/api/entities?action=quality_provenance_review_queue&limit=200'),
+    opsApi('/api/entities?action=quality_provenance&limit=1'),  // only need .unranked
+  ]);
+
+  if (!queueRes.ok) {
+    host.innerHTML = `<div class="widget"><div class="widget-title">Provenance Review Queue</div><div class="ops-empty">Could not load review queue.<br><small>${esc(queueRes.error)}</small></div></div>`;
     return;
   }
-  const data = res.data || {};
-  const rows     = data.actionable || [];
-  const summary  = data.summary_7d || [];
-  const unranked = data.unranked || [];
+  const rows           = queueRes.data?.rows || [];
+  const bucket_counts  = queueRes.data?.bucket_counts || {};
+  const unranked       = legacyRes.data?.unranked || [];
 
-  let html = '<div class="widget"><div class="widget-title">Provenance Conflicts ' +
+  // Compute the "actionable" total (the buckets that need human action)
+  const actionableTotal = (bucket_counts.still_tied || 0)
+    + (bucket_counts.conflicting_source_now_wins || 0)
+    + (bucket_counts.current_source_now_wins || 0);
+  const allTotal = Object.values(bucket_counts).reduce((a,b) => a+b, 0);
+
+  // Filter the loaded rows by the active bucket selector
+  let filtered;
+  if (_provBucket === 'actionable') {
+    filtered = rows.filter(r => _provDefaultBuckets.has(r.bucket));
+  } else if (_provBucket === 'all') {
+    filtered = rows;
+  } else {
+    filtered = rows.filter(r => r.bucket === _provBucket);
+  }
+
+  let html = '<div class="widget"><div class="widget-title">Provenance Review Queue ' +
     '<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">' +
-    'Writes blocked or flagged by enforce_mode (warn / strict). Phase 3 of the data quality loop.</span></div>';
+    'Pick a winner for each open conflict — the change is written to the live dia/gov DB and recorded in field_provenance_resolutions.</span></div>';
 
-  if (summary.length === 0 && rows.length === 0) {
-    html += '<div class="ops-empty" style="color:var(--green)">No skips or conflicts in the last 7 days under warn/strict rules.</div>';
+  if (allTotal === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">Nothing to review. No open conflicts or warn/strict skips.</div>';
     html += '</div>';
     host.innerHTML = html;
     return;
   }
 
-  // Top-N summary by table.field
-  if (summary.length > 0) {
-    html += '<div style="margin-bottom:12px;font-size:13px;color:var(--text2)">Top fields by attempted-overwrite count (last 7 days):</div>';
-    html += '<div class="metrics-grid" style="margin-bottom:12px">';
-    for (const s of summary.slice(0, 6)) {
-      const tone = s.decision === 'conflict' ? 'red' : (s.enforce_mode === 'strict' ? 'red' : 'yellow');
-      html += metricCardHTML(
-        `${s.target_table}.${s.field_name}`,
-        s.count,
-        `${s.decision} · ${s.enforce_mode}`,
-        tone
-      );
-    }
-    html += '</div>';
-  }
-
-  // Filter buttons
+  // Bucket-filter chips. Default (Actionable) covers the 212 conflicts the
+  // R4 round opened; the other chips surface the warn/strict skip set
+  // and any unranked-either-side rows so they're still findable.
+  const chip = (key, label, count, tone) =>
+    `<button class="ops-filter ${_provBucket === key ? 'active' : ''}" onclick="_provBucket='${key}';renderProvenanceConflictWidgets()">${label}${count != null ? ' ('+count+')' : ''}</button>`;
   html += '<div class="ops-filters" style="margin-bottom:12px">';
-  html += `<button class="ops-filter ${_provFilter === 'all' ? 'active' : ''}" onclick="_provFilter='all';renderProvenanceConflictWidgets()">All decisions</button>`;
-  html += `<button class="ops-filter ${_provFilter === 'skip' ? 'active' : ''}" onclick="_provFilter='skip';renderProvenanceConflictWidgets()">Skips only</button>`;
-  html += `<button class="ops-filter ${_provFilter === 'conflict' ? 'active' : ''}" onclick="_provFilter='conflict';renderProvenanceConflictWidgets()">Conflicts only</button>`;
+  html += chip('actionable',  'Actionable',  actionableTotal);
+  html += chip('still_tied',  'Still tied',  bucket_counts.still_tied);
+  html += chip('conflicting_source_now_wins', 'Needs backfill', bucket_counts.conflicting_source_now_wins);
+  html += chip('current_source_now_wins',    'Keep current OK', bucket_counts.current_source_now_wins);
+  html += chip('warn_skip',   'Warn skips',  bucket_counts.warn_skip);
+  html += chip('strict_skip', 'Strict skips', bucket_counts.strict_skip);
+  html += chip('all',         'All',          allTotal);
   html += '</div>';
 
-  const filtered = _provFilter === 'all'
-    ? rows
-    : rows.filter(r => r.decision === _provFilter);
-
-  if (filtered.length === 0) {
-    html += '<div class="ops-empty">No rows for this filter.</div>';
-  } else {
-    for (const r of filtered.slice(0, 50)) {
-      const ago = freshnessHTML(r.recorded_at);
-      const decisionBadge = r.decision === 'conflict' ? 'pri-high' : (r.enforce_mode === 'strict' ? 'pri-high' : 'pri-med');
-      const truncate = (v) => {
-        if (v == null) return '—';
-        const s = typeof v === 'string' ? v : JSON.stringify(v);
-        return s.length > 80 ? s.slice(0, 77) + '…' : s;
-      };
-      html += `<div class="q-item">
-        <div class="q-item-header">
-          <span class="q-item-title">${esc(r.target_table)}.${esc(r.field_name)}</span>
-          <div class="q-item-badges">
-            <span class="q-badge ${decisionBadge}">${esc(r.decision)}</span>
-            <span class="q-badge">${esc(r.enforce_mode)}</span>
-            <span class="q-badge">record ${esc(r.record_pk_value)}</span>
-          </div>
-        </div>
-        <div class="q-item-meta">
-          <span><b>incoming:</b> ${esc(r.attempted_source)} (priority ${esc(String(r.attempted_priority))}) → ${esc(truncate(r.attempted_value))}</span>
-          ${r.current_source ? `<span><b>current:</b> ${esc(r.current_source)} → ${esc(truncate(r.current_value))}</span>` : ''}
-          <span style="color:var(--text2);font-style:italic">${esc(r.decision_reason || '')}</span>
-          ${ago}
-        </div>
-      </div>`;
-    }
-    if (filtered.length > 50) {
-      html += `<div class="q-item-meta" style="padding:8px 12px">Showing first 50 of ${filtered.length}.</div>`;
-    }
+  // Hint when on default
+  if (_provBucket === 'actionable' && actionableTotal === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">All actionable items resolved. Switch chips above to inspect warn/strict skip rows.</div>';
   }
 
+  const truncate = (v) => {
+    if (v == null) return '—';
+    const s = typeof v === 'string' ? v : JSON.stringify(v);
+    return s.length > 80 ? s.slice(0, 77) + '…' : s;
+  };
+
+  for (const r of filtered.slice(0, 50)) {
+    const ago = freshnessHTML(r.recorded_at);
+    const decisionBadge = r.decision === 'conflict' ? 'pri-high' : (r.attempted_enforce_mode === 'strict' ? 'pri-high' : 'pri-med');
+    const bucketBadge = r.bucket === 'still_tied' ? 'pri-high'
+                     : r.bucket === 'conflicting_source_now_wins' ? 'pri-med'
+                     : '';
+
+    // Per-row actions. The data-pid attribute is the field_provenance row id
+    // (the "attempted" side); the resolver always references that and looks
+    // up the current side server-side.
+    const pid = Number(r.provenance_id);
+    const hasCurrent = r.current_provenance_id != null;
+    const actions = [
+      hasCurrent ? `<button class="ops-filter" onclick="resolveProvConflict(${pid},'current',null,this)">Keep current</button>` : '',
+      `<button class="ops-filter" onclick="resolveProvConflict(${pid},'attempted',null,this)">Use incoming</button>`,
+      `<button class="ops-filter" onclick="resolveProvConflictCustom(${pid},this)">Custom…</button>`,
+      `<button class="ops-filter" onclick="resolveProvConflict(${pid},'defer',null,this)">Defer 7d</button>`,
+      `<button class="ops-filter" onclick="resolveProvConflict(${pid},'junk',null,this)">Mark junk</button>`,
+    ].filter(Boolean).join('');
+
+    html += `<div class="q-item" data-prov-row="${pid}">
+      <div class="q-item-header">
+        <span class="q-item-title">${esc(r.target_table)}.${esc(r.field_name)}</span>
+        <div class="q-item-badges">
+          <span class="q-badge ${decisionBadge}">${esc(r.decision)}</span>
+          ${r.attempted_enforce_mode ? `<span class="q-badge">${esc(r.attempted_enforce_mode)}</span>` : ''}
+          ${r.bucket ? `<span class="q-badge ${bucketBadge}">${esc(r.bucket)}</span>` : ''}
+          <span class="q-badge">record ${esc(r.record_pk_value)}</span>
+        </div>
+      </div>
+      <div class="q-item-meta">
+        <span><b>incoming:</b> ${esc(r.attempted_source)} (priority ${esc(String(r.attempted_priority))}) → ${esc(truncate(r.attempted_value))}</span>
+        ${r.current_source ? `<span><b>current:</b> ${esc(r.current_source)} (priority ${esc(String(r.current_priority))}) → ${esc(truncate(r.current_value))}</span>` : '<span style="color:var(--text2)"><b>current:</b> none</span>'}
+        <span style="color:var(--text2);font-style:italic">${esc(r.decision_reason || '')}</span>
+        ${ago}
+      </div>
+      <div class="ops-filters" style="margin-top:8px;gap:4px">${actions}</div>
+    </div>`;
+  }
+  if (filtered.length > 50) {
+    html += `<div class="q-item-meta" style="padding:8px 12px">Showing first 50 of ${filtered.length}.</div>`;
+  }
   html += '</div>';
 
   // ── Phase 4: Unranked fields (schema-drift detector) ──────────────────
@@ -1265,6 +1299,45 @@ async function renderProvenanceConflictWidgets() {
   html += '</div>';
 
   host.innerHTML = html;
+}
+
+// Resolution action handlers — POST to /api/entities?action=resolve_provenance_conflict
+// and refresh the widget on success. Errors are toasted; the row stays in place.
+async function resolveProvConflict(provenance_id, chosen, custom_value, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  const body = { provenance_id, chosen };
+  if (custom_value !== null && custom_value !== undefined) body.custom_value = custom_value;
+  const res = await opsPost('/api/entities?action=resolve_provenance_conflict', body);
+  if (res.ok) {
+    if (typeof toast === 'function') {
+      toast(chosen === 'defer' ? 'Deferred 7 days.'
+          : chosen === 'junk'  ? 'Marked as junk.'
+          : chosen === 'current' ? 'Kept current value.'
+          : 'Domain DB updated.');
+    }
+    renderProvenanceConflictWidgets();
+  } else {
+    const detail = res.error || 'Resolution failed';
+    if (typeof toast === 'function') toast(detail, 'error');
+    else alert(detail);
+    if (btn) { btn.disabled = false; btn.textContent = chosen; }
+  }
+}
+
+async function resolveProvConflictCustom(provenance_id, btn) {
+  // Find the row to show its current values in the prompt
+  const card = btn?.closest('[data-prov-row]');
+  const helper = card ? card.querySelector('.q-item-meta')?.textContent : '';
+  const v = prompt(
+    `Enter the value to write. Numbers will be parsed as JSON (e.g. 3690000 not "3690000").` +
+    (helper ? '\n\nContext:\n' + helper.slice(0, 200) : ''),
+    ''
+  );
+  if (v === null) return;  // cancelled
+  let parsed;
+  try { parsed = JSON.parse(v); }
+  catch { parsed = v; }   // fall back to raw string
+  resolveProvConflict(provenance_id, 'custom', parsed, btn);
 }
 
 // ─── Domain (dialysis) data quality — pulls v_data_quality_summary +
