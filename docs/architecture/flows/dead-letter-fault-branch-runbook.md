@@ -94,6 +94,7 @@ Per the observability standard's wave plan, wire the fault branch into flows in 
 - 2026-05-14 — Runbook created alongside the `flow_run_failures` landing migration. First flow wired: see `FLOW_CHANGES_LOG.md`.
 - 2026-05-14 — Wave 2 complete. Fault branch rolled into 5 flows: `LCC Flagged Email Intake`, `LCC Outlook Intake to Teams`, `LCC SF Flow 1` (the `LCCSFFlow1` queue worker), `Sync SF Tasks to Supabase`, `Sync SF Activities to Supabase`. See `FLOW_CHANGES_LOG.md` entry "Gap #2 Wave 2". Editor nuance added below.
 - 2026-05-14 — **Wave 4 complete — Gap #2 closed.** Fault branch rolled into the remaining 20 long-tail flows (SF mutation ×3, email-triggered ×4, Teams-post ×3, briefing ×2, HTTP orchestration ×3, sync/recovery ×5). 26 flows total now on the dead-letter plane; the two calendar sync flows are the lone deliberate exception. See `FLOW_CHANGES_LOG.md` entry "Gap #2 Wave 4 COMPLETE" for the full per-flow list with flow IDs and terminal-action names. Scheduled-flow nuance added below.
+- 2026-05-20 — **`SF -> LCC: *` family wired (Round 3, R3-M-3d).** 7 flows built after the campaign were off the plane; all wired this round. **Plane now covers 33 flows** (26 + the `LCC Weekday Briefing Email` clone + these 7). Firing confirmed end-to-end in production (R3-M-3c): the briefing flow's real failures produced matching `flow_run_failures` rows + `flow_failure` alerts 1:1. Added the "Practical wiring tips" section below (copy-paste method, read-only Code view, safe fire-test). See `FLOW_CHANGES_LOG.md` 2026-05-20 entry.
 
 ## Editor nuance — typed body vs. pasted body
 
@@ -112,3 +113,40 @@ In the new designer, *typing* a JSON body that contains a bare unquoted `@{...}`
 ## Long-flow nuance — the skip cascade (Wave 4)
 
 For long multi-action flows (`HTTP Init LLC` is 13 actions, `To Do - LCC Sync` is a 9-pair fan-out), you do **not** need to wrap every action in a Scope or attach a fault branch to each. Attach the single `PostDeadLetter` after the flow's *terminal* action with run-after = has-failed **/ is-skipped /** has-timed-out. When any action mid-flow fails, Power Automate skips all subsequent actions including the terminal one — the `is-skipped` leg then fires `PostDeadLetter`. One fault branch per flow catches the whole chain. The trade-off: the dead-letter row names the terminal action as `p_failed_action`, not the true mid-flow culprit — but the run id in the row opens the run history where the real failure point is obvious.
+
+## Practical wiring tips (added 2026-05-20, from wiring the SF -> LCC family)
+
+The fastest, least error-prone way to add the fault branch is to **copy an existing
+PostDeadLetter and paste it**, so the URL/headers/retry/body all carry over intact
+and the only per-flow edit is `p_flow_name`:
+
+1. **Copy.** Open a wired *scheduled* flow that uses the generic payload (e.g.
+   `Unflag Completed Email Tasks`). Right-click its `PostDeadLetter` card →
+   **Copy action**. The PA "My clipboard" persists across flow navigation.
+2. **Paste.** In the target flow, right-click the **`+` directly below the
+   terminal action** → **Paste an action**. (Scroll to the bottom first on long
+   flows.) This brings the headers + retry + a body whose `p_payload =
+   @{string(workflow()?['run'])}` resolves in *any* flow — so no payload edit is
+   needed, only `p_flow_name`.
+3. **Edit `p_flow_name` in Parameters → Body — NOT Code view.** Code view is
+   **read-only** in the new designer ("Cannot edit in read-only editor"). In the
+   Body field, select the value to **end of line including the closing quote**
+   (double-click first word → `Shift+End`) and retype `New Name",` in one go.
+   Selecting only the inner words risks deleting the closing quote, which
+   stringifies the whole body (`"body": "{\n…}"`) and trips "Enter a valid JSON".
+   Verify in Code view that `"body": {` is still an object and the line reads
+   `"p_flow_name": "…",`.
+4. Then set run-after on the terminal action (uncheck Is successful; check Has
+   failed / Is skipped / Has timed out) and add `Control → Terminate` (defaults to
+   Failed). Save.
+
+### Safe fire-test (no Teams-channel noise)
+
+To deliberately exercise the chain without the every-30-min Teams push (R3-M-2)
+grabbing it: build a throwaway `Manual trigger → failing Compose (e.g.
+`@{int('x')}`) → PostDeadLetter → Terminate(Failed)` flow, and set the
+PostDeadLetter body's **`"p_severity": "info"`**. The push is error-severity-only,
+so an `info` alert never reaches the channel. Confirm the row via
+`v_flow_run_failures_open`, resolve with `lcc_resolve_flow_failure(<id>, '…')`,
+then turn the test flow off. (In practice a synthetic test is rarely needed — the
+chain is already proven by real production failures; see R3-M-3c.)

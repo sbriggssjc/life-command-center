@@ -959,3 +959,26 @@ Body conventions by trigger type:
 - Rollback per flow: delete the `PostDeadLetter` HTTP action + the trailing `Terminate`, and reset the terminal action's run-after to "is successful" only. No other action in any flow was modified.
 - Gap #2 status: **closed** — the dead-letter / flow-health plane now covers the full active portfolio. Remaining observability work (correlation IDs, schema versioning, retry policies on the *primary* actions) is the separate observability-standard Waves 3-4 backlog, not Gap #2.
 - Owner: LCC architecture/audit track (Scott Briggs).
+### 2026-05-20 — Gap #2 extension: dead-letter fault branch rolled into the `SF -> LCC: *` family (7 flows)
+
+Round 3 audit finding **R3-M-3d**. The coverage sweep (R3-M-3c) confirmed the 2026-05-14 campaign's 26 flows are genuinely wired, but surfaced a real gap: the 7-flow `SF -> LCC: *` family was built ~2026-05-16/17 (after the campaign) and was never on the generic dead-letter plane. Its own `SF -> LCC: Retry & Dead-letter` flow is a domain reconciliation loop (re-POSTs failed object/file batches), not the flow-failure health plane — and it lacked a fault branch too. Wired all 7 this round; each built live in the PA portal and saved cleanly ("Your flow is ready to go").
+
+**Standard pattern applied to each** (identical to Wave 2/4): a `PostDeadLetter` HTTP `POST https://xengecqvemvfknjvbvrq.supabase.co/rest/v1/rpc/lcc_record_flow_failure` (apikey + `Authorization: Bearer <LCC Opps anon JWT>` + `Content-Type: application/json`) appended after the flow's terminal action, run-after = has-failed / is-skipped / has-timed-out (Is successful unchecked), Fixed-interval 2×PT5S retry, then `Terminate(Failed)`. Body uses the generic scheduled-flow convention: `p_flow_run_id = @{workflow()?['run']?['name']}`, `p_payload = @{string(workflow()?['run'])}` (resolves in any flow), `p_flow_name` = the flow's display name.
+
+**Method nuance (recorded for the runbook):** the action was copied from a wired scheduled flow (`Unflag Completed Email Tasks`, clean generic payload) via right-click → Copy action, then right-click the terminal "+" → Paste an action. This carried URL/headers/retry/body intact, so the only per-flow edit was `p_flow_name`. In the new designer, **Code view is read-only** — `p_flow_name` must be edited in the Parameters → Body field (select the value to end-of-line including the closing quote, then retype value + `",`; selecting only the inner words risks deleting the closing quote and stringifying the body).
+
+**Flows wired this round:**
+1. `SF -> LCC: Retry & Dead-letter` (`f7e7bc07-6cbe-4638-b4c6-09a5f3206930`) — terminal `Apply to each` (keystone; wired first). Saved cleanly.
+2. `SF -> LCC: Property Promotion` (`c06b207e-b077-43a8-a483-39f2fb8c4243`) — terminal `Promote Deals`. Saved cleanly.
+3. `SF -> LCC: File Discovery & Move` (`8cb891a2-05dc-46bd-84c3-d2f3bffbfd18`) — terminal `Apply to each`. Saved cleanly.
+4. `SF -> LCC: Daily Bulk File Backfill` (`3d8be768-cfe7-41c9-81f4-e6b6f024ee5e`) — terminal `Apply to each 1`. Saved cleanly.
+5. `SF -> LCC: On-demand File Backfill` (`aaa452c0-7eb5-4c98-bfe2-f6d872d80639`) — terminal `Apply to each`. Manual-triggered. Saved cleanly.
+6. `SF -> LCC: On-demand Backfill` (`4ffa81bd-c8af-4883-bd8b-c292e6b9346d`) — terminal `POST Backfill Complete`. Manual-triggered. Saved cleanly.
+7. `SF -> LCC: Object Sync` (`503d5519-221e-4014-bde8-c483b6a8ef10`) — terminal `POST Crawl Complete` (long crawl chain). Saved cleanly.
+
+**Total: dead-letter plane now covers 33 flows** (26 from 2026-05-14 + the R2-M-5 `LCC Weekday Briefing Email` clone + these 7). Deliberate exceptions unchanged: the 2 calendar sync flows + the pending (not-yet-on) `LCC Outlook Calendar Write`.
+
+- Validation: same posture as Wave 4 — the `lcc_record_flow_failure` ingestion contract was already proven end-to-end against the live RPC; per-flow run-after/Terminate is standard platform behaviour. No forced test failures run against the live SF -> LCC flows. A controlled fire-test on one safe flow remains the open verification item (R3-M-3c).
+- Rollback per flow: delete the `PostDeadLetter` HTTP action + trailing `Terminate`, reset the terminal action's run-after to "is successful" only. No other action modified.
+- Standing P0 reminder: the anon key is now inline in 33 flows' PostDeadLetter headers. The DRY fix (single shared "dead-letter" child flow invoked via Run a Child Flow, centralizing the key) is captured as a future round.
+- Owner: LCC architecture/audit track (Scott Briggs).
