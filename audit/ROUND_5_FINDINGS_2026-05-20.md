@@ -240,6 +240,54 @@ by-design but worth a triage push), `discarded` 671 (none recent), `failed` **45
   dia continues failing daily — suggests the gov path may have been partially fixed or simply
   hasn't re-run; verify when fixing R5-P-1.
 
+  **ROOT CAUSE CORRECTED + PARTIALLY FIXED 2026-05-20 (deep trace).** My first hypothesis (PA
+  flow drops the bytes) was **wrong**. Actual architecture, end to end:
+  1. **PA Flow 6/7 (`SF -> LCC: File Discovery & Move` / `Daily Bulk`) → `sf_files` + `salesforce-files`
+     storage bucket: ✅ WORKS.** 92 dia files `ingestion_status='stored'`. Bytes are present in storage.
+  2. **Bridge: dia cron `sf-files-extract-queued-hourly` (`15 * * * *`, active) → edge fn
+     `intake-salesforce-files?action=stage-queued`.** It pulls `extraction_status='queued'` PDFs,
+     downloads bytes from the bucket, base64-encodes, and POSTs to LCC `/api/intake/stage-om` with
+     `artifacts.primary_document.bytes_base64` (correct contract). On success → `sf_files`
+     `extraction_status='extracted'`; on failure → `extract_failed` (reason in `process_notes`).
+     The hourly :15 cadence is exactly why the failed `staged_intake_items` cluster at :15.
+  3. **stage-om (LCC copilot-action `intake.stage.om.v1`): the failure point.** `process_notes` on
+     `extract_failed` rows shows **two classes**: `stage-om failed: HTTP 404` (2 rows, newest 01:15
+     today — *before* the R5-FE-2 deploy) and `stage-om failed: copilot_action_exception` (6 rows,
+     newest 18:15). The staged_intake_items I first saw (channel=email, no artifact) are stage-om's
+     own stored shape after it fails — not a separate broken path.
+  - **Fix #1 — ALREADY SHIPPED (R5-FE-2 route deploy).** The `HTTP 404` class was stage-om's
+    internal `/api/data-query` call 404'ing — the exact bug fixed earlier today. **Verified:** a
+    manual bridge re-run after the deploy moved `extracted` 40→42 and `queued` 44→41 (files that
+    were failing now extract). So the 404 sub-class is resolved and the backlog now drains each
+    hourly tick (~2/run; slow because each 6 MB OM's extraction is slow).
+  - **Fix #2 — REMAINING (`copilot_action_exception` subset).** intake.js wraps any handler
+    runtime error as `copilot_action_exception` and **hides `detail` unless `LCC_ENV=development`**;
+    Vercel runtime logs are not retained/queryable for this project, so the inner error isn't
+    visible remotely. To capture it: temporarily set `LCC_ENV=development` in Vercel (surfaces
+    `detail` + `name`/`code` in the stage-om response, which the bridge will then write into
+    `sf_files.process_notes`), re-run the bridge, read one failing row's notes, then revert. Likely
+    a specific-PDF extractor edge case (pdf-parse failure / AI extraction limit) on a subset of OMs.
+  - **storage_path refactor — RULED OUT (investigated 2026-05-20).** Tempting idea (file is already
+    in storage) but **not viable and not the fix**: stage-om's `storage_path` branch in
+    `intake-om-pipeline.js` fetches bytes from **`OPS_URL`** (LCC Opps storage), whereas the SF OMs
+    live in the **dia** project's `salesforce-files` bucket — passing storage_path would point the
+    extractor at the wrong project. And the inline-bytes cap is `OM_INLINE_MAX_BYTES` (~25 MB) which
+    returns a clean **413 file_too_large**; these OMs are ~6 MB, far under it — so size is not the
+    cause. The real `copilot_action_exception` cause is elsewhere in staging/extraction and is only
+    visible once surfaced (see diagnostic below).
+  - **Diagnostic landed 2026-05-20 (`error_summary`).** Added an always-on, non-sensitive
+    `error_summary` (error name + 160-char message, no stack/PII) to `api/intake.js`'s
+    copilot-action catch, and updated the SF-file bridge (`intake-salesforce-files` `handleStageQueued`)
+    to record it in `sf_files.process_notes`. After both ship, the next hourly bridge tick writes the
+    real cause into `process_notes` — no `LCC_ENV=development` toggle needed. Then apply the targeted
+    fix to whatever it reveals.
+  - **Secret-hygiene flag:** the `sf-files-extract-queued-hourly` cron command embeds the
+    `X-PA-Webhook-Secret` in **plaintext** in `cron.job.command`. Same standing P0 class as the
+    inline anon keys — move to Vault and reference it. (Did not echo the secret value anywhere.)
+  - **Status:** R5-P-1 downgraded from "fully broken" to "partially fixed + draining"; the
+    `copilot_action_exception` subset (a minority of OMs) is the open remainder, gated on surfacing
+    the inner error (needs the `LCC_ENV=development` toggle — Scott).
+
 ### SF → LCC object/activity sync — HEALTHY
 
 Very active and current: `sf_sync_log` has **6,862 rows in the last 24h** (newest 19:01 today)

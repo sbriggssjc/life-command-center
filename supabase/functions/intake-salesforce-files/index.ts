@@ -537,7 +537,10 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
 
       if (!stageRes.ok || stageJson.error) {
         vStats.failed++;
-        const errMsg = String(stageJson.error || stageJson.detail || `HTTP ${stageRes.status}`);
+        // R5-P-1 (2026-05-20): prefer error_summary — intake.js now always returns
+        // a short, non-sensitive cause (name + truncated message) so copilot_action_exception
+        // failures self-diagnose here in sf_files.process_notes (no LCC_ENV=development needed).
+        const errMsg = String(stageJson.error_summary || stageJson.error || stageJson.detail || `HTTP ${stageRes.status}`);
         vStats.errors.push(`file_id ${fileId}: ${errMsg.slice(0, 200)}`);
         await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
           extraction_status: "extract_failed",
