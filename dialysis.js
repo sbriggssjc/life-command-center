@@ -2098,6 +2098,54 @@ function _cmsAvgCard(title, value, color) {
 }
 
 // ============================================================================
+// LIST WINDOWING — render-side virtualization for heavy Dialysis lists
+// ============================================================================
+// Each list tracks how many rows are currently materialized into the DOM. The
+// full in-memory arrays (npiSignals, inventoryChanges, researchOutcomes, etc.)
+// are NEVER truncated — counts, filters, and resolve actions all keep working
+// over the full data. Only the rendered HTML is capped, with a "Load more"
+// control to grow the window when the user actually wants to see further.
+const _diaListWindow = {};
+const _DIA_WINDOW_DEFAULT = {
+  allSignals: 100,
+  bdEvents: 100,
+  cleanupMissing: 30,
+  cleanupDup: 25,
+  inventoryChanges: 100,
+};
+function _diaWindowGet(key) {
+  if (typeof _diaListWindow[key] !== 'number') {
+    _diaListWindow[key] = _DIA_WINDOW_DEFAULT[key] || 100;
+  }
+  return _diaListWindow[key];
+}
+function _diaWindowReset(key) {
+  if (key) delete _diaListWindow[key];
+  else for (const k in _diaListWindow) delete _diaListWindow[k];
+}
+window._diaWindowMore = function(key, step, total) {
+  const cur = _diaWindowGet(key);
+  _diaListWindow[key] = Math.min(cur + step, total);
+  renderDiaTab();
+};
+window._diaWindowShowAll = function(key, total) {
+  _diaListWindow[key] = total;
+  renderDiaTab();
+};
+function _diaWindowFooter(key, shown, total, step) {
+  if (shown >= total) {
+    if (total === 0) return '';
+    return `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing all ${fmtN(total)}</div>`;
+  }
+  const nextStep = Math.min(step, total - shown);
+  return `<div style="padding:12px;text-align:center;color:var(--text3);font-size:12px;background:var(--s2);border-radius:8px;margin-top:10px">
+    <span>Showing ${fmtN(shown)} of ${fmtN(total)}</span>
+    <button onclick="_diaWindowMore('${key}', ${step}, ${total})" style="margin-left:12px;font-size:11px;padding:6px 14px;border-radius:6px;border:1px solid var(--accent);background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Load ${fmtN(nextStep)} more</button>
+    <button onclick="_diaWindowShowAll('${key}', ${total})" style="margin-left:6px;font-size:11px;padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer">Show all</button>
+  </div>`;
+}
+
+// ============================================================================
 // NPI TAB
 // ============================================================================
 
@@ -2241,9 +2289,11 @@ function _renderNpiBdEvents(rows) {
     return html;
   }
 
-  // Card per event
+  // Card per event — windowed render (full array drives counts/filters)
+  const _bdWin = _diaWindowGet('bdEvents');
+  const _bdShown = Math.min(_bdWin, visible.length);
   html += '<div style="display:flex;flex-direction:column;gap:10px">';
-  for (const row of visible.slice(0, 200)) {
+  for (const row of visible.slice(0, _bdShown)) {
     const meta = NPI_BD_META[row.signal_type] || { icon: '•', color: 'var(--text2)', label: row.signal_type };
     const npiId = row.npi || row.clinic_id || '';
     const isNewNpi = row.signal_type === 'new_npi';
@@ -2281,15 +2331,14 @@ function _renderNpiBdEvents(rows) {
     html += '</div>';
   }
   html += '</div>';
-  if (visible.length > 200) {
-    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 200 of ${fmtN(visible.length)} events</div>`;
-  }
+  html += _diaWindowFooter('bdEvents', _bdShown, visible.length, 100);
 
   // Wire handlers
   setTimeout(() => {
     document.querySelectorAll('[data-bd-window]').forEach(btn => {
       btn.addEventListener('click', () => {
         diaNpiBdWindowDays = parseInt(btn.dataset.bdWindow, 10);
+        _diaWindowReset('bdEvents');
         renderDiaTab();
       });
     });
@@ -2340,6 +2389,8 @@ function _renderNpiCleanup(missingRows, dupRows) {
     document.querySelectorAll('[data-cleanup-sub]').forEach(btn => {
       btn.addEventListener('click', () => {
         diaNpiCleanupSubMode = btn.dataset.cleanupSub;
+        _diaWindowReset('cleanupMissing');
+        _diaWindowReset('cleanupDup');
         renderDiaTab();
       });
     });
@@ -2393,17 +2444,16 @@ function _renderNpiCleanupMissing(rows) {
     return (b.latest_total_patients || 0) - (a.latest_total_patients || 0);
   });
 
+  const _cmWin = _diaWindowGet('cleanupMissing');
+  const _cmShown = Math.min(_cmWin, sorted.length);
   html += '<div style="display:flex;flex-direction:column;gap:10px">';
-  for (const row of sorted.slice(0, 100)) {
+  for (const row of sorted.slice(0, _cmShown)) {
     const lookup = lookups.get(row.clinic_id);
     const cands = (lookup && Array.isArray(lookup.raw_response)) ? lookup.raw_response : [];
     html += _renderMissingNpiCard(row, cands);
   }
   html += '</div>';
-
-  if (sorted.length > 100) {
-    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 100 of ${fmtN(sorted.length)} — adopt or skip these to load the next batch</div>`;
-  }
+  html += _diaWindowFooter('cleanupMissing', _cmShown, sorted.length, 30);
 
   // Wire handlers
   setTimeout(() => {
@@ -2479,14 +2529,14 @@ function _renderNpiCleanupDuplicates(clusters) {
 
   html += '<div style="padding:10px 14px;background:rgba(248,113,113,0.06);border-radius:8px;border-left:3px solid #f87171;margin-bottom:12px;font-size:12px;color:var(--text);line-height:1.5">' + fmtN(clusters.length) + ' NPI clusters span multiple addresses — for each, decide which clinic should keep the NPI. When NPPES has the practice address, the recommendation is shown; otherwise verify both records and pick.</div>';
 
+  const _cdWin = _diaWindowGet('cleanupDup');
+  const _cdShown = Math.min(_cdWin, clusters.length);
   html += '<div style="display:flex;flex-direction:column;gap:10px">';
-  for (const cluster of clusters.slice(0, 60)) {
+  for (const cluster of clusters.slice(0, _cdShown)) {
     html += _renderDupClusterCard(cluster);
   }
   html += '</div>';
-  if (clusters.length > 60) {
-    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 60 of ${fmtN(clusters.length)} clusters</div>`;
-  }
+  html += _diaWindowFooter('cleanupDup', _cdShown, clusters.length, 25);
 
   setTimeout(() => {
     _wireDupClusterButtons();
@@ -2856,15 +2906,14 @@ function renderDiaInventoryChanges() {
   }
 
   // ─── Card list ───────────────────────────────────────────────────────
+  const _icWin = _diaWindowGet('inventoryChanges');
+  const _icShown = Math.min(_icWin, visible.length);
   html += '<div style="display:flex;flex-direction:column;gap:10px">';
-  for (const row of visible.slice(0, 200)) {
+  for (const row of visible.slice(0, _icShown)) {
     html += _renderInventoryChangeCard(row);
   }
   html += '</div>';
-
-  if (visible.length > 200) {
-    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 200 of ${fmtN(visible.length)} — narrow with the filter pills above</div>`;
-  }
+  html += _diaWindowFooter('inventoryChanges', _icShown, visible.length, 100);
 
   html += '</div>'; // biz-section
 
@@ -2873,6 +2922,7 @@ function renderDiaInventoryChanges() {
     document.querySelectorAll('[data-inv-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
         diaInventoryFilter = btn.dataset.invFilter;
+        _diaWindowReset('inventoryChanges');
         renderDiaTab();
       });
     });
@@ -3043,6 +3093,10 @@ function renderDiaNpi() {
       btn.addEventListener('click', () => {
         diaNpiMode = btn.dataset.npiMode;
         diaNpiSelectedIdx = undefined;
+        _diaWindowReset('allSignals');
+        _diaWindowReset('bdEvents');
+        _diaWindowReset('cleanupMissing');
+        _diaWindowReset('cleanupDup');
         renderDiaTab();
         // Lazy-load cleanup data on first entry
         if (diaNpiMode === 'cleanup' && !diaNpiCleanupLoading && (!diaNpiLookupCache || !diaNpiRegistryCache)) {
@@ -3204,7 +3258,9 @@ function _renderNpiAllSignals(allSignals) {
     html += '<div style="flex: 0 0 90px; text-align: center;">NPI</div>';
     html += '</div>';
 
-    visible.slice(0, 500).forEach((row, idx) => {
+    const _asWin = _diaWindowGet('allSignals');
+    const _asShown = Math.min(_asWin, visible.length);
+    visible.slice(0, _asShown).forEach((row, idx) => {
       const meta = NPI_SEVERITY_META[row._sev] || NPI_SEVERITY_META.unresolved;
       const isSelected = diaNpiSelectedIdx === idx;
       const isChecked = diaNpiSelectedIds.has(row._key);
@@ -3220,9 +3276,7 @@ function _renderNpiAllSignals(allSignals) {
       html += `<div style="flex: 0 0 90px; text-align: center; font-family: monospace; font-size: 11px; color: var(--text2);">${esc(row.npi || '—')}</div>`;
       html += '</div>';
     });
-    if (visible.length > 500) {
-      html += `<div style="padding:8px 14px;font-size:11px;color:var(--text3);text-align:center">Showing first 500 of ${fmtN(visible.length)} — narrow with severity filter to see the rest</div>`;
-    }
+    html += _diaWindowFooter('allSignals', _asShown, visible.length, 100);
   }
   html += '</div></div>';
 
@@ -3287,6 +3341,7 @@ function _renderNpiAllSignals(allSignals) {
       btn.addEventListener('click', e => {
         diaNpiSeverityFilter = e.currentTarget.dataset.sevFilter;
         diaNpiSelectedIdx = undefined;
+        _diaWindowReset('allSignals');
         renderDiaTab();
       });
     });
