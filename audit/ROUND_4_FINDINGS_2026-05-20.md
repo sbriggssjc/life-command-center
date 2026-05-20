@@ -235,6 +235,6 @@ rather than just recording disagreements.
 | R4-2b | MED | ✅ FIXED+verified | auto-merge FK-rewire timeouts (indexed FK children) |
 | R4-3 | MED | ✅ FIXED+verified | data-hygiene-sweep broken on dia (timeout) + gov (FK bug) |
 | R4-4 | HIGH | 🟥 open (recommended build) | dia/gov health alerts never surfaced |
-| R4-5 | MED | 🟧 review | 163 unranked provenance writer-paths |
-| R4-6 | MED | 🟧 review | 485 provenance conflicts logged, not closed |
+| R4-5 | MED | 🟢 mostly fixed | 163 → 22 unranked (residual is writer bug, fixed in JS this round; see `R4_PROVENANCE_PHASE3_2026-05-20.md`) |
+| R4-6 | MED | 🟢 partially fixed | 485 → 212 conflicts (273 stale resolved, 193 await domain backfill review, 19 legit ties); Phase-3 warn flips applied |
 | advisors | — | deferred | focused RLS/search_path security pass |
