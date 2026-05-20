@@ -24,6 +24,7 @@ import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
+import { enrichReviewQueueContext } from '../_shared/provenance-row-context.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -281,8 +282,24 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       for (const r of (countsRpc.data || [])) {
         bucketCounts[r.bucket] = Number(r.n) || 0;
       }
+
+      // Decorate each row with the underlying entity's label (property
+      // address, lease tenant + dates, contact name, document file_name,
+      // parcel APN) so the queue card reads like
+      //     dia.leases.lease_expiration
+      //     Fresenius · expires 2026-05-31
+      //     123 Main St, Memphis, TN
+      // instead of "record 18391" with no other context. Best-effort:
+      // failure leaves record_context=null on the row, queue still renders.
+      const queueRows = rows.data || [];
+      try {
+        await enrichReviewQueueContext(queueRows);
+      } catch (err) {
+        console.warn('[quality_provenance_review_queue] enrichment failed:', err?.message || err);
+      }
+
       return res.status(200).json({
-        rows: rows.data || [],
+        rows: queueRows,
         bucket_counts: bucketCounts,
       });
     }
