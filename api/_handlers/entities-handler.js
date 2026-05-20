@@ -250,6 +250,14 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     // Queue" widget on the Ops page. Returns the rows from
     // v_field_provenance_review_queue plus per-bucket counts so the UI can
     // render the bucket-filter chips without a second round trip.
+    //
+    // Perf note: an earlier version fetched a 10k-row rollup to count
+    // buckets; with the full view computing ~520k skip rows the
+    // PostgREST round-trip exceeded the 8s fetchWithTimeout ceiling.
+    // The view has since been split: actionable conflicts only live in
+    // v_field_provenance_review_queue (~70ms); the warn/strict skip
+    // surface lives in v_field_provenance_warn_strict_skips and is
+    // loaded only when the dedicated chip is clicked.
     if (action === 'quality_provenance_review_queue') {
       const limit  = Math.min(Math.max(parseInt(req.query.limit, 10)  || 200, 1), 1000);
       const bucket = req.query.bucket; // optional pre-filter
@@ -263,16 +271,15 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         path += `&bucket=eq.${bucket}`;
       }
 
-      // Fetch the rows (paged) AND a full-set count rollup for the chips.
-      const [rows, rollup] = await Promise.all([
-        opsQuery('GET', path),
-        opsQuery('GET',
-          `v_field_provenance_review_queue?select=bucket&limit=10000`
-        ),
+      // Rows query + tiny aggregate RPC for counts. countMode:'none' skips
+      // PostgREST's exact-count round-trip (which doubles the view scan).
+      const [rows, countsRpc] = await Promise.all([
+        opsQuery('GET', path, undefined, { countMode: 'none' }),
+        opsQuery('POST', 'rpc/lcc_provenance_review_queue_counts', {}),
       ]);
       const bucketCounts = {};
-      for (const r of (rollup.data || [])) {
-        bucketCounts[r.bucket] = (bucketCounts[r.bucket] || 0) + 1;
+      for (const r of (countsRpc.data || [])) {
+        bucketCounts[r.bucket] = Number(r.n) || 0;
       }
       return res.status(200).json({
         rows: rows.data || [],

@@ -1198,13 +1198,14 @@ async function renderProvenanceConflictWidgets() {
   // and any unranked-either-side rows so they're still findable.
   const chip = (key, label, count, tone) =>
     `<button class="ops-filter ${_provBucket === key ? 'active' : ''}" onclick="_provBucket='${key}';renderProvenanceConflictWidgets()">${label}${count != null ? ' ('+count+')' : ''}</button>`;
+  // Warn/strict skip rows moved to a separate surface (Tier B). The actionable
+  // conflict buckets are what the queue is for; skip events are observation,
+  // not action, and were tanking the query (10k-row PostgREST scan).
   html += '<div class="ops-filters" style="margin-bottom:12px">';
   html += chip('actionable',  'Actionable',  actionableTotal);
   html += chip('still_tied',  'Still tied',  bucket_counts.still_tied);
   html += chip('conflicting_source_now_wins', 'Needs backfill', bucket_counts.conflicting_source_now_wins);
   html += chip('current_source_now_wins',    'Keep current OK', bucket_counts.current_source_now_wins);
-  html += chip('warn_skip',   'Warn skips',  bucket_counts.warn_skip);
-  html += chip('strict_skip', 'Strict skips', bucket_counts.strict_skip);
   html += chip('all',         'All',          allTotal);
   html += '</div>';
 
