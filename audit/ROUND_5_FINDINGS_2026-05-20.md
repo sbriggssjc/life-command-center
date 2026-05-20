@@ -390,3 +390,34 @@ populated). The SF→LCC OMs are visibly flowing into the **Inbox panel** as pro
 - **Not yet walked (deferred — heavy-view freeze risk):** Inbox triage actions, Contacts/entity
   dedup, Capital Markets reports, and the More menu. Best revisited *after* the R5-UI-1
   pagination/virtualization fix so they don't freeze the browser mid-audit.
+
+### Data-consolidation findings (from a live detail-drawer screenshot — DaVita Rocky Mount, NC)
+
+Scott flagged the **DaVita Dialysis – Rocky Mount, NC** ownership drawer (property_id 23146,
+110 Enterprise Dr). Four real issues, root-caused in dia:
+
+- **R5-DQ-1 [MED — bad price → impossible cap rate; 242 rows affected].** The 2026-04-01
+  "sale" at **$1,700,000** (`data_source='costar_sidebar'`) yields `calculated_cap_rate`
+  **13.99%** (= rent_at_sale $237,772 ÷ $1.7M). The 2022 Northmarq sale was $3,800,000 @ 5.69%
+  — a $3.8M→$1.7M drop on a DaVita NNN is implausible, so the **$1.7M is a misparse** (partial
+  interest / assessed value / wrong line item) and the cap math faithfully turned garbage-in
+  into garbage-out. The cap-rate framework's `[0.005, 0.30]` guardrail is **too wide for
+  dialysis** — 13.99% passes. **Scale: 242 dia `sales_transactions` have cap > 10% (116 > 12%)**
+  — implausible for dialysis NNN; almost certainly bad-price captures. **Fix:** add a
+  domain-specific sanity bound (flag/quarantine dia caps > ~10% as `suspect`, exclude from
+  market metrics) AND audit the costar_sidebar sale-price parser for partial-interest /
+  assessed-value mis-capture.
+- **R5-DQ-2 [LOW-MED — owner entity dedup].** Same entity in ≥3 unconsolidated variants:
+  "Tsoumpas 203 N Carolin GRP LLC" / "Tsoumpas 203 N Carolin Grp LLC" / "Tsoumpas 203 North
+  Carolina Group LLC" (truncated "Carolin"→"Carolina", GRP/Grp→Group, N→North). Feeds the known
+  entity-dedup backlog; a normalize-on-write (expand abbreviations, fix the "Carolin" truncation)
+  + a merge pass would consolidate.
+- **R5-DQ-3 [LOW — junk address from OM parsing; 4 props].** A duplicate property record
+  (property_id 42748) has address **"2 Lease Summary 110 Enterprise Dr"** — an OM section header
+  ("Lease Summary") parsed into the address, tenant null, owner "Unknown". Only **4** dia props
+  match OM-section-header address patterns, so it's a small cleanup (merge into the real record +
+  add the section-header tokens to the address-parser reject list).
+- **R5-DQ-4 [LOW — UI display].** The ownership-history drawer shows the $3.8M deal twice
+  (one dated, one undated) and renders the Northmarq decoration **inline with the owner name**
+  ("…GRP LLC by Northmarq"), which reads as if it's part of the LLC name. De-dup the history rows
+  and render the Northmarq indicator as a separate badge.
