@@ -265,6 +265,46 @@ function chartTitleXml(text) {
     <c:autoTitleDeleted val="0"/>`;
 }
 
+// R39 — Excel built-in trendline element. Replaces the helper-column
+// approach for scatter dot plots so the trendline matches the master
+// Excel docs (Core Cap Chart uses polynomial order 3 with 720-day
+// forward forecast; Available Comps uses linear regression).
+//
+// Once attached to a scatter <c:ser>, Excel computes the trendline
+// natively from the series' xVal/yVal pairs — no helper column needed
+// and users can right-click → Format Trendline to adjust in Excel.
+//
+// @param {object} t  trendline config:
+//   { type: 'linear' | 'poly' | 'exp' | 'log' | 'power' | 'movingAvg',
+//     order?: number (poly only, default 2),
+//     period?: number (movingAvg only),
+//     forward?: number (forecast units forward, default 0),
+//     backward?: number (forecast units backward, default 0),
+//     dashed?: boolean (sysDot for the line, default false),
+//     color?: string (hex without #, default navy 003DA5) }
+// Returns the <c:trendline> XML fragment, or empty string if t is null.
+function trendlineXml(t) {
+  if (!t || !t.type) return '';
+  const color = (t.color || '003DA5').replace('#', '');
+  const dashFrag = t.dashed ? '<a:prstDash val="sysDot"/>' : '';
+  const orderFrag = t.type === 'poly' && t.order ? `<c:order val="${t.order}"/>` : '';
+  const periodFrag = t.type === 'movingAvg' && t.period ? `<c:period val="${t.period}"/>` : '';
+  const forwardFrag = t.forward != null ? `<c:forward val="${t.forward}"/>` : '';
+  const backwardFrag = t.backward != null ? `<c:backward val="${t.backward}"/>` : '';
+  return `          <c:trendline>
+            <c:spPr>
+              <a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}</a:ln>
+            </c:spPr>
+            <c:trendlineType val="${t.type}"/>
+            ${orderFrag}
+            ${periodFrag}
+            ${forwardFrag}
+            ${backwardFrag}
+            <c:dispRSqr val="0"/>
+            <c:dispEq val="0"/>
+          </c:trendline>`;
+}
+
 /**
  * Emit a <c:dLbls> block with per-point overrides and "no label by
  * default" settings on the rest. Returns empty string if no points.
@@ -1003,6 +1043,13 @@ ${dLblsFrag}
     // Filled circle marker, no border emphasis (mirrors chart.js
     // pointStyle:'circle' + pointRadius:3 from the renderer).
     // <c:size val="5"/> ≈ pointRadius 3-4 in pixels.
+    //
+    // R39 — per-series `trendline` config attaches an Excel-native
+    // <c:trendline> to this series (replaces the prior helper-column
+    // approach). Matches the master Excel docs:
+    //   Core_Cap_Chart:  { type: 'poly', order: 3, forward: 720, dashed: true }
+    //   Available_Comps: { type: 'linear' }
+    const trendlineFrag = trendlineXml(s.trendline);
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -1019,6 +1066,7 @@ ${dLblsFrag}
             </c:spPr>
           </c:marker>
 ${dLblsFrag}
+${trendlineFrag}
           <c:xVal><c:numRef><c:f>'${sheet}'!$${s.xCol}$${spec.dataStart}:$${s.xCol}$${spec.dataEnd}</c:f></c:numRef></c:xVal>
           <c:yVal><c:numRef><c:f>'${sheet}'!$${s.yCol}$${spec.dataStart}:$${s.yCol}$${spec.dataEnd}</c:f></c:numRef></c:yVal>
           <c:smooth val="0"/>
@@ -2034,46 +2082,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     case 'core_cap_rate_dot_plot': {
       // Closed-sale scatter: x = period_end (sale date), y = cap_rate.
       //
-      // P7.5 — uses the helper-column infrastructure to add a 12-month
-      // rolling-average trendline, matching cm-chart-image-renderer.js
-      // around line 2033. For each row, the helper value is the mean of
-      // cap_rate over all rows whose period_end falls within ±182 days
-      // of the current row's period_end. Plotted as a 2nd scatter series
-      // with showLine=true (line, no markers) in navy.
+      // R39 — Switch from helper-column rolling-average to Excel's
+      // built-in <c:trendline> with polynomial order 3 + 720-day forward
+      // forecast (matches master Dialysis Comp Work MASTER.xlsx > Core Cap
+      // Chart). Excel computes the trendline natively from the series'
+      // xVal/yVal pairs — no helper column needed and users can right-click
+      // the line in Excel to adjust the order / forecast / R² display.
       const xCol = findCol('period_end');
       const yCol = findCol('cap_rate');
       if (!xCol || !yCol) return null;
-
-      // Pre-extract valid (date_ms, cap) pairs so the per-row getValue
-      // doesn't keep re-parsing dates from the rows array.
-      const SIX_MO_MS = 182 * 24 * 60 * 60 * 1000;
-      const validPairs = (rows || [])
-        .map(r => {
-          const t = r.period_end ? new Date(r.period_end).getTime() : NaN;
-          const y = r.cap_rate != null ? Number(r.cap_rate) : NaN;
-          return Number.isFinite(t) && Number.isFinite(y) ? { t, y } : null;
-        })
-        .filter(Boolean);
-      const hasTrendData = validPairs.length > 0;
-
-      // Helper column letter lands at cols.length + 1
-      const trendCol = String.fromCharCode(65 + cols.length);
-
-      const series = [
-        // Dot cloud (sky semi-transparent fill)
-        { titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky },
-      ];
-      if (hasTrendData) {
-        // Trendline (navy connected line, no markers)
-        series.push({
-          titleCol: trendCol, titleRow: headerRow,
-          xCol, yCol: trendCol,
-          color: navy,
-          showLine: true,
-        });
-      }
-
-      const result = {
+      return {
         tabName,
         spec: {
           type: 'scatter',
@@ -2083,83 +2101,28 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // X axis is sale-date — leave auto-scaled (Excel auto-fits date range).
           yAxisRange: CAP_RATE_DOT_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
-          series,
+          series: [{
+            titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky,
+            // Polynomial order 3, dotted, navy, 720-day forecast forward.
+            // Matches the master exactly (see
+            // audit/cm-style-audit/PUNCH-LIST.md + Core Cap Chart trendline).
+            trendline: { type: 'poly', order: 3, forward: 720, dashed: true, color: navy },
+          }],
           anchor: standardAnchor,
         },
       };
-      if (hasTrendData) {
-        result.helperCols = [{
-          key: 'trendline_12mo',
-          header: '12-mo Rolling Avg',
-          format: 'percent_basis_points',
-          width: 18,
-          getValue: (row) => {
-            if (row.period_end == null || row.cap_rate == null) return null;
-            const center = new Date(row.period_end).getTime();
-            if (!Number.isFinite(center)) return null;
-            let sum = 0, n = 0;
-            for (const p of validPairs) {
-              if (p.t >= center - SIX_MO_MS && p.t <= center + SIX_MO_MS) {
-                sum += p.y; n++;
-              }
-            }
-            return n > 0 ? sum / n : null;
-          },
-        }];
-      }
-      return result;
     }
 
     case 'available_cap_rate_dot_plot': {
-      // Active-listing scatter: x = firm_term_years, y = cap_rate.
-      //
-      // P7.5 — uses the helper-column infrastructure to add a linear
-      // regression trendline, matching cm-chart-image-renderer.js around
-      // line 2109. Compute (m, b) via least-squares ONCE across the rows
-      // array; helper getValue is just (m * x + b). The trendline series
-      // is plotted as a 2nd scatter series with showLine=true + dashed
-      // (matches renderer's borderDash: [6, 4]).
+      // R39 — Switch from helper-column linear regression to Excel's
+      // built-in <c:trendline type="linear"/> (matches master
+      // Dialysis Comp Work MASTER.xlsx > Available Comps which uses 2
+      // linear trendlines). Excel computes the regression natively from
+      // the series' xVal/yVal pairs.
       const xCol = findCol('firm_term_years');
       const yCol = findCol('cap_rate');
       if (!xCol || !yCol) return null;
-
-      // Compute least-squares m, b once.
-      const validRows = (rows || []).filter(r =>
-        r.cap_rate != null && r.firm_term_years != null
-      );
-      let m = 0, b = 0;
-      if (validRows.length >= 2) {
-        let sx = 0, sy = 0, sxx = 0, sxy = 0;
-        const n = validRows.length;
-        for (const r of validRows) {
-          const x = Number(r.firm_term_years);
-          const y = Number(r.cap_rate);
-          sx += x; sy += y; sxx += x * x; sxy += x * y;
-        }
-        const denom = n * sxx - sx * sx;
-        if (denom !== 0) {
-          m = (n * sxy - sx * sy) / denom;
-          b = (sy - m * sx) / n;
-        }
-      }
-      const hasTrendData = validRows.length >= 2;
-
-      const trendCol = String.fromCharCode(65 + cols.length);
-
-      const series = [
-        { titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky },
-      ];
-      if (hasTrendData) {
-        series.push({
-          titleCol: trendCol, titleRow: headerRow,
-          xCol, yCol: trendCol,
-          color: navy,
-          showLine: true,
-          dashed: true,
-        });
-      }
-
-      const result = {
+      return {
         tabName,
         spec: {
           type: 'scatter',
@@ -2170,25 +2133,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // varies per data set; renderer pads ±10% dynamically).
           yAxisRange: CAP_RATE_DOT_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
-          series,
+          series: [{
+            titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky,
+            // Linear regression, dashed, navy. Matches master exactly.
+            trendline: { type: 'linear', dashed: true, color: navy },
+          }],
           anchor: standardAnchor,
         },
       };
-      if (hasTrendData) {
-        result.helperCols = [{
-          key: 'trendline_linear',
-          header: 'Linear Trendline',
-          format: 'percent_basis_points',
-          width: 18,
-          getValue: (row) => {
-            if (row.firm_term_years == null) return null;
-            const x = Number(row.firm_term_years);
-            if (!Number.isFinite(x)) return null;
-            return m * x + b;
-          },
-        }];
-      }
-      return result;
     }
 
     // P8 — floating-bar / box-whisker family
