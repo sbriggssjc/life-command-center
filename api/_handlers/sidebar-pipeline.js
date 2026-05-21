@@ -4591,9 +4591,28 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // Only apply current brokers to the current/most-recent sale. Historical
     // deed-record sales predate the current broker engagement and must not
     // have these broker names attributed to them.
+    //
+    // Round 76gp.a (2026-05-21): the original 90-day gate dropped ~95% of
+    // listing_broker writes on costar_sidebar sales because most CoStar
+    // captures happen 3-18 months after the deed records. Audit found 587
+    // most-recent sales with price but no broker, of which 184 had a broker
+    // sitting in available_listings (same property) — i.e. the data was
+    // available but the gate prevented attribution. We now use two tiers:
+    //   1. 90-day window — any sale (even older historical rows on the
+    //      same page) can receive the broker. Unchanged.
+    //   2. "Most recent on property" within 2 years — the page-level
+    //      contacts plausibly belong to this sale even though the 90-day
+    //      window has passed. Limits false attribution to a realistic
+    //      broker engagement horizon.
     const parsedSaleDate = new Date(saleDate);
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const twoYearsAgo   = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000);
     const isCurrentSale = parsedSaleDate >= ninetyDaysAgo;
+    // isMostRecentSale is computed later as `datePart === mostRecentSaleDatePart`
+    // but we need it here for the broker gate.
+    const isMostRecentOnPropertyForBroker =
+      datePart === mostRecentSaleDatePart && parsedSaleDate >= twoYearsAgo;
+    const brokerFallbackAllowed = isCurrentSale || isMostRecentOnPropertyForBroker;
 
     // Find brokers from contacts
     const listingBroker = (metadata.contacts || []).find(c =>
@@ -4608,13 +4627,17 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           (sale.seller_name || '').toLowerCase().includes(c.sale_seller.toLowerCase().split(' ')[0])
         ))
       )
-    ) || (isCurrentSale ? (metadata.contacts || []).find(c => c.role === 'listing_broker') : null);
+    ) || (brokerFallbackAllowed ? (metadata.contacts || []).find(c => c.role === 'listing_broker') : null);
     const buyerBroker = (metadata.contacts || []).find(c => c.role === 'buyer_broker');
 
     // Domain-aware field names for sales transactions
     const capRateVal = parseCapRateDecimal(sale.cap_rate || metadata.cap_rate);
     // For current sales with no deed-level buyer/seller, supplement
-    // from contacts (buyer/seller contacts are the same entities)
+    // from contacts (buyer/seller contacts are the same entities).
+    // The same 2-year/most-recent gate applies here as for brokers — when
+    // the parser only captured page-level buyer/seller contacts (no per-deed
+    // entries), they belong to whichever sale the page is showing, which
+    // is reliably the most-recent transaction on the property.
     const contactBuyer = (metadata.contacts || [])
       .find(c => c.role === 'buyer')?.name || null;
     const contactSeller = (metadata.contacts || [])
@@ -4623,9 +4646,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // Round 76ax: strip brokerage names + test fixtures from buyer/seller
     // before they reach the DB. SQL trigger (dia/gov_filter_junk_sales_party)
     // is the second line of defense; this is the first.
-    const buyerVal  = cleanSalesPartyValue(sale.buyer  || (isCurrentSale ? contactBuyer  : null));
-    const sellerVal = cleanSalesPartyValue(sale.seller || (isCurrentSale ? contactSeller : null));
-    const procuringBrokerVal = isCurrentSale ? (buyerBroker?.name || null) : null;
+    const buyerVal  = cleanSalesPartyValue(sale.buyer  || (brokerFallbackAllowed ? contactBuyer  : null));
+    const sellerVal = cleanSalesPartyValue(sale.seller || (brokerFallbackAllowed ? contactSeller : null));
+    const procuringBrokerVal = brokerFallbackAllowed ? (buyerBroker?.name || null) : null;
 
     // Cap-rate gating: only the most-recent sale (matching CoStar's Last
     // Sale Date) with a real sold_price may carry the CoStar-stated cap
