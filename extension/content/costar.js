@@ -954,6 +954,26 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     return { city: null, state: null, zip: null };
   }
 
+  // Parse a dollar cell into a numeric amount. Handles abbreviated
+  // forms ($10.13M, $250K, $1.2B) as well as the plain "$10,134,761"
+  // shape. Returns null when the string isn't a recognizable amount,
+  // or when it carries an explicit per-SF suffix (which would
+  // otherwise sneak past the >= 1000 guard for adjacent stat cells).
+  function parseDollarAmount(str) {
+    if (!str || typeof str !== 'string') return null;
+    const trimmed = str.trim();
+    if (/\/sf\b/i.test(trimmed)) return null;
+    const m = trimmed.match(/^\$?([\d,]+(?:\.\d+)?)\s*([KMB])?\b/i);
+    if (!m) return null;
+    let n = parseFloat(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(n)) return null;
+    const suffix = (m[2] || '').toUpperCase();
+    if (suffix === 'K') n *= 1e3;
+    else if (suffix === 'M') n *= 1e6;
+    else if (suffix === 'B') n *= 1e9;
+    return n;
+  }
+
   // ── Property field extraction ─────────────────────────────────────────
 
   function extractFields(lines, pageUrl) {
@@ -1035,14 +1055,27 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         ? /^(asking\s+price|for\s+sale|sale\s+price|price)$/i
         : /^asking\s+price$/i;
       if (!inSalesHistorySection && !data.asking_price && askingLabelRe.test(line)) {
-        // Reject "Price/SF" — it's not an asking price.
-        if (next && /^\$[\d,]+/.test(next) && !/\/sf$/i.test(next)) {
-          const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
-          if (numericVal >= 1000) data.asking_price = next;
-        } else if (prev && /^\$[\d,]+/.test(prev) && !/\/sf$/i.test(prev)) {
-          const numericVal = parseFloat(prev.replace(/[$,]/g, '')) || 0;
-          if (numericVal >= 1000) data.asking_price = prev;
+        // CoStar stat cards put the VALUE above the LABEL —
+        // "$10.13M\nSale Price\n$1,410.35\nPrice/SF" — so when both
+        // prev and next look like dollar amounts, prev is this
+        // label's value and next is the *following* field's per-SF
+        // value. Prefer the larger of the two: a real asking price
+        // is always larger than the per-SF figure CoStar sandwiches
+        // between consecutive stat cells. parseDollarAmount handles
+        // the K/M/B suffixed forms that the old `parseFloat(strip $)`
+        // path silently treated as < 1000 and discarded.
+        // Bug 4302 S Main St (2026-05-21): stat card pinned
+        // asking_price to "$1,410.35" because the old code took next
+        // unconditionally when its numeric form was >= 1000.
+        const prevAmt = parseDollarAmount(prev);
+        const nextAmt = parseDollarAmount(next);
+        let chosen = null;
+        if (prevAmt && prevAmt >= 1000 && (nextAmt == null || prevAmt >= nextAmt)) {
+          chosen = prev;
+        } else if (nextAmt && nextAmt >= 1000) {
+          chosen = next;
         }
+        if (chosen) data.asking_price = chosen;
       }
 
       // Sale price: prefer stat card value (appears first, is most recent sale)
@@ -1053,11 +1086,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // ("Price/SF", "Cap Rate", etc.) leak in as the sale_price value
       // when the Sale Price column had no data on a row.
       if (/^sale\s+price$/i.test(line)) {
-        if (next && /^\$[\d,]+/.test(next)) {
-          const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
-          if (numericVal >= 1000) {
-            if (!data.sale_price || !/^\$/.test(data.sale_price)) data.sale_price = next;
-          }
+        // Same stat-card hazard as asking_price above — when prev
+        // and next are both dollar amounts, prev (value above label)
+        // beats the smaller per-SF figure in next.
+        const prevAmt = parseDollarAmount(prev);
+        const nextAmt = parseDollarAmount(next);
+        let chosen = null;
+        if (prevAmt && prevAmt >= 1000 && (nextAmt == null || prevAmt >= nextAmt)) {
+          chosen = prev;
+        } else if (nextAmt && nextAmt >= 1000) {
+          chosen = next;
+        }
+        if (chosen) {
+          if (!data.sale_price || !/^\$/.test(data.sale_price)) data.sale_price = chosen;
         } else if (!data.sale_price && next && /^(not\s+disclosed|confidential|n\/?a|—|-|undisclosed|withheld)$/i.test(next.trim())) {
           data.sale_price = next; // known sentinel values only
         }
