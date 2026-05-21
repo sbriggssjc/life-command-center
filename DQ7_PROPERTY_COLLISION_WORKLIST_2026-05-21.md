@@ -12,7 +12,9 @@ How to use: for each row, put a decision in the **Decision** column — `MERGE -
 
 ## A. Dialysis — 87 groups (the actionable set)
 
-### A1. Sparse-row duplicates — one row has a blank tenant (high-confidence MERGE into the named row)
+### A1. Blank-tenant rows (REVIEW — do NOT bulk-merge)
+
+> **Correction (2026-05-21):** verification showed a blank `tenant` does **not** mean an empty/sparse row. Several of these "(none)" rows carry real child data — e.g. `property_id 1671890` (at 6116sportsvillagerd) has **10 sales, 3 listings, 9 ownership rows**, and most others have a real lease. Treat these as human-review, NOT auto-merge. Confirm which row is the keeper before merging; the blank-tenant row is sometimes the richer record.
 
 | norm_addr | ST | property_ids | tenants | Decision |
 |-----------|----|--------------|---------|----------|
