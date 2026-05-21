@@ -1,0 +1,17 @@
+-- Round 76gp.h (2026-05-21) — Nightly auto-resolve cron + manual-review view (gov)
+-- ============================================================================
+-- pg_cron job 'gov-metadata-queue-auto-resolve' runs nightly 02:40 UTC.
+-- 30-min stagger from dia so the two domains don't compete for resources.
+--
+-- v_property_metadata_backfill_queue_manual_review: same filter rules as
+-- the dia mirror. Triage hint added: 'missing_county' is the most common
+-- automation blocker (county scraper needs both county+state on properties).
+--
+-- Tier 1 (this file)  : pg_cron nightly → SQL auto-resolver
+-- Tier 2 (76gp.g)     : Python public_record_ingest --from-queue, wired into
+--                       src/pipeline_runner.py::run_weekly() as step 6b
+--                       (caps at 25/week of P0+P25 to keep AI spend bounded)
+-- Manual review       : query v_property_metadata_backfill_queue_manual_review
+--
+-- Applied via Supabase MCP apply_migration on 2026-05-21.
+SELECT 'see Supabase MCP — gov_round_76gp_h_metadata_queue_cron_and_manual_review';
