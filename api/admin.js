@@ -3679,7 +3679,9 @@ async function handleGenerateResearchTasks(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   const user = await authenticate(req, res);
   if (!user) return;
-  const workspaceId = primaryWorkspace(user);
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
   if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
 
   const domainParam = String(req.query.domain || 'both').toLowerCase();
