@@ -2844,8 +2844,12 @@ async function handleNextBestAction(req, res) {
   const fetchLimit = Math.min(500, offset + limit + 50);
 
   const fanOutResults = await Promise.all(targets.map(async (dom) => {
+    // Deal-value reconciliation (2026-05-21): gap_value is now the property
+    // value (no gap-weight or completeness multipliers). Sort by
+    // gap_priority_score so cross-domain merge respects the same weighted
+    // ranking the view computes internally.
     let path = 'v_next_best_action?select=*'
-             + '&order=gap_value.desc.nullslast,first_seen_at.asc'
+             + '&order=gap_priority_score.desc.nullslast,first_seen_at.asc'
              + '&limit=' + fetchLimit;
     if (severityFilter) path += '&gap_severity=eq.' + encodeURIComponent(severityFilter);
     if (gapTypeFilter)  path += '&gap_type=eq.'      + encodeURIComponent(gapTypeFilter);
@@ -2863,14 +2867,17 @@ async function handleNextBestAction(req, res) {
     };
   }));
 
-  // Merge + global re-rank by gap_value DESC, tiebreak first_seen_at ASC
+  // Merge + global re-rank by gap_priority_score DESC, tiebreak first_seen_at
+  // ASC. gap_value is now the unweighted property value (deal-value
+  // reconciliation 2026-05-21); priority score is what governs ranking.
+  // Fall back to gap_value if priority is missing (older view shape).
   const merged = [];
   for (const { rows } of fanOutResults) {
     for (const row of rows) merged.push(row);
   }
   merged.sort((a, b) => {
-    const av = Number(a.gap_value) || 0;
-    const bv = Number(b.gap_value) || 0;
+    const av = Number(a.gap_priority_score ?? a.gap_value) || 0;
+    const bv = Number(b.gap_priority_score ?? b.gap_value) || 0;
     if (av !== bv) return bv - av;
     return String(a.first_seen_at || '').localeCompare(String(b.first_seen_at || ''));
   });
