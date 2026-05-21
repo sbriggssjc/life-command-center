@@ -1,0 +1,115 @@
+-- =====================================================================
+-- Round 40 — extend Rent_Price_PSF chart to dialysis vertical.
+-- R33 Tier E1 (long-pending backlog item).
+--
+-- User direction 2026-05-21: dialysis exports should carry both the
+-- existing $/chair chart (rent_and_price_per_chair, dia-only) AND a
+-- $/SF cross-check chart (rent_and_price_psf, previously gov-only).
+-- The $/SF metric provides a sanity check against general MOB pricing
+-- since dialysis clinics are essentially medical office buildings.
+--
+-- ---------------------------------------------------------------------
+-- SUPABASE CHANGES (applied 2026-05-21)
+-- ---------------------------------------------------------------------
+--
+-- 1. cm_chart_catalog (LCC Opps, project xengecqvemvfknjvbvrq)
+--    UPDATE: applies_to_verticals for chart_template_id='rent_and_price_psf'
+--    Before:  ['gov']
+--    After:   ['gov', 'dialysis']
+--
+--    The export endpoint at api/capital-markets.js:exportWorkbook reads
+--    the catalog filtered by `applies_to_verticals=cs.{vertical}`, so
+--    flipping this flag automatically adds Data_Rent_Price_PSF to dia
+--    exports — no LCC code changes required.
+--
+-- 2. cm_dialysis_rent_price_psf_q (Dialysis_DB, project zqzrriwuavgrquhisnoa)
+--    Created — dia counterpart to cm_gov_rent_price_psf_q.
+--    Same column shape: period_end, subspecialty, rent_psf, price_psf,
+--    rent_n, price_n.
+--
+--    Structure mirrors cm_dialysis_rent_price_per_chair_q:
+--      • Quarters generated 2010-01-01 → cm_last_completed_quarter_end()
+--      • Trailing 12 months per quarter window
+--      • Joins properties.building_size + (subquery) leases.annual_rent
+--      • Filters: exclude_from_market_metrics=false, transaction_type
+--        IN ('Investment','Resale'), building_size>0
+--      • Bounds: rent_psf $5-$100, price_psf $50-$1500
+--      • HAVING ≥5 sales per window to emit a numeric value
+--
+--    Data density check (rent_n / price_n per recent TTM window):
+--      2024-Q2: 67 rent / 132 price
+--      2024-Q3: 40 rent / 84 price
+--      2025-Q1: 76 rent / 129 price
+--      2025-Q4: 90 rent / 150 price
+--      2026-Q1: 79 rent / 151 price
+--    All windows well above the HAVING≥5 threshold.
+--
+--    Sanity values (2026-03-31 TTM):
+--      rent_psf  = $25.26/SF  (typical MOB rent — ✓)
+--      price_psf = $386.34/SF (typical MOB price — ✓)
+--
+-- ---------------------------------------------------------------------
+-- WHY NO LCC CODE CHANGES
+-- ---------------------------------------------------------------------
+-- The chart_template_id 'rent_and_price_psf' is already fully wired:
+--   • api/_shared/cm-excel-export.js — CHART_COLUMNS + TAB_NAMES
+--     entries exist (line 416 + 812) for tab 'Data_Rent_Price_PSF'
+--   • api/_shared/cm-chart-image-renderer.js — case at line ~2405 uses
+--     generic labels ("Avg Rent / SF (TTM)", "Avg Sale Price / SF (TTM)")
+--     with no vertical-specific hardcoding
+--   • api/_shared/cm-native-chart-injector.js — case in buildInjectionSpec
+--     uses generic findCol('rent_psf') / findCol('price_psf') — works
+--     for any vertical whose view emits those keys
+--   • capital-markets.js — exportWorkbook reads catalog by vertical, so
+--     the catalog update is the entire wire-up
+--
+-- The dia export will now include Data_Rent_Price_PSF alongside the
+-- existing Data_Rent_Price_Chair tab. Both charts coexist and provide
+-- complementary views of the same underlying sales:
+--   Data_Rent_Price_Chair: $/chair (capacity-normalized)
+--   Data_Rent_Price_PSF:   $/SF (footprint-normalized; cross-check vs MOB)
+--
+-- Phase order in the dia export (catalog phase column):
+--   phase 2  rent_psf_box_quarterly    (already dialysis)
+--   phase 20 rent_and_price_psf        (now dialysis ← this change)
+--   phase 31 rent_and_price_per_chair  (dialysis only)
+--
+-- ---------------------------------------------------------------------
+-- AXIS RANGES (R37 P2 / R38 settings carry over)
+-- ---------------------------------------------------------------------
+-- Native chart spec for rent_and_price_psf:
+--   yLeftRange:   { min: 0, max: 50 }    rent $/SF (covers dia $20-30 + gov to ~$40)
+--   yLeftNumFmt:  VAL_FMT_CURRENCY        '$#,##0_);[Red]($#,##0)'
+--   yRightNumFmt: VAL_FMT_CURRENCY        same; auto-scaled range
+--
+-- Renderer match: yLeftFormat=AXIS_FORMAT_CURRENCY, yLeftRange={0,50}.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 153 CM tests pass (up from 152 in R39). 1 new R40 test verifies
+-- buildInjectionSpec produces a valid combo spec for rent_and_price_psf
+-- with the Data_Rent_Price_PSF tab name and dia column schema (rent_psf
+-- / price_psf / rent_n / price_n).
+--
+-- Existing test "rent_and_price_per_chair (dia) + rent_and_price_psf
+-- (gov) share shape" continues to pass — the builder is fully vertical-
+-- agnostic.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download a fresh dia export after deploy.
+-- 2. Confirm new tab Data_Rent_Price_PSF exists alongside the existing
+--    Data_Rent_Price_Chair tab.
+-- 3. Open Data_Rent_Price_PSF — expect:
+--    • Sky bars for Avg Rent / SF (TTM), left axis ~$0-$30 (auto-fits 0-50)
+--    • Navy line for Avg Sale Price / SF (TTM), right axis ~$300-$430
+--    • R37 quarter cat labels ("1Q-2024", "2Q-2024", etc.)
+--    • R37 P3 peak/trough/most-recent data labels on the price line
+--    • R38 chart title "Rent & Price Per Square Foot (TTM)"
+--    • R38 [Red](N) negative format on val-axis ticks (no negatives in
+--      this data but format is set for consistency)
+-- 4. Open Data_Rent_Price_Chair (existing) — unchanged.
+-- 5. Gov exports — Data_Rent_Price_PSF unchanged from R39.
+-- =====================================================================
