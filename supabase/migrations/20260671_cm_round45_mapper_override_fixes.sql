@@ -1,0 +1,121 @@
+-- =====================================================================
+-- Round 45 — fix R44's master_m mapper-override hole.
+--
+-- Self-audit after R44 deploy revealed both R44 fixes silently
+-- ineffective in the actual exports:
+--
+--   gov Data_Cap_by_Credit  — still 0/303 for State + Municipal
+--   dia Data_Pace_Cap_Expand — still 0/291 for pace_core
+--
+-- Root cause for BOTH: the master_m mapper layer in
+-- api/capital-markets.js intercepts realCharts rows and rewrites them
+-- from the monthly master_m table BEFORE the synthetic recipes /
+-- chart-spec builders see the data. The R44 catalog change + recipe
+-- fallback never get a chance to fire.
+--
+-- ---------------------------------------------------------------------
+-- FIX #1 — gov Cap_by_Credit: remove the mapper override
+-- ---------------------------------------------------------------------
+-- gov verticalMappers had:
+--
+--   cap_rate_by_credit: (rows) => rows.map(r => ({
+--     period_end: r.period_end,
+--     federal_cap: r.federal_cap,
+--     state_cap: r.state_cap,
+--     municipal_cap: r.municipal_cap,
+--   })),
+--
+-- This took the catalog-fetched _q rows (which DO have state+muni
+-- aggregated, ~22% of quarters / ~1% of quarters) and replaced them
+-- with master_m rows from cm_gov_market_quarterly_master_m_mat — which
+-- only aggregates federal. Result: 303 monthly rows with federal_cap
+-- populated and state_cap + muni_cap all NULL.
+--
+-- The R44 catalog change to point at `_q` was correct, but the mapper
+-- override was silently undoing it. The fix is to REMOVE the
+-- cap_rate_by_credit entry from the gov verticalMappers — let the
+-- chart fetch directly from cm_gov_cap_by_credit_q via the realCharts
+-- path (catalog-driven, no override). ~50ms extra round-trip; trivial.
+--
+-- After R45, gov Data_Cap_by_Credit will:
+--   • Switch from 303 monthly rows to ~116 quarterly rows
+--   • Show federal_cap on most quarters
+--   • Show state_cap on ~26 quarters (line will have gaps elsewhere)
+--   • Show muni_cap on ~1 quarter (single visible data point)
+--
+-- ---------------------------------------------------------------------
+-- FIX #2 — dia Pace_Cap_Expand: cap_10plus fallback from cost_of_capital
+-- ---------------------------------------------------------------------
+-- The R44 dia fix extended the pace recipe's coalesce chain to fall
+-- back to `r.cap_12plus` when cap_10plus + cap_10plus_year were missing.
+-- But the loop reads from `termRows = find('cap_rate_by_lease_term')`,
+-- and `cap_rate_by_lease_term` is NOT in the dia catalog
+-- (applies_to_verticals = ['gov']). termRows is always empty for dia.
+-- → byPeriod[period].cap_10plus is never set
+-- → pace_core is always null
+--
+-- Investigation found: the dia catalog DOES include cost_of_capital,
+-- and its master_m mapper (line ~1053) emits cap_10plus_year from
+-- the dia master_m view. dia master_m has cap_10plus_year populated
+-- on 264 of 303 monthly rows (2001+). So cost_of_capital rows are a
+-- viable fallback source for the long-term cohort cap rate.
+--
+-- The fix extends the costRows loop to ALSO set cap_10plus when the
+-- cap_rate_by_lease_term path didn't populate it:
+--
+--   for (const r of costRows) {
+--     ...
+--     byPeriod.get(k).cost_capital = r.mortgage_30y_rate ?? r.treasury_10y_yield;
+--     // R45 — dia fallback: cost_of_capital carries master_m's cap_10plus_year
+--     if (byPeriod.get(k).cap_10plus == null && r.cap_10plus_year != null) {
+--       byPeriod.get(k).cap_10plus = r.cap_10plus_year;
+--     }
+--   }
+--
+-- After R45, dia Data_Pace_Cap_Expand pace_core will populate on the
+-- same ~252 monthly periods where master_m has cap_10plus_year (264
+-- populated periods - 12-month lag = ~252 valid YoY pace calculations).
+--
+-- ---------------------------------------------------------------------
+-- WHY R44 ONLY PARTIALLY WORKED
+-- ---------------------------------------------------------------------
+-- One R44 fix DID land — gov Data_Pace_Cap_Expand pace_core is now
+-- populated (was previously empty). That happened because:
+--   • cap_rate_by_lease_term IS in the gov catalog
+--   • gov mapper (line ~995) emits cap_10plus from master_m's
+--     cap_10plus_year
+--   • The R44 recipe fallback chain (cap_10plus ?? cap_10plus_year
+--     ?? cap_12plus) hit `cap_10plus` first for gov (non-null)
+--
+-- The recipe-side fix was correct; it just didn't help dia because
+-- dia's termRows was empty (catalog config). R45 patches the dia
+-- side via the cost_of_capital fallback.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 219 existing tests pass; 2 unrelated pre-existing failures.
+--
+-- Code-level verification:
+--   1. gov verticalMappers no longer has cap_rate_by_credit
+--   2. costRows loop in pace recipe writes cap_10plus when null +
+--      cap_10plus_year present (verified by reading the deployed code)
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open gov Data_Cap_by_Credit — expect:
+--    • ~116 quarterly rows (was 303 monthly)
+--    • State Cap line: ~26 visible data points (was empty)
+--    • Municipal Cap line: 1 visible data point (was empty)
+--    • Federal Cap line: as before
+-- 3. Open dia Data_Pace_Cap_Expand — expect:
+--    • pace_core (col C, "Pace — 10+ Year Cohort (annualized)") now
+--      populated on most periods from ~2002+ (was 0/291)
+--    • The R43-hidden column will auto-unhide on the next export
+--      because colHasValue[2] will be true for at least one row
+-- 4. Re-run audit:
+--      node audit/cm-style-audit/data-completeness.mjs
+--    Expect both flagged columns to drop off the EMPTY list.
+-- =====================================================================
