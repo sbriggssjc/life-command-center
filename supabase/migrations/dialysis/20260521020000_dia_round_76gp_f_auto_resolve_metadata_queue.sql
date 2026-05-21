@@ -1,0 +1,26 @@
+-- Round 76gp.f (2026-05-21) — Dia auto-resolver for metadata backfill queue
+-- ============================================================================
+-- Single SQL function that sweeps every internal source we have and fills
+-- properties.<field> when it's NULL but a sibling or related row has a value.
+-- The AFTER UPDATE trigger on properties (76gp.e2) then auto-closes the queue
+-- row when all missing fields become populated.
+--
+-- Applied via Supabase MCP apply_migration on 2026-05-21. Run as needed:
+--   SELECT * FROM auto_resolve_metadata_backfill_queue();
+--
+-- First-pass results on 2026-05-21 (dia, 1,420 queue rows):
+--   year_built  ← sibling_address              5
+--   year_built  ← year_renovated               0  (already done in 76gp.b)
+--   land_area   ← sibling_address              8
+--   land_area   ← lot_sf                       1
+--   building_size ← sibling_address            2
+--   tenant      ← properties.operator         15
+--   tenant      ← properties.chain_canonical   1
+--   tenant      ← medicare_clinics             0
+--   tenant      ← lease                        0
+--   ─────────────────────────────────────────────
+--   Total fills: 32   |   Queue rows fully captured: 7
+--
+-- Function body is applied via Supabase MCP — see remote DB for canonical
+-- definition. This file documents the artifact for project history.
+SELECT 'see Supabase MCP migration application — dia_round_76gp_f_auto_resolve_metadata_queue';
