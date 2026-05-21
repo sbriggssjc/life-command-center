@@ -124,6 +124,15 @@ const SYNTHETIC_COMPOSERS = {
       // YoY-change series. Fall back to treasury_10y_yield if mortgage
       // not present.
       byPeriod.get(k).cost_capital = r.mortgage_30y_rate ?? r.treasury_10y_yield;
+      // R45 — for dia, cap_rate_by_lease_term isn't in the catalog
+      // (applies_to_verticals=['gov']), so termRows above is always
+      // empty and cap_10plus is never set. cost_of_capital IS in the
+      // dia catalog and its master_m mapper emits cap_10plus_year
+      // (line ~1057 — dia master_m has cap_10plus_year populated on
+      // 264 of 303 monthly rows). Use it as a fallback source.
+      if (byPeriod.get(k).cap_10plus == null && r.cap_10plus_year != null) {
+        byPeriod.get(k).cap_10plus = r.cap_10plus_year;
+      }
     }
 
     const sorted = [...byPeriod.values()].sort((a, b) =>
@@ -1133,12 +1142,15 @@ async function exportWorkbook(req, res) {
       // cm_gov_seller_sentiment_m computes a proper 8+yr cohort split
       // from sales_transactions + leases — let the chart fetch from
       // that wrapper directly. ~190ms total over 303 monthly rows.
-      cap_rate_by_credit: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        federal_cap: r.federal_cap,
-        state_cap: r.state_cap,
-        municipal_cap: r.municipal_cap,
-      })),
+      //
+      // R45 — `cap_rate_by_credit` master_m mapper REMOVED.
+      // master_m (cm_gov_market_quarterly_master_m_mat) only aggregates
+      // the federal credit class; state_cap + muni_cap are NULL across
+      // all 303 monthly rows. The mapper was silently overriding the
+      // R44 catalog change (which repointed at the quarterly view that
+      // DOES aggregate state + muni). Letting the chart fetch directly
+      // from cm_gov_cap_by_credit_q via the realCharts path unblocks
+      // the state + muni lines.
     };
 
     const monthlyMappers = { ...sharedMappers, ...verticalMappers };
