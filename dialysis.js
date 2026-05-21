@@ -520,6 +520,32 @@ function normalizeSalesTxnRow(r, lookups) {
   if (capPick.source && !String(capPick.source).startsWith('sales_transactions')) prov.cap_rate = capPick.source;
   const capRate = capPick.value != null ? Number(capPick.value) : null;
 
+  // -- Brokers: sales_transactions.listing_broker / procuring_broker text
+  // fields → sale_brokers row by role → brokers.broker_name → brokers.company.
+  // Legacy CSV imports often have the text columns null while the
+  // sale_brokers relation carries the data.
+  const brokerByRole = role => {
+    const sbs = r.sale_brokers || [];
+    for (const sb of sbs) {
+      if (sb && sb.role === role) {
+        const b = sb.brokers || {};
+        if (b.broker_name) return b.broker_name;
+        if (b.company)     return b.company;
+      }
+    }
+    return null;
+  };
+  const listingBrokerPick = pickBest(
+    [r.listing_broker, 'sales_transactions.listing_broker'],
+    [brokerByRole('listing'), 'sale_brokers.listing'],
+  );
+  if (listingBrokerPick.source && listingBrokerPick.source !== 'sales_transactions.listing_broker') prov.listing_broker = listingBrokerPick.source;
+  const procuringBrokerPick = pickBest(
+    [r.procuring_broker, 'sales_transactions.procuring_broker'],
+    [brokerByRole('procuring'), 'sale_brokers.procuring'],
+  );
+  if (procuringBrokerPick.source && procuringBrokerPick.source !== 'sales_transactions.procuring_broker') prov.procuring_broker = procuringBrokerPick.source;
+
   // Cross-validation warning: when both primary and fallback have values for
   // price and they disagree by >5%, log so we can quantify ingestion drift.
   // Console-only — no UI surfacing yet; this is observation, not enforcement.
@@ -536,7 +562,54 @@ function normalizeSalesTxnRow(r, lookups) {
     }
   }
 
-  const buildingSize = p.building_size != null ? Number(p.building_size) : null;
+  // -- Year built: properties.year_built → properties.year_renovated.
+  // year_renovated isn't strictly the same thing, but for legacy CSV imports
+  // where year_built was never populated, the renovated year is the only
+  // anchor we have and it's closer to "vintage" than nothing. Auditing on
+  // 2026-05-21 showed 102 sales properties with year_renovated populated
+  // but year_built null.
+  const yearPick = pickBest(
+    [p.year_built, 'properties.year_built'],
+    [p.year_renovated, 'properties.year_renovated'],
+  );
+  if (yearPick.source && yearPick.source !== 'properties.year_built') prov.year_built = yearPick.source;
+  const yearBuilt = yearPick.value != null ? Number(yearPick.value) : null;
+
+  // -- Building size (RBA): properties.building_size → max(leases.leased_area)
+  // for the current/most-recent lease. Acts as a single-tenant proxy when
+  // properties.building_size is null. Audit coverage is low (~1 row) but
+  // costs nothing extra since the lease is already loaded.
+  let leaseAreaMax = null;
+  const leasesList = p.leases || r.leases || [];
+  if (Array.isArray(leasesList)) {
+    for (const l of leasesList) {
+      if (l && l.leased_area != null && Number(l.leased_area) > 0) {
+        const v = Number(l.leased_area);
+        if (leaseAreaMax == null || v > leaseAreaMax) leaseAreaMax = v;
+      }
+    }
+  }
+  const rbaPick = pickBest(
+    [p.building_size, 'properties.building_size'],
+    [leaseAreaMax, 'leases.leased_area'],
+  );
+  if (rbaPick.source && rbaPick.source !== 'properties.building_size') prov.rba = rbaPick.source;
+  const buildingSize = rbaPick.value != null ? Number(rbaPick.value) : null;
+
+  // -- Land area: properties.land_area → properties.lot_sf (SF → acres at
+  // 43,560 SF/ac). Legacy CSV import populated lot_sf on some properties
+  // without populating land_area; this surfaces it.
+  let lotAcresFromSf = null;
+  if (p.lot_sf != null && Number(p.lot_sf) > 0) {
+    lotAcresFromSf = Number(p.lot_sf) / 43560;
+  }
+  const landPick = pickBest(
+    [p.land_area, 'properties.land_area'],
+    [lotAcresFromSf, 'properties.lot_sf'],
+  );
+  if (landPick.source && landPick.source !== 'properties.land_area') prov.land_area = landPick.source;
+  const landAreaAcres = landPick.value != null ? Number(landPick.value) : null;
+
   const pricePerSF   = (soldPrice && buildingSize && buildingSize > 0)
     ? soldPrice / buildingSize : null;
 
@@ -566,8 +639,8 @@ function normalizeSalesTxnRow(r, lookups) {
     address:           p.address || null,
     city:              p.city    || null,
     state:             p.state   || null,
-    land_area:         p.land_area != null ? Number(p.land_area) : null,
-    year_built:        p.year_built || null,
+    land_area:         landAreaAcres,
+    year_built:        yearBuilt,
     rba:               buildingSize,
     rent:              annualRent,
     rent_per_sf:       rentPsf,
@@ -582,8 +655,8 @@ function normalizeSalesTxnRow(r, lookups) {
     recorded_date:     r.recorded_date || (deed ? deed.recording_date : null),
     seller:            sellerPick.value || null,
     buyer:             buyerPick.value  || null,
-    listing_broker:    r.listing_broker   || null,
-    procuring_broker:  r.procuring_broker || null,
+    listing_broker:    listingBrokerPick.value   || null,
+    procuring_broker:  procuringBrokerPick.value || null,
     broker_companies:  extractBrokerCompanies(r),
     bid_ask_spread:    null,
     dom:               null,
@@ -9143,9 +9216,9 @@ async function renderDiaSales() {
     html += td(r.address, true);
     html += td(r.city);
     html += td(r.state);
-    html += tdr(fmtAcres(r.land_area));
-    html += tdr(r.year_built || '—');
-    html += tdr(fmtSF(r.rba));
+    html += tdrX(fmtAcres(r.land_area), prov, 'land_area');
+    html += tdrX(r.year_built || '—', prov, 'year_built');
+    html += tdrX(fmtSF(r.rba), prov, 'rba');
     html += tdr(fmtMoney(r.rent));
     html += tdr(fmtPSF(r.rent_per_sf));
     html += td(fmtDate(r.lease_expiration));
@@ -9158,9 +9231,9 @@ async function renderDiaSales() {
       html += tdrX(fmtCap(r.cap_rate), prov, 'cap_rate');
       html += td(fmtDate(r.sold_date));
       html += tdX(r.seller, prov, 'seller', true);
-      html += td(r.listing_broker, true);
+      html += tdX(r.listing_broker, prov, 'listing_broker', true);
       html += tdX(r.buyer, prov, 'buyer', true);
-      html += td(r.procuring_broker, true);
+      html += tdX(r.procuring_broker, prov, 'procuring_broker', true);
       html += tdr(r.bid_ask_spread != null && parseFloat(r.bid_ask_spread) > 0 ? Math.round(parseFloat(r.bid_ask_spread)) + ' bps' : '—');
       html += tdr(r.dom != null ? r.dom + 'd' : '—');
     } else {
