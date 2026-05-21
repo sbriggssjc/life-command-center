@@ -1,0 +1,21 @@
+-- Round 76gp.h (2026-05-21) — Nightly auto-resolve cron + manual-review view (dia)
+-- ============================================================================
+-- pg_cron job 'dia-metadata-queue-auto-resolve' runs nightly 02:10 UTC and
+-- calls auto_resolve_metadata_backfill_queue() to drain Tier 1 (internal)
+-- candidates. Idempotent — only fills nulls.
+--
+-- v_property_metadata_backfill_queue_manual_review exposes ONLY rows where
+-- automation has visibly given up:
+--   * attempts >= 3 (the external worker has tried multiple times)
+--   * last_attempt_at within last 60 days (recent enough to act on)
+--   * last_error IS NOT NULL OR attempts >= 5 (clear signal of an issue)
+-- Rows still in active automation (never tried, or < 3 tries) are hidden
+-- so humans aren't asked to handle work the cron will pick up.
+--
+-- Tier 1 (this file)  : pg_cron nightly → SQL auto-resolver
+-- Tier 2 (76gp.g)     : Python assessor_enrichment --from-queue (Railway weekly cron
+--                       scripts/cron/metadata-backfill-queue.sh in Dialysis repo)
+-- Manual review       : query v_property_metadata_backfill_queue_manual_review
+--
+-- Applied via Supabase MCP apply_migration on 2026-05-21.
+SELECT 'see Supabase MCP — dia_round_76gp_h_metadata_queue_cron_and_manual_view';
