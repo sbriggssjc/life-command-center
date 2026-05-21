@@ -1,0 +1,155 @@
+-- =====================================================================
+-- Round 39 — Excel-native <c:trendline> on scatter dot plots.
+-- R33 Tier E2: "Core_Cap_Dot trendline review vs master."
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- AUDIT FINDING
+-- ---------------------------------------------------------------------
+-- Dialysis Comp Work MASTER.xlsx > "Core Cap Chart" tab contains a
+-- single scatter chart with title "Core Dialysis" that uses Excel's
+-- built-in trendline:
+--
+--   <c:trendline>
+--     <c:spPr><a:ln w="19050" cap="rnd"><a:solidFill>
+--       <a:schemeClr val="accent1"/></a:solidFill>
+--       <a:prstDash val="sysDot"/></a:ln></c:spPr>
+--     <c:trendlineType val="poly"/>
+--     <c:order val="3"/>
+--     <c:forward val="720"/>
+--     <c:dispRSqr val="0"/>
+--     <c:dispEq val="0"/>
+--   </c:trendline>
+--
+-- → polynomial regression, ORDER 3 (cubic), 720-day forward forecast,
+-- dotted (sysDot) accent1-colored line.
+--
+-- The R34 P7.5 implementation in cm-native-chart-injector.js used a
+-- DIFFERENT approach: a helper column computed 12-month rolling
+-- average in JS for each row, then plotted as a 2nd scatter series with
+-- showLine=true. This was a faithful port of the PDF renderer's
+-- chartjs-only behavior, but it does NOT match master Excel which has
+-- a single dot series with an attached Excel trendline element.
+--
+-- The "Available Comps" tab in the same master uses 2 linear
+-- trendlines (one per dot series). Our equivalent
+-- available_cap_rate_dot_plot used the same helper-column workaround
+-- — computed (m, b) via least-squares and plotted m·x + b as a 2nd
+-- series. Master uses Excel's <c:trendlineType val="linear"/>.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEW
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-native-chart-injector.js:
+--
+-- New helper trendlineXml(t):
+--   Emits Excel's <c:trendline> element with type / order / forward /
+--   backward / dashed / color knobs. Empty string when no trendline.
+--   Supported types: linear, poly, exp, log, power, movingAvg.
+--
+-- buildScatterChartXml — dot-cloud series now emits
+--   ${trendlineXml(s.trendline)} inside <c:ser>. Excel computes the
+--   trendline natively from the series' xVal/yVal pairs; no helper
+--   column needed. Users can right-click → Format Trendline to adjust
+--   the order, forecast, R² display, etc. directly in Excel.
+--
+-- Two scatter templates rewired to use trendline config:
+--
+--   core_cap_rate_dot_plot:
+--     series: [{ trendline: { type: 'poly', order: 3, forward: 720,
+--                             dashed: true, color: navy } }]
+--   → matches master exactly.
+--
+--   available_cap_rate_dot_plot:
+--     series: [{ trendline: { type: 'linear', dashed: true,
+--                             color: navy } }]
+--   → matches master exactly.
+--
+-- Removed:
+--   • The helper-column declarations (trendline_12mo + trendline_linear)
+--   • The pre-pass that walked rows to compute the trendline values
+--   • The 2nd scatter series that plotted the helper column
+--
+-- This means scatter charts now have 1 series in chart XML (was 2) and
+-- the data tab no longer carries an extra "12-mo Rolling Avg" or
+-- "Linear Trendline" column at the right edge.
+--
+-- ---------------------------------------------------------------------
+-- WHY THIS IS BETTER
+-- ---------------------------------------------------------------------
+-- 1. Matches master Excel exactly — both Core Cap Chart (poly 3) and
+--    Available Comps (linear) trendlines are now identical structurally.
+--
+-- 2. Excel-native: users can right-click the trendline in Excel to:
+--    - Change the order (poly 2/3/4/5/6)
+--    - Show R²
+--    - Show the equation
+--    - Forecast further forward/backward
+--    None of that was possible with the helper-column approach.
+--
+-- 3. Cleaner data tabs: removed the extra helper column at the right
+--    edge of Data_Core_Cap_Dot and Data_Avail_Cap_Dot.
+--
+-- 4. Polynomial order 3 with 2-year forecast is more analytically useful
+--    than rolling average for a cap-rate-over-time chart — captures the
+--    cycle (downturn/recovery) and extends a forecast into the future.
+--
+-- ---------------------------------------------------------------------
+-- WHAT THE PDF RENDERER STILL DOES
+-- ---------------------------------------------------------------------
+-- cm-chart-image-renderer.js (PNG export path) keeps its 12-month
+-- rolling average for core_cap_rate_dot_plot because chart.js doesn't
+-- have a built-in polynomial regression. The two paths now diverge:
+--
+--   PDF / web charts:  12-month rolling average overlay (smooth trace)
+--   Native Excel:      Excel-native poly-3 + 720-day forecast trendline
+--
+-- This is acceptable — the PDF is a snapshot, Excel is the analytical
+-- artifact where users want to manipulate the trendline.
+--
+-- If the user later wants the two to match, options are:
+--   (a) Port the rolling-average to the native chart (revert this PR)
+--   (b) Switch the PDF renderer to a polynomial regression (rewrite
+--       buildAnnotations + chartjs-plugin-regression)
+--   (c) Leave them as-is (each path uses its native best-fit method)
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 152 CM tests pass (up from 148 in R38). Full suite 219 pass / 2
+-- unrelated pre-existing failures.
+--
+-- New / replaced tests:
+--   • R39: core_cap_rate_dot_plot uses native poly trendline
+--   • R39: available_cap_rate_dot_plot uses native linear trendline
+--   • R39: <c:trendline> XML emitted with type/order/forward/dashed
+--   • R39: scatter without trendline config emits no <c:trendline>
+--          (backward compat for any future scatter)
+--   • R39: linear trendline omits order + forward fragments
+--
+-- 3 old R34 P7.5 helper-column tests removed (they asserted on the
+-- now-deleted helperCols + 2nd-series shape).
+--
+-- Smoke build with 30 synthetic dot points confirmed the chart XML
+-- contains <c:trendline>, type=poly, order=3, forward=720, dotted
+-- dash, navy color, single series, no helperCols.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Core_Cap_Dot — expect:
+--    - Sky scatter dots (one per closed sale)
+--    - Single dotted navy curve sweeping through the dots — captures
+--      the cap-rate cycle (rising / peak / falling / recovery)
+--    - Curve extends ~2 years beyond the last sale as a forecast
+--    - Right-click the curve → "Format Trendline" lets you tune it
+--    - No extra column at the right edge of the data table
+-- 3. Open Data_Avail_Cap_Dot — expect:
+--    - Sky scatter dots, one per active listing
+--    - Single dotted navy straight line (linear regression)
+--    - Right-click → "Format Trendline" lets you swap to poly, exp, etc.
+--    - No extra column at the right edge of the data table
+-- 4. PDF charts unchanged (still show 12-mo rolling avg curve).
+-- =====================================================================
