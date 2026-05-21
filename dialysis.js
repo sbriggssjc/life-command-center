@@ -61,7 +61,13 @@ let diaSalesLoading = false;
 let diaSalesSearch = '';
 const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
 let diaSalesPage = 0;
-let diaSalesSort = { col: null, dir: 'desc' }; // column sort state
+// Default sort: newest first. Sales Comps uses sold_date; Available uses
+// listing_date. Users can click any column header to override; "Reset Sort"
+// returns to this default.
+function diaSalesDefaultSort(view) {
+  return { col: view === 'available' ? 'listing_date' : 'sold_date', dir: 'desc' };
+}
+let diaSalesSort = diaSalesDefaultSort('comps'); // column sort state
 let diaSalesStateFilter = ''; // state filter
 let diaFilteredSalesData = [];
 const DIA_SALES_PAGE_SIZE = 50;
@@ -8813,8 +8819,10 @@ async function renderDiaSales() {
     html += '<option value="' + esc(st) + '"' + (diaSalesStateFilter === st ? ' selected' : '') + '>' + esc(st) + '</option>';
   });
   html += '</select>';
-  if (diaSalesSort.col) {
-    html += '<button class="pill active" id="diaSalesClearSort" style="font-size:11px;padding:4px 10px;">Clear Sort</button>';
+  const _defSort = diaSalesDefaultSort(diaSalesView);
+  const isDefaultSort = diaSalesSort.col === _defSort.col && diaSalesSort.dir === _defSort.dir;
+  if (!isDefaultSort) {
+    html += '<button class="pill active" id="diaSalesClearSort" style="font-size:11px;padding:4px 10px;" title="Reset to newest-first">Reset Sort</button>';
   }
   html += '<span style="font-size: 12px; color: var(--text3);">' + fmtN(filtered.length) + ' results</span>';
   html += '<button onclick="exportCompsToXlsx(diaFilteredSalesData, \'sales\')" style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:4px;" title="Export all ' + fmtN(filtered.length) + ' filtered results to Excel">&#x1F4E5; Export</button>';
@@ -8976,7 +8984,7 @@ async function renderDiaSales() {
       diaSalesView = e.target.dataset.salesView;
       diaSalesPage = 0;
       diaSalesSearch = '';
-      diaSalesSort = { col: null, dir: 'desc' };
+      diaSalesSort = diaSalesDefaultSort(diaSalesView);
       diaSalesStateFilter = '';
       renderDiaSales();
     });
@@ -9021,7 +9029,7 @@ async function renderDiaSales() {
   const clearSortBtn = document.getElementById('diaSalesClearSort');
   if (clearSortBtn) {
     clearSortBtn.addEventListener('click', function() {
-      diaSalesSort = { col: null, dir: 'desc' };
+      diaSalesSort = diaSalesDefaultSort(diaSalesView);
       diaSalesPage = 0;
       renderDiaSales();
     });
