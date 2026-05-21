@@ -97,6 +97,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
+    case 'sos-writeback':           return handleSosWriteback(req, res);
     case 'agency-drift-queue':      return handleAgencyDriftQueueList(req, res);
     case 'resolve-agency-drift':    return handleResolveAgencyDrift(req, res);
     case 'write-failures-rollup':   return handleWriteFailuresRollup(req, res);
@@ -3001,14 +3002,22 @@ async function handleLlcResearchQueueList(req, res) {
   if (!user) return;
 
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  // Domain-aware: gov holds the high-value GSA LLCs; dialysis is the default
+  // for backward-compatibility with the original (dialysis-only) caller.
+  const domain = String(req.query.domain || 'dialysis').toLowerCase();
+  if (!['government', 'dialysis'].includes(domain)) {
+    return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+  }
+  const isGov = domain === 'government';
 
   try {
     const { domainQuery } = await import('./_shared/domain-db.js');
-    // Pull queue rows first
-    const qRes = await domainQuery('dialysis', 'GET',
+    // Pull queue rows first. recorded_owner_id is REQUIRED so the sidebar can
+    // target the SOS write-back at the right owner.
+    const qRes = await domainQuery(domain, 'GET',
       'llc_research_queue' +
       '?status=eq.queued' +
-      '&select=queue_id,property_id,search_name,guessed_state,attempts,last_attempt_at,last_error,created_at' +
+      '&select=queue_id,recorded_owner_id,property_id,search_name,guessed_state,attempts,last_attempt_at,last_error,created_at' +
       '&order=created_at.asc' +
       '&limit=' + limit
     );
@@ -3017,25 +3026,28 @@ async function handleLlcResearchQueueList(req, res) {
     }
     const rows = Array.isArray(qRes.data) ? qRes.data : [];
     if (rows.length === 0) {
-      return res.status(200).json({ ok: true, items: [], total: 0 });
+      return res.status(200).json({ ok: true, domain, items: [], total: 0 });
     }
 
     // Fetch property context for each queue row (single batched query)
     const propIds = Array.from(new Set(rows.map(r => r.property_id).filter(Boolean)));
     let propsById = {};
     if (propIds.length > 0) {
-      const pRes = await domainQuery('dialysis', 'GET',
-        'properties?property_id=in.(' + propIds.join(',') + ')' +
-        '&select=property_id,address,city,state,zip_code,tenant,operator,chain_canonical,latest_sale_price,current_value_estimate,annual_rent,completeness_band,completeness_score'
+      const propSelect = isGov
+        ? 'property_id,address,city,state,agency,gross_rent,investment_score,deal_grade'
+        : 'property_id,address,city,state,zip_code,tenant,operator,chain_canonical,latest_sale_price,current_value_estimate,annual_rent,completeness_band,completeness_score';
+      const pRes = await domainQuery(domain, 'GET',
+        'properties?property_id=in.(' + propIds.join(',') + ')&select=' + propSelect
       );
       if (pRes.ok && Array.isArray(pRes.data)) {
         for (const p of pRes.data) propsById[p.property_id] = p;
       }
     }
 
-    // Pull value signal for ranking
+    // Value signal for ranking. dia has a dedicated revenue view; gov ranks on
+    // gross_rent (annual rent is the cleanest deal-size proxy there).
     let valueById = {};
-    if (propIds.length > 0) {
+    if (!isGov && propIds.length > 0) {
       const vRes = await domainQuery('dialysis', 'GET',
         'v_property_value_signal?property_id=in.(' + propIds.join(',') + ')&select=property_id,rev_value'
       );
@@ -3046,9 +3058,13 @@ async function handleLlcResearchQueueList(req, res) {
 
     const items = rows.map(r => {
       const prop = propsById[r.property_id] || null;
-      const rev_value = valueById[r.property_id] || 0;
+      const rev_value = isGov
+        ? (Number(prop?.gross_rent) || 0)
+        : (valueById[r.property_id] || 0);
       return {
         queue_id:           r.queue_id,
+        recorded_owner_id:  r.recorded_owner_id || null,
+        domain,
         property_id:        r.property_id,
         search_name:        r.search_name,
         guessed_state:      r.guessed_state,
@@ -3060,9 +3076,12 @@ async function handleLlcResearchQueueList(req, res) {
         property_city:      prop?.city || null,
         property_state:     prop?.state || null,
         property_zip:       prop?.zip_code || null,
-        tenant:             prop?.tenant || prop?.operator || prop?.chain_canonical || null,
-        completeness_band:  prop?.completeness_band || null,
-        completeness_score: prop?.completeness_score != null ? Number(prop.completeness_score) : null,
+        tenant:             isGov
+                              ? (prop?.agency || null)
+                              : (prop?.tenant || prop?.operator || prop?.chain_canonical || null),
+        deal_grade:         isGov ? (prop?.deal_grade || null) : null,
+        completeness_band:  isGov ? null : (prop?.completeness_band || null),
+        completeness_score: (!isGov && prop?.completeness_score != null) ? Number(prop.completeness_score) : null,
         rev_value,
       };
     });
@@ -3070,7 +3089,7 @@ async function handleLlcResearchQueueList(req, res) {
     // Sort by rev_value DESC so highest-value research surfaces first
     items.sort((a, b) => (b.rev_value || 0) - (a.rev_value || 0));
 
-    return res.status(200).json({ ok: true, items, total: items.length });
+    return res.status(200).json({ ok: true, domain, items, total: items.length });
   } catch (err) {
     console.error('[llc-research-queue]', err?.message || err);
     return res.status(500).json({ error: 'llc_research_queue_failed', message: err?.message });
@@ -3110,6 +3129,151 @@ async function handleResolveLlcResearch(req, res) {
   } catch (err) {
     console.error('[resolve-llc-research]', err?.message || err);
     return res.status(500).json({ error: 'resolve_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// SOS MANUAL WRITE-BACK — sidebar-assisted SOS lookup (2026-05-21)
+//
+// The demand-driven workhorse for owner-LLC enrichment. The Chrome sidebar's
+// public-records scanner already extracts the SOS entity-detail fields
+// (registered agent, officers/members, filing number, formation date, status,
+// state of formation). This route accepts that capture and writes it back to
+// `recorded_owners` using the SAME field mapping as the automated
+// `llc-research-tick`, then marks the originating `llc_research_queue` row
+// done. Works for all 50 states day one (a human is the parser), is compliant
+// (broker opens the official SOS page), and needs no per-state adapter or paid
+// API key. Per-state automated adapters (SPEC_sos_direct_scraper) drain the
+// long tail later; this covers the high-value head immediately.
+//
+// POST /api/admin?_route=sos-writeback   (rewritten: /api/sos-writeback)
+//   Body: {
+//     domain: 'government' | 'dialysis',
+//     recorded_owner_id: <uuid>,          // required — the owner to enrich
+//     queue_id?: <number>,                // optional — queue row to close
+//     capture: {                          // raw sidebar SOS scan
+//       name?, registered_agent?, agent_address?, principal_address?,
+//       officers?, filing_number?, formation_date?, status?,
+//       state_of_formation?
+//     }
+//   }
+// ============================================================================
+
+// "John Smith, Manager; Jane Doe, Member" → {name:'John Smith', role:'Manager'}
+function parseSosOfficer(raw) {
+  if (!raw || typeof raw !== 'string') return { name: null, role: null };
+  const first = raw.split(/[;\n]|(?:,\s*(?:and|&)\s*)/i)[0]?.trim() || '';
+  if (!first) return { name: null, role: null };
+  // Try "Name, Role"
+  const m = first.match(/^(.+?)\s*[,\-–—]\s*([A-Za-z][A-Za-z /]+)$/);
+  if (m) {
+    const role = m[2].trim();
+    if (/manager|member|president|ceo|director|officer|principal|partner|owner|registered agent|secretary|treasurer/i.test(role)) {
+      return { name: m[1].trim().slice(0, 200), role: role.slice(0, 100) };
+    }
+  }
+  return { name: first.slice(0, 200), role: null };
+}
+
+// "Delaware" / "DE" / "State of Texas" → 2-letter code (best-effort, else null)
+function normalizeStateCode(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const s = raw.trim().toUpperCase().replace(/^STATE OF\s+/, '');
+  if (/^[A-Z]{2}$/.test(s)) return s;
+  const MAP = {
+    ALABAMA:'AL',ALASKA:'AK',ARIZONA:'AZ',ARKANSAS:'AR',CALIFORNIA:'CA',COLORADO:'CO',
+    CONNECTICUT:'CT',DELAWARE:'DE','DISTRICT OF COLUMBIA':'DC',FLORIDA:'FL',GEORGIA:'GA',
+    HAWAII:'HI',IDAHO:'ID',ILLINOIS:'IL',INDIANA:'IN',IOWA:'IA',KANSAS:'KS',KENTUCKY:'KY',
+    LOUISIANA:'LA',MAINE:'ME',MARYLAND:'MD',MASSACHUSETTS:'MA',MICHIGAN:'MI',MINNESOTA:'MN',
+    MISSISSIPPI:'MS',MISSOURI:'MO',MONTANA:'MT',NEBRASKA:'NE',NEVADA:'NV','NEW HAMPSHIRE':'NH',
+    'NEW JERSEY':'NJ','NEW MEXICO':'NM','NEW YORK':'NY','NORTH CAROLINA':'NC','NORTH DAKOTA':'ND',
+    OHIO:'OH',OKLAHOMA:'OK',OREGON:'OR',PENNSYLVANIA:'PA','RHODE ISLAND':'RI','SOUTH CAROLINA':'SC',
+    'SOUTH DAKOTA':'SD',TENNESSEE:'TN',TEXAS:'TX',UTAH:'UT',VERMONT:'VT',VIRGINIA:'VA',
+    WASHINGTON:'WA','WEST VIRGINIA':'WV',WISCONSIN:'WI',WYOMING:'WY',
+  };
+  return MAP[s] || null;
+}
+
+// Best-effort date parse → ISO YYYY-MM-DD, else null
+function parseSosDate(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const d = new Date(raw.trim());
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+async function handleSosWriteback(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body    = req.body || {};
+  const domain  = String(body.domain || '').toLowerCase();
+  const ownerId = body.recorded_owner_id ? String(body.recorded_owner_id) : null;
+  const queueId = body.queue_id != null ? Number(body.queue_id) : null;
+  const cap     = body.capture || {};
+
+  if (!['government', 'dialysis'].includes(domain)) {
+    return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+  }
+  if (!ownerId) {
+    return res.status(400).json({ error: 'recorded_owner_id required' });
+  }
+
+  const officer  = parseSosOfficer(cap.officers);
+  const isGov     = domain === 'government';
+  const stateCol  = isGov ? 'filing_state' : 'state_of_incorporation';
+  const filingState = normalizeStateCode(cap.state_of_formation);
+
+  const ownerPatch = stripNullsLocal({
+    [stateCol]:               filingState,
+    filing_id:                cap.filing_number ? String(cap.filing_number).slice(0, 200) : null,
+    filing_date:              parseSosDate(cap.formation_date),
+    filing_status:            cap.status ? String(cap.status).slice(0, 100) : null,
+    registered_agent_name:    cap.registered_agent ? String(cap.registered_agent).slice(0, 300) : null,
+    registered_agent_address: cap.agent_address
+                                ? String(cap.agent_address).slice(0, 500)
+                                : (cap.principal_address ? String(cap.principal_address).slice(0, 500) : null),
+    manager_name:             officer.name,
+    manager_role:             officer.role,
+    llc_research_at:          new Date().toISOString(),
+    llc_research_source:      'sos_manual_sidebar',
+  });
+
+  if (Object.keys(ownerPatch).length <= 2) {
+    // only the two timestamp/source fields → nothing useful was captured
+    return res.status(400).json({ error: 'capture contained no enrichable SOS fields' });
+  }
+
+  try {
+    const r = await domainQuery(domain, 'PATCH',
+      `recorded_owners?recorded_owner_id=eq.${ownerId}`, ownerPatch);
+    if (!r.ok) return res.status(502).json({ error: 'owner_update_failed', detail: r.data });
+
+    let queueClosed = false;
+    if (Number.isFinite(queueId)) {
+      const qr = await domainQuery(domain, 'PATCH',
+        `llc_research_queue?queue_id=eq.${queueId}`,
+        stripNullsLocal({
+          status:             'done',
+          found_filing_id:    ownerPatch.filing_id || null,
+          found_filing_state: ownerPatch[stateCol] || null,
+          resolved_at:        new Date().toISOString(),
+          last_error:         null,
+        }));
+      queueClosed = !!qr.ok;
+    }
+
+    return res.status(200).json({
+      ok: true,
+      domain,
+      recorded_owner_id: ownerId,
+      queue_id: Number.isFinite(queueId) ? queueId : null,
+      queue_closed: queueClosed,
+      applied: ownerPatch,
+    });
+  } catch (err) {
+    console.error('[sos-writeback]', err?.message || err);
+    return res.status(500).json({ error: 'sos_writeback_failed', message: err?.message });
   }
 }
 

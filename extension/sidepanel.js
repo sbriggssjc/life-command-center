@@ -3023,6 +3023,99 @@ function renderDocuments(docs) {
   return html;
 }
 
+// ── SOS-direct lookup: demand-driven LLC-research workhorse ──────────────────
+// The "active research target" is the owner the broker chose from the LLC
+// research queue. It's stashed in storage so that, after they navigate to the
+// state SOS page and Scan it, the org view knows which recorded_owner +
+// queue row the captured filing should be written back to.
+
+function setActiveLlcResearch(target) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ lcc_active_llc_research: target || null }, resolve);
+  });
+}
+function getActiveLlcResearch() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['lcc_active_llc_research'], (r) => resolve(r.lcc_active_llc_research || null));
+  });
+}
+
+// Google-routed SOS search — works for all 50 states day one (the broker is
+// the parser; no per-state adapter needed). Lands them on the official SOS
+// business-entity search for the LLC.
+function sosSearchUrl(name, state) {
+  const q = `${name || ''} ${state || ''} secretary of state business entity search`.trim();
+  return 'https://www.google.com/search?q=' + encodeURIComponent(q);
+}
+
+// Render the ranked LLC research queue into the Property tab. Highest deal
+// value first (server-ranked). "Look up" stashes the target and opens the SOS
+// search; the broker then Scans the SOS page and the org view offers a
+// one-click write-back to that owner.
+async function renderLlcResearchQueue(domain) {
+  const dom = (domain === 'government' || domain === 'dialysis') ? domain : 'government';
+  const header = $('#propertyHeader');
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
+
+  header.innerHTML = `<div class="property-title">LLC Research Queue</div>
+    <div class="property-source">${dom === 'government' ? 'Government' : 'Dialysis'} · ranked by deal value</div>`;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading queue…</div>';
+  actions.innerHTML = `
+    <button class="btn btn-sm" id="llcQGov">Government</button>
+    <button class="btn btn-sm" id="llcQDia" style="margin-left:6px;">Dialysis</button>
+    <button class="btn btn-sm btn-primary" id="llcQBack" style="margin-left:6px;">← Back</button>`;
+  $('#llcQGov')?.addEventListener('click', () => renderLlcResearchQueue('government'));
+  $('#llcQDia')?.addEventListener('click', () => renderLlcResearchQueue('dialysis'));
+  $('#llcQBack')?.addEventListener('click', () => loadPropertyTab());
+
+  const result = await apiCall(`/api/admin?_route=llc-research-queue&domain=${dom}&limit=25`, null, 'GET');
+  if (!result.ok) {
+    body.innerHTML = `<div class="error-state">${escapeHtml(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || 'Failed to load queue')}</div>`;
+    return;
+  }
+  const items = result.data?.items || [];
+  if (!items.length) {
+    body.innerHTML = '<div class="empty-state">Queue is empty — no owners awaiting SOS research.</div>';
+    return;
+  }
+
+  const active = await getActiveLlcResearch();
+  let html = '<div class="section-label">Owners awaiting SOS lookup</div>';
+  for (const it of items) {
+    const isActive = active && active.queue_id === it.queue_id && active.domain === dom;
+    const loc = [it.property_city, it.property_state].filter(Boolean).join(', ');
+    const val = it.rev_value ? '$' + Math.round(it.rev_value).toLocaleString() : '';
+    html += `<div class="context-field" style="flex-direction:column;align-items:stretch;${isActive ? 'outline:2px solid var(--accent,#2e86de);border-radius:6px;padding:6px;' : ''}">
+      <div><span class="context-value" style="font-weight:600;">${escapeHtml(it.search_name || '(unnamed)')}</span></div>
+      <div style="font-size:11px;color:var(--text-secondary);">${escapeHtml(it.tenant || '')}${it.tenant && loc ? ' · ' : ''}${escapeHtml(loc)}${val ? ' · ' + val : ''}${it.guessed_state ? ' · ' + escapeHtml(it.guessed_state) : ''}</div>
+      <div style="margin-top:4px;">
+        <button class="btn btn-sm btn-primary llc-lookup-btn"
+                data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
+                data-name="${escapeHtml(it.search_name || '')}" data-state="${escapeHtml(it.guessed_state || it.property_state || '')}"
+                data-domain="${dom}">${isActive ? '✓ Active — Look up again' : 'Look up SOS'}</button>
+      </div>
+    </div>`;
+  }
+  body.innerHTML = html;
+
+  body.querySelectorAll('.llc-lookup-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const target = {
+        queue_id: Number(btn.dataset.qid),
+        recorded_owner_id: btn.dataset.oid || null,
+        search_name: btn.dataset.name || '',
+        state: btn.dataset.state || '',
+        domain: btn.dataset.domain,
+      };
+      await setActiveLlcResearch(target);
+      chrome.tabs.create({ url: sosSearchUrl(target.search_name, target.state) });
+      btn.textContent = '✓ Active — Scan the SOS page, then Save';
+      btn.className = 'btn btn-sm btn-success llc-lookup-btn';
+    });
+  });
+}
+
 // ── Organization view (SOS / business entity lookups) ───────────────────────
 
 function loadOrgView(source, domainLabel) {
@@ -3055,11 +3148,60 @@ function loadOrgView(source, domainLabel) {
 
   body.innerHTML = html;
 
-  // Action: save org to LCC or search for it
+  // Action: save org to LCC, search for it, write SOS filing back to the
+  // owner being researched, or browse the LLC research queue.
   actions.innerHTML = `
-    <button class="btn btn-sm btn-primary" id="searchOrgBtn">Search in LCC</button>
-    <button class="btn btn-sm btn-success" id="saveOrgBtn" style="margin-left:6px;">Save to LCC</button>
+    <button class="btn btn-sm btn-success" id="saveSosOwnerBtn">SOS → Owner</button>
+    <button class="btn btn-sm btn-primary" id="llcQueueBtn" style="margin-left:6px;">Research Queue</button>
+    <button class="btn btn-sm" id="searchOrgBtn" style="margin-left:6px;">Search in LCC</button>
+    <button class="btn btn-sm" id="saveOrgBtn" style="margin-left:6px;">Save to LCC</button>
   `;
+
+  $('#llcQueueBtn')?.addEventListener('click', () => renderLlcResearchQueue('government'));
+
+  // SOS → Owner: write the captured filing back to the recorded_owner the
+  // broker picked from the research queue, and close that queue row.
+  const sosBtn = $('#saveSosOwnerBtn');
+  if (sosBtn) {
+    sosBtn.addEventListener('click', async () => {
+      const target = await getActiveLlcResearch();
+      const showToast = (msg) => {
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = msg;
+        sosBtn.parentElement?.prepend(toast);
+        setTimeout(() => toast.remove(), 6000);
+      };
+      if (!target || !target.recorded_owner_id) {
+        showToast('Open the owner from "Research Queue" first so I know which owner to save to.');
+        return;
+      }
+      sosBtn.disabled = true;
+      sosBtn.textContent = 'Saving…';
+      const capture = {};
+      // raw scanner keys map 1:1 to the sos-writeback contract
+      for (const k of ['name','registered_agent','agent_address','principal_address',
+                       'officers','filing_number','formation_date','status','state_of_formation']) {
+        if (source[k]) capture[k] = source[k];
+      }
+      const result = await apiCall('/api/sos-writeback', {
+        domain: target.domain,
+        recorded_owner_id: target.recorded_owner_id,
+        queue_id: target.queue_id,
+        capture,
+      });
+      if (result.ok) {
+        sosBtn.className = 'btn btn-sm btn-success';
+        sosBtn.textContent = `✓ Saved to ${target.search_name || 'owner'}`;
+        await setActiveLlcResearch(null);   // consume the target
+      } else {
+        sosBtn.disabled = false;
+        sosBtn.textContent = 'SOS → Owner (retry)';
+        sosBtn.className = 'btn btn-sm btn-danger';
+        showToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || `HTTP ${result.status || 'error'}`);
+      }
+    });
+  }
 
   const searchBtn = $('#searchOrgBtn');
   if (searchBtn) {
