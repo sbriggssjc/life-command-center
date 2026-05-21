@@ -2222,6 +2222,124 @@ test('R39: linear trendline omits order + forward fragments', async () => {
   assert.ok(!/<c:forward val=/.test(trendlineBlock), 'no forward inside trendline for linear');
 });
 
+// ============================================================================
+// R41 — chart-area polish: explicit major gridlines + roundedCorners=0.
+// Audit finding (audit/cm-style-audit + on-demand inspection of master
+// Core Cap Chart's val axis XML): master has <c:majorGridlines> at every
+// val tick (~D9D9D9 light gray); our exports relied on Excel defaults
+// which can render inconsistently across versions. Master also explicitly
+// sets <c:roundedCorners val="0"/> on the chart wrapper.
+// ============================================================================
+
+test('R41: chart wrapper emits <c:roundedCorners val="0"/>', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('B5').value = 'Series';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${6 + i}`).value = 100 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 11,
+      color: '003DA5',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:roundedCorners val="0"\/>/,
+    'roundedCorners disabled at chart wrapper');
+});
+
+test('R41: val axis emits <c:majorGridlines> with light-gray color', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('B5').value = 'Series';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${6 + i}`).value = 100 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 11,
+      color: '003DA5',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  // Major gridlines inside the val axis block
+  const valAx = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(valAx, /<c:majorGridlines>/, 'val axis has major gridlines');
+  assert.match(valAx, /<c:majorGridlines>[\s\S]*?<a:srgbClr val="D9D9D9"\/>/,
+    'gridline color is light gray D9D9D9 (matches master ~85%-lightened tx1)');
+  // Cat axis should NOT have gridlines (we only emit them on val axes)
+  const catAx = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  assert.ok(!/<c:majorGridlines>/.test(catAx),
+    'cat axis does NOT have gridlines (val axis only)');
+});
+
+test('R41: combo chart emits gridlines on both left + right val axes', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${5 + i}`).value = 50 + i;
+    sheet.getCell(`C${5 + i}`).value = 0.85 + i * 0.01;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'combo', tabName: 'Data_Test',
+      catCol: 'A', dataStart: 5, dataEnd: 10,
+      barSeries: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' }],
+      lineSeries: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' }],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  // Two val axes both have gridlines
+  const gridlineCount = (chartXml.match(/<c:majorGridlines>/g) || []).length;
+  assert.equal(gridlineCount, 2, 'both left + right val axes have gridlines');
+});
+
+test('R41: scatter chart emits gridlines on both x + y val axes', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = i + 1;
+    sheet.getCell(`B${5 + i}`).value = 0.05 + i * 0.005;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'scatter', tabName: 'Data_Test',
+      dataStart: 5, dataEnd: 10,
+      series: [{ titleCol: 'B', titleRow: 4, xCol: 'A', yCol: 'B', color: '003DA5' }],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  // Scatter has 2 val axes (x + y); both should have gridlines
+  const gridlineCount = (chartXml.match(/<c:majorGridlines>/g) || []).length;
+  assert.equal(gridlineCount, 2, 'both scatter axes have gridlines');
+});
+
 test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line', () => {
   // Quarterly tab has no avg_last_ask_cap → renderer uses single-line.
   const cols = [

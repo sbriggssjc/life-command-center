@@ -1204,8 +1204,15 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     const headerRow_n = png ? (27 + summaryRowCount) : 4;
     const dataStart = headerRow_n + 1;
 
+    // R41 — NM-navy tab color on every Data_* worksheet (visual organization;
+    // distinguishes chart/data tabs from Cover / Index / KPI_* / Brand tabs
+    // which stay uncolored).
+    const tabColorOpt = tabName.startsWith('Data_')
+      ? { tabColor: { argb: 'FF' + hex(palette.nm_navy) } }
+      : {};
     const sheet = wb.addWorksheet(tabName, {
       views: [{ showGridLines: false, state: 'frozen', ySplit: headerRow_n }],
+      ...tabColorOpt,
     });
 
     // Embed chart image at the top, anchored at A1, sized to span the

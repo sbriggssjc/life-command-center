@@ -1,0 +1,110 @@
+-- =====================================================================
+-- Round 41 — chart-area polish (initiative round).
+--
+-- Three small structural improvements identified by inspecting the
+-- master Excel docs' chart XML directly (beyond the structural audit
+-- in audit/cm-style-audit/PUNCH-LIST.md which focused on titles,
+-- legends, and number formats):
+--
+--   1. Explicit <c:majorGridlines> on every val axis
+--   2. Explicit <c:roundedCorners val="0"/> on chart wrapper
+--   3. NM-navy tab color on every Data_* worksheet
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- FINDING #1 — major gridlines on val axes
+-- ---------------------------------------------------------------------
+-- Inspecting Dialysis Comp Work MASTER.xlsx > Core Cap Chart's val
+-- axis XML showed an explicit <c:majorGridlines> child with light-gray
+-- styling:
+--
+--   <c:majorGridlines>
+--     <c:spPr><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr">
+--       <a:solidFill><a:schemeClr val="tx1">
+--         <a:lumMod val="15000"/><a:lumOff val="85000"/>
+--       </a:schemeClr></a:solidFill>
+--       <a:round/>
+--     </a:ln></c:spPr>
+--   </c:majorGridlines>
+--
+-- → "Black, Text 1, Lighter 85%" ≈ #D9D9D9 light gray gridlines.
+-- Verified the same on chart1.xml (Available Comps scatter) and
+-- chart5.xml — pattern is consistent across all master charts.
+--
+-- Our exports omitted this element, relying on Excel's theme default
+-- to render gridlines. The default behavior renders gridlines but can
+-- vary across Excel versions and themes — emitting the element
+-- explicitly pins the visual.
+--
+-- Fix: new MAJOR_GRIDLINES_FRAG constant in cm-native-chart-injector.js
+-- with srgbClr D9D9D9 (equivalent to master's schemeClr+lumMod).
+-- Injected into every <c:valAx> block across all 8 builders (10 val
+-- axes total: 4 single-axis + 2 combo dual-axis + 2 scatter dual-axis
+-- + 2 area-combo dual-axis). Cat axes deliberately NOT changed — they
+-- typically have no gridlines (vertical gridlines on time axes clutter
+-- the chart; master doesn't emit them either).
+--
+-- ---------------------------------------------------------------------
+-- FINDING #2 — roundedCorners on chart wrapper
+-- ---------------------------------------------------------------------
+-- Master charts include <c:roundedCorners val="0"/> as a direct child
+-- of <c:chartSpace>, before <c:chart>. This explicitly disables Excel's
+-- rounded-corner rendering on the chart object border. Excel default
+-- in some versions adds a slight rounding that looks less professional.
+--
+-- Fix: add <c:roundedCorners val="0"/> right after the <c:chartSpace>
+-- open tag in every builder. All 8 builders updated via replace_all.
+--
+-- ---------------------------------------------------------------------
+-- FINDING #3 — tab colors on Data_* worksheets
+-- ---------------------------------------------------------------------
+-- The dia + gov exports have 33-35 Data_* tabs each, interleaved with
+-- Cover, Index, KPI_*, MasterPasteReady, Brand, etc. All currently
+-- render as the same default uncolored tab strip. ExcelJS supports
+-- tab colors via `tabColor: { argb: '...' }`.
+--
+-- Fix: in cm-excel-export.js where addWorksheet is called for each
+-- chart's tab (~line 1207), conditionally apply NM-navy tab color when
+-- the tab name starts with `Data_`. Non-Data tabs (Cover, Index,
+-- KPI_*, Brand, MasterPasteReady) stay uncolored so the chart tabs
+-- visually pop in the tab strip.
+--
+-- This is a pure visual organization improvement — doesn't change
+-- chart structure, doesn't change data, doesn't affect anyone using
+-- the workbook programmatically (tab name unchanged).
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 157 CM tests pass (up from 153 in R40). Full suite 219 pass / 2
+-- unrelated pre-existing failures.
+--
+-- New R41 tests:
+--   • Chart wrapper emits <c:roundedCorners val="0"/>
+--   • Val axis emits <c:majorGridlines> with light-gray D9D9D9 color
+--   • Cat axis does NOT emit gridlines (val-axis only)
+--   • Combo chart emits gridlines on BOTH left + right val axes
+--   • Scatter chart emits gridlines on BOTH x + y val axes
+--
+-- Smoke build confirmed all R37 + R38 + R39 + R41 features coexist on
+-- a single chart: quarter cat labels, [Red](N) negative format,
+-- peak/trough/last data labels, chart title (12pt bold navy),
+-- roundedCorners=0, major gridlines (D9D9D9).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download a fresh dia or gov export after deploy
+-- 2. Open any chart tab — Y-axis should now have visible horizontal
+--    gridlines at every major tick, drawn in a faint light-gray that
+--    matches the master Excel "Office" theme look. Chart should NOT
+--    have rounded corners on its border.
+-- 3. Tab strip — every Data_* tab should display with NM-navy color
+--    on its label. Cover, Index, KPI_*, Brand tabs stay uncolored.
+--    Visual organization: easy to spot chart tabs in the strip.
+-- 4. Re-run smoke build via:
+--      node smoke-r41.mjs   (one-time script, not committed)
+--    or any of the existing test runs:
+--      node --test test/cm-native-chart-injector.test.mjs
+-- =====================================================================
