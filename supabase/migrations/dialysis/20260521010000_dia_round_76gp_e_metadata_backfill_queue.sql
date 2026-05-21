@@ -1,0 +1,30 @@
+-- Round 76gp.e (2026-05-21) — Property metadata backfill queue (dia)
+-- ============================================================================
+-- After the Round 76gp.b in-DB backfill closed every gap we had a source for,
+-- ~938 properties remained with NULL year_built / 808 with NULL land_area /
+-- 157 with NULL building_size where NO source exists anywhere in the dia DB.
+-- These need external re-pulls (CoStar sidebar capture or county assessor).
+--
+-- This queue surfaces the candidates ranked by business value (recent +
+-- high-dollar sales first) so manual or automated backfill work can attack
+-- the highest-leverage rows.
+--
+-- Applied via Supabase MCP apply_migration on 2026-05-21.
+-- Recorded here for project history.
+--
+-- Initial seed: 1,420 properties (42 P0 / 1,234 P25 / 144 P50)
+--
+-- Auto-resolution: AFTER UPDATE trigger on properties watches year_built,
+-- land_area, building_size, tenant. When a queue row's missing_fields all
+-- become non-null, status flips to 'captured'. Partial fills narrow the
+-- missing_fields list.
+--
+-- Operating model:
+--   1. SELECT * FROM v_property_metadata_backfill_queue LIMIT 20
+--   2. Each row carries a costar_search_url — user clicks, navigates,
+--      sidebar captures the property page, writer updates properties
+--   3. Trigger auto-resolves the queue row
+--   4. Repeat until the P0/P25 tiers drain
+--
+-- (Full DDL applied via apply_migration; see remote DB for canonical schema.)
+SELECT 'see Supabase MCP migration application — dia_round_76gp_e_property_metadata_backfill_queue + e2_backfill_queue_auto_resolver';

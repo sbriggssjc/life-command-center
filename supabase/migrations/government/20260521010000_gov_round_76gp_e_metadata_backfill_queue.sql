@@ -1,0 +1,17 @@
+-- Round 76gp.e (2026-05-21) — Property metadata backfill queue (gov)
+-- ============================================================================
+-- gov mirror of dia metadata backfill queue. Same shape, adapted columns:
+--   * properties.rba (not building_size)
+--   * properties.land_acres (not land_area)
+--   * No tenant column on gov properties (gov uses agency_full from lease)
+--
+-- Applied via Supabase MCP apply_migration on 2026-05-21.
+-- Recorded here for project history.
+--
+-- Initial seed: 3,180 properties (41 P0 / 1,411 P25 / 1,728 P50)
+--
+-- Auto-resolution trigger watches year_built / land_acres / rba on
+-- gov.properties; behaves identically to the dia version.
+--
+-- (Full DDL applied via apply_migration; see remote DB for canonical schema.)
+SELECT 'see Supabase MCP migration application — gov_round_76gp_e_property_metadata_backfill_queue + e2_backfill_queue_auto_resolver';
