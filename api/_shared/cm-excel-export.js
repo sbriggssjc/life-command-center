@@ -1204,16 +1204,17 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     const headerRow_n = png ? (27 + summaryRowCount) : 4;
     const dataStart = headerRow_n + 1;
 
-    // R41 — NM-navy tab color on every Data_* worksheet (visual organization;
-    // distinguishes chart/data tabs from Cover / Index / KPI_* / Brand tabs
-    // which stay uncolored).
-    const tabColorOpt = tabName.startsWith('Data_')
-      ? { tabColor: { argb: 'FF' + hex(palette.nm_navy) } }
-      : {};
     const sheet = wb.addWorksheet(tabName, {
       views: [{ showGridLines: false, state: 'frozen', ySplit: headerRow_n }],
-      ...tabColorOpt,
     });
+    // R42 hotfix — R41 set tabColor via addWorksheet options, which ExcelJS
+    // silently drops (verified: pre-R41 MasterPasteReady was already using
+    // this broken pattern; output XML had no <tabColor/> element on any of
+    // the 40+ Data_* tabs). Correct API is `sheet.properties.tabColor`
+    // set AFTER worksheet creation.
+    if (tabName.startsWith('Data_')) {
+      sheet.properties.tabColor = { argb: 'FF' + hex(palette.nm_navy) };
+    }
 
     // Embed chart image at the top, anchored at A1, sized to span the
     // first ~22 rows. Image is 900x440 pixels which lands cleanly in a
@@ -1526,8 +1527,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     const { layout: PASTE_LAYOUT, titleText, noteHeader, noteBody } = masterPasteVertical;
     const ms = wb.addWorksheet('MasterPasteReady', {
       views: [{ showGridLines: false, state: 'frozen', ySplit: 2 }],
-      tabColor: { argb: 'FF' + hex(palette.nm_navy) },
     });
+    // R42 hotfix — addWorksheet options silently drops tabColor; must be
+    // set on sheet.properties post-creation.
+    ms.properties.tabColor = { argb: 'FF' + hex(palette.nm_navy) };
 
     // Title block
     ms.getCell('A1').value = titleText;
@@ -1612,8 +1615,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   if (Array.isArray(chartImages) && chartImages.length > 0) {
     const chartsSheet = wb.addWorksheet('Charts', {
       views: [{ showGridLines: false }],
-      tabColor: { argb: 'FF' + hex(palette.nm_navy) },
     });
+    // R42 hotfix — addWorksheet options silently drops tabColor; must be
+    // set on sheet.properties post-creation.
+    chartsSheet.properties.tabColor = { argb: 'FF' + hex(palette.nm_navy) };
     chartsSheet.getColumn(1).width = 4;
     chartsSheet.getColumn(2).width = 130;
 
