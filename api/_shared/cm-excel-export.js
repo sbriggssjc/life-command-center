@@ -1339,6 +1339,13 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
 
     // Data rows starting just below the header
     let dataRowIdx = dataStart;
+    // R43 — track non-null counts per column so we can hide columns
+    // that are 100% empty after writing (e.g. cross-schema cohort
+    // ghosts where dia's data tab carries gov's cohort columns and
+    // vice versa, all empty). Hiding (vs deleting) preserves column
+    // letters so native chart XML refs like `'Data_X'!$D$5:$D$300`
+    // continue to resolve correctly.
+    const colHasValue = new Array(cols.length).fill(false);
     for (const row of chart.rows || []) {
       const r = sheet.getRow(dataRowIdx);
       cols.forEach((c, i) => {
@@ -1360,6 +1367,7 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         }
         const cell = r.getCell(i + 1);
         cell.value = v == null ? null : v;
+        if (v != null) colHasValue[i] = true;
         cell.font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
         if (c.format && FMT[c.format]) cell.numFmt = FMT[c.format];
       });
@@ -1375,6 +1383,21 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         });
       }
       dataRowIdx++;
+    }
+
+    // R43 — hide columns that ended up 100% empty across all rows.
+    // Skip the first two anchor columns (period_end / subspecialty)
+    // and any column explicitly marked `keepIfEmpty: true` in the
+    // CHART_COLUMNS entry (none currently, but the escape hatch is
+    // there for future schema-stable cases). Chart XML references
+    // use column letters which stay intact under `hidden=true`.
+    if ((chart.rows || []).length > 0) {
+      cols.forEach((c, i) => {
+        if (i < 2) return;                  // never hide period_end / subspecialty
+        if (c.keepIfEmpty) return;          // explicit opt-out
+        if (colHasValue[i]) return;         // has data
+        sheet.getColumn(i + 1).hidden = true;
+      });
     }
 
     // R34 — Collect a native-chart injection spec for migrated templates.
