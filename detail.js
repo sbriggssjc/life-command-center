@@ -5461,9 +5461,15 @@ function _udDedupChain(chain, currentOwn) {
   if (chain.length === 0) return [];
 
   // Normalize a name so "Mds Dv Victorville, LLC." == "mds dv victorville llc"
+  // R5-DQ-2 (2026-05-20): also strip the same " by <Brokerage>" suffix the
+  // sidebar pipeline now sanitizes on write, so any chain rows that still
+  // carry the old suffixed text (older sidebar/legacy data) dedup against
+  // their cleaned-up cousins.
+  const _BROKER_SUFFIX_RE = /\s+by\s+(northmarq|cbre|jll|colliers( international)?|newmark|cushman( & wakefield)?|marcus( & millichap)?|matthews( real estate)?|matthews|berkadia|hanley|capital pacific|nai( [a-z]+)?|stream realty|kw commercial|trinity|avison( young)?|stan johnson( company)?|sjc)\.?\s*$/i;
   const _normName = (s) => {
     if (!s) return '';
     return String(s).toLowerCase()
+      .replace(_BROKER_SUFFIX_RE, '')
       .replace(/[.,]/g, ' ')
       .replace(/\b(llc|inc|l\.p\.|lp|corp|corporation|company|co|ltd|trust)\b/g, '')
       .replace(/\s+/g, ' ')
@@ -5484,6 +5490,21 @@ function _udDedupChain(chain, currentOwn) {
     const names = [h.recorded_owner_name, h.to_owner, h.true_owner_name, h.name]
       .map(_normName).filter(Boolean);
     names.forEach(function(n) { keys.push('nm:' + n); });
+    // R5-DQ-4 (2026-05-20): also key on (sale_id) and (sale_price + transfer
+    // year) so phantom ownership_history rows that were back-filled from a
+    // sale before the sidebar pipeline rebuilt the row collapse onto the
+    // canonical entry, even when the owner-id linkage diverges. Example:
+    // property 23146 had a 2022 Northmarq sale rendered twice (dated
+    // ownership_id 14287 with recorded_owner_id; undated 317 with
+    // true_owner_id pointing at a now-merged variant).
+    if (h.sale_id != null) keys.push('sale:' + h.sale_id);
+    const _price = h.sale_price != null ? Math.round(Number(h.sale_price)) : null;
+    if (_price && _price > 0) {
+      const _year = h.transfer_date ? String(h.transfer_date).slice(0, 4) : '';
+      // Use price+year (yearless OK) — same price within the same year is a
+      // strong fingerprint for the same deal even if one row has no date.
+      keys.push('pxyr:' + _price + ':' + _year);
+    }
     return keys;
   };
 
@@ -5509,12 +5530,20 @@ function _udDedupChain(chain, currentOwn) {
       // Earliest transfer_date wins
       const t1 = _ts(group.transfer_date), t2 = _ts(h.transfer_date);
       if (t2 != null && (t1 == null || t2 < t1)) group.transfer_date = h.transfer_date;
-      // Latest ownership_end wins; if any row is still open (null), prefer null
-      if (h.ownership_end == null) {
+      // R5-DQ-4 (2026-05-20): only prefer null ownership_end when the
+      // incoming row also has a real transfer_date — a row with null
+      // transfer_date AND null ownership_end is a phantom backfill
+      // signal (no data), not a "still owned" signal, and must not
+      // clobber a sibling row's real closed-end date.
+      if (h.ownership_end == null && _ts(h.transfer_date) != null) {
         group.ownership_end = null;
-      } else if (group.ownership_end != null) {
+      } else if (h.ownership_end != null && group.ownership_end != null) {
         const e1 = _ts(group.ownership_end), e2 = _ts(h.ownership_end);
         if (e2 != null && (e1 == null || e2 > e1)) group.ownership_end = h.ownership_end;
+      } else if (h.ownership_end != null && group.ownership_end == null
+                 && _ts(group.transfer_date) == null) {
+        // Group's null end came from a phantom; promote the real end-date.
+        group.ownership_end = h.ownership_end;
       }
       // Backfill any missing fields from later rows
       ['sale_price','cap_rate','ownership_type','ownership_source','principal_names',
@@ -5952,7 +5981,22 @@ function _udTabOwnership() {
         html += '</div>';
       } else {
         // Dia: timeline row — [Owner]  start → end | sale price | cap rate
-        const ownerLabel = h.recorded_owner_name || h.true_owner_name || '\u2014';
+        // R5-DQ-4 (2026-05-20): defensive suffix strip \u2014 the SQL data fix
+        // covers existing rows but a still-suffixed string could ride in
+        // from a partial-sync. Strip on render too so the NM badge is
+        // the only place "Northmarq" surfaces in the row.
+        const _BROKER_SUFFIX_RE_R5 = /\s+by\s+(northmarq|cbre|jll|colliers( international)?|newmark|cushman( & wakefield)?|marcus( & millichap)?|matthews( real estate)?|matthews|berkadia|hanley|capital pacific|nai( [a-z]+)?|stream realty|kw commercial|trinity|avison( young)?|stan johnson( company)?|sjc)\.?\s*$/i;
+        const _cleanOwnerName = (s) => s ? String(s).replace(_BROKER_SUFFIX_RE_R5, '').trim() : s;
+        const ownerLabel = _cleanOwnerName(h.recorded_owner_name || h.true_owner_name) || '\u2014';
+        // R5-DQ-4: surface brokerage / suspect-cap meta as chips. The
+        // old "by Northmarq" pattern shoved broker text into the owner
+        // name string, which then broke owner dedup.
+        const nmBadge = h.is_northmarq
+          ? ' <span class="detail-badge" style="background:#0c4a6e;color:#7dd3fc;border:1px solid #075985;margin-left:6px;font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600" title="Brokered by Northmarq">NM</span>'
+          : '';
+        const suspectBadge = (h.cap_rate_confidence === 'suspect' || h.exclude_from_market_metrics === true)
+          ? ' <span class="detail-badge" style="background:rgba(251,191,36,0.10);color:var(--yellow);border:1px solid rgba(251,191,36,0.35);margin-left:6px;font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600" title="Cap rate outside the dialysis NNN band (0.5%-10%); excluded from market metrics">Suspect</span>'
+          : '';
         const isCurrent = _isChainEntryCurrent(h, isFirst);
         const statusClass = isCurrent ? 'green' : '';
         const startStr = _fmtDate(h.transfer_date) || 'Unknown';
@@ -5991,16 +6035,17 @@ function _udTabOwnership() {
 
         html += `<div class="detail-timeline-item ${statusClass}">`;
         html += `<div class="detail-card-date">${esc(startStr)} \u2192 ${esc(endStr)}${isCurrent ? ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>' : ''}${prospectBadge}</div>`;
-        html += `<div class="detail-card-title">${_ownerLink(ownerLabel, _ownerCtxFromChain(h, db))}</div>`;
+        html += `<div class="detail-card-title">${_ownerLink(ownerLabel, _ownerCtxFromChain(h, db))}${nmBadge}${suspectBadge}</div>`;
         html += '<div class="detail-card-body">';
         if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
-          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}<br>`;
+          const _tn = _cleanOwnerName(h.true_owner_name);
+          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(_tn, Object.assign(_ownerCtxFromChain(h, db), { name: _tn }))}<br>`;
         }
         html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span style="color:var(--text3)">|</span> Cap rate: <span${capSource ? ' title="' + esc(capSource) + '"' : ''}>${esc(capStr)}</span></div>`;
         if (h.listing_broker) html += `<div style="font-size:11px;color:var(--text2);margin-top:2px">Listing Broker: ${esc(h.listing_broker)}</div>`;
         if (h.procuring_broker) html += `<div style="font-size:11px;color:var(--text2)">Procuring Broker: ${esc(h.procuring_broker)}</div>`;
-        if (h.buyer_name) html += `<div style="font-size:11px;color:var(--text2)">Buyer: ${esc(h.buyer_name)}</div>`;
-        if (h.seller_name) html += `<div style="font-size:11px;color:var(--text2)">Seller: ${esc(h.seller_name)}</div>`;
+        if (h.buyer_name) html += `<div style="font-size:11px;color:var(--text2)">Buyer: ${esc(_cleanOwnerName(h.buyer_name))}</div>`;
+        if (h.seller_name) html += `<div style="font-size:11px;color:var(--text2)">Seller: ${esc(_cleanOwnerName(h.seller_name))}</div>`;
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
         if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
         if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
