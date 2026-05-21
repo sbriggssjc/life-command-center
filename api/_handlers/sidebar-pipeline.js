@@ -4791,8 +4791,13 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       Object.assign(saleData, capRateProv);
     }
 
+    // Round 76gp.d: track the resolved sale_id across both write branches
+    // so we can emit a single diagnostic per iteration at the end.
+    let loopSaleId = null;
+
     if (lookup.ok && lookup.data?.length) {
       const existing = lookup.data[0];
+      loopSaleId = existing.sale_id;
 
       // Lookup already proved identity (document_number OR price ±5%
       // AND date ±14d). Treat as the same sale and refresh it so the
@@ -4931,6 +4936,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           ? (Array.isArray(result.data) ? result.data[0] : result.data)
           : null;
         const newSaleId = inserted?.sale_id ?? recoveredSaleId ?? null;
+        loopSaleId = newSaleId;
 
         // Create BD alert for new dialysis sale capture (gov uses sf_comps_staging).
         // Only on a TRUE insert — 409 recovery means we already knew about this sale.
@@ -4962,9 +4968,90 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         }
       }
     }
+
+    // Round 76gp.d: fire-and-forget per-capture diagnostic for empirical
+    // miss-rate tracking. Logs to LCC Opps; failures are swallowed.
+    await recordSalesParserDiagnostic({
+      domain,
+      propertyId,
+      saleId:                 loopSaleId,
+      saleDate:               datePart,
+      dataSource:             metadata._intake_promoted ? 'om_extraction' : 'costar_sidebar',
+      metadata,
+      sale,
+      saleData,
+      isMostRecent:           datePart === mostRecentSaleDatePart,
+      isCurrent:              isCurrentSale,
+      brokerFallbackAllowed:  brokerFallbackAllowed,
+    });
   }
 
   return count;
+}
+
+// ── Per-capture diagnostics (Round 76gp.d) ────────────────────────────────
+// Logs to LCC Opps `sales_parser_diagnostics` so we can quantify, post-hoc,
+// how often each field-of-interest made it from the parser's metadata into
+// sales_transactions. Used to prioritize parser-fix work empirically rather
+// than from one-off audit guesses. Fire-and-forget: errors are logged but
+// never block the write path.
+async function recordSalesParserDiagnostic(ctx) {
+  // ctx: { domain, propertyId, saleId, saleDate, dataSource, metadata, sale,
+  //        saleData, isMostRecent, isCurrent, brokerFallbackAllowed }
+  try {
+    const contacts = Array.isArray(ctx.metadata?.contacts) ? ctx.metadata.contacts : [];
+    const parserSawListingBroker = contacts.some(c => c?.role === 'listing_broker');
+    const parserSawBuyerBroker   = contacts.some(c => c?.role === 'buyer_broker');
+    const parserSawBuyerContact  = contacts.some(c => c?.role === 'buyer');
+    const parserSawSellerContact = contacts.some(c => c?.role === 'seller');
+    const parserSawCapRate       = ctx.sale?.cap_rate != null || ctx.metadata?.cap_rate != null;
+    const parserSawSoldPrice     = ctx.sale?.sale_price != null;
+
+    const sd = ctx.saleData || {};
+    const wroteListingBroker   = !!(sd.listing_broker && String(sd.listing_broker).trim());
+    const wroteProcuringBroker = !!((sd.procuring_broker || sd.purchasing_broker) &&
+                                    String(sd.procuring_broker || sd.purchasing_broker).trim());
+    const wroteBuyer  = !!((sd.buyer_name || sd.buyer) && String(sd.buyer_name || sd.buyer).trim());
+    const wroteSeller = !!((sd.seller_name || sd.seller) && String(sd.seller_name || sd.seller).trim());
+    const wroteCap    = sd.stated_cap_rate != null || sd.sold_cap_rate != null
+                     || sd.calculated_cap_rate != null;
+    const wroteSoldPrice = sd.sold_price != null && Number(sd.sold_price) > 0;
+
+    const daysSinceClose = ctx.saleDate
+      ? Math.max(0, Math.round((Date.now() - new Date(ctx.saleDate).getTime()) / (24 * 60 * 60 * 1000)))
+      : null;
+
+    await opsQuery('POST', 'sales_parser_diagnostics', {
+      domain:        ctx.domain === 'dialysis' ? 'dialysis' : 'government',
+      property_id:   ctx.propertyId ?? null,
+      sale_id:       ctx.saleId ?? null,
+      sale_date:     ctx.saleDate ?? null,
+      data_source:   ctx.dataSource || 'costar_sidebar',
+      days_since_close:            daysSinceClose,
+      is_most_recent_on_property:  !!ctx.isMostRecent,
+      is_current_sale_90d:         !!ctx.isCurrent,
+      parser_listing_broker_avail: parserSawListingBroker,
+      parser_buyer_broker_avail:   parserSawBuyerBroker,
+      parser_cap_rate_avail:       parserSawCapRate,
+      parser_buyer_contact_avail:  parserSawBuyerContact,
+      parser_seller_contact_avail: parserSawSellerContact,
+      parser_sold_price_avail:     parserSawSoldPrice,
+      written_listing_broker:   wroteListingBroker,
+      written_procuring_broker: wroteProcuringBroker,
+      written_cap_rate:         wroteCap,
+      written_buyer:            wroteBuyer,
+      written_seller:           wroteSeller,
+      written_sold_price:       wroteSoldPrice,
+      details: {
+        broker_tag_match_tried: parserSawListingBroker && !wroteListingBroker,
+        broker_fallback_allowed: !!ctx.brokerFallbackAllowed,
+      },
+    });
+  } catch (err) {
+    // Diagnostic writes are best-effort. Never propagate failures back to
+    // the sale write path.
+    console.warn('[sales-diagnostic] log failed:', err?.message);
+  }
 }
 
 // ── Link sale_brokers table from listing_broker / procuring_broker text ──────
