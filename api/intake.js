@@ -1622,10 +1622,14 @@ async function handleIntakePromote(req, res) {
     promoted_at: new Date().toISOString(),
   });
 
-  // 6. Update intake item status
+  // 6. Update intake item status. 'finalized' is the terminal state in the
+  //    staged_intake_items_status_check set; 'promoted' is NOT allowed and was
+  //    silently failing this PATCH (leaving promoted intakes stuck). The
+  //    separate promoted_at/promoted_by audit fields (step 5) record the
+  //    promotion event. (P-2b, 2026-05-21)
   await opsQuery('PATCH',
     `staged_intake_items?intake_id=eq.${encodeURIComponent(intake_id)}&workspace_id=eq.${encodeURIComponent(workspaceId)}`,
-    { status: 'promoted', updated_at: new Date().toISOString() }
+    { status: 'finalized', updated_at: new Date().toISOString() }
   );
 
   // 7. Write signal

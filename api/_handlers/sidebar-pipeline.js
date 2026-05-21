@@ -23,6 +23,7 @@ import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { getCadenceState } from '../_shared/cadence-engine.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
+import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
 // Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
 // fields whose strict-mode rules block this source from updating; the
 // existing after-the-fact provenance recorder (recordCoStarFieldsProvenance)
@@ -2911,6 +2912,17 @@ async function upsertDomainProperty(domain, entity, metadata) {
   if (isJunkAddress(address)) {
     _lastDomainPropertyError = `junk_address_rejected:${address}`;
     console.warn(`[upsertDomainProperty] Refusing to write OM-junk address: "${address}" (${domain})`);
+    return null;
+  }
+
+  // §3 (2026-05-21): never create a property at the firm's OWN office address.
+  // OM/flyer extractors often grab the broker contact-block address ("For more
+  // information contact …") instead of the subject property — the 6120 S Yale
+  // Ave case created 11 mis-located dia properties. Skip the write so the
+  // canonical subject-address path runs against the next/better capture.
+  if (isOwnFirmAddress(address)) {
+    _lastDomainPropertyError = `own_firm_address_rejected:${address}`;
+    console.warn(`[upsertDomainProperty] Refusing to write firm office address: "${address}" (${domain})`);
     return null;
   }
 

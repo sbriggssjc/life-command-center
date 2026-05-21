@@ -322,6 +322,7 @@ For any field not present in the document, use null.
 For monetary values, return numbers only (no $ or commas).
 For percentages, return decimals (7.5% → 7.5).
 For dates, return YYYY-MM-DD format.
+"address" MUST be the SUBJECT PROPERTY's street address. Do NOT return the listing broker's, marketing firm's, or contact-block address (often in the header/footer or a "For more information contact …" section). If only a contact/brokerage address is present and no subject-property address, return null for "address".
 
 ${documentBody}
 {

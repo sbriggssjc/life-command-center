@@ -463,7 +463,7 @@ async function writeMatchResult(intakeId, match) {
   // Update intake item status
   const patchResult = await opsQuery('PATCH',
     `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
-    { status: match.status === 'matched' ? 'matched' : 'review_needed' }
+    { status: match.status === 'matched' ? 'matched' : 'review_required' }
   );
 
   if (!patchResult.ok) {
