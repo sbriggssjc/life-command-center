@@ -21,6 +21,13 @@
 #   - daily-briefing (deployed pre-config.toml)
 #   - data-query     (deployed pre-config.toml)
 
+[functions.data-query]
+# Dual-source gov/dia read/write proxy; self-authenticates via x-lcc-key and is
+# called by pg_net/cron without a Supabase JWT — must stay verify_jwt = false
+# or the gateway 401s every call. (Was deployed pre-config.toml; pinned here
+# 2026-05-21 so redeploys do not silently re-enable JWT verification.)
+verify_jwt = false
+
 [functions.availability-checker]
 verify_jwt = false
 
