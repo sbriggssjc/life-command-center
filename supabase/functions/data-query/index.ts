@@ -17,6 +17,7 @@ import { queryParams, parseBody } from "../_shared/utils.ts";
 // ── Allowlists (ported from api/_shared/allowlist.js) ──────────────────────
 
 const GOV_READ_TABLES = new Set([
+  "v_next_best_research", "v_ownership_coverage",
   "properties", "prospect_leads", "ownership_history", "contacts",
   "available_listings", "gsa_lease_events", "gsa_snapshots",
   "location_code_reference", "frpp_records", "county_authorities",
@@ -85,6 +86,7 @@ const GOV_WRITE_TABLES = new Set([
 ]);
 
 const DIA_READ_TABLES = new Set([
+  "v_next_best_research", "v_ownership_coverage",
   "v_counts_freshness", "v_clinic_inventory_diff_summary",
   "v_clinic_inventory_latest_diff", "v_facility_patient_counts_mom",
   "v_npi_inventory_signal_summary", "v_npi_inventory_signals",

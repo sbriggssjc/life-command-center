@@ -29,6 +29,7 @@
     { "source": "/api/auto-scrape-listings", "destination": "/api/admin?_route=auto-scrape-listings" },
     { "source": "/api/llc-research-tick", "destination": "/api/admin?_route=llc-research-tick" },
     { "source": "/api/sos-writeback", "destination": "/api/admin?_route=sos-writeback" },
+    { "source": "/api/generate-research-tasks", "destination": "/api/admin?_route=generate-research-tasks" },
     { "source": "/api/geocode-tick", "destination": "/api/admin?_route=geocode-tick" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },

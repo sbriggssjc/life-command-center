@@ -98,6 +98,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
     case 'sos-writeback':           return handleSosWriteback(req, res);
+    case 'generate-research-tasks': return handleGenerateResearchTasks(req, res);
     case 'agency-drift-queue':      return handleAgencyDriftQueueList(req, res);
     case 'resolve-agency-drift':    return handleResolveAgencyDrift(req, res);
     case 'write-failures-rollup':   return handleWriteFailuresRollup(req, res);
@@ -3646,6 +3647,125 @@ async function handleResolveCmsChainDrift(req, res) {
 
 // Local stripNulls — admin.js doesn't import the sidebar-pipeline version
 // to avoid pulling its full dependency tree just for one helper.
+// ============================================================================
+// RESEARCH-TASK GENERATOR (O-9, 2026-05-21)
+// Materializes the gov/dia `v_next_best_research` NBA feed into LCC
+// `research_tasks`. Cross-DB: reads the gap feed via the data-query edge
+// function (?_source=gov|dia), upserts into research_tasks keyed on
+// (domain, research_type, source_record_id).
+//   POST /api/admin?_route=generate-research-tasks&domain=gov|dia|both&limit=N
+// Auto-close (filled gap -> completed/gap_resolved) only fires when the full
+// feed fit under `limit` — never on a capped slice.
+// ============================================================================
+async function fetchNbaFeed(source, limit, req) {
+  const url = new URL(DATA_QUERY_EDGE_URL);
+  url.searchParams.set('_source', source);
+  url.searchParams.set('table', 'v_next_best_research');
+  url.searchParams.set('select', 'research_type,entity_kind,entity_id,label,priority,instructions,domain');
+  url.searchParams.set('order', 'priority.desc');
+  url.searchParams.set('limit', String(limit));
+  url.searchParams.set('count', 'false');
+  const r = await fetch(url.toString(), {
+    method: 'GET',
+    headers: buildEdgeProxyHeaders(req),
+    signal: AbortSignal.timeout(25000),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`data-query ${source} ${r.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  return Array.isArray(body.data) ? body.data : [];
+}
+
+async function handleGenerateResearchTasks(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const workspaceId = primaryWorkspace(user);
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['gov', 'dia', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: "domain must be gov, dia, or both" });
+  }
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 2000);
+  const sources = domainParam === 'both' ? ['gov', 'dia'] : [domainParam];
+
+  const result = { ok: true, by_domain: {} };
+
+  for (const source of sources) {
+    const domain = source === 'dia' ? 'dialysis' : 'government';
+    const summary = { feed: 0, inserted: 0, refreshed: 0, closed: 0, skipped_ignored: 0, errors: [] };
+    try {
+      const feed = await fetchNbaFeed(source, limit, req);
+      summary.feed = feed.length;
+
+      const ignoreRes = await opsQuery('GET',
+        `ignored_recommendation_contacts?select=entity_id&domain=eq.${encodeURIComponent(domain)}`);
+      const ignored = new Set(
+        (ignoreRes.ok && Array.isArray(ignoreRes.data) ? ignoreRes.data : [])
+          .map(r => String(r.entity_id)));
+
+      const openRes = await opsQuery('GET',
+        `research_tasks?select=id,research_type,source_record_id,priority,status` +
+        `&domain=eq.${encodeURIComponent(domain)}&source_table=eq.v_next_best_research&status=eq.open`);
+      const openTasks = (openRes.ok && Array.isArray(openRes.data) ? openRes.data : []);
+      const openByKey = new Map(openTasks.map(t => [`${t.research_type}|${t.source_record_id}`, t]));
+      const feedKeys = new Set();
+
+      for (const row of feed) {
+        const entityId = row.entity_id == null ? null : String(row.entity_id);
+        if (!entityId) continue;
+        if (ignored.has(entityId)) { summary.skipped_ignored += 1; continue; }
+        const key = `${row.research_type}|${entityId}`;
+        feedKeys.add(key);
+        const existing = openByKey.get(key);
+        const priority = row.priority != null ? Number(row.priority) : null;
+        if (existing) {
+          if (Number(existing.priority) !== priority) {
+            await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(existing.id)}`,
+              { priority, updated_at: new Date().toISOString() });
+            summary.refreshed += 1;
+          }
+        } else {
+          const title = (row.label && String(row.label).slice(0, 200)) || `${row.research_type} — ${entityId}`;
+          const ins = await opsQuery('POST', 'research_tasks', {
+            workspace_id:    workspaceId,
+            research_type:   row.research_type || 'ownership_research',
+            title,
+            instructions:    row.instructions || null,
+            entity_id:       entityId,
+            domain,
+            status:          'open',
+            priority,
+            source_record_id: entityId,
+            source_table:    'v_next_best_research',
+            metadata:        { entity_kind: row.entity_kind || null, label: row.label || null },
+          });
+          if (ins.ok) summary.inserted += 1;
+          else summary.errors.push(`insert ${key}: ${JSON.stringify(ins.data).slice(0, 120)}`);
+        }
+      }
+
+      if (feed.length < limit) {
+        for (const t of openTasks) {
+          const key = `${t.research_type}|${t.source_record_id}`;
+          if (!feedKeys.has(key)) {
+            await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(t.id)}`,
+              { status: 'completed', outcome: 'gap_resolved',
+                completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+            summary.closed += 1;
+          }
+        }
+      } else {
+        summary.note = 'feed capped at limit; auto-close skipped';
+      }
+    } catch (err) {
+      summary.errors.push(String(err?.message || err));
+    }
+    result.by_domain[domain] = summary;
+  }
+  return res.status(200).json(result);
+}
+
 function stripNullsLocal(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj || {})) {
