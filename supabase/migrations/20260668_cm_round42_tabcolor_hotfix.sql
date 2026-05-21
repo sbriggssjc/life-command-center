@@ -1,0 +1,94 @@
+-- =====================================================================
+-- Round 42 — hotfix R41 tab-color regression.
+--
+-- R41 added tabColor logic via ExcelJS's addWorksheet options:
+--
+--   const tabColorOpt = tabName.startsWith('Data_')
+--     ? { tabColor: { argb: 'FF' + hex(palette.nm_navy) } }
+--     : {};
+--   const sheet = wb.addWorksheet(tabName, {
+--     views: [{ ... }],
+--     ...tabColorOpt,
+--   });
+--
+-- This pattern is SILENTLY IGNORED by ExcelJS — addWorksheet options
+-- drops `tabColor` from the output XML. Verified against the deployed
+-- 2026-03-31 exports: NONE of the 40 dia + 44 gov Data_* tabs have a
+-- <tabColor/> element in their worksheet XML.
+--
+-- Same broken pattern affected three other tabs that have used it
+-- since long before R41:
+--   • MasterPasteReady tab (line ~1505)
+--   • Charts tab (line ~1593)
+--   • Data_* tabs (R41 new)
+--
+-- ALL THREE had broken tab colors. R42 fixes all three.
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- ExcelJS's correct API for tab color is to set the property AFTER
+-- worksheet creation:
+--
+--   const sheet = wb.addWorksheet(tabName, { views: [...] });
+--   sheet.properties.tabColor = { argb: 'FF003DA5' };
+--
+-- Applied at all three addWorksheet sites in
+-- api/_shared/cm-excel-export.js:
+--   1. Data_* tab loop (line ~1207) — restored R41 behavior
+--   2. MasterPasteReady tab (line ~1505)
+--   3. Charts tab (line ~1593)
+--
+-- ---------------------------------------------------------------------
+-- VERIFICATION
+-- ---------------------------------------------------------------------
+-- Built a minimal smoke test with one tab using each pattern:
+--
+--   Pattern A (broken — pre-R42):  addWorksheet(name, { tabColor: ... })
+--     → output XML: NO <tabColor/> element
+--
+--   Pattern B (fixed — R42):       sheet.properties.tabColor = ...
+--     → output XML: <tabColor rgb="FF003DA5"/> ✓
+--
+-- All 219 existing tests pass. 2 unrelated pre-existing failures.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download a fresh dia or gov export after deploy
+-- 2. Tab strip — every Data_* tab now displays with NM-navy color on
+--    its label. Cover, Index, KPI_*, Brand tabs stay uncolored.
+-- 3. MasterPasteReady tab — navy color (was supposed to be there since
+--    its initial implementation).
+-- 4. Charts tab — navy color (same).
+--
+-- ---------------------------------------------------------------------
+-- BONUS — DATA COMPLETENESS AUDIT (no view changes here)
+-- ---------------------------------------------------------------------
+-- User reported "a number of charts with data lacking or missing"
+-- alongside the R41 tab-color report. R42 includes an audit script
+-- (audit/cm-style-audit/data-completeness.mjs) that scans every
+-- Data_* tab and flags empty or sparse data columns.
+--
+-- Findings written to audit/cm-style-audit/DATA-COMPLETENESS.md.
+-- 34 dia + 35 gov empty/sparse columns identified across 4 patterns:
+--
+--   A. Cross-schema cohort ghosts (16 cols) — dia tab carries gov
+--      cohort columns + vice versa; charts only read the relevant
+--      vertical's cohorts. Cosmetic noise; chart unaffected.
+--
+--   B. View doesn't emit declared column — some chart-visible
+--      (gov Cap_by_Credit State+Municipal, dia Pace_Cap_Expand
+--      pace_core), some spreadsheet-only (Volume_TTM.YoY,
+--      Val_Index.N_Sales, Returns_Idx.Leveraged_High/Low).
+--
+--   C. Median/secondary columns chart doesn't render (gov
+--      DOM_Ask.Median_*).
+--
+--   D. NM-Listed flag empty (dia Avail_Cap_Dot) — column unused
+--      since R30 collapsed NM + market dots into one series.
+--
+-- These are NOT addressed in R42. The audit doc lists recommended
+-- next-step PRs (R43 column cleanup, R44 view-level chart fixes) and
+-- the user can prioritize.
+-- =====================================================================

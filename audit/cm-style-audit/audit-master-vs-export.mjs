@@ -28,8 +28,8 @@ const MASTERS = {
 };
 
 const EXPORTS = {
-  dia: 'C:\\Users\\scott\\Downloads\\NM-CapMarkets-Dialysis-2026-05-20.xlsx',
-  gov: 'C:\\Users\\scott\\Downloads\\NM-CapMarkets-GovLeased-2026-03-31 (3).xlsx',
+  dia: 'C:\\Users\\scott\\Downloads\\NM-CapMarkets-Dialysis-2026-03-31.xlsx',
+  gov: 'C:\\Users\\scott\\Downloads\\NM-CapMarkets-GovLeased-2026-03-31.xlsx',
 };
 
 const OUT_DIR = 'audit/cm-style-audit';
