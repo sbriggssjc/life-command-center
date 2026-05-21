@@ -1,0 +1,21 @@
+-- Round 76gp.f (2026-05-21) — Gov auto-resolver for metadata backfill queue
+-- ============================================================================
+-- gov counterpart of dia 76gp.f. Uses FRPP / GSA / dup-address as sources.
+--
+-- Applied via Supabase MCP apply_migration on 2026-05-21. Run as needed:
+--   SELECT * FROM auto_resolve_metadata_backfill_queue();
+--
+-- First-pass results on 2026-05-21 (gov, 3,180 queue rows):
+--   year_built  ← frpp_records                  0  (frpp year_of_construction sparse)
+--   year_built  ← year_renovated                0
+--   year_built  ← sibling_address               2
+--   land_acres  ← frpp_records.acres           41  (biggest fill)
+--   land_acres  ← sibling_address               2
+--   rba         ← gsa_leases.lease_rsf (single) 3
+--   rba         ← sibling_address              14
+--   ─────────────────────────────────────────────
+--   Total fills: 62   |   Queue rows fully captured: 5
+--
+-- Function body is applied via Supabase MCP — see remote DB for canonical
+-- definition. This file documents the artifact for project history.
+SELECT 'see Supabase MCP migration application — gov_round_76gp_f_auto_resolve_metadata_queue';
