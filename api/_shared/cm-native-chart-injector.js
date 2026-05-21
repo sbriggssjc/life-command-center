@@ -124,6 +124,25 @@ function valAxNumFmtFrag(numFmt) {
   return `<c:numFmt formatCode="${escapeXml(numFmt)}" sourceLinked="0"/>`;
 }
 
+// R41 — explicit major gridlines on val axes. Matches the master Excel
+// docs (audit/cm-style-audit) which use a light-gray gridline at every
+// major tick. Excel will fall back to its theme defaults if we omit
+// this, but the rendering can be inconsistent across Excel versions —
+// emitting the gridlines block explicitly pins the visual.
+//
+// Master uses tx1 schemeClr with lumMod 15000 / lumOff 85000
+// (= "Black, Text 1, Lighter 85%" → ~#D9D9D9). We use the equivalent
+// srgbClr so the color stays consistent regardless of the workbook's
+// theme — same approach we use for series colors elsewhere.
+const VAL_AX_GRIDLINE_COLOR = 'D9D9D9';  // ~85%-lightened tx1 (master parity)
+const MAJOR_GRIDLINES_FRAG =
+  `<c:majorGridlines>` +
+    `<c:spPr><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr">` +
+      `<a:solidFill><a:srgbClr val="${VAL_AX_GRIDLINE_COLOR}"/></a:solidFill>` +
+      `<a:round/>` +
+    `</a:ln></c:spPr>` +
+  `</c:majorGridlines>`;
+
 // ----------------------------------------------------------------------------
 // R37 P3 — peak/trough/most-recent data labels
 // ----------------------------------------------------------------------------
@@ -353,6 +372,7 @@ function buildSingleLineChartXml(spec) {
   const dLblsFrag = dLblsXml(spec.dataLabels);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -394,6 +414,7 @@ ${dLblsFrag}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${valFmtFrag}
@@ -442,6 +463,7 @@ function buildSingleBarChartXml(spec) {
   const catOrientation = horizontal ? 'maxMin' : 'minMax';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -483,6 +505,7 @@ ${dLblsFrag}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="${valAxPos}"/>
         ${valFmtFrag}
@@ -559,6 +582,7 @@ function buildStackedBarChartXml(spec) {
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -584,6 +608,7 @@ ${seriesXml}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${valFmtFrag}
@@ -649,6 +674,7 @@ ${dLblsFrag}
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -672,6 +698,7 @@ ${seriesXml}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${valFmtFrag}
@@ -850,6 +877,7 @@ ${dLblsFrag}
   // Line block shares the cat axis (1) but uses the secondary val axis (3).
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -883,6 +911,7 @@ ${lineXml}
       <c:valAx>
         <c:axId val="2"/>
         ${leftRangeFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${leftFmtFrag}
@@ -891,6 +920,7 @@ ${lineXml}
       <c:valAx>
         <c:axId val="3"/>
         ${rightRangeFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="r"/>
         ${rightFmtFrag}
@@ -978,6 +1008,7 @@ function buildDoughnutChartXml(spec) {
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -1076,6 +1107,7 @@ ${trendlineFrag}
   // Both axes are valAx (continuous). Axis IDs 1 (x, bottom) + 2 (y, left).
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -1090,6 +1122,7 @@ ${seriesXml}
       <c:valAx>
         <c:axId val="1"/>
         ${xScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="b"/>
         ${xFmtFrag}
@@ -1098,6 +1131,7 @@ ${seriesXml}
       <c:valAx>
         <c:axId val="2"/>
         ${yScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${yFmtFrag}
@@ -1250,6 +1284,7 @@ ${dLblsFrag}
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
   <c:chart>
     ${chartTitleXml(spec.title)}
     <c:plotArea>
@@ -1290,6 +1325,7 @@ ${lineXml}
       <c:valAx>
         <c:axId val="2"/>
         ${leftScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${leftFmtFrag}
@@ -1298,6 +1334,7 @@ ${lineXml}
       <c:valAx>
         <c:axId val="3"/>
         ${rightScalingFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="r"/>
         ${rightFmtFrag}
