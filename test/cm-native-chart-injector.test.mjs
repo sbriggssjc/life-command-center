@@ -1307,6 +1307,37 @@ test('buildInjectionSpec: txn_count_avg_deal_combo builds standard combo', () =>
   assert.equal(out.spec.lineSeries[0].color, '003DA5');
 });
 
+test('R40: rent_and_price_psf works for dia with Data_Rent_Price_PSF tab (R33 Tier E1)', () => {
+  // R33 Tier E1 — extended rent_and_price_psf to dia via catalog
+  // applies_to_verticals + new view cm_dialysis_rent_price_psf_q.
+  // The native chart builder is vertical-agnostic: same cols schema
+  // resolves to the same combo spec regardless of which Data_* tab
+  // the chart lands in.
+  const dia = buildInjectionSpec({
+    chart_template_id: 'rent_and_price_psf',
+    tabName: 'Data_Rent_Price_PSF',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'rent_psf',     col: 'C' },
+      { key: 'price_psf',    col: 'D' },
+      { key: 'rent_n',       col: 'E' },
+      { key: 'price_n',      col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(dia, 'spec produced for dia variant');
+  assert.equal(dia.spec.type, 'combo');
+  assert.equal(dia.spec.barSeries[0].valCol, 'C', 'bars = rent_psf');
+  assert.equal(dia.spec.lineSeries[0].valCol, 'D', 'line = price_psf');
+  // Same left-axis pinning ($0-$50 rent/SF) as gov variant — dia rents
+  // typically $20-$30, gov rents up to $40+, both fit comfortably
+  assert.deepEqual(dia.spec.yLeftRange, { min: 0, max: 50 });
+  // Right axis (price/SF) auto-scaled — dia ~$385, gov varies by region
+  assert.equal(dia.spec.yRightRange, undefined, 'price axis auto-scaled');
+});
+
 test('buildInjectionSpec: rent_and_price_per_chair (dia) + rent_and_price_psf (gov) share shape', () => {
   // Dia variant
   const dia = buildInjectionSpec({
