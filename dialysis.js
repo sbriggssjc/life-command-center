@@ -268,7 +268,7 @@ async function loadDiaSalesCompsFromTxns() {
   // Sales + brokers + cross-source fallbacks (ownership_history, deed_records,
   // medicare_clinics) loaded in parallel. All are small relative to sales,
   // so the merge cost is negligible compared to the round-trip savings.
-  const [salesPages, brokerMap, ohBySaleId, deedsByPropId, clinicByMedId] = await Promise.all([
+  const [salesPages, brokerMap, ohBySaleId, deedsByPropId, clinicByMedId, listingsByPropId] = await Promise.all([
     (async () => {
       let all = [];
       for (let pg = 0; pg <= 20; pg++) {
@@ -289,6 +289,7 @@ async function loadDiaSalesCompsFromTxns() {
     loadDiaOwnershipHistoryBySaleId(),
     loadDiaDeedRecordsByPropertyId(),
     loadDiaMedicareClinicsByMedId(),
+    loadDiaAvailableListingsByPropertyId(),
   ]);
 
   return salesPages.map(r => {
@@ -297,6 +298,7 @@ async function loadDiaSalesCompsFromTxns() {
       ohBySaleId,
       deedsByPropId,
       clinicByMedId,
+      listingsByPropId,
     });
   });
 }
@@ -399,6 +401,73 @@ async function loadDiaMedicareClinicsByMedId() {
   return map;
 }
 
+async function loadDiaAvailableListingsByPropertyId() {
+  // available_listings is the HIGHEST-LEVERAGE cross-source — when a
+  // property goes through CoStar listing capture, the listing carries the
+  // broker / seller / asking cap that the deed-only sale row doesn't.
+  // Audit on 2026-05-21 against dia found ~988 listing_broker fills, ~597
+  // seller fills, ~335 cap_rate fills, and ~222 price fills available
+  // from this source.
+  const map = {};
+  try {
+    const sel = 'property_id,listing_date,off_market_date,sold_date,'
+              + 'listing_broker,seller_name,sold_price,initial_price,last_price,'
+              + 'cap_rate,initial_cap_rate,current_cap_rate,last_cap_rate';
+    let all = [];
+    for (let pg = 0; pg <= 10; pg++) {
+      const batch = await diaQuery('available_listings', sel, {
+        filter: 'property_id=not.is.null', limit: 1000, offset: pg * 1000,
+      });
+      all = all.concat(batch || []);
+      if (!batch || batch.length < 1000) break;
+    }
+    all.forEach(l => {
+      const pid = l.property_id;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(l);
+    });
+  } catch(e) { console.warn('available_listings fallback load failed:', e.message); }
+  return map;
+}
+
+// Pick the listing whose listing_date / off_market_date / sold_date best
+// straddles the sale_date. Falls back to the most recent listing on the
+// property when no date overlap exists.
+function pickListingMatch(listings, saleDate) {
+  if (!Array.isArray(listings) || listings.length === 0) return null;
+  if (!saleDate) return listings[0]; // best-effort: just return first
+  const saleT = Date.parse(saleDate);
+  if (isNaN(saleT)) return listings[0];
+  let best = null, bestDelta = Infinity;
+  for (const l of listings) {
+    // Prefer a listing that "contains" the sale_date in its lifecycle.
+    const listT = Date.parse(l.listing_date || '');
+    const closeT = Date.parse(l.off_market_date || l.sold_date || '');
+    let delta;
+    if (!isNaN(listT) && !isNaN(closeT) && saleT >= listT && saleT <= closeT) {
+      delta = 0; // exact lifecycle hit
+    } else if (!isNaN(listT)) {
+      delta = Math.abs(listT - saleT);
+    } else {
+      continue;
+    }
+    if (delta < bestDelta) { best = l; bestDelta = delta; }
+  }
+  return best || listings[0];
+}
+
+// Pick the first non-zero cap rate from an available_listings row, scanning
+// the various cap_rate columns CoStar populates.
+function listingCapRate(l) {
+  if (!l) return null;
+  const cols = ['cap_rate', 'current_cap_rate', 'last_cap_rate', 'initial_cap_rate'];
+  for (const c of cols) {
+    const v = l[c];
+    if (v != null && Number(v) > 0) return Number(v);
+  }
+  return null;
+}
+
 // Find the deed_records row closest to sale_date within a tolerance window.
 // Used to fill grantor/grantee/consideration when sales_transactions has
 // nulls. Returns null if no candidate within the window.
@@ -462,9 +531,21 @@ function normalizeSalesTxnRow(r, lookups) {
   const p = r.properties || {};
   const lease = pickCurrentLease(p.leases || r.leases);
   const oh = (lookups && lookups.ohBySaleId && lookups.ohBySaleId[r.sale_id]) || null;
-  const deeds = (lookups && lookups.deedsByPropId && lookups.deedsByPropId[r.property_id || p.property_id]) || null;
+  const propId = r.property_id || p.property_id;
+  const deeds = (lookups && lookups.deedsByPropId && lookups.deedsByPropId[propId]) || null;
   const deed = deeds ? pickDeedMatch(deeds, r.sale_date, 90) : null;
   const clinic = (lookups && lookups.clinicByMedId && p.medicare_id) ? lookups.clinicByMedId[p.medicare_id] : null;
+  const listings = (lookups && lookups.listingsByPropId && lookups.listingsByPropId[propId]) || null;
+  const listing = listings ? pickListingMatch(listings, r.sale_date) : null;
+  const listingCap = listingCapRate(listing);
+  // Asking price proxy: listings can populate sold_price (post-close) or
+  // initial_price/last_price (pre-close). Prefer sold_price > last > initial.
+  const listingPrice = listing
+    ? (Number(listing.sold_price) > 0 ? Number(listing.sold_price)
+       : Number(listing.last_price) > 0 ? Number(listing.last_price)
+       : Number(listing.initial_price) > 0 ? Number(listing.initial_price)
+       : null)
+    : null;
 
   // Provenance: track which source filled each field so we can audit and
   // surface a "Sources: deed_records, lease, ownership_history" tooltip
@@ -494,28 +575,39 @@ function normalizeSalesTxnRow(r, lookups) {
   );
   if (buyerPick.source && buyerPick.source !== 'sales_transactions') prov.buyer = buyerPick.source;
 
-  // -- Seller: sales_transactions → deed grantor
+  // -- Seller: sales_transactions → available_listings.seller_name → deed grantor
+  // Listings carry the seller because brokers list it; deed records have
+  // grantor as the legal seller. Both are good evidence.
   const sellerPick = pickBest(
     [r.seller_name, 'sales_transactions'],
+    [listing && listing.seller_name, 'available_listings.seller_name'],
     [deed && deed.grantor, 'deed_records.grantor'],
   );
   if (sellerPick.source && sellerPick.source !== 'sales_transactions') prov.seller = sellerPick.source;
 
-  // -- Sold price: sales_transactions → ownership_history → deed consideration
+  // -- Sold price: sales_transactions → ownership_history → listing
+  //    sold_price → deed consideration. Listings outrank deed because the
+  //    listing's sold_price is the broker-reported close price, while the
+  //    deed consideration sometimes carries a nominal transfer value.
   const pricePick = pickBest(
     [r.sold_price, 'sales_transactions'],
     [oh && oh.sold_price, 'ownership_history'],
+    [listingPrice, 'available_listings.sold_price'],
     [deed && deed.consideration, 'deed_records.consideration'],
   );
   if (pricePick.source && pricePick.source !== 'sales_transactions') prov.price = pricePick.source;
   const soldPrice = pricePick.value != null ? Number(pricePick.value) : null;
 
-  // -- Cap rate: existing st columns → ownership_history.cap_rate
+  // -- Cap rate: sales_transactions cap columns → ownership_history.cap_rate
+  //    → available_listings cap_rate (asking → sold proxy). The listing cap
+  //    is the asking cap and typically tracks the sold cap within ~50bps;
+  //    we use it only when nothing else is available.
   const capPick = pickBest(
     [r.cap_rate, 'sales_transactions.cap_rate'],
     [r.calculated_cap_rate, 'sales_transactions.calculated_cap_rate'],
     [r.stated_cap_rate, 'sales_transactions.stated_cap_rate'],
     [oh && oh.cap_rate, 'ownership_history.cap_rate'],
+    [listingCap, 'available_listings.cap_rate'],
   );
   if (capPick.source && !String(capPick.source).startsWith('sales_transactions')) prov.cap_rate = capPick.source;
   const capRate = capPick.value != null ? Number(capPick.value) : null;
@@ -538,6 +630,7 @@ function normalizeSalesTxnRow(r, lookups) {
   const listingBrokerPick = pickBest(
     [r.listing_broker, 'sales_transactions.listing_broker'],
     [brokerByRole('listing'), 'sale_brokers.listing'],
+    [listing && listing.listing_broker, 'available_listings.listing_broker'],
   );
   if (listingBrokerPick.source && listingBrokerPick.source !== 'sales_transactions.listing_broker') prov.listing_broker = listingBrokerPick.source;
   const procuringBrokerPick = pickBest(
