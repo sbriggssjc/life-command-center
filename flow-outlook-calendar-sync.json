@@ -31,35 +31,37 @@
         },
         "runAfter": {}
       },
-      "List_Calendars": {
+      "List_Office365_Calendars": {
         "type": "ApiConnection",
+        "description": "Returns ALL calendars in the work mailbox: primary, shared mailbox delegates, iCal subscriptions (TeamSnap, etc.).",
         "inputs": {
           "host": {
             "connection": {
-              "name": "@parameters('$connections')['outlookcom']['connectionId']"
+              "name": "@parameters('$connections')['office365']['connectionId']"
             }
           },
           "method": "get",
-          "path": "/datasets/calendars/v3/tables"
+          "path": "/v3/Me/Calendars"
         },
         "runAfter": {
           "Initialize_AllEvents": ["Succeeded"]
         }
       },
-      "Loop_Each_Calendar": {
+      "Loop_Each_Work_Calendar": {
         "type": "Foreach",
-        "foreach": "@body('List_Calendars')?['value']",
+        "foreach": "@body('List_Office365_Calendars')?['value']",
         "actions": {
-          "Get_Events_For_Calendar": {
+          "Get_Calendar_View_For_Calendar": {
             "type": "ApiConnection",
+            "description": "GetEventsCalendarView V3 — expands recurring events into instances within the window. Returns `start`/`end` as {dateTime, timeZone} objects which the edge function normalizes to true UTC.",
             "inputs": {
               "host": {
                 "connection": {
-                  "name": "@parameters('$connections')['outlookcom']['connectionId']"
+                  "name": "@parameters('$connections')['office365']['connectionId']"
                 }
               },
               "method": "get",
-              "path": "/datasets/calendars/v3/tables/@{encodeURIComponent(items('Loop_Each_Calendar')?['Name'])}/calendarview",
+              "path": "/datasets/calendars/v3/tables/@{encodeURIComponent(items('Loop_Each_Work_Calendar')?['Id'])}/calendarview",
               "queries": {
                 "startDateTimeUtc": "@{addDays(utcNow(), -1)}",
                 "endDateTimeUtc": "@{addDays(utcNow(), 30)}"
@@ -67,40 +69,40 @@
             },
             "runAfter": {}
           },
-          "Loop_Each_Event": {
+          "Loop_Each_Event_In_Calendar": {
             "type": "Foreach",
-            "foreach": "@body('Get_Events_For_Calendar')?['value']",
+            "foreach": "@body('Get_Calendar_View_For_Calendar')?['value']",
             "actions": {
               "Append_Event": {
                 "type": "AppendToArrayVariable",
                 "inputs": {
                   "name": "AllEvents",
                   "value": {
-                    "Id": "personal-@{items('Loop_Each_Calendar')?['Name']}-@{items('Loop_Each_Event')?['id']}",
-                    "Subject": "@{items('Loop_Each_Event')?['subject']}",
-                    "Start": "@items('Loop_Each_Event')?['start']",
-                    "End": "@items('Loop_Each_Event')?['end']",
-                    "Location": "@{items('Loop_Each_Event')?['location']?['displayName']}",
-                    "IsAllDay": "@{items('Loop_Each_Event')?['isAllDay']}",
-                    "Organizer": "@{items('Loop_Each_Event')?['organizer']?['emailAddress']?['address']}",
-                    "BodyPreview": "@{substring(coalesce(items('Loop_Each_Event')?['bodyPreview'], ''), 0, min(length(coalesce(items('Loop_Each_Event')?['bodyPreview'], '')), 300))}",
-                    "WebLink": "@{items('Loop_Each_Event')?['webLink']}",
-                    "IsRecurring": "@{items('Loop_Each_Event')?['isRecurrence']}",
-                    "CalendarName": "personal:@{items('Loop_Each_Calendar')?['Name']}",
-                    "Sensitivity": "@{items('Loop_Each_Event')?['sensitivity']}",
-                    "ShowAs": "@{items('Loop_Each_Event')?['showAs']}"
+                    "Id": "work-@{items('Loop_Each_Work_Calendar')?['Id']}-@{items('Loop_Each_Event_In_Calendar')?['id']}",
+                    "Subject": "@{items('Loop_Each_Event_In_Calendar')?['subject']}",
+                    "Start": "@items('Loop_Each_Event_In_Calendar')?['start']",
+                    "End": "@items('Loop_Each_Event_In_Calendar')?['end']",
+                    "Location": "@{items('Loop_Each_Event_In_Calendar')?['location']?['displayName']}",
+                    "IsAllDay": "@{items('Loop_Each_Event_In_Calendar')?['isAllDay']}",
+                    "Organizer": "@{items('Loop_Each_Event_In_Calendar')?['organizer']?['emailAddress']?['address']}",
+                    "BodyPreview": "@{substring(coalesce(items('Loop_Each_Event_In_Calendar')?['bodyPreview'], ''), 0, min(length(coalesce(items('Loop_Each_Event_In_Calendar')?['bodyPreview'], '')), 300))}",
+                    "WebLink": "@{items('Loop_Each_Event_In_Calendar')?['webLink']}",
+                    "IsRecurring": "@{items('Loop_Each_Event_In_Calendar')?['isRecurrence']}",
+                    "CalendarName": "@{items('Loop_Each_Work_Calendar')?['Name']}",
+                    "Sensitivity": "@{items('Loop_Each_Event_In_Calendar')?['sensitivity']}",
+                    "ShowAs": "@{items('Loop_Each_Event_In_Calendar')?['showAs']}"
                   }
                 },
                 "runAfter": {}
               }
             },
             "runAfter": {
-              "Get_Events_For_Calendar": ["Succeeded"]
+              "Get_Calendar_View_For_Calendar": ["Succeeded"]
             }
           }
         },
         "runAfter": {
-          "List_Calendars": ["Succeeded"]
+          "List_Office365_Calendars": ["Succeeded"]
         }
       },
       "POST_To_Supabase": {
@@ -123,20 +125,20 @@
           }
         },
         "runAfter": {
-          "Loop_Each_Calendar": ["Succeeded"]
+          "Loop_Each_Work_Calendar": ["Succeeded"]
         }
       }
     }
   },
   "connectionReferences": {
-    "outlookcom": {
+    "office365": {
       "api": {
-        "id": "/providers/Microsoft.PowerApps/apis/shared_outlook"
+        "id": "/providers/Microsoft.PowerApps/apis/shared_office365"
       },
       "connection": {
         "id": "CONFIGURE_AT_IMPORT"
       },
-      "connectionName": "shared-outlook"
+      "connectionName": "shared-office365"
     }
   }
 }

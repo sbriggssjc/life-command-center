@@ -789,17 +789,40 @@ function formatDate(d) {
 }
 
 const TZ = 'America/Chicago';
-// Calendar events from edge function have +00:00 but are actually Central Time
-// Strip the false UTC offset so JS treats them as local (Central) time
-function stripTZ(d) { return String(d).replace(/[Zz]$/,'').replace(/[+-]\d{2}:\d{2}$/,''); }
-function tzHour(d) { return new Date(stripTZ(d)).getHours(); }
-function tzMin(d) { return new Date(stripTZ(d)).getMinutes(); }
-function tzHourMin(d) { return tzHour(d)*60+tzMin(d); }
-function tzDateStr(d) { return new Date(stripTZ(d)).toLocaleDateString('en-US'); }
-function localToday() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }); }
+// Calendar timestamps are stored as true UTC (post-2026-05-21 normalization in the
+// ai-copilot edge function). Use Intl.DateTimeFormat to project each instant into
+// America/Chicago — handles CDT/CST transitions automatically.
+function _tzParts(d) {
+  if (!d) return null;
+  const date = d instanceof Date ? d : new Date(d);
+  if (isNaN(date.getTime())) return null;
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  });
+  const parts = {};
+  for (const p of fmt.formatToParts(date)) parts[p.type] = p.value;
+  let hour = parseInt(parts.hour, 10);
+  if (hour === 24) hour = 0;
+  return {
+    year: parseInt(parts.year, 10),
+    month: parseInt(parts.month, 10),
+    day: parseInt(parts.day, 10),
+    hour,
+    minute: parseInt(parts.minute, 10)
+  };
+}
+function tzHour(d) { const p = _tzParts(d); return p ? p.hour : 0; }
+function tzMin(d) { const p = _tzParts(d); return p ? p.minute : 0; }
+function tzHourMin(d) { return tzHour(d) * 60 + tzMin(d); }
+function tzDateStr(d) { const p = _tzParts(d); return p ? `${p.month}/${p.day}/${p.year}` : ''; }
+function localToday() { return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
 function formatTime(d) {
-  if (!d) return ''; const date = new Date(stripTZ(d)); if (isNaN(date)) return '';
-  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  if (!d) return '';
+  const date = d instanceof Date ? d : new Date(d);
+  if (isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
 function fmt(n) {
@@ -7093,7 +7116,7 @@ function renderCalendarFull() {
   if (calEvents.length === 0) { calEl.innerHTML = '<div style="color:var(--text2)">No events loaded.</div>'; return; }
   const byDay = {};
   for (const ev of calEvents) {
-    const d = new Date(stripTZ(ev.start_time)).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const d = new Date(ev.start_time).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric' });
     if (!byDay[d]) byDay[d] = [];
     byDay[d].push(ev);
   }
