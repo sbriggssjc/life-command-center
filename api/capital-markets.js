@@ -109,7 +109,12 @@ const SYNTHETIC_COMPOSERS = {
     for (const r of termRows) {
       const k = r.period_end;
       if (!byPeriod.has(k)) byPeriod.set(k, { period_end: k });
-      byPeriod.get(k).cap_10plus = r.cap_10plus ?? r.cap_10plus_year;
+      // R44 — pace_core uses the "long-term cohort" cap rate. Gov's long-
+      // term cohort is 10+ year (cap_10plus); dia's is 12+ year (cap_12plus).
+      // The original recipe only looked for cap_10plus, so pace_core was
+      // always null for dia. Fall back to cap_12plus when the 10+ key is
+      // missing.
+      byPeriod.get(k).cap_10plus = r.cap_10plus ?? r.cap_10plus_year ?? r.cap_12plus;
     }
     for (const r of costRows) {
       const k = r.period_end;

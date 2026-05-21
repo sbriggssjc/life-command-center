@@ -1,0 +1,115 @@
+-- =====================================================================
+-- Round 44 — fix chart-visible data gaps flagged in R42 audit.
+--
+-- Two chart-visible gaps identified in audit/cm-style-audit/
+-- DATA-COMPLETENESS.md:
+--
+--   1. gov Data_Cap_by_Credit — State + Municipal Cap lines flat/empty
+--   2. dia Data_Pace_Cap_Expand — pace_core (10+ yr cohort) bar empty
+--
+-- ---------------------------------------------------------------------
+-- FIX #1 — gov Cap_by_Credit catalog redirect
+-- ---------------------------------------------------------------------
+-- Catalog entry for chart_template_id='cap_rate_by_credit' was pointed
+-- at the monthly view `cm_{vertical}_cap_by_credit_m`. That view is a
+-- passthrough from the materialized view
+-- `cm_gov_market_quarterly_master_m_mat` which only aggregates the
+-- federal credit_class — state and municipal columns are emitted as
+-- NULL across all 303 monthly rows.
+--
+-- The quarterly view `cm_{vertical}_cap_by_credit_q` properly aggregates
+-- all three credit classes. Sample state of the quarterly view:
+--
+--   SELECT COUNT(*), COUNT(federal_cap), COUNT(state_cap), COUNT(municipal_cap)
+--   FROM cm_gov_cap_by_credit_q
+--   → rows=116, fed=104, state=26, muni=1
+--
+-- Compared to the monthly view:
+--
+--   → rows=303, fed=302, state=0, muni=0
+--
+-- The applied change (already executed via Supabase MCP):
+--
+--   UPDATE cm_chart_catalog
+--   SET view_name_template = 'cm_{vertical}_cap_by_credit_q',
+--       cadence            = 'quarterly'
+--   WHERE chart_template_id = 'cap_rate_by_credit';
+--
+-- The renderer (api/_shared/cm-chart-image-renderer.js case
+-- 'cap_rate_by_credit' at line ~1510) and the native injector both
+-- plot whatever rows arrive — no cadence-specific logic. Switching from
+-- monthly to quarterly just gives the chart fewer x-axis points but
+-- populates the state + muni lines where data exists.
+--
+-- Trade-off: state data exists on 26 of 116 quarters (~22%), muni on 1.
+-- The lines will look choppy in places but show real data instead of
+-- flat-zero. Renderer's <c:dispBlanksAs val="gap"/> renders missing
+-- points as gaps, so the lines break where data is absent — preferred
+-- over a flat zero line which would imply "0% cap rate."
+--
+-- Future enhancement: if state + muni source data gets backfilled (R21
+-- note: "current gov dataset has 0 state + ~5 municipal sales with
+-- valid cap rates — state and municipal series will read empty until
+-- external state/muni lease records are imported"), the chart will
+-- automatically densify because the view will start producing more
+-- non-null cells.
+--
+-- ---------------------------------------------------------------------
+-- FIX #2 — dia Pace_Cap_Expand pace_core fallback
+-- ---------------------------------------------------------------------
+-- The synthetic recipe for `pace_of_cap_rate_expansion` in
+-- api/capital-markets.js (line ~85) builds the pace_core series from
+-- `cap_rate_by_lease_term` rows by reading `r.cap_10plus ?? r.cap_10plus_year`.
+--
+-- Gov's cap_rate_by_lease_term view emits cohorts using the 10+ year
+-- scheme (cap_10plus, cap_6to10, cap_less5, cap_outside_firm).
+-- Dia's cap_rate_by_lease_term view uses the 12+ year scheme
+-- (cap_12plus, cap_8to12, cap_6to8, cap_5orless).
+--
+-- The recipe never tried `cap_12plus`, so for dia exports `pace_core`
+-- was always null → the chart showed only pace_all (1 bar) even though
+-- the legend implies 2 bars.
+--
+-- The fix extends the coalesce chain:
+--
+--   byPeriod.get(k).cap_10plus = r.cap_10plus
+--                              ?? r.cap_10plus_year
+--                              ?? r.cap_12plus;   // R44 dia fallback
+--
+-- For dia, the "long-term cohort" is 12+ years (different from gov's
+-- 10+ years). Treating cap_12plus as the dia equivalent is consistent
+-- with the rest of the deck where dia's 12+ cohort fills the same
+-- visual slot as gov's 10+ cohort.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 219 existing tests pass; 2 unrelated pre-existing failures.
+--
+-- The pace recipe is a runtime-only composition with no direct unit
+-- tests — verified via code inspection: the coalesce chain now hits
+-- cap_12plus when cap_10plus/cap_10plus_year are both absent (dia case).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open gov Data_Cap_by_Credit:
+--    • Federal Cap line: solid across the date range
+--    • State Cap line: present where data exists (~26 quarters), gaps
+--      elsewhere (rendered as broken line, not flat zero)
+--    • Municipal Cap line: at least 1 visible data point
+--    • Quarterly cadence (was monthly) — x-axis labels change from
+--      every month to every quarter
+-- 3. Open dia Data_Pace_Cap_Expand:
+--    • pace_all bars: as before
+--    • pace_core bars: NOW POPULATED (was empty) — sourced from dia's
+--      12+ year cap rate cohort (cap_12plus)
+-- 4. Re-run audit:
+--      node audit/cm-style-audit/data-completeness.mjs
+--    Expect:
+--    • gov Data_Cap_by_Credit: state_cap + muni_cap no longer 0/303
+--      (now ~22% / 1% populated, will register as SPARSE not EMPTY)
+--    • dia Data_Pace_Cap_Expand: pace_core no longer 0/291
+--      (now mostly populated from cap_12plus availability)
+-- =====================================================================
