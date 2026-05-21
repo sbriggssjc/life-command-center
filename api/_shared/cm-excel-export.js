@@ -1391,6 +1391,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         // (cap_rate_by_lease_term, *_cap_by_term_dot_plot) can sniff
         // dia vs gov cohorts the same way the renderer does.
         rows: chart.rows || [],
+        // R38 — pass the catalog name through so each chart gets a
+        // visible <c:title> matching the master Excel docs (audit
+        // finding A: "no titles on any export chart").
+        title: chart.name,
       });
       if (spec) {
         nativeInjections.push(spec);

@@ -465,7 +465,8 @@ test('R37 P2: buildInjectionSpec ports renderer ranges/formats to specs', () => 
   });
   assert.deepEqual(dom.spec.yRightRange, { min: 0.85, max: 1.05 });
   assert.equal(dom.spec.yRightNumFmt, '0.0%');
-  assert.equal(dom.spec.yLeftNumFmt, '#,##0');
+  // R38 — VAL_FMT_INTEGER now uses CRE-standard [Red](N) negative idiom
+  assert.equal(dom.spec.yLeftNumFmt, '#,##0_);[Red](#,##0)');
 
   // core_cap_rate_dot_plot pins 4-12% on y
   const core = buildInjectionSpec({
@@ -918,8 +919,9 @@ test('injectNativeCharts: doughnut chart emits correct OOXML structure', async (
   // <c:varyColors val="1"/> (donut conventionally varies colors per segment)
   assert.match(chartXml, /<c:varyColors val="1"\/>/);
 
-  // Legend at right (donut convention)
-  assert.match(chartXml, /<c:legendPos val="r"\/>/);
+  // Legend at bottom (R38 audit finding C — match master Excel
+  // doughnut convention; was 'r' through R36)
+  assert.match(chartXml, /<c:legendPos val="b"\/>/);
 });
 
 test('buildInjectionSpec: leased_inventory_by_state builds horizontal bar', () => {
@@ -3270,4 +3272,177 @@ test('R37 P3: buildAnnotations returns fewer than 3 entries when peaks coincide'
     'monotonic data → max==last → 2 labels (last + min)');
   const idxs = spec.spec.dataLabels.map(l => l.idx).sort((a, b) => a - b);
   assert.deepEqual(idxs, [0, 7], 'min at idx 0, last at idx 7');
+});
+
+// ============================================================================
+// R38 — style polish: chart titles, [Red](N) negative formats, donut legend.
+// Audit findings A + B + C (see audit/cm-style-audit/PUNCH-LIST.md).
+// ============================================================================
+
+test('R38 A: chart emits <c:title> when spec.title is provided', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('B5').value = 'Series';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${6 + i}`).value = 100 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 11,
+      color: '003DA5',
+      title: 'Cap Rate — TTM Weighted Avg by Quarter',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:title>/, '<c:title> block emitted');
+  assert.match(chartXml, /<a:t>Cap Rate — TTM Weighted Avg by Quarter<\/a:t>/,
+    'title text rendered');
+  assert.match(chartXml, /<c:autoTitleDeleted val="0"\/>/,
+    'autoTitleDeleted is 0 when title is set (auto-title is allowed since we have a title)');
+  // Title style: 12pt bold navy
+  assert.match(chartXml, /sz="1200"[^/]*b="1"/, '12pt bold');
+  // Color is navy 003DA5
+  assert.match(chartXml, /<c:title>[\s\S]*?<a:srgbClr val="003DA5"\/>/, 'navy color');
+});
+
+test('R38 A: chart omits <c:title> when spec.title is missing (backward compat)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  sheet.getCell('B5').value = 'Series';
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${6 + i}`).value = new Date(2025, i, 31);
+    sheet.getCell(`B${6 + i}`).value = 100 + i;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'line', tabName: 'Data_Test',
+      titleCol: 'B', titleRow: 5,
+      catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 11,
+      color: '003DA5',
+      // no title
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.ok(!/<c:title>/.test(chartXml), 'no <c:title> when title omitted');
+  assert.match(chartXml, /<c:autoTitleDeleted val="1"\/>/,
+    'autoTitleDeleted falls back to 1 when no title');
+});
+
+test('R38 A: buildInjectionSpec splices title into spec', () => {
+  const spec = buildInjectionSpec({
+    chart_template_id: 'avg_deal_size',
+    tabName: 'Data_Avg_Deal_Size',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'avg_deal_size', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 16,
+    brand: { palette: {} },
+    title: 'Average Deal Size — TTM by Quarter',
+  });
+  assert.equal(spec.spec.title, 'Average Deal Size — TTM by Quarter',
+    'title flows from buildInjectionSpec args into spec');
+});
+
+test('R38 A: buildInjectionSpec omits title when not provided', () => {
+  const spec = buildInjectionSpec({
+    chart_template_id: 'avg_deal_size',
+    tabName: 'Data_Avg_Deal_Size',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'avg_deal_size', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 16,
+    brand: { palette: {} },
+    // no title arg
+  });
+  assert.ok(!spec.spec.title, 'no title key on spec when omitted');
+});
+
+test('R38 B: VAL_FMT_INTEGER uses [Red] negative idiom in single-series specs', () => {
+  // transaction_count_ttm uses VAL_FMT_INTEGER on valAx
+  const spec = buildInjectionSpec({
+    chart_template_id: 'transaction_count_ttm',
+    tabName: 'Data_Txn_Count',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'ttm_count', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: {} },
+  });
+  assert.equal(spec.spec.valAxNumFmt, '#,##0_);[Red](#,##0)',
+    'integer format uses [Red](N) negatives');
+});
+
+test('R38 B: VAL_FMT_CURRENCY uses [Red] negative idiom', () => {
+  // volume_ttm_by_quarter uses VAL_FMT_CURRENCY
+  const spec = buildInjectionSpec({
+    chart_template_id: 'volume_ttm_by_quarter',
+    tabName: 'Data_Volume_TTM',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'volume_dollars', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: {} },
+  });
+  assert.equal(spec.spec.valAxNumFmt, '$#,##0_);[Red]($#,##0)',
+    'currency format uses [Red]($N) negatives');
+});
+
+test('R38 B: VAL_FMT_CURRENCY_M (millions) uses [Red] negative idiom', () => {
+  // txn_count_avg_deal_combo right axis uses CURRENCY_M
+  const spec = buildInjectionSpec({
+    chart_template_id: 'txn_count_avg_deal_combo',
+    tabName: 'Data_Txn_AvgDeal_Combo',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'ttm_count', col: 'B' },
+      { key: 'avg_deal_size', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: {} },
+  });
+  assert.equal(spec.spec.yRightNumFmt, '$#,##0,,"M"_);[Red]($#,##0,,"M")',
+    'currency_m format uses [Red]($150M) negatives');
+});
+
+test('R38 C: doughnut emits legend at bottom (not right)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Donut');
+  sheet.getCell('B4').value = 'Title';
+  for (let i = 0; i < 3; i++) {
+    sheet.getCell(`A${5 + i}`).value = ['DaVita', 'FMC', 'Other'][i];
+    sheet.getCell(`B${5 + i}`).value = 100 - i * 20;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Donut',
+    spec: {
+      type: 'doughnut', tabName: 'Data_Donut',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 7,
+      colors: ['003DA5', '62B5E5', '4CB582'],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:legendPos val="b"\/>/, 'donut legend at bottom');
+  assert.ok(!/<c:legendPos val="r"\/>/.test(chartXml), 'no right-side legend');
 });

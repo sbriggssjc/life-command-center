@@ -82,13 +82,21 @@ function catAxNumFmtFrag(numFmt) {
 
 // OOXML format-code constants — direct equivalents of the renderer's
 // AXIS_FORMAT_* objects, translated to Excel custom number formats.
+//
+// R38 (audit finding B) — adopt the CRE-standard `[Red](N)` negative
+// idiom on currency + integer formats. Master Excel uses
+// `#,##0_);[Red]\(#,##0\)` for negatives in red parens; export was using
+// bare formats that show negatives with a minus sign. Percent formats
+// are left bare since negative percents in CRE typically read as a
+// minus sign (yoy_volume_change, pace_of_cap_rate_expansion, etc.)
+// rather than red parens.
 const VAL_FMT_PERCENT_2DP = '0.00%';
 const VAL_FMT_PERCENT_1DP = '0.0%';
 const VAL_FMT_PERCENT_0DP = '0%';
-const VAL_FMT_CURRENCY    = '$#,##0';
-const VAL_FMT_CURRENCY_M  = '$#,##0,,"M"';   // millions ($150M)
-const VAL_FMT_CURRENCY_K  = '$#,##0,"K"';    // thousands ($150K)
-const VAL_FMT_INTEGER     = '#,##0';
+const VAL_FMT_CURRENCY    = '$#,##0_);[Red]($#,##0)';
+const VAL_FMT_CURRENCY_M  = '$#,##0,,"M"_);[Red]($#,##0,,"M")';   // millions ($150M / red ($150M))
+const VAL_FMT_CURRENCY_K  = '$#,##0,"K"_);[Red]($#,##0,"K")';     // thousands ($150K / red ($150K))
+const VAL_FMT_INTEGER     = '#,##0_);[Red](#,##0)';
 
 // Common range constants matching the renderer's shared ranges
 const CAP_RATE_RANGE          = { min: 0.05,  max: 0.10  };
@@ -215,6 +223,48 @@ function dLblXml(idx, text) {
           </c:dLbl>`;
 }
 
+// R38 (audit finding A) — embedded <c:title> block at the top of every
+// chart so the chart object itself carries its name (matches master
+// Excel charts which display titles like "Average Asking Capitalization
+// Rate (TTM)" above the plot area). Each builder injects this fragment
+// just inside <c:chart>, before <c:autoTitleDeleted>.
+//
+// Style: 12pt bold, NM navy (003DA5) — matches the title cells in
+// cm-excel-export.js (`titleRow` line ~1250).
+function chartTitleXml(text) {
+  if (!text) return '<c:autoTitleDeleted val="1"/>';
+  return `<c:title>
+      <c:tx>
+        <c:rich>
+          <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr">
+              <a:defRPr sz="1200" b="1" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
+                <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
+                <a:latin typeface="+mn-lt"/>
+                <a:ea typeface="+mn-ea"/>
+                <a:cs typeface="+mn-cs"/>
+              </a:defRPr>
+            </a:pPr>
+            <a:r>
+              <a:rPr lang="en-US" sz="1200" b="1">
+                <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
+              </a:rPr>
+              <a:t>${escapeXml(text)}</a:t>
+            </a:r>
+          </a:p>
+        </c:rich>
+      </c:tx>
+      <c:overlay val="0"/>
+      <c:spPr>
+        <a:noFill/>
+        <a:ln><a:noFill/></a:ln>
+      </c:spPr>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>`;
+}
+
 /**
  * Emit a <c:dLbls> block with per-point overrides and "no label by
  * default" settings on the rest. Returns empty string if no points.
@@ -264,7 +314,7 @@ function buildSingleLineChartXml(spec) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:lineChart>
@@ -353,7 +403,7 @@ function buildSingleBarChartXml(spec) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:barChart>
@@ -470,7 +520,7 @@ function buildStackedBarChartXml(spec) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:barChart>
@@ -560,7 +610,7 @@ ${dLblsFrag}
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:lineChart>
@@ -761,7 +811,7 @@ ${dLblsFrag}
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:barChart>
@@ -889,7 +939,7 @@ function buildDoughnutChartXml(spec) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:doughnutChart>
@@ -907,7 +957,7 @@ ${dPtXml}
       </c:doughnutChart>
     </c:plotArea>
     <c:legend>
-      <c:legendPos val="r"/>
+      <c:legendPos val="b"/>
       <c:overlay val="0"/>
     </c:legend>
     <c:plotVisOnly val="1"/>
@@ -979,7 +1029,7 @@ ${dLblsFrag}
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:scatterChart>
@@ -1153,7 +1203,7 @@ ${dLblsFrag}
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:chart>
-    <c:autoTitleDeleted val="1"/>
+    ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
       <c:areaChart>
@@ -1569,7 +1619,20 @@ export const NATIVE_CHART_TEMPLATES = new Set([
  *                                    in their data tab (e.g. cap_rate_by_lease_term).
  * @returns {object|null} injection spec or null if no builder registered
  */
-export function buildInjectionSpec({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows }) {
+export function buildInjectionSpec(args) {
+  // R38 — thin wrapper that lets `args.title` flow into the returned
+  // spec without touching the ~50 switch cases in buildInjectionSpecInner.
+  // Each case constructs `spec: { type, tabName, ... }` and returns it
+  // wrapped in `{ tabName, spec, helperCols? }`. We splice title here
+  // so every builder gets it via `spec.title` regardless of case.
+  const result = buildInjectionSpecInner(args);
+  if (result && result.spec && args.title) {
+    result.spec.title = args.title;
+  }
+  return result;
+}
+
+function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title }) {
   const palette = brand?.palette || {};
   const navy   = (palette.nm_navy   || '#003DA5').replace('#', '');
   const sky    = (palette.nm_sky    || '#62B5E5').replace('#', '');

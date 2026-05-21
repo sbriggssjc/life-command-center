@@ -1,0 +1,161 @@
+-- =====================================================================
+-- Round 38 — chart style polish to align with master Excel docs.
+-- User feedback 2026-05-19, item #1: "match the formatting, style,
+-- layout, type, datasets, colors, number formats, etc. as closely as
+-- you can to the Excel style we had in our example documents."
+--
+-- Driven by the structural audit in audit/cm-style-audit/PUNCH-LIST.md
+-- which compared the dia + gov master Excel docs in Team Briggs
+-- SharePoint against the 2026-05-19/20 exports.
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- AUDIT INFRASTRUCTURE (new)
+-- ---------------------------------------------------------------------
+-- audit/cm-style-audit/audit-master-vs-export.mjs
+--   Node script that diffs master XLSX vs export XLSX. Walks each
+--   sheet→drawing→chart chain, dumps per-chart inventory (title,
+--   legend, axis formats, ranges, colors, series count, data label
+--   count) to markdown tables.
+--
+-- audit/cm-style-audit/{dia,gov}-master-inventory.md
+-- audit/cm-style-audit/{dia,gov}-export-inventory.md
+-- audit/cm-style-audit/{dia,gov}-diff.md
+-- audit/cm-style-audit/PUNCH-LIST.md   ← synthesized findings
+--
+-- Audit conclusions:
+--   dia master: 37 charts on 13 sheets (Charts + Market Size + others)
+--   dia export: 33 charts on 48 Data_* sheets (1 chart per tab)
+--   gov master: 32 charts on 10 sheets (All Charts + SSA Charts + Rent Survey)
+--   gov export: 35 charts on 49 Data_* sheets
+--
+-- Master packs charts onto 1-2 big tabs; export gives each chart its
+-- own Data_* tab. No 1:1 chart match possible by tab name; comparison
+-- is by chart KIND (line/bar/combo/etc.) and visible styling.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S FIXED (3 findings)
+-- ---------------------------------------------------------------------
+--
+-- Finding A — chart titles missing on every export chart (HIGH)
+--   Master charts have visible titles ("LEASE TERM REMAINING", "Cap by
+--   Credit", "Average Asking Capitalization Rate (TTM)", etc.). Export
+--   had NO titles — only the sheet name carried context.
+--
+--   Fix:
+--     • New chartTitleXml(text) helper in cm-native-chart-injector.js
+--       emits <c:title> with 12pt bold navy (003DA5) rich text + sets
+--       autoTitleDeleted=0. Style matches cm-excel-export.js title-row
+--       cells (size 14, bold, navy — chart embeds at 12pt).
+--     • All 8 chart builders (line/bar/stacked-bar/multi-line/combo/
+--       doughnut/scatter/area-combo) now emit ${chartTitleXml(spec.title)}
+--       at the start of <c:chart>. Falls back to <c:autoTitleDeleted
+--       val="1"/> when title is null/empty (backward compat).
+--     • buildInjectionSpec wrapped — thin caller accepts args.title and
+--       splices it into the returned spec without touching the ~50
+--       switch cases.
+--     • cm-excel-export.js call site passes chart.name (catalog "name"
+--       column from cm_chart_catalog) through as title.
+--
+-- Finding B — number formats use bare style; master uses CRE [Red](N) (MEDIUM)
+--   Master format: `#,##0_);[Red]\(#,##0\)` renders negatives in red
+--   parens (the textbook CRE convention). Export was using bare `#,##0`
+--   and `$#,##0` — negatives showed as minus sign.
+--
+--   Fix:
+--     • VAL_FMT_INTEGER:    '#,##0' → '#,##0_);[Red](#,##0)'
+--     • VAL_FMT_CURRENCY:   '$#,##0' → '$#,##0_);[Red]($#,##0)'
+--     • VAL_FMT_CURRENCY_M: '$#,##0,,"M"' → '$#,##0,,"M"_);[Red]($#,##0,,"M")'
+--     • VAL_FMT_CURRENCY_K: '$#,##0,"K"' → '$#,##0,"K"_);[Red]($#,##0,"K")'
+--
+--   Percent formats (VAL_FMT_PERCENT_*) left bare since negative percent
+--   in CRE conventionally reads as -X% (yoy_volume_change,
+--   pace_of_cap_rate_expansion show negative bars with minus signs).
+--
+--   This change propagates to every chart using these constants on its
+--   value axis AND any data labels formatted with them.
+--
+-- Finding C — doughnut legend right; master uses bottom (LOW)
+--   buildDoughnutChartXml had <c:legendPos val="r"/> hardcoded.
+--   Master pies/donuts use bottom (b). Two affected charts:
+--   Data_Avail_Tenant_CountD + Data_Avail_Tenant_VolD.
+--
+--   Fix: one-line swap r → b in buildDoughnutChartXml.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT FIXED (intentional — diffs that look like regressions but aren't)
+-- ---------------------------------------------------------------------
+-- (Documented in audit/cm-style-audit/PUNCH-LIST.md for future reviewers
+-- so we don't accidentally "fix" these later.)
+--
+--   • Color palette — export uses canonical Northmarq brand (003DA5
+--     navy, 62B5E5 sky, 265AB2 mid blue, etc.). Master predates the
+--     Nov 2024 brand refresh and mixes inconsistent colors (5FA3A8
+--     teal, 9B88A5 purple-gray, A8AD00 olive). Brand standards win.
+--
+--   • Quarter-format cat axis (`q"Q-"yyyy`) — R37 P1 by explicit user
+--     request ("we had previously displayed the labels in year and
+--     quarter terms"). Don't revert to master's `mmm-yy` or `General`.
+--
+--   • Y-axis pinning + percent formats — R37 P2 by explicit user request
+--     ("axis formatting has changed on most charts").
+--
+--   • 3-label-per-chart density (peak/trough/last) — R37 P3 by explicit
+--     user request ("most data labels are gone, lowest highest and most
+--     recent"). Master has 29-79 labels per chart (every-point labels).
+--     User explicitly chose the 3-label style, not every-point.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 148 CM tests pass (up from 138 in R37 P3). Suite 219 pass / 2
+-- unrelated pre-existing failures.
+--
+-- New tests:
+--   • R38 A: chart emits <c:title> when spec.title provided
+--   • R38 A: chart omits <c:title> + sets autoTitleDeleted=1 when omitted
+--   • R38 A: buildInjectionSpec splices title into spec
+--   • R38 A: buildInjectionSpec omits title when not provided
+--   • R38 B: VAL_FMT_INTEGER uses [Red](N) (transaction_count_ttm)
+--   • R38 B: VAL_FMT_CURRENCY uses [Red]($N) (volume_ttm_by_quarter)
+--   • R38 B: VAL_FMT_CURRENCY_M uses [Red]($150M) (txn_count_avg_deal_combo)
+--   • R38 C: doughnut emits legend bottom not right
+--
+-- Smoke build confirmed: a single chart with title + dataLabels +
+-- VAL_FMT_CURRENCY (with negatives) renders correctly with all three
+-- features simultaneously.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Click on any chart object — chart title should now appear at the top
+--    of the chart area in 12pt bold navy, matching the catalog name
+--    (e.g. "Cap Rate — TTM Weighted Avg by Quarter", "Average Deal Size
+--    — TTM by Quarter", "Northmarq vs Market — Avg Cap Rate (TTM)")
+-- 3. Open Data_Pace_Cap_Expand — y-axis range -2.5% to +3.5%; negative
+--    bars should render with red minus-paren format on tick labels and
+--    any data labels.
+-- 4. Open Data_YoY_Change — same, negatives in red.
+-- 5. Open Data_Avail_Tenant_CountD + Data_Avail_Tenant_VolD — legend
+--    should sit BELOW the donut, not to the right.
+-- 6. Confirm everything else from R37 P1-P4 still renders correctly:
+--    quarter cat labels, pinned y-axis ranges, peak/trough/last labels.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT (out of scope for R38)
+-- ---------------------------------------------------------------------
+-- Visual aspects the structural audit can't detect:
+--   • Chart-area background fill color
+--   • Plot-area gridline color
+--   • Font family / size for axis ticks (currently inherits theme)
+--   • Image positioning / cell layout around the chart (the master
+--     organizes its Charts tab with images side-by-side; export gives
+--     each chart its own tab so this doesn't directly apply)
+--
+-- Re-run audit anytime via:
+--   node audit/cm-style-audit/audit-master-vs-export.mjs
+-- after downloading a fresh export into Downloads/. The script picks up
+-- NM-CapMarkets-Dialysis-* and NM-CapMarkets-GovLeased-* by name pattern.
+-- =====================================================================
