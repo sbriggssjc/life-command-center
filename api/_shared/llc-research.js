@@ -52,6 +52,26 @@ export async function lookupLlc({ name, state }) {
     return { found: false, source: null, reason: 'invalid_input' };
   }
 
+  // ── SOS-direct adapters (free, per-state) — preferred over OpenCorporates
+  //    where we have a verified handler. The registry below maps a 2-letter
+  //    state code → adapter; each adapter returns the SAME uniform shape as
+  //    this orchestrator (source:'sos_<state>'). The queue/writer code that
+  //    calls lookupLlc is source-agnostic, so adding a state is just adding a
+  //    registry entry. Registry starts empty → behavior unchanged until an
+  //    adapter is built AND verified against the live source.
+  const st = (state || '').trim().toUpperCase();
+  const adapter = /^[A-Z]{2}$/.test(st) ? SOS_DIRECT_ADAPTERS[st] : null;
+  if (adapter) {
+    try {
+      const res = await adapter({ name, state: st });
+      if (res && res.found) return res;                       // got it from the SOS
+      if (res && res.reason === 'no_match') return res;       // authoritative miss for that state
+      // adapter_pending / unreachable / rate_limited → fall through to OC
+    } catch (err) {
+      console.warn(`[llc-research] SOS-direct adapter ${st} threw:`, err?.message);
+    }
+  }
+
   const apiKey = process.env.OPENCORPORATES_API_KEY || null;
   if (!apiKey) {
     return { found: false, source: null, reason: 'no_handler_configured' };
@@ -59,6 +79,21 @@ export async function lookupLlc({ name, state }) {
 
   return lookupViaOpenCorporates({ name, state, apiKey });
 }
+
+// ── SOS-direct adapter registry ──────────────────────────────────────────────
+// Each adapter: async ({name, state}) => uniform lookupLlc shape, source
+// 'sos_<state>'. Build strategy by state (compliance-first):
+//   1. BULK-DOWNLOAD states — e.g. Florida Sunbiz publishes downloadable
+//      corporate data files; ingest to a local mirror and match against it.
+//      Compliant, complete, no anti-bot, no per-request cost. Preferred.
+//   2. FREE search/API states — per-entity query of an official open endpoint.
+//   3. Everything else — leave to OpenCorporates, or sidebar-assisted manual
+//      capture (broker opens the SOS page; the existing sidebar ingests it).
+// Adapters MUST be verified against the live/source format before enabling
+// (return {found:false, reason:'adapter_pending'} until then).
+const SOS_DIRECT_ADAPTERS = {
+  // FL: lookupViaFloridaSunbizMirror,   // enable after the FL data-file mirror + parser are built & verified
+};
 
 async function lookupViaOpenCorporates({ name, state, apiKey }) {
   const jurisdiction = stateToJurisdiction(state);
