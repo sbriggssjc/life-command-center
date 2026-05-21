@@ -1085,7 +1085,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // any next-line text < 60 chars, which let CoStar column headers
       // ("Price/SF", "Cap Rate", etc.) leak in as the sale_price value
       // when the Sale Price column had no data on a row.
-      if (/^sale\s+price$/i.test(line)) {
+      // 4302 S Main St NEW listing (2026-05-21): on /detail/for-sale/
+      // URLs CoStar labels the stat-card *asking* price as "Sale Price"
+      // (there's no actual sale yet on a NEW listing). The block above
+      // already routes that value to data.asking_price via the widened
+      // askingLabelRe — capturing it again here would propagate the
+      // asking price into dia.sales_transactions as a phantom closed
+      // sale. Skip the sale_price write on /for-sale/ pages outside
+      // the /public-record sub-tab (which still carries real historical
+      // sales).
+      if (/^sale\s+price$/i.test(line) && !(isForSaleUrl && !isPublicRecordTab)) {
         // Same stat-card hazard as asking_price above — when prev
         // and next are both dollar amounts, prev (value above label)
         // beats the smaller per-SF figure in next.
