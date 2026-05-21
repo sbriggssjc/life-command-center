@@ -3706,7 +3706,7 @@ async function handleGenerateResearchTasks(req, res) {
 
       const openRes = await opsQuery('GET',
         `research_tasks?select=id,research_type,source_record_id,priority,status` +
-        `&domain=eq.${encodeURIComponent(domain)}&source_table=eq.v_next_best_research&status=eq.open`);
+        `&domain=eq.${encodeURIComponent(domain)}&source_table=eq.v_next_best_research&status=eq.queued`);
       const openTasks = (openRes.ok && Array.isArray(openRes.data) ? openRes.data : []);
       const openByKey = new Map(openTasks.map(t => [`${t.research_type}|${t.source_record_id}`, t]));
       const feedKeys = new Set();
@@ -3718,7 +3718,7 @@ async function handleGenerateResearchTasks(req, res) {
         const key = `${row.research_type}|${entityId}`;
         feedKeys.add(key);
         const existing = openByKey.get(key);
-        const priority = row.priority != null ? Number(row.priority) : null;
+        const priority = row.priority != null ? Number(row.priority) : 0;
         if (existing) {
           if (Number(existing.priority) !== priority) {
             await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(existing.id)}`,
@@ -3732,9 +3732,8 @@ async function handleGenerateResearchTasks(req, res) {
             research_type:   row.research_type || 'ownership_research',
             title,
             instructions:    row.instructions || null,
-            entity_id:       entityId,
             domain,
-            status:          'open',
+            status:          'queued',
             priority,
             source_record_id: entityId,
             source_table:    'v_next_best_research',
