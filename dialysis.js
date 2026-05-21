@@ -249,53 +249,172 @@ async function loadDiaSalesCompsFromTxns() {
   // orphan sales without a property drop out — v_sales_comps filtered those
   // too. Leases are a left-side embed so sales on vacant/land parcels still
   // show up.
+  // Properties select now pulls operator + chain_canonical + medicare_id so
+  // tenant fallback chain has more anchors when leases is empty and
+  // properties.tenant is null (the legacy CSV import didn't populate it).
   // NOTE: sale_brokers loaded separately to avoid 3-level PostgREST embed
   // failures that silently return [] through the edge proxy.
   const select = [
     '*,',
     'properties!inner(property_id,address,city,state,zip_code,county,building_size,',
-    'land_area,lot_sf,year_built,year_renovated,tenant,building_type,zoning,',
+    'land_area,lot_sf,year_built,year_renovated,tenant,operator,chain_canonical,',
+    'medicare_id,linked_medicare_facility_id,building_type,zoning,',
     'latitude,longitude,lease_bump_pct,lease_bump_interval_mo,',
     'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
     'expense_structure,rent_per_sf,annual_rent,renewal_options,is_active,',
     'status,data_source,source_confidence))',
   ].join('');
-  let all = [];
-  for (let pg = 0; pg <= 20; pg++) {
-    const batch = await diaQuery('sales_transactions', select, {
-      // Value-weighted sort (Item #9 Phase A, 2026-05-17): biggest comps
-      // surface first. Tiebreaker on sale_date keeps recency where prices
-      // are equal/null.
-      order: 'sold_price.desc.nullslast,sale_date.desc.nullslast',
-      limit: 1000,
-      offset: pg * 1000,
-    });
-    all = all.concat(batch || []);
-    if (!batch || batch.length < 1000) break;
-  }
 
-  // Load sale_brokers separately and merge by sale_id
-  let brokerMap = {};
+  // Sales + brokers + cross-source fallbacks (ownership_history, deed_records,
+  // medicare_clinics) loaded in parallel. All are small relative to sales,
+  // so the merge cost is negligible compared to the round-trip savings.
+  const [salesPages, brokerMap, ohBySaleId, deedsByPropId, clinicByMedId] = await Promise.all([
+    (async () => {
+      let all = [];
+      for (let pg = 0; pg <= 20; pg++) {
+        const batch = await diaQuery('sales_transactions', select, {
+          // Value-weighted sort (Item #9 Phase A, 2026-05-17): biggest comps
+          // surface first. Tiebreaker on sale_date keeps recency where prices
+          // are equal/null.
+          order: 'sold_price.desc.nullslast,sale_date.desc.nullslast',
+          limit: 1000,
+          offset: pg * 1000,
+        });
+        all = all.concat(batch || []);
+        if (!batch || batch.length < 1000) break;
+      }
+      return all;
+    })(),
+    loadDiaSaleBrokers(),
+    loadDiaOwnershipHistoryBySaleId(),
+    loadDiaDeedRecordsByPropertyId(),
+    loadDiaMedicareClinicsByMedId(),
+  ]);
+
+  return salesPages.map(r => {
+    r.sale_brokers = brokerMap[r.sale_id] || [];
+    return normalizeSalesTxnRow(r, {
+      ohBySaleId,
+      deedsByPropId,
+      clinicByMedId,
+    });
+  });
+}
+
+// -- Cross-source fallback loaders ------------------------------------------
+//
+// Each returns a lookup map. Failures degrade gracefully — if a secondary
+// source is down or empty, we still produce comp rows from the primary
+// sales_transactions + properties + leases join. We never replace a populated
+// primary value with a secondary one; secondaries only fill nulls.
+
+async function loadDiaSaleBrokers() {
+  const sbSelect = 'sale_id,role,broker_id,brokers(broker_name,company)';
+  const map = {};
   try {
-    const sbSelect = 'sale_id,role,broker_id,brokers(broker_name,company)';
     let sbAll = [];
     for (let pg = 0; pg <= 5; pg++) {
-      const batch = await diaQuery('sale_brokers', sbSelect, {
-        limit: 1000, offset: pg * 1000,
-      });
+      const batch = await diaQuery('sale_brokers', sbSelect, { limit: 1000, offset: pg * 1000 });
       sbAll = sbAll.concat(batch || []);
       if (!batch || batch.length < 1000) break;
     }
     sbAll.forEach(sb => {
-      if (!brokerMap[sb.sale_id]) brokerMap[sb.sale_id] = [];
-      brokerMap[sb.sale_id].push(sb);
+      if (!map[sb.sale_id]) map[sb.sale_id] = [];
+      map[sb.sale_id].push(sb);
     });
   } catch(e) { console.warn('sale_brokers load failed:', e.message); }
+  return map;
+}
 
-  return all.map(r => {
-    r.sale_brokers = brokerMap[r.sale_id] || [];
-    return normalizeSalesTxnRow(r);
-  });
+async function loadDiaOwnershipHistoryBySaleId() {
+  // ownership_history has its own sold_price/cap_rate/recorded_owner_name —
+  // a parallel record of the same transaction (sometimes populated when
+  // sales_transactions is not, especially for legacy CSV imports).
+  const map = {};
+  try {
+    // Only recorded_owner_id has a FK to recorded_owners (fk_ownership_recorded_owner).
+    // true_owner_id is unenforced text, so we can't PostgREST-embed it — we
+    // surface it as a raw uuid that the normalizer ignores. Buyer fallback
+    // therefore goes through recorded_owners.name only.
+    const ohSelect = 'sale_id,sold_price,cap_rate,rent,recorded_owner_id,true_owner_id,'
+                   + 'recorded_owners(name)';
+    let all = [];
+    for (let pg = 0; pg <= 10; pg++) {
+      const batch = await diaQuery('ownership_history', ohSelect, {
+        filter: 'sale_id=not.is.null', limit: 1000, offset: pg * 1000,
+      });
+      all = all.concat(batch || []);
+      if (!batch || batch.length < 1000) break;
+    }
+    all.forEach(oh => {
+      if (oh.sale_id != null && !map[oh.sale_id]) map[oh.sale_id] = oh;
+    });
+  } catch(e) { console.warn('ownership_history fallback load failed:', e.message); }
+  return map;
+}
+
+async function loadDiaDeedRecordsByPropertyId() {
+  // Group deed_records by property_id. Each map entry is an array sorted
+  // by recording_date desc so the per-row matcher can pick the deed closest
+  // to the sale_date in O(n) scan.
+  const map = {};
+  try {
+    const sel = 'property_id,recording_date,grantor,grantee,consideration,deed_type';
+    let all = [];
+    for (let pg = 0; pg <= 5; pg++) {
+      const batch = await diaQuery('deed_records', sel, {
+        filter: 'property_id=not.is.null', limit: 1000, offset: pg * 1000,
+      });
+      all = all.concat(batch || []);
+      if (!batch || batch.length < 1000) break;
+    }
+    all.forEach(d => {
+      const pid = d.property_id;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(d);
+    });
+    Object.keys(map).forEach(k => {
+      map[k].sort((a, b) => String(b.recording_date || '').localeCompare(String(a.recording_date || '')));
+    });
+  } catch(e) { console.warn('deed_records fallback load failed:', e.message); }
+  return map;
+}
+
+async function loadDiaMedicareClinicsByMedId() {
+  // Tenant fallback of last resort: when properties.tenant + lease.tenant +
+  // properties.operator + properties.chain_canonical are all null, the
+  // linked CMS facility_name is the operator (e.g. "Davita Twin Falls
+  // Dialysis Center").
+  const map = {};
+  try {
+    const sel = 'medicare_id,facility_name';
+    let all = [];
+    for (let pg = 0; pg <= 20; pg++) {
+      const batch = await diaQuery('medicare_clinics', sel, { limit: 1000, offset: pg * 1000 });
+      all = all.concat(batch || []);
+      if (!batch || batch.length < 1000) break;
+    }
+    all.forEach(m => { if (m.medicare_id) map[m.medicare_id] = m; });
+  } catch(e) { console.warn('medicare_clinics fallback load failed:', e.message); }
+  return map;
+}
+
+// Find the deed_records row closest to sale_date within a tolerance window.
+// Used to fill grantor/grantee/consideration when sales_transactions has
+// nulls. Returns null if no candidate within the window.
+function pickDeedMatch(deeds, saleDate, maxDays) {
+  if (!Array.isArray(deeds) || deeds.length === 0 || !saleDate) return null;
+  const saleT = Date.parse(saleDate);
+  if (isNaN(saleT)) return null;
+  const maxMs = (maxDays || 90) * 24 * 60 * 60 * 1000;
+  let best = null, bestDelta = Infinity;
+  for (const d of deeds) {
+    const t = Date.parse(d.recording_date || '');
+    if (isNaN(t)) continue;
+    const delta = Math.abs(t - saleT);
+    if (delta <= maxMs && delta < bestDelta) { best = d; bestDelta = delta; }
+  }
+  return best;
 }
 
 function pickCurrentLease(leases) {
@@ -322,19 +441,104 @@ function extractBrokerCompanies(r) {
   return companies.join(', ');
 }
 
-function normalizeSalesTxnRow(r) {
+// pickBest walks a list of [value, sourceLabel] candidates and returns the
+// first non-empty value plus its source tag. Lets us record per-field
+// provenance so the UI/devtools can see when a comp row was synthesized
+// from secondary sources.
+function pickBest(/* ...[value, source] pairs */) {
+  for (let i = 0; i < arguments.length; i++) {
+    const pair = arguments[i];
+    if (!pair) continue;
+    const v = pair[0];
+    if (v == null) continue;
+    if (typeof v === 'string' && !v.trim()) continue;
+    if (typeof v === 'number' && !(v > 0 || v < 0)) continue; // skip 0 / NaN
+    return { value: v, source: pair[1] };
+  }
+  return { value: null, source: null };
+}
+
+function normalizeSalesTxnRow(r, lookups) {
   const p = r.properties || {};
   const lease = pickCurrentLease(p.leases || r.leases);
+  const oh = (lookups && lookups.ohBySaleId && lookups.ohBySaleId[r.sale_id]) || null;
+  const deeds = (lookups && lookups.deedsByPropId && lookups.deedsByPropId[r.property_id || p.property_id]) || null;
+  const deed = deeds ? pickDeedMatch(deeds, r.sale_date, 90) : null;
+  const clinic = (lookups && lookups.clinicByMedId && p.medicare_id) ? lookups.clinicByMedId[p.medicare_id] : null;
+
+  // Provenance: track which source filled each field so we can audit and
+  // surface a "Sources: deed_records, lease, ownership_history" tooltip
+  // later. Primary source = 'sales_transactions' or 'properties' / 'leases'.
+  const prov = {};
+
+  const ohRecOwnerName = oh && oh.recorded_owners ? oh.recorded_owners.name : null;
+
+  // -- Tenant / operator: lease → property.tenant → property.operator →
+  //    chain_canonical → CMS chain_owner / facility_name
+  const tenantPick = pickBest(
+    [lease && lease.tenant, 'lease'],
+    [p.tenant, 'properties.tenant'],
+    [p.operator, 'properties.operator'],
+    [p.chain_canonical, 'properties.chain_canonical'],
+    [clinic && clinic.facility_name, 'medicare_clinics.facility_name'],
+  );
+  if (tenantPick.source && tenantPick.source !== 'lease' && tenantPick.source !== 'properties.tenant') {
+    prov.tenant_operator = tenantPick.source;
+  }
+
+  // -- Buyer: sales_transactions → ownership_history (sale_id link) → deed grantee
+  const buyerPick = pickBest(
+    [r.buyer_name, 'sales_transactions'],
+    [ohRecOwnerName, 'ownership_history.recorded_owner'],
+    [deed && deed.grantee, 'deed_records.grantee'],
+  );
+  if (buyerPick.source && buyerPick.source !== 'sales_transactions') prov.buyer = buyerPick.source;
+
+  // -- Seller: sales_transactions → deed grantor
+  const sellerPick = pickBest(
+    [r.seller_name, 'sales_transactions'],
+    [deed && deed.grantor, 'deed_records.grantor'],
+  );
+  if (sellerPick.source && sellerPick.source !== 'sales_transactions') prov.seller = sellerPick.source;
+
+  // -- Sold price: sales_transactions → ownership_history → deed consideration
+  const pricePick = pickBest(
+    [r.sold_price, 'sales_transactions'],
+    [oh && oh.sold_price, 'ownership_history'],
+    [deed && deed.consideration, 'deed_records.consideration'],
+  );
+  if (pricePick.source && pricePick.source !== 'sales_transactions') prov.price = pricePick.source;
+  const soldPrice = pricePick.value != null ? Number(pricePick.value) : null;
+
+  // -- Cap rate: existing st columns → ownership_history.cap_rate
+  const capPick = pickBest(
+    [r.cap_rate, 'sales_transactions.cap_rate'],
+    [r.calculated_cap_rate, 'sales_transactions.calculated_cap_rate'],
+    [r.stated_cap_rate, 'sales_transactions.stated_cap_rate'],
+    [oh && oh.cap_rate, 'ownership_history.cap_rate'],
+  );
+  if (capPick.source && !String(capPick.source).startsWith('sales_transactions')) prov.cap_rate = capPick.source;
+  const capRate = capPick.value != null ? Number(capPick.value) : null;
+
+  // Cross-validation warning: when both primary and fallback have values for
+  // price and they disagree by >5%, log so we can quantify ingestion drift.
+  // Console-only — no UI surfacing yet; this is observation, not enforcement.
+  if (r.sold_price != null && oh && oh.sold_price != null) {
+    const a = Number(r.sold_price), b = Number(oh.sold_price);
+    if (a > 0 && b > 0 && Math.abs(a - b) / a > 0.05) {
+      console.warn('[sales-comp xref] price disagreement sale_id=' + r.sale_id + ' st=$' + a + ' oh=$' + b);
+    }
+  }
+  if (r.sold_price != null && deed && deed.consideration != null) {
+    const a = Number(r.sold_price), b = Number(deed.consideration);
+    if (a > 0 && b > 0 && Math.abs(a - b) / a > 0.05) {
+      console.warn('[sales-comp xref] price disagreement sale_id=' + r.sale_id + ' st=$' + a + ' deed=$' + b);
+    }
+  }
 
   const buildingSize = p.building_size != null ? Number(p.building_size) : null;
-  const soldPrice    = r.sold_price    != null ? Number(r.sold_price)    : null;
   const pricePerSF   = (soldPrice && buildingSize && buildingSize > 0)
     ? soldPrice / buildingSize : null;
-
-  const capRateRaw = r.cap_rate != null ? r.cap_rate
-                   : r.calculated_cap_rate != null ? r.calculated_cap_rate
-                   : r.stated_cap_rate;
-  const capRate = capRateRaw != null ? Number(capRateRaw) : null;
 
   let termYrs = null;
   if (lease && lease.lease_expiration) {
@@ -358,7 +562,7 @@ function normalizeSalesTxnRow(r) {
   return {
     sale_id:           r.sale_id,
     property_id:       r.property_id || p.property_id || null,
-    tenant_operator:   (lease && lease.tenant) || p.tenant || null,
+    tenant_operator:   tenantPick.value || null,
     address:           p.address || null,
     city:              p.city    || null,
     state:             p.state   || null,
@@ -375,9 +579,9 @@ function normalizeSalesTxnRow(r) {
     price_per_sf:      pricePerSF,
     cap_rate:          capRate,
     sold_date:         r.sale_date || null,
-    recorded_date:     r.recorded_date || null,
-    seller:            r.seller_name || null,
-    buyer:             r.buyer_name  || null,
+    recorded_date:     r.recorded_date || (deed ? deed.recording_date : null),
+    seller:            sellerPick.value || null,
+    buyer:             buyerPick.value  || null,
     listing_broker:    r.listing_broker   || null,
     procuring_broker:  r.procuring_broker || null,
     broker_companies:  extractBrokerCompanies(r),
@@ -387,6 +591,11 @@ function normalizeSalesTxnRow(r) {
     exclude_from_market_metrics: r.exclude_from_market_metrics === true,
     notes:             r.notes || null,
     data_source:       r.data_source || null,
+    // _provenance: per-field map of secondary sources used to fill the row.
+    // Only fields where a fallback fired appear here. UI can render this as
+    // a small "ⓘ Sources" affordance per cell; for now it's observable in
+    // the console via window.diaSalesComps[i]._provenance.
+    _provenance:       Object.keys(prov).length ? prov : null,
   };
 }
 
@@ -8755,7 +8964,13 @@ async function renderDiaSales() {
   // === Action guidance banner ===
   html += '<div style="padding:10px 14px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid #34d399;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
   if (isComps) {
-    html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Sales Comps</strong> — Browse closed dialysis property transactions. Use these as comparable evidence for BOV underwriting. Click any row to view full property details and financials.</div>';
+    // Count comps where one or more fields were filled from a secondary
+    // source (ownership_history, deed_records, medicare_clinics, etc.).
+    const xrefCount = (diaSalesComps || []).filter(r => r && r._provenance).length;
+    const xrefBlurb = xrefCount > 0
+      ? ' <span style="color:var(--text2);font-size:12px">(' + fmtN(xrefCount) + ' rows enriched from cross-referenced sources)</span>'
+      : '';
+    html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Sales Comps</strong> — Browse closed dialysis property transactions. Use these as comparable evidence for BOV underwriting. Click any row to view full property details and financials.' + xrefBlurb + '</div>';
   } else {
     html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Available Listings</strong> — Monitor on-market dialysis properties. Identify acquisition opportunities or competitive positioning for your pipeline. Click any row for property details.</div>';
   }
@@ -8894,6 +9109,24 @@ async function renderDiaSales() {
   html += '<tbody>';
   const td = (val, trunc) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;' + (trunc ? ' max-width: 180px; overflow: hidden; text-overflow: ellipsis;' : '') + '">' + esc(val || '—') + '</td>';
   const tdr = (val) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; text-align: right; font-family: \'JetBrains Mono\', monospace; font-size: 11px;">' + (val || '—') + '</td>';
+  // Cross-source marker: faint dot appended to a cell value when the value
+  // came from a secondary source (ownership_history, deed_records, etc.).
+  // Hover reveals which source supplied it. We render via td/tdr by passing
+  // the already-formatted value so the marker survives whatever formatter
+  // ran upstream.
+  const xrefMark = (provSrc) => provSrc
+    ? ' <span style="color:var(--accent);opacity:0.65;font-size:10px;" title="Cross-sourced from ' + esc(provSrc) + '">●</span>'
+    : '';
+  const tdX = (val, prov, key, trunc) => {
+    const src = prov ? prov[key] : null;
+    const inner = esc(val || '—') + xrefMark(src);
+    return '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;' + (trunc ? ' max-width: 180px; overflow: hidden; text-overflow: ellipsis;' : '') + '">' + inner + '</td>';
+  };
+  const tdrX = (val, prov, key) => {
+    const src = prov ? prov[key] : null;
+    const inner = (val || '—') + xrefMark(src);
+    return '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; text-align: right; font-family: \'JetBrains Mono\', monospace; font-size: 11px;">' + inner + '</td>';
+  };
   const fmtMoney = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
   const fmtCap = (v) => v != null && v > 0 ? (v < 1 ? (v * 100).toFixed(2) : parseFloat(v).toFixed(2)) + '%' : '—';
   const fmtPSF = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
@@ -8904,8 +9137,9 @@ async function renderDiaSales() {
 
   pageRows.forEach((r, _ri) => {
     const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    const prov = r._provenance || null;
     html += '<tr class="clickable-row" onclick=\'openDiaSaleOrProperty(' + safeJSON(r) + ')\' style="cursor: pointer;' + _zebra + '">';
-    html += td(r.tenant_operator, true);
+    html += tdX(r.tenant_operator, prov, 'tenant_operator', true);
     html += td(r.address, true);
     html += td(r.city);
     html += td(r.state);
@@ -8919,13 +9153,13 @@ async function renderDiaSales() {
     html += td(r.expenses);
     html += td(r.bumps, true);
     if (isComps) {
-      html += tdr(fmtMoney(r.price));
+      html += tdrX(fmtMoney(r.price), prov, 'price');
       html += tdr(fmtPSF(r.price_per_sf));
-      html += tdr(fmtCap(r.cap_rate));
+      html += tdrX(fmtCap(r.cap_rate), prov, 'cap_rate');
       html += td(fmtDate(r.sold_date));
-      html += td(r.seller, true);
+      html += tdX(r.seller, prov, 'seller', true);
       html += td(r.listing_broker, true);
-      html += td(r.buyer, true);
+      html += tdX(r.buyer, prov, 'buyer', true);
       html += td(r.procuring_broker, true);
       html += tdr(r.bid_ask_spread != null && parseFloat(r.bid_ask_spread) > 0 ? Math.round(parseFloat(r.bid_ask_spread)) + ' bps' : '—');
       html += tdr(r.dom != null ? r.dom + 'd' : '—');
