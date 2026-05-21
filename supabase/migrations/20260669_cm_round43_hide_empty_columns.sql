@@ -1,0 +1,125 @@
+-- =====================================================================
+-- Round 43 — hide 100%-empty columns in Data_* tabs.
+-- Addresses the data-table noise findings in
+-- audit/cm-style-audit/DATA-COMPLETENESS.md (R42 audit).
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- THE PROBLEM
+-- ---------------------------------------------------------------------
+-- The R42 data-completeness audit identified 34 dia + 35 gov columns
+-- across the Data_* tabs that are 100% empty across all rows. Causes:
+--
+--   • Cross-schema cohort ghosts — dia's Data_Sold_Cap_by_Term carries
+--     gov cohort columns (10+ / 6-10 / <5 / outside_firm) which are
+--     empty for dia, and vice versa. CHART_COLUMNS uses a single
+--     unified schema per template.
+--
+--   • Catalog over-declared columns — schema includes computed cols
+--     the views don't actually emit (Volume_TTM.YoY_Change,
+--     Val_Index.{Expenses_PSF, NOI_PSF, N_Sales}, Sentiment.N_8+_yr,
+--     Returns_Idx.Leveraged_{High, Low}, DOM_Ask.Median_{DOM, %_of_Ask},
+--     Avail_Cap_Dot.NM_Listed).
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- api/_shared/cm-excel-export.js — the row-writing loop now tracks a
+-- `colHasValue[]` boolean array. After all rows are written, columns
+-- with no non-null value across any row get hidden via
+-- `sheet.getColumn(i + 1).hidden = true`.
+--
+-- IMPORTANT — uses HIDDEN, not DELETE:
+--   • Excel preserves the column slot; column letters remain stable
+--   • Native chart XML references like `'Data_X'!$D$5:$D$300` continue
+--     to resolve correctly because column D is still there, just hidden
+--   • Users can unhide if they want to inspect the schema
+--   • Future-proof: if a view starts emitting data in a previously-
+--     empty column, the column simply un-hides on next export
+--
+-- Safety carve-outs:
+--   • First two columns (period_end + subspecialty) are never hidden,
+--     even though subspecialty often emits the same 'all' value
+--     uniformly (the column header still serves as documentation)
+--   • Per-column `keepIfEmpty: true` opt-out flag in CHART_COLUMNS
+--     entries (unused today; available for schema-stable cases where
+--     a column needs to remain visible even when sparse)
+--
+-- ---------------------------------------------------------------------
+-- EXPECTED EFFECT ON THE NEXT EXPORT
+-- ---------------------------------------------------------------------
+-- ~22 ghost columns will become hidden across the dia + gov exports:
+--
+--   dia Data_Sold_Cap_by_Term : 4 cohort cols (gov scheme) hidden
+--   dia Data_Volume_TTM       : 1 col (YoY_Change) hidden
+--   dia Data_Val_Index        : 3 cols (Expenses_PSF, NOI_PSF, N_Sales) hidden
+--   dia Data_Sentiment        : 1 col (N_8+_yr) hidden
+--   dia Data_Returns_Idx      : 2 cols (Leveraged_High, _Low) hidden
+--   dia Data_Avail_Cap_Dot    : 1 col (NM-Listed) hidden
+--
+--   gov Data_Cap_by_Term      : 4 cohort cols (dia scheme) hidden
+--   gov Data_Sold_Cap_by_Term : 4 cohort cols (dia scheme) hidden
+--   gov Data_Cap_by_Credit    : 2 cols (State_Cap, Municipal_Cap) hidden
+--                                ↑ Note: this is a CHART-VISIBLE gap; hiding
+--                                  the data columns won't fix the chart's
+--                                  empty State + Municipal series. See R44
+--                                  for the chart-side fix.
+--   gov Data_Returns_Idx      : 2 cols hidden
+--   gov Data_DOM_Ask          : 2 cols (Median_DOM, Median_%_of_Ask) hidden
+--   gov Data_Val_Index        : 1 col (N_Sales) hidden
+--   gov Data_Volume_TTM       : 1 col (YoY_Change) hidden
+--
+-- Cosmetic only. Chart XML references unchanged. No chart visuals affected.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT FIXED IN R43
+-- ---------------------------------------------------------------------
+-- Charts where the chart itself references an empty column (the
+-- "chart-visible gaps" from the audit):
+--
+--   • gov Data_Cap_by_Credit: chart shows 3 lines (Federal/State/Muni)
+--     but State + Municipal are empty in source data. R43 hides the
+--     empty data columns but the chart series still display as flat
+--     zero / empty. Fix needs either:
+--       (a) backfill source data (out of scope)
+--       (b) drop those 2 series from the chart spec when empty
+--     Tackle in R44.
+--
+--   • dia Data_Pace_Cap_Expand: chart shows 2 bars (pace_all + pace_core)
+--     but pace_core is empty in source. R43 hides the data column;
+--     the chart still legend-shows pace_core but bars are flat.
+--     R44 should either populate pace_core in the view or drop the
+--     series from the chart spec.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- All 219 existing tests pass. Same 2 unrelated pre-existing failures.
+--
+-- Smoke test (smoke-r43.mjs — not committed): built a 4-column data tab
+-- with col D entirely null. After running the R43 hide logic, output
+-- worksheet XML contained `<col min="4" max="4" hidden="1"/>`. Col A
+-- (period) and col C (populated) remained un-hidden. ✓
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Sold_Cap_by_Term (dia):
+--    • Visible columns: Period End, Subspecialty, 12+ Year Cap,
+--      8-12 Year Cap, 6-8 Year Cap, ≤5 Year Cap (the dia cohort scheme)
+--    • Cols G-J (10+ Year Cap, 6-10 Year Cap, < 5 Year Cap, Outside
+--      Firm Cap) — hidden. Right-click the column header → "Unhide"
+--      to see they still exist if you need to inspect the schema
+-- 3. Open Data_Cap_by_Term (gov):
+--    • Visible: Period End, Subspecialty, 10+ Year Cap, 6-10 Year Cap,
+--      < 5 Year Cap, Outside Firm Cap (the gov cohort scheme)
+--    • Dia cohort cols hidden
+-- 4. Re-run audit:
+--      node audit/cm-style-audit/data-completeness.mjs
+--    Expect ~22 fewer "EMPTY" flags now that ghost columns are hidden.
+--    (The audit script still sees them in the XML; this is a visual
+--    Excel-only change. The empty cells are still present, just
+--    rendered as hidden by Excel.)
+-- =====================================================================
