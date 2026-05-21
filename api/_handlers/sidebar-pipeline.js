@@ -7862,6 +7862,29 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     }
   }
 
+  // Upper-bound rent guard (2026-05-21): detect and correct annual_rent
+  // values inflated by 12 (legacy ingestor pattern where annual was treated
+  // as monthly and multiplied by 12). Cleanup migration backfilled 113
+  // properties + 70 leases; this guard prevents recurrence on new captures.
+  // Realistic dialysis lease PSF: $15-$60/SF/yr. PSF > 200 is the corruption
+  // threshold; if dividing by 12 lands in [10, 80] PSF we auto-correct,
+  // otherwise we drop the rent value entirely and log for review.
+  function correctRentForPsfAnomaly(rent, leasedArea, tenantName) {
+    if (!rent || !leasedArea || leasedArea < 100) return rent;
+    const psf = rent / leasedArea;
+    if (psf <= 200) return rent;
+    const div12Psf = psf / 12;
+    if (div12Psf >= 10 && div12Psf <= 80) {
+      console.warn(`[upsertDomainLeases] x12 rent anomaly auto-corrected for ${tenantName}: ` +
+        `$${Math.round(rent)} (PSF $${Math.round(psf)}) -> $${Math.round(rent / 12)} (PSF $${Math.round(div12Psf)})`);
+      return rent / 12;
+    }
+    console.warn(`[upsertDomainLeases] suspicious rent dropped for ${tenantName}: ` +
+      `$${Math.round(rent)} on ${Math.round(leasedArea)} SF = $${Math.round(psf)}/SF (no clean correction). ` +
+      `Will fall through to derived rent.`);
+    return null;
+  }
+
   if (Array.isArray(tenants) && tenants.length > 0) {
     // Build one lease record per tenant entry, filtering out junk
     for (const t of tenants) {
@@ -7905,6 +7928,8 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
         console.log(`[upsertDomainLeases] skip dateless tenant=${t.name} on property=${propertyId}`);
         continue;
       }
+      const correctedAnnualRent = correctRentForPsfAnomaly(safeAnnualRent, inferredLeasedArea, t.name);
+      const finalAnnualRent = correctedAnnualRent !== null ? correctedAnnualRent : derivedAnnualRent;
       leaseRecords.push({
         property_id: propertyId,
         // canonicalizeTenant collapses brand variants (DaVita Inc. /
@@ -7917,7 +7942,7 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
         lease_expiration: leaseExp,
         expense_structure: t.lease_type || metadata.expense_structure || metadata.lease_type,
         rent_per_sf: parseCurrency(t.rent_per_sf || metadata.rent_per_sf),
-        annual_rent: safeAnnualRent,
+        annual_rent: finalAnnualRent,
         renewal_options: metadata.renewal_options || null,
         guarantor: metadata.guarantor || null,
         status: 'active',
@@ -7940,15 +7965,18 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
 
     const fallbackAnnualRent = parseCurrency(metadata.annual_rent);
     const safeFallbackRent = (fallbackAnnualRent && fallbackAnnualRent >= 100) ? fallbackAnnualRent : derivedAnnualRent;
+    const fallbackLeasedArea = parseSF(metadata.sf_leased);
+    const correctedFallbackRent = correctRentForPsfAnomaly(safeFallbackRent, fallbackLeasedArea, tenantName);
+    const finalFallbackRent = correctedFallbackRent !== null ? correctedFallbackRent : derivedAnnualRent;
     leaseRecords.push({
       property_id: propertyId,
       tenant: canonicalizeTenant(tenantName.trim()),
-      leased_area: parseSF(metadata.sf_leased),
+      leased_area: fallbackLeasedArea,
       lease_start: fallbackStart,
       lease_expiration: fallbackExp,
       expense_structure: metadata.expense_structure || metadata.lease_type,
       rent_per_sf: parseCurrency(metadata.rent_per_sf),
-      annual_rent: safeFallbackRent,
+      annual_rent: finalFallbackRent,
       renewal_options: metadata.renewal_options || null,
       guarantor: metadata.guarantor || null,
       status: 'active',
