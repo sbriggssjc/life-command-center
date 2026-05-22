@@ -22,6 +22,7 @@ import {
   NATIVE_CHART_TEMPLATES,
   buildInjectionSpec,
   buildMultiLineChartXml,
+  buildComboChartXml,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -4450,4 +4451,91 @@ test('R53: end-to-end injectNativeCharts emits no qQ-yyyy literal format', async
   const catAxBlock = xml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
   assert.ok(!/<c:numFmt[^>]*formatCode="q&quot;Q-&quot;yyyy"/.test(catAxBlock),
     'R53: no qQ-yyyy literal format on cat axis');
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// R55 — Market_Turnover full restructure (3 series + labeled axes)
+// ─────────────────────────────────────────────────────────────────────
+test('R55: market_turnover with R55 view cols renders 2-bar+1-line combo', () => {
+  // 8 cols matching the new R55 view shape
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'subspecialty',       col: 'B' },
+    { key: 'ttm_sales_count',    col: 'C' },
+    { key: 'market_universe',    col: 'D' },
+    { key: 'turnover_rate',      col: 'E' },
+    { key: 'active_count',       col: 'F' },
+    { key: 'annual_sales_rate',  col: 'G' },
+    { key: 'months_of_supply',   col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'market_turnover',
+    tabName: 'Data_Market_Turnover',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barSeries.length, 2, '2 bars: active + sales');
+  // Back bar = active_count (col F, pale)
+  assert.equal(out.spec.barSeries[0].valCol, 'F');
+  assert.equal(out.spec.barSeries[0].color, '#E0E8F4');
+  // Front bar = annual_sales_rate (col G, navy)
+  assert.equal(out.spec.barSeries[1].valCol, 'G');
+  assert.equal(out.spec.barSeries[1].color, '003DA5');
+  // Line = months_of_supply (col H, gray)
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'H');
+  assert.equal(out.spec.lineSeries[0].color, '6A748C');
+  // barOverlap=100 places the front bar IN FRONT of the back bar
+  assert.equal(out.spec.barOverlap, 100);
+  // Axis titles set
+  assert.match(out.spec.yLeftAxisTitle, /Listings|count/i);
+  assert.match(out.spec.yRightAxisTitle, /Months/i);
+});
+
+test('R55: market_turnover falls back to R50 shape when R55 cols missing (back-compat)', () => {
+  // Pre-R55 view shape: only 5 cols, no active_count/annual_sales_rate/months_of_supply
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'subspecialty',    col: 'B' },
+    { key: 'ttm_sales_count', col: 'C' },
+    { key: 'market_universe', col: 'D' },
+    { key: 'turnover_rate',   col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'market_turnover',
+    tabName: 'Data_Market_Turnover',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // R50 fallback: 1 bar (monthly_clear_pace helper) + 1 line (turnover_rate)
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barSeries.length, 1);
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'E', 'fallback line plots turnover_rate');
+  assert.ok(out.helperCols && out.helperCols.some(h => h.key === 'monthly_clear_pace'),
+    'R50 fallback emits monthly_clear_pace helper');
+});
+
+test('R55: buildComboChartXml emits axis titles and barOverlap', () => {
+  const xml = buildComboChartXml({
+    tabName: 'Data_Market_Turnover',
+    catCol: 'A', dataStart: 5, dataEnd: 60,
+    barGrouping: 'clustered',
+    barOverlap:  100,
+    yLeftAxisTitle:  'Listings count',
+    yRightAxisTitle: 'Months of supply',
+    yLeftNumFmt:  '#,##0',
+    yRightNumFmt: '#,##0.0',
+    barSeries: [
+      { titleCol: 'F', titleRow: 4, valCol: 'F', color: '#E0E8F4' },
+      { titleCol: 'G', titleRow: 4, valCol: 'G', color: '003DA5' },
+    ],
+    lineSeries: [
+      { titleCol: 'H', titleRow: 4, valCol: 'H', color: '6A748C' },
+    ],
+  });
+  assert.match(xml, /<c:overlap val="100"\/>/, 'barOverlap = 100');
+  assert.match(xml, /Listings count/, 'left axis title rendered');
+  assert.match(xml, /Months of supply/, 'right axis title rendered');
 });

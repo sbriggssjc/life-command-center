@@ -403,6 +403,11 @@ const CHART_COLUMNS = {
     { key: 'ttm_sales_count',    header: 'TTM Sales',         format: 'integer_count',       width: 13 },
     { key: 'market_universe',    header: 'Market Universe',   format: 'integer_count',       width: 16 },
     { key: 'turnover_rate',      header: 'Turnover Rate',     format: 'percent_one_decimal', width: 14 },
+    // R55 — new columns for the restructured chart (active inventory bar,
+    // annualized sales rate bar, months-of-supply line).
+    { key: 'active_count',       header: 'Active Listings',   format: 'integer_count',       width: 16 },
+    { key: 'annual_sales_rate',  header: 'Annual Sales Rate', format: 'integer_count',       width: 18 },
+    { key: 'months_of_supply',   header: 'Months of Supply',  format: 'number_one_decimal',  width: 17 },
   ],
   inventory_backlog: [
     { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
