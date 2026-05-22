@@ -1459,10 +1459,10 @@ test('buildInjectionSpec: seller_sentiment_monthly handles different column layo
   assert.equal(out.spec.swapAxes, true);
 });
 
-test('buildInjectionSpec: inventory_backlog R50 — combo bar+bar+net line via helper col', () => {
+test('buildInjectionSpec: inventory_backlog R50+R54 — combo bar+bar+net line; Sold renders below 0', () => {
   // R50 — restructured to match master Charts!chart8 (Inventory Backlog).
-  // Now a 3-series combo: Added (sky bar) + Sold (navy bar) + Net to
-  // Market (gray line, computed at chart-build time as added − sold).
+  // R54 — Sold bar now reads from sold_neg helper col so it renders
+  // BELOW 0 (user direction 2026-05-22: visualize the market flow).
   const out = buildInjectionSpec({
     chart_template_id: 'inventory_backlog',
     tabName: 'Data_Inventory',
@@ -1479,23 +1479,26 @@ test('buildInjectionSpec: inventory_backlog R50 — combo bar+bar+net line via h
   });
   assert.equal(out.spec.type, 'combo');
   assert.equal(out.spec.sharedAxis, true, 'all 3 series share the same axis (integer count)');
-  // Bars: Added (sky) + Sold (navy)
+  // Bars: Added (sky, col C) + Sold (navy, R54 reads from sold_neg helper H)
   assert.equal(out.spec.barSeries.length, 2);
-  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['C', 'D']);
+  assert.equal(out.spec.barSeries[0].valCol, 'C', 'Added bar reads from added_ttm col');
+  assert.equal(out.spec.barSeries[1].valCol, 'H', 'R54: Sold bar reads from sold_neg helper col H');
+  assert.equal(out.spec.barSeries[1].titleCol, 'D', 'legend title still references sold_ttm header');
   assert.deepEqual(out.spec.barSeries.map(s => s.color), ['62B5E5', '003DA5'], 'sky + navy');
-  // Line: Net = added − sold, gray
+  // Line: Net = added − sold (gray), reads from net_ttm helper at G
   assert.equal(out.spec.lineSeries.length, 1);
-  // Helper col lands at G (one past the regular A-F columns)
-  assert.equal(out.spec.lineSeries[0].valCol, 'G', 'net col is helper col G');
-  assert.equal(out.spec.lineSeries[0].color, '6A748C', 'net line is gray');
-  // helperCols declaration
-  assert.ok(Array.isArray(out.helperCols) && out.helperCols.length === 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'G');
+  assert.equal(out.spec.lineSeries[0].color, '6A748C');
+  // R54 — helperCols now: [net_ttm at G, sold_neg at H]
+  assert.equal(out.helperCols.length, 2);
   assert.equal(out.helperCols[0].key, 'net_ttm');
-  assert.equal(out.helperCols[0].header, 'Net to Market (TTM)');
-  // Helper computes Added − Sold (returns null when either is missing)
-  assert.equal(out.helperCols[0].getValue({ added_ttm: 50, sold_ttm: 30 }), 20);
-  assert.equal(out.helperCols[0].getValue({ added_ttm: 20, sold_ttm: 30 }), -10, 'can go negative');
-  assert.equal(out.helperCols[0].getValue({ added_ttm: null, sold_ttm: 30 }), null);
+  assert.equal(out.helperCols[1].key, 'sold_neg');
+  assert.equal(out.helperCols[1].header, 'No. Sold (chart)');
+  // Helpers compute correctly
+  assert.equal(out.helperCols[0].getValue({ added_ttm: 50, sold_ttm: 30 }), 20, 'net = +20');
+  assert.equal(out.helperCols[0].getValue({ added_ttm: 20, sold_ttm: 30 }), -10, 'net can be negative');
+  assert.equal(out.helperCols[1].getValue({ sold_ttm: 30 }), -30, 'R54: sold_neg = -sold_ttm');
+  assert.equal(out.helperCols[1].getValue({ sold_ttm: null }), null);
 });
 
 test('buildInjectionSpec: pace_of_cap_rate_expansion clusters 2 bars (3rd line series deferred)', () => {
@@ -4382,12 +4385,18 @@ test('R53: injectPeriodLabel preserves existing helper cols + shifts their lette
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
     injectPeriodLabel: true,
   });
-  assert.equal(out.helperCols.length, 2);
+  // R54 — inventory_backlog now has 2 inner helper cols (net_ttm + sold_neg),
+  // so after R53 prepends period_label there are 3 helpers total.
+  assert.equal(out.helperCols.length, 3);
   assert.equal(out.helperCols[0].key, 'period_label');
   assert.equal(out.helperCols[1].key, 'net_ttm');
-  assert.equal(out.spec.catCol, 'G');
+  assert.equal(out.helperCols[2].key, 'sold_neg');
+  assert.equal(out.spec.catCol, 'G', 'period_label takes col G');
   assert.equal(out.spec.lineSeries[0].valCol, 'H',
     'R53: net_ttm line valCol auto-shifted from G to H');
+  // R54 — sold_neg shifted from H (pre-R53) to I; the Sold bar reads from it.
+  assert.equal(out.spec.barSeries[1].valCol, 'I',
+    'R54: Sold bar valCol shifted to I (sold_neg helper, post-period_label)');
 });
 
 test('R53: injectPeriodLabel skips charts without period_end as first col', () => {
