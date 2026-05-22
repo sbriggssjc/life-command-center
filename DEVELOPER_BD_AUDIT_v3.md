@@ -2048,10 +2048,11 @@ This is the single biggest data-sync gap remaining.
 | — | Topic 1.7 gov DB mirror | ✅ §11.11 |
 | — | Topic 1.8 reclassification cron | ✅ §11.13 |
 
-**Single biggest remaining gap:** LCC entity owner_role sync from dia/gov
-true_owners. Once that runs, all the schema work above starts producing
-visible value in the priority queue. Likely a Vercel API endpoint or
-pg_cron + lcc_cron_post pattern; needs design + implementation.
+**Single biggest remaining gap (resolved 2026-05-22 — see §11.22):** LCC
+entity owner_role sync from dia/gov true_owners has been backfilled and the
+recurring infrastructure is in place. All 4,003 classified rows now live in
+public.entities with external_identities links, and v_priority_queue
+populates P0.5 (473 developers) accordingly.
 
 **Final classification distribution (canonical rows only, 2026-05-22):**
 - developer: 473 (172 dia + 301 gov)
@@ -2063,8 +2064,6 @@ pg_cron + lcc_cron_post pattern; needs design + implementation.
 ### 11.21 Phase A + Topic 1 — Combined deferred items (2026-05-22)
 
 **Deferred to follow-up rounds:**
-- **LCC entity owner_role sync** (THE critical gap — needs LCC entity ↔
-  dia/gov true_owner external_identities population + owner_role propagation)
 - SF Opportunity sync writer (read-only mirror that populates
   bd_opportunities hourly from Salesforce). Schema is ready (Topic 9).
 - Audit Topic A3: cross-vertical `v_entity_portfolio_all`
@@ -2079,6 +2078,85 @@ pg_cron + lcc_cron_post pattern; needs design + implementation.
 - LCC cross-domain entity sync to merge dia + gov true_owners by canonical
   identity (would consolidate Truist Bank / SMBC Leasing / MassMutual / etc.
   across both verticals)
+
+### 11.22 Topic 10 — LCC entity sync from dia/gov true_owners (2026-05-22)
+
+**The last "critical gap" called out in §11.20 — LCC priority queue had 0
+rows in P0/P0.5 because public.entities held no dia/gov classified owners
+even though dia and gov themselves had 4,003 classified rows. This closes
+that loop.**
+
+**What was added (migration `20260522220000_lcc_entity_sync_from_dia_gov.sql`):**
+
+1. **`entities.owner_role_source` check constraint expanded** to accept the
+   v5 fact-based source tags (`tenant_relationship_value_creation`,
+   `acquired_after_lease`, `manual_operator_flag`,
+   `bts_explicit_with_first_gen`, etc.) emitted by
+   `v_dia_owner_role_classification` and the gov equivalent.
+
+2. **`public.lcc_entity_sync_inflight`** — bookkeeping table mapping
+   pg_net `request_id` → source domain + page offset for the
+   fire/finalize two-pass cadence.
+
+3. **`public.lcc_sync_classified_owners(p_domain text)`** — fires up to
+   5×1000-row paginated GETs against the dia and gov PostgREST endpoints
+   for non-merged owners with a classified `owner_role`. Reads URL + anon
+   key from Vault (`dia_supabase_url`, `dia_supabase_anon_key`,
+   `gov_supabase_url`, `gov_supabase_anon_key`); skips with a NOTICE if a
+   secret is missing.
+
+4. **`public.lcc_finalize_classified_owners()`** — joins inflight rows to
+   `net._http_response`, parses each 200 body, upserts into `entities`
+   (reusing the dia/gov `true_owner_id` as the LCC `entities.id`) and
+   writes `external_identities` (`dia_supabase|true_owner|<uuid>` or
+   `gov_supabase|true_owner|<uuid>`). Idempotent on re-run; deletes
+   consumed inflight rows; sweeps inflight rows older than 24h that
+   never received a response.
+
+**Initial backfill (applied manually 2026-05-22 before the function
+existed):**
+- 627 dia entities (172 developer, 13 operator, 442 buyer) via direct
+  CTE upserts from rows pulled with `v_dia_owner_role_classification`.
+- 3,376 gov entities (301 developer, 3,075 buyer) via a single pg_net
+  pull pattern that prefigured what
+  `lcc_finalize_classified_owners()` now does — 4 paginated GETs against
+  gov PostgREST, one CTE that unpacks the JSON and upserts.
+
+**Validation:**
+- `entities` now has 4,003 rows with `domain IN ('dia','gov')` and a
+  non-null `owner_role`, matching the dia+gov classified row count
+  exactly.
+- `external_identities` holds 4,003 `*_supabase|true_owner|*` rows (some
+  pre-existed from earlier work; the sync added the missing 2,776 gov
+  links).
+- `v_priority_queue` now populates: **P0.5 = 473** (the developer cohort)
+  and **P7 = 162** (operator-related). Up from 0 in both bands.
+
+**Cron scheduling (deferred — user action required):**
+The two functions are in place but **not yet scheduled** because the four
+Vault secrets (`dia_supabase_url`, `dia_supabase_anon_key`,
+`gov_supabase_url`, `gov_supabase_anon_key`) have not been seeded. Once
+seeded, the recommended cadence is:
+
+```sql
+SELECT cron.schedule('lcc-entity-sync-fire',     '5 */4 * * *',  $$SELECT public.lcc_sync_classified_owners('both');$$);
+SELECT cron.schedule('lcc-entity-sync-finalize', '10 */4 * * *', $$SELECT public.lcc_finalize_classified_owners();$$);
+```
+
+Every four hours: at :05 fire the pulls, at :10 consume the responses.
+This matches the dia/gov reclassify-cron cadence so a newly-classified
+owner shows up in the LCC priority queue within ~4 hours.
+
+**Impact on the BD doctrine:**
+With this sync live, the LCC priority queue can finally serve its design
+purpose — surface the 473 developers (and any other classified roles) as
+P0.5 prospects ahead of the existing P1-P9 bands. The four "tier-A
+gaps" called out in §11.20 are now fully resolved:
+- ✅ §11.20 Gap 1 (priority queue can't see classified owners) — fixed
+- ✅ §11.20 Gap 2 (no cross-DB owner identity) — fixed (same UUID across
+  dia, gov, and LCC)
+- Gap 3 (no SF Opportunity inbound sync) — still deferred per §11.21
+- Gap 4 (no UI for the priority queue) — still deferred per §11.21
 
 ---
 
