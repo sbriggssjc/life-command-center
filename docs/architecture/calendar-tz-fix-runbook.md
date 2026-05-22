@@ -111,3 +111,19 @@ Then redeploy the previous `app.js` (revert this branch) and re-deploy the previ
 - **`tz_normalized_at` column is brand new.** Migration adds it via `IF NOT EXISTS` — re-running the migration won't drop existing values. Safe.
 - **PA flow re-import is manual.** The flows aren't deployed via Git; the JSON in this repo is reference-only.
 - **One-time historical events outside the ±31-day PA window** stay frozen with whatever the backfill left them at. They'll continue to display at the same CT they showed before. If you need to correct deep history, re-sync each event manually from Outlook.
+
+## 2026-05-22 update — what actually shipped (read this)
+
+This runbook describes the *intended* design. In practice the deployed flow did **not**
+match the repo flow-JSON files, and steps 4–5 above (importing the repo JSON) were the
+WRONG move — the live flow is a richer hand-built flow whose simplified repo copies were
+never imported. The real fix was made by editing the **live** flow's `Compose Event`
+(`start`/`end` → offset-bearing `startWithTimeZone`/`endWithTimeZone`) and repairing the
+`Append to array variable` value (`@outputs('Compose_Event')`, which had been corrupted
+to literal text → `events_upserted: 0`). Times now verify correct (Focus time = 8 AM CT,
+`tz_normalized_at = true`, 17 events upserted).
+
+`calendar_name` is still NULL (Check 2 — deferred). Full accurate write-up, real action
+topology, and the calendar-name circle-back plan live in
+[`flows/outlookcalendar-lcc-sync.md`](flows/outlookcalendar-lcc-sync.md) → section
+"2026-05-22 — Actual deployed architecture, TZ fix applied, and open items".
