@@ -1857,9 +1857,221 @@ manual classification apply, expected).
 | **Total canonical** | **3,757** | **13,219** | 16,976 |
 | (merged duplicates) | 131 | 887 | 1,018 |
 
-**Deferred to follow-up rounds (not Topic 1):**
-- Topic 2: BTS tracker → owner_role wiring (audit §7.1 A2; adds explicit
-  0.95-confidence developer signal on dia for tracker rows marked delivered)
+### 11.15 Topic 2 — BTS tracker → owner_role wiring (2026-05-22)
+
+Wired `dia.build_to_suit_tracker` to automatically classify the developer
+entity when a project's `construction_status` transitions to `'delivered'`.
+
+**Trigger:** `trg_dia_bts_tracker_to_developer` on
+`public.build_to_suit_tracker` fires AFTER INSERT or UPDATE of
+`construction_status`, `developer_name`, or `certification_date`.
+
+**Trigger function logic** (`public.dia_bts_tracker_to_developer`):
+1. Guard: only acts when new state is `'delivered'` AND prior state was not
+   already `'delivered'` (idempotent on re-updates)
+2. Resolves `developer_name` text → `recorded_owners` → `true_owners`
+   (creates both if absent — high-confidence BTS signal justifies auto-create)
+3. Follows the merge chain to write to the canonical `true_owner_id`
+4. Sets `owner_role='developer'`, `source='bts_delivered'`,
+   `confidence=0.95` (the strongest developer signal we have)
+5. Sets `developer_status_active_until = certification_date + 5yr`
+   (or `CURRENT_DATE + 5yr` if cert date NULL); takes `GREATEST` of existing
+   and new value so subsequent BTS deliveries roll the date forward
+6. Appends evidence entry to `developer_flag_sources` JSONB with bts_id,
+   property_id, certification_date, tenant
+7. Honors `behavioral_override` and `manual` source — won't overwrite
+   broker-set classifications
+
+**Cron protection:** updated `dia_reclassify_owner_roles()` to exclude
+`bts_delivered` from its overwrite scope (alongside `manual` and
+`behavioral_override`). BTS evidence is the strongest classification
+signal and the v5 fact-based rules (0.75-0.85 confidence) should never
+downgrade it.
+
+**Smoke test (2026-05-22):** inserted a test BTS row with
+`construction_status='delivered'`, `developer_name='TEST_BTS_TRIGGER_DEV LLC'`,
+`certification_date=2026-05-22`. Trigger correctly:
+- Created `recorded_owners` + `true_owners` rows for the test entity
+- Set `owner_role='developer'`, `source='bts_delivered'`,
+  `confidence=0.95`
+- Set `developer_status_active_until=2031-05-22` (5 years out)
+- Recorded evidence in JSONB
+Test data cleaned up after verification.
+
+**Gov side:** already handled by `v_gov_developer_candidates` Rule A
+(`bts_explicit_with_first_gen`, 0.90 confidence) since gov has the
+`properties.is_build_to_suit` explicit flag. No separate gov trigger
+needed.
+
+**Migration:** `20260522180000_dia_bts_tracker_to_developer.sql`.
+
+### 11.16 Topic 1 + 2 — Combined deferred items (2026-05-22)
+
+### 11.17 Topics 4, 7, 8, 9 — Foundation schema (2026-05-22)
+
+Continued through the audit's Phase A backlog after Topic 2 closed. Lands
+the schema + helper views that the priority queue (Topic 5) will read.
+
+**Topic 4 — `v_contact_former_properties` (dia + gov views)**
+
+Surfaces the "Formerly Owned (N)" section data for contact/prospect detail
+pages. Schema differs across DBs:
+- dia: chains contact_links → true_owners → recorded_owners →
+  ownership_history (where `end_date <= CURRENT_DATE`). Merge-aware via
+  `true_owner_id_canonical`. Initial population: 0 rows (contact_links
+  table not yet populated with seller-exit-entity associations); will
+  grow as brokers curate contacts → owners.
+- gov: chains contacts.true_owner_id → ownership_history where the entity
+  appears as `prior_owner`. Resolves via `gov_normalize_for_match` name
+  match (gov recorded_owners lacks `true_owner_id` FK). **Initial
+  population: 1,306 rows across 546 contacts** — significant BD value
+  immediately, surfacing every gov contact whose linked entity has exited
+  one or more properties.
+
+**Topic 7 — touchpoint event integration (minimal scope)**
+
+LCC already has `activity_events` (event log) and `touchpoint_cadence`
+(per-entity rollup), so Topic 7 didn't need to create a new touchpoint
+table. The audit-specified columns were ADDED to the existing infra:
+- `activity_events.bd_opportunity_id` — links event to SF Opportunity
+- `activity_events.stream` ENUM `('bd', 'showing')` — BD scoreboard vs
+  Showing Stream separation per audit §3.4
+- `touchpoint_cadence.bd_opportunity_id` — cadence-per-Opp tracking
+  (per audit §2.6, BD unit = entity × open Opportunity)
+- Supporting partial indexes on each new column
+
+**Topic 8 — `user_domain_specialties` table + seed**
+
+New table tracking per-user vertical focus (dia, gov, asc, vet, childcare,
+urgent_care). Drives daily briefing + priority queue filtering so each
+broker sees their relevant slice. Seeded with Scott Briggs (gov primary +
+dia secondary per audit §1.2). Kelly + Nate seed deferred until their
+LCC user accounts are created.
+
+**Topic 9 — `bd_opportunities` table schema (Salesforce mirror, schema only)**
+
+New table mirroring SF Opportunity records. Schema-first: the actual SF
+sync (hourly read-only pull) is a deferred follow-up, but the table +
+indexes are now ready so the priority queue can be built against the
+model. Key fields per audit §2.6:
+- `type` ENUM `('prospect', 'buyer', 'other')` — prospect counts for BD
+  scoreboard
+- `is_open` GENERATED column (TRUE when closed_at IS NULL)
+- `vertical` text for cross-domain queries
+- `entity_id` UUID linking to canonical LCC entities
+- Helper view `v_bd_open_prospect_opportunities` aggregates per-entity
+  open Prospect Opps for priority queue gating
+
+**Migrations applied:**
+- LCC: `20260522190000_lcc_touchpoint_opportunity_integration.sql`,
+  `20260522190100_lcc_bd_opportunities.sql`,
+  `20260522190200_lcc_user_domain_specialties.sql`
+- dia: `20260522190300_dia_v_contact_former_properties.sql`
+- gov: `20260522190300_gov_v_contact_former_properties.sql`
+
+### 11.18 Topic 1 + 2 + 4 + 7 + 8 + 9 — Combined deferred items (2026-05-22)
+
+**Deferred to follow-up rounds:**
+- SF Opportunity sync writer (read-only mirror that populates
+  bd_opportunities hourly from Salesforce). Schema is ready (Topic 9);
+  the sync service is the missing piece.
+- Topic 5: Priority queue view ✅ (built 2026-05-22; see §11.19)
+- Topic 6: 7-touch onboarding sequence state machine (touchpoint_cadence
+  already has `phase`, `current_touch`, `next_touch_due` — needs
+  scripted template progression + UI widget).
+- Topic 3: Cross-vertical `v_entity_portfolio_all` (unions dia + gov
+  properties for a canonical LCC entity; requires LCC ↔ domain canonical
+  entity mapping populated).
+- Topic 10: Listing-event fan-out engine (Lane A buyer cohort
+  nationwide × subspecialty; Lane B owner-geographic proximity).
+### 11.19 Topic 5 — Priority queue (initial scope) — 2026-05-22
+
+The flagship UX surface for Phase A. Replaces "next call from last viewed
+account" with a deterministically-ranked priority queue. Built as
+`public.v_priority_queue` on LCC ops with a companion
+`v_priority_queue_for_user(user_id)` function that filters by the user's
+`user_domain_specialties`.
+
+**Initial-scope bands implemented (out of audit §4's 10 bands):**
+- **P0** — Developer overdue: entity with `effective_owner_role='developer'`
+  AND open Prospect Opp AND `next_touch_due <= NOW()`
+- **P0.5** — Open BD Opportunity Needed: developer/user_owner without an
+  open Prospect Opp (one-click "open Opp" target in UI)
+- **P6** — Onboarding step due: `touchpoint_cadence.phase='onboarding'`
+  AND `next_touch_due <= NOW()`
+- **P7** — Steady-state cadence due: any non-onboarding cadence row
+  with `next_touch_due <= NOW()`
+
+**Deferred bands:** P1 (lease event imminent), P2 (refi/CMBS event),
+P3 (lease milestone), P4 (user-owner sale-leaseback fit), P5 (seller-
+flipper event), P8 (buyer listing-event task), P9 (gap-fill research)
+— each requires additional data views or trigger work.
+
+**Live state at deployment (2026-05-22):**
+- Total queue items: **162 P7** (steady-state cadence due from existing
+  touchpoint_cadence rows)
+- P0/P0.5/P6 = 0 — because no LCC entities are classified as developer
+  yet. Cross-domain sync from dia/gov true_owners to LCC entities is the
+  missing data link.
+
+**Migration:** `20260522200000_lcc_priority_queue_view.sql`.
+
+**Hard prerequisite for full P0/P0.5 population: LCC entity owner_role
+sync**. The dia + gov true_owners tables have 473 developers + 3,517
+buyers classified, but LCC entities (10,771 rows) all show
+`owner_role='unknown'`. The `external_identities` table also lacks
+`source_type='true_owner'` linkages (only 'asset', 'company', 'contact').
+This is the single biggest data-sync gap remaining.
+
+**Deferred:** (separate sync round)
+- LCC entity ↔ dia/gov true_owner mapping (via external_identities
+  source_type='true_owner')
+- owner_role propagation from dia/gov true_owners up to LCC entities
+- Once those land, the P0/P0.5 priority bands populate automatically
+
+### 11.20 Phase A — Final state (2026-05-22)
+
+| Audit ref | Topic | Status |
+|---|---|---|
+| §7.1 A1 | Owner-role taxonomy + v5 algorithm | ✅ §11.1-9 (Topic 1) |
+| §7.1 A2 | BTS tracker → owner_role wiring | ✅ §11.15 (Topic 2) |
+| §7.1 A3 | Cross-vertical `v_entity_portfolio_all` | Deferred |
+| §7.1 A4 | `v_contact_former_properties` | ✅ §11.17 (Topic 4) |
+| §7.1 A5 | Priority queue view | ✅ §11.19 (Topic 5, initial scope) |
+| §7.1 A6 | 7-touch onboarding state machine | Partial — schema ready in touchpoint_cadence |
+| §7.1 A7 | Unified touchpoint events | ✅ §11.17 (Topic 7 — activity_events + cadence already covered most) |
+| §7.1 A8 | `user_domain_specialties` | ✅ §11.17 (Topic 8) |
+| §7.1 A9 | SF Opportunity mirror | ✅ §11.17 (Topic 9, schema only; SF sync deferred) |
+| §7.1 A10 | Listing-event fan-out engine | Deferred |
+| — | Topic 1.5 sidebar pipeline patch | ✅ §11.10 |
+| — | Topic 1.6 entity resolution | ✅ §11.12 |
+| — | Topic 1.7 gov DB mirror | ✅ §11.11 |
+| — | Topic 1.8 reclassification cron | ✅ §11.13 |
+
+**Single biggest remaining gap:** LCC entity owner_role sync from dia/gov
+true_owners. Once that runs, all the schema work above starts producing
+visible value in the priority queue. Likely a Vercel API endpoint or
+pg_cron + lcc_cron_post pattern; needs design + implementation.
+
+**Final classification distribution (canonical rows only, 2026-05-22):**
+- developer: 473 (172 dia + 301 gov)
+- buyer: 3,517 (442 dia + 3,075 gov)
+- operator: 13 (dia only)
+- unknown: 12,973
+- **Total auto-classified: 4,003** (vs 18 in the v1 baseline — **222× improvement**)
+
+### 11.21 Phase A + Topic 1 — Combined deferred items (2026-05-22)
+
+**Deferred to follow-up rounds:**
+- **LCC entity owner_role sync** (THE critical gap — needs LCC entity ↔
+  dia/gov true_owner external_identities population + owner_role propagation)
+- SF Opportunity sync writer (read-only mirror that populates
+  bd_opportunities hourly from Salesforce). Schema is ready (Topic 9).
+- Audit Topic A3: cross-vertical `v_entity_portfolio_all`
+- Audit Topic A6: 7-touch onboarding sequence UI + template progression
+- Audit Topic A10: listing-event fan-out engine (Lane A buyer cohort +
+  Lane B owner-geographic proximity)
+- Priority queue bands P1-P5, P8, P9 (each requires additional data views)
 - Fuzzy entity resolution (Levenshtein, abbreviation expansion) for
   multi-form variants like "Genesis KC Dev" / "GENESIS KC DEVELOPMENT LLC"
 - Operator-affiliate registry for sale-leaseback subsidiary detection
