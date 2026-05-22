@@ -1431,6 +1431,14 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         // visible <c:title> matching the master Excel docs (audit
         // finding A: "no titles on any export chart").
         title: chart.name,
+        // R53 — opt into the buildInjectionSpec wrapper that emits a
+        // `period_label` string helper col + repoints date cat axes
+        // at it. Fixes the broken "qQ-yyyy" literal labels affecting
+        // 29/34 charts (R37 P1's `q"Q-"yyyy` numFmt isn't valid Excel —
+        // there's no `q` token for quarter in the date-format grammar).
+        // Production exports always opt in; unit tests don't (so they
+        // continue to see the unwrapped pre-R53 spec shape).
+        injectPeriodLabel: true,
       });
       if (spec) {
         nativeInjections.push(spec);

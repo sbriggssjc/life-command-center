@@ -4277,3 +4277,168 @@ test('R51: dom_price_change_active trims to 2013', () => {
   assert.equal(out.spec.dataStart, 17,
     'R51: chart starts at first 2013 row');
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// R53 — period_label wrapper (fixes broken qQ-yyyy cat-axis labels)
+// ─────────────────────────────────────────────────────────────────────
+
+test('R53: injectPeriodLabel=false (default) leaves spec unchanged', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'ttm_weighted_cap_rate', col: 'C' },
+  ];
+  const rows = [];
+  for (let q = 0; q < 8; q++) {
+    rows.push({ period_end: new Date(2024, q * 3, 31).toISOString().slice(0, 10),
+                ttm_weighted_cap_rate: 0.07 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols, dataStart: 5, dataEnd: 12,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.equal(out.spec.catCol, 'A');
+  assert.ok(!out.helperCols || out.helperCols.length === 0,
+    'no period_label helper col added without the flag');
+});
+
+test('R53: injectPeriodLabel=true on a quarterly chart prepends period_label helper col + swaps catCol', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'ttm_weighted_cap_rate', col: 'C' },
+  ];
+  const rows = [];
+  for (let q = 0; q < 8; q++) {
+    rows.push({ period_end: new Date(2024, q * 3, 31).toISOString().slice(0, 10),
+                ttm_weighted_cap_rate: 0.07 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols, dataStart: 5, dataEnd: 12,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5' } },
+    injectPeriodLabel: true,
+  });
+  assert.equal(out.spec.catCol, 'D',
+    'R53: catCol shifts from period_end to period_label letter');
+  assert.equal(out.spec.catAxNumFmt, '',
+    'R53: broken q"Q-"yyyy numFmt cleared');
+  assert.ok(Array.isArray(out.helperCols) && out.helperCols.length >= 1);
+  assert.equal(out.helperCols[0].key, 'period_label');
+  assert.equal(out.helperCols[0].header, 'Quarter');
+  const sample = out.helperCols[0].getValue({ period_end: '2024-06-30' });
+  assert.equal(sample, "Q2 '24");
+});
+
+test('R53: injectPeriodLabel=true on a monthly chart formats labels as Mon yy', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'avg_dom', col: 'C' },
+    { key: 'pct_of_ask', col: 'D' },
+  ];
+  const rows = [];
+  for (let m = 0; m < 24; m++) {
+    rows.push({ period_end: new Date(2024, m, 28).toISOString().slice(0, 10),
+                avg_dom: 60, pct_of_ask: 0.95 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask_monthly',
+    tabName: 'Data_DOM_Ask_Monthly',
+    cols, dataStart: 5, dataEnd: 28,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5' } },
+    injectPeriodLabel: true,
+  });
+  assert.equal(out.helperCols[0].header, 'Month');
+  const sample = out.helperCols[0].getValue({ period_end: '2024-03-31' });
+  assert.equal(sample, "Mar '24");
+});
+
+test('R53: injectPeriodLabel preserves existing helper cols + shifts their letter refs', () => {
+  const cols = [
+    { key: 'period_end',       col: 'A' },
+    { key: 'subspecialty',     col: 'B' },
+    { key: 'added_ttm',        col: 'C' },
+    { key: 'sold_ttm',         col: 'D' },
+    { key: 'active_count',     col: 'E' },
+    { key: 'months_of_supply', col: 'F' },
+  ];
+  const rows = [];
+  for (let q = 0; q < 8; q++) {
+    rows.push({ period_end: new Date(2024, q * 3, 31).toISOString().slice(0, 10),
+                added_ttm: 50, sold_ttm: 30 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'inventory_backlog',
+    tabName: 'Data_Inventory',
+    cols, dataStart: 5, dataEnd: 12,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    injectPeriodLabel: true,
+  });
+  assert.equal(out.helperCols.length, 2);
+  assert.equal(out.helperCols[0].key, 'period_label');
+  assert.equal(out.helperCols[1].key, 'net_ttm');
+  assert.equal(out.spec.catCol, 'G');
+  assert.equal(out.spec.lineSeries[0].valCol, 'H',
+    'R53: net_ttm line valCol auto-shifted from G to H');
+});
+
+test('R53: injectPeriodLabel skips charts without period_end as first col', () => {
+  const cols = [
+    { key: 'term_bucket',         col: 'A' },
+    { key: 'n_listings',          col: 'B' },
+    { key: 'avg_price',           col: 'C' },
+    { key: 'avg_cap',             col: 'D' },
+    { key: 'upper_quartile_cap',  col: 'E' },
+    { key: 'median_cap',          col: 'F' },
+    { key: 'lower_quartile_cap',  col: 'G' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_term_summary',
+    tabName: 'Data_Avail_Term',
+    cols, dataStart: 5, dataEnd: 8,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+    injectPeriodLabel: true,
+  });
+  assert.equal(out.spec.catCol, 'A', 'categorical catCol stays at A (term_bucket)');
+  assert.ok(!out.helperCols || !out.helperCols.some(h => h.key === 'period_label'),
+    'no period_label helper col for categorical charts');
+});
+
+test('R53: end-to-end injectNativeCharts emits no qQ-yyyy literal format', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Cap_Avg');
+  sheet.getCell('A4').value = 'Period End';
+  sheet.getCell('C4').value = 'TTM Cap Rate';
+  sheet.getCell('D4').value = 'Quarter';
+  for (let q = 0; q < 4; q++) {
+    sheet.getCell(`A${5 + q}`).value = new Date(2024, q * 3, 31);
+    sheet.getCell(`C${5 + q}`).value = 0.07 + q * 0.001;
+    sheet.getCell(`D${5 + q}`).value = `Q${q + 1} '24`;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Cap_Avg',
+    spec: {
+      type: 'line', tabName: 'Data_Cap_Avg',
+      catCol: 'D', valCol: 'C',
+      titleCol: 'C', titleRow: 4,
+      dataStart: 5, dataEnd: 8,
+      color: '003DA5',
+      catAxNumFmt: '',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const xml = await zip.file('xl/charts/chart1.xml').async('string');
+  const catAxBlock = xml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  assert.ok(!/<c:numFmt[^>]*formatCode="q&quot;Q-&quot;yyyy"/.test(catAxBlock),
+    'R53: no qQ-yyyy literal format on cat axis');
+});

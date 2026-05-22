@@ -1870,7 +1870,156 @@ export function buildInjectionSpec(args) {
   if (result && result.spec && args.title) {
     result.spec.title = args.title;
   }
+
+  // R53 — universal fix for the broken "qQ-yyyy" cat-axis labels.
+  // R37 P1 set DEFAULT_CAT_AX_NUM_FMT = 'q"Q-"yyyy' on every date-axis
+  // chart so users would see quarter labels like "1Q-2024". Excel's
+  // number-format token set DOES NOT support `q` for quarter — Excel
+  // renders the format string LITERALLY as "qQ-2024", breaking all 29
+  // date-axis charts in the export (verified in
+  // audit/cm-style-audit/R53-peek-export.mjs).
+  //
+  // The fix: emit a `period_label` STRING helper column at the data
+  // tab (values like "Q1 '24" for quarterly cadence, "Jan '24" for
+  // monthly) and repoint the chart's cat axis at that string column.
+  // The format on the axis becomes General — the string values pass
+  // through unchanged.
+  //
+  // Applied universally to any spec whose catCol points at the
+  // period_end column (col A in every quarterly/monthly view). Specs
+  // with categorical/text x-axes (term_bucket, year, state) are
+  // untouched because their catCol points somewhere other than the
+  // period_end col.
+  //
+  // Opt-in via args.injectPeriodLabel = true. cm-excel-export.js
+  // ALWAYS passes true (so the production export benefits). Existing
+  // unit tests that target the inner spec shape don't pass the flag
+  // and continue to see the unwrapped pre-R53 spec (so their hard-coded
+  // catCol = 'A' assertions don't need rewriting); new R53 tests opt
+  // in explicitly to verify the period_label wiring.
+  const cols = args.cols;
+  if (args.injectPeriodLabel && result && result.spec && Array.isArray(cols) && cols.length > 0) {
+    const firstCol = cols[0];
+    const periodEndCol = (firstCol && firstCol.key === 'period_end') ? firstCol.col : null;
+    if (periodEndCol && result.spec.catCol === periodEndCol) {
+      // Detect cadence from the row spacing. Robust against the
+      // template-id naming convention drift (some monthly templates
+      // don't end with `_monthly`).
+      const isMonthly = detectMonthlyCadence(args.rows);
+      const labelFormatter = isMonthly ? formatMonthLabel : formatQuarterLabel;
+      const existingHelpers = Array.isArray(result.helperCols) ? result.helperCols : [];
+      // period_label lands one column past the regular CHART_COLUMNS
+      // entries. Existing helper cols (e.g. R50 net_ttm at cols.length+1)
+      // shift right by one — wrapper rewrites their column letter
+      // references in the spec body too.
+      const labelColIdx = cols.length;                            // 0-based
+      const labelColLetter = String.fromCharCode(65 + labelColIdx);
+      // Shift any existing helper col references in the spec body by 1.
+      // Helper cols are typically computed in the inner builder as
+      // `String.fromCharCode(65 + cols.length)` → that needs to become
+      // 65 + cols.length + 1 now that period_label is in front of them.
+      if (existingHelpers.length > 0) {
+        const oldFirstHelperLetter = String.fromCharCode(65 + cols.length);
+        const newFirstHelperLetter = String.fromCharCode(65 + cols.length + 1);
+        shiftHelperColRefs(result.spec, oldFirstHelperLetter, newFirstHelperLetter, existingHelpers.length);
+      }
+      // Prepend period_label so it sits BEFORE the other helper cols.
+      result.helperCols = [
+        {
+          key: 'period_label',
+          header: isMonthly ? 'Month' : 'Quarter',
+          // No FMT entry — string values render as-is. width set for legibility.
+          width: 10,
+          getValue: (row) => row && row.period_end ? labelFormatter(row.period_end) : null,
+        },
+        ...existingHelpers,
+      ];
+      // Repoint the chart's cat axis at the new string column. Drop
+      // the broken catAxNumFmt so the General format renders the
+      // strings as-is. Persist the original numFmt as catAxOriginalFmt
+      // for any downstream debugging.
+      if (result.spec.catAxNumFmt !== undefined) {
+        result.spec.catAxOriginalFmt = result.spec.catAxNumFmt;
+      }
+      result.spec.catAxNumFmt = '';      // explicit empty → numFmt suppressed
+      result.spec.catCol = labelColLetter;
+    }
+  }
+
   return result;
+}
+
+// R53 — cadence detection from row spacing. Returns true if rows look
+// like monthly cadence (~30-day gaps), false otherwise (quarterly or
+// unknown). Robust against template id naming (some monthly templates
+// don't end with `_monthly`).
+function detectMonthlyCadence(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return false;
+  // Take median gap between consecutive period_end values to avoid
+  // outlier sensitivity (annual rollovers, year-end variability).
+  const dates = rows
+    .map(r => r && r.period_end ? new Date(r.period_end).getTime() : null)
+    .filter(t => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (dates.length < 2) return false;
+  const gaps = [];
+  for (let i = 1; i < dates.length; i++) gaps.push(dates[i] - dates[i - 1]);
+  gaps.sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)];
+  const days = median / (1000 * 60 * 60 * 24);
+  // Monthly = 25-40 day gaps; quarterly = 80-100 day gaps.
+  return days >= 20 && days <= 45;
+}
+
+// R53 — "Q1 '24" formatter for quarterly cadence.
+function formatQuarterLabel(periodEnd) {
+  const d = new Date(periodEnd);
+  if (Number.isNaN(d.getTime())) return null;
+  const m = d.getUTCMonth();              // 0..11
+  const q = Math.floor(m / 3) + 1;        // 1..4
+  const y2 = String(d.getUTCFullYear()).slice(-2);
+  return `Q${q} '${y2}`;
+}
+
+// R53 — "Jan '24" formatter for monthly cadence.
+const MONTH_ABBREV_R53 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatMonthLabel(periodEnd) {
+  const d = new Date(periodEnd);
+  if (Number.isNaN(d.getTime())) return null;
+  const y2 = String(d.getUTCFullYear()).slice(-2);
+  return `${MONTH_ABBREV_R53[d.getUTCMonth()]} '${y2}`;
+}
+
+// R53 — when a spec body refers to a helper col by a hard-coded
+// column letter (e.g. R50 Inventory_Backlog sets netCol = 'G' at
+// cols.length=6), we need to shift that reference forward by 1
+// because period_label now sits at that position.
+//
+// `oldFirst` is what existing helper col letters START at (computed
+// before adding period_label); `newFirst` is what they SHOULD start
+// at now. We walk through the spec's series/bar/line lists looking
+// for valCol / titleCol values within the helper-col letter range
+// and shift them.
+function shiftHelperColRefs(spec, oldFirst, newFirst, helperCount) {
+  if (!spec || helperCount <= 0) return;
+  const oldStart = oldFirst.charCodeAt(0);
+  const newStart = newFirst.charCodeAt(0);
+  const inRange = (letter) => {
+    if (typeof letter !== 'string' || letter.length !== 1) return false;
+    const code = letter.charCodeAt(0);
+    return code >= oldStart && code < oldStart + helperCount;
+  };
+  const shift = (letter) => String.fromCharCode(letter.charCodeAt(0) + (newStart - oldStart));
+  const visit = (s) => {
+    if (!s || typeof s !== 'object') return;
+    for (const key of ['valCol', 'titleCol', 'catCol', 'xCol', 'yCol']) {
+      if (inRange(s[key])) s[key] = shift(s[key]);
+    }
+  };
+  visit(spec);
+  for (const arr of [spec.series, spec.barSeries, spec.lineSeries]) {
+    if (Array.isArray(arr)) for (const s of arr) visit(s);
+  }
 }
 
 function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title }) {
