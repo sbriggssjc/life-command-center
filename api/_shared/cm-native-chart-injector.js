@@ -1757,13 +1757,77 @@ export const NATIVE_CHART_TEMPLATES = new Set([
  *                                    in their data tab (e.g. cap_rate_by_lease_term).
  * @returns {object|null} injection spec or null if no builder registered
  */
+// R47 — per-template chart-axis trim. User notes 2026-05-21 batch 2:
+// many charts looked like they had "missing data" prior to a given year.
+// Investigation (audit/cm-style-audit/R47-DATA-GAP-AUDIT.md) showed two
+// shapes:
+//   (1) TRUE gap — source data really starts at the cited year.
+//   (2) FALSE alarm — data exists 2001-2002 + 2005+, but the sparse
+//       2003-2004 window (sales_transactions only had 4-12 sales/year
+//       then) causes line breaks the user reads as "missing pre-2005".
+//
+// User direction:
+//   • TRUE gap: trim chart x-axis to where data begins.
+//   • FALSE alarm: pin chart x-axis to 2005 (skip the 2003-2004 break).
+//
+// Implementation: shift the chart's dataStart row reference forward to
+// the first row whose period_end >= cutoff year. The data tab keeps
+// every row from 2001+ (so historical context is preserved); only the
+// chart series references narrow. dataEnd is unchanged.
+const MIN_YEAR_BY_TEMPLATE = {
+  // FALSE-alarm (pin to 2005 — skip 2003-2004 sparseness)
+  cap_rate_ttm_by_quarter:      2005,
+  cap_rate_top_bottom_quartile: 2005,
+  cash_leveraged_returns:       2005,
+  cost_of_capital:              2005,
+  volume_cap_quartile_combo:    2005,
+  sold_cap_by_term_dot_plot:    2005,
+  asking_cap_by_term_dot_plot:  2005,
+  // TRUE-gap (trim to where data actually starts)
+  nm_vs_market_cap:             2006,
+  seller_sentiment:             2006,
+  seller_sentiment_monthly:     2006,
+  dom_and_pct_of_ask:           2013,
+  dom_and_pct_of_ask_monthly:   2013,
+  bid_ask_spread:               2014,
+  bid_ask_spread_monthly:       2014,
+  // Pace recipe inherits dia/gov coverage; safe to skip 2003-2004 here too
+  pace_of_cap_rate_expansion:   2005,
+};
+
 export function buildInjectionSpec(args) {
   // R38 — thin wrapper that lets `args.title` flow into the returned
   // spec without touching the ~50 switch cases in buildInjectionSpecInner.
   // Each case constructs `spec: { type, tabName, ... }` and returns it
   // wrapped in `{ tabName, spec, helperCols? }`. We splice title here
   // so every builder gets it via `spec.title` regardless of case.
-  const result = buildInjectionSpecInner(args);
+  //
+  // R47 — also compute an effective dataStart row offset based on the
+  // per-template MIN_YEAR_BY_TEMPLATE cutoff. The first row whose
+  // period_end is >= cutoff year becomes the chart's dataStart; the
+  // data tab is unchanged so all historical rows from 2001+ remain
+  // visible in the worksheet.
+  const minYear = MIN_YEAR_BY_TEMPLATE[args.chart_template_id];
+  let effectiveStart = args.dataStart;
+  if (minYear && Array.isArray(args.rows) && args.rows.length > 0) {
+    // Find first row at or after the cutoff year. Rows arrive in
+    // chronological order from the view; first match is the offset.
+    const cutoff = new Date(`${minYear}-01-01T00:00:00Z`).getTime();
+    let offset = 0;
+    for (const r of args.rows) {
+      const pe = r.period_end ? new Date(r.period_end).getTime() : NaN;
+      if (Number.isFinite(pe) && pe >= cutoff) break;
+      offset++;
+    }
+    // Don't shift past the end (safety — keep at least 1 row visible)
+    if (offset < args.rows.length) {
+      effectiveStart = args.dataStart + offset;
+    }
+  }
+  const innerArgs = effectiveStart !== args.dataStart
+    ? { ...args, dataStart: effectiveStart }
+    : args;
+  const result = buildInjectionSpecInner(innerArgs);
   if (result && result.spec && args.title) {
     result.spec.title = args.title;
   }
