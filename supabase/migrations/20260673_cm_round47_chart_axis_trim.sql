@@ -1,0 +1,152 @@
+-- =====================================================================
+-- Round 47 — per-template chart x-axis trim.
+-- User notes 2026-05-21 batch 2, Bucket A: 14 charts flagged as
+-- "missing data from before YYYY".
+--
+-- Investigation findings: audit/cm-style-audit/R47-DATA-GAP-AUDIT.md
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- THE FINDING
+-- ---------------------------------------------------------------------
+-- Investigation showed two distinct shapes hiding behind the same
+-- user complaint:
+--
+-- TRUE gaps (source data really starts at the cited year):
+--   • bid_ask_spread        — source starts 2014
+--   • dom_and_pct_of_ask    — source starts 2013
+--   • nm_vs_market_cap      — NM broker attribution begins 2006
+--   • seller_sentiment      — source starts 2006
+--
+-- FALSE alarms (data exists 2001-2002, gap in 2003-2004, full 2005+):
+--   • cap_rate_ttm_by_quarter, cap_rate_top_bottom_quartile
+--   • cash_leveraged_returns, cost_of_capital
+--   • volume_cap_quartile_combo
+--   • sold_cap_by_term_dot_plot, asking_cap_by_term_dot_plot
+--   • pace_of_cap_rate_expansion
+--
+-- The 2003-2004 sparseness traces to sales_transactions only having
+-- 4 + 12 sales in those years (vs 20+/yr from 2006). The views' TTM
+-- rolling windows + HAVING ≥4 thresholds correctly reject those
+-- months as too-thin-to-be-meaningful. The chart line breaks at
+-- 2003-2004 → user reads it as "missing pre-2005".
+--
+-- Per-tab population pivot (post-R45 export, data col = headline series):
+--
+--   Tab                      Data col          2001 02 03 04 05 06 ... 13 14 15-24
+--   bid_ask_spread           Avg Bid-Ask         0  0  0  0  0  0      3 10  full
+--   cap_rate_top_bottom_q.   Top Quartile       12 12  3  5 12 12     12 12  full
+--   cap_rate_ttm_by_quarter  Avg Cap Rate       12 12  3  5 12 12     12 12  full
+--   cash_leveraged_returns   Cash Return        12 12  3  5 12 12     12 12  full
+--   cost_of_capital          Avg Cap (TTM)      12 12  3  5 12 12     12 12  full
+--   dom_and_pct_of_ask       Avg DOM             0  0  0  0  0  0     12 12  full
+--   nm_vs_market_cap         NM Cap              0  0  0  0  0 11     12 12  full
+--   seller_sentiment         Last Ask Cap        0  0  0  0  0 11     12 12  full
+--   sold_cap_by_term_dot     12+ Year Cap       12  2  0  0  9 12     12 12  full
+--   volume_cap_quartile_co.  TTM Volume         12 12 12 12 12 12     12 12  full
+--   "                        TTM Cap (avg)      12 12  3  5 12 12     12 12  full
+--
+-- ---------------------------------------------------------------------
+-- USER DIRECTION (2026-05-22)
+-- ---------------------------------------------------------------------
+-- Q1 (FALSE-alarm category): "Pin chart x-axis to start at 2005"
+-- Q2 (TRUE-gap category): "Trim chart x-axis to where data begins"
+-- Q3 (backfill): "Yes — worth exploring" (R-backfill, deferred)
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- New MIN_YEAR_BY_TEMPLATE map in api/_shared/cm-native-chart-injector.js:
+--
+--   cap_rate_ttm_by_quarter      → 2005   (FALSE-alarm, skip sparse 2003-04)
+--   cap_rate_top_bottom_quartile → 2005
+--   cash_leveraged_returns       → 2005
+--   cost_of_capital              → 2005
+--   volume_cap_quartile_combo    → 2005
+--   sold_cap_by_term_dot_plot    → 2005
+--   asking_cap_by_term_dot_plot  → 2005
+--   pace_of_cap_rate_expansion   → 2005
+--   nm_vs_market_cap             → 2006   (TRUE-gap, NM attribution begins)
+--   seller_sentiment             → 2006
+--   seller_sentiment_monthly     → 2006
+--   dom_and_pct_of_ask           → 2013   (TRUE-gap)
+--   dom_and_pct_of_ask_monthly   → 2013
+--   bid_ask_spread               → 2014   (TRUE-gap)
+--   bid_ask_spread_monthly       → 2014
+--
+-- The buildInjectionSpec wrapper (added in R38, extended here) scans
+-- `args.rows` (in chronological order from the view), finds the first
+-- row whose period_end >= cutoff year, and shifts the chart's
+-- `dataStart` row reference forward by that offset. The data tab
+-- itself is UNCHANGED — all rows from 2001+ remain visible in the
+-- worksheet. Only the chart's series references (e.g. `$A$53:$A$300`
+-- instead of `$A$5:$A$300`) narrow to plot the trimmed range.
+--
+-- This is a per-template, per-export computation: if the underlying
+-- view starts emitting data at a different year (after a backfill or
+-- a Supabase ingestion update), the offset re-computes automatically.
+--
+-- ---------------------------------------------------------------------
+-- BACKWARD COMPATIBILITY
+-- ---------------------------------------------------------------------
+-- Templates NOT in MIN_YEAR_BY_TEMPLATE keep dataStart unchanged.
+-- Empty rows array → no shift. All rows after cutoff → no shift.
+-- Verified by 8 new tests.
+--
+-- ---------------------------------------------------------------------
+-- CARRY-OVER TO GOV
+-- ---------------------------------------------------------------------
+-- All 15 templates in MIN_YEAR_BY_TEMPLATE apply to gov where the
+-- template is in the gov catalog. The cutoff years are chosen based
+-- on dia data density; gov may have data starting at different years.
+-- Verified: the cutoff logic only narrows the chart range — if gov
+-- has data from earlier years, those rows still appear in the data
+-- tab; the chart just doesn't plot them. If gov has data starting
+-- LATER than the cutoff, the cutoff is a no-op (all rows already
+-- after cutoff → no shift).
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 132 CM tests pass (up from 124 in R46). Full suite 219 pass / 2
+-- unrelated pre-existing failures.
+--
+-- New R47 tests:
+--   • cap_rate_ttm_by_quarter dataStart shifts to first 2005 row (5+48=53)
+--   • bid_ask_spread dataStart shifts to first 2014 row (5+156)
+--   • dom_and_pct_of_ask dataStart shifts to first 2013 row (5+144)
+--   • nm_vs_market_cap dataStart shifts to first 2006 row (5+60)
+--   • Template not in MIN_YEAR_BY_TEMPLATE keeps dataStart unchanged
+--   • Empty rows array → no shift (backward compat)
+--   • All rows after cutoff → no shift (no over-trim)
+--   • End-to-end: chart XML references row 53+ instead of row 5+
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Cap_Avg (dia) — chart x-axis should start at 1Q-2005
+--    (was 1Q-2001). Data tab still has rows from 2001+.
+-- 3. Open Data_Bid_Ask — chart x-axis starts at 1Q-2014 (was 1Q-2001)
+-- 4. Open Data_DOM_Ask — chart x-axis starts at 1Q-2013
+-- 5. Open Data_NM_vs_Market + Data_Sentiment — start at 1Q-2006
+-- 6. Confirm data tabs still show full rows from 2001+ (just chart
+--    plot area is narrowed)
+-- 7. Charts NOT in MIN_YEAR_BY_TEMPLATE list (e.g. Data_Volume_TTM,
+--    Data_Buyer_Pool, Data_Market_Turnover) unchanged.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S DEFERRED
+-- ---------------------------------------------------------------------
+-- R-backfill: external source-data ingestion for pre-2003 dia
+-- sales_transactions. User confirmed worth exploring. Separate task —
+-- requires data agreement (RCA / CoStar / broker memory) + ingestion
+-- pipeline + provenance + model versioning per
+-- C:\Users\scott\DialysisProject\CLAUDE.md ground rules.
+--
+-- R48 (next in plan): Bucket B statistical formula fixes (real
+-- percentiles on quartile bands; NM-vs-Market smoothing; erratic
+-- cap-by-term lines; Vol_Cap_Combo 2024 drop).
+-- R49: Bucket C chart type/style restructures vs master.
+-- =====================================================================

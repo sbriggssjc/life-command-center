@@ -2534,6 +2534,198 @@ test('R46: buildInjectionSpec wires per-series showSegmentVal on buyer_class_pct
   assert.equal(out.spec.series[3].segmentLabelColor, '191919', 'institutional dark text');
 });
 
+// ============================================================================
+// R47 — per-template chart x-axis trim. User notes 2026-05-21 batch 2.
+// Charts with FALSE-alarm pre-2005 data gap pin to 2005; TRUE-gap charts
+// trim to where source data actually starts (2006-2014). Data tables keep
+// all 2001+ rows; only chart series references narrow.
+// ============================================================================
+
+function mkRows(startYear, endYear, valKey = 'ttm_weighted_cap_rate') {
+  const rows = [];
+  for (let y = startYear; y <= endYear; y++) {
+    for (let m = 1; m <= 12; m++) {
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        [valKey]: 0.05 + Math.random() * 0.03,
+      });
+    }
+  }
+  return rows;
+}
+
+test('R47: cap_rate_ttm_by_quarter shifts dataStart to row matching 2005', () => {
+  const rows = mkRows(2001, 2024);
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols: [
+      { key: 'period_end',             col: 'A' },
+      { key: 'subspecialty',           col: 'B' },
+      { key: 'ttm_weighted_cap_rate',  col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2001-01 to 2004-12 = 48 monthly rows before 2005-01
+  // dataStart 5 + 48 = row 53
+  assert.equal(spec.spec.dataStart, 53,
+    'dataStart shifted to first 2005 row (5 + 48)');
+});
+
+test('R47: bid_ask_spread trims to 2014 (TRUE-gap)', () => {
+  const rows = mkRows(2001, 2024, 'avg_bid_ask_spread');
+  const spec = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread',
+    tabName: 'Data_Bid_Ask',
+    cols: [
+      { key: 'period_end',         col: 'A' },
+      { key: 'subspecialty',       col: 'B' },
+      { key: 'avg_bid_ask_spread', col: 'C' },
+      { key: 'pct_price_change',   col: 'D' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2001-01 to 2013-12 = 156 rows before 2014-01
+  assert.equal(spec.spec.dataStart, 5 + 156, 'dataStart at first 2014 row');
+});
+
+test('R47: dom_and_pct_of_ask trims to 2013', () => {
+  const rows = mkRows(2001, 2024, 'avg_dom');
+  // dom_and_pct_of_ask requires period_end + avg_dom + pct_of_ask
+  for (const r of rows) r.pct_of_ask = 0.93;
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_dom',      col: 'C' },
+      { key: 'median_dom',   col: 'D' },
+      { key: 'pct_of_ask',   col: 'E' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2001-01 to 2012-12 = 144 rows before 2013-01
+  assert.equal(spec.spec.dataStart, 5 + 144, 'dataStart at first 2013 row');
+});
+
+test('R47: nm_vs_market_cap trims to 2006', () => {
+  const rows = mkRows(2001, 2024, 'nm_cap_rate');
+  for (const r of rows) r.market_cap_rate = 0.07;
+  const spec = buildInjectionSpec({
+    chart_template_id: 'nm_vs_market_cap',
+    tabName: 'Data_NM_vs_Market',
+    cols: [
+      { key: 'period_end',      col: 'A' },
+      { key: 'subspecialty',    col: 'B' },
+      { key: 'nm_cap_rate',     col: 'C' },
+      { key: 'market_cap_rate', col: 'D' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2001-01 to 2005-12 = 60 rows before 2006-01
+  assert.equal(spec.spec.dataStart, 5 + 60, 'dataStart at first 2006 row');
+});
+
+test('R47: template not in MIN_YEAR_BY_TEMPLATE keeps original dataStart', () => {
+  // transaction_count_ttm isn't in the trim list — should be unchanged
+  const rows = mkRows(2001, 2024, 'ttm_count');
+  const spec = buildInjectionSpec({
+    chart_template_id: 'transaction_count_ttm',
+    tabName: 'Data_Txn_Count',
+    cols: [
+      { key: 'period_end',  col: 'A' },
+      { key: 'ttm_count',   col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  assert.equal(spec.spec.dataStart, 5, 'untrimmed templates keep dataStart=5');
+});
+
+test('R47: cutoff applies cleanly when rows array is empty (no shift)', () => {
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'ttm_weighted_cap_rate', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 10,
+    brand: { palette: {} },
+    rows: [],
+  });
+  assert.equal(spec.spec.dataStart, 5, 'empty rows → no shift (backward compat)');
+});
+
+test('R47: if all rows are after cutoff, dataStart is unchanged', () => {
+  // cap_rate_ttm starts at 2010 (all after 2005 cutoff)
+  const rows = mkRows(2010, 2024);
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'ttm_weighted_cap_rate', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // First row (2010-01) is already after 2005-01 — offset 0
+  assert.equal(spec.spec.dataStart, 5, 'when all rows after cutoff, no shift');
+});
+
+test('R47: chart XML series references shift to trimmed dataStart', async () => {
+  // End-to-end: build a workbook with cap_rate_ttm rows from 2001-2024,
+  // inject the chart, and confirm the series xml references row 53+ not 5+.
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Cap_Avg');
+  sheet.getCell('A4').value = 'Quarter End';
+  sheet.getCell('B4').value = 'Subspecialty';
+  sheet.getCell('C4').value = 'Avg Cap Rate';
+  sheet.getCell('C5').value = 'Avg Cap Rate';  // series title
+  const rows = mkRows(2001, 2024);
+  for (let i = 0; i < rows.length; i++) {
+    const r = sheet.getRow(5 + i);
+    r.getCell(1).value = new Date(rows[i].period_end);
+    r.getCell(2).value = 'all';
+    r.getCell(3).value = rows[i].ttm_weighted_cap_rate;
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'ttm_weighted_cap_rate', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: { nm_navy: '#003DA5' } },
+    rows,
+  });
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [spec]);
+  const zip = await JSZip.loadAsync(result);
+  const xml = await zip.file('xl/charts/chart1.xml').async('string');
+  // chart should reference rows 53+ (= 5 + 48 months pre-2005)
+  assert.match(xml, /'Data_Cap_Avg'!\$A\$53:\$A\$\d+/,
+    'cat axis references start at row 53 (first 2005 row)');
+  assert.match(xml, /'Data_Cap_Avg'!\$C\$53:\$C\$\d+/,
+    'val series references start at row 53');
+});
+
 test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line', () => {
   // Quarterly tab has no avg_last_ask_cap → renderer uses single-line.
   const cols = [
