@@ -833,7 +833,29 @@ function buildComboChartXml(spec) {
   const rightFmtFrag   = valAxNumFmtFrag(spec.yRightNumFmt);
   // P8.5 — barGrouping + sharedAxis support
   const barGrouping = spec.barGrouping === 'stacked' ? 'stacked' : 'clustered';
-  const overlap     = barGrouping === 'stacked' ? 100 : -20;
+  // R55 — barOverlap explicit override (e.g. market_turnover wants 100
+  // so the front sales bar overlays the back inventory bar at the same x).
+  // Default: stacked=100, clustered=-20 (cluster side-by-side with small gap).
+  const overlap = (spec.barOverlap != null)
+    ? spec.barOverlap
+    : (barGrouping === 'stacked' ? 100 : -20);
+  // R55 — optional axis titles. Excel renders these as rotated labels
+  // alongside the value axes. Pass spec.yLeftAxisTitle / yRightAxisTitle.
+  const axisTitleFrag = (text) => {
+    if (!text) return '';
+    return `<c:title>
+        <c:tx><c:rich>
+          <a:bodyPr rot="-5400000" vert="horz"/>
+          <a:lstStyle/>
+          <a:p><a:r><a:rPr lang="en-US" sz="900" b="0">
+            <a:solidFill><a:srgbClr val="6A748C"/></a:solidFill>
+          </a:rPr><a:t>${escapeXml(text)}</a:t></a:r></a:p>
+        </c:rich></c:tx>
+        <c:overlay val="0"/>
+      </c:title>`;
+  };
+  const leftAxTitleFrag  = axisTitleFrag(spec.yLeftAxisTitle);
+  const rightAxTitleFrag = axisTitleFrag(spec.yRightAxisTitle);
   // Tier F1 — swapAxes flips which axis each chart block points at.
   // Default: bars=axId 2 (left), line=axId 3 (right).
   // swapAxes:  bars=axId 3 (right), line=axId 2 (left).
@@ -969,6 +991,7 @@ ${lineXml}
         ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${leftAxTitleFrag}
         ${leftFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>${spec.sharedAxis ? '' : `
@@ -978,6 +1001,7 @@ ${lineXml}
         ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="r"/>
+        ${rightAxTitleFrag}
         ${rightFmtFrag}
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
@@ -2123,28 +2147,57 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         valAxNumFmt: VAL_FMT_PERCENT_0DP,
       });
     case 'market_turnover': {
-      // R50 — restructured to match master Market Size tab chart31
-      // (untitled combo at the bottom of the tab, rows 159-194). Master
-      // is a bar+line combo: Monthly Clear Pace bars + Inventory line
-      // for Total Market plus the 10+ Year cohort. We don't have a
-      // dialysis "10+ year cohort" decomposition in the turnover view
-      // and our market_universe is a near-constant total — so we plot
-      // the two most informative series we DO have:
-      //   • Bar (sky):  Monthly Clear Pace = ttm_sales_count / 12
-      //                 (helper col added at spec-build time)
-      //   • Line (navy): Turnover Rate (right axis, %)
+      // R55 — restructured per user direction 2026-05-22:
+      // "I think we show a total number of listings on the market on a
+      //  bar, the annualized rate at which sales are occurring monthly
+      //  on another bar in front of the inventory bar, and then the
+      //  line is the number of months that it would take to sell all
+      //  of the inventory available during that month at the current
+      //  rate we are seeing transactions occur."
       //
-      // This preserves the master's "bars for activity + line for the
-      // rate overlay" shape while staying faithful to the data we have.
-      // The original `turnover_rate` series is preserved (it's now the
-      // line); we add a helper col for monthly clear pace as the bar.
+      // 3 series, dual axis:
+      //   • Bar (back, pale sky):  Active Listings (current inventory)
+      //   • Bar (front, navy):     Annual Sales Rate (TTM sales count)
+      //   • Line (gray, right):    Months of Supply (= active / monthly_sales)
+      //
+      // Bars share the LEFT axis (integer count). Line on RIGHT axis
+      // (months, ~30-50 mo range). Both axes labeled.
       const periodCol = findCol('period_end');
-      const salesCol  = findCol('ttm_sales_count');
-      const rateCol   = findCol('turnover_rate');
-      if (!periodCol || !salesCol || !rateCol) return null;
-      // Monthly Clear Pace helper col — sits past the regular columns.
-      // market_turnover has 5 cols (A-E); helper lands at F.
-      const paceCol = String.fromCharCode(65 + cols.length);
+      const activeCol = findCol('active_count');
+      const salesRateCol = findCol('annual_sales_rate');
+      const mosCol    = findCol('months_of_supply');
+      // Backward-compat fallback: if the new R55 columns haven't propagated
+      // to a vertical's view yet, degrade to the R50 single-bar+line shape.
+      if (!periodCol) return null;
+      if (!activeCol || !salesRateCol || !mosCol) {
+        // Pre-R55 view shape — keep R50 behavior so the chart still renders.
+        const salesCol  = findCol('ttm_sales_count');
+        const rateCol   = findCol('turnover_rate');
+        if (!salesCol || !rateCol) return null;
+        const paceCol = String.fromCharCode(65 + cols.length);
+        return {
+          tabName,
+          spec: {
+            type: 'combo', tabName, catCol: periodCol, dataStart, dataEnd,
+            barGrouping:  'clustered',
+            yLeftNumFmt:  VAL_FMT_INTEGER,
+            yLeftAxisTitle:  'Sales per month',
+            yRightNumFmt: VAL_FMT_PERCENT_1DP,
+            yRightAxisTitle: 'Turnover rate',
+            barSeries:  [{ titleCol: paceCol, titleRow: headerRow, valCol: paceCol, color: sky }],
+            lineSeries: [{ titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: navy }],
+            anchor: standardAnchor,
+          },
+          helperCols: [{
+            key: 'monthly_clear_pace',
+            header: 'Monthly Clear Pace',
+            format: 'number_one_decimal',
+            width: 18,
+            getValue: (row) => row.ttm_sales_count == null ? null : Number(row.ttm_sales_count) / 12,
+          }],
+        };
+      }
+      const pale = '#E0E8F4'; // pale sky for back inventory bar
       return {
         tabName,
         spec: {
@@ -2152,30 +2205,31 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // Bars left (clear pace, integer ~1-25/month), line right
-          // (turnover rate, 0-10%-ish percentage). NOT sharedAxis —
-          // the two metrics are different units, dual axis is right.
-          barGrouping:  'clustered',
-          yLeftNumFmt:  VAL_FMT_INTEGER,
-          yRightNumFmt: VAL_FMT_PERCENT_1DP,
+          // Bars on left axis (counts ~100-600); line on right axis (months ~10-60).
+          // overlap=100 NOT used because we want CLUSTERED bars (sales bar
+          // sits in FRONT of the inventory bar at the same x — Excel
+          // clustered-bar default places them side-by-side, but with
+          // overlap=100 the front bar overlays the back bar at the same
+          // x-tick which matches user direction "annualized rate ... in
+          // FRONT of the inventory bar").
+          barGrouping:     'clustered',
+          barOverlap:      100,  // overlay sales bar IN FRONT of inventory bar
+          yLeftNumFmt:     VAL_FMT_INTEGER,
+          yLeftAxisTitle:  'Listings / annual sales (count)',
+          yRightNumFmt:    '#,##0.0" mo"',
+          yRightAxisTitle: 'Months of supply',
           barSeries: [
-            { titleCol: paceCol, titleRow: headerRow, valCol: paceCol, color: sky },
+            // Back bar — total active inventory (pale sky)
+            { titleCol: activeCol,    titleRow: headerRow, valCol: activeCol,    color: pale, borderColor: sky },
+            // Front bar — annual sales rate (navy, narrower so back bar is visible)
+            { titleCol: salesRateCol, titleRow: headerRow, valCol: salesRateCol, color: navy },
           ],
           lineSeries: [
-            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: navy },
+            // Right axis — months of supply
+            { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C' },
           ],
           anchor: standardAnchor,
         },
-        helperCols: [{
-          key: 'monthly_clear_pace',
-          header: 'Monthly Clear Pace',
-          format: 'number_one_decimal',
-          width: 18,
-          getValue: (row) => {
-            const c = row.ttm_sales_count;
-            return c == null ? null : Number(c) / 12;
-          },
-        }],
       };
     }
     case 'quarterly_volume_bars':
