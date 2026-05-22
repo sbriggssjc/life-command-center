@@ -2066,7 +2066,6 @@ populates P0.5 (473 developers) accordingly.
 **Deferred to follow-up rounds:**
 - SF Opportunity sync writer (read-only mirror that populates
   bd_opportunities hourly from Salesforce). Schema is ready (Topic 9).
-- Audit Topic A3: cross-vertical `v_entity_portfolio_all`
 - Audit Topic A6: 7-touch onboarding sequence UI + template progression
 - Audit Topic A10: listing-event fan-out engine (Lane A buyer cohort +
   Lane B owner-geographic proximity)
@@ -2157,6 +2156,111 @@ gaps" called out in §11.20 are now fully resolved:
   dia, gov, and LCC)
 - Gap 3 (no SF Opportunity inbound sync) — still deferred per §11.21
 - Gap 4 (no UI for the priority queue) — still deferred per §11.21
+
+### 11.23 Topic A3 — Cross-vertical portfolio + enriched priority queue (2026-05-22)
+
+**Builds on §11.22:** with 4,003 entities live, the priority queue can
+now see *who* the developers are, but each row is still just a name and
+a band — the operator can't tell whether "Elliott Bay Capital" is a one-
+property hobbyist or a 93-property institutional. Topic A3 closes that.
+
+**What was added (migration `20260522230000_lcc_entity_portfolio_facts
+_schema.sql` + `20260522230100_lcc_entity_portfolio_sync_and_enriched
+_queue.sql` + `government/20260522230000_gov_v_ownership_history
+_portfolio.sql`):**
+
+1. **`public.lcc_entity_portfolio_facts`** — one row per
+   `(entity_id, source_domain, source_property_id)` ownership edge.
+   `is_current` is a STORED generated column on `ownership_end_date IS
+   NULL`. Three indexes (entity, domain-property, partial-on-current)
+   cover the join + filter shapes the views use.
+
+2. **`public.v_entity_portfolio_all`** (SECURITY INVOKER) — per-entity
+   rollup: total/current property counts split by source_domain,
+   ARRAY_AGG of source_property_ids, earliest/latest acquisition,
+   `is_cross_vertical` flag, current annual rent total, avg cap rate.
+
+3. **`gov.v_ownership_history_portfolio`** — slim PII-stripped view on
+   gov.ownership_history exposing only `(ownership_id, property_id,
+   true_owner_id, transfer_date, transfer_price, sale_price,
+   annual_rent, cap_rate, data_source, change_type)`. SECURITY DEFINER
+   (default) with explicit `GRANT SELECT TO anon, authenticated` so
+   LCC's pg_net pulls succeed without exposing
+   phone/address/principal_names/research_notes from the underlying
+   table. Mirrors the existing anon-read pattern on `gov.true_owners`.
+
+4. **`public.lcc_portfolio_sync_inflight`** + **`lcc_sync_entity
+   _portfolios(p_domain)`** + **`lcc_finalize_entity_portfolios()`** —
+   same fire/finalize cadence as Topic 10:
+   - Fire: 16 pages × 1000 rows per domain (covers both dia ~7k and
+     gov ~14k with headroom). Reads URL + anon key from Vault; skips
+     with NOTICE if either is missing.
+   - Finalize: dia branch aggregates multiple ownership periods by
+     keeping `bool_or(end IS NULL)` as the current flag and earliest
+     start. Gov branch uses a window function over `property_id` to
+     identify the latest transfer per property, then stamps earlier
+     transfers' `ownership_end_date` with the latest transfer date
+     (approximation — true ownership end requires the next transfer
+     to a different owner, but for portfolio rollups this is close
+     enough).
+   - Both branches guard with `EXISTS (SELECT 1 FROM entities WHERE id
+     = entity_id)` so we don't store edges for unclassified owners
+     (keeps the table at ~5,888 rows instead of ~19,500).
+
+5. **`public.v_priority_queue_enriched`** (SECURITY INVOKER) — wraps
+   `v_priority_queue` with the portfolio rollup columns. Stable
+   contract: original `v_priority_queue` is unchanged for any caller
+   already depending on it; UI/console code can adopt the `_enriched`
+   variant when it needs the new columns.
+
+**Initial backfill (applied manually 2026-05-22):**
+- dia ownership_history pulled in 8 paginated pg_net GETs
+  (~7,300 rows received, 1,666 unique entity↔property edges after
+  aggregation across multiple periods).
+- gov v_ownership_history_portfolio pulled in 15 paginated GETs
+  (~12,700 rows received, 4,222 unique edges after the window-based
+  current/former resolution).
+- 5,888 total edges in `lcc_entity_portfolio_facts`, all linked to
+  classified entities.
+
+**Top P0.5 developers by current portfolio (validation):**
+| Name | Current | Lifetime | Domain |
+|---|--:|--:|---|
+| Elliott Bay Capital | 37 | 93 | dia |
+| Kingsbarn Realty | 22 | 38 | dia |
+| Ar Global | 15 | 22 | dia |
+| Truist Bank | 12 | 41 | dia |
+| GPT Properties Trust | 8 | 9 | gov |
+| Choice One Development LLC | 7 | 14 | dia |
+| Palestra Properties | 5 | 21 | dia |
+
+No entities show `is_cross_vertical=true` yet — gov and dia
+true_owner_ids are distinct UUIDs even when the same legal entity owns
+both healthcare and government-leased properties. Surfacing
+cross-vertical entities is the §11.21 deferred "LCC cross-domain
+entity sync" item (canonical-name merge across dia + gov), explicitly
+unblocked by this round but not yet wired.
+
+**Cron scheduling (deferred — same gating as §11.22):**
+Once the four Vault secrets are seeded:
+
+```sql
+SELECT cron.schedule('lcc-portfolio-sync-fire',     '15 */4 * * *', $$SELECT public.lcc_sync_entity_portfolios('both');$$);
+SELECT cron.schedule('lcc-portfolio-sync-finalize', '20 */4 * * *', $$SELECT public.lcc_finalize_entity_portfolios();$$);
+```
+
+Staggered :15 / :20 so the portfolio sync runs after the entity sync
+(:05 / :10) in §11.22's schedule, giving entity inserts time to land
+before portfolio edges try to FK-resolve them.
+
+**Impact on the BD doctrine:**
+The operator console can now answer "which developer should I call
+first?" by `ORDER BY current_property_count DESC` on the enriched
+queue. Elliott Bay rises to the top with 37 active properties; a no-
+portfolio "developer" entry sinks to the bottom regardless of
+classification confidence. This is the first round where the priority
+queue surface actually reflects *business priority*, not just
+classification status.
 
 ---
 
