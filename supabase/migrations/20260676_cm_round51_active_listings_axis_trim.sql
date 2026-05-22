@@ -1,0 +1,91 @@
+-- =====================================================================
+-- Round 51 — sweep up the 4 sparseness items from user notes 2026-05-21
+-- that R47 didn't cover. Code-only fix; NO Supabase view changes.
+--
+-- Investigation findings: audit/cm-style-audit/R51-ACTIVE-LISTING-GAPS.md
+--
+-- ---------------------------------------------------------------------
+-- THE FINDING
+-- ---------------------------------------------------------------------
+-- 3 of 4 flagged charts are TRUE-gaps (active_listings tracking began
+-- at different times for different metrics):
+--   • asking_cap_quartiles_active — 2 rows in 2014, full from 2015 Q1
+--   • available_market_size_combo — 3 rows in 2015, full from 2016 Q1
+--   • dom_price_change_active     — full from 2013 Q1
+--
+-- 1 of 4 is real lease-data thinning:
+--   • rent_psf_box_quarterly — 5-12 leases/quarter through 2020 →
+--                              1-7 leases/quarter from 2021+. The view's
+--                              HAVING n_leases >= 4 gate correctly hides
+--                              quarters below 4 samples (statistically
+--                              misleading to emit IQR from 1-3 points).
+--                              2023 = 1-3 per quarter = zero rows survive.
+--                              Real ingestion thinning, not a formula bug.
+--                              Documented in audit doc; no chart fix.
+--
+-- ---------------------------------------------------------------------
+-- THE FIX (code-only, no SQL changes)
+-- ---------------------------------------------------------------------
+-- Extend MIN_YEAR_BY_TEMPLATE in api/_shared/cm-native-chart-injector.js
+-- with 3 new entries:
+--
+--   asking_cap_quartiles_active:  2015
+--   available_market_size_combo:  2016
+--   dom_price_change_active:      2013
+--
+-- The R47 wrapper logic already handles the rest — it shifts the chart's
+-- dataStart row reference forward to the first row whose period_end is
+-- >= cutoff year. The data tab keeps every row (so historical context
+-- stays visible); only chart series references narrow.
+--
+-- These 3 templates are dia-only in the current catalog. The trim is a
+-- no-op for verticals where the catalog doesn't include the template,
+-- so this change is safe to apply across all exports.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT FIXED — documented as not-bugs
+-- ---------------------------------------------------------------------
+--   • rent_psf_box_quarterly 2021+ sparseness — real lease-record
+--     thinning in the source `leases` table; HAVING n_leases >= 4 gate
+--     correctly filters out quarters with too few samples. Backfill
+--     would require external data agreement (R-backfill track from R47,
+--     still deferred).
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 140 CM injector tests pass (up from 137 after R50). Full suite
+-- 361 pass / 2 unrelated pre-existing failures.
+--
+-- New R51 tests:
+--   • asking_cap_quartiles_active dataStart shifts to first 2015 row
+--   • available_market_size_combo trims to 2016
+--   • dom_price_change_active trims to 2013
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia export
+-- 2. Open Data_Active_Cap_Quart — x-axis starts at 1Q-2015 (was earlier)
+-- 3. Open Data_Avail_Mkt_Size — x-axis starts at 1Q-2016
+-- 4. Open Data_Active_DOM_PC — x-axis starts at 1Q-2013
+-- 5. Data tabs themselves still show every row (just chart plot area
+--    is narrowed)
+-- 6. Open Data_Rent_PSF_Box — still shows the 2021+ sparseness; this
+--    is real lease-data thinning, not fixed by axis trim
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT
+-- ---------------------------------------------------------------------
+-- R-backfill (still deferred): external source-data ingestion for
+--   pre-2003 dia comps AND 2021+ dia leases. User confirmed worth
+--   exploring back in R47.
+-- R-cohort (deferred from R50): 10+ Year cohort decomposition for
+--   market_turnover to fully match master chart31's 4-series shape.
+-- R-cross-surface (open): the user's last note in the 2026-05-21
+--   feedback batch flagged that "charts in the individual tabs don't
+--   match what's in the aggregate Charts tab… same with what's
+--   displayed in the LCC app on the capital markets tab". Three-surface
+--   consistency audit (Data_* native charts vs aggregate Charts tab
+--   vs LCC app Capital Markets UI) is the natural next track.
+-- =====================================================================

@@ -1820,6 +1820,18 @@ const MIN_YEAR_BY_TEMPLATE = {
   bid_ask_spread_monthly:       2014,
   // Pace recipe inherits dia/gov coverage; safe to skip 2003-2004 here too
   pace_of_cap_rate_expansion:   2005,
+  // R51 — active-listings family (user notes 2026-05-21 sparseness items
+  // that R47 didn't sweep up). Each is a TRUE-gap: the active_listings
+  // table itself only carries data from the cited year onward (broker
+  // active-inventory tracking began at different times for different
+  // metrics). Verified per-year row counts in
+  // audit/cm-style-audit/R51-ACTIVE-LISTING-GAPS.md.
+  //
+  // dia-only templates (gov doesn't carry these views); the trim is a
+  // no-op for verticals where the catalog doesn't include the template.
+  asking_cap_quartiles_active:  2015,  // 2 rows in 2014 → trim to first full year
+  available_market_size_combo:  2016,  // 3 rows in 2015 → trim to first full year
+  dom_price_change_active:      2013,  // full from Q1-2013
 };
 
 export function buildInjectionSpec(args) {
