@@ -1,0 +1,93 @@
+-- =====================================================================
+-- Round 61 — fix "recoverable errors / data and charts" warning that
+-- Excel displays on every export open.
+-- Code-only PR. NO Supabase changes.
+--
+-- ---------------------------------------------------------------------
+-- THE BUG (persistent across multiple user batches)
+-- ---------------------------------------------------------------------
+-- User flagged repeatedly: "this time, when we opened the Excel, there
+-- were some warnings and error messages again about recoverable data
+-- and charts — same error message as the time before".
+--
+-- Excel's recoverable-errors warning means it found malformed OOXML
+-- during open but was able to auto-repair it. R58's surface diagnostic
+-- found no obvious malformation. R61 wrote a stricter OOXML
+-- schema-order validator (per ECMA-376 EG_ValAxShared) and ran it
+-- against every chart XML in the latest dia export.
+--
+-- Result: 45 schema-order violations across all 34 charts. Every
+-- <c:valAx> block emitted children in the WRONG order:
+--
+--   PRE-R61 (BROKEN):
+--     <c:valAx>
+--       <c:axId val="2"/>
+--       <c:scaling>...</c:scaling>
+--       <c:majorGridlines>...</c:majorGridlines>   ← wrong position
+--       <c:delete val="0"/>                         ← wrong position
+--       <c:axPos val="l"/>                          ← wrong position
+--       <c:numFmt formatCode="..."/>
+--       <c:crossAx val="1"/>
+--     </c:valAx>
+--
+--   POST-R61 (CANONICAL):
+--     <c:valAx>
+--       <c:axId val="2"/>
+--       <c:scaling>...</c:scaling>
+--       <c:delete val="0"/>                         ← moved up
+--       <c:axPos val="l"/>                          ← moved up
+--       <c:majorGridlines>...</c:majorGridlines>   ← moved down
+--       <c:numFmt formatCode="..."/>
+--       <c:crossAx val="1"/>
+--     </c:valAx>
+--
+-- Per ECMA-376 EG_AxShared, the canonical order is:
+--   axId → scaling → delete → axPos → [majorGridlines | minorGridlines
+--   | title] → numFmt → majorTickMark → minorTickMark → tickLblPos →
+--   spPr → txPr → crossAx → crosses → crossesAt → ...
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- Reorder the children in 4 builder functions in
+-- api/_shared/cm-native-chart-injector.js:
+--   • buildSingleLineChartXml + buildSingleBarChartXml + buildStackedBarChartXml
+--     + buildMultiLineChartXml (single valAx)
+--   • buildComboChartXml (left + right valAx, both with axis titles)
+--   • buildScatterChartXml (x + y valAx)
+--   • buildAreaComboChartXml (left + right valAx)
+--
+-- 9 total <c:valAx> blocks reordered. Same content, canonical order.
+--
+-- A new regression test in test/cm-native-chart-injector.test.mjs walks
+-- each builder's emitted XML and asserts every valAx block's children
+-- follow the canonical order — so this regression can't quietly recur.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 161 CM injector tests pass (was 160 after R60); 1 new R61 regression
+-- test. Full suite 382/2 (2 unrelated pre-existing).
+--
+-- Re-validated in-memory: 0 schema-order violations across all 4
+-- builder types (multi-line, combo, combo-shared, scatter).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open in Excel — there should be NO "recoverable errors" warning
+--    dialog. File opens cleanly on first try.
+-- 3. All charts render normally with the visual fixes from R52-R60
+--    intact (gridlines, axis pins, formats unchanged).
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT
+-- ---------------------------------------------------------------------
+-- R62: tenant donuts re-verify in the now-clean export. Earlier
+-- diagnostics confirmed donut chart XML + data are present; the
+-- "missing chart" complaint was likely Excel stripping chart objects
+-- during the recoverable-errors recovery phase. With R61 eliminating
+-- the malformation, the recovery shouldn't happen and the donuts
+-- should appear.
+-- =====================================================================
