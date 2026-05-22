@@ -127,3 +127,34 @@ to literal text → `events_upserted: 0`). Times now verify correct (Focus time 
 topology, and the calendar-name circle-back plan live in
 [`flows/outlookcalendar-lcc-sync.md`](flows/outlookcalendar-lcc-sync.md) → section
 "2026-05-22 — Actual deployed architecture, TZ fix applied, and open items".
+
+## 2026-05-22 — CACHE-BUSTER GOTCHA (must read before editing app.js)
+
+**Symptom:** After the data was corrected to true UTC, the LCC app displayed *every*
+calendar event ~5 hours off ("all calendars in the wrong time zone"), even though:
+- the DB stored correct true-UTC values (Focus time = `13:00 UTC` = 8 AM CT), and
+- the deployed production `app.js` was verified to be the NEW `Intl`/`America/Chicago`
+  renderer with no `stripTZ`.
+
+**Root cause:** `index.html` loads scripts with a manual cache-buster query string, e.g.
+`<script src="app.js?v=2026050802"></script>`. That `?v=` stamp (May 8) was **not bumped**
+when `app.js` was changed for the calendar fix on May 21. Browsers cache by full URL
+(including the query string), so a returning browser kept serving the **old cached
+`app.js` (the `stripTZ` build)** for the unchanged URL `app.js?v=2026050802`. Old
+`stripTZ` code applied to new true-UTC data = everything shifted +5h. The bug only
+*appeared* after the data fix because, before it, the old `stripTZ` code and the old
+naive-CT-stored-as-UTC data happened to cancel out and display roughly-right.
+
+**The rule:** in this repo, `app.js` / `auth.js` / `gov.js` / `dialysis.js` /
+`capital-markets.js` / `detail.js` / `contacts-ui.js` / `ops.js` are **NOT
+content-hashed** — they're served at a stable path with a hand-maintained `?v=YYYYMMDDnn`
+cache-buster in `index.html` (~line 726-734). **Whenever you change one of these files
+you MUST bump its `?v=` stamp in `index.html` in the same change**, or returning clients
+will keep the stale cached copy indefinitely. Each file is versioned independently
+(e.g. `detail-lease-comps-fix.js` was already at `?v=2026050903` while the rest sat at
+`2026050802`), so bump only the file(s) you touched.
+
+**Fixes applied 2026-05-22:** bumped `app.js?v=2026050802` → `app.js?v=2026052201`
+(commit it + push → Vercel auto-deploy, then all clients fetch fresh JS with no manual
+cache-clearing). Immediate per-device workaround is a hard refresh (Ctrl+Shift+R), which
+bypasses the cache and loads current JS.

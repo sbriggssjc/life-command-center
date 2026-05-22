@@ -178,3 +178,29 @@ full corrected value (with `@` prefixes) from the clipboard → confirm via **Co
 that `inputs`/`value` is a real expression (`"@coalesce(...)"`, not `"coalesce(...)"`)
 **before** Save.
 
+### 2026-05-22 (later) — two more data-layer issues found via the LCC schedule view
+
+After the renderer cache issue was cleared (hard refresh), the schedule still showed an
+event at the wrong time and a deleted event. Both were **data**, not display:
+
+1. **Forward-only fetch window left same-day-earlier events stuck (FIXED).**
+   `Get calendar view of events (V3)` used `startDateTimeUtc = @utcNow()` (window
+   `now → now+7d`). An event earlier *today* than the run time falls behind the window
+   start, so later runs never re-pull it — it keeps whatever the last in-window run
+   wrote. "DVA The Villages Follow Up" (10:30 AM) was last written by a pre-fix morning
+   run as `05:30 UTC` (12:30 AM CT) and the corrected 11 AM+ runs couldn't reach it.
+   **Fix:** changed `startDateTimeUtc` → `@addDays(utcNow(), -1)` (window now
+   `-1d → +7d`). Re-ran; DVA corrected to `15:30 UTC` = 10:30 AM CT. If you ever see a
+   same-day event stuck on a stale value again, widen this further (e.g. `-2`).
+
+2. **Sync is upsert-only — deleted events never get removed (OPEN).**
+   `Sync Events to Supabase` only inserts/updates by `id`; it never deletes. When an
+   event is removed at the source, the flow simply stops sending it and the
+   `calendar_events` row lingers forever. "Claire Lucy" (deleted from the shared
+   calendar) kept showing. **Stopgap applied:** manually `DELETE`d the specific stale
+   row by `id`. **Durable fix (deferred):** add window-scoped reconciliation — e.g. the
+   edge function deletes rows whose `start_time` is inside the just-synced window but
+   whose `id` was absent from the payload. Must be guarded against partial/failed
+   source fetches (a dropped calendar source must NOT trigger mass deletes), so gate it
+   on a per-source success flag or a "full sync" marker before enabling.
+
