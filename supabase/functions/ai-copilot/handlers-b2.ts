@@ -129,8 +129,58 @@ export async function handleSyncCalendarEvents(body: { events?: CalendarEvent[] 
   const eventsList = body.event ? [body.event] : normalizeSFArray<CalendarEvent>(body.events as CalendarEvent[] | { value?: CalendarEvent[] });
   if (eventsList.length === 0) return jsonResponse({ success: true, upserted: 0, message: "No events to sync" }, 200);
   const d = getDialysisClient(); const results = { upserted: 0, errors: [] as string[], total_received: eventsList.length }; const batchSize = 100;
+  const runStartedAt = new Date().toISOString();
   for (let i = 0; i < eventsList.length; i += batchSize) { const batch = eventsList.slice(i, i + batchSize).map(e => { const eventId = (e.Id || e.id || '') as string; if (!eventId) return null; const rawOrganizer = e.Organizer || e.organizer; const organizerIsString = typeof rawOrganizer === 'string'; const organizer = (organizerIsString ? {} : rawOrganizer || {}) as Record<string, unknown>; const orgEmail = organizer.emailAddress as Record<string, string> | undefined; const respStatus = (e.ResponseStatus || e.responseStatus || {}) as Record<string, unknown>; const startParsed = parseDateTimeDetailed(e.Start || e.start); const endParsed = parseDateTimeDetailed(e.End || e.end); return { id: eventId, subject: (e.Subject || e.subject || e.title || null) as string | null, start_time: startParsed.iso, end_time: endParsed.iso, location: parseLocation(e.Location || e.location), organizer_name: (orgEmail?.name || organizer.name || null) as string | null, organizer_email: (organizerIsString ? rawOrganizer : orgEmail?.address || organizer.email || null) as string | null, is_all_day: (e.IsAllDay ?? e.isAllDay ?? e.is_all_day ?? false) as boolean, calendar_name: (e.CalendarName || e.calendar_name || null) as string | null, categories: (e.Categories || e.categories || []) as string[], body_preview: (e.BodyPreview || e.bodyPreview || e.body_preview || e.body || null) as string | null, web_link: (e.WebLink || e.webLink || e.web_link || null) as string | null, sensitivity: (e.Sensitivity || e.sensitivity || 'normal') as string, show_as: (e.ShowAs || e.showAs || e.show_as || null) as string | null, response_status: (respStatus.response || respStatus.Response || null) as string | null, is_recurring: (e.IsRecurring ?? e.isRecurring ?? e.is_recurring ?? false) as boolean, synced_at: new Date().toISOString(), tz_normalized_at: (startParsed.trusted && (endParsed.iso === null || endParsed.trusted)) ? new Date().toISOString() : null }; }).filter(Boolean); if (batch.length === 0) continue; const { data, error } = await d.from("calendar_events").upsert(batch, { onConflict: "id", ignoreDuplicates: false }).select("id"); if (error) results.errors.push(`Batch ${i}: ${error.message}`); else results.upserted += data?.length || batch.length; }
-  return jsonResponse({ success: results.errors.length === 0, events_upserted: results.upserted, total_received: results.total_received, errors: results.errors, version: 53 });
+  // ── Deletion reconciliation ────────────────────────────────────────────────
+  // Events removed at the source are simply absent from the payload; an upsert
+  // never deletes them, so they linger forever. Within the window the sources
+  // actually covered THIS run, any row NOT touched this run (synced_at <
+  // runStartedAt) was not re-sent => it was deleted at the source. We delete it.
+  //
+  // SAFETY: a silently-dropped calendar source (e.g. an iCal fetch returns empty
+  // on error) would make all its events look "deleted". Two guards prevent a
+  // mass-delete: (1) the window end is derived from the payload's own max start,
+  // so it never exceeds real coverage; (2) if the candidate count exceeds
+  // MAX_RECONCILE_DELETES we SKIP and warn instead of deleting. Reconciliation
+  // only runs on a full array sync that upserted cleanly.
+  const reconcile = { window_start: null as string | null, window_end: null as string | null, candidates: 0, deleted: 0, skipped: false, skip_reason: null as string | null };
+  const MAX_RECONCILE_DELETES = parseInt(Deno.env.get('CALENDAR_MAX_RECONCILE_DELETES') || '10', 10);
+  if (!body.event && results.errors.length === 0 && results.upserted > 0) {
+    const nowMs = Date.now();
+    let maxStartMs = nowMs;
+    for (const e of eventsList) { const p = parseDateTimeDetailed(e.Start || e.start); if (p.iso) { const ms = Date.parse(p.iso); if (!isNaN(ms) && ms > maxStartMs) maxStartMs = ms; } }
+    // FORWARD-ONLY: start at now, not in the past. Some sources (iCal subscriptions
+    // like TeamSnap) only return events from now forward, so a PAST row missing from
+    // the payload is ambiguous (deleted vs. simply aged out of the source's window).
+    // From `now` onward, every active source still returns anything that exists, so
+    // an absent row genuinely means it was deleted at the source.
+    const windowStart = new Date(nowMs).toISOString();
+    const windowEnd = new Date(maxStartMs).toISOString();                        // furthest event the sources actually returned
+    reconcile.window_start = windowStart; reconcile.window_end = windowEnd;
+    try {
+      const { data: stale, error: staleErr } = await d.from("calendar_events")
+        .select("id, subject, start_time")
+        .gte("start_time", windowStart).lte("start_time", windowEnd)
+        .lt("synced_at", runStartedAt);
+      if (staleErr) { results.errors.push(`Reconcile query: ${staleErr.message}`); }
+      else {
+        const candidates = stale || [];
+        reconcile.candidates = candidates.length;
+        if (candidates.length > MAX_RECONCILE_DELETES) {
+          reconcile.skipped = true;
+          reconcile.skip_reason = `candidate count ${candidates.length} exceeds MAX_RECONCILE_DELETES (${MAX_RECONCILE_DELETES}); likely a dropped calendar source — skipping to avoid mass delete`;
+          console.warn(`[calendar-reconcile] SKIP: ${reconcile.skip_reason}`);
+        } else if (candidates.length > 0) {
+          const ids = candidates.map((r: { id: string }) => r.id);
+          const { error: delErr } = await d.from("calendar_events").delete().in("id", ids);
+          if (delErr) { results.errors.push(`Reconcile delete: ${delErr.message}`); }
+          else { reconcile.deleted = ids.length; console.warn(`[calendar-reconcile] deleted ${ids.length} stale event(s) no longer at source: ${candidates.map((r: { subject?: string }) => r.subject || '(untitled)').join(' | ')}`); }
+        }
+      }
+    } catch (e) { results.errors.push(`Reconcile exception: ${String(e)}`); }
+  }
+
+  return jsonResponse({ success: results.errors.length === 0, events_upserted: results.upserted, total_received: results.total_received, reconcile, errors: results.errors, version: 54 });
 }
 
 export async function handleGetCalendarEvents(url: URL) {

@@ -193,14 +193,34 @@ event at the wrong time and a deleted event. Both were **data**, not display:
    `-1d → +7d`). Re-ran; DVA corrected to `15:30 UTC` = 10:30 AM CT. If you ever see a
    same-day event stuck on a stale value again, widen this further (e.g. `-2`).
 
-2. **Sync is upsert-only — deleted events never get removed (OPEN).**
-   `Sync Events to Supabase` only inserts/updates by `id`; it never deletes. When an
-   event is removed at the source, the flow simply stops sending it and the
-   `calendar_events` row lingers forever. "Claire Lucy" (deleted from the shared
-   calendar) kept showing. **Stopgap applied:** manually `DELETE`d the specific stale
-   row by `id`. **Durable fix (deferred):** add window-scoped reconciliation — e.g. the
-   edge function deletes rows whose `start_time` is inside the just-synced window but
-   whose `id` was absent from the payload. Must be guarded against partial/failed
-   source fetches (a dropped calendar source must NOT trigger mass deletes), so gate it
-   on a per-source success flag or a "full sync" marker before enabling.
+2. **Sync was upsert-only — deleted events never got removed (RECONCILER BUILT 2026-05-22, deploy pending).**
+   `Sync Events to Supabase` only inserts/updates by `id`; it never deleted. When an
+   event was removed at the source, the flow simply stopped sending it and the
+   `calendar_events` row lingered forever. "Claire Lucy" (deleted from the shared
+   calendar) kept showing; the specific stale row was manually `DELETE`d as a stopgap.
+
+   **Durable fix — added to `handleSyncCalendarEvents` (`handlers-b2.ts`, version → 54):**
+   after the upsert, the edge function reconciles deletions. Mechanism:
+   - It records `runStartedAt` at entry; every upserted row gets `synced_at = now()`.
+     So within the synced window, any row with `synced_at < runStartedAt` was **not
+     re-sent this run ⇒ deleted at the source** (or its source dropped — see guards).
+   - **Forward-only + self-calibrating window:** `windowStart = now`, `windowEnd = the
+     max event start_time present in THIS payload`. Forward-only because some sources
+     (iCal subs like TeamSnap) only return events from now forward — a PAST row missing
+     from the payload is ambiguous (deleted vs. aged out of the source window), so we
+     never reconcile the past. `windowEnd` from the payload max means the range never
+     exceeds the coverage the sources actually returned, so a partial payload only
+     narrows the reconcile range (deleted *past* events are cleaned manually instead).
+   - **Mass-delete guard:** `MAX_RECONCILE_DELETES` (env `CALENDAR_MAX_RECONCILE_DELETES`,
+     default 10). If candidate count exceeds it (the fingerprint of a dropped calendar
+     source), the function **skips the delete and logs a warning** instead.
+   - Only runs on a full array sync (`body.events`) that upserted cleanly
+     (`errors == 0 && upserted > 0`).
+   - Response now includes a `reconcile` object: `{window_start, window_end, candidates,
+     deleted, skipped, skip_reason}` for observability.
+
+   **Deploy:** `supabase functions deploy ai-copilot --project-ref zqzrriwuavgrquhisnoa --no-verify-jwt`.
+   Confirm the next sync's POST response shows `"version": 54` and a `reconcile` block.
+   To verify end-to-end: delete a test event in Outlook, run the flow, confirm its
+   `calendar_events` row is gone and `reconcile.deleted >= 1`.
 
