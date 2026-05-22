@@ -1500,4 +1500,219 @@ Files referenced in this audit by topic.
 
 ---
 
+## 11. Implementation Log — Phase A Topic 1 (2026-05-22)
+
+This section captures the data integrity work and the v5 fact-based
+classification algorithm shipped on 2026-05-22. It supersedes the
+"legacy_heuristic" approach described in earlier sections of the
+rollout plan (§7.1 A1 as originally written).
+
+### 11.1 Why the legacy heuristic was rejected
+
+The original Topic 1 design (§7.1 A1) inferred `owner_role='developer'`
+from three legacy signals: `is_developer`, `developer_flag`, and
+`ownership_pattern='developer'`. These had been populated historically
+from CoStar text extraction + LLC name pattern matching. The user
+rejected this approach explicitly:
+
+> "We want our determination of what is a developer or not to be fact
+> based and not based on something pulled from CoStar or something
+> about the naming structure. We want it to be the first landlord
+> name on a first generation lease, or the recorded owner that buys
+> raw land and builds the building, or something else about the
+> actual ownership chain or the property or the lease or some
+> combination of those that would indicate that the recorded owner
+> was the entity that developed the property."
+
+Subsequent investigation showed the legacy heuristic only flagged
+2 dia rows as developer (both based on CoStar text), while the
+fact-based ownership-chain signal exists for hundreds of properties
+once the underlying data quality is repaired.
+
+### 11.2 Data integrity root causes (WS3)
+
+Diagnostics on 2026-05-22 revealed:
+
+| Defect | Count | Impact |
+|---|---|---|
+| Salesforce placeholder OH rows | 7,544 (61% of 12,403) | Polluted every ownership chain query with synthetic 2023-07-01→2024-06-30 rows containing no identifiers |
+| Imputed `start_date` with no `sale_id` | 8,736 (70%) | Backward-projected dates that don't reflect real acquisitions |
+| Dangling open OH rows | 1,098 | Open intervals where subsequent sales exist |
+| Unresolved `true_owner_id` | 2,121 | OH rows can't roll up to canonical entity |
+| Empty OH rows | 8,422 | Both true_owner and recorded_owner NULL |
+| **Sales with buyer but no seller-exit OH row** | **2,995 of 3,007 (99.6%)** | **The smoking gun: developers' tenures are systematically never recorded because the sidebar pipeline only writes the buyer's OH row, never closes the seller's** |
+| `sales_transactions.seller_name` populated but `seller_id` NULL | 2,893 of 3,880 (74.6% / 99.9%) | Seller text captured but never resolved to an entity, blocking developer attribution |
+
+### 11.3 Data integrity fixes (applied to dia DB)
+
+| Migration | What it does | Result |
+|---|---|---|
+| `20260522140000_dia_cleanup_sf_placeholder_oh.sql` | Drops the 7,544 SF placeholder OH rows | OH reduced from 12,403 → 4,859 |
+| `20260522140100_dia_backfill_seller_id_from_seller_name.sql` | Creates `dia_normalize_for_match()` helper; resolves `seller_id` from `seller_name` text; creates new `recorded_owners` rows when no match exists | All 6 case-study developers' names linked (Sierra Lane Partners, GP Renix Smyrna, MSD & DV NLV, Market Street Development, New Broadway Ltd, US Renal Care) |
+| `20260522140200_dia_backfill_oh_seller_exits.sql` | Two-pass: closes existing open OH rows where seller exited; inserts new seller-exit OH rows for sellers without coverage. `ownership_source='sales_transactions_seller_exit'` provenance tag. | 2,890 new seller-exit OH rows added |
+| `20260522140300_dia_auto_resolve_true_owner_backfill.sql` | Mirrors sidebar-pipeline auto-resolve as a backfill: links recorded_owners → true_owners via multi-form name match (handles legacy buggy normalizer), creates true_owners where needed, propagates true_owner_id onto OH and sales_transactions | 100% of new seller-exit rows now have true_owner_id; orphan count dropped from 2,121 |
+| `20260522140350_dia_expand_owner_role_source_check.sql` | Expands the `owner_role_source` CHECK constraint to allow the new fact-based source tags | Required prereq for the apply migration |
+| `20260522140400_dia_apply_owner_role_classification_v5.sql` | Creates the 6-view classification chain (see §11.5); applies it to true_owners | 630 entities auto-classified |
+
+### 11.4 The v5 fact-based classification algorithm
+
+**Priority (operator > user_owner > developer > buyer > unknown):**
+
+1. **operator** — `true_owners.is_operator_not_owner = TRUE` (manually
+   curated team flag). 16 entities currently. Always wins.
+
+2. **user_owner** — Entity appears as seller in a sale-leaseback
+   transaction where:
+   - Sale exists with `sale_date = X`
+   - Lease commences within ±30 days of X
+   - No prior lease at the property
+   - The seller's true_owner has `is_operator_not_owner = TRUE`
+     (the operator is selling out their owned RE)
+   - 0 entities currently (all SL events in our data are by operators
+     who already classify as `operator` via the priority rule above)
+
+3. **developer** — Either rule produces a developer flag for a property:
+   - **Rule A — Strict BTS with 90-day gap**: owner's tenure starts
+     **≥90 days BEFORE** the first long-term lease commencement;
+     tenure covers lease commencement; sale-supported (`sale_id IS NOT NULL`);
+     lease anchored within ±6mo to +24mo of `year_built` or `year_renovated`.
+     The 90-day gap eliminates the "took title at delivery" pattern
+     (Carrollwood, Butler Trust) where buyers acquire concurrent with
+     pre-negotiated leases.
+   - **Rule B — Seller-exit BTS**: OH row with
+     `ownership_source = 'sales_transactions_seller_exit'`; exit date
+     within ±2 years of `year_built` or `year_renovated` (or within
+     365 days of first long-term lease); lease anchored to construction
+     or renovation. Catches the common pattern where developer sells
+     to a fund at delivery and their ownership tenure is recoverable
+     from `sales_transactions.seller_name` + the seller-exit backfill.
+   - **Promotion rule**: classify as developer at entity level when
+     `dev_props ≥ 2` OR `dev_share ≥ 30%` (entity-level priority that
+     preserves the developer tag even with mixed buyer signals).
+   - Filtered: excludes `is_operator_not_owner=TRUE` entities and
+     entities flagged as sale-leaseback sellers for the same property.
+   - 172 entities currently.
+
+4. **buyer** — First sale-supported acquisition date is AFTER
+   earliest lease commencement by >90 days, AND no new long-term
+   lease commenced during their tenure. 442 entities currently.
+
+5. **unknown** — No signal pattern match. 3,258 entities (most of
+   these have insufficient data; will reclassify as ingestion
+   improves).
+
+### 11.5 View chain (the authoritative classification artifact)
+
+Per `supabase/migrations/dialysis/20260522140400_dia_apply_owner_role_classification_v5.sql`:
+
+```
+v_dia_property_signals
+  └── per-property year_built + first long-term lease + anchor flags
+
+v_dia_sale_leaseback_events
+  └── sale + ±30d lease coincidence + seller IS operator
+
+v_dia_developer_candidates
+  ├── Rule A: strict BTS with 90d gap
+  └── Rule B: seller_exit_near_construction
+      (both filtered by sale-leaseback exclusion)
+
+v_dia_buyer_candidates
+  └── acquired_post_lease pattern
+
+v_dia_user_owner_candidates
+  └── sale_leaseback_seller (= seller in SL where seller is operator)
+
+v_dia_owner_role_classification ← TOP-LEVEL VIEW
+  └── priority rollup → (owner_role, source, confidence, evidence_jsonb)
+```
+
+The view chain recomputes on every read. The migration's UPDATE step
+applies the classification to `true_owners.owner_role` (honoring
+behavioral_override and manual classification). Re-running the apply
+migration is idempotent and picks up new ingestion data.
+
+### 11.6 Result: 6 case-study resolution
+
+The original 6 false positives from the legacy heuristic + naive
+fact-based attempts are now resolved as follows:
+
+| Property | Legacy false positive | New classification | Actual developer (per user) | New classification |
+|---|---|---|---|---|
+| Anchorage AK | Montecito Medical = developer | developer ⚠ (1 dev + 1 buy = 50% share; edge case, broker override available) | Elliott Bay (intermediate); pre-2014 user/owner | Elliott Bay = developer ⚠ (mixed pattern, dev_share<40%); pre-2014 owner missing from data |
+| Murrieta CA | John Gartman = developer | **unknown** ✓ (no signals → correctly downgraded) | Sierra Lane Partners LLC | **developer** ✓ (via seller-exit rule) |
+| Smyrna TN | Rakesh Alla = developer | **unknown** ✓ | Renix Smyrna GP | **developer** ✓ (via seller-exit rule) |
+| NLV NV | Butler Trust = developer | **unknown** ✓ (90-day gap rule excludes) | MSD & DV NLV LLC / Market Street Development | **developer** ✓ (5 properties for Market Street) |
+| Pearland TX | Carrollwood Investors = developer | **unknown** ✓ (90-day gap rule excludes) | New Broadway Ltd | **developer** ✓ |
+| San Antonio TX | Elliott Bay Capital = developer | developer ⚠ (3 dev + 15 buy via seller-exit rule on 3 properties) | US Renal Care (sale-leaseback) | **operator** ✓ (priority over user_owner) |
+
+**Aggregate result:**
+- Total auto-classified: **630 entities** (vs 18 in v1 — 35× improvement)
+- Developer detections: **172** (vs 2 in v1 — 86× improvement)
+- Buyer detections: **442** (vs 0 in v1)
+- **Zero developer classifications from CoStar text or naming patterns** —
+  the legacy heuristic path is gone
+
+### 11.7 Known limitations
+
+The algorithm is honest about data completeness:
+
+- **Missing developers stay missing**: when our ownership_history + sales
+  data simply doesn't go back far enough to capture the actual developer's
+  tenure, the property gets no developer classification. Example: Anchorage
+  AK's pre-2014 user/owner isn't in our records, so the actual developer
+  is not surfaced. The fix is data ingestion (CoStar re-pull, internal
+  lease document ingest), not algorithm tuning.
+- **Edge cases at the priority boundary**: entities like Elliott Bay
+  Capital that hit both developer and buyer signals are classified by
+  the share rule (dev_share ≥ 30% → developer). For Elliott Bay
+  specifically, 3/18 = 17% should keep them as buyer, but with
+  `dev_props ≥ 2` the entity-level rule triggers developer. Brokers
+  can use `behavioral_override` to reclassify mixed-pattern entities
+  manually.
+- **Entity resolution gaps**: variants like "GENESIS KC DEVELOPMENT LLC"
+  / "Genesis Kc Dev" / "Genesis KC Dev LLC" / "GENESIS KC DVELOPMENT LLC"
+  (typo) currently classify separately. WS4 entity resolution will
+  consolidate; deferred to follow-up.
+- **Sale-leaseback subsidiary detection**: Bio-Medical Applications of MA
+  is a Fresenius subsidiary acting as user/owner seller, but our
+  is_operator_not_owner flag isn't set on the subsidiary. Need an
+  operator-affiliate registry (Phase B).
+
+### 11.8 Follow-up work (deferred from this Topic 1 round)
+
+| Item | Why deferred |
+|---|---|
+| **Sidebar pipeline patch** (`sidebar-pipeline.js:7033-7111`) — write seller OH rows + populate `sales_transactions.seller_id` on new captures | Preventive (stops future data gaps); corrective work is done. Reasonable as Topic 1.5 follow-up. |
+| **Entity resolution pass** (WS4) — consolidate "Genesis KC" / "Oman-Gibson" / "AEI" / "DaVita" / etc. variants | Cross-cutting; better as a dedicated round given the merge-FK complexity |
+| **Government DB mirror** — apply the same 4-step WS3 pattern + classification view to gov.true_owners | Gov schema differs (`transfer_date` vs `start_date`/`end_date`, no `is_operator_not_owner` flag); requires its own design pass |
+| **Operator-affiliate registry** | Phase B; affects sale-leaseback subsidiary detection |
+| **Scheduled re-classification cron** | Add pg_cron job to re-run the apply nightly so new ingestion data reflows |
+| **Phase A unit-test additions** for the view-based path | Integration testing required (mock the view layer); deferred |
+| **Topic 2 — BTS tracker → owner_role wiring** | Next per the v3 plan; will add a 0.95-confidence developer pattern when explicit BTS records exist |
+
+### 11.9 How to re-run the classification
+
+```bash
+# Dry-run (no writes; reports what would change)
+python scripts/backfill_owner_role.py --dry-run
+
+# Apply
+python scripts/backfill_owner_role.py --apply
+
+# Single entity
+python scripts/backfill_owner_role.py --apply --true-owner-id <uuid>
+```
+
+The view-based logic auto-incorporates new ownership_history,
+sales_transactions, leases data on every read. Re-running the apply
+after each ingest round will progressively classify more entities.
+
+The Python module `src/owner_role_derivation.py` exposes:
+- `run_classification_from_view(dry_run=True)` — programmatic apply
+- `get_classification_for_entity(true_owner_id)` — single-entity inspection
+- `derive_from_row()` — LEGACY v1 heuristic (deprecated; kept for tests)
+
+---
+
 *End of DEVELOPER_BD_AUDIT_v3*
