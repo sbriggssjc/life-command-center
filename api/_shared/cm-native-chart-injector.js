@@ -1904,6 +1904,17 @@ const MIN_YEAR_BY_TEMPLATE = {
   bid_ask_spread_monthly:       2014,
   // Pace recipe inherits dia/gov coverage; safe to skip 2003-2004 here too
   pace_of_cap_rate_expansion:   2005,
+  // R62 — Val_Index 2010-12 swings and YOY 2002-2004 swings are both
+  // small-sample TTM artifacts. User notes 2026-05-22 batch 4:
+  //   "Data_Val_Index: Data swings wildly in the 2010-12 set,
+  //    suggesting a lack of real data that skews the entire chart"
+  //   "Data_YOY_Change: Big changes in 2002 and 2004 time frame"
+  // Trim each to where the volatility stabilizes. valuation_index
+  // gets 2005 (avoids 2003-2004 thin data); yoy_volume_change goes
+  // to 2003 so YoY is computed against 2002 (which exists per R47
+  // 12 sales/yr in 2001-2002).
+  valuation_index:              2013,
+  yoy_volume_change:            2005,
   // R51 — active-listings family (user notes 2026-05-21 sparseness items
   // that R47 didn't sweep up). Each is a TRUE-gap: the active_listings
   // table itself only carries data from the cited year onward (broker
@@ -2067,22 +2078,30 @@ export function buildInjectionSpec(args) {
 // All others default to quarter labels.
 function detectMonthlyCadence(chartTemplateId /* legacy: rows[] also accepted */) {
   if (typeof chartTemplateId === 'string') {
+    // R62 — _monthly suffix only. Removed monthly_count special case so
+    // buyer_pool_monthly_count gets quarter labels too (user notes
+    // 2026-05-22 batch 4: "Data_Buyer_Pool_M: X-axis quarter labeling
+    // issue showing in months"). Quarter labels are emitted on
+    // end-of-quarter rows only (see formatQuarterLabel below), so the
+    // 3-bars-per-quarter visual doesn't get duplicated labels.
     if (/_monthly$/.test(chartTemplateId)) return true;
-    if (/monthly_count$/.test(chartTemplateId)) return true;
     return false;
   }
-  // Back-compat: callers (tests) that still pass a rows array.
-  // Returns false (quarterly default) — they should switch to passing
-  // chart_template_id.
+  // Back-compat for any callers still passing rows array.
   return false;
 }
 
-// R53 — "Q1 '24" formatter for quarterly cadence.
+// R62 — emit quarter labels ONLY on end-of-quarter rows so monthly-
+// cadence charts (buyer_pool_monthly_count, etc.) get one quarter
+// label per 3 monthly bars instead of "Q1 '24, Q1 '24, Q1 '24, Q2 '24
+// ..." duplicated across consecutive bars.
 function formatQuarterLabel(periodEnd) {
   const d = new Date(periodEnd);
   if (Number.isNaN(d.getTime())) return null;
   const m = d.getUTCMonth();              // 0..11
-  const q = Math.floor(m / 3) + 1;        // 1..4
+  // Only label end-of-quarter rows: Mar (2), Jun (5), Sep (8), Dec (11)
+  if (m % 3 !== 2) return '';
+  const q = Math.floor(m / 3) + 1;
   const y2 = String(d.getUTCFullYear()).slice(-2);
   return `Q${q} '${y2}`;
 }
@@ -2280,7 +2299,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           }],
         };
       }
-      const pale = '#E0E8F4'; // pale sky for back inventory bar
+      // R62 — switch the front bar from annual_sales_rate to monthly
+      // clear pace (= ttm_sales_count / 12) per user clarification
+      // 2026-05-22 batch 4: "the monthly figures for sales should be
+      // the TTM sales count/12 so we show the rate at which the
+      // current outstanding inventory clears the market monthly
+      // (total listings available for sale during that month against
+      // the average monthly sold rate for the prior 12 months)."
+      //
+      // R55 used annual_sales_rate (TTM raw count, ~150 dia); user
+      // wants monthly clear pace (~12.5 dia). Added as a helper col
+      // computed at chart-build time so the data tab keeps both
+      // figures available. Front bar reads from the helper col.
+      const pale = '#E0E8F4';
+      const monthlyPaceCol = String.fromCharCode(65 + cols.length);
       return {
         tabName,
         spec: {
@@ -2288,31 +2320,34 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // Bars on left axis (counts ~100-600); line on right axis (months ~10-60).
-          // overlap=100 NOT used because we want CLUSTERED bars (sales bar
-          // sits in FRONT of the inventory bar at the same x — Excel
-          // clustered-bar default places them side-by-side, but with
-          // overlap=100 the front bar overlays the back bar at the same
-          // x-tick which matches user direction "annualized rate ... in
-          // FRONT of the inventory bar").
           barGrouping:     'clustered',
-          barOverlap:      100,  // overlay sales bar IN FRONT of inventory bar
+          barOverlap:      100,  // front bar overlays back inventory bar at same x
           yLeftNumFmt:     VAL_FMT_INTEGER,
-          yLeftAxisTitle:  'Listings / annual sales (count)',
+          yLeftAxisTitle:  'Listings / monthly sales rate',
           yRightNumFmt:    '#,##0.0" mo"',
           yRightAxisTitle: 'Months of supply',
           barSeries: [
             // Back bar — total active inventory (pale sky)
-            { titleCol: activeCol,    titleRow: headerRow, valCol: activeCol,    color: pale, borderColor: sky },
-            // Front bar — annual sales rate (navy, narrower so back bar is visible)
-            { titleCol: salesRateCol, titleRow: headerRow, valCol: salesRateCol, color: navy },
+            { titleCol: activeCol,        titleRow: headerRow, valCol: activeCol,        color: pale, borderColor: sky },
+            // Front bar (R62) — monthly clear pace helper col, NOT annual rate
+            { titleCol: monthlyPaceCol,   titleRow: headerRow, valCol: monthlyPaceCol,   color: navy },
           ],
           lineSeries: [
-            // Right axis — months of supply
             { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C' },
           ],
           anchor: standardAnchor,
         },
+        // R62 — monthly clear pace helper col (TTM sales / 12).
+        helperCols: [{
+          key: 'monthly_clear_pace',
+          header: 'Monthly Sales Rate',
+          format: 'number_one_decimal',
+          width: 18,
+          getValue: (row) => {
+            const c = row.annual_sales_rate ?? row.ttm_sales_count;
+            return c == null ? null : Number(c) / 12;
+          },
+        }],
       };
     }
     case 'quarterly_volume_bars':
