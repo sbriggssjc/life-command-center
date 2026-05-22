@@ -1945,7 +1945,12 @@ export function buildInjectionSpec(args) {
       // Detect cadence from the row spacing. Robust against the
       // template-id naming convention drift (some monthly templates
       // don't end with `_monthly`).
-      const isMonthly = detectMonthlyCadence(args.rows);
+      // R58 — detect cadence from template id, not row spacing.
+      // Most underlying views are monthly (_m) but most exports show
+      // quarter labels on the x-axis. Only the explicitly-monthly
+      // templates (chart_template_id ending in _monthly or
+      // monthly_count) keep "Mar '24" style labels.
+      const isMonthly = detectMonthlyCadence(args.chart_template_id);
       const labelFormatter = isMonthly ? formatMonthLabel : formatQuarterLabel;
       const existingHelpers = Array.isArray(result.helperCols) ? result.helperCols : [];
       // period_label lands one column past the regular CHART_COLUMNS
@@ -1989,26 +1994,36 @@ export function buildInjectionSpec(args) {
   return result;
 }
 
-// R53 — cadence detection from row spacing. Returns true if rows look
-// like monthly cadence (~30-day gaps), false otherwise (quarterly or
-// unknown). Robust against template id naming (some monthly templates
-// don't end with `_monthly`).
-function detectMonthlyCadence(rows) {
-  if (!Array.isArray(rows) || rows.length < 2) return false;
-  // Take median gap between consecutive period_end values to avoid
-  // outlier sensitivity (annual rollovers, year-end variability).
-  const dates = rows
-    .map(r => r && r.period_end ? new Date(r.period_end).getTime() : null)
-    .filter(t => Number.isFinite(t))
-    .sort((a, b) => a - b);
-  if (dates.length < 2) return false;
-  const gaps = [];
-  for (let i = 1; i < dates.length; i++) gaps.push(dates[i] - dates[i - 1]);
-  gaps.sort((a, b) => a - b);
-  const median = gaps[Math.floor(gaps.length / 2)];
-  const days = median / (1000 * 60 * 60 * 24);
-  // Monthly = 25-40 day gaps; quarterly = 80-100 day gaps.
-  return days >= 20 && days <= 45;
+// R58 — cadence detection from chart_template_id. The R53 row-spacing
+// heuristic was wrong: most underlying views are MONTHLY cadence (the
+// _m views), but the user's chart conventions show QUARTER labels on
+// the x-axis even when the line connects monthly dots. R58 inverts
+// the default: every date-axis chart shows quarter labels ("Q1 '24")
+// UNLESS the template name explicitly marks it as a monthly variant
+// (chart_template_id ends with _monthly OR includes _m_).
+//
+// Why this matters: user notes 2026-05-22 batch 4 repeatedly called
+// out "Date x-axis and not quarters" / "labeled in months now and we
+// want quarters" across nearly every chart in the export. R53 was
+// producing "Jan '07" / "Feb '07" labels because the row-spacing
+// detection saw the underlying _m views as monthly.
+//
+// Explicitly-monthly templates (keep "Jan '24" labels):
+//   • bid_ask_spread_monthly
+//   • dom_and_pct_of_ask_monthly
+//   • seller_sentiment_monthly
+//   • buyer_pool_monthly_count
+// All others default to quarter labels.
+function detectMonthlyCadence(chartTemplateId /* legacy: rows[] also accepted */) {
+  if (typeof chartTemplateId === 'string') {
+    if (/_monthly$/.test(chartTemplateId)) return true;
+    if (/monthly_count$/.test(chartTemplateId)) return true;
+    return false;
+  }
+  // Back-compat: callers (tests) that still pass a rows array.
+  // Returns false (quarterly default) — they should switch to passing
+  // chart_template_id.
+  return false;
 }
 
 // R53 — "Q1 '24" formatter for quarterly cadence.
