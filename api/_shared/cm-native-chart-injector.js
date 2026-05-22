@@ -561,11 +561,39 @@ function buildStackedBarChartXml(spec) {
       const borderColor = s.borderColor.replace('#', '');
       lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
     }
+    // R46 — per-series in-bar value labels (for stacked % charts like
+    // buyer_class_pct_by_year). User feedback 2026-05-21: "Data_Buyer_Pool:
+    // Missing the data labels". When `s.showSegmentVal=true` is set on
+    // the series, emit a <c:dLbls> block that renders each bar segment's
+    // value inside the bar. Honors `s.segmentLabelFmt` (e.g. '0%') and
+    // `s.segmentLabelColor` (white for dark fills, black for pale fills).
+    let segLblFrag = '';
+    if (s.showSegmentVal) {
+      const lblFmt   = s.segmentLabelFmt   || '0%';
+      const lblColor = (s.segmentLabelColor || 'FFFFFF').replace('#', '');
+      segLblFrag = `          <c:dLbls>
+            <c:numFmt formatCode="${escapeXml(lblFmt)}" sourceLinked="0"/>
+            <c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>
+            <c:txPr>
+              <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+              <a:lstStyle/>
+              <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="${lblColor}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+            </c:txPr>
+            <c:dLblPos val="ctr"/>
+            <c:showLegendKey val="0"/>
+            <c:showVal val="1"/>
+            <c:showCatName val="0"/>
+            <c:showSerName val="0"/>
+            <c:showPercent val="0"/>
+            <c:showBubbleSize val="0"/>
+          </c:dLbls>`;
+    }
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
           <c:spPr>${fillFrag}${lineFrag}</c:spPr>
+${segLblFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>`;
@@ -1006,6 +1034,30 @@ function buildDoughnutChartXml(spec) {
 
   const holeSize = Math.max(10, Math.min(90, spec.holeSize || 55));
 
+  // R46 — per-segment percent labels. User feedback 2026-05-21:
+  // "Data_Avail_Tenant_Count: Missing Labels" + "Data_Avail_Tenant_Vol:
+  // Missing labels". When spec.showSegmentLabels=true, emit a <c:dLbls>
+  // block with showPercent=1 and a 0% format so each segment shows its
+  // share of the donut total (e.g. DaVita 42%).
+  const segLblsFrag = spec.showSegmentLabels
+    ? `        <c:dLbls>
+          <c:numFmt formatCode="0%" sourceLinked="0"/>
+          <c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:txPr>
+            <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+            <a:lstStyle/>
+            <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+          </c:txPr>
+          <c:dLblPos val="ctr"/>
+          <c:showLegendKey val="0"/>
+          <c:showVal val="0"/>
+          <c:showCatName val="0"/>
+          <c:showSerName val="0"/>
+          <c:showPercent val="1"/>
+          <c:showBubbleSize val="0"/>
+        </c:dLbls>`
+    : '';
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:roundedCorners val="0"/>
@@ -1020,6 +1072,7 @@ function buildDoughnutChartXml(spec) {
           <c:order val="0"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${spec.titleCol}$${spec.titleRow}</c:f></c:strRef></c:tx>
 ${dPtXml}
+${segLblsFrag}
           <c:cat><c:strRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:strRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${spec.valCol}$${spec.dataStart}:$${spec.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>
@@ -2138,6 +2191,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // X axis is sale-date — leave auto-scaled (Excel auto-fits date range).
           yAxisRange: CAP_RATE_DOT_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
+          // R46 — scatter x axis renders raw dates by default; switch to the
+          // q"Q-"yyyy quarter format used elsewhere in the deck. Period_end
+          // cells are stored as Excel date serials (cm-excel-export.js
+          // converts ISO strings to Date for any column with format='date_short'),
+          // so the numFmt applies cleanly. User feedback 2026-05-21:
+          // "X-axis is messed up and we need to see quarters for the labels,
+          // not dates".
+          xAxisNumFmt: DEFAULT_CAT_AX_NUM_FMT,
           series: [{
             titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky,
             // Polynomial order 3, dotted, navy, 720-day forecast forward.
@@ -2889,11 +2950,21 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // R37 P2 — pct stack totals 100% (renderer line ~1249 sets max=1.0)
           yAxisRange:  { min: 0, max: 1 },
           valAxNumFmt: VAL_FMT_PERCENT_0DP,
+          // R46 — per-segment in-bar % labels. User feedback 2026-05-21:
+          // "Data_Buyer_Pool: Missing the data labels". Renderer (line
+          // ~1244) renders white text on navy/mid-blue, dark text on
+          // sky/pale fills (legibility). Mirror that here per-series:
+          //   navy + mid-blue  → showSegmentVal: true, white text
+          //   sky + pale       → showSegmentVal: true, dark text
           series: [
-            { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy    },  // Private
-            { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid },  // Public REITs
-            { titleCol: cbCol,   titleRow: headerRow, valCol: cbCol,   color: sky     },  // Cross-Border
-            { titleCol: instCol, titleRow: headerRow, valCol: instCol, color: pale    },  // Institutional
+            { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy,
+              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+            { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid,
+              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+            { titleCol: cbCol,   titleRow: headerRow, valCol: cbCol,   color: sky,
+              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
+            { titleCol: instCol, titleRow: headerRow, valCol: instCol, color: pale,
+              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
           ],
           anchor: standardAnchor,
         },
@@ -3167,6 +3238,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           dataStart, dataEnd,
           colors,
           holeSize: 55,
+          // R46 — per-segment % labels (user feedback 2026-05-21)
+          showSegmentLabels: true,
           anchor: standardAnchor,
         },
       };

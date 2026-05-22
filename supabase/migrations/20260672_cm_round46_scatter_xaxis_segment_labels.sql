@@ -1,0 +1,127 @@
+-- =====================================================================
+-- Round 46 — easy wins from user feedback batch 2 (2026-05-21).
+--
+-- Three small, mechanical fixes responding directly to the user notes
+-- in audit/cm-style-audit/USER-NOTES-2026-05-21.docx:
+--
+--   E. Core_Cap_Dot x-axis labels — "X-axis is messed up and we need
+--      to see quarters for the labels, not dates"
+--   D. Buyer_Pool stacked-% labels — "Missing the data labels"
+--   D. Avail_Tenant donuts (Count + Vol) — "Missing labels"
+--
+-- Code-only. NO Supabase view changes.
+--
+-- ---------------------------------------------------------------------
+-- FIX #1 — Core_Cap_Dot scatter x-axis quarter format
+-- ---------------------------------------------------------------------
+-- Scatter charts use <c:valAx> for BOTH axes (x + y are numeric); they
+-- can't pick up the R37 P1 catAxNumFmt default (which targets <c:catAx>).
+-- The scatter builder already had spec.xAxisNumFmt support from R37 P2;
+-- it just wasn't wired on core_cap_rate_dot_plot.
+--
+-- Added xAxisNumFmt: DEFAULT_CAT_AX_NUM_FMT ('q"Q-"yyyy') to the spec.
+-- period_end cells already carry Excel date serials (cm-excel-export.js
+-- converts ISO strings to Date for any format='date_short' column),
+-- so the format string renders as e.g. "1Q-2024" instead of "1/1/2024".
+--
+-- ---------------------------------------------------------------------
+-- FIX #2 — Avail_Tenant_Count + Avail_Tenant_Vol donut % labels
+-- ---------------------------------------------------------------------
+-- Both donut charts render 4 tenant segments (DaVita / FMC / US Renal /
+-- Other) but lacked any in-segment labels — users had to read the
+-- legend to know which segment was which size.
+--
+-- New `showSegmentLabels: true` flag on buildDoughnutChartXml emits a
+-- <c:dLbls> block with:
+--   • <c:showPercent val="1"/>  — render each segment as % of total
+--   • <c:showVal val="0"/>       — don't show raw values
+--   • <c:dLblPos val="ctr"/>     — center label inside segment
+--   • <c:numFmt formatCode="0%"/>— integer-percent format
+--   • White bold 9pt text        — legible on the colored segments
+--
+-- Wired on both available_by_tenant_count_donut + available_by_tenant_volume_donut.
+--
+-- ---------------------------------------------------------------------
+-- FIX #3 — Buyer_Pool annual stacked % in-bar labels
+-- ---------------------------------------------------------------------
+-- buyer_class_pct_by_year is a 4-series annual stacked bar (Private /
+-- Public REITs / Cross-Border / Institutional). Renderer (line ~1244)
+-- shows each segment's % inside the bar; native version was missing
+-- the labels (called out in the R35 P3 implementation as deferred).
+--
+-- New `showSegmentVal: true` flag on individual stacked-bar series
+-- emits per-series <c:dLbls> with:
+--   • <c:showVal val="1"/>     — render the cell value (the %)
+--   • <c:dLblPos val="ctr"/>   — center label inside each stack segment
+--   • Configurable color + format via segmentLabelFmt + segmentLabelColor
+--
+-- Wired per-series on buyer_class_pct_by_year:
+--   Private (navy)        → white text  segmentLabelColor: 'FFFFFF'
+--   Public REITs (blueMid) → white text  segmentLabelColor: 'FFFFFF'
+--   Cross-Border (sky)     → dark text   segmentLabelColor: '191919'
+--   Institutional (pale)   → dark text   segmentLabelColor: '191919'
+--
+-- Matches the renderer's contrast logic (white on dark fills, dark on
+-- light fills) so labels stay legible regardless of segment color.
+--
+-- ---------------------------------------------------------------------
+-- ASSUMPTION CARRY-OVER TO GOV
+-- ---------------------------------------------------------------------
+-- User said "this is just for dialysis but I would venture a guess
+-- that most of these comments also apply to the same charts in the
+-- government versions."
+--
+-- For R46:
+--   • Core_Cap_Dot scatter x-axis fix applies to BOTH verticals
+--     (same template, same builder, same xAxisNumFmt) ✓
+--   • Avail_Tenant donuts are DIA-ONLY templates (no gov equivalent
+--     in the catalog) — N/A for gov
+--   • buyer_class_pct_by_year applies to BOTH verticals (template
+--     covers both) — the same fix lands automatically ✓
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 124 CM tests pass (up from 117 in R45). Full suite 219 pass / 2
+-- unrelated pre-existing failures.
+--
+-- New R46 tests:
+--   • core_cap_rate_dot_plot spec sets xAxisNumFmt='q"Q-"yyyy'
+--   • Scatter chart XML emits quarter format on the x val axis
+--   • Doughnut emits <c:dLbls>+showPercent=1 when showSegmentLabels=true
+--   • Doughnut omits dLbls when flag missing (backward compat)
+--   • buildInjectionSpec wires showSegmentLabels=true on both donut templates
+--   • Stacked-bar series emits in-bar value labels when showSegmentVal=true
+--   • buildInjectionSpec wires per-series showSegmentVal on buyer_class_pct_by_year
+--     with correct contrast colors (white for navy+midblue; dark for sky+pale)
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_Core_Cap_Dot (both verticals) — x-axis labels should now
+--    read "1Q-2024", "2Q-2024", etc. instead of "1/1/2024", "4/1/2024"
+-- 3. Open Data_Avail_Tenant_CountD + Data_Avail_Tenant_VolD (dia only) —
+--    each donut segment should show its % share inside the wedge in
+--    white bold 9pt text (e.g. "42%" on DaVita slice)
+-- 4. Open Data_Buyer_Pool (both verticals) — each yearly stacked bar
+--    should display the % of each buyer-class segment inside the bar:
+--    white text on navy (Private) + mid-blue (REITs); dark text on
+--    sky (Cross-Border) + pale (Institutional)
+-- 5. Re-run audit:
+--      node audit/cm-style-audit/verify-r37-r41.mjs
+--    All R37-R45 features should still report 100% / 98% as before.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S COMING IN R47-R49 (per user notes triage)
+-- ---------------------------------------------------------------------
+-- R47 — Bucket A: pre-2014/pre-2006 data gap investigation across
+--       ~12 views. Confirm whether generate_series starts are too
+--       conservative or inner filters are dropping older rows.
+-- R48 — Bucket B: statistical formula fixes (Cap_Quartile +
+--       Active_Cap_Quart real percentiles; NM_vs_Market smoothing;
+--       Sold/Ask_Cap_by_Term erratic series; Vol_Cap_Combo 2024 drop).
+-- R49 — Bucket C: chart type/style restructures vs master Excel
+--       (Bid_Ask, Inventory_Backlog, Market_Turnover,
+--       Avail_by_Term_Summary).
+-- =====================================================================
