@@ -1502,9 +1502,9 @@ test('buildInjectionSpec: inventory_backlog R50+R54 — combo bar+bar+net line; 
   assert.equal(out.helperCols[1].getValue({ sold_ttm: null }), null);
 });
 
-test('buildInjectionSpec: pace_of_cap_rate_expansion clusters 2 bars (3rd line series deferred)', () => {
-  // Renderer references pace_cost for a 3rd line, but it's not in
-  // the data tab schema. Native plots the 2 bars that exist.
+test('buildInjectionSpec: pace_of_cap_rate_expansion falls back to 2-bar when pace_cost missing (back-compat)', () => {
+  // Legacy view shape — no pace_cost column. Spec falls back to the
+  // pre-R56 clustered-bar shape so the chart still renders.
   const out = buildInjectionSpec({
     chart_template_id: 'pace_of_cap_rate_expansion',
     tabName: 'Data_Pace_Cap_Expand',
@@ -1520,6 +1520,30 @@ test('buildInjectionSpec: pace_of_cap_rate_expansion clusters 2 bars (3rd line s
   assert.equal(out.spec.series.length, 2);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['B', 'C']);
   assert.deepEqual(out.spec.series.map(s => s.color), ['003DA5', '62B5E5'], 'navy + sky');
+});
+
+test('R56: pace_of_cap_rate_expansion adds pace_cost YOY line when col present', () => {
+  // R56 — restructured to combo with pace_cost as a 3rd line (amber).
+  // User notes 2026-05-22: "We also have a YOY pace of change line in
+  // our Excel/PDF version that is missing from this one."
+  const out = buildInjectionSpec({
+    chart_template_id: 'pace_of_cap_rate_expansion',
+    tabName: 'Data_Pace_Cap_Expand',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'pace_all',   col: 'B' },
+      { key: 'pace_core',  col: 'C' },
+      { key: 'pace_cost',  col: 'D' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.sharedAxis, true, 'pace_cost on same axis as pace_all/core');
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'D', 'pace_cost line reads from col D');
+  assert.equal(out.spec.lineSeries[0].color, 'D97706', 'amber matches deferred color in R45/R50');
 });
 
 test('injectNativeCharts: clustered-bar dispatch produces grouping=clustered XML', async () => {
@@ -4538,4 +4562,39 @@ test('R55: buildComboChartXml emits axis titles and barOverlap', () => {
   assert.match(xml, /<c:overlap val="100"\/>/, 'barOverlap = 100');
   assert.match(xml, /Listings count/, 'left axis title rendered');
   assert.match(xml, /Months of supply/, 'right axis title rendered');
+});
+
+test('R56: NAME_OVERRIDES_BY_VERTICAL — dia available_cap_rate_dot_plot title says Lease Term', async () => {
+  // This is an integration test against cm-excel-export.js NAME_OVERRIDES_BY_VERTICAL.
+  // Verifies the chart.name is patched to "Lease Term" for dia vertical.
+  const { buildCapitalMarketsWorkbook } = await import('../api/_shared/cm-excel-export.js');
+  const charts = [{
+    chart_template_id: 'available_cap_rate_dot_plot',
+    name: 'Available Deals — Asking Cap vs Firm Term',  // catalog default
+    chart_type: 'scatter',
+    rows: [],
+  }];
+  // buildCapitalMarketsWorkbook mutates `charts` in place via the override map.
+  buildCapitalMarketsWorkbook({
+    vertical: 'dialysis', subspecialty: 'all', asOf: '2026-03-31',
+    charts, brand: { palette: {}, fonts: {} },
+  });
+  assert.equal(charts[0].name, 'Available Deals — Asking Cap vs Lease Term',
+    'R56: dia title patched to "Lease Term"');
+});
+
+test('R56: NAME_OVERRIDES_BY_VERTICAL — gov keeps original Firm Term title', async () => {
+  const { buildCapitalMarketsWorkbook } = await import('../api/_shared/cm-excel-export.js');
+  const charts = [{
+    chart_template_id: 'available_cap_rate_dot_plot',
+    name: 'Available Deals — Asking Cap vs Firm Term',
+    chart_type: 'scatter',
+    rows: [],
+  }];
+  buildCapitalMarketsWorkbook({
+    vertical: 'gov', subspecialty: 'all', asOf: '2026-03-31',
+    charts, brand: { palette: {}, fonts: {} },
+  });
+  assert.equal(charts[0].name, 'Available Deals — Asking Cap vs Firm Term',
+    'R56: gov keeps original title (firm term is a gov-only concept)');
 });
