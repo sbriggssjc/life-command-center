@@ -1,0 +1,100 @@
+-- =====================================================================
+-- Round 60 — chart visual polish from user notes 2026-05-22 batch 4.
+-- Four items. Code-only PR. NO Supabase changes.
+--
+-- ---------------------------------------------------------------------
+-- 1. Cap_Quartile y-axis tightening (5-10% → 5.5-8.5%)
+-- ---------------------------------------------------------------------
+-- User: "the bands move in perfect proportion to the median in both
+-- directions". Per R54-R57 verification, the underlying data IS
+-- asymmetric (Q3-Med differs from Med-Q1 by ~12-32 bps year over
+-- year). But on a 500bps-wide y-axis pin (CAP_RATE_RANGE 5-10%), the
+-- ~150bps IQR consumes only ~30% of the chart height — the
+-- asymmetry is visually invisible.
+--
+-- R60 tightens to 5.5-8.5% (300bps span), giving the IQR ~50% of the
+-- chart height. The asymmetry the data already has becomes visible.
+-- Verified in audit/cm-style-audit/R54-CAP-QUARTILE-FINDINGS.md.
+--
+-- ---------------------------------------------------------------------
+-- 2. Inventory_Backlog title mismatch
+-- ---------------------------------------------------------------------
+-- User: "chart titles don't depict what is displayed." Direct
+-- inspection of the post-R58 export found:
+--   Chart title (from catalog): "Inventory Backlog — Active Listings
+--                                & Months of Supply"
+--   What's actually charted:    Added (sky bar) + Sold (navy bar, neg)
+--                              + Net to Market (gray line) [R50/R54]
+--
+-- Title talks about active listings + months of supply (the
+-- Market_Turnover chart's data), but R50/R54 restructured this chart
+-- to plot added/sold flow.
+--
+-- Fix: add an override entry to NAME_OVERRIDES_BY_VERTICAL in
+-- cm-excel-export.js:
+--   inventory_backlog: 'Inventory Backlog — Added vs Sold (TTM) + Net to Market'
+-- Applied to both dia and gov.
+--
+-- ---------------------------------------------------------------------
+-- 3. Pace_Cap_Expand x-axis label position
+-- ---------------------------------------------------------------------
+-- User: "now we want the x-axis labels to be dropped below zero so we
+-- can see the data's movement."
+--
+-- Excel's default `<c:tickLblPos val="nextTo"/>` places labels where
+-- the cat axis crosses the value axis. For charts with negative
+-- values (Pace_Cap_Expand has negative cap-rate-change bars;
+-- Inventory_Backlog has negative sold_neg bars post-R54), this puts
+-- labels in the middle of the chart area where they overlap the
+-- negative bars.
+--
+-- R60 emits `<c:tickLblPos val="low"/>` on every cat-axis block.
+-- Labels pin to the bottom of the chart area regardless of negative
+-- values. For all-positive charts the visual is identical to the
+-- previous default.
+--
+-- ---------------------------------------------------------------------
+-- 4. Avail_by_Term_Summary callouts + tighter cap axis
+-- ---------------------------------------------------------------------
+-- User: "We need the data points labeled with call outs so we can see
+-- the data, maybe even adjust the cap rate axis so we can see the
+-- movement better."
+--
+-- Two fixes:
+--   • dLblsXml extended with a new mode: { showVal: true, numFmt: ... }
+--     emits chart-level <c:showVal val="1"/> so every data point gets
+--     a value callout. Position: above the marker.
+--   • yRightRange tightened from CAP_RATE_DOT_RANGE (4-12%) to 5-9%
+--     so the typical dia term-bucket cap range (5.5-8%) takes more
+--     vertical space.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 160 CM injector tests pass (was 157 after R58). 3 new R60 tests:
+--   • every catAx emits tickLblPos="low"
+--   • cap_rate_top_bottom_quartile yAxisRange = 5.5-8.5%
+--   • dLblsXml { showVal: true } emits chart-level value labels
+-- Full suite 381/2 (2 unrelated pre-existing).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Data_Cap_Quartile — IQR bands take ~50% of chart height (was
+--    ~30%); asymmetric movement between Q3-Med and Med-Q1 visible
+-- 3. Data_Inventory_Backlog — chart title reads "Inventory Backlog —
+--    Added vs Sold (TTM) + Net to Market"
+-- 4. Data_Pace_Cap_Expand — x-axis labels at the bottom of the chart
+--    area, NOT overlapping the negative bars at y=0
+-- 5. Data_Inventory_Backlog — same: x-axis labels at the bottom,
+--    not overlapping the negative Sold bars
+-- 6. Data_Avail_by_Term_Summary — value callouts (e.g. "6.42%") above
+--    every diamond dot; right-axis range visible 5-9%
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT
+-- ---------------------------------------------------------------------
+-- R61: recoverable-errors warning deep investigation
+-- R62: tenant donuts re-verify post-R58/R60 deploy
+-- =====================================================================
