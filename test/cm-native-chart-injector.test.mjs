@@ -4796,3 +4796,81 @@ test('R60: dLblsXml with { showVal: true } emits chart-level value labels', () =
   assert.match(xml, /<c:showVal val="1"\/>/, 'R60: showVal=1 emitted for marker dataLabels');
   assert.match(xml, /<c:dLblPos val="t"\/>/, 'R60: label position above marker');
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// R61 — OOXML schema-order regression test for valAx blocks
+// ─────────────────────────────────────────────────────────────────────
+
+test('R61: every valAx block emits children in OOXML canonical order', () => {
+  // Excel's "recoverable errors / data and charts" warning is triggered
+  // when chart XML violates the strict child-element order in
+  // EG_AxShared. Per ECMA-376 the order is:
+  //   axId → scaling → delete → axPos → [majorGridlines/minorGridlines/title]
+  //   → numFmt → majorTickMark → minorTickMark → tickLblPos → spPr → txPr
+  //   → crossAx → crosses → crossesAt → ...
+  //
+  // Pre-R61, every builder emitted majorGridlines BEFORE delete + axPos,
+  // which Excel auto-repaired with a "recoverable errors" warning on
+  // every chart open. R61 reorders to: scaling → delete → axPos →
+  // majorGridlines → numFmt → ... (canonical).
+  //
+  // This test verifies the regression doesn't recur across all 4
+  // builders that emit valAx blocks.
+  const CANONICAL = [
+    'c:axId', 'c:scaling', 'c:delete', 'c:axPos',
+    'c:majorGridlines', 'c:title', 'c:numFmt',
+    'c:majorTickMark', 'c:minorTickMark', 'c:tickLblPos',
+    'c:spPr', 'c:txPr', 'c:crossAx', 'c:crosses', 'c:crossesAt',
+  ];
+  function getChildren(blockXml) {
+    const inner = blockXml.replace(/^<c:valAx>/, '').replace(/<\/c:valAx>$/, '');
+    const out = [];
+    let depth = 0, pos = 0;
+    while (pos < inner.length) {
+      const ts = inner.indexOf('<', pos);
+      if (ts === -1) break;
+      const te = inner.indexOf('>', ts);
+      const tag = inner.substring(ts + 1, te);
+      const isClose = tag.startsWith('/');
+      const isSelf = tag.endsWith('/');
+      const name = tag.replace(/^\//, '').replace(/\/$/, '').split(/\s/)[0];
+      if (depth === 0 && !isClose) out.push(name);
+      if (!isSelf && !isClose) depth++;
+      else if (isClose) depth--;
+      pos = te + 1;
+    }
+    return out;
+  }
+  function assertCanonical(blockXml, label) {
+    const children = getChildren(blockXml);
+    let lastIdx = -1;
+    for (const c of children) {
+      const idx = CANONICAL.indexOf(c);
+      if (idx === -1) continue; // unknown — skip
+      assert.ok(idx >= lastIdx,
+        `${label}: <${c}> appears AFTER a higher-order sibling (was: ${children.join(', ')})`);
+      lastIdx = idx;
+    }
+  }
+
+  // Sample one chart of each builder type
+  const samples = [
+    ['multi-line', buildMultiLineChartXml({
+      tabName: 'T', catCol: 'A', dataStart: 5, dataEnd: 10,
+      yAxisRange: { min: 0.05, max: 0.10 }, valAxNumFmt: '0.00%',
+      series: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' }],
+    })],
+    ['combo', buildComboChartXml({
+      tabName: 'T', catCol: 'A', dataStart: 5, dataEnd: 10,
+      yLeftRange: { min: 0, max: 100 }, yLeftNumFmt: '#,##0',
+      yRightNumFmt: '0.0%',
+      barSeries: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '62B5E5' }],
+      lineSeries: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' }],
+    })],
+  ];
+
+  for (const [label, xml] of samples) {
+    const blocks = xml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/g) || [];
+    blocks.forEach((b, i) => assertCanonical(b, `${label} valAx[${i}]`));
+  }
+});

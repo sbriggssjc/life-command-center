@@ -460,9 +460,9 @@ ${dLblsFrag}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
@@ -684,9 +684,9 @@ ${seriesXml}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
@@ -802,9 +802,9 @@ ${upDownBarsFrag}
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
@@ -1038,20 +1038,20 @@ ${lineXml}
       <c:valAx>
         <c:axId val="2"/>
         ${leftRangeFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${leftAxTitleFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         ${leftFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>${spec.sharedAxis ? '' : `
       <c:valAx>
         <c:axId val="3"/>
         ${rightRangeFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="r"/>
         ${rightAxTitleFrag}
+        ${MAJOR_GRIDLINES_FRAG}
         ${rightFmtFrag}
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
@@ -1276,18 +1276,18 @@ ${seriesXml}
       <c:valAx>
         <c:axId val="1"/>
         ${xScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="b"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${xFmtFrag}
         <c:crossAx val="2"/>
       </c:valAx>
       <c:valAx>
         <c:axId val="2"/>
         ${yScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${yFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
@@ -1480,18 +1480,18 @@ ${lineXml}
       <c:valAx>
         <c:axId val="2"/>
         ${leftScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${leftFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
       <c:valAx>
         <c:axId val="3"/>
         ${rightScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="r"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${rightFmtFrag}
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
