@@ -343,13 +343,22 @@ function trendlineXml(t) {
 }
 
 /**
- * Emit a <c:dLbls> block with per-point overrides and "no label by
- * default" settings on the rest. Returns empty string if no points.
+ * Emit a <c:dLbls> block. Three modes:
+ *
+ *   1. Array of { idx, text } objects (R37 P3 peak/trough/last labels).
+ *      Emits per-point overrides + suppresses the rest.
+ *   2. { showVal: true } — turn on chart-level value labels (showVal=1)
+ *      so EVERY data point displays its value. Used by R60 for
+ *      Avail_by_Term_Summary dot callouts where each dot's cap-rate
+ *      value should be visible. Optional numFmt for label format
+ *      (defaults to source-linked).
+ *   3. Anything else → empty (no label block emitted).
  */
-function dLblsXml(points) {
-  if (!Array.isArray(points) || points.length === 0) return '';
-  const lbls = points.map(p => dLblXml(p.idx, p.text)).join('\n');
-  return `        <c:dLbls>
+function dLblsXml(spec) {
+  // Mode 1 — legacy array of per-point labels (R37 P3)
+  if (Array.isArray(spec) && spec.length > 0) {
+    const lbls = spec.map(p => dLblXml(p.idx, p.text)).join('\n');
+    return `        <c:dLbls>
 ${lbls}
           <c:showLegendKey val="0"/>
           <c:showVal val="0"/>
@@ -358,6 +367,24 @@ ${lbls}
           <c:showPercent val="0"/>
           <c:showBubbleSize val="0"/>
         </c:dLbls>`;
+  }
+  // Mode 2 — R60 chart-level showVal for "label every point" mode
+  if (spec && typeof spec === 'object' && spec.showVal === true) {
+    const numFmtFrag = spec.numFmt
+      ? `<c:numFmt formatCode="${escapeXml(spec.numFmt)}" sourceLinked="0"/>`
+      : '';
+    return `        <c:dLbls>
+          ${numFmtFrag}
+          <c:dLblPos val="t"/>
+          <c:showLegendKey val="0"/>
+          <c:showVal val="1"/>
+          <c:showCatName val="0"/>
+          <c:showSerName val="0"/>
+          <c:showPercent val="0"/>
+          <c:showBubbleSize val="0"/>
+        </c:dLbls>`;
+  }
+  return '';
 }
 
 // ----------------------------------------------------------------------------
@@ -3815,7 +3842,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // spans 800bps but the actual dia term-bucket caps cluster
       // 5.5-8% — a 250bps spread crushed into 28% of the chart height.
       // 5-9% pin (400bps span) doubles the visible vertical resolution.
-      const dotLabelsAll = { positions: 'all', formatter: 'pct2' };
+      const dotLabelsAll = { showVal: true, numFmt: VAL_FMT_PERCENT_2DP };
       return {
         tabName,
         spec: {
