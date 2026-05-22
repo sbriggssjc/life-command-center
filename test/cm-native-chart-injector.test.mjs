@@ -2340,6 +2340,200 @@ test('R41: scatter chart emits gridlines on both x + y val axes', async () => {
   assert.equal(gridlineCount, 2, 'both scatter axes have gridlines');
 });
 
+// ============================================================================
+// R46 — user feedback batch 2 (2026-05-21):
+//   • Core_Cap_Dot scatter x-axis: render quarters not raw dates
+//   • Avail_Tenant donuts: per-segment % labels
+//   • Buyer_Pool stacked-bar: per-segment in-bar % labels
+// ============================================================================
+
+test('R46: core_cap_rate_dot_plot spec sets xAxisNumFmt to quarter format', () => {
+  const spec = buildInjectionSpec({
+    chart_template_id: 'core_cap_rate_dot_plot',
+    tabName: 'Data_Core_Cap_Dot',
+    cols: [
+      { key: 'period_end',      col: 'A' },
+      { key: 'cap_rate',        col: 'B' },
+      { key: 'firm_term_years', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 100,
+    brand: { palette: {} },
+    rows: [],
+  });
+  assert.ok(spec, 'spec produced');
+  assert.equal(spec.spec.xAxisNumFmt, 'q"Q-"yyyy',
+    'scatter x-axis uses quarter format');
+});
+
+test('R46: scatter chart emits xAxisNumFmt on x axis when set', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Test');
+  for (let i = 0; i < 6; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2024, i, 31);
+    sheet.getCell(`B${5 + i}`).value = 0.05 + i * 0.005;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Test',
+    spec: {
+      type: 'scatter', tabName: 'Data_Test',
+      dataStart: 5, dataEnd: 10,
+      series: [{ titleCol: 'B', titleRow: 4, xCol: 'A', yCol: 'B', color: '003DA5' }],
+      xAxisNumFmt: 'q"Q-"yyyy',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  const xAxBlock = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/g)?.[0];
+  assert.ok(xAxBlock, 'first valAx block found');
+  assert.match(xAxBlock, /q&quot;Q-&quot;yyyy/,
+    'x axis (first valAx) emits quarter format');
+});
+
+test('R46: doughnut chart emits per-segment % labels when showSegmentLabels=true', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Donut');
+  sheet.getCell('B4').value = 'Title';
+  for (let i = 0; i < 3; i++) {
+    sheet.getCell(`A${5 + i}`).value = ['DaVita', 'FMC', 'Other'][i];
+    sheet.getCell(`B${5 + i}`).value = 100 - i * 20;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Donut',
+    spec: {
+      type: 'doughnut', tabName: 'Data_Donut',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 7,
+      colors: ['003DA5', '62B5E5', '4CB582'],
+      showSegmentLabels: true,
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:dLbls>/, '<c:dLbls> block emitted');
+  assert.match(chartXml, /<c:showPercent val="1"\/>/, 'showPercent=1');
+  assert.match(chartXml, /<c:showVal val="0"\/>/, 'showVal=0 (use percent only)');
+  assert.match(chartXml, /<c:dLblPos val="ctr"\/>/, 'labels centered in segment');
+  assert.match(chartXml, /formatCode="0%"/, 'percent format 0%');
+});
+
+test('R46: doughnut omits dLbls when showSegmentLabels missing (backward compat)', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Donut');
+  for (let i = 0; i < 3; i++) {
+    sheet.getCell(`A${5 + i}`).value = ['DaVita', 'FMC', 'Other'][i];
+    sheet.getCell(`B${5 + i}`).value = 100 - i * 20;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Donut',
+    spec: {
+      type: 'doughnut', tabName: 'Data_Donut',
+      titleCol: 'B', titleRow: 4,
+      catCol: 'A', valCol: 'B',
+      dataStart: 5, dataEnd: 7,
+      colors: ['003DA5', '62B5E5', '4CB582'],
+      // no showSegmentLabels
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.ok(!/<c:dLbls>/.test(chartXml), 'no dLbls when flag missing');
+});
+
+test('R46: buildInjectionSpec wires showSegmentLabels on tenant donuts', () => {
+  for (const tpl of ['available_by_tenant_count_donut', 'available_by_tenant_volume_donut']) {
+    const colsBase = [
+      { key: 'tenant', col: 'A' },
+      { key: tpl === 'available_by_tenant_volume_donut' ? 'volume_available' : 'count_active', col: 'B' },
+      { key: 'period_end', col: 'C' },
+    ];
+    const out = buildInjectionSpec({
+      chart_template_id: tpl,
+      tabName: tpl === 'available_by_tenant_volume_donut' ? 'Data_Avail_Tenant_VolD' : 'Data_Avail_Tenant_CountD',
+      cols: colsBase,
+      dataStart: 5, dataEnd: 8,
+      brand: { palette: {} },
+    });
+    assert.ok(out, `${tpl}: spec produced`);
+    assert.equal(out.spec.showSegmentLabels, true, `${tpl}: showSegmentLabels=true`);
+  }
+});
+
+test('R46: stacked-bar series emits in-bar value labels when showSegmentVal=true', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Stack');
+  for (let i = 0; i < 3; i++) {
+    sheet.getCell(`A${5 + i}`).value = 2023 + i;
+    sheet.getCell(`B${5 + i}`).value = 0.5 - i * 0.1;  // private %
+    sheet.getCell(`C${5 + i}`).value = 0.5 + i * 0.1;  // reit %
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Stack',
+    spec: {
+      type: 'stacked-bar', tabName: 'Data_Stack',
+      catCol: 'A', dataStart: 5, dataEnd: 7,
+      yAxisRange: { min: 0, max: 1 },
+      valAxNumFmt: '0%',
+      series: [
+        { titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5',
+          showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '62B5E5',
+          showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  // Two dLbls blocks — one per series
+  const dLblsCount = (chartXml.match(/<c:dLbls>/g) || []).length;
+  assert.equal(dLblsCount, 2, 'each stack series has its own dLbls block');
+  assert.match(chartXml, /<c:showVal val="1"\/>/);
+  // White label color (private series)
+  assert.match(chartXml, /<a:srgbClr val="FFFFFF"\/>/, 'white text on dark fill');
+  // Dark label color (sky series)
+  assert.match(chartXml, /<a:srgbClr val="191919"\/>/, 'dark text on light fill');
+});
+
+test('R46: buildInjectionSpec wires per-series showSegmentVal on buyer_class_pct_by_year', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'buyer_class_pct_by_year',
+    tabName: 'Data_Buyer_Pool',
+    cols: [
+      { key: 'year',                  col: 'A' },
+      { key: 'subspecialty',          col: 'B' },
+      { key: 'private_volume',        col: 'C' },
+      { key: 'reit_volume',           col: 'D' },
+      { key: 'cross_border_volume',   col: 'E' },
+      { key: 'institutional_volume',  col: 'F' },
+      { key: 'private_pct',           col: 'G' },
+      { key: 'reit_pct',              col: 'H' },
+      { key: 'cross_border_pct',      col: 'I' },
+      { key: 'institutional_pct',     col: 'J' },
+    ],
+    dataStart: 5, dataEnd: 20,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5', nm_blue_mid: '#265AB2', nm_pale: '#E0E8F4' } },
+  });
+  assert.ok(out, 'spec produced');
+  assert.equal(out.spec.series.length, 4);
+  for (const s of out.spec.series) {
+    assert.equal(s.showSegmentVal, true, 'every series has showSegmentVal');
+    assert.equal(s.segmentLabelFmt, '0%');
+  }
+  // First two (private + reit) use white; last two (cross-border + institutional) use dark
+  assert.equal(out.spec.series[0].segmentLabelColor, 'FFFFFF', 'private white text');
+  assert.equal(out.spec.series[1].segmentLabelColor, 'FFFFFF', 'reit white text');
+  assert.equal(out.spec.series[2].segmentLabelColor, '191919', 'cross-border dark text');
+  assert.equal(out.spec.series[3].segmentLabelColor, '191919', 'institutional dark text');
+});
+
 test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line', () => {
   // Quarterly tab has no avg_last_ask_cap → renderer uses single-line.
   const cols = [
