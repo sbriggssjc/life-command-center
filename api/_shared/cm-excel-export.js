@@ -270,6 +270,11 @@ const CHART_COLUMNS = {
     { key: 'period_end', header: 'Month End',                          format: 'date_short',          width: 13 },
     { key: 'pace_all',   header: 'Pace — All Cohort (annualized)',     format: 'percent_basis_points', width: 28 },
     { key: 'pace_core',  header: 'Pace — 10+ Year Cohort (annualized)',format: 'percent_basis_points', width: 32 },
+    // R56 — pace_cost (YoY cost-of-capital change) was being computed
+    // by the synthetic composer but dropped here. User notes 2026-05-22:
+    // "We also have a YOY pace of change line in our Excel/PDF version
+    // that is missing from this one."
+    { key: 'pace_cost',  header: 'Pace — Cost of Capital (YoY)',       format: 'percent_basis_points', width: 28 },
   ],
   // Audit-fix: catalog rows existed but TAB_NAMES + CHART_COLUMNS were missing,
   // so these DataTables were silently dropped from every export.
@@ -963,9 +968,34 @@ const GOV_MASTER_PASTE_LAYOUT = [
 // Workbook builder
 // ============================================================================
 
+// R56 — per-vertical name overrides. The catalog's `name` field is shared
+// across verticals (one catalog row → multiple verticals), but a few
+// charts want vertical-specific phrasing (e.g. "Firm Term" is a gov-only
+// concept; dialysis says just "Lease Term"). Apply override at chart-loop
+// time so it flows into tab title + index row + chart <c:title> + page
+// header consistently.
+const NAME_OVERRIDES_BY_VERTICAL = {
+  dialysis: {
+    // User notes 2026-05-22: "Firm term label in the dialysis chart title,
+    // should just be lease term — firm term is for government only"
+    available_cap_rate_dot_plot: 'Available Deals — Asking Cap vs Lease Term',
+  },
+  gov: {},
+};
+
 export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
   const fonts   = (brand?.fonts)   ? brand.fonts   : DEFAULT_BRAND.fonts;
+  // R56 — patch chart.name based on per-vertical overrides ONCE up front.
+  // chart.name is read in many places (tab title, page header, chart
+  // <c:title>, index row); patching the source avoids per-callsite plumbing.
+  const verticalOverrides = NAME_OVERRIDES_BY_VERTICAL[vertical] || {};
+  if (Array.isArray(charts)) {
+    for (const c of charts) {
+      const override = verticalOverrides[c.chart_template_id];
+      if (override) c.name = override;
+    }
+  }
 
   // Lookup chartImages by chart_template_id for per-tab embedding.
   // chartImages is the array returned by renderChartsToImages(), where each

@@ -3311,27 +3311,58 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'pace_of_cap_rate_expansion': {
-      // 2 bars: pace_all (navy) + pace_core (sky). Renderer also wants
-      // a 3rd amber line (pace_cost) but the data tab schema doesn't
-      // include it — same pattern as net_lease_spread + fed_funds_vs_treasury.
-      // Plot the 2 bars that exist.
+      // R56 — restructured from 2-bar to 2-bar + 1-line combo. User
+      // notes 2026-05-22: "We also have a YOY pace of change line in
+      // our Excel/PDF version that is missing from this one."
+      //
+      // The synthetic composer at api/capital-markets.js already emits
+      // a `pace_cost` field (YoY change in cost-of-capital, derived
+      // from mortgage_30y_rate / treasury_10y_yield), but the prior
+      // chart spec dropped it. R56 adds it back as an amber line on
+      // the SHARED axis (pace_cost is in the same %bps units as the
+      // other two pace series).
       const periodCol = findCol('period_end');
       const allCol    = findCol('pace_all');
       const coreCol   = findCol('pace_core');
+      const costCol   = findCol('pace_cost');
       if (!periodCol || !allCol || !coreCol) return null;
+      // Graceful fallback — if pace_cost isn't in cols (legacy view),
+      // keep the original 2-bar shape.
+      if (!costCol) {
+        return {
+          tabName,
+          spec: {
+            type: 'clustered-bar', tabName, catCol: periodCol, dataStart, dataEnd,
+            yAxisRange: { min: -0.025, max: 0.035 },
+            valAxNumFmt: VAL_FMT_PERCENT_2DP,
+            series: [
+              { titleCol: allCol,  titleRow: headerRow, valCol: allCol,  color: navy },
+              { titleCol: coreCol, titleRow: headerRow, valCol: coreCol, color: sky  },
+            ],
+            anchor: standardAnchor,
+          },
+        };
+      }
       return {
         tabName,
         spec: {
-          type: 'clustered-bar',
+          type: 'combo',
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — percent change ±3% pin (renderer line ~1970)
-          yAxisRange: { min: -0.025, max: 0.035 },
-          valAxNumFmt: VAL_FMT_PERCENT_2DP,
-          series: [
+          barGrouping:    'clustered',
+          sharedAxis:     true,   // pace_cost is in the same units as pace_all/core
+          yAxisRange:     { min: -0.025, max: 0.035 },
+          valAxNumFmt:    VAL_FMT_PERCENT_2DP,
+          yLeftNumFmt:    VAL_FMT_PERCENT_2DP,
+          barSeries: [
             { titleCol: allCol,  titleRow: headerRow, valCol: allCol,  color: navy },
             { titleCol: coreCol, titleRow: headerRow, valCol: coreCol, color: sky  },
+          ],
+          lineSeries: [
+            // R56 — Cost-of-capital YoY pace, amber (matches the
+            // renderer's deferred 3rd series color noted in R45/R50).
+            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: 'D97706' },
           ],
           anchor: standardAnchor,
         },
