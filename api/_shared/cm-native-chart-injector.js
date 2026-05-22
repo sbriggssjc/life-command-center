@@ -1804,7 +1804,16 @@ export const NATIVE_CHART_TEMPLATES = new Set([
 const MIN_YEAR_BY_TEMPLATE = {
   // FALSE-alarm (pin to 2005 — skip 2003-2004 sparseness)
   cap_rate_ttm_by_quarter:      2005,
-  cap_rate_top_bottom_quartile: 2005,
+  // R54 — cap_rate_top_bottom_quartile bumped from 2005 to 2007 because
+  // 2005-2006 has 0-3 cap-rate samples per TTM window (sane band). With
+  // n<4 the master_m view emits degenerate Q1=Med=Q3 (single sample
+  // means all three percentiles are equal). The R54 view-level
+  // sample-count gate (cm_dialysis_cap_quartile_m + cm_gov_cap_quartile_m)
+  // NULLs those rows so the chart correctly shows a line gap during
+  // sparse periods; the MIN_YEAR bump keeps the visible chart starting
+  // where data is dense, matching user expectation that the chart
+  // shouldn't "move wildly around 2006".
+  cap_rate_top_bottom_quartile: 2007,
   cash_leveraged_returns:       2005,
   cost_of_capital:              2005,
   volume_cap_quartile_combo:    2005,
@@ -3173,12 +3182,28 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     // The helper col lands one past the regular CHART_COLUMNS entries
     // (col G for inventory_backlog which has cols A-F).
     case 'inventory_backlog': {
+      // R54 — Sold now renders as NEGATIVE bars (below 0). User notes
+      // 2026-05-22: "The No Sold category should be counting as a number
+      // removed from the market and go below the 0 on the same plane as
+      // the count for those added so that we can visualize the movement
+      // in the market better." The data tab keeps sold_ttm POSITIVE
+      // (it's a real count); we add a `sold_neg` helper col that's
+      // -sold_ttm, and chart that column instead.
+      //
+      // Net to Market line (R50) stays positive when added > sold,
+      // negative when sold > added. Visual flow:
+      //   Sky bar at +50 (Added) ──────────┐
+      //   Net line at +20 (gray, can be ±)  │
+      //   Navy bar at -30 (Sold, helper) ───┘
       const periodCol = findCol('period_end');
       const addedCol  = findCol('added_ttm');
       const soldCol   = findCol('sold_ttm');
       if (!periodCol || !addedCol || !soldCol) return null;
-      // Helper col letter — sits one column past the regular CHART_COLUMNS
-      const netCol = String.fromCharCode(65 + cols.length);
+      // Helper col letters — net_ttm at G, sold_neg at H (relative to the
+      // 6 regular cols A-F). After R53 wrapper inserts period_label at G,
+      // these shift to H and I respectively (wrapper auto-shifts).
+      const netColLetter     = String.fromCharCode(65 + cols.length);
+      const soldNegColLetter = String.fromCharCode(65 + cols.length + 1);
       return {
         tabName,
         spec: {
@@ -3186,36 +3211,48 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // Bars (added + sold) and the net line share the SAME axis —
-          // they're all integer counts in the same scale. sharedAxis=true
-          // forces the line onto axId 2 (the bars' axis) instead of
-          // emitting a separate right-axis. Range auto-scales so the
-          // line can dip negative without clipping.
+          // Bars + net line all share the same integer axis. Range
+          // auto-scales so negative sold_neg + positive added both fit.
           barGrouping: 'clustered',
           sharedAxis:  true,
           valAxNumFmt: VAL_FMT_INTEGER,
           yLeftNumFmt: VAL_FMT_INTEGER,
           barSeries: [
-            { titleCol: addedCol, titleRow: headerRow, valCol: addedCol, color: sky  },
-            { titleCol: soldCol,  titleRow: headerRow, valCol: soldCol,  color: navy },
+            { titleCol: addedCol,         titleRow: headerRow, valCol: addedCol,         color: sky  },
+            // R54 — Sold series renders from sold_neg helper col so it
+            // appears below 0. Series TITLE still references the original
+            // sold_ttm header cell so the legend reads "No. Sold (TTM)".
+            { titleCol: soldCol,          titleRow: headerRow, valCol: soldNegColLetter, color: navy },
           ],
           lineSeries: [
-            // Net to Market = added − sold (R50 helper col, gray)
-            { titleCol: netCol, titleRow: headerRow, valCol: netCol, color: '6A748C' },
+            // Net to Market = added − sold (R50 gray helper col)
+            { titleCol: netColLetter,     titleRow: headerRow, valCol: netColLetter,     color: '6A748C' },
           ],
           anchor: standardAnchor,
         },
-        helperCols: [{
-          key: 'net_ttm',
-          header: 'Net to Market (TTM)',
-          format: 'integer_count',
-          width: 20,
-          getValue: (row) => {
-            const a = row.added_ttm;
-            const s = row.sold_ttm;
-            return (a == null || s == null) ? null : Number(a) - Number(s);
+        helperCols: [
+          {
+            key: 'net_ttm',
+            header: 'Net to Market (TTM)',
+            format: 'integer_count',
+            width: 20,
+            getValue: (row) => {
+              const a = row.added_ttm;
+              const s = row.sold_ttm;
+              return (a == null || s == null) ? null : Number(a) - Number(s);
+            },
           },
-        }],
+          {
+            key: 'sold_neg',
+            header: 'No. Sold (chart)',
+            format: 'integer_count',
+            width: 18,
+            // R54 — negated sold_ttm for the chart bar (renders below 0).
+            // Data tab still has the original positive sold_ttm for users
+            // reading the numbers.
+            getValue: (row) => row.sold_ttm == null ? null : -Number(row.sold_ttm),
+          },
+        ],
       };
     }
 
