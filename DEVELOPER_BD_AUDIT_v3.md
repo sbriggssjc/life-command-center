@@ -1907,7 +1907,85 @@ needed.
 
 ### 11.16 Topic 1 + 2 — Combined deferred items (2026-05-22)
 
+### 11.17 Topics 4, 7, 8, 9 — Foundation schema (2026-05-22)
+
+Continued through the audit's Phase A backlog after Topic 2 closed. Lands
+the schema + helper views that the priority queue (Topic 5) will read.
+
+**Topic 4 — `v_contact_former_properties` (dia + gov views)**
+
+Surfaces the "Formerly Owned (N)" section data for contact/prospect detail
+pages. Schema differs across DBs:
+- dia: chains contact_links → true_owners → recorded_owners →
+  ownership_history (where `end_date <= CURRENT_DATE`). Merge-aware via
+  `true_owner_id_canonical`. Initial population: 0 rows (contact_links
+  table not yet populated with seller-exit-entity associations); will
+  grow as brokers curate contacts → owners.
+- gov: chains contacts.true_owner_id → ownership_history where the entity
+  appears as `prior_owner`. Resolves via `gov_normalize_for_match` name
+  match (gov recorded_owners lacks `true_owner_id` FK). **Initial
+  population: 1,306 rows across 546 contacts** — significant BD value
+  immediately, surfacing every gov contact whose linked entity has exited
+  one or more properties.
+
+**Topic 7 — touchpoint event integration (minimal scope)**
+
+LCC already has `activity_events` (event log) and `touchpoint_cadence`
+(per-entity rollup), so Topic 7 didn't need to create a new touchpoint
+table. The audit-specified columns were ADDED to the existing infra:
+- `activity_events.bd_opportunity_id` — links event to SF Opportunity
+- `activity_events.stream` ENUM `('bd', 'showing')` — BD scoreboard vs
+  Showing Stream separation per audit §3.4
+- `touchpoint_cadence.bd_opportunity_id` — cadence-per-Opp tracking
+  (per audit §2.6, BD unit = entity × open Opportunity)
+- Supporting partial indexes on each new column
+
+**Topic 8 — `user_domain_specialties` table + seed**
+
+New table tracking per-user vertical focus (dia, gov, asc, vet, childcare,
+urgent_care). Drives daily briefing + priority queue filtering so each
+broker sees their relevant slice. Seeded with Scott Briggs (gov primary +
+dia secondary per audit §1.2). Kelly + Nate seed deferred until their
+LCC user accounts are created.
+
+**Topic 9 — `bd_opportunities` table schema (Salesforce mirror, schema only)**
+
+New table mirroring SF Opportunity records. Schema-first: the actual SF
+sync (hourly read-only pull) is a deferred follow-up, but the table +
+indexes are now ready so the priority queue can be built against the
+model. Key fields per audit §2.6:
+- `type` ENUM `('prospect', 'buyer', 'other')` — prospect counts for BD
+  scoreboard
+- `is_open` GENERATED column (TRUE when closed_at IS NULL)
+- `vertical` text for cross-domain queries
+- `entity_id` UUID linking to canonical LCC entities
+- Helper view `v_bd_open_prospect_opportunities` aggregates per-entity
+  open Prospect Opps for priority queue gating
+
+**Migrations applied:**
+- LCC: `20260522190000_lcc_touchpoint_opportunity_integration.sql`,
+  `20260522190100_lcc_bd_opportunities.sql`,
+  `20260522190200_lcc_user_domain_specialties.sql`
+- dia: `20260522190300_dia_v_contact_former_properties.sql`
+- gov: `20260522190300_gov_v_contact_former_properties.sql`
+
+### 11.18 Topic 1 + 2 + 4 + 7 + 8 + 9 — Combined deferred items (2026-05-22)
+
 **Deferred to follow-up rounds:**
+- SF Opportunity sync writer (read-only mirror that populates
+  bd_opportunities hourly from Salesforce). Schema is ready (Topic 9);
+  the sync service is the missing piece.
+- Topic 5: Priority queue view (now buildable against bd_opportunities +
+  touchpoint_cadence + activity_events + owner_role classification).
+  This is the biggest UX win that brings all the schema work together.
+- Topic 6: 7-touch onboarding sequence state machine (touchpoint_cadence
+  already has `phase`, `current_touch`, `next_touch_due` — needs
+  scripted template progression + UI widget).
+- Topic 3: Cross-vertical `v_entity_portfolio_all` (unions dia + gov
+  properties for a canonical LCC entity; requires LCC ↔ domain canonical
+  entity mapping populated).
+- Topic 10: Listing-event fan-out engine (Lane A buyer cohort
+  nationwide × subspecialty; Lane B owner-geographic proximity).
 - Fuzzy entity resolution (Levenshtein, abbreviation expansion) for
   multi-form variants like "Genesis KC Dev" / "GENESIS KC DEVELOPMENT LLC"
 - Operator-affiliate registry for sale-leaseback subsidiary detection
