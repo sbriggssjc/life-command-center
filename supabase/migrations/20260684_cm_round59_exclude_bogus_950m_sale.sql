@@ -1,0 +1,79 @@
+-- =====================================================================
+-- Round 59 — exclude a CoStar ingestion artifact that caused Volume_TTM
+-- cliff (Aug→Sept 2024) + Volume_Quarterly Q3-2023 spike. Plus four
+-- data-quality findings documented.
+--
+-- User notes 2026-05-22 batch 4 deferred items investigated:
+--   1. Volume_TTM Aug→Sept 2024 cliff ($1.5B → $400M)
+--   2. Volume_Quarterly Jul 2023 huge jump
+--   3. Bid_Ask 2015-2016 jumps
+--   4. Avg_Deal_Size Jun 2006 spike
+--
+-- Findings + per-complaint verdicts in
+-- audit/cm-style-audit/R59-DATA-QUALITY-FINDINGS.md.
+--
+-- ---------------------------------------------------------------------
+-- THE FIX (#1 + #2)
+-- ---------------------------------------------------------------------
+-- Sale_id 13357: $950,000,000 attributed to a single Houston dialysis
+-- property (8621 Fulton St) on 2023-09-12. Single-property dialysis
+-- sales typically range $0.07M-$22.59M (p99); this row is 42× the
+-- p99 and missing all metadata (buyer/seller names, notes). data_source
+-- is 'costar_sidebar' with cap_rate_confidence='low'. Almost certainly
+-- a CoStar portfolio-summary row mis-attributed to a single property
+-- record during ingestion.
+--
+-- This one row was responsible for:
+--   • Volume_TTM Aug→Sept 2024 cliff ($1469M → $519M after fix; was
+--     $1469M → $405M before, a $1064M one-month drop the user
+--     correctly flagged as suspicious)
+--   • Volume_Quarterly Q3-2023 spike ($1163M → $213M after fix)
+--   • Inflated p95/p99 stats for the median deal size
+--
+-- Replay (applied via Supabase MCP):
+UPDATE sales_transactions
+   SET exclude_from_market_metrics = true,
+       updated_at = now()
+ WHERE sale_id = 13357
+   AND sold_price = 950000000;
+-- Post-fix verification (2024-08-31 master_m):
+--   ttm_volume         $1469.1M → $519.1M
+--   transaction_count_ttm   126 →     125
+-- (The row is the only one being excluded; the count drops by 1.)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT FIXED (documented as not-bugs)
+-- ---------------------------------------------------------------------
+-- #3 Bid_Ask 2015-2016: jump is supported by n=17-26 samples, real
+--    market data (post-2015 cap-rate widening). Not a formula bug.
+--
+-- #4 Avg_Deal_Size Jun 2006: small-sample TTM volatility — with
+--    n=11-13 a single $20-30M deal swings the average by ~$1.5M.
+--    Same pattern as the cohort cap-rate sparseness R48 documented.
+--    Optional follow-up: gate avg_deal_size on transaction_count_ttm
+--    >= 15 to smooth early years. Deferred unless asked.
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia export
+-- 2. Open Data_Volume_TTM: the Aug-2024 → Sept-2024 step should now
+--    be a normal ~$114M variation, not a $1.06B cliff
+-- 3. Open Data_Volume_Quarterly: the Q3-2023 bar should drop from
+--    ~$1.16B to ~$213M (a normal quarterly level)
+-- 4. Open Data_Avg_Deal_Size: peak deal size in Aug-2024 should
+--    drop noticeably (no more $950M outlier inflating the average)
+-- 5. Pre-2007 / Bid_Ask 2015-16: unchanged (documented as real
+--    market data, not bugs)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT (R60+)
+-- ---------------------------------------------------------------------
+-- R60: chart visual polish from batch 4 deferred list:
+--   • Cap_Quartile y-axis tightening for asymmetric IQR visibility
+--   • Inventory_Backlog legend label/color mismatch + title text
+--   • Pace_Cap_Expand axis labels position (drop below 0)
+--   • Avail_by_Term_Summary callouts + tighter cap axis
+-- R61: recoverable-errors warning deep investigation
+-- R62: tenant donuts re-verify post-R58
+-- =====================================================================
