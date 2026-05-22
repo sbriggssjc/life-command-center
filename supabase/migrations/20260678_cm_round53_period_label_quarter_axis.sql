@@ -1,0 +1,112 @@
+-- =====================================================================
+-- Round 53 — P0 fix: broken "qQ-yyyy" cat-axis labels on 29 charts.
+-- User notes 2026-05-22 batch 3: "X-axis quarter labels show literal
+-- 'qQ-2024' text" (appearing on essentially every date-axis chart).
+-- Code-only PR. NO Supabase changes.
+--
+-- ---------------------------------------------------------------------
+-- THE BUG
+-- ---------------------------------------------------------------------
+-- R37 P1 set DEFAULT_CAT_AX_NUM_FMT = 'q"Q-"yyyy' on every date-axis
+-- chart so users would see quarter labels like "1Q-2024" instead of
+-- raw Excel date serials. The intent was Excel's date-format grammar
+-- supporting a `q` token for quarter — IT DOES NOT. Excel's date
+-- format token set is: y / m / d / h / s only. The literal character
+-- `q` is rendered verbatim, so the chart axis displays "qQ-2024",
+-- "qQ-2023", etc. across all 29 of 34 charts in the dia export
+-- (verified in audit/cm-style-audit/R53-peek-export.mjs).
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- Add a "Quarter" / "Month" STRING helper column to every chart whose
+-- data tab's first column is `period_end`. Emit "Q1 '24" / "Jan '24"
+-- formatted strings. Repoint the chart's cat axis at this string
+-- column. Drop the broken `q"Q-"yyyy` numFmt so the axis falls back
+-- to General (the string values pass through unchanged).
+--
+-- Wrapper logic in api/_shared/cm-native-chart-injector.js
+-- buildInjectionSpec, opt-in via `injectPeriodLabel: true`. Production
+-- code (api/_shared/cm-excel-export.js) ALWAYS opts in; unit tests
+-- opt in selectively so existing assertions that target the inner
+-- spec shape (catCol='A' etc.) continue to pass unchanged.
+--
+-- Cadence detection is robust: rather than parsing the template_id
+-- naming convention (some monthly templates don't end with _monthly),
+-- the wrapper computes the median gap between consecutive period_end
+-- values. ≤45 days = monthly; >45 = quarterly. The cadence drives
+-- the label format (Q1 '24 vs Jan '24) and the header text
+-- ("Quarter" vs "Month").
+--
+-- Existing helper cols (R34 P8.5 — IQR width, R50 — net_ttm, R50 —
+-- monthly_clear_pace) shift right by one column. The wrapper auto-
+-- rewrites helper col letter references in the spec body
+-- (shiftHelperColRefs) so spec.lineSeries[0].valCol = 'G' becomes
+-- 'H' when period_label takes col G's previous slot.
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT FIXED IN THIS PR
+-- ---------------------------------------------------------------------
+-- Other user notes from 2026-05-22 batch 3 deferred to R54+:
+--   • Tenant donut data tabs empty (chart exists but no data rows)
+--   • Cap_Quartile bands look symmetric (re-verify R48 conclusion)
+--   • Core_Cap_Dot possibly overcounts via current-time lease_end
+--   • Inventory_Backlog: Sold should go below 0 (negative bars)
+--   • Market_Turnover full restructure (inventory bar + monthly pace
+--     bar + months-of-supply line)
+--   • Pace_Cap_Expand missing YOY pace line
+--   • Avail_by_Term_Summary still doesn't match
+--   • Avail_Cap_Dot title says "Firm Term" for dia (should be
+--     "Lease Term")
+--   • NM cap rate still not smooth enough
+--   • Volume_TTM 2024 cliff (Aug $1.5B → Sept $400M)
+--   • Recoverable errors on file open
+--   • Legend data labels mislabeled / showing same value
+--   • Cross-vertical: comments apply to gov too
+--
+-- Triaged this way because the qQ-yyyy fix is universal-impact (29
+-- of 34 charts) and self-contained; the rest are per-chart issues
+-- with varying scope. Plan to ship one PR per logical group.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 367 tests pass total (was 361 after R52); 6 new R53 tests cover:
+--   • injectPeriodLabel=false leaves spec unchanged (back-compat)
+--   • quarterly chart prepends period_label + swaps catCol to col D
+--   • monthly chart emits "Mar '24" labels + header reads "Month"
+--   • existing helper cols (R50 net_ttm) auto-shift G→H
+--   • categorical x-axis (term_bucket) untouched
+--   • end-to-end injectNativeCharts: no q"Q-"yyyy in cat axis XML
+--
+-- 2 unrelated pre-existing failures unchanged
+-- (availability-checker-parsers, raw write guardrail; same as R47-R52).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open any chart with a date x-axis (Data_Cap_Avg, Data_Volume_TTM,
+--    Data_NM_vs_Market, etc.)
+-- 3. X-axis ticks read "Q1 '24" / "Q2 '24" (not "qQ-2024")
+-- 4. Monthly-cadence charts (Data_DOM_Ask_Monthly, Data_Sentiment_Monthly,
+--    Data_Bid_Ask_Monthly, Data_Buyer_Pool_Monthly_Count) read
+--    "Mar '24" / "Apr '24"
+-- 5. Data tabs have a new "Quarter" or "Month" column right after the
+--    regular CHART_COLUMNS entries
+-- 6. R50 inventory_backlog Net to Market line still computes correctly
+--    (the wrapper auto-shifted its valCol letter G → H)
+-- 7. Categorical charts (Data_Avail_by_Term_Summary,
+--    Data_Buyer_Class_Pct_By_Year) unchanged
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT
+-- ---------------------------------------------------------------------
+-- R54 (next): tenant donut data fix + Cap_Quartile re-verification +
+--             Inventory_Backlog negative-bars restructure.
+-- R55:        Market_Turnover full restructure with months-of-supply line.
+-- R56:        Core_Cap_Dot point-in-time lease_end correction +
+--             Avail_Cap_Dot title fix + Pace_Cap_Expand YOY line.
+-- R57:        Legend / data label correctness pass.
+-- R-backfill: still deferred.
+-- =====================================================================
