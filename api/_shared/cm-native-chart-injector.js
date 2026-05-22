@@ -68,6 +68,24 @@ function catAxNumFmtFrag(numFmt) {
   return `<c:numFmt formatCode="${escapeXml(numFmt)}" sourceLinked="0"/>`;
 }
 
+// R60 — force cat-axis labels to render at the LOW end of the value
+// axis (the bottom of the chart area) regardless of negative values
+// in the data. User notes 2026-05-22 batch 4: "Pace_Cap_Expand: now
+// we want the x-axis labels to be dropped below zero so we can see
+// the data's movement" — same applies to Inventory_Backlog after the
+// R54 sold-below-zero restructure (negative Sold bars would otherwise
+// overlap the cat-axis labels positioned at y=0).
+//
+// Excel's default tickLblPos="nextTo" places labels at the point where
+// the cat axis crosses the value axis. For charts with negative
+// values this is the middle of the chart area. tickLblPos="low" pins
+// labels at the visual bottom — identical to the default appearance
+// for all-positive charts, correct for charts with negative bars.
+//
+// Emitted as a sibling fragment alongside the existing catFmtFrag in
+// every chart builder's <c:catAx> block.
+const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
+
 // ----------------------------------------------------------------------------
 // R37 P2 — value-axis range pinning + number format
 // ----------------------------------------------------------------------------
@@ -409,6 +427,7 @@ ${dLblsFrag}
         <c:delete val="0"/>
         <c:axPos val="b"/>
         ${catFmtFrag}
+        ${CAT_AX_TICK_LBL_POS}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -500,6 +519,7 @@ ${dLblsFrag}
         <c:delete val="0"/>
         <c:axPos val="${catAxPos}"/>
         ${catFmtFrag}
+        ${CAT_AX_TICK_LBL_POS}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -631,6 +651,7 @@ ${seriesXml}
         <c:delete val="0"/>
         <c:axPos val="b"/>
         ${catFmtFrag}
+        ${CAT_AX_TICK_LBL_POS}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -748,6 +769,7 @@ ${upDownBarsFrag}
         <c:delete val="0"/>
         <c:axPos val="b"/>
         ${catFmtFrag}
+        ${CAT_AX_TICK_LBL_POS}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -983,6 +1005,7 @@ ${lineXml}
         <c:delete val="0"/>
         <c:axPos val="b"/>
         ${catFmtFrag}
+        ${CAT_AX_TICK_LBL_POS}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1424,6 +1447,7 @@ ${lineXml}
         <c:delete val="0"/>
         <c:axPos val="b"/>
         ${catFmtFrag}
+        ${CAT_AX_TICK_LBL_POS}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -2915,8 +2939,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R37 P2 — cap quartile chart uses CAP_RATE_RANGE 5-10% (renderer ~808)
-          yAxisRange: CAP_RATE_RANGE,
+          // R60 — tighter y-axis pin so the IQR (which is ~140-170 bps wide
+          // post-R54 gate) takes more vertical space and the asymmetry the
+          // user expects to see between (Q3-Med) and (Med-Q1) is visible.
+          // The previous 5-10% pin (500bps span) crushed the IQR into ~28%
+          // of the chart height. 5.5-8.5% (300bps span) gives the IQR ~50%
+          // of the chart height — visually surfaces the asymmetry the data
+          // already has (per R54-R57 verification).
+          yAxisRange: { min: 0.055, max: 0.085 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
@@ -3775,6 +3805,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //   Upper Quartile purple (unchanged)         #7E6BAD
       //   Lower Quartile sky   (R50, was gray)    #62B5E5
       //   Median         sage   (unchanged)         #4CB582
+      // R60 — per-dot callout labels. User notes 2026-05-22 batch 4:
+      // "We need the data points labeled with call outs so we can see
+      // the data, maybe even adjust the cap rate axis so we can see
+      // the movement better." dataLabels: 'all' tells the combo
+      // builder to emit per-point labels on each marker.
+      //
+      // R60 — tighter right-axis range. CAP_RATE_DOT_RANGE (4-12%)
+      // spans 800bps but the actual dia term-bucket caps cluster
+      // 5.5-8% — a 250bps spread crushed into 28% of the chart height.
+      // 5-9% pin (400bps span) doubles the visible vertical resolution.
+      const dotLabelsAll = { positions: 'all', formatter: 'pct2' };
       return {
         tabName,
         spec: {
@@ -3782,28 +3823,26 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: termCol,
           dataStart, dataEnd,
-          // R50 — pin axes per user direction.
-          // Left axis = Avg Price (currency in $); leave auto-scale —
-          // dia chair prices range widely and master uses general fmt.
-          // Right axis = Cap Rate; pin 4-12% to match other dia cap
-          // dot charts (CAP_RATE_DOT_RANGE).
           yLeftNumFmt:  VAL_FMT_CURRENCY,
-          yRightRange:  CAP_RATE_DOT_RANGE,
+          yRightRange:  { min: 0.05, max: 0.09 },  // R60 — tighter than CAP_RATE_DOT_RANGE
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: sky },
           ],
           lineSeries: [
-            // 4 diamond markers on the right axis — order matches renderer.
-            // Colors realigned to master in R50 (teal Avg, sky Lower).
+            // 4 diamond markers on the right axis with per-point callout labels (R60).
             { titleCol: avgCapCol,  titleRow: headerRow, valCol: avgCapCol,
-              color: '00B1B0', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+              color: '00B1B0', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              dataLabels: dotLabelsAll },
             { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
-              color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+              color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              dataLabels: dotLabelsAll },
             { titleCol: lowerQCol,  titleRow: headerRow, valCol: lowerQCol,
-              color: '62B5E5', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+              color: '62B5E5', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              dataLabels: dotLabelsAll },
             { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
-              color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+              color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              dataLabels: dotLabelsAll },
           ],
           anchor: standardAnchor,
         },

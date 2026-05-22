@@ -979,8 +979,15 @@ const NAME_OVERRIDES_BY_VERTICAL = {
     // User notes 2026-05-22: "Firm term label in the dialysis chart title,
     // should just be lease term — firm term is for government only"
     available_cap_rate_dot_plot: 'Available Deals — Asking Cap vs Lease Term',
+    // R60 — title was "Inventory Backlog — Active Listings & Months of
+    // Supply" (catalog default) but R50/R54 restructured the chart to
+    // show Added/Sold/Net flow, not active listings + months. User notes
+    // 2026-05-22: "chart titles don't depict what is displayed".
+    inventory_backlog: 'Inventory Backlog — Added vs Sold (TTM) + Net to Market',
   },
-  gov: {},
+  gov: {
+    inventory_backlog: 'Inventory Backlog — Added vs Sold (TTM) + Net to Market',
+  },
 };
 
 export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages }) {
