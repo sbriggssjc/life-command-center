@@ -21,6 +21,7 @@ import {
   injectNativeCharts,
   NATIVE_CHART_TEMPLATES,
   buildInjectionSpec,
+  buildMultiLineChartXml,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -704,14 +705,21 @@ test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter com
   assert.deepEqual(out.spec.lineSeries.map(s => s.valCol),
     ['D', 'E', 'G', 'F'],
     'Avg Cap / Upper Q / Lower Q / Median order');
+  // R50 — colors realigned to master Market Size chart26 (user feedback
+  // 2026-05-22). Avg Cap teal/aquamarine (was navy), Lower Q sky (was gray).
   assert.deepEqual(out.spec.lineSeries.map(s => s.color),
-    ['003DA5', '7E6BAD', '6A748C', '4CB582'],
-    'navy / purple / gray / sage');
+    ['00B1B0', '7E6BAD', '62B5E5', '4CB582'],
+    'aquamarine / purple / sky / sage (R50 master-aligned)');
   // All 4 are markers-only (no connecting line)
   assert.ok(out.spec.lineSeries.every(s => s.showMarker === true),
     'all 4 have showMarker=true');
   assert.ok(out.spec.lineSeries.every(s => s.markerShape === 'diamond'),
     'all 4 use diamond markers');
+  // R50 — right axis pinned to cap rate dot range, left axis currency
+  assert.deepEqual(out.spec.yRightRange, { min: 0.04, max: 0.12 },
+    'R50: right axis pinned to CAP_RATE_DOT_RANGE');
+  assert.ok(out.spec.yRightNumFmt && out.spec.yRightNumFmt.includes('%'),
+    'R50: right axis labeled as percent');
 });
 
 test('buildInjectionSpec: available_by_firm_term_summary uses same shape as dia variant', () => {
@@ -1451,7 +1459,10 @@ test('buildInjectionSpec: seller_sentiment_monthly handles different column layo
   assert.equal(out.spec.swapAxes, true);
 });
 
-test('buildInjectionSpec: inventory_backlog builds 2-series clustered bar (no line)', () => {
+test('buildInjectionSpec: inventory_backlog R50 — combo bar+bar+net line via helper col', () => {
+  // R50 — restructured to match master Charts!chart8 (Inventory Backlog).
+  // Now a 3-series combo: Added (sky bar) + Sold (navy bar) + Net to
+  // Market (gray line, computed at chart-build time as added − sold).
   const out = buildInjectionSpec({
     chart_template_id: 'inventory_backlog',
     tabName: 'Data_Inventory',
@@ -1466,10 +1477,25 @@ test('buildInjectionSpec: inventory_backlog builds 2-series clustered bar (no li
     dataStart: 5, dataEnd: 60,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
-  assert.equal(out.spec.type, 'clustered-bar');
-  assert.equal(out.spec.series.length, 2);
-  assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D']);
-  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5'], 'sky + navy');
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.sharedAxis, true, 'all 3 series share the same axis (integer count)');
+  // Bars: Added (sky) + Sold (navy)
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['C', 'D']);
+  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['62B5E5', '003DA5'], 'sky + navy');
+  // Line: Net = added − sold, gray
+  assert.equal(out.spec.lineSeries.length, 1);
+  // Helper col lands at G (one past the regular A-F columns)
+  assert.equal(out.spec.lineSeries[0].valCol, 'G', 'net col is helper col G');
+  assert.equal(out.spec.lineSeries[0].color, '6A748C', 'net line is gray');
+  // helperCols declaration
+  assert.ok(Array.isArray(out.helperCols) && out.helperCols.length === 1);
+  assert.equal(out.helperCols[0].key, 'net_ttm');
+  assert.equal(out.helperCols[0].header, 'Net to Market (TTM)');
+  // Helper computes Added − Sold (returns null when either is missing)
+  assert.equal(out.helperCols[0].getValue({ added_ttm: 50, sold_ttm: 30 }), 20);
+  assert.equal(out.helperCols[0].getValue({ added_ttm: 20, sold_ttm: 30 }), -10, 'can go negative');
+  assert.equal(out.helperCols[0].getValue({ added_ttm: null, sold_ttm: 30 }), null);
 });
 
 test('buildInjectionSpec: pace_of_cap_rate_expansion clusters 2 bars (3rd line series deferred)', () => {
@@ -2726,8 +2752,41 @@ test('R47: chart XML series references shift to trimmed dataStart', async () => 
     'val series references start at row 53');
 });
 
-test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line', () => {
-  // Quarterly tab has no avg_last_ask_cap → renderer uses single-line.
+test('buildInjectionSpec: bid_ask_spread R50 — stacked line + up-down bars when last_ask present', () => {
+  // R50 — restructured to match master chart7. With avg_last_ask_cap
+  // available (added to the quarterly view in R50), the chart is now
+  // a stacked-line + upDownBars combo matching the master visual:
+  // bottom line = Last Ask Cap (sky); top line stacks Spread above it,
+  // and up-down bars connect the two at each x point.
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'subspecialty',       col: 'B' },
+    { key: 'n_with_spread',      col: 'C' },
+    { key: 'avg_bid_ask_spread', col: 'D' },
+    { key: 'pct_price_change',   col: 'E' },
+    { key: 'avg_last_ask_cap',   col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread',
+    tabName: 'Data_Bid_Ask',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.catCol, 'A');
+  assert.equal(out.spec.lineGrouping, 'stacked', 'R50: stacked grouping');
+  assert.equal(out.spec.upDownBars, true, 'R50: up-down bars draw the gap');
+  assert.equal(out.spec.series.length, 2);
+  assert.equal(out.spec.series[0].valCol, 'F', 'bottom = avg_last_ask_cap (sky)');
+  assert.equal(out.spec.series[0].color, '62B5E5');
+  assert.equal(out.spec.series[1].valCol, 'D', 'top = avg_bid_ask_spread (navy)');
+  assert.equal(out.spec.series[1].color, '003DA5');
+});
+
+test('buildInjectionSpec: bid_ask_spread (quarterly) gracefully degrades when last_ask missing', () => {
+  // Backward-compat: if a view layout drops avg_last_ask_cap (legacy
+  // catalogs, custom verticals), fall back to single-line of the spread.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -2738,15 +2797,15 @@ test('buildInjectionSpec: bid_ask_spread (quarterly) falls back to single line',
     chart_template_id: 'bid_ask_spread',
     tabName: 'Data_Bid_Ask',
     cols, dataStart: 5, dataEnd: 60,
-    brand: { palette: { nm_navy: '#003DA5' } },
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'line');
-  assert.equal(out.spec.catCol, 'A');
-  assert.equal(out.spec.valCol, 'C', 'line = avg_bid_ask_spread');
+  assert.equal(out.spec.type, 'line', 'falls back to single line');
+  assert.equal(out.spec.valCol, 'C', 'fallback plots the spread');
 });
 
-test('buildInjectionSpec: bid_ask_spread_monthly builds floating-bar via invisible-base stack', () => {
+test('buildInjectionSpec: bid_ask_spread_monthly R50 — same stacked-line restructure as quarterly', () => {
+  // R50 — both cadences now share the same chart shape.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -2759,18 +2818,15 @@ test('buildInjectionSpec: bid_ask_spread_monthly builds floating-bar via invisib
     chart_template_id: 'bid_ask_spread_monthly',
     tabName: 'Data_Bid_Ask_Monthly',
     cols, dataStart: 5, dataEnd: 60,
-    brand: { palette: { nm_sky: '#62B5E5' } },
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'stacked-bar');
-  assert.equal(out.spec.series.length, 2, 'invisible base + visible band');
-  // Series 0 = invisible base (last_ask = col F)
-  assert.equal(out.spec.series[0].valCol, 'F', 'base series = avg_last_ask_cap');
-  assert.equal(out.spec.series[0].noFill, true, 'base series is invisible');
-  // Series 1 = visible spread band (col D)
-  assert.equal(out.spec.series[1].valCol, 'D', 'top series = avg_bid_ask_spread');
-  assert.equal(out.spec.series[1].color, '62B5E5', 'visible band is sky');
-  assert.ok(!out.spec.series[1].noFill, 'top series visible');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.lineGrouping, 'stacked');
+  assert.equal(out.spec.upDownBars, true);
+  // Order: last_ask (F, sky) baseline, spread (D, navy) stacked on top
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'D']);
+  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5']);
 });
 
 test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axes (Tier F1)', () => {
@@ -4021,4 +4077,117 @@ test('R38 C: doughnut emits legend at bottom (not right)', async () => {
   const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
   assert.match(chartXml, /<c:legendPos val="b"\/>/, 'donut legend at bottom');
   assert.ok(!/<c:legendPos val="r"\/>/.test(chartXml), 'no right-side legend');
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// R50 — Bucket C chart-type restructures (user feedback 2026-05-22)
+// ─────────────────────────────────────────────────────────────────────
+
+test('R50: market_turnover restructured to combo bar+line with monthly clear pace helper', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'market_turnover',
+    tabName: 'Data_Market_Turnover',
+    cols: [
+      { key: 'period_end',      col: 'A' },
+      { key: 'subspecialty',    col: 'B' },
+      { key: 'ttm_sales_count', col: 'C' },
+      { key: 'market_universe', col: 'D' },
+      { key: 'turnover_rate',   col: 'E' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo', 'R50: combo (was single line)');
+  assert.equal(out.spec.catCol, 'A');
+  // Bar = Monthly Clear Pace (helper col, lands at F = one past 5 regular cols)
+  assert.equal(out.spec.barSeries.length, 1);
+  assert.equal(out.spec.barSeries[0].valCol, 'F', 'pace bar reads from helper col F');
+  assert.equal(out.spec.barSeries[0].color, '62B5E5', 'pace bar is sky');
+  // Line = Turnover Rate (existing col E) on right axis (% format)
+  assert.equal(out.spec.lineSeries.length, 1);
+  assert.equal(out.spec.lineSeries[0].valCol, 'E', 'turnover_rate line on right axis');
+  assert.equal(out.spec.lineSeries[0].color, '003DA5', 'rate line is navy');
+  // Helper col
+  assert.equal(out.helperCols.length, 1);
+  assert.equal(out.helperCols[0].key, 'monthly_clear_pace');
+  assert.equal(out.helperCols[0].getValue({ ttm_sales_count: 120 }), 10,
+    '120/12 = 10 sales/month');
+  assert.equal(out.helperCols[0].getValue({ ttm_sales_count: null }), null);
+});
+
+test('R50: buildMultiLineChartXml emits stacked grouping + upDownBars when requested', () => {
+  const xml = buildMultiLineChartXml({
+    tabName: 'Data_Bid_Ask',
+    catCol: 'A', dataStart: 5, dataEnd: 60,
+    lineGrouping: 'stacked',
+    upDownBars:   true,
+    yAxisRange:   { min: 0.05, max: 0.095 },
+    valAxNumFmt:  '0.00%',
+    series: [
+      { titleCol: 'F', titleRow: 4, valCol: 'F', color: '62B5E5' },
+      { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5' },
+    ],
+  });
+  assert.match(xml, /<c:grouping val="stacked"\/>/, 'stacked grouping');
+  assert.match(xml, /<c:upDownBars>/, 'up-down bars present');
+  assert.match(xml, /<c:upBars>/, 'upBars styling block');
+  assert.match(xml, /<c:downBars>/, 'downBars styling block');
+  // The gap-bars block should sit AFTER all <c:ser> blocks but BEFORE <c:marker val=...>
+  // (OOXML CT_LineChart sequence). A quick sanity check: marker appears after upDownBars.
+  const upDownIdx = xml.indexOf('<c:upDownBars>');
+  const markerIdx = xml.indexOf('<c:marker val=');
+  assert.ok(upDownIdx > 0 && markerIdx > upDownIdx,
+    'upDownBars sits before chart-level <c:marker>');
+});
+
+test('R50: buildMultiLineChartXml default keeps standard grouping (no upDownBars)', () => {
+  // Backward compat — existing multi-line charts (nm_vs_market_cap,
+  // cap_rate_by_lease_term, etc.) should still emit unchanged XML.
+  const xml = buildMultiLineChartXml({
+    tabName: 'Data_NM_vs_Market',
+    catCol: 'A', dataStart: 5, dataEnd: 60,
+    series: [
+      { titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' },
+      { titleCol: 'D', titleRow: 4, valCol: 'D', color: '62B5E5' },
+    ],
+  });
+  assert.match(xml, /<c:grouping val="standard"\/>/);
+  assert.ok(!xml.includes('<c:upDownBars>'),
+    'no upDownBars on standard multi-line');
+});
+
+test('R50: injectNativeCharts renders stacked-line + upDownBars for Bid_Ask quarterly', async () => {
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'Test';
+  const sheet = wb.addWorksheet('Data_Bid_Ask');
+  sheet.getCell('A4').value = 'Date';
+  sheet.getCell('D4').value = 'Spread';
+  sheet.getCell('F4').value = 'Last Ask Cap';
+  for (let i = 0; i < 4; i++) {
+    sheet.getCell(`A${5 + i}`).value = new Date(2025, i * 3, 31);
+    sheet.getCell(`D${5 + i}`).value = 0.002 + i * 0.0002;
+    sheet.getCell(`F${5 + i}`).value = 0.063 + i * 0.001;
+  }
+  const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [{
+    tabName: 'Data_Bid_Ask',
+    spec: {
+      type: 'multi-line', tabName: 'Data_Bid_Ask',
+      catCol: 'A', dataStart: 5, dataEnd: 8,
+      lineGrouping: 'stacked',
+      upDownBars:   true,
+      yAxisRange:   { min: 0.05, max: 0.095 },
+      valAxNumFmt:  '0.00%',
+      series: [
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '62B5E5' },
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5' },
+      ],
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(chartXml, /<c:grouping val="stacked"\/>/);
+  assert.match(chartXml, /<c:upDownBars>/);
+  assert.match(chartXml, /<c:max val="0\.095"\/>/, 'pinned y-max 9.5%');
+  assert.match(chartXml, /<c:min val="0\.05"\/>/,  'pinned y-min 5%');
 });

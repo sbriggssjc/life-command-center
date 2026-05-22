@@ -665,6 +665,18 @@ ${seriesXml}
  * @param {number} spec.dataStart    First data row (1-indexed)
  * @param {number} spec.dataEnd      Last data row (inclusive)
  * @param {Array}  spec.series       List of { titleCol, titleRow, valCol, color, [dashed] }
+ * @param {'standard'|'stacked'} [spec.lineGrouping]  Default 'standard'.
+ *        'stacked' makes Excel render each series at value=cumulative sum
+ *        of all earlier series at that x — used by the Bid_Ask chart
+ *        (R50): bottom line = Last Ask (ttm) at its raw cap rate; top
+ *        line = Last Ask + Bid-Ask Spread. The visible distance between
+ *        the two stacked lines is the spread itself, which combined with
+ *        upDownBars draws the floating "drop down" bars the master uses.
+ * @param {boolean} [spec.upDownBars] If true, emit <c:upDownBars/> as a
+ *        chart-level sibling of the series. Excel draws gray bars between
+ *        the FIRST and LAST series at each category, visually marking the
+ *        gap. Pairs with lineGrouping='stacked' to produce the master's
+ *        bid-ask "drop bars above the last ask" visual.
  * @returns {string} chart XML
  */
 function buildMultiLineChartXml(spec) {
@@ -700,6 +712,20 @@ ${dLblsFrag}
         </c:ser>`;
   }).join('\n');
 
+  // R50 — optional stacked grouping + chart-level up-down bars.
+  // upDownBars is a child of <c:lineChart> AFTER all <c:ser> blocks and
+  // BEFORE <c:axId/>, per OOXML schema (CT_LineChart sequence). Excel
+  // renders gray bars connecting the first-vs-last series at each x point,
+  // creating the "drop bar above the last ask" visual the master uses.
+  const lineGrouping = spec.lineGrouping === 'stacked' ? 'stacked' : 'standard';
+  const upDownBarsFrag = spec.upDownBars
+    ? `        <c:upDownBars>
+          <c:gapWidth val="150"/>
+          <c:upBars><c:spPr><a:solidFill><a:srgbClr val="D8DFDF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill></a:ln></c:spPr></c:upBars>
+          <c:downBars><c:spPr><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill></a:ln></c:spPr></c:downBars>
+        </c:upDownBars>`
+    : '';
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:roundedCorners val="0"/>
@@ -708,9 +734,10 @@ ${dLblsFrag}
     <c:plotArea>
       <c:layout/>
       <c:lineChart>
-        <c:grouping val="standard"/>
+        <c:grouping val="${lineGrouping}"/>
         <c:varyColors val="0"/>
 ${seriesXml}
+${upDownBarsFrag}
         <c:marker val="0"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
@@ -1925,14 +1952,62 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       return singleSeries('bar', 'yoy_change_pct', navy, {
         valAxNumFmt: VAL_FMT_PERCENT_0DP,
       });
-    case 'market_turnover':
-      // R37 P3 — peak/trough/most-recent labels on turnover rate
-      // (renderer line 2276: buildAnnotations(rows, r => r.turnover_rate, fmtPct1))
-      return singleSeries('line', 'turnover_rate', navy, {
-        valAxNumFmt: VAL_FMT_PERCENT_1DP,
-        annotateKey: 'turnover_rate',
-        annotateFmt: 'pct1',
-      });
+    case 'market_turnover': {
+      // R50 — restructured to match master Market Size tab chart31
+      // (untitled combo at the bottom of the tab, rows 159-194). Master
+      // is a bar+line combo: Monthly Clear Pace bars + Inventory line
+      // for Total Market plus the 10+ Year cohort. We don't have a
+      // dialysis "10+ year cohort" decomposition in the turnover view
+      // and our market_universe is a near-constant total — so we plot
+      // the two most informative series we DO have:
+      //   • Bar (sky):  Monthly Clear Pace = ttm_sales_count / 12
+      //                 (helper col added at spec-build time)
+      //   • Line (navy): Turnover Rate (right axis, %)
+      //
+      // This preserves the master's "bars for activity + line for the
+      // rate overlay" shape while staying faithful to the data we have.
+      // The original `turnover_rate` series is preserved (it's now the
+      // line); we add a helper col for monthly clear pace as the bar.
+      const periodCol = findCol('period_end');
+      const salesCol  = findCol('ttm_sales_count');
+      const rateCol   = findCol('turnover_rate');
+      if (!periodCol || !salesCol || !rateCol) return null;
+      // Monthly Clear Pace helper col — sits past the regular columns.
+      // market_turnover has 5 cols (A-E); helper lands at F.
+      const paceCol = String.fromCharCode(65 + cols.length);
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          // Bars left (clear pace, integer ~1-25/month), line right
+          // (turnover rate, 0-10%-ish percentage). NOT sharedAxis —
+          // the two metrics are different units, dual axis is right.
+          barGrouping:  'clustered',
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightNumFmt: VAL_FMT_PERCENT_1DP,
+          barSeries: [
+            { titleCol: paceCol, titleRow: headerRow, valCol: paceCol, color: sky },
+          ],
+          lineSeries: [
+            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: navy },
+          ],
+          anchor: standardAnchor,
+        },
+        helperCols: [{
+          key: 'monthly_clear_pace',
+          header: 'Monthly Clear Pace',
+          format: 'number_one_decimal',
+          width: 18,
+          getValue: (row) => {
+            const c = row.ttm_sales_count;
+            return c == null ? null : Number(c) / 12;
+          },
+        }],
+      };
+    }
     case 'quarterly_volume_bars':
       return singleSeries('bar', 'quarterly_volume', sky, {
         valAxNumFmt: VAL_FMT_CURRENCY,
@@ -2305,52 +2380,58 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       };
     }
 
-    // P8 — floating-bar / box-whisker family
-    case 'bid_ask_spread': {
-      // Quarterly bid-ask only carries avg_bid_ask_spread (no last_ask).
-      // Renderer falls back to a single-line chart with palette[3] fill;
-      // mirror that as a plain line chart in the native version.
-      return singleSeries('line', 'avg_bid_ask_spread', navy);
-    }
-
+    // R50 — Bid_Ask restructured to match master chart7 (Charts tab).
+    // Master is a STACKED line chart with chart-level up-down bars:
+    //   • Bottom series (sky line):  Last Ask Cap (TTM)
+    //   • Top series (navy line):    Last Ask + Bid-Ask Spread (stacked)
+    //   • <c:upDownBars/> draws gray bars BETWEEN the two stacked lines
+    //     at each x point — visually marks the spread distance above
+    //     the last asking cap, which is exactly what the user described:
+    //     "spread in bars/lines with drop down lines above the last
+    //      asking cap TTM" (R50 user notes 2026-05-22).
+    //
+    // Both cadences (quarterly + monthly) need both avg_last_ask_cap AND
+    // avg_bid_ask_spread. Quarterly views (cm_*_bid_ask_spread_q) were
+    // extended in R50 to add avg_last_ask_cap — monthly views already
+    // carried both. If avg_last_ask_cap is missing for any reason we
+    // gracefully degrade to a single-line spread chart so the chart
+    // still renders (preserves the R47/R48 behavior).
+    case 'bid_ask_spread':
     case 'bid_ask_spread_monthly': {
-      // Monthly tab has both avg_last_ask_cap AND avg_bid_ask_spread, so
-      // we can build a TRUE floating-bar visual:
-      //
-      //   Visible band = [last_ask, last_ask + spread]
-      //
-      // Decompose into a stacked bar where:
-      //   • Bottom series (invisible): val = avg_last_ask_cap (last_ask)
-      //   • Top series (visible sky):  val = avg_bid_ask_spread (the band width)
-      //
-      // The total stacked height = last_ask + spread, exactly matching
-      // the PDF's floating-bar top. The invisible base hides the bar
-      // segment from 0 to last_ask so only the spread band shows.
-      //
-      // Native Excel can read it as a stacked column chart — users can
-      // re-style the bottom series back to visible if they want a
-      // stacked-from-zero view instead of the floating band.
       const periodCol  = findCol('period_end');
       const lastAskCol = findCol('avg_last_ask_cap');
       const spreadCol  = findCol('avg_bid_ask_spread');
-      if (!periodCol || !lastAskCol || !spreadCol) return null;
+      if (!periodCol || !spreadCol) return null;
+
+      // Graceful fallback: if last_ask col missing (older view layout),
+      // fall back to single-line of the spread itself.
+      if (!lastAskCol) {
+        return singleSeries('line', 'avg_bid_ask_spread', sky, {
+          valAxNumFmt: VAL_FMT_PERCENT_2DP,
+        });
+      }
+
       return {
         tabName,
         spec: {
-          type: 'stacked-bar',
+          type: 'multi-line',
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — cap rate 5.5-10% pin matches renderer's CAP_RATE_BID_ASK_RANGE
-          yAxisRange: CAP_RATE_BID_ASK_RANGE,
-          valAxNumFmt: VAL_FMT_PERCENT_2DP,
+          // R50 — stacked grouping + up-down bars. Y-axis covers the
+          // stacked top: last_ask (~5.5-8%) + spread (~0.1-1.5%) sums to
+          // about 5.5-9%. Pin 5-9.5% to give a small visual margin.
+          lineGrouping: 'stacked',
+          upDownBars:   true,
+          yAxisRange:   { min: 0.05, max: 0.095 },
+          valAxNumFmt:  VAL_FMT_PERCENT_2DP,
           series: [
-            // Invisible base — gets the chart off 0 up to last_ask
+            // Bottom: Last Ask Cap (sky) — visible baseline line
             { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol,
-              color: '003DA5', noFill: true },
-            // Visible spread band — sky fill, sits on top of the invisible base
-            { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,
               color: sky },
+            // Top: Bid-Ask Spread (navy) — stacked = Last Ask + Spread
+            { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,
+              color: navy },
           ],
           anchor: standardAnchor,
         },
@@ -2919,30 +3000,61 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       };
     }
 
-    // Clustered bar — multi-bar single-axis (renderer's "line" series
-    // isn't in the data tab schema; native plots just the bars).
+    // R50 — Inventory_Backlog restructured to match master chart8 (Charts tab).
+    // Master is a combo: 2 bars (Added, Sold) + 1 LINE (Net to Market).
+    // The line tells the story of whether inventory is growing or shrinking:
+    //   net_ttm = added_ttm − sold_ttm
+    // Negative ⇒ inventory shrinking (more sold than added).
+    // Positive ⇒ inventory growing (more listings hitting market).
+    //
+    // The net column doesn't exist in the view — compute it as a helper
+    // column at chart-build time via the R34 P8.5 helperCols infra.
+    // The helper col lands one past the regular CHART_COLUMNS entries
+    // (col G for inventory_backlog which has cols A-F).
     case 'inventory_backlog': {
-      // 2 bars: No. Added (sky) + No. Sold (navy). Single axis (integer).
-      // Renderer uses commonOpts (not comboOpts) — no secondary axis.
       const periodCol = findCol('period_end');
       const addedCol  = findCol('added_ttm');
       const soldCol   = findCol('sold_ttm');
       if (!periodCol || !addedCol || !soldCol) return null;
+      // Helper col letter — sits one column past the regular CHART_COLUMNS
+      const netCol = String.fromCharCode(65 + cols.length);
       return {
         tabName,
         spec: {
-          type: 'clustered-bar',
+          type: 'combo',
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — integer count
+          // Bars (added + sold) and the net line share the SAME axis —
+          // they're all integer counts in the same scale. sharedAxis=true
+          // forces the line onto axId 2 (the bars' axis) instead of
+          // emitting a separate right-axis. Range auto-scales so the
+          // line can dip negative without clipping.
+          barGrouping: 'clustered',
+          sharedAxis:  true,
           valAxNumFmt: VAL_FMT_INTEGER,
-          series: [
+          yLeftNumFmt: VAL_FMT_INTEGER,
+          barSeries: [
             { titleCol: addedCol, titleRow: headerRow, valCol: addedCol, color: sky  },
             { titleCol: soldCol,  titleRow: headerRow, valCol: soldCol,  color: navy },
           ],
+          lineSeries: [
+            // Net to Market = added − sold (R50 helper col, gray)
+            { titleCol: netCol, titleRow: headerRow, valCol: netCol, color: '6A748C' },
+          ],
           anchor: standardAnchor,
         },
+        helperCols: [{
+          key: 'net_ttm',
+          header: 'Net to Market (TTM)',
+          format: 'integer_count',
+          width: 20,
+          getValue: (row) => {
+            const a = row.added_ttm;
+            const s = row.sold_ttm;
+            return (a == null || s == null) ? null : Number(a) - Number(s);
+          },
+        }],
       };
     }
 
@@ -3334,11 +3446,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (!termCol || !priceCol || !avgCapCol || !upperQCol || !lowerQCol || !medianCol) {
         return null;
       }
-      // Per renderer line ~557-580:
-      //   Avg Cap        navy   (cap_short)        #003DA5
-      //   Upper Quartile purple (cap_long_term)    #7E6BAD
-      //   Lower Quartile gray   (cap_outside_firm) #6A748C
-      //   Median         sage   (cap_mid_long)     #4CB582
+      // R50 — colors realigned to master Market Size tab chart26
+      // (user feedback 2026-05-22: "Adjust dot colors to match master,
+      // Pin right-axis range (cap %), Diamond markers instead of circles").
+      // Master uses navy/teal/purple/sky for the cap dots (no Median dot
+      // — we keep ours as sage so existing PDF parity holds). Marker
+      // shape stays as diamond per user preference (master uses circle
+      // but user prefers diamond — diamond reads as more distinct from
+      // the bar fill in tight Excel previews).
+      //
+      // Updated mapping (R50):
+      //   Avg Cap        teal   (R50, was navy)    aquamarine #00B1B0
+      //   Upper Quartile purple (unchanged)         #7E6BAD
+      //   Lower Quartile sky   (R50, was gray)    #62B5E5
+      //   Median         sage   (unchanged)         #4CB582
       return {
         tabName,
         spec: {
@@ -3346,17 +3467,26 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: termCol,
           dataStart, dataEnd,
+          // R50 — pin axes per user direction.
+          // Left axis = Avg Price (currency in $); leave auto-scale —
+          // dia chair prices range widely and master uses general fmt.
+          // Right axis = Cap Rate; pin 4-12% to match other dia cap
+          // dot charts (CAP_RATE_DOT_RANGE).
+          yLeftNumFmt:  VAL_FMT_CURRENCY,
+          yRightRange:  CAP_RATE_DOT_RANGE,
+          yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: sky },
           ],
           lineSeries: [
-            // 4 diamond markers on the right axis — order matches renderer
+            // 4 diamond markers on the right axis — order matches renderer.
+            // Colors realigned to master in R50 (teal Avg, sky Lower).
             { titleCol: avgCapCol,  titleRow: headerRow, valCol: avgCapCol,
-              color: navy,     showMarker: true, markerShape: 'diamond', markerSize: 7 },
+              color: '00B1B0', showMarker: true, markerShape: 'diamond', markerSize: 7 },
             { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
               color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7 },
             { titleCol: lowerQCol,  titleRow: headerRow, valCol: lowerQCol,
-              color: '6A748C', showMarker: true, markerShape: 'diamond', markerSize: 7 },
+              color: '62B5E5', showMarker: true, markerShape: 'diamond', markerSize: 7 },
             { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
               color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7 },
           ],

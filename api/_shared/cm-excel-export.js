@@ -85,6 +85,11 @@ const FMT = {
   percent_basis_points: '0.00%',
   percent_one_decimal:  '0.0%',
   integer_count:        '#,##0',
+  // Number with one decimal (used by months_of_supply, firm_term_years,
+  // and R50 helper col monthly_clear_pace). Pre-existing references in
+  // CHART_COLUMNS expected this key; added the format in R50 so the
+  // numFmt actually applies instead of silently falling through to General.
+  number_one_decimal:   '#,##0.0',
   date_short:           'mm/dd/yyyy',
   // User feedback (2026-05-07) on Avail_by_Tenant: "Let's display Avg
   // Term Remaining in 'x.x Years'."
