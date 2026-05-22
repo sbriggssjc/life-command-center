@@ -1,0 +1,166 @@
+-- =====================================================================
+-- Round 48 — statistical smoothing for small-sample series.
+-- Bucket B from user notes 2026-05-21.
+--
+-- Applied via Supabase MCP — view changes already live on dia + gov:
+--   cm_dialysis_sold_cap_by_term_dot   (3-mo → 5-mo smoothing)
+--   cm_gov_sold_cap_by_term_dot        (3-mo → 5-mo smoothing)
+--   cm_dialysis_nm_vs_market_m         (passthrough → 5-mo smooth NM only)
+--   cm_gov_nm_vs_market_m              (passthrough → 5-mo smooth NM only)
+--
+-- ---------------------------------------------------------------------
+-- INVESTIGATION FINDINGS
+-- ---------------------------------------------------------------------
+-- User flagged 5 charts as having statistical / data-quality issues:
+--
+-- 1. Cap_Quartile / Active_Cap_Quart — "bands move in perfect proportion
+--    to median" → user suspected derived bands, not real percentiles.
+--
+--    RESULT: NOT A BUG. Verified the master_m view uses
+--    `percentile_cont(0.75) WITHIN GROUP (ORDER BY cap_rate)` and the
+--    matching 0.25 + 0.50 functions. These are real statistical
+--    percentiles. Sample IQR values across years:
+--
+--      year   Q3       Med      Q1       IQR
+--      2006   0.0942   0.0738   0.0717   2.25%
+--      2010   0.0882   0.0843   0.0814   0.68%   ← very tight
+--      2015   0.0759   0.0698   0.0592   1.66%
+--      2020   0.0698   0.0610   0.0557   1.41%
+--      2022   0.0685   0.0596   0.0540   1.45%
+--      2024Q2 0.0789   0.0650   0.0591   1.98%
+--      2024Q4 0.0801   0.0728   0.0643   1.59%
+--
+--    The IQR is genuinely narrow (1-2%) because dialysis cap rates cluster
+--    tightly within the 4-12% filter window. User's perception of "bands
+--    track median" reflects this natural tightness — not a formula error.
+--
+--    Q3-Med and Med-Q1 are asymmetric (e.g. 2006: Q3-Med=2.04%, Med-Q1=0.22%),
+--    proving the bands are NOT derived from median.
+--
+--    NO FIX NEEDED. Documented for clarity.
+--
+-- 2. NM_vs_Market "NM line not smooth" — "suggests a data issue."
+--
+--    RESULT: REAL SMALL-SAMPLE NOISE. NM TTM sample sizes are tiny vs
+--    non-NM:
+--
+--      year   nm_sales_in_ttm   non_nm_sales_in_ttm
+--      2010   4.4               15.9
+--      2015   10.8              108.2
+--      2020   30.0              223.8
+--      2024   8.8               82.8     ← single new NM sale ≈ 50bps swing
+--
+--    With 8-30 NM sales averaged per TTM window, a single new sale
+--    entering/leaving the window moves the NM cap by 30-50 bps. The
+--    non-NM line is smooth because its 80-220 sample size dampens swings.
+--
+--    FIX: Wrap the NM cap rate with a 5-month centered moving average
+--    (ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING). Leave market_cap_rate
+--    as raw TTM (already smooth). The view becomes:
+--
+--      CREATE OR REPLACE VIEW cm_dialysis_nm_vs_market_m AS
+--      SELECT period_end, subspecialty,
+--             avg(nm_avg_cap_ttm) OVER w AS nm_cap_rate,
+--             non_nm_avg_cap_ttm  AS market_cap_rate
+--      FROM cm_dialysis_market_quarterly_master_m
+--      WINDOW w AS (PARTITION BY subspecialty ORDER BY period_end
+--                   ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING);
+--
+--    Same change applied to cm_gov_nm_vs_market_m.
+--
+--    Trade-off: a 5-month smooth lags real changes by ~2 months. For a
+--    chart that visualizes cycle-level trends (the NM-vs-Market chart is
+--    explicitly cycle-context, not point-in-time), the lag is acceptable.
+--
+-- 3. Sold_Cap_by_Term cohort lines "erratic" — "the charts in our
+--    Excel/PDF versions do not move this erratically."
+--
+--    RESULT: SMALL-SAMPLE NOISE in cohort buckets. Sample sizes per TTM:
+--
+--      cohort         2020 avg  2024 avg
+--      12+ year       94.3      13.8     ← 7x drop in samples
+--      8-12 year      75.3      16.8
+--      6-8 year       21.4      10.8     ← already small in 2020
+--      ≤5 year        25.3      28.1
+--
+--    The view already had 3-month centered smoothing (ROWS BETWEEN 1
+--    PRECEDING AND 1 FOLLOWING). 2024's halving of sample size pushed
+--    that beyond its smoothing capacity.
+--
+--    FIX: Widen smoothing to 5-month centered (ROWS BETWEEN 2 PRECEDING
+--    AND 2 FOLLOWING). Applied to cm_dialysis_sold_cap_by_term_dot +
+--    cm_gov_sold_cap_by_term_dot.
+--
+--    Sanity check (post-fix, dia 2024 monthly):
+--      2024-04-30  c12p=6.00%  c8-12=6.71%  c6-8=7.63%   ← smooth monthly deltas
+--      2024-05-31  c12p=5.96%  c8-12=6.71%  c6-8=7.73%
+--      2024-06-30  c12p=5.96%  c8-12=6.76%  c6-8=7.80%
+--    Month-to-month deltas now consistently <10bps.
+--
+-- 4. Ask_Cap_by_Term "same exact comments as sold cap rates above"
+--
+--    RESULT: NOT A BUG. The view cm_dialysis_asking_cap_by_term_m already
+--    has BOTH a HAVING ≥5-per-cohort gate AND a 3-month centered
+--    smoothing. Sample-count check + smoothing both already in place.
+--    No additional fix needed.
+--
+-- 5. Vol_Cap_Combo "big drop in the numbers in 2024 too, do we have a
+--    formula or data issue here?"
+--
+--    RESULT: REAL MARKET ACTIVITY. TTM sales counts:
+--
+--      year   nm_sales  non_nm_sales  total
+--      2022   30.0      198.7         228.7
+--      2023   15.4      133.8         149.2
+--      2024   8.8       82.8          91.6    ← 60% drop from 2022
+--      2025   17.3      117.0         134.3   ← rebound
+--
+--    Volume tracks sales count proportionally. The 2024 drop is genuine
+--    market quiet (post-rate-hike freeze) reflected in the comp data,
+--    NOT a formula bug. No fix needed; chart correctly shows market
+--    reality.
+--
+-- ---------------------------------------------------------------------
+-- CHANGES SUMMARY
+-- ---------------------------------------------------------------------
+-- 4 views updated (2 dia + 2 gov), all in passthrough layer (no master_m
+-- mat view changes). No LCC repo code changes.
+--
+-- Behavior:
+--   • Cap-by-term lines smoother (5-mo vs 3-mo window)
+--   • NM cap line smoother (raw → 5-mo)
+--   • All other charts unchanged
+--   • Slight ~2-month lag on responding to new market moves; acceptable
+--     for cycle-context charts where smoothness > recency
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NOT FIXED — documented as not-bugs
+-- ---------------------------------------------------------------------
+--   • Quartile bands appear to track median (real percentile_cont; IQR
+--     just narrow — data feature)
+--   • Vol_Cap_Combo 2024 drop (real market activity drop, not formula)
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 132 CM tests pass (unchanged from R47 — these are view changes, no
+-- chart-spec changes). Full suite 219 pass / 2 unrelated.
+--
+-- Post-deploy:
+-- 1. Download fresh dia + gov exports
+-- 2. Open Data_NM_vs_Market — NM line should be smooth (matches the
+--    smooth master line); slight 2-month lag on inflections
+-- 3. Open Data_Sold_Cap_by_Term — cohort lines (12+, 8-12, 6-8) much
+--    smoother through 2024 low-volume window
+-- 4. Open Data_Cap_Quartile — UNCHANGED (formula is correct; bands
+--    naturally tight)
+-- 5. Open Data_Vol_Cap_Combo — UNCHANGED (2024 drop is real activity)
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT
+-- ---------------------------------------------------------------------
+-- R49: Bucket C chart type/style restructures vs master (Bid_Ask,
+--      Inventory_Backlog, Market_Turnover, Avail_by_Term_Summary).
+-- R-backfill: external source-data ingestion for pre-2003 dia comps
+--      (still deferred; need data agreement first).
+-- =====================================================================
