@@ -4598,3 +4598,67 @@ test('R56: NAME_OVERRIDES_BY_VERTICAL — gov keeps original Firm Term title', a
   assert.equal(charts[0].name, 'Available Deals — Asking Cap vs Firm Term',
     'R56: gov keeps original title (firm term is a gov-only concept)');
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// R57 — preserve original headerRow even when R47 axis-trim shifts dataStart
+// ─────────────────────────────────────────────────────────────────────
+
+test('R57: titleRow stays at original header row when R47 trim shifts dataStart', () => {
+  // R47 axis-trim for cap_rate_top_bottom_quartile bumped from 2005 to
+  // 2007 in R54. With rows starting Jan 2005, the trim shifts
+  // effectiveStart forward by ~24 months. PRE-R57 bug: the inner builder
+  // computed headerRow = effectiveStart - 1 = a DATA row, so the chart's
+  // <c:tx> series-title cell ref pointed at "4.73%" instead of "Top
+  // Quartile". POST-R57: headerRow stays pinned at the original
+  // dataStart - 1, no matter how far the data trim shifts.
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'subspecialty',    col: 'B' },
+    { key: 'top_quartile',    col: 'C' },
+    { key: 'median',          col: 'D' },
+    { key: 'bottom_quartile', col: 'E' },
+  ];
+  const rows = [];
+  // 30 monthly rows starting 2005-01 — R54's MIN_YEAR=2007 will shift
+  // effectiveStart forward by 24 rows.
+  for (let m = 0; m < 30; m++) {
+    rows.push({ period_end: new Date(2005, m, 28).toISOString().slice(0, 10),
+                top_quartile: 0.08, median: 0.07, bottom_quartile: 0.06 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_top_bottom_quartile',
+    tabName: 'Data_Cap_Quartile',
+    cols, dataStart: 5, dataEnd: 5 + rows.length - 1,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  // dataStart was shifted to row 29 (first 2007-01 row at index 24, +5)
+  assert.ok(out.spec.dataStart >= 29, 'R47: dataStart shifted forward for 2007 trim');
+  // R57 — all series titleRow should still be 4 (the original
+  // header row), NOT the shifted data row.
+  for (const s of out.spec.series) {
+    assert.equal(s.titleRow, 4,
+      `R57: series titleRow stays at original headerRow=4 (was bug: pointed at shifted data row ${out.spec.dataStart - 1})`);
+  }
+});
+
+test('R57: titleRow unchanged when no R47 trim applies (back-compat)', () => {
+  // For templates not in MIN_YEAR_BY_TEMPLATE the dataStart isn't shifted;
+  // headerRow falls through to dataStart - 1 as before.
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'subspecialty',    col: 'B' },
+    { key: 'ttm_count',       col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'transaction_count_ttm',
+    tabName: 'Data_Txn_Count',
+    cols, dataStart: 5, dataEnd: 50,
+    rows: [],
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  // No R47 entry for transaction_count_ttm → dataStart stays at 5,
+  // headerRow stays at 4 (= dataStart - 1 normal compute).
+  assert.equal(out.spec.dataStart, 5);
+  assert.equal(out.spec.titleRow, 4, 'no-trim chart still has headerRow = dataStart - 1');
+});

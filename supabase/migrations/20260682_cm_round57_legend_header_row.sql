@@ -1,0 +1,119 @@
+-- =====================================================================
+-- Round 57 — fix legend / series-title labels broken by R47 axis trim.
+-- Final 2026-05-22 batch-3 item. Code-only PR. NO Supabase changes.
+--
+-- ---------------------------------------------------------------------
+-- THE BUG
+-- ---------------------------------------------------------------------
+-- User notes 2026-05-22 batch 3 flagged across MANY charts:
+--   • "Data labels in the legend at the bottom are mislabeled and all
+--      the same number — honestly a number that doesn't make sense for
+--      the time period; cap rates in 2005 were no where near a 4.73%
+--      cap rate even on the lower quartile"   (Cap_Quartile)
+--   • Same "4.73% / 2005 cap in the 4s" complaint on Cap_Avg,
+--     Returns_Idx, Cost_Capital
+--   • "Data labels in the legend are labeled incorrectly" on DOM_Ask,
+--     NM_vs_Market, Sentiment, Avail_Mkt_Size, Active_DOM_PC,
+--     Vol_Cap_Combo, Pace_Cap_Expand
+--   • "Data labels are missing for each data set" on Sold_Cap_by_Term
+--
+-- Diagnostic dump of every flagged chart's <c:tx><c:strRef><c:f>...</c:f>
+-- (series-title cell reference) showed the references all pointed at
+-- DATA cells, NOT the header row:
+--
+--   Data_DOM_Ask          'Data_DOM_Ask'!$C$148      = 103
+--   Data_Cap_Quartile     'Data_Cap_Quartile'!$C$52  = 0.0473
+--   Data_Returns_Idx      'Data_Returns_Idx'!$B$52   = 0.0473
+--   Data_Cost_Capital     'Data_Cost_Capital'!$C$52  = 0.0473
+--   Data_Vol_Cap_Combo    'Data_Vol_Cap_Combo'!$F$52 = 0.0473
+--   ...
+--
+-- The row numbers ALL match each chart's R47/R51/R54 effective dataStart
+-- (post-axis-trim first row). That's the bug:
+--
+-- R47's wrapper computed an `effectiveStart` (the first row at or after
+-- MIN_YEAR_BY_TEMPLATE's cutoff) and passed it to the inner builder as
+-- `dataStart`. The inner builder then derived
+--   const headerRow = dataStart - 1;
+-- — which silently shifted FROM row 4 (the actual header location set
+-- by cm-excel-export.js) TO `effectiveStart - 1` (a DATA row).
+--
+-- Series titles got pointed at data values:
+--   • Cap_Quartile chart shows "4.73%" in legend because that's the
+--     value at row 52 col C of the trimmed first row (2007 quartile
+--     pre-R54-gate, or the first non-NULL row post-R54).
+--   • Other charts show whatever numeric value happens to live at the
+--     trimmed first row.
+--
+-- ---------------------------------------------------------------------
+-- THE FIX
+-- ---------------------------------------------------------------------
+-- Add a `headerRowOverride` parameter to buildInjectionSpecInner. When
+-- R47's wrapper applies a dataStart shift, it computes the ORIGINAL
+-- header row (= args.dataStart - 1) BEFORE the shift and passes it via
+-- headerRowOverride. Inner builder uses that pinned value for every
+-- `titleRow: headerRow` reference, so legend / series-title refs
+-- stay at the worksheet's actual header row no matter how far the
+-- data range trims.
+--
+-- For specs that don't get trimmed (no MIN_YEAR_BY_TEMPLATE entry),
+-- headerRowOverride is undefined and the inner builder falls back to
+-- its original `dataStart - 1` derivation. Pure back-compat — no
+-- existing chart spec needed to change.
+--
+-- ---------------------------------------------------------------------
+-- WHAT THIS FIXES (all from one root cause)
+-- ---------------------------------------------------------------------
+-- After R57 deploys, the legend / series-title text on every chart
+-- with R47/R51/R54 axis-trim will read the correct column header
+-- ("Top Quartile", "Avg Cap Rate", "10Y Treasury", etc.) instead of
+-- a degenerate cell value from the trimmed first row.
+--
+-- Specifically clears these user-reported complaints:
+--   • "4.73% in legend" on Cap_Quartile, Cap_Avg, Returns_Idx, Cost_Capital
+--   • "Labels labeled incorrectly" on DOM_Ask, NM_vs_Market, Sentiment,
+--     Avail_Mkt_Size, Active_DOM_PC, Vol_Cap_Combo, Pace_Cap_Expand
+--   • "Data labels missing" on Sold_Cap_by_Term (it was showing
+--     whatever was in the trimmed first row for each cohort series,
+--     which can be empty for sparse early years → no label rendered;
+--     after R57 each cohort shows its proper header like "12+ Year")
+--
+-- Cap_Quartile's "bands move in perfect proportion" complaint (now
+-- fixed by R54's view-level sample-count gate) was a SEPARATE issue
+-- from the legend bug; the legend just happened to also show the
+-- same degenerate 4.73% number because the broken cell ref pointed
+-- at the same degenerate row.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 154 CM injector tests pass (was 152 after R56). 2 new R57 tests:
+--   • R57: titleRow stays at original headerRow when R47 trim shifts
+--   • R57: titleRow unchanged when no trim applies (back-compat)
+-- Full suite 375/2 (2 unrelated pre-existing).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY VERIFICATION
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Open any chart with an axis trim (Cap_Quartile, Cap_Avg, NM,
+--    Sentiment, DOM_Ask, Bid_Ask, Vol_Cap_Combo, etc.) — the legend
+--    at the bottom should read the column headers correctly
+--    ("Top Quartile", "Median", "Bottom Quartile", "Avg Cap Rate",
+--    "NM Cap", "Market Cap", etc.) and NOT numeric values
+-- 3. Charts that didn't have an R47/R51/R54 trim (e.g. Buyer_Pool,
+--    Avail_by_Term_Summary) are unchanged — their legends were
+--    already correct because headerRow = dataStart - 1 was right
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S DEFERRED
+-- ---------------------------------------------------------------------
+-- All items from 2026-05-22 batch 3 are now shipped across R53-R57.
+-- Remaining open backlog:
+--   • R-backfill: external source-data ingestion for pre-2003 dia
+--     comps + 2021+ leases (needs data agreement)
+--   • R-cohort:   10+ Year cohort decomposition for Market_Turnover
+--     (synthetic split since dialysis has no firm lease terms)
+--   • R-full-app-polish: remaining ~30 LCC app chart cases not
+--     touched in R52's targeted pass
+-- =====================================================================

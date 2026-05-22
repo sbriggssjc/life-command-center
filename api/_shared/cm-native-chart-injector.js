@@ -1896,8 +1896,15 @@ export function buildInjectionSpec(args) {
       effectiveStart = args.dataStart + offset;
     }
   }
+  // R57 — preserve the ORIGINAL header row even when R47's axis trim
+  // shifted dataStart forward. The header row in the worksheet is at a
+  // fixed location set by cm-excel-export.js (row 4 by default; or 27
+  // + summary when a PNG image is anchored on top). headerRowOverride
+  // pins the legend / series-title references at that original spot
+  // so they continue showing column header text ("Top Quartile") and
+  // not numeric cell values from the trimmed first data row.
   const innerArgs = effectiveStart !== args.dataStart
-    ? { ...args, dataStart: effectiveStart }
+    ? { ...args, dataStart: effectiveStart, headerRowOverride: args.dataStart - 1 }
     : args;
   const result = buildInjectionSpecInner(innerArgs);
   if (result && result.spec && args.title) {
@@ -2055,11 +2062,21 @@ function shiftHelperColRefs(spec, oldFirst, newFirst, helperCount) {
   }
 }
 
-function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title }) {
+function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title, headerRowOverride }) {
   const palette = brand?.palette || {};
   const navy   = (palette.nm_navy   || '#003DA5').replace('#', '');
   const sky    = (palette.nm_sky    || '#62B5E5').replace('#', '');
-  const headerRow = dataStart - 1;  // header row sits one row above first data row
+  // R57 — accept a headerRow override from the outer wrapper. The R47
+  // axis-trim wrapper shifts dataStart forward to skip sparse early
+  // years, but the header row is at a FIXED location in the worksheet
+  // (row 4 or wherever cm-excel-export writes it) — it doesn't move
+  // when the chart's plotted data range narrows. Without this override,
+  // titleRow = dataStart - 1 would point at the TRIMMED first data
+  // row's cells, making the legend show numeric values like "4.73%"
+  // instead of the column headers like "Top Quartile".
+  const headerRow = (typeof headerRowOverride === 'number' && headerRowOverride > 0)
+    ? headerRowOverride
+    : dataStart - 1;
   const standardAnchor = { col0: 0, row0: 0, col1: 13, row1: 21 };
 
   // Helper: find the column letter for a CHART_COLUMNS key (or first
