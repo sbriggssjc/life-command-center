@@ -211,25 +211,23 @@ To answer your question directly — for the 14 user-flagged charts in the
 | Ask_Cap_by_Term | Per-cohort TTM **AVG** with HAVING≥5, 3-mo smoothing | ⚠ 3-mo smoothed |
 | Vol_Cap_Combo | TTM **SUM** volume + TTM **AVG** cap + TTM quartiles | ✓ Pure TTM (no smoothing) |
 
-## Recommended next steps
+## User decisions (2026-05-22)
 
-**Question for the user:** for the 3-4 smoothed charts (NM_vs_Market,
-Sold_Cap_by_Term, Ask_Cap_by_Term), do you want me to:
+After reviewing this audit + sample data, Scott confirmed each chart's
+calculation methodology:
 
-1. **Keep smoothing** — current state; the lines look like master Excel but
-   are slightly lagged + not strictly "12 months prior"
-2. **Revert to pure TTM** — strict adherence to your formula; lines will be
-   noisier for small-sample series (NM, cohort-by-term)
-3. **Choose a different cadence** — e.g. quarterly TTM windows that
-   align to calendar quarters (Q4 covers Jan→Dec; Q1 covers Apr→Mar);
-   would naturally smooth without explicit moving avg
+| Chart | Treatment | Decision |
+| --- | --- | --- |
+| NM_vs_Market | NM line smoothed (5-mo) + market line pure TTM | **Keep** smoothing on NM — small-sample noise needs absorbing |
+| Sold_Cap_by_Term (4 cohorts) | All cohorts smoothed (5-mo) | **Keep** smoothing — 2024 low-volume window otherwise jagged |
+| Ask_Cap_by_Term (4 cohorts) | HAVING ≥ 5 + 3-mo smoothing | **Keep** current; gate + smooth both serve the visual |
+| Market_Turnover | TTM sales / point-in-time active leases | **Current mix correct** — this is conventional turnover definition |
+| Inventory_Backlog | TTM added + TTM sold + point-in-time active | **Current mix correct** — conventional inventory snapshot |
+| All other 20 TTM charts | Pure 12-months-prior TTM, no smoothing | Already correct, no change |
 
-**Other clarifications worth confirming:**
-- `Market_Turnover`'s denominator (active leases at period_end) is a snapshot.
-  Should this also be a TTM avg of active count?
-- `Inventory_Backlog`'s active_count is similarly a snapshot. Same question.
-- `Buyer_Pool` (annual stacked %) shows per-calendar-year totals — NOT a
-  rolling window. That's intentional but worth confirming.
+**Implication for future readers:** any chart in this catalog NOT tagged
+"smoothed" computes a strict "12 months prior" window ending at the chart's
+period_end anchor.
 
 ## Confidence
 
