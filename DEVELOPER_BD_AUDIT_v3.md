@@ -1713,6 +1713,161 @@ The Python module `src/owner_role_derivation.py` exposes:
 - `get_classification_for_entity(true_owner_id)` — single-entity inspection
 - `derive_from_row()` — LEGACY v1 heuristic (deprecated; kept for tests)
 
+### 11.10 Topic 1.5 — Sidebar pipeline patch (2026-05-22 closeout)
+
+Patched `life-command-center/api/_handlers/sidebar-pipeline.js` in
+`upsertDomainOwners` to:
+
+1. **Populate `sales_transactions.seller_id` on new captures** — when the
+   sidebar already creates a `recorded_owners` row for the seller (line 7037),
+   also link it to the sales_transactions row alongside the buyer's
+   `recorded_owner_id`. This is dia-only (gov uses `seller_contact_id` via
+   contacts in a separate ingest path).
+2. **Write seller-exit `ownership_history` row** — alongside the buyer-side OH
+   row, write an exit row for the seller with `ownership_end = sale_date`,
+   `ownership_source = 'sales_transactions_seller_exit'`, and `start_date = NULL`
+   (dodges the unique `(property_id, start_date)` index). Provenance is
+   pushed to `field_provenance` per the existing pattern.
+
+The fix is preventive — corrective work (WS3-b backfill) already handled
+the 2,890 historical missing seller-exit rows. Going forward, every new
+CoStar sidebar capture will populate seller-side data so the data quality
+that motivated WS3 doesn't reaccumulate.
+
+### 11.11 Topic 1.7 — Government DB Mirror (2026-05-22 closeout)
+
+Applied the v5 classification chain to the government DB with adaptations
+for gov's different schema:
+
+**Key gov advantages over dia (cleaner signals):**
+- `leases.is_first_generation` populated on 9,167 rows — no "earliest lease"
+  proxy needed
+- `properties.is_build_to_suit` populated on 155 rows — explicit BTS signal
+- `ownership_history.change_type` + `source_event_id` + `matched_sale_id`
+  (richer audit trail)
+
+**Key gov schema differences:**
+- OH uses `transfer_date` single-event semantics (each row = one transfer)
+  rather than dia's interval `start_date`/`end_date` model
+- `new_owner` + `prior_owner` text fields capture both sides on the same row
+- No `is_operator_not_owner` flag (federal tenant is always the operator)
+- Owner-at-date logic uses a window function over OH transfers ordered by
+  `transfer_date DESC`
+
+**Algorithm adaptations:**
+- Rule A: explicit `is_build_to_suit=TRUE` + first-gen lease anchored to
+  construction/renovation (confidence 0.90 — higher than dia's strict rule
+  because the BTS signal is explicit)
+- Rule B: first-gen lease landlord without explicit BTS (confidence 0.80)
+- No user_owner classification (no operator-as-owner pattern in gov data)
+- Federal-government anti-pattern names excluded (USA, Federal, GSA, etc.)
+
+**Migrations applied:**
+- `20260522150000_gov_expand_owner_role_source_check.sql`
+- `20260522150100_gov_apply_owner_role_classification_v5.sql`
+
+**Result:** 301 developers + 3,075 buyers + 10,730 unknown = **3,376 entities
+auto-classified** on gov (vs 0 pre-migration). Top developer list dominated
+by genuine GSA net-lease SPE structures (NGP/EGP/Boyd/SGP/Orion/UIRC/TEP
+variants) — exactly the entity types expected for build-to-suit GSA
+properties.
+
+### 11.12 Topic 1.6 — Entity Resolution (case-only merge) — 2026-05-22
+
+Added `true_owners.merged_into_true_owner_id` column on both DBs and marked
+case-only duplicate variants (e.g., "MR BROADWAY LTD" / "Mr Broadway Ltd",
+"Highwoods Properties Inc" / "HIGHWOODS PROPERTIES, INC" / "Highwoods
+Properties, Inc."). Duplicate rows are NOT deleted — read paths follow the
+merge chain via `COALESCE(merged_into_true_owner_id, true_owner_id)`.
+
+**Canonical selection priority:**
+1. Prefer rows already classified as developer/user_owner/operator > buyer >
+   unknown
+2. Prefer rows with more populated metadata (city, state, contact_id,
+   salesforce_id)
+3. Tie-break by lowest UUID (deterministic)
+
+**Rewrote classification views to be merge-aware:** the v_*_owner_role_
+classification views now group by `COALESCE(merged_into_true_owner_id,
+true_owner_id)`, aggregating `dev_props` / `buy_props` / `uo_props` across
+all variants. The canonical row gets the consolidated classification;
+duplicate rows have `owner_role` reset to NULL.
+
+**Migrations applied:**
+- dia: `20260522160000_dia_true_owner_merge_duplicates.sql`,
+  `20260522160100_dia_classification_merge_aware_reapply.sql`
+- gov: `20260522160000_gov_true_owner_merge_duplicates.sql`,
+  `20260522160100_gov_classification_merge_aware_reapply.sql`
+
+**Result:**
+- dia: 131 rows marked as duplicates (124 canonical entities survive)
+- gov: 887 rows marked as duplicates (876 canonical entities survive)
+
+**Scope limit:** only case + punctuation variants are merged. Fuzzy matches
+(Levenshtein, abbreviation expansion like "Dev" → "Development") are
+deferred to a separate manual-review round. The "Genesis KC Dev" /
+"GENESIS KC DEVELOPMENT LLC" / "GENESIS KC DVELOPMENT LLC" (typo) family,
+for example, still classify as separate entities because their normalized
+forms differ.
+
+### 11.13 Topic 1.8 — Scheduled reclassification cron — 2026-05-22
+
+Added pg_cron jobs on both DBs to nightly re-run the v5 classification:
+
+- **`dia-reclassify-owner-roles-nightly`** at 02:30 UTC daily
+- **`gov-reclassify-owner-roles-nightly`** at 02:45 UTC daily
+
+Each cron calls the corresponding `{dia,gov}_reclassify_owner_roles()`
+stored function, which:
+1. Resets `owner_role`/etc. to NULL on all merged duplicates (in case any
+   crept back via cross-database sync)
+2. Re-reads the classification view (auto-incorporates new
+   ownership_history, sales_transactions, leases data)
+3. Updates canonical rows where classification changed, honoring
+   `behavioral_override` and manual classification
+
+Returns `(rows_updated, rows_reset)` for observability. Smoke-tested
+at deployment — both functions ran cleanly (0/0 immediately after the
+manual classification apply, expected).
+
+**Migrations applied:**
+- `20260522170000_dia_reclassify_owner_roles_cron.sql`
+- `20260522170000_gov_reclassify_owner_roles_cron.sql`
+
+### 11.14 Topic 1 — Final state (2026-05-22)
+
+| Topic | Description | Status |
+|---|---|---|
+| 1.0 | v1 baseline (legacy heuristic) | Superseded |
+| 1.0+ | v5 fact-based algorithm + WS3 data integrity | ✅ §11.1-9 |
+| 1.5 | Sidebar pipeline patch (preventive) | ✅ §11.10 |
+| 1.6 | Entity resolution (case-only merges) | ✅ §11.12 |
+| 1.7 | Government DB mirror | ✅ §11.11 |
+| 1.8 | Scheduled reclassification cron | ✅ §11.13 |
+
+**Final classification distribution (canonical rows only):**
+
+| owner_role | dia | gov | Total |
+|---|---|---|---|
+| developer | 172 | 301 | **473** |
+| buyer | 442 | 3,075 | **3,517** |
+| operator | 13 | n/a | **13** |
+| user_owner | 0 | n/a | **0** |
+| unknown | 3,130 | 9,843 | 12,973 |
+| **Total canonical** | **3,757** | **13,219** | 16,976 |
+| (merged duplicates) | 131 | 887 | 1,018 |
+
+**Deferred to follow-up rounds (not Topic 1):**
+- Topic 2: BTS tracker → owner_role wiring (audit §7.1 A2; adds explicit
+  0.95-confidence developer signal on dia for tracker rows marked delivered)
+- Fuzzy entity resolution (Levenshtein, abbreviation expansion) for
+  multi-form variants like "Genesis KC Dev" / "GENESIS KC DEVELOPMENT LLC"
+- Operator-affiliate registry for sale-leaseback subsidiary detection
+  (e.g., Bio-Medical Applications of MA as Fresenius subsidiary)
+- LCC cross-domain entity sync to merge dia + gov true_owners by canonical
+  identity (would consolidate Truist Bank / SMBC Leasing / MassMutual / etc.
+  across both verticals)
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*

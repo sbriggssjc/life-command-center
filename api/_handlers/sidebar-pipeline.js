@@ -7036,15 +7036,25 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
     // Ensure seller owner record
     const sellerId = sale.seller ? await ensureRecordedOwner(sale.seller, sale.seller_address) : null;
 
-    // Link sale_transaction to the buyer's recorded_owner_id
+    // Link sale_transaction to the buyer's recorded_owner_id (+ seller_id for dia).
+    // DEVELOPER_BD_AUDIT_v3 §11 Topic 1.5: when seller is captured, also link
+    // sales_transactions.seller_id so the v_dia_owner_role_classification view
+    // can see who sold the asset (the developer-exit signal). Gov uses
+    // seller_contact_id linking to contacts via a separate ingest path, so
+    // we skip the seller link for gov here.
     const matchedSaleId = findMatchingSaleId(saleDateStr, parseCurrency(sale.sale_price));
     if (matchedSaleId && buyerId) {
+      const buyerPatch = stripNulls({
+        recorded_owner_id: buyerId,
+        recorded_owner_name: sale.buyer,
+      });
+      if (domain === 'dialysis' && sellerId) {
+        buyerPatch.seller_id = sellerId;
+        if (sale.seller) buyerPatch.seller_name = sale.seller;
+      }
       await domainPatch(domain,
         `sales_transactions?sale_id=eq.${matchedSaleId}`,
-        stripNulls({
-          recorded_owner_id: buyerId,
-          recorded_owner_name: sale.buyer,
-        }),
+        buyerPatch,
         'upsertDomainOwners:linkSaleToOwner'
       );
     }
@@ -7107,6 +7117,49 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
           { sale_id: matchedSaleId },
           'upsertDomainOwners:linkOwnershipToSale'
         );
+      }
+    }
+
+    // DEVELOPER_BD_AUDIT_v3 §11 Topic 1.5: write seller-exit OH row for dia.
+    // The legacy sidebar code never closed the seller's tenure when a new
+    // sale was captured, leaving 99.6% of pre-stabilization developers
+    // invisible to ownership_history chain queries. This addition closes
+    // the gap on new captures. Gov OH already captures the seller via
+    // the prior_owner text field on the (single-event) transfer row above,
+    // so no separate seller OH row is needed for gov.
+    if (domain === 'dialysis' && sellerId) {
+      // Dedup: skip if a seller-exit OH row already exists for this
+      // (property, recorded_owner) closed near saleDateStr.
+      const sellerOhLookup = await domainQuery(domain, 'GET',
+        `ownership_history?property_id=eq.${propertyId}` +
+        `&recorded_owner_id=eq.${sellerId}` +
+        `&ownership_end=eq.${saleDateStr}` +
+        `&select=ownership_id&limit=1`
+      );
+
+      if (!sellerOhLookup.ok || !sellerOhLookup.data?.length) {
+        // start_date NULL to dodge the unique (property_id, start_date) index;
+        // end_date carries the developer-exit signal.
+        const sellerOhData = stripNulls({
+          property_id:       propertyId,
+          recorded_owner_id: sellerId,
+          ownership_start:   null,
+          ownership_end:     saleDateStr,
+          start_date:        null,
+          end_date:          saleDateStr,
+          sold_price:        parseCurrency(sale.sale_price),
+          sale_id:           null, // exit row, not acquisition
+          ownership_source:  'sales_transactions_seller_exit',
+          notes:             `Sidebar: seller exit from sale ${matchedSaleId || 'unmatched'} on ${saleDateStr}`,
+        });
+        const sellerResult = await domainQuery(domain, 'POST', 'ownership_history', sellerOhData);
+        if (sellerResult.ok) {
+          results.history++;
+          const sellerOhRow = Array.isArray(sellerResult.data) ? sellerResult.data[0] : sellerResult.data;
+          if (sellerOhRow?.ownership_id) {
+            pushProvenance(provCollect, 'ownership_history', sellerOhRow.ownership_id, sellerOhData);
+          }
+        }
       }
     }
   }
