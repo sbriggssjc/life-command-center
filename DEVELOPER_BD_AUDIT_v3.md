@@ -1857,9 +1857,57 @@ manual classification apply, expected).
 | **Total canonical** | **3,757** | **13,219** | 16,976 |
 | (merged duplicates) | 131 | 887 | 1,018 |
 
-**Deferred to follow-up rounds (not Topic 1):**
-- Topic 2: BTS tracker → owner_role wiring (audit §7.1 A2; adds explicit
-  0.95-confidence developer signal on dia for tracker rows marked delivered)
+### 11.15 Topic 2 — BTS tracker → owner_role wiring (2026-05-22)
+
+Wired `dia.build_to_suit_tracker` to automatically classify the developer
+entity when a project's `construction_status` transitions to `'delivered'`.
+
+**Trigger:** `trg_dia_bts_tracker_to_developer` on
+`public.build_to_suit_tracker` fires AFTER INSERT or UPDATE of
+`construction_status`, `developer_name`, or `certification_date`.
+
+**Trigger function logic** (`public.dia_bts_tracker_to_developer`):
+1. Guard: only acts when new state is `'delivered'` AND prior state was not
+   already `'delivered'` (idempotent on re-updates)
+2. Resolves `developer_name` text → `recorded_owners` → `true_owners`
+   (creates both if absent — high-confidence BTS signal justifies auto-create)
+3. Follows the merge chain to write to the canonical `true_owner_id`
+4. Sets `owner_role='developer'`, `source='bts_delivered'`,
+   `confidence=0.95` (the strongest developer signal we have)
+5. Sets `developer_status_active_until = certification_date + 5yr`
+   (or `CURRENT_DATE + 5yr` if cert date NULL); takes `GREATEST` of existing
+   and new value so subsequent BTS deliveries roll the date forward
+6. Appends evidence entry to `developer_flag_sources` JSONB with bts_id,
+   property_id, certification_date, tenant
+7. Honors `behavioral_override` and `manual` source — won't overwrite
+   broker-set classifications
+
+**Cron protection:** updated `dia_reclassify_owner_roles()` to exclude
+`bts_delivered` from its overwrite scope (alongside `manual` and
+`behavioral_override`). BTS evidence is the strongest classification
+signal and the v5 fact-based rules (0.75-0.85 confidence) should never
+downgrade it.
+
+**Smoke test (2026-05-22):** inserted a test BTS row with
+`construction_status='delivered'`, `developer_name='TEST_BTS_TRIGGER_DEV LLC'`,
+`certification_date=2026-05-22`. Trigger correctly:
+- Created `recorded_owners` + `true_owners` rows for the test entity
+- Set `owner_role='developer'`, `source='bts_delivered'`,
+  `confidence=0.95`
+- Set `developer_status_active_until=2031-05-22` (5 years out)
+- Recorded evidence in JSONB
+Test data cleaned up after verification.
+
+**Gov side:** already handled by `v_gov_developer_candidates` Rule A
+(`bts_explicit_with_first_gen`, 0.90 confidence) since gov has the
+`properties.is_build_to_suit` explicit flag. No separate gov trigger
+needed.
+
+**Migration:** `20260522180000_dia_bts_tracker_to_developer.sql`.
+
+### 11.16 Topic 1 + 2 — Combined deferred items (2026-05-22)
+
+**Deferred to follow-up rounds:**
 - Fuzzy entity resolution (Levenshtein, abbreviation expansion) for
   multi-form variants like "Genesis KC Dev" / "GENESIS KC DEVELOPMENT LLC"
 - Operator-affiliate registry for sale-leaseback subsidiary detection
