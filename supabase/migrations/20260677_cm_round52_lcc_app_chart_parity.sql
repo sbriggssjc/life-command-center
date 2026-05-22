@@ -1,0 +1,145 @@
+-- =====================================================================
+-- Round 52 — LCC app chart UI parity with master + export Data_* charts.
+-- User notes 2026-05-21 closing item: "the charts in the individual
+-- tabs don't match what's in the aggregate 'Charts' tab. Let's make
+-- sure we are consistent so we can always copy/paste or extract the
+-- same layout and formatted and data from these charts no matter where
+-- we look. Same with what's displayed in the LCC app on the capital
+-- markets tab."
+--
+-- Code-only PR. NO Supabase changes. Targets the LCC app's
+-- capital-markets.js (Chart.js v4.4.1 renderers) — the third surface
+-- that hadn't received the per-template polish the exports got R34-R51.
+--
+-- ---------------------------------------------------------------------
+-- BACKGROUND
+-- ---------------------------------------------------------------------
+-- Three surfaces hold the same dataset:
+--   1. User's master Excel "Charts" tab (canonical reference)
+--   2. Our export's individual Data_* native chart XML tabs
+--      (heavy polish R34-R51 — gridlines, axis pins, [Red] formats,
+--      data labels, R50 restructures, R51 axis trim)
+--   3. Our LCC app Capital Markets tab (Chart.js v4.4.1)
+--
+-- Surface #2 was brought in line with #1 over the previous rounds.
+-- Surface #3 lagged: the LCC app's `bid_ask_spread` case still rendered
+-- spread bars + last-ask line on dual axis (Round 31 shape), not R50's
+-- stacked-line + drop-down-bars structure. Three target templates
+-- (buyer_pool_monthly_count + the two tenant donuts) had no LCC case
+-- at all and fell through the switch default to null.
+--
+-- ---------------------------------------------------------------------
+-- THE FIX (capital-markets.js + index.html)
+-- ---------------------------------------------------------------------
+-- 8 LCC chart cases brought into parity with the export + master:
+--
+-- 1. bid_ask_spread / bid_ask_spread_monthly
+--    Restructured to Chart.js's closest equivalent to master chart7's
+--    stacked-line + <c:upDownBars/>: two lines with a fill BETWEEN
+--    them. Bottom sky line = Last Ask Cap; top navy line = Last Ask +
+--    Spread; gray fill between = the spread band. Y-axis pinned to
+--    5-9.5% (matches R50 export).
+--
+--    Graceful fallback: if avg_last_ask_cap missing (legacy view),
+--    falls back to the single spread line — no breakage.
+--
+-- 2. inventory_backlog
+--    Added 3rd dataset: gray Net-to-Market line (added − sold) on
+--    the same axis as the bars. Matches R50 export combo with
+--    sharedAxis=true.
+--
+-- 3. market_turnover
+--    Restructured from single area-filled line to combo bar+line:
+--    sky bars for Monthly Clear Pace (= ttm_sales_count / 12) on
+--    left integer axis; navy line for Turnover Rate on right %
+--    axis. Adaptive right-axis max (gov 1-3%, dia 20-30%).
+--    Matches R50 export Market Size chart31 shape.
+--
+-- 4. available_by_term_summary + available_by_firm_term_summary
+--    (Dia variant was MISSING — fell through to default null!)
+--    Added the dia variant by sharing the case body with gov firm-term.
+--    Realigned dot colors to master chart26:
+--      Avg Cap navy → aquamarine #00B1B0
+--      Lower Q gray → sky #62B5E5
+--    Pinned right-axis 4-12% (CAP_RATE_DOT_RANGE — matches R50 export).
+--    Markers stay diamond ('rectRot') per user preference.
+--
+-- 5. buyer_pool_monthly_count (was MISSING — fell through to null)
+--    Added new stacked-bar case with per-segment % labels via
+--    chartjs-plugin-datalabels (loaded in index.html). Shows the
+--    segment's share of stack-total (Private / Inst / REIT /
+--    Cross-Border) in-bar — matches R46 export behavior.
+--
+-- 6. available_by_tenant_count_donut +
+--    available_by_tenant_volume_donut (BOTH MISSING)
+--    Added doughnut chart cases with per-segment % labels. 4-segment
+--    palette navy / sky / aquamarine / sage matching the export's
+--    donut colors. Tooltip shows raw value + % of total. Matches
+--    R46 export segment-label parity.
+--
+-- 7. core_cap_rate_dot_plot
+--    Switched x-axis from `time.unit: 'year'` (ticks like "2024") to
+--    `time.unit: 'quarter'` with displayFormats: { quarter: "[Q]Q ''yy" }
+--    (ticks like "Q1 '24"). Matches R46 export quarter-format
+--    parity. autoSkip + autoSkipPadding keeps the label density
+--    reasonable across multi-year ranges.
+--
+-- ---------------------------------------------------------------------
+-- INDEX.HTML CHANGE
+-- ---------------------------------------------------------------------
+-- Added chartjs-plugin-datalabels@2.2.0 via CDN (after Chart.js
+-- v4.4.1). The plugin auto-registers globally; commonChartOptions
+-- now sets `plugins.datalabels: { display: false }` so it's opt-in
+-- per chart. Only Buyer_Pool + donut cases opt in.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- node -c capital-markets.js passes (syntax check).
+-- Full test suite 361 pass / 2 unrelated pre-existing failures
+-- (availability-checker-parsers + raw write guardrail; same as
+-- R47-R51).
+--
+-- (The LCC app's Chart.js renderer is not covered by automated tests
+-- — manual visual verification is the standard for UI changes per
+-- the existing testing convention in this codebase. Post-deploy
+-- verification plan below.)
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- LCC app → Capital Markets tab → Dialysis vertical → All Subspecialties:
+-- 1. Bid_Ask card: visible sky baseline (Last Ask) + navy line above
+--    (Last Ask + Spread) + light gray band BETWEEN the two lines.
+--    Y-axis labels 5.0-9.5% range.
+-- 2. Inventory_Backlog card: 2 bars (sky added + navy sold) + gray
+--    line tracing the Net (added − sold). Line can go negative.
+-- 3. Market_Turnover card: sky bars (Monthly Clear Pace) on left
+--    integer axis + navy line (Turnover Rate) on right % axis.
+-- 4. Avail_by_Term_Summary card: sky price bars + 4 diamond dots
+--    on right axis (aquamarine Avg / purple Upper / sky Lower /
+--    sage Median). Right axis 4-12%.
+-- 5. Buyer_Pool card: 4-color stacked bars with white/dark % labels
+--    inside large segments.
+-- 6. Avail_by_Tenant_Count + Volume donut cards: 4-segment donuts
+--    (navy/sky/aquamarine/sage) with white % labels inside each
+--    slice. Hover for raw value.
+-- 7. Core_Cap_Dot card: x-axis ticks read "Q1 '23, Q2 '23..." not
+--    "2023, 2024...".
+--
+-- ---------------------------------------------------------------------
+-- WHAT'S NEXT
+-- ---------------------------------------------------------------------
+-- R-backfill (still deferred): external source-data ingestion for
+--   pre-2003 dia comps + 2021+ dia leases (rent_psf_box).
+-- R-cohort (deferred from R50): 10+ Year cohort decomposition for
+--   market_turnover to match master chart31's full 4-series shape.
+-- R-full-app-polish (open): the other ~30 LCC app chart cases that
+--   didn't receive per-template polish. Cleanup pass would bring
+--   gridlines, axis pins, [Red] formats, and other R37-R51 features
+--   to the rest of the chart switch. Lower priority than what
+--   shipped here (those weren't user-flagged).
+-- R-cross-surface aggregate (open): the master's "Charts" aggregate
+--   page is updated via the MasterPasteReady tab paste. Verify that
+--   workflow still works end-to-end after R50/R52 chart restructures.
+-- =====================================================================

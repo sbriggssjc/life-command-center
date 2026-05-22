@@ -204,6 +204,12 @@
             label: (ctx) => `${ctx.dataset.label}: ${tickFormatterFor(yFormat)(ctx.parsed.y)}`,
           },
         },
+        // R52 — chartjs-plugin-datalabels (added in index.html R52)
+        // auto-registers globally and draws labels on every dataset by
+        // default. Disable globally; individual chart specs that want
+        // labels (Buyer_Pool stacked %, donut segment %) opt in via
+        // their own plugins.datalabels override.
+        datalabels: { display: false },
       },
       scales: {
         x: {
@@ -501,6 +507,110 @@
         opts.scales.y.max = 1.0;
         return new Chart(canvas, { type: 'bar', data: { labels: yearLabels, datasets }, options: opts });
       }
+      // R52 — Buyer_Pool monthly count stacked bar with per-segment %
+      // labels (export parity, R46). The exports's data tab has
+      // private_count / institutional_count / reit_count / cross_border_count;
+      // we stack the counts and show the % of stack-total per segment.
+      case 'buyer_pool_monthly_count': {
+        const rows = chart.rows || [];
+        const priv = rows.map(r => Number(r.private_count) || 0);
+        const inst = rows.map(r => Number(r.institutional_count) || 0);
+        const reit = rows.map(r => Number(r.reit_count) || 0);
+        const cb   = rows.map(r => Number(r.cross_border_count) || 0);
+        const totals = rows.map((_, i) => priv[i] + inst[i] + reit[i] + cb[i]);
+        const pct = (n, i) => totals[i] > 0 ? n / totals[i] : 0;
+        const labelFmt = (ctx, arr) => {
+          const v = ctx.dataset.data[ctx.dataIndex];
+          if (!v) return '';
+          const p = pct(arr[ctx.dataIndex], ctx.dataIndex);
+          // Only show if the segment is large enough to fit a label.
+          return p >= 0.06 ? (p * 100).toFixed(0) + '%' : '';
+        };
+        datasets = [
+          { label: 'Private (Individual)', data: priv,
+            backgroundColor: palette[0], stack: 'pool',
+            datalabels: { display: true, color: '#FFFFFF',
+              font: { weight: 600, size: 9 },
+              formatter: (_v, ctx) => labelFmt(ctx, priv) } },
+          { label: 'Institutional / Fund', data: inst,
+            backgroundColor: palette[2], stack: 'pool',
+            datalabels: { display: true, color: '#FFFFFF',
+              font: { weight: 600, size: 9 },
+              formatter: (_v, ctx) => labelFmt(ctx, inst) } },
+          { label: 'REIT',                 data: reit,
+            backgroundColor: palette[1], stack: 'pool',
+            datalabels: { display: true, color: brandColor('nm_text', '#191919'),
+              font: { weight: 600, size: 9 },
+              formatter: (_v, ctx) => labelFmt(ctx, reit) } },
+          { label: 'Cross-Border',         data: cb,
+            backgroundColor: palette[3], stack: 'pool',
+            datalabels: { display: true, color: brandColor('nm_text', '#191919'),
+              font: { weight: 600, size: 9 },
+              formatter: (_v, ctx) => labelFmt(ctx, cb) } },
+        ];
+        const opts = commonChartOptions('integer_count');
+        opts.scales.x.stacked = true;
+        opts.scales.y.stacked = true;
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+      }
+      // R52 — Avail_by_Tenant donut charts (count + volume) with
+      // per-segment % labels (export parity, R46). Single ring;
+      // categories = tenant labels (DaVita / FMC / US Renal / Other).
+      case 'available_by_tenant_count_donut':
+      case 'available_by_tenant_volume_donut': {
+        const rows = chart.rows || [];
+        const isVol = chart.chart_template_id === 'available_by_tenant_volume_donut';
+        // Backend composer (api/capital-markets.js) emits count_active /
+        // volume_available — see syntheticRecipeFor entries.
+        const valKey = isVol ? 'volume_available' : 'count_active';
+        const tenantLabels = rows.map(r => r.tenant || 'Other');
+        const values = rows.map(r => Number(r[valKey]) || 0);
+        const total = values.reduce((a, b) => a + b, 0);
+        // 4-segment palette aligned to exports: navy / sky / aquamarine / sage
+        const donutColors = [
+          brandColor('nm_navy', '#003DA5'),
+          brandColor('nm_sky',  '#62B5E5'),
+          '#00B1B0',
+          '#4CB582',
+          brandColor('nm_axis', '#6A748C'),
+        ];
+        datasets = [{
+          label: isVol ? 'Volume Available' : 'Count Available',
+          data: values,
+          backgroundColor: tenantLabels.map((_, i) => donutColors[i % donutColors.length]),
+          borderWidth: 1,
+          borderColor: '#FFFFFF',
+          datalabels: {
+            display: true,
+            color: '#FFFFFF',
+            font: { weight: 600, size: 11, family: 'Calibri, sans-serif' },
+            formatter: (v) => total > 0 && v / total >= 0.04
+              ? (v / total * 100).toFixed(0) + '%'
+              : '',
+          },
+        }];
+        const opts = {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '55%',
+          plugins: {
+            legend: { position: 'bottom',
+              labels: { color: brandColor('nm_text','#191919'),
+                       font: { family: 'Calibri, sans-serif', size: 11 } } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const v = ctx.parsed; const p = total > 0 ? (v / total * 100).toFixed(1) : '0.0';
+                  const fmt = isVol ? tickFormatterFor('currency_millions') : tickFormatterFor('integer_count');
+                  return `${ctx.label}: ${fmt(v)} (${p}%)`;
+                },
+              },
+            },
+          },
+        };
+        return new Chart(canvas, { type: 'doughnut',
+          data: { labels: tenantLabels, datasets }, options: opts });
+      }
       case 'dom_and_pct_of_ask':
       case 'dom_and_pct_of_ask_monthly': {
         // Combo: DOM as bars (left axis), % of ask as line (right axis)
@@ -525,46 +635,50 @@
       }
       case 'bid_ask_spread':
       case 'bid_ask_spread_monthly': {
-        // Quarterly: spread line only.
-        // Monthly (deliverable p.34): spread bars on left axis + last-ask cap line
-        // on right axis. The monthly view exposes avg_last_ask_cap; if present
-        // the renderer adds the overlay; otherwise falls back to spread-only.
-        const isMonthly = chart.chart_template_id === 'bid_ask_spread_monthly';
-        if (isMonthly) {
-          datasets = [
-            { type: 'bar',  label: 'Bid-Ask Spread (bps)',
-              data: chart.rows.map(r => r.avg_bid_ask_spread),
-              backgroundColor: palette[3], borderRadius: 1, yAxisID: 'y' },
-            { type: 'line', label: 'Last Ask Cap',
-              data: chart.rows.map(r => r.avg_last_ask_cap),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y1' },
-          ];
-          const opts = commonChartOptions('percent_basis_points');
-          opts.scales.y1 = {
-            position: 'right',
-            ticks: {
-              color: brandColor('nm_axis', '#6A748C'),
-              font: { family: 'Calibri, sans-serif', size: 9 },
-              callback: tickFormatterFor('percent_basis_points'),
-            },
-            grid: { display: false },
-          };
-          return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
+        // R52 — match the master chart7 visual the user pointed at in R50:
+        // a sky baseline line at the Last Ask Cap, plus a navy line at
+        // Last Ask + Spread, with a gray band filled BETWEEN the two
+        // lines (Chart.js fill-between-datasets — closest Chart.js
+        // equivalent to the master's <c:upDownBars/>). This matches the
+        // export's stacked-line + drop-down-bars shape we shipped for
+        // both quarterly + monthly cadences in R50.
+        //
+        // Graceful fallback: if avg_last_ask_cap missing (legacy view),
+        // fall back to the single spread line so the chart still renders.
+        const navy = brandColor('nm_navy', '#003DA5');
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const hasLastAsk = (chart.rows || []).some(r => r.avg_last_ask_cap != null);
+        if (!hasLastAsk) {
+          datasets = [{
+            label: 'Bid-Ask Spread',
+            data: chart.rows.map(r => r.avg_bid_ask_spread),
+            borderColor: sky, backgroundColor: 'rgba(98,181,229,0.25)',
+            fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2,
+          }];
+          return new Chart(canvas, { type: 'line', data: { labels, datasets },
+            options: commonChartOptions('percent_basis_points') });
         }
-        // Quarterly fallback (gov, dialysis quarterly cadence)
-        datasets = [{
-          label: 'Bid-Ask Spread (bps)',
-          data: chart.rows.map(r => r.avg_bid_ask_spread),
-          borderColor: palette[0],
-          backgroundColor: palette[3],
-          fill: true,
-          tension: 0.25,
-          pointRadius: 0,
-          borderWidth: 2,
-        }];
-        return new Chart(canvas, { type: 'line', data: { labels, datasets },
-          options: commonChartOptions('percent_basis_points') });
+        // Order matters: the top line (Last Ask + Spread, navy) must be
+        // index 0 so `fill: { target: 1 }` fills DOWN to the bottom line
+        // (Last Ask, sky) at index 1 with a gray band = the spread.
+        datasets = [
+          { label: 'Last Ask + Spread',
+            data: chart.rows.map(r =>
+              (r.avg_last_ask_cap != null && r.avg_bid_ask_spread != null)
+                ? Number(r.avg_last_ask_cap) + Number(r.avg_bid_ask_spread)
+                : null),
+            borderColor: navy, backgroundColor: 'rgba(154,169,183,0.35)',
+            fill: { target: 1 }, // fill DOWN to dataset index 1 (sky baseline)
+            tension: 0.25, pointRadius: 0, borderWidth: 2, order: 0 },
+          { label: 'Last Ask Cap',
+            data: chart.rows.map(r => r.avg_last_ask_cap),
+            borderColor: sky, backgroundColor: 'transparent',
+            fill: false, tension: 0.25, pointRadius: 0, borderWidth: 2, order: 1 },
+        ];
+        const opts = commonChartOptions('percent_basis_points');
+        opts.scales.y.min = 0.05;   // matches R50 export pin
+        opts.scales.y.max = 0.095;
+        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
       }
 
       // ===== Phase 2c additions (FRED-sourced macro context) ========================
@@ -1025,8 +1139,17 @@
             tension: 0.3, pointRadius: 0, borderWidth: 2.5, showLine: true, order: 0 },
         ];
         const opts = commonChartOptions('percent_basis_points');
-        opts.scales.x = { type: 'time', time: { unit: 'year' },
-          ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 } },
+        // R52 — quarter ticks (R46 export parity). Use `time.unit: 'quarter'`
+        // so Chart.js places a tick at each quarter boundary; the
+        // displayFormats override lands "Q1 '25" rather than the default
+        // "Jan 2025". User notes 2026-05-21 item "Data_Core_Cap_Dot:
+        // X-axis is messed up and we need to see quarters for the
+        // labels, not dates" — already shipped in the export R46; this
+        // brings the LCC app to parity.
+        opts.scales.x = { type: 'time', time: { unit: 'quarter',
+            displayFormats: { quarter: "[Q]Q ''yy" } },
+          ticks: { color: brandColor('nm_axis','#6A748C'), font: { family: 'Calibri', size: 9 },
+                   maxRotation: 0, autoSkip: true, autoSkipPadding: 16 },
           grid: { display: false } };
         opts.scales.y.min = 0.04; opts.scales.y.max = 0.12;
         return new Chart(canvas, { type: 'scatter', data: { datasets: ds }, options: opts });
@@ -1080,14 +1203,23 @@
         return new Chart(canvas, { type: 'scatter', data: { datasets: ds }, options: opts });
       }
 
+      case 'available_by_term_summary':
       case 'available_by_firm_term_summary': {
-        // Gov-only. Combo: avg_price bars + 4 cohort dots (avg/upper-Q/median/lower-Q cap)
-        // on a right axis. Categories: Sub 5 / 5-8 / 8-12 / 12+.
-        const navy   = brandColor('nm_navy',     '#003DA5');
-        const sky    = brandColor('nm_sky',      '#62B5E5');
-        const purple = '#7E6BAD';
-        const sage   = '#4CB582';
-        const gray   = '#6A748C';
+        // R52 — combo: avg_price bars (sky) + 4 cohort dots on right axis.
+        // Categories: Sub 5 / 5-8 / 8-12 / 12+. Dia + gov share the same
+        // shape (R50 export merged the cases). Colors realigned to master
+        // chart26 (Market Size tab):
+        //   Avg Cap        aquamarine #00B1B0  (was navy in R31; R50 master-aligned)
+        //   Upper Quart    purple     #7E6BAD
+        //   Lower Quart    sky        #62B5E5  (was gray; R50 master-aligned)
+        //   Median         sage       #4CB582  (master has no Median dot but
+        //                              we keep ours per user direction)
+        // Markers stay as diamond (Chart.js pointStyle 'rectRot') per
+        // user preference (master uses circle; user prefers diamond).
+        const aqua   = '#00B1B0';                                // R52 — Avg Cap
+        const sky    = brandColor('nm_sky',  '#62B5E5');         // R52 — Lower Q + bar
+        const purple = '#7E6BAD';                                // Upper Q
+        const sage   = '#4CB582';                                // Median
         const termRows = chart.rows || [];
         const termLabels = termRows.map(r => r.term_bucket || '?');
         datasets = [
@@ -1098,63 +1230,99 @@
             yAxisID: 'y', order: 5 },
           { type: 'scatter', label: 'Avg Cap',
             data: termRows.map((r, i) => ({ x: i, y: r.avg_cap })),
-            backgroundColor: navy, borderColor: navy,
-            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 1 },
+            backgroundColor: aqua, borderColor: aqua,
+            pointRadius: 7, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 1 },
           { type: 'scatter', label: 'Upper Q',
             data: termRows.map((r, i) => ({ x: i, y: r.upper_quartile_cap })),
             backgroundColor: purple, borderColor: purple,
-            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 2 },
+            pointRadius: 7, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 2 },
           { type: 'scatter', label: 'Lower Q',
             data: termRows.map((r, i) => ({ x: i, y: r.lower_quartile_cap })),
-            backgroundColor: gray, borderColor: gray,
-            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 3 },
+            backgroundColor: sky, borderColor: sky,
+            pointRadius: 7, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 3 },
           { type: 'scatter', label: 'Median',
             data: termRows.map((r, i) => ({ x: i, y: r.median_cap })),
             backgroundColor: sage, borderColor: sage,
-            pointRadius: 6, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 4 },
+            pointRadius: 7, pointStyle: 'rectRot', showLine: false, yAxisID: 'y1', order: 4 },
         ];
         const opts = commonChartOptions('currency_millions');
         opts.scales.x = { ...(opts.scales.x || {}), type: 'category' };
-        opts.scales.y1 = { type: 'linear', position: 'right', min: 0.04, max: 0.10,
+        // R52 — pin right-axis 4-12% to match R50 export
+        // (CAP_RATE_DOT_RANGE — same as Core_Cap_Dot + Avail_Cap_Dot).
+        opts.scales.y1 = { type: 'linear', position: 'right', min: 0.04, max: 0.12,
           grid: { drawOnChartArea: false },
           ticks: { callback: (v) => (v * 100).toFixed(1) + '%', font: { size: 11 } } };
         return new Chart(canvas, { type: 'bar', data: { labels: termLabels, datasets }, options: opts });
       }
 
       case 'market_turnover': {
-        // Area-filled navy line of TTM turnover rate.
+        // R52 — match the R50 export restructure. Switch from single
+        // turnover-rate line to a combo bar+line that mirrors master
+        // Market Size chart31 (the untitled bottom-of-tab combo).
+        //   Bar (sky):    Monthly Clear Pace = ttm_sales_count / 12
+        //   Line (navy):  Turnover Rate (TTM) on right % axis
         const navy = brandColor('nm_navy', '#003DA5');
-        const pale = brandColor('nm_pale', '#E0E8F4');
-        datasets = [{
-          label: 'Turnover Rate (TTM)',
-          data: chart.rows.map(r => r.turnover_rate),
-          borderColor: navy, backgroundColor: pale, fill: true,
-          tension: 0.3, pointRadius: 0, borderWidth: 2.5,
-        }];
-        const opts = commonChartOptions('percent_one_decimal');
-        // Adaptive y-max: gov sits 1-3%, dia 20-30%.
-        const vals = chart.rows.map(r => Number(r.turnover_rate)).filter(v => Number.isFinite(v));
+        const sky  = brandColor('nm_sky',  '#62B5E5');
+        const rows = chart.rows || [];
+        datasets = [
+          { type: 'bar',  label: 'Monthly Clear Pace',
+            data: rows.map(r => r.ttm_sales_count != null
+              ? Number(r.ttm_sales_count) / 12 : null),
+            backgroundColor: sky, borderColor: sky, borderRadius: 1,
+            yAxisID: 'y',  order: 2 },
+          { type: 'line', label: 'Turnover Rate (TTM)',
+            data: rows.map(r => r.turnover_rate),
+            borderColor: navy, backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+            yAxisID: 'y1', order: 0 },
+        ];
+        const opts = commonChartOptions('integer_count');
+        // Adaptive right-axis: gov sits 1-3%, dia 20-30%.
+        const vals = rows.map(r => Number(r.turnover_rate)).filter(v => Number.isFinite(v));
         const maxV = vals.length ? Math.max(...vals) : 0.05;
         opts.scales.y.min = 0;
-        opts.scales.y.max = maxV > 0.10 ? Math.ceil(maxV * 20) / 20 : 0.05;
-        return new Chart(canvas, { type: 'line', data: { labels, datasets }, options: opts });
+        opts.scales.y1 = {
+          type: 'linear', position: 'right',
+          min: 0, max: maxV > 0.10 ? Math.ceil(maxV * 20) / 20 : 0.05,
+          grid: { drawOnChartArea: false },
+          ticks: {
+            color: brandColor('nm_axis', '#6A748C'),
+            font: { family: 'Calibri, sans-serif', size: 9 },
+            callback: tickFormatterFor('percent_one_decimal'),
+          },
+        };
+        return new Chart(canvas, { type: 'bar', data: { labels, datasets }, options: opts });
       }
 
       case 'inventory_backlog': {
-        // Round 31 Tier 2b — Restructured to match master Excel
-        // `Dialysis Comp Work MASTER.xlsx` > 'Charts' > chart 5:
-        // 2-bar inflow vs outflow. Mirrors server renderer rewrite.
+        // R52 — matches the R50 export restructure (and master chart8):
+        // 2 bars (Added sky + Sold navy) + 1 gray line for Net-to-Market.
+        // Net = added − sold. The line tells the inventory-direction story.
         const sky  = brandColor('nm_sky',  '#62B5E5');
         const navy = brandColor('nm_navy', '#003DA5');
+        const gray = '#6A748C';
+        const rows = chart.rows || [];
         datasets = [
           { type: 'bar', label: 'No. Added to Market (TTM)',
-            data: chart.rows.map(r => Number(r.added_ttm) || 0),
+            data: rows.map(r => Number(r.added_ttm) || 0),
             backgroundColor: sky, borderColor: sky, borderRadius: 1,
-            yAxisID: 'y', order: 1 },
-          { type: 'bar', label: 'No. Sold (TTM)',
-            data: chart.rows.map(r => Number(r.sold_ttm ?? r.ttm_sales) || 0),
-            backgroundColor: navy, borderColor: navy, borderRadius: 1,
             yAxisID: 'y', order: 2 },
+          { type: 'bar', label: 'No. Sold (TTM)',
+            data: rows.map(r => Number(r.sold_ttm ?? r.ttm_sales) || 0),
+            backgroundColor: navy, borderColor: navy, borderRadius: 1,
+            yAxisID: 'y', order: 3 },
+          // R52 — Net-to-Market line on the same axis as the bars
+          // (sharedAxis style; matches the export's combo with
+          // sharedAxis=true).
+          { type: 'line', label: 'Net to Market (TTM)',
+            data: rows.map(r => {
+              const a = r.added_ttm; const s = r.sold_ttm ?? r.ttm_sales;
+              if (a == null || s == null) return null;
+              return Number(a) - Number(s);
+            }),
+            borderColor: gray, backgroundColor: 'transparent',
+            tension: 0.25, pointRadius: 0, borderWidth: 2,
+            yAxisID: 'y', order: 0 },
         ];
         return new Chart(canvas, { type: 'bar', data: { labels, datasets },
           options: commonChartOptions('integer_count') });
