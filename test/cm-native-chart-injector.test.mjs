@@ -4191,3 +4191,89 @@ test('R50: injectNativeCharts renders stacked-line + upDownBars for Bid_Ask quar
   assert.match(chartXml, /<c:max val="0\.095"\/>/, 'pinned y-max 9.5%');
   assert.match(chartXml, /<c:min val="0\.05"\/>/,  'pinned y-min 5%');
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// R51 — active-listings family axis trim (user notes 2026-05-21 sparseness
+//        items R47 didn't sweep up)
+// ─────────────────────────────────────────────────────────────────────
+
+test('R51: asking_cap_quartiles_active dataStart shifts to first 2015 row', () => {
+  // 60 monthly rows starting 2014-01 — first 12 are 2014, then 48 are 2015+.
+  const rows = [];
+  for (let m = 0; m < 60; m++) {
+    rows.push({ period_end: new Date(2014, m, 28).toISOString().slice(0, 10),
+                upper_q_total: 0.08 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'asking_cap_quartiles_active',
+    tabName: 'Data_Active_Cap_Quart',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'upper_q_total', col: 'C' },
+      { key: 'lower_q_total', col: 'D' },
+      { key: 'upper_q_core',  col: 'E' },
+      { key: 'lower_q_core',  col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // 2015-01 is at row index 12 → original row 5+12 = 17
+  assert.equal(out.spec.dataStart, 17,
+    'R51: chart starts at first 2015 row');
+  assert.equal(out.spec.dataEnd, 64, 'dataEnd unchanged');
+});
+
+test('R51: available_market_size_combo trims to 2016', () => {
+  const rows = [];
+  for (let m = 0; m < 60; m++) {
+    rows.push({ period_end: new Date(2014, m, 28).toISOString().slice(0, 10),
+                count_total: 50 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_market_size_combo',
+    tabName: 'Data_Avail_Mkt_Size',
+    cols: [
+      { key: 'period_end',         col: 'A' },
+      { key: 'subspecialty',       col: 'B' },
+      { key: 'count_total',        col: 'C' },
+      { key: 'count_core_10plus',  col: 'D' },
+      { key: 'avg_cap_total',      col: 'E' },
+      { key: 'avg_cap_core_10plus',col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // 2016-01 is at row index 24 → original row 5+24 = 29
+  assert.equal(out.spec.dataStart, 29,
+    'R51: chart starts at first 2016 row');
+});
+
+test('R51: dom_price_change_active trims to 2013', () => {
+  // Mix 2012 + 2013 monthly rows
+  const rows = [];
+  for (let m = 0; m < 36; m++) {
+    rows.push({ period_end: new Date(2012, m, 28).toISOString().slice(0, 10),
+                avg_dom_total: 90 });
+  }
+  const out = buildInjectionSpec({
+    chart_template_id: 'dom_price_change_active',
+    tabName: 'Data_Active_DOM_PC',
+    cols: [
+      { key: 'period_end',             col: 'A' },
+      { key: 'subspecialty',           col: 'B' },
+      { key: 'avg_dom_total',          col: 'C' },
+      { key: 'avg_dom_core',           col: 'D' },
+      { key: 'pct_price_change_total', col: 'E' },
+      { key: 'pct_price_change_core',  col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    rows,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // 2013-01 is at row index 12 → original row 5+12 = 17
+  assert.equal(out.spec.dataStart, 17,
+    'R51: chart starts at first 2013 row');
+});
