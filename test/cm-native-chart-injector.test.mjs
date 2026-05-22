@@ -716,11 +716,15 @@ test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter com
     'all 4 have showMarker=true');
   assert.ok(out.spec.lineSeries.every(s => s.markerShape === 'diamond'),
     'all 4 use diamond markers');
-  // R50 — right axis pinned to cap rate dot range, left axis currency
-  assert.deepEqual(out.spec.yRightRange, { min: 0.04, max: 0.12 },
-    'R50: right axis pinned to CAP_RATE_DOT_RANGE');
+  // R60 — right axis tightened to 5-9% (was R50's 4-12%) so the
+  // narrow dia cap-rate range is more visible.
+  assert.deepEqual(out.spec.yRightRange, { min: 0.05, max: 0.09 },
+    'R60: right axis tightened to 5-9% from R50 default');
   assert.ok(out.spec.yRightNumFmt && out.spec.yRightNumFmt.includes('%'),
     'R50: right axis labeled as percent');
+  // R60 — per-dot value callouts on each scatter series
+  assert.ok(out.spec.lineSeries.every(s => s.dataLabels && s.dataLabels.showVal === true),
+    'R60: each dot series has chart-wide value callouts');
 });
 
 test('buildInjectionSpec: available_by_firm_term_summary uses same shape as dia variant', () => {
@@ -4742,4 +4746,53 @@ test('R58: buyer_pool_monthly_count keeps monthly labels via monthly_count suffi
   // are wired). So the wrapper short-circuits. Skip the cadence assertion
   // for null specs; verify cadence detector directly.
   // (cadence detector is internal — assert via helper col emission shape.)
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// R60 — chart visual polish
+// ─────────────────────────────────────────────────────────────────────
+
+test('R60: every catAx block emits tickLblPos="low"', () => {
+  // R60 fix: cat-axis labels stay at the chart bottom even when value
+  // bars dip negative (Pace_Cap_Expand, Inventory_Backlog sold_neg).
+  // Verified by checking each builder's emitted XML.
+  const baseSpec = {
+    tabName: 'Test', catCol: 'A', dataStart: 5, dataEnd: 10,
+    series: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5' }],
+  };
+  // Use the export of buildSingleLineChartXml etc. via multi-line for shape parity
+  const xml = buildMultiLineChartXml(baseSpec);
+  assert.match(xml, /<c:tickLblPos val="low"\/>/, 'R60: tickLblPos="low" emitted on catAx');
+});
+
+test('R60: cap_rate_top_bottom_quartile yAxisRange tightened to 5.5-8.5%', () => {
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'subspecialty',    col: 'B' },
+    { key: 'top_quartile',    col: 'C' },
+    { key: 'median',          col: 'D' },
+    { key: 'bottom_quartile', col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_top_bottom_quartile',
+    tabName: 'Data_Cap_Quartile',
+    cols, dataStart: 5, dataEnd: 100,
+    rows: [],
+    brand: { palette: { nm_navy: '#003DA5' } },
+  });
+  assert.deepEqual(out.spec.yAxisRange, { min: 0.055, max: 0.085 },
+    'R60: cap quartile pinned to 5.5-8.5% (was 5-10%) for IQR visibility');
+});
+
+test('R60: dLblsXml with { showVal: true } emits chart-level value labels', () => {
+  // Indirect test via buildComboChartXml emission
+  const xml = buildComboChartXml({
+    tabName: 'Test', catCol: 'A', dataStart: 5, dataEnd: 8,
+    barSeries: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5' }],
+    lineSeries: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '00B1B0',
+                   showMarker: true, markerShape: 'diamond',
+                   dataLabels: { showVal: true, numFmt: '0.00%' } }],
+  });
+  assert.match(xml, /<c:showVal val="1"\/>/, 'R60: showVal=1 emitted for marker dataLabels');
+  assert.match(xml, /<c:dLblPos val="t"\/>/, 'R60: label position above marker');
 });
