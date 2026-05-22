@@ -4484,8 +4484,8 @@ test('R53: end-to-end injectNativeCharts emits no qQ-yyyy literal format', async
 // ─────────────────────────────────────────────────────────────────────
 // R55 — Market_Turnover full restructure (3 series + labeled axes)
 // ─────────────────────────────────────────────────────────────────────
-test('R55: market_turnover with R55 view cols renders 2-bar+1-line combo', () => {
-  // 8 cols matching the new R55 view shape
+test('R55+R62: market_turnover renders 2-bar+1-line combo with monthly-pace helper', () => {
+  // 8 cols matching the R55 view shape
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -4503,21 +4503,27 @@ test('R55: market_turnover with R55 view cols renders 2-bar+1-line combo', () =>
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'combo');
-  assert.equal(out.spec.barSeries.length, 2, '2 bars: active + sales');
-  // Back bar = active_count (col F, pale)
+  assert.equal(out.spec.barSeries.length, 2, '2 bars: active + monthly clear pace');
+  // Back bar = active_count (col F, pale sky)
   assert.equal(out.spec.barSeries[0].valCol, 'F');
   assert.equal(out.spec.barSeries[0].color, '#E0E8F4');
-  // Front bar = annual_sales_rate (col G, navy)
-  assert.equal(out.spec.barSeries[1].valCol, 'G');
+  // R62 — front bar now reads from monthly clear pace HELPER col, not annual_sales_rate
+  // Helper lands one past the regular cols (cols.length=8 → 'I')
+  assert.equal(out.spec.barSeries[1].valCol, 'I', 'R62: front bar reads monthly_clear_pace helper');
   assert.equal(out.spec.barSeries[1].color, '003DA5');
   // Line = months_of_supply (col H, gray)
   assert.equal(out.spec.lineSeries.length, 1);
   assert.equal(out.spec.lineSeries[0].valCol, 'H');
   assert.equal(out.spec.lineSeries[0].color, '6A748C');
+  // R62 — monthly_clear_pace helper col declared (TTM sales / 12)
+  assert.ok(Array.isArray(out.helperCols) && out.helperCols.length === 1);
+  assert.equal(out.helperCols[0].key, 'monthly_clear_pace');
+  assert.equal(out.helperCols[0].getValue({ annual_sales_rate: 144 }), 12,
+    'R62: 144 annual = 12 monthly');
   // barOverlap=100 places the front bar IN FRONT of the back bar
   assert.equal(out.spec.barOverlap, 100);
   // Axis titles set
-  assert.match(out.spec.yLeftAxisTitle, /Listings|count/i);
+  assert.match(out.spec.yLeftAxisTitle, /Listings|monthly/i);
   assert.match(out.spec.yRightAxisTitle, /Months/i);
 });
 
