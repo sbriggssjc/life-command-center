@@ -32,7 +32,61 @@
 // ============================================================================
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
+
+// ---------------------------------------------------------------------------
+// CORS helpers (inlined from ../_shared/cors.ts so this function deploys as
+// a single file — keeps the Supabase MCP / CLI deploy path simple).
+// ---------------------------------------------------------------------------
+
+const FRONTEND_URL = Deno.env.get("VERCEL_FRONTEND_URL")
+  || Deno.env.get("LCC_BASE_URL")
+  || "https://tranquil-delight-production-633f.up.railway.app";
+const ALLOWED_ORIGINS: string[] = [
+  FRONTEND_URL,
+  "https://tranquil-delight-production-633f.up.railway.app",
+  "http://localhost:3000",
+  "http://localhost:5500",
+  "http://127.0.0.1:5500",
+];
+
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin") || "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : FRONTEND_URL;
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-LCC-Workspace, X-LCC-Key, X-PA-Webhook-Secret, X-LCC-User-Id, X-LCC-User-Email",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+function handleCors(req: Request): Response | null {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders(req) });
+  }
+  return null;
+}
+
+function jsonResponse(
+  req: Request,
+  body: unknown,
+  status = 200,
+  extraHeaders?: Record<string, string>,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders(req),
+      "Content-Type": "application/json",
+      ...(extraHeaders || {}),
+    },
+  });
+}
+
+function errorResponse(req: Request, message: string, status = 400): Response {
+  return jsonResponse(req, { error: message }, status);
+}
 
 // ---------------------------------------------------------------------------
 // Configuration

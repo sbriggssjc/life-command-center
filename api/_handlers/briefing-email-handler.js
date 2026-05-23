@@ -56,6 +56,8 @@ import {
   fetchUpcomingLeaseExpirations,
   fetchNewActiveListings,
   fetchPipelineRollup,
+  fetchMarketStats,
+  fetchResearchProgress,
   normalizePersonalContext,
 } from '../_shared/briefing-data.js';
 
@@ -440,6 +442,179 @@ function renderCapitalMarkets({ intelSnapshot }) {
     sectionHeader('Capital Markets & Rates', 'Where money is priced today') +
     bodyCell(`<div style="padding:14px 0;">${tablePair}${cmBlock}${fedRow}</div>`)
   );
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Market Stats — TTM tiles per vertical (dia + gov)
+// ---------------------------------------------------------------------------
+
+/** Compact money formatter for tile values — $4.2M, $850K, $1.2B. */
+function fmtMoneyCompact(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return '—';
+  if (v >= 1_000_000_000) return '$' + (v / 1_000_000_000).toFixed(1) + 'B';
+  if (v >= 1_000_000)     return '$' + (v / 1_000_000).toFixed(v >= 10_000_000 ? 0 : 1) + 'M';
+  if (v >= 1_000)         return '$' + Math.round(v / 1_000) + 'K';
+  return '$' + Math.round(v);
+}
+
+function fmtCapDecimal(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  // RPC returns cap_rate as a fraction (0.072). Multiply for display.
+  const pct = Math.abs(v) < 1 ? v * 100 : v;
+  return pct.toFixed(2) + '%';
+}
+
+function fmtInt(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  return Math.round(v).toLocaleString('en-US');
+}
+
+/**
+ * One tile group for a single vertical. Renders 5 metric tiles in a row:
+ *   TTM Volume · Avg Cap · Q1-Q3 Cap · TTM Tx Count · On Market.
+ */
+function marketTileGroup(label, accent, stats) {
+  if (!stats) {
+    return (
+      `<div style="${FONT}margin-top:14px;">` +
+      `<div style="font-size:11px;color:${BRAND.navy};font-weight:600;` +
+      `text-transform:uppercase;letter-spacing:0.8px;padding-bottom:6px;">` +
+      `${escapeHtml(label)} <span style="color:${accent};">●</span></div>` +
+      `<div style="${FONT}font-size:12px;color:${BRAND.textMuted};font-style:italic;` +
+      `padding:6px 0;">Market stats unavailable.</div>` +
+      `</div>`
+    );
+  }
+  const q1 = fmtCapDecimal(stats.q1_cap);
+  const q3 = fmtCapDecimal(stats.q3_cap);
+  const tiles = [
+    { label: 'TTM Volume',  value: fmtMoneyCompact(stats.ttm_volume),    sub: '12-month closed' },
+    { label: 'Avg Cap',     value: fmtCapDecimal(stats.avg_cap),         sub: `median ${fmtCapDecimal(stats.median_cap)}` },
+    { label: 'Cap Q1–Q3',   value: `${q1} – ${q3}`,                       sub: 'inter-quartile' },
+    { label: 'TTM Tx',      value: fmtInt(stats.ttm_count),               sub: 'comp count' },
+    { label: 'On Market',   value: fmtInt(stats.on_market_count),         sub: fmtMoneyCompact(stats.on_market_volume) + ' asking' },
+  ];
+
+  const cells = tiles.map((t) => (
+    `<td style="${FONT}padding:10px 8px;text-align:center;width:20%;` +
+    `vertical-align:top;border-right:1px solid ${BRAND.bgAlt};` +
+    `background:#ffffff;">` +
+    `<div style="font-size:10px;color:${BRAND.axis};text-transform:uppercase;` +
+    `letter-spacing:0.6px;">${escapeHtml(t.label)}</div>` +
+    `<div style="font-size:18px;font-weight:600;color:${BRAND.text};margin-top:3px;line-height:1.1;">` +
+    `${escapeHtml(t.value)}</div>` +
+    `<div style="font-size:10px;color:${BRAND.textMuted};margin-top:2px;">` +
+    `${escapeHtml(t.sub)}</div>` +
+    `</td>`
+  )).join('');
+
+  return (
+    `<div style="${FONT}margin-top:14px;">` +
+    `<div style="font-size:11px;color:${BRAND.navy};font-weight:600;` +
+    `text-transform:uppercase;letter-spacing:0.8px;padding-bottom:6px;">` +
+    `<span style="color:${accent};">●</span> ${escapeHtml(label)}</div>` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+    `style="border:1px solid ${BRAND.bgAlt};border-radius:4px;background:#fafbfc;">` +
+    `<tr>${cells}</tr></table></div>`
+  );
+}
+
+function renderMarketStats({ marketStats }) {
+  const dia = marketStats?.dialysis;
+  const gov = marketStats?.government;
+  if (!dia && !gov) return '';
+
+  return sectionHeader('Vertical Market Stats', 'Trailing-12-month deal flow by vertical') +
+    bodyCell(
+      marketTileGroup('Dialysis',     BRAND.sky,    dia) +
+      marketTileGroup('Government',   BRAND.blueMid, gov) +
+      `<div style="${FONT}font-size:10px;color:${BRAND.textMuted};margin:8px 0 14px 0;font-style:italic;">` +
+      `Excludes NM-listed deals and flagged outliers. Cap-rate distribution filtered to 2-20% range.</div>`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4c. Research Progress — weekly counts + coverage tiles
+// ---------------------------------------------------------------------------
+
+function fmtPctRate(v) {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return (v * 100).toFixed(0) + '%';
+}
+
+function researchTile(label, value, sub, accent) {
+  return (
+    `<td style="${FONT}padding:10px 8px;text-align:center;width:25%;` +
+    `vertical-align:top;border-right:1px solid ${BRAND.bgAlt};` +
+    `background:#ffffff;">` +
+    `<div style="font-size:10px;color:${BRAND.axis};text-transform:uppercase;` +
+    `letter-spacing:0.6px;">${escapeHtml(label)}</div>` +
+    `<div style="font-size:20px;font-weight:600;color:${accent || BRAND.text};` +
+    `margin-top:3px;line-height:1.1;">${escapeHtml(value)}</div>` +
+    `<div style="font-size:10px;color:${BRAND.textMuted};margin-top:2px;">` +
+    `${escapeHtml(sub || '')}</div>` +
+    `</td>`
+  );
+}
+
+function renderResearchProgress({ researchProgress }) {
+  const ws  = researchProgress?.workspace;
+  const dia = researchProgress?.dialysis;
+  const gov = researchProgress?.government;
+  if (!ws && !dia && !gov) return '';
+
+  // Row 1: workspace-wide weekly counts
+  let row1 = '';
+  if (ws) {
+    row1 =
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+      `style="border:1px solid ${BRAND.bgAlt};border-radius:4px;margin-top:14px;background:#fafbfc;"><tr>` +
+      researchTile('Touchpoints',     fmtInt(ws.touchpoints_this_week),     'calls/emails/meetings 7d', BRAND.navy) +
+      researchTile('Prospects Added', fmtInt(ws.prospects_added_this_week), 'new entities 7d',          BRAND.navy) +
+      researchTile('Opps Opened',     fmtInt(ws.opportunities_opened_this_week), 'BD opportunities 7d',  BRAND.navy) +
+      researchTile('% Prospected',    fmtPctRate(ws.pct_accounts_prospected),
+        `${fmtInt(ws.entities_with_recent_activity)} of ${fmtInt(ws.total_entities)} engaged`, BRAND.navy) +
+      `</tr></table>`;
+  }
+
+  // Row 2: per-vertical comps + listings + research coverage
+  const verticalRow = (label, accent, row) => {
+    if (!row) {
+      return (
+        `<div style="${FONT}font-size:11px;color:${BRAND.navy};font-weight:600;` +
+        `text-transform:uppercase;letter-spacing:0.8px;padding-bottom:6px;margin-top:14px;">` +
+        `<span style="color:${accent};">●</span> ${escapeHtml(label)}</div>` +
+        `<div style="${FONT}font-size:12px;color:${BRAND.textMuted};font-style:italic;">` +
+        `Coverage data unavailable.</div>`
+      );
+    }
+    return (
+      `<div style="${FONT}font-size:11px;color:${BRAND.navy};font-weight:600;` +
+      `text-transform:uppercase;letter-spacing:0.8px;padding-bottom:6px;margin-top:14px;">` +
+      `<span style="color:${accent};">●</span> ${escapeHtml(label)}</div>` +
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+      `style="border:1px solid ${BRAND.bgAlt};border-radius:4px;background:#fafbfc;"><tr>` +
+      researchTile('Comps Added',      fmtInt(row.comps_added),     'sales 7d') +
+      researchTile('Listings Added',   fmtInt(row.listings_added),  'listings 7d') +
+      researchTile('% Owner Researched', fmtPctRate(row.pct_owner),
+        `${fmtInt(row.props_with_owner)} of ${fmtInt(row.props_total)} props`) +
+      researchTile('% Developer Tagged', fmtPctRate(row.pct_developer),
+        `${fmtInt(row.props_with_developer)} of ${fmtInt(row.props_total)} props`) +
+      `</tr></table>`
+    );
+  };
+
+  return sectionHeader('Research Progress', 'Coverage and outreach over the last 7 days') +
+    bodyCell(
+      row1 +
+      verticalRow('Dialysis',   BRAND.sky,     dia) +
+      verticalRow('Government', BRAND.blueMid, gov) +
+      `<div style="${FONT}font-size:10px;color:${BRAND.textMuted};margin:8px 0 14px 0;font-style:italic;">` +
+      `Touchpoints = call/email/meeting/note events. Engaged accounts = entities with activity in the last 180 days.</div>`,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -864,9 +1039,11 @@ function renderHtml(ctx) {
     renderGamePlan(ctx) +
     renderAnalystTake(ctx) +
     renderCapitalMarkets(ctx) +
+    renderMarketStats(ctx) +
     renderWeeklyChanges(ctx) +
     renderDealIntelligence(ctx) +
     renderStrategicAndUrgent(ctx) +
+    renderResearchProgress(ctx) +
     renderNewOnMarket(ctx) +
     renderSectorWatch(ctx) +
     renderReadingList(ctx) +
@@ -1062,6 +1239,7 @@ export async function briefingEmailHandler(req, res) {
     workCounts, myWork, inboxSummary, unassignedWork, syncHealth,
     sfActivity, hotContacts, diaPipeline, newIntakes,
     intelSnapshot, salesComps, expirations, newListings, pipelineRollup,
+    marketStats, researchProgress,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts, 'fetchWorkCounts'),
     safe(() => fetchMyWork(workspaceId, userId, 15), [], 'fetchMyWork'),
@@ -1082,6 +1260,10 @@ export async function briefingEmailHandler(req, res) {
       { dialysis: [], government: [] }, 'fetchNewActiveListings'),
     safe(fetchPipelineRollup,
       { open_count: 0, total_value: 0, weighted_value: 0, by_stage: [] }, 'fetchPipelineRollup'),
+    safe(() => fetchMarketStats(365), { dialysis: null, government: null }, 'fetchMarketStats'),
+    safe(() => fetchResearchProgress(workspaceId, 7),
+      { window_days: 7, workspace: null, dialysis: null, government: null },
+      'fetchResearchProgress'),
   ]);
 
   let priorities;
@@ -1110,6 +1292,7 @@ export async function briefingEmailHandler(req, res) {
     personalContext, intelSnapshot,
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
+    marketStats, researchProgress,
     weather: personalContext.weather,
   };
 
