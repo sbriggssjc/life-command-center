@@ -879,6 +879,65 @@ export const ACTION_SCHEMAS = {
 // OPENAPI SPEC GENERATOR
 // ============================================================================
 
+// Typed gateway operations that live OUTSIDE ACTION_REGISTRY (routed via the
+// /api/intake, /api/context, /api/memory gateways in server.js). They MUST be
+// included in the generated specs so the connector definition is a COMPLETE
+// superset — re-importing the spec must never drop the OM-intake or
+// entity-memory actions the Copilot agent depends on.
+const TYPED_GATEWAY_OPERATIONS = [
+  {
+    path: '/api/intake/stage-om', operationId: 'intakeStageOm', tag: 'intake',
+    summary: 'Stage an Offering Memorandum for intake',
+    description: 'Stages a property OM PDF inline (base64) into inbox_items + staged_intake_items, kicks off AI extraction + property matching, and logs an interaction for entity-scoped memory.',
+    inputs: {
+      type: 'object',
+      properties: {
+        intake_source: { type: 'string', description: 'e.g. copilot' },
+        intake_channel: { type: 'string', description: 'e.g. copilot_chat' },
+        intent: { type: 'string' },
+        artifacts: {
+          type: 'object',
+          properties: {
+            primary_document: {
+              type: 'object',
+              properties: {
+                file_name: { type: 'string' },
+                mime_type: { type: 'string' },
+                bytes_base64: { type: 'string', description: 'Base64-encoded document bytes' },
+                storage_path: { type: 'string' }
+              }
+            }
+          }
+        },
+        seed_data: { type: 'object' }
+      },
+      required: ['artifacts']
+    },
+    outputs: { type: 'object', properties: { ok: { type: 'boolean' }, intake_id: { type: 'string' }, extraction_status: { type: 'string' }, classified_domain: { type: 'string' }, matched_entity_id: { type: 'string' } } }
+  },
+  {
+    path: '/api/intake/finalize-om', operationId: 'intakeFinalizeOm', tag: 'intake',
+    summary: 'Finalize staged OM intake',
+    description: 'Idempotent status probe. Flips the staged inbox_item from new to triaged.',
+    inputs: { type: 'object', properties: { intake_id: { type: 'string' } }, required: ['intake_id'] },
+    outputs: { type: 'object', properties: { ok: { type: 'boolean' }, status: { type: 'string' } } }
+  },
+  {
+    path: '/api/context/retrieve-entity', operationId: 'contextRetrieveEntity', tag: 'context',
+    summary: 'Retrieve full entity context (timeline + open work + recent inbox)',
+    description: 'THE memory-retrieval action. Call at the start of any conversation that mentions a specific contact, property, or organization — before drafting emails or making recommendations.',
+    inputs: { type: 'object', properties: { entity_id: { type: 'string' }, entity_name: { type: 'string' }, entity_type: { type: 'string' } } },
+    outputs: { type: 'object', properties: { ok: { type: 'boolean' }, entity: { type: 'object' }, recent_interactions: { type: 'array' }, open_action_items: { type: 'array' }, recent_inbox_items: { type: 'array' }, last_touchpoint: { type: 'string' }, active_listings: { type: 'array' } } }
+  },
+  {
+    path: '/api/memory/log-turn', operationId: 'memoryLogTurn', tag: 'context',
+    summary: 'Log an agent-worthy insight, preference, or commitment',
+    description: 'Explicit memory write. Use to capture context the agent decides should persist across conversations.',
+    inputs: { type: 'object', properties: { entity_id: { type: 'string' }, summary: { type: 'string' }, turn_text: { type: 'string' }, channel: { type: 'string' } }, required: ['summary'] },
+    outputs: { type: 'object', properties: { ok: { type: 'boolean' }, activity_id: { type: 'string' } } }
+  }
+];
+
 /**
  * Generate an OpenAPI 3.0 spec from the ACTION_REGISTRY + ACTION_SCHEMAS.
  * This spec is consumable by MS Copilot as a plugin manifest.
@@ -1007,6 +1066,20 @@ export function generateOpenApiSpec(registry, baseUrl = process.env.LCC_BASE_URL
     }
   }
 
+  // Typed gateway operations (outside ACTION_REGISTRY) — keep the spec complete.
+  for (const op of TYPED_GATEWAY_OPERATIONS) {
+    spec.paths[op.path] = {
+      post: {
+        operationId: op.operationId,
+        summary: op.summary,
+        description: op.description,
+        tags: [op.tag],
+        requestBody: { required: true, content: { 'application/json': { schema: op.inputs } } },
+        responses: { '200': { description: 'Success', content: { 'application/json': { schema: op.outputs } } } }
+      }
+    };
+  }
+
   return spec;
 }
 
@@ -1128,6 +1201,21 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
         }
       };
     }
+  }
+
+  // Typed gateway operations (outside ACTION_REGISTRY) — keep the spec complete.
+  for (const op of TYPED_GATEWAY_OPERATIONS) {
+    spec.paths[op.path] = {
+      post: {
+        operationId: op.operationId,
+        summary: op.summary,
+        description: op.description,
+        'x-ms-summary': op.summary.slice(0, 80),
+        tags: [op.tag],
+        parameters: [{ in: 'body', name: 'body', required: true, schema: op.inputs }],
+        responses: { '200': { description: 'Success', schema: op.outputs } }
+      }
+    };
   }
 
   return spec;
