@@ -2067,8 +2067,9 @@ populates P0.5 (473 developers) accordingly.
 - SF Opportunity sync writer (read-only mirror that populates
   bd_opportunities hourly from Salesforce). Schema is ready (Topic 9).
 - Audit Topic A6 templates + UI: state machine + cadence schedule
-  shipped §11.25; remaining is the actual message templates and the
-  operator UI that surfaces "send touch N" / "log touch N" actions.
+  shipped §11.25; activity-driven auto-advance + dashboard shipped
+  §11.26; remaining is the actual message template bodies and the
+  operator console UI surface itself.
 - Audit Topic A10: listing-event fan-out engine (Lane A buyer cohort +
   Lane B owner-geographic proximity)
 - Priority queue bands P1-P5, P8, P9 (each requires additional data views)
@@ -2422,6 +2423,103 @@ The remaining big pieces are SF Opportunity inbound sync (so
 `bd_opportunities` actually populates from Salesforce) and the
 operator console UI itself. Both are non-database work and don't
 block the doctrine — the data and logic layers are complete.
+
+### 11.26 Topic A6.5 — Activity-driven cadence auto-advance + dashboard (2026-05-22)
+
+§11.25 added the state machine but the cadence still required an
+explicit `lcc_advance_onboarding_cadence()` call after each touch. This
+topic closes the loop by wiring it to the natural operator workflow:
+*log the activity, cadence advances itself.*
+
+**What was added (migration `20260522260000_lcc_cadence_auto_advance
+_and_dashboard.sql`):**
+
+1. **`lcc_activity_event_advance_cadence()`** trigger on
+   `activity_events` AFTER INSERT. When the inserted row has
+   `category IN ('email','call','meeting')` and an `entity_id`:
+   - Looks up the entity's most specific cadence row (prefer the
+     matching `bd_opportunity_id`; fall back to any active cadence
+     for the entity).
+   - Maps activity category → cadence touch_type. The `'call'`
+     category bridges to either `'vm'` or `'call'` next_touch_type
+     since both are call attempts from the operator's perspective.
+   - If the activity matches the expected `next_touch_type`, calls
+     `lcc_advance_onboarding_cadence()` with optional booleans
+     pulled from `metadata` (`email_opened`, `email_replied`,
+     `call_connected`, `meeting_held`).
+   - If the activity is off-schedule (operator did something other
+     than the next scheduled touch), bumps the relevant counter but
+     leaves `current_touch` unchanged.
+   - Wrapped in EXCEPTION WHEN OTHERS so a cadence-wiring bug can
+     never block an activity insert.
+
+2. **`lcc_open_prospect_opportunity(entity, owner?, vertical?,
+   source?, notes?)`** helper. Until the SF inbound sync ships, this
+   lets operators (or seed scripts) open a `bd_opportunities` row
+   for a P0.5 entity. Idempotent — returns the existing open
+   prospect opp if there is one. The §11.25 auto-seed trigger
+   handles cadence creation. `is_open` is a generated column on
+   `(closed_at IS NULL)`, so we just leave `closed_at` NULL and
+   `is_open` computes to true.
+
+3. **`v_bd_cadence_dashboard`** (SECURITY INVOKER) — per-cadence
+   summary view joining `touchpoint_cadence` + `entities` +
+   `v_entity_portfolio_all`. Columns:
+   `cadence_id, entity_id, entity_name, owner_role, workspace_id,
+    domain, phase, priority_tier, current_touch, next_touch_due,
+    next_touch_type, next_touch_template, days_until_next,
+    days_overdue, last_touch_at/type/template, emails_sent/opened
+    /replied, calls_made/connected, meetings_scheduled,
+    consecutive_unopened, unsubscribe_status, bd_opportunity_id,
+    owner_user_id, total_property_count, current_property_count,
+    is_cross_vertical`.
+
+**End-to-end validation (Elliott Bay Capital):**
+
+1. Called `lcc_open_prospect_opportunity()` — bd_opportunities row
+   inserted, §11.25 trigger fired, cadence seeded at step 0 with
+   `next_touch_type='email'`.
+2. Inserted `activity_events(category='email', email_opened=true)`
+   — trigger advanced cadence to step 1, `next_touch_type='vm'`,
+   `next_touch_template='onboarding_vm_2_followup'`,
+   `emails_sent=1`, `emails_opened=1`.
+3. Inserted `activity_events(category='call')` — cadence advanced
+   to step 2, `next_touch_type='email'`,
+   `next_touch_template='onboarding_email_3_market_color'`,
+   `days_until_next=28`, `calls_made=1`.
+4. `v_bd_cadence_dashboard` returned the full state including
+   `total_property_count=93`, `owner_role='developer'`.
+
+Test data was cleaned up afterward.
+
+**The complete BD loop is now operational:**
+
+```
+Open opportunity ──►  §11.25 trigger ──► seed cadence
+                                              │
+Operator logs activity_event ──► §11.26 trigger ──► advance cadence
+                                                       │
+                                              v_bd_cadence_dashboard
+                                              v_priority_queue_enriched
+```
+
+Three observable triggers, two views, three helper functions. Every
+operator interaction either opens an opportunity (manual or via SF
+sync) or logs an activity_event, and the cadence state machine
+maintains itself.
+
+**Remaining for full operator console:**
+- Message **template bodies** for each `onboarding_email_*` /
+  `onboarding_vm_*` template name (cadence points at them but text
+  lives elsewhere).
+- **Frontend UI** that renders `v_bd_cadence_dashboard` + buttons
+  for "log next touch" / "open opportunity" that hit the helpers.
+- **SF Opportunity inbound sync** so `bd_opportunities` rows arrive
+  automatically when the sales team marks a contact as a Prospect
+  in Salesforce.
+
+All three are integration / UI work; the database doctrine is now
+complete.
 
 ---
 
