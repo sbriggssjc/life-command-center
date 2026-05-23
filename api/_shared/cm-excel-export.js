@@ -531,6 +531,13 @@ const CHART_COLUMNS = {
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',       header: 'Subspecialty',        width: 14 },
     { key: 'avg_bid_ask_spread', header: 'Bid-Ask Spread (bps)', format: 'percent_basis_points', width: 19 },
+    // R68 — add avg_last_ask_cap so the bid_ask_spread chart template
+    // (cm-native-chart-injector.js) can emit the master's stacked-line +
+    // upDownBars visual ("dots/lines stacked above the last asking cap
+    // rate over the TTM with drop-down lines between data points").
+    // Without this column the template falls back to a single-line
+    // chart of the spread alone, which is what users saw in 2026-03-31.
+    { key: 'avg_last_ask_cap',   header: 'Last Asking Cap (TTM)', format: 'percent_basis_points', width: 19 },
     { key: 'pct_price_change',   header: '% Price Changes',     format: 'percent_one_decimal', width: 16 },
   ],
 
@@ -1681,9 +1688,22 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     chartsSheet.getCell('B2').font = { name: fonts.title_family, size: 18, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
     chartsSheet.getRow(2).height = 24;
 
+    // R68 — flag the aggregate Charts tab as a legacy snapshot. User
+    // notes 2026-05-23: "the charts in the individual tabs don't match
+    // what's in the aggregate Charts tab. Let's make sure we are
+    // consistent so we can always copy/paste or extract the same
+    // layout and formatted and data from these charts no matter where
+    // we look." The QuickChart-rendered PNGs on this tab are the
+    // ORIGINAL rendering path; the per-tab native Excel charts (Data_*)
+    // have received the R34-R68 fidelity improvements and are
+    // authoritative going forward. Until the QuickChart renderer is
+    // brought back into sync (tracked in audit/cm-style-audit/) the
+    // honest label is the one below.
     chartsSheet.getCell('B3').value =
-      `Auto-rendered via QuickChart from ${chartImages.length} chart configs. ` +
-      'For full chart parity, see the MasterPasteReady tab + your master XLSX.';
+      `LEGACY SNAPSHOT — auto-rendered via QuickChart from ${chartImages.length} chart configs ` +
+      '(may be out of sync with the per-tab native charts). For authoritative ' +
+      'formatting and current data, see the Data_* tabs. For paste-into-master ' +
+      'workflows, see the MasterPasteReady tab.';
     chartsSheet.getCell('B3').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
     chartsSheet.getRow(3).height = 18;
 
