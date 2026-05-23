@@ -4771,7 +4771,9 @@ test('R60: every catAx block emits tickLblPos="low"', () => {
   assert.match(xml, /<c:tickLblPos val="low"\/>/, 'R60: tickLblPos="low" emitted on catAx');
 });
 
-test('R60: cap_rate_top_bottom_quartile yAxisRange tightened to 5.5-8.5%', () => {
+test('R63: cap_rate_top_bottom_quartile yAxisRange widened back to 5-9%', () => {
+  // R60 went 5-10% → 5.5-8.5%. R63 widens to 5-9% per user batch 5:
+  // "y-axis is too zoomed in and we miss much of the data".
   const cols = [
     { key: 'period_end',      col: 'A' },
     { key: 'subspecialty',    col: 'B' },
@@ -4786,8 +4788,8 @@ test('R60: cap_rate_top_bottom_quartile yAxisRange tightened to 5.5-8.5%', () =>
     rows: [],
     brand: { palette: { nm_navy: '#003DA5' } },
   });
-  assert.deepEqual(out.spec.yAxisRange, { min: 0.055, max: 0.085 },
-    'R60: cap quartile pinned to 5.5-8.5% (was 5-10%) for IQR visibility');
+  assert.deepEqual(out.spec.yAxisRange, { min: 0.05, max: 0.09 },
+    'R63: cap quartile widened from R60 5.5-8.5% to 5-9% per user feedback');
 });
 
 test('R60: dLblsXml with { showVal: true } emits chart-level value labels', () => {

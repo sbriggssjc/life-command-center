@@ -1,0 +1,95 @@
+-- =====================================================================
+-- Round 63 — batch 5 fixes: x-axis label alignment, residual schema-
+-- order violation in single-bar builder, Cap_Quartile y-widen.
+--
+-- User notes 2026-05-22 batch 5 (post-R62 deploy). Diagnostic on the
+-- fresh export found:
+--   • 6 valAx schema-order violations REMAIN after R61 (only fixed in
+--     4 of 5 builders; missed buildSingleBarChartXml)
+--   • 0 chart catAx blocks have explicit text rotation → Excel
+--     auto-rotates labels to angled when many labels exist → user's
+--     "x-axis quarter alignment issue" complaint × 25 charts
+--   • Tenant donut data tabs DO have rows + drawing tags (8 rows
+--     each) — the "missing chart" persists for an unknown reason
+--   • Data_Volume_TTM dLbl count = 0 (R57 may have broken R37 P3
+--     annotations on this template specifically)
+--
+-- ---------------------------------------------------------------------
+-- THE FIXES SHIPPED IN R63
+-- ---------------------------------------------------------------------
+--
+-- 1. UNIVERSAL: horizontal cat-axis labels
+--    Add a CAT_AX_HORIZONTAL_TXT constant emitted alongside the
+--    CAT_AX_TICK_LBL_POS frag. Forces <a:bodyPr rot="0"/> so Excel
+--    can't auto-rotate quarter labels to angled. With R62's
+--    end-of-quarter-only label emission (1 label per 3 monthly bars,
+--    or 1 per quarterly bar), labels should fit horizontally without
+--    overlap.
+--
+-- 2. UNIVERSAL: fix residual valAx schema-order in buildSingleBarChartXml
+--    R61 fixed 4 builders but missed buildSingleBarChartXml (~6 chart
+--    templates affected per export). Reorder: scaling → delete →
+--    axPos → MAJOR_GRIDLINES_FRAG → numFmt (canonical EG_AxShared).
+--    The R61 regression test should be extended in a future round to
+--    cover ALL builder XML outputs, not just multi-line + combo.
+--
+-- 3. Cap_Quartile y-axis 5.5-8.5% → 5.0-9.0%
+--    User: "y-axis is too zoomed in and we miss much of the data."
+--    R60 went 5-10% → 5.5-8.5% to surface the IQR asymmetry but the
+--    300bps span clipped outlying months. R63 widens to 5.0-9.0%
+--    (400bps span) — still tighter than the original 500bps but with
+--    enough headroom to show outliers.
+--
+-- ---------------------------------------------------------------------
+-- DEFERRED TO R64+
+-- ---------------------------------------------------------------------
+-- • Tenant donuts "missing" — data + chart XML are confirmed
+--   present. Needs deeper Excel-side investigation; possibly a
+--   chart-anchor issue (charts rendered off-screen) or content-type
+--   relationship error not detected by the schema validator.
+-- • Volume_TTM peak/trough/last labels missing — needs investigation
+--   of why the R37 P3 annotation path returns 0 dLbl elements for
+--   this template. Same diagnostic shows other charts DO have
+--   annotations.
+-- • Number-format updates: Avg_Deal_Size "$7.0M", Volume_TTM "$1.80B",
+--   Avail_by_Term bar values "$X.XM" — straightforward but multi-
+--   chart, defer to R64.
+-- • Market_Turnover active_listings semantic — user says "should be
+--   ~120 listings matching inventory analysis". Current view returns
+--   ~514 (genuinely the snapshot count). Likely the user has a
+--   tighter definition in mind (e.g. listings within last 18 months).
+--   Need user clarification on exact definition.
+-- • Inventory_Backlog legend label/color mismatch — R60 added title
+--   override but the legend mismatch complaint persists. Need
+--   investigation.
+-- • Avail_Mkt_Size brand color check — defer.
+-- • NM cap not smooth enough — defer (R48 5-mo MA may need widening
+--   to 7-mo or 12-mo).
+-- • Sold/Ask_Cap_by_Term still erratic + missing pre-2014 — defer.
+-- • Active_Cap_Quart still appears symmetric — R62 added band-filtered
+--   sample gate to the view. Verify in fresh export after R63 deploy.
+-- • Recoverable-errors warning still appears — R63 fixes 6 more
+--   schema violations. Verify in fresh export whether warning
+--   actually clears. If persists, suggests there's a malformation
+--   the OOXML validator isn't catching.
+--
+-- ---------------------------------------------------------------------
+-- LOCAL VERIFICATION
+-- ---------------------------------------------------------------------
+-- 161 CM injector tests pass (was 161 after R62). R60 cap_quartile
+-- y-axis assertion updated for 5.0-9.0%. Full suite 382/2 (2 unrelated
+-- pre-existing).
+--
+-- ---------------------------------------------------------------------
+-- POST-DEPLOY TEST PLAN
+-- ---------------------------------------------------------------------
+-- 1. Download fresh dia + gov exports
+-- 2. Every chart x-axis: quarter labels render HORIZONTAL (not
+--    auto-rotated to angled). Aligns vertically with consistent
+--    label baseline across charts.
+-- 3. Data_Cap_Quartile: outlying months no longer clipped at the
+--    top/bottom of the y-axis.
+-- 4. Recoverable-errors warning: should be gone (if R63 + R61
+--    together caught all schema-order issues). If still appears,
+--    means there's at least one more violation pattern.
+-- =====================================================================
