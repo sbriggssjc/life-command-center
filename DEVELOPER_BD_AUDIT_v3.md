@@ -2834,6 +2834,116 @@ their losers' property edges, so portfolio counts reflect reality
 (e.g., the "Davita" operator entity now correctly includes the
 2 props from "DaVita Inc.").
 
+### 11.32 Topic 15 — Listing-event watcher (2026-05-22)
+
+The A10 fan-out trio (Lanes 1/2/3) was already operator-driven —
+someone pasted in a `(source_domain, source_property_id)` and the
+functions returned a cohort. This topic closes the loop: a cron pulls
+new `sales_transactions` rows from dia + gov via pg_net and persists
+them as listing events. The operator console reads
+`v_lcc_listing_event_queue` to see what's new and clicks through to
+fire the §11.27/§11.28/§11.29 functions live.
+
+**What was added (migrations `20260522330000_lcc_listing_event
+_watcher.sql` + `government/20260522330000_gov_v_sales_transactions
+_portfolio.sql`):**
+
+1. **gov-side slim view** — `v_sales_transactions_portfolio`,
+   anon-readable, exposes deal-shape columns only (sale_id,
+   property_id, sale_date, sold_price→sale_price, buyer→buyer_name,
+   seller→seller_name, sold_cap_rate→cap_rate). Aliased to dia's
+   column names so the LCC pg_net pull uses the same shape against
+   both domains.
+
+2. **`lcc_listing_events` table** — PK uuid event_id; unique
+   `(source_domain, source_event_type, source_event_id)` for
+   idempotency on re-pull. Columns: source_domain, source_event_type
+   (`'sale'` for now; available_listings can be added later),
+   source_event_id, source_property_id, event_date, sale_price,
+   buyer_name, seller_name, cap_rate, data_source, detected_at,
+   processed_at. Three indexes: unprocessed (partial), by property,
+   by event_date.
+
+3. **`lcc_listing_event_sync_inflight`** — pg_net request tracking
+   (same pattern as §11.22/§11.23/§11.28).
+
+4. **`lcc_sync_listing_events(p_domain, p_lookback_days=30)`** —
+   fires one pg_net GET per domain filtered `sale_date >=
+   (CURRENT_DATE - p_lookback_days)`. Caps at 1000 rows per pull,
+   which comfortably covers any plausible 30-day window in current
+   volumes.
+
+5. **`lcc_finalize_listing_events()`** — consumes responses, inserts
+   into `lcc_listing_events` with `ON CONFLICT DO NOTHING` on the
+   uniqueness key. Idempotent on re-run.
+
+6. **`v_lcc_listing_event_queue`** (SECURITY INVOKER) — operator-
+   facing view that joins each event to property attributes
+   (address, city, state, building_size_sqft, year_built, lat/lng)
+   and resolves the seller/buyer to LCC entities via
+   `lcc_entity_portfolio_facts`:
+   - **Seller** = most recent former owner whose ownership_end_date
+     is non-NULL (the entity that just got out of the property).
+   - **Buyer** = current owner whose `is_current = true`.
+   Each entity is enriched with its `owner_role` so the operator
+   sees "developer" / "buyer" / "operator" badges at a glance.
+
+7. **`lcc_mark_listing_event_processed(event_id, processed_at?)`** —
+   helper that stamps `processed_at`, so the queue view can
+   pre-filter to unprocessed events.
+
+**Initial backfill (90-day lookback, applied manually 2026-05-22):**
+
+| Domain | Events |
+|---|--:|
+| gov | 242 |
+| dia | 51 |
+| **Total** | **293** |
+
+**High-signal samples surfaced:**
+
+| Date | Vertical | Location | Sale | Seller | Buyer |
+|---|---|---|---|---|---|
+| 2026-04-22 | dia | Houston TX, 9.5k sqft | (no price recorded) | CASTILLO JORGE L (developer) | RF FULTON LLC (developer) |
+| 2026-04-30 | dia | San Antonio TX, 12.5k sqft | $3.15M | (unresolved) | SMBC Leasing & Finance (buyer, 130 props) |
+| 2026-04-14 | gov | Lawrence MA, 28k sqft | $5.6M | (unresolved) | NGP V LAWRENCE MA LLC (developer) |
+| 2026-04-06 | gov | Carlsbad NM, 52k sqft | $19.99M | (unresolved) | CARLSBAD PARTNERS LLC (developer) |
+
+The dev-to-dev flip in Houston (Castillo Jorge → RF Fulton) is exactly
+the type of high-priority event the BD operator wants to see in
+real-time — both sides are classified developers, both already in
+the priority queue, and the transaction itself is a relationship
+signal.
+
+**Cron scheduling (deferred — needs vault secrets):**
+Once the dia/gov URL + anon-key secrets are seeded:
+
+```sql
+SELECT cron.schedule('lcc-listing-event-sync-fire',
+  '25 */4 * * *',
+  $$SELECT public.lcc_sync_listing_events('both', 30);$$);
+SELECT cron.schedule('lcc-listing-event-sync-finalize',
+  '30 */4 * * *',
+  $$SELECT public.lcc_finalize_listing_events();$$);
+```
+
+Staggered at :25/:30 (entity sync ran :05/:10, portfolio :15/:20 per
+§11.22/§11.23) so the listing watcher fires after dependent data is
+fresh.
+
+**A10 status (now complete on the database side):**
+
+| Lane | Status |
+|---|---|
+| Lane 1 — same-owner fan-out | ✅ §11.27 |
+| Lane 2 — buyer cohort | ✅ §11.29 |
+| Lane 3 — geographic neighbors | ✅ §11.28 |
+| Listing-event watcher | ✅ §11.32 |
+
+All structural A10 work is shipped. Remaining: cron scheduling
+(blocked on vault secrets) and the operator UI surface that calls
+the functions on click.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
