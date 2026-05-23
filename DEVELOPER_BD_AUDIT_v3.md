@@ -3162,6 +3162,90 @@ funding event" (P9) — but those require data we don't yet
 sync into LCC (regional cap rate trends, federal award activity).
 Deferred until those signals are available.
 
+### 11.36 Topic 19 — Federal-activity signals + priority queue band P8 (2026-05-22)
+
+§11.35 left P8/P9 deferred pending federal-activity data sync. This
+round adds the columns, re-syncs, then defines P8. P9 is also
+specified but **not shipped** — the data probe showed only 1 dia
+property with a recent CMS award that's owned by a classified
+entity, which isn't enough to justify a band yet.
+
+**What was added (migration `government/20260522370000_gov_v_property
+_attributes_portfolio_federal.sql` + `20260522370000_lcc_property
+_attributes_federal_signals.sql` + `20260522370100_lcc_priority
+_queue_band_p8.sql`):**
+
+1. **Gov view extended** with three federal-activity columns:
+   `sam_active_opportunities`, `total_federal_investment`,
+   `federal_employee_count`. All publicly-published GSA/OPM data.
+
+2. **`lcc_property_attributes` extended** with six columns covering
+   both verticals' federal-activity signals (dia uses
+   `federal_award_count` / `_total` / `_latest_date`; gov uses the
+   three above). Two partial indexes (one for sam_active>0, one
+   for non-null award date).
+
+3. **`lcc_sync_property_attributes()` + `lcc_finalize_property
+   _attributes()` updated** to pull the new columns from each
+   vertical's source.
+
+4. **Manual backfill applied 2026-05-22:** 2,502 gov properties with
+   active SAM solicitations, 26 dia properties with recent CMS
+   federal awards.
+
+5. **P8 — `agency_active_solicitations`:** gov property with
+   `sam_active_opportunities > 0` AND classified developer/user_owner
+   owner. Surfaces 88 rows. The `days_overdue` column is repurposed
+   to carry the solicitations count so the operator console can
+   sort by "most active federal tenant."
+
+**Sample P8 rows:**
+
+| Owner | Property | Active SAM solicitations | Vertical |
+|---|--:|--:|---|
+| TWO CON LLC | gov 3153 | 23 | gov |
+| GPT Properties Trust | gov 3141 | 22 | gov |
+| PORTALS OWNER, LLC | gov 3336 | 22 | gov |
+| NEW CUMBERLAND PA I FGF LLC | gov 11646 | 9 | gov |
+| PH FBI SD LLC | gov 1281 | 8 | gov |
+| RTD ST. LOUIS - FBI, LLC | gov 8196 | 8 | gov |
+
+The two FBI-tenanted entities (PH FBI SD LLC, RTD ST. LOUIS - FBI)
+illustrate the doctrine: the FBI San Diego and St Louis tenants have
+8 active solicitations each, signaling stable / expanding federal
+spend at those buildings — high-value renewal conversations with
+the landlord-developer.
+
+**P9 deferred (with notes):**
+
+The data probe found 26 dia properties with `federal_award_latest
+_date` in the last 12 months, but only 1 is owned by a classified
+entity (a buyer). The remaining 25 are owned by entities still in
+the unclassified pool. Until classification coverage improves on
+that subset, P9 wouldn't add meaningful rows. The
+`federal_award_count` / `_total` / `_latest_date` columns are
+synced and ready; defining P9 is a single UNION ALL block when the
+data justifies it.
+
+**Final priority queue (8 bands):**
+
+| Band | Signal | n |
+|---|---|--:|
+| P0 | developer overdue cadence | (dynamic) |
+| P0.5 | classified entity, no opp yet | 472 |
+| P1 | gov lease expiring 0-24mo | 66 |
+| P2 | gov firm term ending <2yr | 30 |
+| P3 | gov 10-year window | 56 |
+| P4 | recent acquisition streak (2+ in 18mo) | 14 |
+| P5 | aged building value-add | 66 |
+| P6 | onboarding step overdue | (dynamic) |
+| P7 | steady-state cadence due | 168 |
+| **P8** | **agency active SAM solicitations** | **88** |
+
+The priority queue is now at full doctrinal richness for the data
+synced into LCC. P9 and any further bands are gated on additional
+upstream data signals.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
