@@ -2646,6 +2646,58 @@ developer within 20 miles to reach out to.
   `year_built` (refi window), `firm_term_remaining` — now have the
   data, just need the band definitions.
 
+### 11.29 Topic A10 Lane 2 — Buyer cohort fan-out (2026-05-22)
+
+Completes the A10 fan-out trio. With Lane 1 (§11.27 same-owner) and
+Lane 3 (§11.28 geographic) shipped, this round adds the third lane:
+who recently bought similar properties in the same market.
+
+**`lcc_listing_buyer_cohort(p_source_domain, p_source_property_id,
+p_size_tolerance_pct, p_lookback_months, p_limit)`** — given a
+listing, returns classified entities who acquired a similar property
+(same vertical, same state, building_size_sqft within ±tolerance) in
+the last lookback window. One row per buyer with their most recent
+qualifying acquisition as anchor evidence.
+
+Filters:
+- `e.merged_into_entity_id IS NULL` — skip merged-out rows
+- `e.owner_role <> 'unknown'` — only classified entities (the noise
+  rate on unknowns is too high to be useful)
+- `is_current = true` — they still hold it
+- `ownership_start_date >= now() - p_lookback_months`
+
+Sort: most recent acquisition first, then by role tier (developer >
+user_owner > buyer > operator).
+
+**Validation:** For dia property 30281 (Seguin TX, 15k sqft, ±50%,
+60-month lookback), the cohort returned six classified TX-active
+buyers anchored by recent acquisitions:
+
+| Buyer | Role | Curr props | Acquired (city, date, size_ratio) |
+|---|---|--:|---|
+| SMBC Leasing & Finance Inc | buyer | 120 | San Antonio · 2025-10-30 · 0.83x |
+| Choice One Development LLC | developer | 7 | Houston · 2024-12-01 · 0.71x |
+| Agree Realty CORP | buyer | 23 | Houston · 2022-11-01 · 0.59x |
+| Equimax Management | buyer | 3 | Houston · 2022-03-01 · 0.97x |
+| Massmutual | buyer | 38 | Pasadena · 2022-01-01 · 0.77x |
+| Elliott Bay Capital | developer | 37 | New Braunfels · 2021-07-01 · 0.72x |
+
+Two developers + four buyer institutions — exactly the cohort
+an operator would want if 30281 just listed in Seguin.
+
+**A10 status:**
+
+| Lane | Status |
+|---|---|
+| Lane 1 — same-owner fan-out | ✅ §11.27 |
+| Lane 2 — buyer cohort by similar property | ✅ §11.29 |
+| Lane 3 — geographic neighbors | ✅ §11.28 |
+| Listing-event watcher cron | ⏸ deferred |
+
+The watcher (a cron that fires the fan-out automatically when new
+`available_listings` / `sales_transactions` rows land in dia/gov)
+remains the only structural A10 piece outstanding.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
