@@ -30,17 +30,27 @@ Last updated: **2026-05-24**.
 | B | B4 ownership-chain-tick | ✅ DONE | v_sales_chain_breaks view + nightly tick on both domains (03:45 UTC). Baselines: dia 416 breaks / 167 matches / 579 unverifiable; gov 483 breaks / 357 matches / 437 unverifiable. Alerts fire on >25 growth vs prior snapshot. |
 | B | B5 cap-rate-quality-tick | ✅ DONE | nightly 03:15 UTC both domains |
 | B | B6 propagate-recompute-tick | ⬜ TODO | |
-| B | B7 backslide alarms | ✅ DONE | data_health_snapshots + data_health_alerts tables, snapshot tick fn + nightly 02:30 UTC cron on both domains; 4 rule checks (dup_growth, missing_price_growth, entity_growth, coverage_regression) |
+| B | B7 backslide alarms | ✅ DONE + extended | 5 rules now (added completeness_regression). Snapshots v_data_health_{sales,ownership,entities} + v_sales_completeness_summary nightly. |
 | B | B8 Data Health dashboard tile | ⬜ TODO | UI work in ops.js |
 | A | A1 entity dedup backfill | ✅ DONE | 35 dia (15 clusters via v_recorded_owner_canonical_clusters) + 116 gov (115 clusters via canonical_name) = 151 losers merged with FK-repoint across 9 dia / 9 gov tables; merged_into_recorded_owner_id pointer set; field-merge backfills survivor non-nulls; remaining 247 dia / 1,030 gov redundant rows are lower-confidence variants the curated canonicalizers reject |
 | A | A2 sales dedup quarantine | ✅ DONE | A2a; 1,077 rows quarantined (504 dia + 573 gov) |
-| A | A3 ownership-stub reclassify | ✅ DONE | A3a (3,313) + A3b (3,006) — total 6,319 reclassified |
+| A | A3 ownership-stub reclassify | ✅ DONE + continuous | A3a (3,313) + A3b (3,006) one-shot — total 6,319 reclassified. Continuous `sales_needs_review_tick()` worker runs hourly on both domains (catches new NULL-price + ownership_stub captures within 60 min). |
 | A | A4 deed orphan recovery | ✅ PARTIAL | A4a synced 364 dia column-backfills; 232 dia + 88 gov true orphans remain (A4b) |
 | A | A5 cap-rate retro-tagging | ✅ DONE | 4,018 rows tagged (1,301 dia + 2,717 gov) |
 | A | A6 ownership_history overlap cleanup | ⏳ PARTIAL | A6b (same-owner duplicate open rows) DONE: 610 dia + 249 gov rows superseded. A6a (chronological closure across different owners — 1,111 dia + tbd gov rows) still TODO. C5 EXCLUDE constraint still gated on A6a. |
 | A | A7 owner→SF link backfill | ⬜ TODO | depends on A1 |
 | A | A8 CoStar Contacts retroactive harvest | ⬜ TODO | depends on C2 |
 | A | A9 unified_contacts consolidation in LCC Opps | ⬜ TODO | A9a + A9b per Decision #1 |
+
+**Diagnostic tooling added (not in original plan but high-value):**
+
+| Tool | Status | Notes |
+|---|---|---|
+| `v_sales_completeness` | ✅ DONE | Per-sale 0–100 score + array of missing fields. dia + gov. |
+| `v_sales_completeness_summary` | ✅ DONE | Distribution (perfect / high / mid / low / critical). Snapshotted nightly. |
+| `v_sales_missing_field_rates` | ✅ DONE | Per-field % missing — directly answers "which fields are we losing the most?" |
+| `v_sales_chain_breaks` (B4) | ✅ DONE | Per-property consecutive sale pairs with verdict (match/break/unverifiable). |
+| `audit_run_log` query helpers | ✅ DONE | All cleanup runs traceable + reversible via `field_provenance.source_run_id`. |
 
 **Symptoms tracked against the original user complaint:**
 
