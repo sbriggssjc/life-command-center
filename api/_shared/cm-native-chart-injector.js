@@ -86,6 +86,25 @@ function catAxNumFmtFrag(numFmt) {
 // every chart builder's <c:catAx> block.
 const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
 
+// R63 — force horizontal text rotation on cat-axis labels. Excel's
+// default behavior is to auto-rotate labels to an angle when too many
+// won't fit horizontally. After R62 dropped to one quarter label per
+// quarter (Mar/Jun/Sep/Dec only, blank in between), there are far
+// fewer labels and they should fit horizontally. User notes 2026-05-22
+// batch 5: "x-axis has the quarters correct now but the alignment is
+// off to where it makes it difficult to see" — repeated for ~25 charts.
+// The fix is to explicitly pin rot=0 (horizontal) so Excel can't
+// auto-rotate.
+//
+// Emitted as <c:txPr> block alongside CAT_AX_TICK_LBL_POS. Per OOXML
+// schema, txPr appears after spPr but before crossAx in the EG_AxShared
+// sequence. We place it next to tickLblPos for clarity.
+const CAT_AX_HORIZONTAL_TXT = `<c:txPr>
+          <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+        </c:txPr>`;
+
 // ----------------------------------------------------------------------------
 // R37 P2 — value-axis range pinning + number format
 // ----------------------------------------------------------------------------
@@ -455,6 +474,7 @@ ${dLblsFrag}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -547,14 +567,15 @@ ${dLblsFrag}
         <c:axPos val="${catAxPos}"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
         ${valScalingFrag}
-        ${MAJOR_GRIDLINES_FRAG}
         <c:delete val="0"/>
         <c:axPos val="${valAxPos}"/>
+        ${MAJOR_GRIDLINES_FRAG}
         ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
@@ -679,6 +700,7 @@ ${seriesXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -797,6 +819,7 @@ ${upDownBarsFrag}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1033,6 +1056,7 @@ ${lineXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1475,6 +1499,7 @@ ${lineXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -3001,14 +3026,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R60 — tighter y-axis pin so the IQR (which is ~140-170 bps wide
-          // post-R54 gate) takes more vertical space and the asymmetry the
-          // user expects to see between (Q3-Med) and (Med-Q1) is visible.
-          // The previous 5-10% pin (500bps span) crushed the IQR into ~28%
-          // of the chart height. 5.5-8.5% (300bps span) gives the IQR ~50%
-          // of the chart height — visually surfaces the asymmetry the data
-          // already has (per R54-R57 verification).
-          yAxisRange: { min: 0.055, max: 0.085 },
+          // R60 → R63 — y-axis tuning round-trip. R60 went 5-10% → 5.5-8.5%
+          // to surface the IQR asymmetry; user flagged R60 as "too zoomed
+          // and we miss much of the data" in batch 5. R63 widens to
+          // 5.0-9.0% (400bps span) — still tighter than the original
+          // 500bps but with enough headroom to show outlying months.
+          yAxisRange: { min: 0.05, max: 0.09 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
