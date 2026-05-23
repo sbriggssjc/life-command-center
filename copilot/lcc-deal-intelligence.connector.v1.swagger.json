@@ -2703,7 +2703,7 @@
     }
   ],
   "swagger": "2.0",
-  "host": "life-command-center-nine.vercel.app",
+  "host": "tranquil-delight-production-633f.up.railway.app",
   "basePath": "/",
   "schemes": [
     "https"

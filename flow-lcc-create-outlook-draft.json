@@ -1,0 +1,108 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "LCC Create Outlook Draft — org-sanctioned outbound email path. LCC (api/_shared/outlook-draft.js) POSTs a rendered draft here; this flow creates the draft in Outlook via the Office 365 Outlook connector under the user's M365 connection. NO Microsoft Graph token required. The Office 365 Outlook action below is type OpenApiConnection and needs a $connections reference that only resolves on import into an environment where the 'Office 365 Outlook' connection exists — confirm/select that connection in the designer after import. operationId names (CreateDraftMessageV3 / SendEmailV2 / GetEmailMessageV2) should be confirmed against the connector version in your tenant.",
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "defaultValue": {}
+    },
+    "LCC_FLOW_SHARED_SECRET": {
+      "type": "securestring",
+      "defaultValue": ""
+    }
+  },
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "to":              { "type": "string", "description": "Semicolon-delimited recipient addresses" },
+            "cc":              { "type": "string" },
+            "subject":         { "type": "string" },
+            "body_html":       { "type": "string" },
+            "in_reply_to":     { "type": "string", "description": "Internet messageId to thread the draft as a reply (optional)" },
+            "attachment_url":  { "type": "string", "description": "Publicly fetchable URL to download + attach (optional)" },
+            "attachment_name": { "type": "string" }
+          },
+          "required": ["to", "subject", "body_html"]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Check_Shared_Secret": {
+      "runAfter": {},
+      "type": "If",
+      "expression": {
+        "or": [
+          { "equals": [ "@parameters('LCC_FLOW_SHARED_SECRET')", "" ] },
+          { "equals": [ "@triggerOutputs()?['headers']?['X-LCC-Flow-Secret']", "@parameters('LCC_FLOW_SHARED_SECRET')" ] }
+        ]
+      },
+      "actions": {
+        "Create_draft": {
+          "runAfter": {},
+          "type": "OpenApiConnection",
+          "_comment": "Office 365 Outlook → 'Create draft (V3)'. Confirm operationId in designer; map the parameters below to the action's fields. If your tenant's connector exposes 'Create event' style naming, re-select in the UI.",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_office365",
+              "operationId": "CreateDraftMessageV3",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+            },
+            "parameters": {
+              "emailMessage/To":      "@triggerBody()?['to']",
+              "emailMessage/Cc":      "@triggerBody()?['cc']",
+              "emailMessage/Subject": "@triggerBody()?['subject']",
+              "emailMessage/Body":    "@triggerBody()?['body_html']",
+              "emailMessage/Importance": "Normal"
+            }
+          }
+        },
+        "Respond_Success": {
+          "runAfter": { "Create_draft": ["Succeeded"] },
+          "type": "Response",
+          "kind": "Http",
+          "inputs": {
+            "statusCode": 200,
+            "headers": { "Content-Type": "application/json" },
+            "body": {
+              "ok": true,
+              "draft_id": "@{body('Create_draft')?['id']}",
+              "web_link": "@{body('Create_draft')?['webLink']}"
+            }
+          }
+        },
+        "Respond_Create_Failed": {
+          "runAfter": { "Create_draft": ["Failed", "Skipped", "TimedOut"] },
+          "type": "Response",
+          "kind": "Http",
+          "inputs": {
+            "statusCode": 502,
+            "headers": { "Content-Type": "application/json" },
+            "body": { "ok": false, "error": "Outlook Create draft action failed" }
+          }
+        }
+      },
+      "else": {
+        "actions": {
+          "Respond_Unauthorized": {
+            "runAfter": {},
+            "type": "Response",
+            "kind": "Http",
+            "inputs": {
+              "statusCode": 401,
+              "headers": { "Content-Type": "application/json" },
+              "body": { "ok": false, "error": "Invalid or missing X-LCC-Flow-Secret" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "outputs": {}
+}
