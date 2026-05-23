@@ -3104,6 +3104,64 @@ seller Davita → buyer Pearl Wang (private), $3.73M,
 this row as "Davita corporate divestiture" instead of treating
 the buyer (a private individual) as the BD target.
 
+### 11.35 Topic 18 — Priority queue bands P4 + P5 (2026-05-22)
+
+Two more doctrinal bands now have the data they need:
+
+**P4 — `recent_acquisition_streak`**
+- Developer/user_owner/buyer with ≥2 current properties acquired in
+  the last 18 months.
+- Signal: institutional active-acquisition mode. They're assembling
+  a portfolio NOW, so BD timing is critical.
+- Threshold rationale: 3+ would only catch 2 entities; 2+ catches
+  14. Two is the threshold where a deliberate buying pattern starts
+  to differentiate from background noise.
+- Entity-level band — `source_domain`/`source_property_id` stay
+  NULL. `days_overdue` is repurposed to carry the streak count, and
+  `last_touch_at` carries the most recent acquisition date.
+
+**P5 — `aged_building_value_add`**
+- Developer/user_owner currently holding a property built ≥25 years
+  ago with no recent renovation (year_renovated NULL or ≤15 years
+  ago).
+- Signal: refi / value-add / recapitalization window proxy.
+- Property-level band — one row per qualifying property with
+  `source_domain`/`source_property_id` populated. `days_overdue`
+  is repurposed to carry the building's age in years.
+- Bad-data guard: `year_built > 1800` excludes the small number of
+  bad-data rows where 0 / NULL got persisted as year_built=0.
+
+**Counts post-deploy:**
+
+| Band | n | Type |
+|---|--:|---|
+| P0.5 | 472 | entity |
+| P1 | 66 | property (gov, lease) |
+| P2 | 30 | property (gov, firm-term) |
+| P3 | 56 | property (gov, 10yr) |
+| **P4** | **14** | **entity (acquisition streak)** |
+| **P5** | **69** | **property (aged building)** |
+| P7 | 168 | entity (cadence) |
+
+**Sample P5 rows:**
+
+| Owner | Year built | Age | Vertical |
+|---|--:|--:|---|
+| Palestra Properties | 1921 | 105 | dia |
+| Truist Bank | 1925 | 101 | dia |
+| AR Global | 1957 | 69 | dia |
+| EGP 500 CHARLESTON LLC | 1959 | 67 | gov |
+| NGP VI FALLS CHURCH VA LLC | 1964 | 62 | gov |
+
+These are exactly the buildings whose recapitalization or value-add
+windows are most worth the BD operator's attention.
+
+**Remaining bands (P8, P9):** the doctrine has space for more
+signals — for example "market shift" (P8) and "external award /
+funding event" (P9) — but those require data we don't yet
+sync into LCC (regional cap rate trends, federal award activity).
+Deferred until those signals are available.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
