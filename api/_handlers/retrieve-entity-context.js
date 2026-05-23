@@ -36,11 +36,17 @@ const DEFAULT_LIMIT       = 20;
 export async function handleRetrieveEntityContext({ inputs, authContext, workspaceId }) {
   if (!inputs) return { status: 400, body: { error: 'missing_inputs' } };
   if (!inputs.entity_id && !inputs.entity_name) {
+    // Graceful (200) so the Copilot agent does not surface a hard error — it
+    // should simply ask the user for, or resolve, a name before retrying.
     return {
-      status: 400,
+      status: 200,
       body: {
-        error: 'missing_entity_identifier',
-        detail: 'Provide entity_id (UUID) or entity_name (string).',
+        ok: true,
+        found: false,
+        needs: 'entity_name',
+        message: 'No client/property/company specified. Provide an entity_name '
+          + '(or first call search_entities to resolve a name to an entity_id), '
+          + 'then retry retrieve-entity-context.',
       },
     };
   }
@@ -58,7 +64,17 @@ export async function handleRetrieveEntityContext({ inputs, authContext, workspa
 
   if (inputs.entity_id) {
     if (!/^[0-9a-fA-F-]{36}$/.test(inputs.entity_id)) {
-      return { status: 400, body: { error: 'invalid_entity_id' } };
+      // The agent likely passed a name in the id slot — guide it to resolve first.
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          found: false,
+          needs: 'entity_name',
+          message: `"${inputs.entity_id}" is not a valid entity_id (UUID). Pass it `
+            + 'as entity_name instead, or call search_entities to resolve it to an id.',
+        },
+      };
     }
     const sel = await opsQuery('GET',
       `entities?id=eq.${pgFilterVal(inputs.entity_id)}` +
@@ -66,7 +82,15 @@ export async function handleRetrieveEntityContext({ inputs, authContext, workspa
       `&select=id,entity_type,display_name,domain,metadata,created_at&limit=1`
     );
     if (!sel.ok || !sel.data?.length) {
-      return { status: 404, body: { error: 'entity_not_found', entity_id: inputs.entity_id } };
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          found: false,
+          entity_id: inputs.entity_id,
+          message: `No entity with id ${inputs.entity_id} in this workspace.`,
+        },
+      };
     }
     entity = sel.data[0];
   } else {
@@ -84,12 +108,16 @@ export async function handleRetrieveEntityContext({ inputs, authContext, workspa
       `&order=updated_at.desc&limit=5`
     );
     if (!sel.ok || !sel.data?.length) {
+      // Graceful (200) so the agent can say "I couldn't find that client" and
+      // optionally fall back to search_entities, instead of surfacing an error.
       return {
-        status: 404,
+        status: 200,
         body: {
-          error: 'entity_not_found',
-          detail: `No entity matching "${inputs.entity_name}" in this workspace.`,
+          ok: true,
+          found: false,
           entity_name: inputs.entity_name,
+          message: `No entity matching "${inputs.entity_name}" in this workspace. `
+            + 'Try a different spelling, or call search_entities to browse candidates.',
         },
       };
     }
@@ -161,6 +189,7 @@ export async function handleRetrieveEntityContext({ inputs, authContext, workspa
     status: 200,
     body: {
       ok: true,
+      found: true,
       entity: {
         id:           entity.id,
         entity_type:  entity.entity_type,
