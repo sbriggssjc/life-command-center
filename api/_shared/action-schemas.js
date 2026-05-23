@@ -1099,6 +1099,23 @@ export function generateOpenApiSpec(registry, baseUrl = process.env.LCC_BASE_URL
  * @param {string} baseUrl
  * @returns {object} Swagger 2.0 spec object
  */
+// Recursively convert/strip constructs that are invalid in Swagger 2.0 so
+// Power Platform's connector validator accepts the spec. JSON-Schema `const`
+// (used by some ACTION_SCHEMAS, e.g. get_my_execution_queue.view) becomes
+// `enum: [value]`; 3.0-only keywords (nullable, examples) are dropped.
+function sanitizeForSwagger2(node) {
+  if (Array.isArray(node)) { node.forEach(sanitizeForSwagger2); return; }
+  if (node && typeof node === 'object') {
+    if (Object.prototype.hasOwnProperty.call(node, 'const')) {
+      node.enum = [node.const];
+      delete node.const;
+    }
+    delete node.nullable;
+    delete node.examples;
+    for (const k of Object.keys(node)) sanitizeForSwagger2(node[k]);
+  }
+}
+
 export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app') {
   let host = baseUrl;
   let schemes = ['https'];
@@ -1218,7 +1235,11 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
     };
   }
 
-  return spec;
+  // Deep-clone (breaks references to shared ACTION_SCHEMAS) then strip
+  // Swagger-2.0-invalid constructs before returning.
+  const safe = JSON.parse(JSON.stringify(spec));
+  sanitizeForSwagger2(safe);
+  return safe;
 }
 
 /**
