@@ -25,19 +25,19 @@ Last updated: **2026-05-24**.
 | C | C8 RCM/LoopNet auth fix | ⬜ TODO | flow + endpoint |
 | C | C9 standard ingest contract | ⬜ TODO | TypeScript DTO refactor |
 | B | B1 sales-dedup-tick | ✅ DONE | `*/15 * * * *` both domains |
-| B | B2 owner-merge-tick | ⬜ TODO | needs A1 / C4 first |
+| B | B2 owner-merge-tick | ✅ DONE | hourly on both domains; uses canonical clusters view (dia) / canonical_name groups (gov) + apply_owner_merge() |
 | B | B3 deed-relink-tick | ⬜ TODO | small; tiny backlog left |
-| B | B4 ownership-chain-tick | ⬜ TODO | needs entity dedup |
+| B | B4 ownership-chain-tick | ✅ DONE | v_sales_chain_breaks view + nightly tick on both domains (03:45 UTC). Baselines: dia 416 breaks / 167 matches / 579 unverifiable; gov 483 breaks / 357 matches / 437 unverifiable. Alerts fire on >25 growth vs prior snapshot. |
 | B | B5 cap-rate-quality-tick | ✅ DONE | nightly 03:15 UTC both domains |
 | B | B6 propagate-recompute-tick | ⬜ TODO | |
 | B | B7 backslide alarms | ✅ DONE | data_health_snapshots + data_health_alerts tables, snapshot tick fn + nightly 02:30 UTC cron on both domains; 4 rule checks (dup_growth, missing_price_growth, entity_growth, coverage_regression) |
 | B | B8 Data Health dashboard tile | ⬜ TODO | UI work in ops.js |
-| A | A1 entity dedup backfill | ⬜ TODO | 1,399 redundant owner rows |
+| A | A1 entity dedup backfill | ✅ DONE | 35 dia (15 clusters via v_recorded_owner_canonical_clusters) + 116 gov (115 clusters via canonical_name) = 151 losers merged with FK-repoint across 9 dia / 9 gov tables; merged_into_recorded_owner_id pointer set; field-merge backfills survivor non-nulls; remaining 247 dia / 1,030 gov redundant rows are lower-confidence variants the curated canonicalizers reject |
 | A | A2 sales dedup quarantine | ✅ DONE | A2a; 1,077 rows quarantined (504 dia + 573 gov) |
 | A | A3 ownership-stub reclassify | ✅ DONE | A3a (3,313) + A3b (3,006) — total 6,319 reclassified |
 | A | A4 deed orphan recovery | ✅ PARTIAL | A4a synced 364 dia column-backfills; 232 dia + 88 gov true orphans remain (A4b) |
 | A | A5 cap-rate retro-tagging | ✅ DONE | 4,018 rows tagged (1,301 dia + 2,717 gov) |
-| A | A6 ownership_history overlap cleanup | ⏳ SURVEYED | 1,102 dia properties with multiple open-ended owners (1,749 excess rows); needs per-property cleanup before C5 EXCLUDE constraint can land |
+| A | A6 ownership_history overlap cleanup | ⏳ PARTIAL | A6b (same-owner duplicate open rows) DONE: 610 dia + 249 gov rows superseded. A6a (chronological closure across different owners — 1,111 dia + tbd gov rows) still TODO. C5 EXCLUDE constraint still gated on A6a. |
 | A | A7 owner→SF link backfill | ⬜ TODO | depends on A1 |
 | A | A8 CoStar Contacts retroactive harvest | ⬜ TODO | depends on C2 |
 | A | A9 unified_contacts consolidation in LCC Opps | ⬜ TODO | A9a + A9b per Decision #1 |
