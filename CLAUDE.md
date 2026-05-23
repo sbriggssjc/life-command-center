@@ -508,3 +508,127 @@ ORDER BY 2 DESC;
 ```
 
 Both views live on gov + dia DBs.
+
+
+## BD Engine — Developer / Owner / Listing-Event Doctrine (2026-05-22)
+
+End-to-end BD data layer shipped in topics 10–20 across a single
+session. See `docs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` for the
+post-work audit and `DEVELOPER_BD_AUDIT_v3.md` §11.22 – §11.37 for the
+full per-topic implementation log.
+
+### Core artifacts (LCC Opps)
+
+**Tables:**
+- `lcc_entity_portfolio_facts` (5,888 edges) — per (entity, source_domain, source_property_id) ownership row
+- `lcc_property_attributes` (30,625 rows) — synced address, lat/lng, size, year, lease, SAM/federal-award signals
+- `lcc_listing_events` (293 backfill rows) — pulled from dia + gov sales_transactions
+- `lcc_operator_affiliate_patterns` (18 rules) — operator → subsidiary-name patterns
+- `lcc_onboarding_schedule` (7 rows) — 7-touch onboarding cadence rules
+- `lcc_*_sync_inflight` (4 tables) — pg_net request tracking
+
+**Views (all SECURITY INVOKER):**
+- `v_priority_queue` — 8 doctrinal bands (P0/P0.5/P1/P2/P3/P4/P5/P6/P7/P8)
+- `v_priority_queue_enriched` — queue + portfolio rollup + property context
+- `v_entity_portfolio_all` — per-entity portfolio rollup (cross-vertical aware)
+- `v_bd_cadence_dashboard` — per-cadence dashboard with portfolio context
+- `v_lcc_listing_event_queue` — listing events + resolved buyer/seller +
+  `is_sale_leaseback`
+- `v_lcc_operator_affiliates` / `v_lcc_operator_effective_portfolio` —
+  affiliate resolution + concentration math
+- `v_lcc_merge_candidates` — fuzzy duplicate candidates for review
+
+**Functions:**
+- Sync pairs (4): `lcc_sync_*` + `lcc_finalize_*` for entity, portfolio,
+  property attributes, listing events
+- Fan-out functions (3): `lcc_listing_same_owner_cohort` /
+  `_buyer_cohort` / `_geographic_neighbors`
+- Cadence: `lcc_seed_onboarding_cadence`, `lcc_advance_onboarding_cadence`,
+  `lcc_steady_state_interval_days`, `lcc_open_prospect_opportunity`,
+  `lcc_mark_listing_event_processed`
+- Entity ops: `lcc_normalize_entity_name`, `lcc_merge_entity`,
+  `lcc_apply_fuzzy_merges`
+
+**Triggers:**
+- `bd_opportunity_auto_seed_cadence` on `bd_opportunities` — seeds cadence
+- `activity_event_advance_cadence` on `activity_events` — advances cadence
+  on email/call/meeting
+
+**pg_cron (all UTC, registered + `active=true`):**
+- `:05/:10` every 4h — entity sync (true_owners → entities)
+- `:15/:20` every 4h — portfolio sync (ownership_history → portfolio_facts)
+- `:25/:30` every 4h — listing events (sales_transactions → listing_events)
+- `:35/:40` daily at 4am — property attributes
+- `:45` hourly — pg_net response cleanup (>24h)
+
+### Activation requirement
+
+All four pg_net sync functions read from `vault.decrypted_secrets`:
+- `dia_supabase_url` / `dia_supabase_anon_key`
+- `gov_supabase_url` / `gov_supabase_anon_key`
+
+If a secret is missing, the sync function logs a NOTICE and skips.
+Cron jobs run idempotently on the no-op path until secrets land.
+
+### Gov-side anon-readable views
+
+Three slim views expose non-PII slices of RLS-protected gov tables so
+LCC's pg_net pulls work as anon:
+- `gov.v_ownership_history_portfolio`
+- `gov.v_property_attributes_portfolio`
+- `gov.v_sales_transactions_portfolio`
+
+When adding new BD-relevant columns to gov, extend these views (not
+the underlying tables) to avoid loosening RLS on PII fields.
+
+### Architectural gotchas (learned during the session)
+
+1. **`CREATE OR REPLACE VIEW` is append-only** for columns. Postgres
+   42P16 if you try to insert columns in the middle. All BD views
+   add new columns at the end of the SELECT.
+
+2. **`lcc_merge_entity` uses two-step DELETE-then-UPDATE** (not a
+   single CTE) because the CTE form's pre-snapshot semantics caused
+   PK collisions on portfolio_facts. See migration
+   `20260522305000_lcc_merge_entity_dedupe_fix.sql`.
+
+3. **PL/pgSQL `#variable_conflict use_column`** required in every
+   function with a `RETURNS TABLE` whose OUT params share names with
+   column names (most BD functions hit this).
+
+4. **`days_overdue` is overloaded** in the priority queue. P0/P6/P7
+   carry literal days. P4 carries acquisition streak count. P5 carries
+   building age in years. P8 carries SAM solicitations count.
+   The `reason` column disambiguates; operator console should
+   interpret per band.
+
+5. **`bd_opportunities.is_open`** is `GENERATED ALWAYS AS (closed_at
+   IS NULL)` — omit from INSERT.
+
+6. **`lcc_entity_portfolio_facts.is_current`** is `GENERATED ALWAYS
+   AS (ownership_end_date IS NULL) STORED` — same constraint.
+
+### Quick-reference queries
+
+```sql
+-- Priority queue snapshot
+SELECT priority_band, COUNT(*) FROM v_priority_queue GROUP BY 1 ORDER BY 1;
+
+-- Operator dashboard for an entity
+SELECT * FROM v_bd_cadence_dashboard WHERE entity_name ILIKE '%elliott bay%';
+
+-- Listing event fan-out for any property (Lanes 1/2/3)
+SELECT * FROM lcc_listing_same_owner_cohort('dia', '26621');
+SELECT * FROM lcc_listing_buyer_cohort('dia', '30281', 50, 36, 15);
+SELECT * FROM lcc_listing_geographic_neighbors('dia', '26621', 10, 20);
+
+-- New sales events to triage
+SELECT * FROM v_lcc_listing_event_queue
+WHERE processed_at IS NULL ORDER BY event_date DESC LIMIT 20;
+
+-- Cron job health
+SELECT jobname, status, return_message, start_time
+FROM cron.job_run_details
+WHERE jobname LIKE 'lcc-%-sync%'
+ORDER BY start_time DESC LIMIT 10;
+```
