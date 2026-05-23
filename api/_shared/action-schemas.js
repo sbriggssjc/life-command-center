@@ -236,7 +236,7 @@ export const ACTION_SCHEMAS = {
   },
 
   draft_outreach_email: {
-    description: 'Draft a personalized outreach email for a business development contact. Provide contact_id (unified_id from GOV contacts DB) or contact_name.',
+    description: 'Draft a personalized outreach email for a business development contact. Provide contact_id (unified_id from GOV contacts DB) or contact_name. Set create_draft=true to also create the email as a real draft in the user\'s Outlook (returns draft_web_link).',
     category: 'outreach',
     inputs: {
       type: 'object',
@@ -244,7 +244,10 @@ export const ACTION_SCHEMAS = {
         contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB' },
         contact_name: { type: 'string', description: 'Contact name (used if contact_id not available)' },
         intent: { type: 'string', description: 'Purpose of the outreach (e.g., "reconnect", "listing pitch", "market update")' },
-        tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' }
+        tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' },
+        create_draft: { type: 'boolean', description: 'If true, create the email as a real draft in Outlook (requires a recipient — uses the contact email or the "to" field).' },
+        to: { type: 'string', description: 'Recipient email address; required for an Outlook draft when the contact has no email on file.' },
+        cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' }
       }
     },
     outputs: {
@@ -252,19 +255,24 @@ export const ACTION_SCHEMAS = {
       properties: {
         subject: { type: 'string' },
         body: { type: 'string' },
-        provider: { type: 'string' }
+        provider: { type: 'string' },
+        draft_created: { type: 'boolean' },
+        draft_web_link: { type: 'string', description: 'Link that opens the created Outlook draft.' }
       }
     }
   },
 
   draft_seller_update_email: {
-    description: 'Draft a seller update email for an active listing with marketing activity summary.',
+    description: 'Draft a seller update email for an active listing with marketing activity summary. Set create_draft=true with a "to" address to also create the email as a real draft in the user\'s Outlook.',
     category: 'outreach',
     inputs: {
       type: 'object',
       properties: {
         entity_id: { type: 'string', format: 'uuid', description: 'Listing entity UUID' },
-        include_metrics: { type: 'boolean', description: 'Include marketing metrics (OM downloads, showings)' }
+        include_metrics: { type: 'boolean', description: 'Include marketing metrics (OM downloads, showings)' },
+        create_draft: { type: 'boolean', description: 'If true, create the email as a real draft in Outlook (requires the "to" field — the seller\'s email).' },
+        to: { type: 'string', description: 'Seller recipient email address; required to create an Outlook draft.' },
+        cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' }
       },
       required: ['entity_id']
     },
@@ -273,7 +281,9 @@ export const ACTION_SCHEMAS = {
       properties: {
         subject: { type: 'string' },
         body: { type: 'string' },
-        provider: { type: 'string' }
+        provider: { type: 'string' },
+        draft_created: { type: 'boolean' },
+        draft_web_link: { type: 'string', description: 'Link that opens the created Outlook draft.' }
       }
     }
   },

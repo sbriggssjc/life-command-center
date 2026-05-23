@@ -68,6 +68,7 @@ import { getCadenceForDraft, advanceCadence, getCadenceState } from './_shared/c
 import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
+import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import { ingestPdfWorker } from './intake.js';
@@ -1177,17 +1178,79 @@ async function handleProspectingBrief(params, user, workspaceId) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Outlook draft helpers (Phase 2) — turn an AI draft into a real Outlook draft
+// via the org-sanctioned "LCC Create Outlook Draft" Power Automate flow.
+// Only engaged when params.create_draft is true AND a recipient is resolvable.
+// Degrades silently to the text-only path otherwise (e.g. flow URL not set).
+// ---------------------------------------------------------------------------
+
+// Split an AI-generated email ("Subject: ...\n\n body...") into {subject, body}.
+function _parseDraftSubjectBody(text) {
+  const raw = String(text || '');
+  const lines = raw.split(/\r?\n/);
+  let subject = '';
+  let bodyStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const m = line.match(/^\**\s*subject\s*\**\s*:\s*(.+)$/i);
+    if (m) {
+      subject = m[1].replace(/\**/g, '').trim();
+      bodyStart = i + 1;
+    } else {
+      // No explicit "Subject:" — use the first non-empty line as subject.
+      subject = line.replace(/^\**|\**$/g, '').trim();
+      bodyStart = i + 1;
+    }
+    break;
+  }
+  const body = lines.slice(bodyStart).join('\n').replace(/^\s+/, '');
+  return { subject, body };
+}
+
+// Convert plain-text body to minimal HTML (paragraphs + line breaks).
+function _draftBodyToHtml(text) {
+  const esc = String(text || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const paras = esc.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`);
+  return paras.join('\n');
+}
+
+// Best-effort: create a real Outlook draft from an AI draft response.
+// Returns a partial result object to merge into the action response, or null.
+async function _maybeCreateOutlookDraft({ params, responseText, fallbackTo }) {
+  if (!params?.create_draft) return null;
+  const to = params.to || fallbackTo;
+  if (!to) {
+    return { draft_created: false, draft_note: 'No recipient email available — returned text only. Pass "to" to create an Outlook draft.' };
+  }
+  const { subject, body } = _parseDraftSubjectBody(responseText);
+  const res = await createOutlookDraftViaPA({
+    to,
+    cc: params.cc,
+    subject: subject || (params.subject || 'Draft'),
+    body_html: _draftBodyToHtml(body || responseText),
+  });
+  if (res.ok) {
+    return { draft_created: true, draft_web_link: res.web_link || null, draft_id: res.draft_id || null, draft_recipient: to };
+  }
+  return { draft_created: false, draft_note: `Outlook draft not created (${res.error || 'unknown'}); returned text only.` };
+}
+
 async function handleDraftOutreachEmail(params, user, workspaceId) {
   const { contact_id, contact_name, intent, tone } = params || {};
 
   // Fetch contact context if ID provided
   let contactContext = '';
+  let recipientEmail = null;
   if (contact_id) {
     const result = await govContactQuery(
       `unified_contacts?unified_id=eq.${encodeURIComponent(contact_id)}&limit=1&select=full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent,city,state`
     );
     const c = result.data?.[0];
     if (c) {
+      recipientEmail = c.email || null;
       contactContext = `\nRecipient Profile:\n- Name: ${c.full_name}\n- Company: ${c.company_name || 'unknown'}\n- Title: ${c.title || 'unknown'}\n- Location: ${[c.city, c.state].filter(Boolean).join(', ') || 'unknown'}\n- Engagement: score ${c.engagement_score || 0}, ${c.total_calls || 0} calls, ${c.total_emails_sent || 0} emails sent\n- Last call: ${c.last_call_date || 'never'} | Last email: ${c.last_email_date || 'never'} | Last meeting: ${c.last_meeting_date || 'never'}`;
     }
   } else if (contact_name) {
@@ -1208,13 +1271,19 @@ async function handleDraftOutreachEmail(params, user, workspaceId) {
     workspaceId
   });
 
+  const responseText = result.data?.response || '';
+  const draftInfo = await _maybeCreateOutlookDraft({ params, responseText, fallbackTo: recipientEmail });
+
   return {
     ok: true,
     action: 'draft_outreach_email',
-    response: result.data?.response || '',
+    response: responseText,
     requires_review: true,
-    note: 'This is a draft. Review and edit before sending from Outlook.',
-    provider: result.provider
+    note: draftInfo?.draft_created
+      ? 'Draft created in your Outlook — open it to review and send.'
+      : 'This is a draft. Review and edit before sending from Outlook.',
+    provider: result.provider,
+    ...(draftInfo || {})
   };
 }
 
@@ -1257,13 +1326,19 @@ async function handleDraftSellerUpdate(params, user, workspaceId) {
     workspaceId
   });
 
+  const responseText = result.data?.response || '';
+  const draftInfo = await _maybeCreateOutlookDraft({ params, responseText, fallbackTo: null });
+
   return {
     ok: true,
     action: 'draft_seller_update_email',
-    response: result.data?.response || '',
+    response: responseText,
     requires_review: true,
-    note: 'This is a draft. Review and personalize before sending to the seller.',
-    provider: result.provider
+    note: draftInfo?.draft_created
+      ? 'Draft created in your Outlook — open it to review and send to the seller.'
+      : 'This is a draft. Review and personalize before sending to the seller.',
+    provider: result.provider,
+    ...(draftInfo || {})
   };
 }
 
