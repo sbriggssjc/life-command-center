@@ -654,3 +654,311 @@ export async function buildStrategicPriorities(roleView, myWork, inboxItems, sfA
     }
   };
 }
+
+// ===========================================================================
+// Briefing v2 — executive-briefing data fetchers
+//
+// The v2 email layers market + capital-markets + sector-news content on top
+// of the existing Strategic / Urgent / Pipeline sections. These helpers are
+// additive: they pull from the daily intel snapshot (cached by the
+// briefing-intel-snapshot edge function) and from dia/gov Supabase tables
+// for fresh deal intelligence. Each one degrades gracefully — if a data
+// source is missing or errors, the corresponding email section renders an
+// empty-state placeholder rather than blocking the briefing.
+// ===========================================================================
+
+/**
+ * Read today's cached intel snapshot (market data, Fed outlook, AI analyst
+ * take, sector news, reading list). Written by the briefing-intel-snapshot
+ * edge function at 5:30 AM CT.
+ *
+ * Returns the freshest row matching today's CT date, or null if the cron
+ * hasn't landed yet (cold-start morning, manual flow trigger, etc). The
+ * renderer treats null as "skip the macro/news sections."
+ *
+ * @param {string|null} workspaceId
+ * @returns {Promise<object|null>}
+ */
+export async function fetchIntelSnapshot(workspaceId) {
+  // CT date — the snapshot row keys on America/Chicago, not UTC, so a 6 AM
+  // CT briefing reads today's row even though UTC has rolled over.
+  const ctNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const ctDate = ctNow.toISOString().slice(0, 10);
+
+  // Prefer the workspace-specific row if present, else the global (null) row.
+  // Order by generated_at so a manual re-run overrides the cron row.
+  const wsFilter = workspaceId
+    ? `workspace_id=in.(${encodeURIComponent(workspaceId)},null)`
+    : 'workspace_id=is.null';
+  const path =
+    `briefing_intel_snapshot?as_of_date=eq.${ctDate}&${wsFilter}` +
+    `&order=workspace_id.desc.nullslast,generated_at.desc&limit=1`;
+  const res = await opsQuery('GET', path, undefined, { countMode: 'none' });
+  if (!res.ok || !Array.isArray(res.data) || !res.data.length) return null;
+  return res.data[0];
+}
+
+/**
+ * Recently-closed sales transactions across dia + gov — surfaces comparable
+ * deals a broker should be aware of for pricing conversations.
+ *
+ * @param {number} sinceDays  — lookback window (default 14 days)
+ * @param {number} limit      — per-domain row cap (default 5)
+ * @returns {Promise<{ dialysis: Array, government: Array }>}
+ */
+export async function fetchRecentSalesComps(sinceDays = 14, limit = 5) {
+  const sinceIso = new Date(Date.now() - sinceDays * 86400000)
+    .toISOString().slice(0, 10);
+  const fields = 'property_id,sale_date,sale_price,cap_rate,buyer,seller,tenant,city,state';
+  const headers = (key) => ({ apikey: key, Authorization: `Bearer ${key}` });
+
+  const calls = [];
+  if (DIA_URL && DIA_KEY) {
+    calls.push(
+      fetchWithTimeout(
+        `${DIA_URL}/rest/v1/sales_transactions?sale_date=gte.${sinceIso}` +
+          `&order=sale_date.desc&limit=${limit}&select=${fields}`,
+        { headers: headers(DIA_KEY) },
+        5000,
+      ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    );
+  } else {
+    calls.push(Promise.resolve([]));
+  }
+  if (GOV_URL && GOV_KEY) {
+    calls.push(
+      fetchWithTimeout(
+        `${GOV_URL}/rest/v1/sales_transactions?sale_date=gte.${sinceIso}` +
+          `&order=sale_date.desc&limit=${limit}&select=${fields},tenant_agency`,
+        { headers: headers(GOV_KEY) },
+        5000,
+      ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    );
+  } else {
+    calls.push(Promise.resolve([]));
+  }
+
+  const [dia, gov] = await Promise.all(calls);
+  return {
+    dialysis: Array.isArray(dia) ? dia : [],
+    government: Array.isArray(gov) ? gov : [],
+  };
+}
+
+/**
+ * Leases expiring inside a forward window — drives the "Lease Expirations"
+ * watchlist. A 90-day default keeps the list short enough to act on without
+ * being noisy.
+ *
+ * @param {number} windowDays  — forward look-ahead (default 90 days)
+ * @param {number} limit       — per-domain row cap (default 6)
+ * @returns {Promise<{ dialysis: Array, government: Array }>}
+ */
+export async function fetchUpcomingLeaseExpirations(windowDays = 90, limit = 6) {
+  const today = new Date().toISOString().slice(0, 10);
+  const horizonIso = new Date(Date.now() + windowDays * 86400000)
+    .toISOString().slice(0, 10);
+  const headers = (key) => ({ apikey: key, Authorization: `Bearer ${key}` });
+
+  const calls = [];
+  if (DIA_URL && DIA_KEY) {
+    calls.push(
+      fetchWithTimeout(
+        `${DIA_URL}/rest/v1/leases?lease_expiration=gte.${today}` +
+          `&lease_expiration=lte.${horizonIso}&is_active=eq.true` +
+          `&order=lease_expiration.asc&limit=${limit}` +
+          `&select=property_id,tenant,lease_expiration,annual_rent,rent_per_sf,leased_area`,
+        { headers: headers(DIA_KEY) },
+        5000,
+      ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    );
+  } else {
+    calls.push(Promise.resolve([]));
+  }
+  if (GOV_URL && GOV_KEY) {
+    calls.push(
+      fetchWithTimeout(
+        `${GOV_URL}/rest/v1/leases?lease_expiration=gte.${today}` +
+          `&lease_expiration=lte.${horizonIso}&is_active=eq.true` +
+          `&order=lease_expiration.asc&limit=${limit}` +
+          `&select=property_id,tenant,tenant_agency,lease_expiration,annual_rent,rent_per_sf,leased_area`,
+        { headers: headers(GOV_KEY) },
+        5000,
+      ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    );
+  } else {
+    calls.push(Promise.resolve([]));
+  }
+
+  const [dia, gov] = await Promise.all(calls);
+  return {
+    dialysis: Array.isArray(dia) ? dia : [],
+    government: Array.isArray(gov) ? gov : [],
+  };
+}
+
+/**
+ * Newest active listings across dia + gov — "New on Market" alongside the
+ * 24h OM intake feed.
+ *
+ * @param {number} sinceDays — lookback (default 7)
+ * @param {number} limit     — per-domain cap (default 5)
+ * @returns {Promise<{ dialysis: Array, government: Array }>}
+ */
+export async function fetchNewActiveListings(sinceDays = 7, limit = 5) {
+  const sinceIso = new Date(Date.now() - sinceDays * 86400000)
+    .toISOString().slice(0, 10);
+  const headers = (key) => ({ apikey: key, Authorization: `Bearer ${key}` });
+
+  const calls = [];
+  if (DIA_URL && DIA_KEY) {
+    calls.push(
+      fetchWithTimeout(
+        `${DIA_URL}/rest/v1/available_listings?listing_date=gte.${sinceIso}` +
+          `&is_active=eq.true&order=listing_date.desc&limit=${limit}` +
+          `&select=property_id,listing_date,asking_price,cap_rate,tenant,city,state,listing_broker,listing_url`,
+        { headers: headers(DIA_KEY) },
+        5000,
+      ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    );
+  } else {
+    calls.push(Promise.resolve([]));
+  }
+  if (GOV_URL && GOV_KEY) {
+    calls.push(
+      fetchWithTimeout(
+        `${GOV_URL}/rest/v1/available_listings?listing_date=gte.${sinceIso}` +
+          `&is_active=eq.true&order=listing_date.desc&limit=${limit}` +
+          `&select=property_id,listing_date,asking_price,cap_rate,tenant_agency,city,state,listing_broker,listing_url`,
+        { headers: headers(GOV_KEY) },
+        5000,
+      ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    );
+  } else {
+    calls.push(Promise.resolve([]));
+  }
+
+  const [dia, gov] = await Promise.all(calls);
+  return {
+    dialysis: Array.isArray(dia) ? dia : [],
+    government: Array.isArray(gov) ? gov : [],
+  };
+}
+
+/**
+ * Pipeline value roll-up from open SF opportunities — supports the
+ * "Deal Intelligence" callout card. Returns counts grouped by stage.
+ *
+ * Reads via dia_db salesforce_activities; defensive — returns zeros on
+ * any failure.
+ *
+ * @returns {Promise<{ open_count, total_value, weighted_value, by_stage: Array }>}
+ */
+export async function fetchPipelineRollup() {
+  const zero = { open_count: 0, total_value: 0, weighted_value: 0, by_stage: [] };
+  if (!DIA_URL || !DIA_KEY) return zero;
+  try {
+    const r = await fetchWithTimeout(
+      `${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&is_closed=eq.false` +
+        `&select=id,status,priority,what_name,description&limit=500`,
+      { headers: { apikey: DIA_KEY, Authorization: `Bearer ${DIA_KEY}` } },
+      5000,
+    );
+    if (!r.ok) return zero;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return zero;
+
+    // Stages and amounts aren't in the salesforce_activities projection we
+    // currently read; this rolls up by status only. When a richer SF view
+    // lands, expand the select to include Amount + StageName.
+    const byStage = new Map();
+    for (const row of rows) {
+      const stage = row.status || 'Unknown';
+      byStage.set(stage, (byStage.get(stage) || 0) + 1);
+    }
+    return {
+      open_count: rows.length,
+      total_value: 0,        // pending SF Amount field projection
+      weighted_value: 0,     // pending SF Probability field projection
+      by_stage: Array.from(byStage.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([stage, count]) => ({ stage, count })),
+    };
+  } catch {
+    return zero;
+  }
+}
+
+/**
+ * Parse Power Automate-supplied calendar / todo / weather payload from the
+ * briefing-email POST body. The flow uses the Outlook + To Do connectors
+ * (running under the broker's identity) to fetch today's events and tasks
+ * pre-call. We accept whatever shape PA sends and normalize.
+ *
+ * Expected body shape (lenient; missing keys are OK):
+ * {
+ *   "today": { "iso_date": "2026-05-23", "weekday": "Saturday" },
+ *   "calendar": { "events": [{ start, end, subject, location, attendees, is_all_day }] },
+ *   "todo":     { "tasks":  [{ title, due, importance, list_name, completed }] },
+ *   "weather":  { "high_f", "low_f", "condition", "location" }
+ * }
+ *
+ * Never throws; bad input → empty arrays.
+ *
+ * @param {any} body — raw POST body
+ * @returns {{ events: Array, tasks: Array, weather: object|null }}
+ */
+export function normalizePersonalContext(body) {
+  const out = { events: [], tasks: [], weather: null };
+  if (!body || typeof body !== 'object') return out;
+
+  const events = body.calendar?.events;
+  if (Array.isArray(events)) {
+    out.events = events
+      .map((e) => ({
+        start:      e.start || e.startTime || e.start_time || null,
+        end:        e.end || e.endTime || e.end_time || null,
+        subject:    e.subject || e.title || e.summary || '(busy)',
+        location:   e.location?.displayName || e.location || null,
+        attendees:  Array.isArray(e.attendees)
+                      ? e.attendees.map((a) => a.emailAddress?.name || a.name || a.email || '')
+                          .filter(Boolean)
+                      : [],
+        is_all_day: !!(e.isAllDay || e.is_all_day),
+      }))
+      .filter((e) => e.subject)
+      .sort((a, b) => (a.start || '').localeCompare(b.start || ''))
+      .slice(0, 8);
+  }
+
+  const tasks = body.todo?.tasks || body.tasks;
+  if (Array.isArray(tasks)) {
+    out.tasks = tasks
+      .filter((t) => !t.completed && !t.isCompleted)
+      .map((t) => ({
+        title:      t.title || t.subject || '(untitled task)',
+        due:        t.due || t.dueDateTime?.dateTime || t.due_date || null,
+        importance: (t.importance || t.priority || 'normal').toLowerCase(),
+        list_name:  t.list_name || t.listName || t.parentList || null,
+      }))
+      .sort((a, b) => {
+        if (a.importance === 'high' && b.importance !== 'high') return -1;
+        if (b.importance === 'high' && a.importance !== 'high') return 1;
+        return (a.due || '9999').localeCompare(b.due || '9999');
+      })
+      .slice(0, 6);
+  }
+
+  if (body.weather && typeof body.weather === 'object') {
+    const w = body.weather;
+    out.weather = {
+      high_f:    Number.isFinite(+w.high_f) ? Math.round(+w.high_f) : null,
+      low_f:     Number.isFinite(+w.low_f) ? Math.round(+w.low_f) : null,
+      condition: w.condition || w.summary || null,
+      location:  w.location || null,
+    };
+  }
+
+  return out;
+}
