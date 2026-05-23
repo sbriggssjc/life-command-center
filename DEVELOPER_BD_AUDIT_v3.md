@@ -2074,9 +2074,11 @@ populates P0.5 (473 developers) accordingly.
   multi-form variants like "Genesis KC Dev" / "GENESIS KC DEVELOPMENT LLC"
 - Operator-affiliate registry for sale-leaseback subsidiary detection
   (e.g., Bio-Medical Applications of MA as Fresenius subsidiary)
-- LCC cross-domain entity sync to merge dia + gov true_owners by canonical
-  identity (would consolidate Truist Bank / SMBC Leasing / MassMutual / etc.
-  across both verticals)
+- LCC cross-domain entity sync **(initial pass shipped §11.24)**: 60
+  duplicates merged on strict canonical-name match (3 cross-vertical +
+  57 legacy). Fuzzy/normalized name matching for the long tail (Truist
+  Bank vs Truist Securities Inc; MassMutual vs MassMutual Asset Finance
+  LLC) still deferred — overlaps with the Levenshtein entry above.
 
 ### 11.22 Topic 10 — LCC entity sync from dia/gov true_owners (2026-05-22)
 
@@ -2261,6 +2263,69 @@ portfolio "developer" entry sinks to the bottom regardless of
 classification confidence. This is the first round where the priority
 queue surface actually reflects *business priority*, not just
 classification status.
+
+### 11.24 Topic 11 — Cross-domain entity merge (2026-05-22)
+
+**Builds on §11.22 + §11.23.** Same legal entity could own properties
+in both dia and gov, but each vertical had its own true_owner_id
+UUID — so the LCC entities table held two rows for Truist Bank, Embree,
+Jana Collins LLC, etc. Result: `v_entity_portfolio_all.is_cross_vertical`
+returned `false` for every row even when the underlying data clearly
+spanned both books.
+
+**What was added (migration `20260522240000_lcc_cross_domain_entity
+_merge.sql`):**
+
+1. **`entities.merged_into_entity_id`** column (nullable, self-FK) +
+   partial index. Mirrors the `merged_into_true_owner_id` pattern
+   already used in dia/gov true_owners.
+
+2. **`public.lcc_merge_entity(p_loser, p_winner)`** function:
+   re-points `lcc_entity_portfolio_facts` and `external_identities`
+   from loser → winner, deduping on the PKs first so we don't trip
+   unique constraints, then stamps `merged_into_entity_id` on the
+   loser. SECURITY DEFINER; explicit REVOKE FROM PUBLIC.
+
+3. **One-shot merges in a `DO` block:**
+   - 3 strict cross-vertical matches (dia wins, gov merged in):
+     - Truist Bank (dia developer 41 props ← gov buyer 3 props)
+     - Embree (dia developer 3 props ← gov buyer 1 prop)
+     - Jana Collins LLC (dia buyer 1 prop ← gov buyer 1 prop)
+   - 57 legacy `domain IN ('dialysis','government')` rows merged
+     into the now-classified `'dia'`/`'gov'` row that shares their
+     canonical_name. Winner selection: prefer the highest-tier role
+     (developer > operator > user_owner > buyer > unknown), then UUID.
+
+4. **`v_entity_portfolio_all`** updated to filter `merged_into_entity_id
+   IS NULL`. Aggregation otherwise unchanged — since the merge step
+   re-pointed facts to the winner, the existing GROUP BY naturally
+   rolls cross-vertical portfolios up under one row.
+
+**Validation:**
+
+| Cross-vertical entity | DIA props | GOV props | Total | Current |
+|---|--:|--:|--:|--:|
+| Truist Bank | 41 | 3 | 44 | 14 |
+| Embree | 3 | 1 | 4 | 1 |
+| Jana Collins LLC | 1 | 1 | 2 | 2 |
+
+`v_priority_queue_enriched` now ranks Truist Bank correctly with the
+combined 14 current property count, and the row carries
+`is_cross_vertical=true` so the operator console can render a "spans
+both verticals" badge.
+
+**Counts post-merge:**
+- 60 entities marked merged (3 cross-vertical + 57 legacy)
+- 4,000 canonical classified entities remaining (down from 4,003 due
+  to the 3 cross-vertical merges; the 57 legacy duplicates were
+  `owner_role='unknown'` so they don't affect the classified count)
+- `lcc_merge_entity()` is reusable — manual merges, future fuzzy
+  passes, and operator-driven merges via the UI all go through it.
+
+**Still deferred:** fuzzy/normalized name matching (Levenshtein, suffix
+stripping like "Truist Bank" ↔ "Truist Securities Inc (Suntrust /
+Bb&T)"). The conservative pass shipped here catches only exact
+canonical-name matches.
 
 ---
 
