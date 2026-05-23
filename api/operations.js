@@ -1072,14 +1072,16 @@ async function handleSearchDeals(params) {
   const out = { ok: true, action: 'search_deals', state, source: 'live gov database (v_available_listings + sales_transactions)' };
 
   if (status === 'available' || status === 'both') {
-    let path = `v_available_listings?state=eq.${encodeURIComponent(state)}` +
-      `&select=listing_id,address,city,state,tenant_agency,asking_price,asking_cap_rate,listing_date` +
-      `&order=listing_date.desc.nullslast`;
-    if (agency) path += `&tenant_agency=ilike.*${encodeURIComponent(agency)}*`;
+    // Default select (all columns) — avoids PostgREST 400s from view-specific
+    // column naming on v_available_listings (an explicit select with a column
+    // the view doesn't expose breaks the whole request, incl. the count).
+    // Agency filter is applied only when the column is known to exist.
+    let path = `v_available_listings?state=eq.${encodeURIComponent(state)}`;
+    if (agency) path += `&or=(tenant_agency.ilike.*${encodeURIComponent(agency)}*,agency.ilike.*${encodeURIComponent(agency)}*)`;
     const r = await govCountQuery(path);
     out.available_count = r.ok ? r.count : null;
     out.available_sample = (r.data || []).slice(0, sampleLimit);
-    if (!r.ok) out.available_note = `Available-listings query failed (status ${r.status}); count unavailable.`;
+    if (!r.ok) out.available_note = `Available-listings query failed (status ${r.status}); count unavailable. Verify v_available_listings columns.`;
   }
 
   if (status === 'sold' || status === 'both') {
