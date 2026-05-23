@@ -133,6 +133,14 @@ const VAL_FMT_PERCENT_0DP = '0%';
 const VAL_FMT_CURRENCY    = '$#,##0_);[Red]($#,##0)';
 const VAL_FMT_CURRENCY_M  = '$#,##0,,"M"_);[Red]($#,##0,,"M")';   // millions ($150M / red ($150M))
 const VAL_FMT_CURRENCY_K  = '$#,##0,"K"_);[Red]($#,##0,"K")';     // thousands ($150K / red ($150K))
+// R64 — $X.XM (1 decimal millions) for chart y-axis labels where the
+// magnitude is small enough that a single decimal place adds info.
+// User notes 2026-05-22 batch 5: "Let's adjust the y-axis labels so
+// that they are formatted in the same $7.0M style" (Avg_Deal_Size).
+const VAL_FMT_CURRENCY_M_1DP = '$#,##0.0,,"M"_);[Red]($#,##0.0,,"M")';
+// R64 — $X.XXB (2 decimal billions) for Volume_TTM. User: "Let's
+// adjust the y-axis label formats to show $1.80B or something similar"
+const VAL_FMT_CURRENCY_B  = '$#,##0.00,,,"B"_);[Red]($#,##0.00,,,"B")';
 const VAL_FMT_INTEGER     = '#,##0_);[Red](#,##0)';
 
 // Common range constants matching the renderer's shared ranges
@@ -194,6 +202,7 @@ const MAJOR_GRIDLINES_FRAG =
 const fmtPct1Native        = (v) => (Number(v) * 100).toFixed(1) + '%';
 const fmtPct2Native        = (v) => (Number(v) * 100).toFixed(2) + '%';
 const fmtCurrencyMNative   = (v) => '$' + (Number(v) / 1_000_000).toFixed(1) + 'M';
+const fmtCurrencyBNative   = (v) => '$' + (Number(v) / 1_000_000_000).toFixed(2) + 'B';  // R64 — "$1.80B"
 const fmtCurrencyNative    = (v) => '$' + Math.round(Number(v)).toLocaleString('en-US');
 const fmtCurrencyKNative   = (v) => '$' + Math.round(Number(v) / 1000) + 'K';
 const fmtIndexNative       = (v) => Number(v).toFixed(1);
@@ -206,6 +215,7 @@ const ANNOTATION_FORMATTERS = {
   pct2:          fmtPct2Native,
   currency:      fmtCurrencyNative,
   currency_m:    fmtCurrencyMNative,
+  currency_b:    fmtCurrencyBNative,        // R64 — "$1.80B" annotation labels
   currency_k:    fmtCurrencyKNative,
   currency_psf:  fmtCurrencyPerSfNative,
   index:         fmtIndexNative,
@@ -2241,9 +2251,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
   switch (chart_template_id) {
     // P2 — first migration
     case 'volume_ttm_by_quarter':
-      // master_m mapper renames ttm_volume → volume_dollars in some places
+      // master_m mapper renames ttm_volume → volume_dollars in some places.
+      // R64 — user feedback 2026-05-22 batch 5: "$1.80B y-axis format" +
+      // peak/trough/last annotations missing (R37 P3 wasn't wired here).
       return singleSeries('line', ['volume_dollars', 'ttm_volume'], navy, {
-        valAxNumFmt: VAL_FMT_CURRENCY,
+        valAxNumFmt:  VAL_FMT_CURRENCY_B,
+        annotateKey:  'volume_dollars',
+        annotateFmt:  'currency_b',
       });
 
     // P3 — simple single-series line + bar charts
@@ -2257,10 +2271,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         valAxNumFmt: VAL_FMT_INTEGER,
       });
     case 'avg_deal_size':
-      // R37 P3 — peak/trough/most-recent labels on avg deal size
-      // (renderer line 758: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
+      // R37 P3 + R64 — y-axis labels use "$X.XM" format per user batch 5
+      // ("formatted in the same $7.0M style"). The R37 P3 peak/trough/last
+      // annotation already used currency_m formatter; only the y-axis
+      // numFmt changes to match.
       return singleSeries('bar', 'avg_deal_size', navy, {
-        valAxNumFmt: VAL_FMT_CURRENCY,
+        valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
         annotateKey: 'avg_deal_size',
         annotateFmt: 'currency_m',
       });
@@ -3908,7 +3924,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: termCol,
           dataStart, dataEnd,
-          yLeftNumFmt:  VAL_FMT_CURRENCY,
+          // R64 — left axis "$X.XM" per user batch 5: "lets adjust the
+          // number formatting of the x-axis to show $x.xM". Avg Price
+          // for dia chair sale typically $1.5M-$5M; gov bldg $3M-$30M;
+          // single-decimal millions is the right resolution.
+          yLeftNumFmt:  VAL_FMT_CURRENCY_M_1DP,
           yRightRange:  { min: 0.05, max: 0.09 },  // R60 — tighter than CAP_RATE_DOT_RANGE
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
