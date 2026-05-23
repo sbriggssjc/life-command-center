@@ -86,24 +86,30 @@ function catAxNumFmtFrag(numFmt) {
 // every chart builder's <c:catAx> block.
 const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
 
-// R63 — force horizontal text rotation on cat-axis labels. Excel's
-// default behavior is to auto-rotate labels to an angle when too many
-// won't fit horizontally. After R62 dropped to one quarter label per
-// quarter (Mar/Jun/Sep/Dec only, blank in between), there are far
-// fewer labels and they should fit horizontally. User notes 2026-05-22
-// batch 5: "x-axis has the quarters correct now but the alignment is
-// off to where it makes it difficult to see" — repeated for ~25 charts.
-// The fix is to explicitly pin rot=0 (horizontal) so Excel can't
-// auto-rotate.
+// R66 — vertical text rotation on cat-axis labels (rot=-5400000 = -90°).
+// Master Excel (Dialysis Comp Work MASTER.xlsx / Copy Government Master
+// Document.xlsx) uses rot="-5400000" on every time-series catAx so the
+// month/quarter labels read bottom-to-top, leaving the labels narrow
+// enough to fit without overlap or auto-rotation to an awkward angle.
 //
-// Emitted as <c:txPr> block alongside CAT_AX_TICK_LBL_POS. Per OOXML
-// schema, txPr appears after spPr but before crossAx in the EG_AxShared
-// sequence. We place it next to tickLblPos for clarity.
-const CAT_AX_HORIZONTAL_TXT = `<c:txPr>
-          <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+// R63 set rot="0" (horizontal) on the assumption that R62's once-per-
+// quarter label thinning would leave room. User notes 2026-05-23 (batch
+// 6) clarify the opposite: "review our Excel/PDF versions so the
+// alignment vertically matches what's in there" — repeated for ~25
+// charts. With ~100+ category positions across a typical 25-year monthly
+// chart, even sparse quarter labels overflow horizontally and Excel
+// auto-cuts them. Vertical rotation is the master's chosen idiom.
+//
+// txPr appears after spPr / before crossAx in the EG_AxShared sequence.
+// Color 595959 (NM neutral gray, dark enough to print) matches R63.
+const CAT_AX_VERTICAL_TXT = `<c:txPr>
+          <a:bodyPr rot="-5400000" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
           <a:lstStyle/>
           <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
         </c:txPr>`;
+// R66 — retained alias so call sites read naturally; R63's "horizontal"
+// naming was a misnomer once the master parity was confirmed.
+const CAT_AX_HORIZONTAL_TXT = CAT_AX_VERTICAL_TXT;
 
 // ----------------------------------------------------------------------------
 // R37 P2 — value-axis range pinning + number format
@@ -1074,8 +1080,8 @@ ${lineXml}
         ${leftRangeFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
-        ${leftAxTitleFrag}
         ${MAJOR_GRIDLINES_FRAG}
+        ${leftAxTitleFrag}
         ${leftFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>${spec.sharedAxis ? '' : `
@@ -1084,8 +1090,8 @@ ${lineXml}
         ${rightRangeFrag}
         <c:delete val="0"/>
         <c:axPos val="r"/>
-        ${rightAxTitleFrag}
         ${MAJOR_GRIDLINES_FRAG}
+        ${rightAxTitleFrag}
         ${rightFmtFrag}
         <c:crossAx val="1"/>
         <c:crosses val="max"/>
@@ -3049,12 +3055,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R60 → R63 — y-axis tuning round-trip. R60 went 5-10% → 5.5-8.5%
-          // to surface the IQR asymmetry; user flagged R60 as "too zoomed
-          // and we miss much of the data" in batch 5. R63 widens to
-          // 5.0-9.0% (400bps span) — still tighter than the original
-          // 500bps but with enough headroom to show outlying months.
-          yAxisRange: { min: 0.05, max: 0.09 },
+          // R60 → R63 → R66 — IQR-visibility round-trip continues. R63's
+          // 5-9% still drew user complaints ("y-axis is too zoomed in and
+          // we miss much of the data" — batch 6 2026-05-23). The TTM
+          // statistical quartile bands hover 6.0-8.1% with rare outliers
+          // (e.g. 2024 dia top quartile briefly to 8.12%). Widen to 4-10%
+          // (600bps) to match CAP_RATE_RANGE master parity and visually
+          // separate the upper and lower quartile lines from the median.
+          yAxisRange: { min: 0.04, max: 0.10 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
@@ -3192,9 +3200,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R37 P2 — CAP_RATE_TIGHT_RANGE 5-8% (renderer line ~1382)
-          // quartile data lives 5.3-7.7%; tighter axis shows movement.
-          yAxisRange: CAP_RATE_TIGHT_RANGE,
+          // R37 P2 → R66 — was CAP_RATE_TIGHT_RANGE 5-8%, but the active-
+          // listing quartile lines hug the median tightly and a 300bps
+          // span makes upper/lower hard to distinguish. Widen to 4-10%
+          // (CAP_RATE_RANGE) to match the closed-cap-quartile chart's R66
+          // widening and give the four lines visual separation.
+          yAxisRange: CAP_RATE_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol,

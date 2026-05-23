@@ -4780,9 +4780,10 @@ test('R60: every catAx block emits tickLblPos="low"', () => {
   assert.match(xml, /<c:tickLblPos val="low"\/>/, 'R60: tickLblPos="low" emitted on catAx');
 });
 
-test('R63: cap_rate_top_bottom_quartile yAxisRange widened back to 5-9%', () => {
-  // R60 went 5-10% → 5.5-8.5%. R63 widens to 5-9% per user batch 5:
-  // "y-axis is too zoomed in and we miss much of the data".
+test('R66: cap_rate_top_bottom_quartile yAxisRange widened to 4-10%', () => {
+  // R60 5-10% → 5.5-8.5% → R63 5-9% → R66 4-10% (CAP_RATE_RANGE master
+  // parity) per user batch 6: even 5-9% was still "too zoomed in and we
+  // miss much of the data".
   const cols = [
     { key: 'period_end',      col: 'A' },
     { key: 'subspecialty',    col: 'B' },
@@ -4797,8 +4798,8 @@ test('R63: cap_rate_top_bottom_quartile yAxisRange widened back to 5-9%', () => 
     rows: [],
     brand: { palette: { nm_navy: '#003DA5' } },
   });
-  assert.deepEqual(out.spec.yAxisRange, { min: 0.05, max: 0.09 },
-    'R63: cap quartile widened from R60 5.5-8.5% to 5-9% per user feedback');
+  assert.deepEqual(out.spec.yAxisRange, { min: 0.04, max: 0.10 },
+    'R66: cap quartile widened from R63 5-9% to 4-10% per user batch 6 feedback');
 });
 
 test('R60: dLblsXml with { showVal: true } emits chart-level value labels', () => {
@@ -4890,4 +4891,45 @@ test('R61: every valAx block emits children in OOXML canonical order', () => {
     const blocks = xml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/g) || [];
     blocks.forEach((b, i) => assertCanonical(b, `${label} valAx[${i}]`));
   }
+
+  // R66 — regression sample: combo chart WITH yLeftAxisTitle + yRightAxisTitle
+  // (market_turnover shape). Pre-R66 the title fragment emitted before
+  // majorGridlines which violated canonical order and Excel issued a
+  // "recoverable errors" warning on every workbook open.
+  const titledCombo = buildComboChartXml({
+    tabName: 'T', catCol: 'A', dataStart: 5, dataEnd: 10,
+    yLeftRange: { min: 0, max: 300 }, yLeftNumFmt: '#,##0',
+    yLeftAxisTitle: 'Listings / monthly sales rate',
+    yRightNumFmt: '#,##0.0" mo"', yRightAxisTitle: 'Months of supply',
+    barSeries: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: 'E0E8F4' }],
+    lineSeries: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '6A748C' }],
+  });
+  const titledBlocks = titledCombo.match(/<c:valAx>[\s\S]*?<\/c:valAx>/g) || [];
+  assert.equal(titledBlocks.length, 2, 'R66: titled combo emits left + right valAx');
+  titledBlocks.forEach((b, i) => assertCanonical(b, `R66 titled-combo valAx[${i}]`));
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// R66 — vertical cat-axis label rotation (master Excel parity)
+// ─────────────────────────────────────────────────────────────────────
+
+test('R66: catAx labels render with rot="-5400000" (vertical) to match master Excel', () => {
+  // Master Dialysis Comp Work MASTER.xlsx / Copy Government Master
+  // Document.xlsx both use rot="-5400000" on every time-series catAx
+  // (labels read bottom-to-top). R63 inverted to rot="0" on the theory
+  // that R62's once-per-quarter label thinning would fit; user batch 6
+  // 2026-05-23 confirmed that's the wrong direction: "review our Excel/
+  // PDF versions so the alignment vertically matches what's in there."
+  const xml = buildMultiLineChartXml({
+    tabName: 'T', catCol: 'A', dataStart: 5, dataEnd: 10,
+    yAxisRange: { min: 0.05, max: 0.10 }, valAxNumFmt: '0.00%',
+    series: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '003DA5' }],
+  });
+  // catAx block must contain rot="-5400000"
+  const catAxBlock = xml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/);
+  assert.ok(catAxBlock, 'catAx block present');
+  assert.match(catAxBlock[0], /<a:bodyPr rot="-5400000"/,
+    'R66: catAx txPr emits rot="-5400000" (vertical) matching master');
+  assert.doesNotMatch(catAxBlock[0], /<a:bodyPr rot="0"/,
+    'R66: catAx txPr does NOT emit rot="0" (the R63 regression)');
 });
