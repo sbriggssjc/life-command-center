@@ -1674,6 +1674,26 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // way to ship visible charts in the workbook for users who don't have
   // the master XLSX paste-into workflow.
   // ----------------------------------------------------------------
+  // R71 — the aggregate Charts tab now hosts NATIVE Excel charts for
+  // templates listed in NATIVE_CHART_TEMPLATES, tiled at calculated
+  // anchors. Templates that haven't been migrated to native fall back
+  // to QuickChart PNG (same as pre-R71). This closes the per-tab vs
+  // aggregate-tab visual divergence the user flagged in 2026-05-23
+  // batch 6, and makes the aggregate tab cell references live —
+  // editing the data in any Data_* tab updates the chart on this
+  // sheet automatically.
+  //
+  // We emit a "twin" injection for each native chart already queued
+  // for a Data_* tab: outer tabName='Charts' (anchors drawing on the
+  // Charts sheet), spec.tabName preserved (data refs still point at
+  // Data_* tabs). The multi-chart-per-sheet support in R71's
+  // injectNativeCharts (one drawing.xml with N anchors) makes this
+  // work.
+  //
+  // Render path conditions:
+  //   - Has native injection: emit twin injection, skip PNG.
+  //   - PNG only:               emit PNG as before (legacy fallback).
+  //   - Neither:                skip (chart_template_id has no chart).
   if (Array.isArray(chartImages) && chartImages.length > 0) {
     const chartsSheet = wb.addWorksheet('Charts', {
       views: [{ showGridLines: false }],
@@ -1688,46 +1708,91 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     chartsSheet.getCell('B2').font = { name: fonts.title_family, size: 18, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
     chartsSheet.getRow(2).height = 24;
 
-    // R68 — flag the aggregate Charts tab as a legacy snapshot. User
-    // notes 2026-05-23: "the charts in the individual tabs don't match
-    // what's in the aggregate Charts tab. Let's make sure we are
-    // consistent so we can always copy/paste or extract the same
-    // layout and formatted and data from these charts no matter where
-    // we look." The QuickChart-rendered PNGs on this tab are the
-    // ORIGINAL rendering path; the per-tab native Excel charts (Data_*)
-    // have received the R34-R68 fidelity improvements and are
-    // authoritative going forward. Until the QuickChart renderer is
-    // brought back into sync (tracked in audit/cm-style-audit/) the
-    // honest label is the one below.
-    chartsSheet.getCell('B3').value =
-      `LEGACY SNAPSHOT — auto-rendered via QuickChart from ${chartImages.length} chart configs ` +
-      '(may be out of sync with the per-tab native charts). For authoritative ' +
-      'formatting and current data, see the Data_* tabs. For paste-into-master ' +
-      'workflows, see the MasterPasteReady tab.';
+    // R71 — index the queued native injections by data tab so we can
+    // find the matching spec when iterating chartImages.
+    const nativeByDataTab = new Map();
+    for (const inj of nativeInjections) {
+      if (inj && inj.tabName && inj.spec) nativeByDataTab.set(inj.tabName, inj.spec);
+    }
+
+    // R71 — count native vs PNG before rendering. Excel requires at
+    // most ONE `<drawing r:id="..."/>` element per sheet. ExcelJS
+    // creates one automatically when `addImage` is called; the native
+    // chart injector creates one when injecting chart drawings. Mixing
+    // both on the same sheet hits a conflict. So: if ANY native twins
+    // are available, we go pure-native on the Charts sheet (PNGs for
+    // templates without a native twin are dropped — those templates
+    // have not been migrated and their data tabs remain authoritative).
+    // If ZERO native twins exist, fall back to the legacy all-PNG path.
+    const eligibleNative = [];
+    const orphanedPngs = [];
+    for (const img of chartImages) {
+      const dataTab = TAB_NAMES[img.chart_template_id];
+      const spec = dataTab ? nativeByDataTab.get(dataTab) : null;
+      if (spec) eligibleNative.push({ img, dataTab, spec });
+      else      orphanedPngs.push(img);
+    }
+    const useNativePath = eligibleNative.length > 0;
+
+    if (useNativePath) {
+      const skipped = orphanedPngs.length;
+      chartsSheet.getCell('B3').value =
+        `${eligibleNative.length} native Excel charts — fully editable, live-linked to the Data_* tabs.` +
+        (skipped > 0
+          ? ` ${skipped} additional chart${skipped === 1 ? '' : 's'} ${skipped === 1 ? 'is' : 'are'} only available on the per-tab Data_* sheet${skipped === 1 ? '' : 's'} (template${skipped === 1 ? '' : 's'} not yet migrated to native).`
+          : '');
+    } else {
+      chartsSheet.getCell('B3').value =
+        `LEGACY SNAPSHOT — auto-rendered via QuickChart from ${chartImages.length} chart configs ` +
+        '(may be out of sync with the per-tab native charts). For authoritative ' +
+        'formatting and current data, see the Data_* tabs.';
+    }
     chartsSheet.getCell('B3').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
     chartsSheet.getRow(3).height = 18;
 
-    // Each image gets a header row + 25 data rows (≈ 480px tall)
+    // Each tile gets a header row + 25 data rows (≈ 480px tall)
     let cursor = 5;
-    for (const img of chartImages) {
-      // Header
-      const titleCell = chartsSheet.getCell(`B${cursor}`);
-      titleCell.value = img.name || img.chart_template_id;
-      titleCell.font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
-      chartsSheet.getRow(cursor).height = 20;
-
-      // Add the image. addImage requires (workbook, image opts) → returns id;
-      // worksheet.addImage(id, range/extent) places it.
-      const imageId = wb.addImage({
-        buffer: img.png,
-        extension: 'png',
-      });
-      chartsSheet.addImage(imageId, {
-        tl: { col: 1, row: cursor },        // 0-indexed: column B (index 1), row right below header
-        ext: { width: 900, height: 480 },
-      });
-
-      cursor += 27; // header + 25 image rows + 1 spacer
+    if (useNativePath) {
+      // Native path: emit a twin injection per native-eligible chart;
+      // skip orphaned PNGs (their data tab is authoritative).
+      for (const { img, spec } of eligibleNative) {
+        const titleCell = chartsSheet.getCell(`B${cursor}`);
+        titleCell.value = img.name || img.chart_template_id;
+        titleCell.font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+        chartsSheet.getRow(cursor).height = 20;
+        nativeInjections.push({
+          tabName: 'Charts',
+          spec: {
+            ...spec,
+            anchor: {
+              col0: 1,           // col B (0-indexed)
+              row0: cursor,      // row below header (1-indexed cursor = 0-indexed row)
+              col1: 14,          // col O exclusive — matches legacy PNG width (~900px)
+              row1: cursor + 25,
+            },
+          },
+        });
+        cursor += 27; // header + 25 chart rows + 1 spacer
+      }
+    } else {
+      // Legacy path: pure-PNG (no native chart was queued for any
+      // chart_template_id on this export — usually means an old caller
+      // or a vertical without migrated templates).
+      for (const img of chartImages) {
+        const titleCell = chartsSheet.getCell(`B${cursor}`);
+        titleCell.value = img.name || img.chart_template_id;
+        titleCell.font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+        chartsSheet.getRow(cursor).height = 20;
+        const imageId = wb.addImage({
+          buffer: img.png,
+          extension: 'png',
+        });
+        chartsSheet.addImage(imageId, {
+          tl: { col: 1, row: cursor },
+          ext: { width: 900, height: 480 },
+        });
+        cursor += 27;
+      }
     }
 
     chartsSheet.pageSetup = {

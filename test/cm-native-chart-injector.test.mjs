@@ -5038,3 +5038,104 @@ test('R67: combo bar series emits <c:invertIfNegative val="0"/>', () => {
     'R67: combo bar series pins invertIfNegative=0');
 });
 
+
+// ─────────────────────────────────────────────────────────────────────
+// R71 — multi-chart-per-sheet support (aggregate Charts tab)
+// ─────────────────────────────────────────────────────────────────────
+
+test('R71: injectNativeCharts emits ONE drawing.xml per sheet when multiple charts target it', async () => {
+  // Pre-R71 the injector emitted one drawing per chart and silently
+  // dropped subsequent injections targeting the same sheet. R71
+  // collates by tabName and produces one drawing.xml with N anchors
+  // plus one drawing-rels file with N chart relationships. Required
+  // to host the aggregate Charts tab's tiled native chart layout.
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'X';
+  const sh = wb.addWorksheet('Data_X');
+  sh.getCell('B4').value = 'Avg';
+  for (let i = 0; i < 6; i++) {
+    sh.getCell(`A${5 + i}`).value = `Period ${i}`;
+    sh.getCell(`B${5 + i}`).value = 100 + i;
+    sh.getCell(`C${5 + i}`).value = 200 + i;
+  }
+
+  const baseAnchor = (row0, row1) => ({ col0: 1, row0, col1: 14, row1 });
+  const buf = await injectNativeCharts(await wb.xlsx.writeBuffer(), [
+    {
+      tabName: 'Data_X',
+      spec: {
+        type: 'bar', tabName: 'Data_X', titleCol: 'B', titleRow: 4,
+        catCol: 'A', valCol: 'B', dataStart: 5, dataEnd: 10,
+        anchor: baseAnchor(1, 21),
+      },
+    },
+    {
+      tabName: 'Data_X',
+      spec: {
+        type: 'bar', tabName: 'Data_X', titleCol: 'C', titleRow: 4,
+        catCol: 'A', valCol: 'C', dataStart: 5, dataEnd: 10,
+        anchor: baseAnchor(23, 43),
+      },
+    },
+  ]);
+
+  const zip = await JSZip.loadAsync(buf);
+  // One drawing file for the sheet; two chart files (one per spec).
+  const drawingFiles = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  const chartFiles = Object.keys(zip.files).filter(n => /^xl\/charts\/chart\d+\.xml$/.test(n));
+  assert.equal(drawingFiles.length, 1, 'R71: ONE drawing.xml emitted per sheet');
+  assert.equal(chartFiles.length, 2, 'R71: TWO chart.xml files emitted (one per spec)');
+
+  // Drawing XML contains two anchors
+  const drawingXml = await zip.file(drawingFiles[0]).async('string');
+  const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
+  assert.equal(anchorCount, 2, 'R71: drawing.xml has 2 twoCellAnchor blocks');
+
+  // cNvPr ids are unique (2 and 3) within the drawing
+  const ids = Array.from(drawingXml.matchAll(/<xdr:cNvPr\s+id="(\d+)"/g)).map(m => m[1]);
+  assert.deepEqual([...new Set(ids)].sort(), ['2', '3'],
+    'R71: cNvPr ids are unique (2, 3) — Excel requires uniqueness within a drawing');
+
+  // Drawing rels file contains two chart relationships
+  const drawingRels = Object.keys(zip.files).find(n => /^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/.test(n));
+  const drawingRelsXml = await zip.file(drawingRels).async('string');
+  const relCount = (drawingRelsXml.match(/<Relationship\b/g) || []).length;
+  assert.equal(relCount, 2, 'R71: drawing rels has 2 chart relationships');
+
+  // Sheet XML has exactly ONE <drawing r:id="..."/> reference
+  const sheetXml = await zip.file('xl/worksheets/sheet2.xml').async('string');
+  const drawingTagCount = (sheetXml.match(/<drawing\s+r:id=/g) || []).length;
+  assert.equal(drawingTagCount, 1, 'R71: sheet XML has exactly one <drawing/> element');
+});
+
+test('R71: single-chart path preserves legacy drawing.xml byte shape', async () => {
+  // The legacy buildDrawingXml output (used when only one chart targets
+  // a sheet) is byte-for-byte preserved so downstream snapshot-style
+  // assertions and any pre-R71 expectations continue to work.
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'X';
+  const sh = wb.addWorksheet('Data_Y');
+  sh.getCell('B4').value = 'Val';
+  for (let i = 0; i < 5; i++) {
+    sh.getCell(`A${5 + i}`).value = `P${i}`;
+    sh.getCell(`B${5 + i}`).value = 10 + i;
+  }
+  const buf = await injectNativeCharts(await wb.xlsx.writeBuffer(), [
+    {
+      tabName: 'Data_Y',
+      spec: {
+        type: 'bar', tabName: 'Data_Y', titleCol: 'B', titleRow: 4,
+        catCol: 'A', valCol: 'B', dataStart: 5, dataEnd: 9,
+        anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+      },
+    },
+  ]);
+  const zip = await JSZip.loadAsync(buf);
+  const drawingFiles = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  const drawingXml = await zip.file(drawingFiles[0]).async('string');
+  // Legacy single-chart drawings used cNvPr id=2, name="Chart 1"
+  assert.match(drawingXml, /<xdr:cNvPr id="2" name="Chart 1"\/>/,
+    'R71: single-chart path keeps legacy cNvPr id=2, name="Chart 1"');
+  const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
+  assert.equal(anchorCount, 1, 'R71: single-chart drawing has exactly 1 anchor');
+});
