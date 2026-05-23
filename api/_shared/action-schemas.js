@@ -138,6 +138,34 @@ export const ACTION_SCHEMAS = {
     }
   },
 
+  search_deals: {
+    description: 'Count and list LIVE government deals by state from the live database — currently-available listings and sales closed within the past N months. Use this for any quantitative or geographic deal question (e.g. "how many gov deals are available in Texas", "what sold in Florida in the last 12 months"). Returns exact live counts; prefer this over knowledge-file lookups for current numbers.',
+    category: 'portfolio',
+    inputs: {
+      type: 'object',
+      properties: {
+        state: { type: 'string', description: 'US state, 2-letter code or full name (e.g. "TX" or "Texas").' },
+        status: { type: 'string', enum: ['available', 'sold', 'both'], description: 'Which deals to return (default: both).' },
+        months: { type: 'integer', description: 'Look-back window in months for sold deals (default: 12).' },
+        agency: { type: 'string', description: 'Optional tenant/agency filter (substring match), e.g. "SSA", "VA".' },
+        limit: { type: 'integer', description: 'Max sample rows to return per category (default: 10, max: 25).' }
+      },
+      required: ['state']
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        state: { type: 'string' },
+        available_count: { type: 'integer', description: 'Exact count of active listings in the state.' },
+        available_sample: { type: 'array' },
+        sold_count: { type: 'integer', description: 'Exact count of sales in the look-back window.' },
+        sold_window_months: { type: 'integer' },
+        sold_sample: { type: 'array' },
+        source: { type: 'string' }
+      }
+    }
+  },
+
   fetch_listing_activity_context: {
     description: 'Get the activity timeline for a specific entity — calls, emails, status changes, research.',
     category: 'portfolio',

@@ -651,6 +651,7 @@ const ACTION_REGISTRY = {
   list_government_review_observations: { method: 'GET', path: 'gov-evidence?endpoint=research-observations', tier: 0, alias: 'data-proxy?_route=gov-evidence&endpoint=research-observations' },
   list_dialysis_review_queue:  { method: 'GET', path: 'dia-query?table=v_clinic_property_link_review_queue&select=*', tier: 0, alias: 'data-proxy?_source=dia&table=v_clinic_property_link_review_queue&select=*' },
   get_work_counts:             { method: 'GET', path: 'queue-v2?view=work_counts', tier: 0, alias: 'queue?_version=v2&view=work_counts' },
+  search_deals:                { tier: 0, handler: 'search_deals' },
 
   // Tier 0-1: AI-powered actions (fetch context + generate content)
   generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
@@ -765,6 +766,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   if (spec.handler) {
     switch (spec.handler) {
       case 'daily_briefing':          result = await handleDailyBriefing(params, user, workspaceId, req); break;
+      case 'search_deals':            result = await handleSearchDeals(params); break;
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
       case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
@@ -1011,6 +1013,93 @@ async function govContactQuery(path) {
   });
   const data = await res.json().catch(() => []);
   return { ok: res.ok, data: Array.isArray(data) ? data : [] };
+}
+
+// PostgREST GET that captures the exact total count from the Content-Range
+// header (Prefer: count=exact) while returning only a small sample of rows.
+async function govCountQuery(path) {
+  if (!GOV_URL || !GOV_KEY) return { ok: false, count: 0, data: [], status: 0 };
+  const res = await fetch(`${GOV_URL}/rest/v1/${path}`, {
+    headers: {
+      'apikey': GOV_KEY,
+      'Authorization': `Bearer ${GOV_KEY}`,
+      'Prefer': 'count=exact',
+      'Range-Unit': 'items',
+      'Range': '0-24',
+    },
+  });
+  const data = await res.json().catch(() => []);
+  const cr = res.headers.get('content-range') || '';            // e.g. "0-9/142"
+  const total = cr.includes('/') ? parseInt(cr.split('/')[1], 10) : (Array.isArray(data) ? data.length : 0);
+  return { ok: res.ok, count: Number.isFinite(total) ? total : 0, data: Array.isArray(data) ? data : [], status: res.status };
+}
+
+// US state name → 2-letter abbreviation, so callers can pass "Texas" or "TX".
+const US_STATE_ABBR = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO',
+  connecticut: 'CT', delaware: 'DE', 'district of columbia': 'DC', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY',
+  louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',
+  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH',
+  'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND',
+  ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA',
+  washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+};
+
+function normalizeState(input) {
+  const s = String(input || '').trim();
+  if (!s) return '';
+  if (s.length === 2) return s.toUpperCase();
+  return US_STATE_ABBR[s.toLowerCase()] || s.toUpperCase();
+}
+
+// Tier 0 — search LIVE government deals by state: currently-available listings
+// (from v_available_listings, already filtered to active/metric-eligible) and
+// sales closed within the past N months (sales_transactions). Returns exact
+// counts + a small sample. This grounds quantitative/geographic deal questions
+// in the live gov DB instead of static knowledge files.
+async function handleSearchDeals(params) {
+  const p = params || {};
+  const state = normalizeState(p.state);
+  if (!state) return { ok: false, error: 'state is required (e.g. "TX" or "Texas").' };
+
+  const status = String(p.status || 'both').toLowerCase();          // available | sold | both
+  const months = (Number.isFinite(+p.months) && +p.months > 0) ? Math.min(+p.months, 120) : 12;
+  const agency = p.agency ? String(p.agency).trim() : '';
+  const sampleLimit = (Number.isFinite(+p.limit) && +p.limit > 0) ? Math.min(+p.limit, 25) : 10;
+
+  const out = { ok: true, action: 'search_deals', state, source: 'live gov database (v_available_listings + sales_transactions)' };
+
+  if (status === 'available' || status === 'both') {
+    let path = `v_available_listings?state=eq.${encodeURIComponent(state)}` +
+      `&select=listing_id,address,city,state,tenant_agency,asking_price,asking_cap_rate,listing_date` +
+      `&order=listing_date.desc.nullslast`;
+    if (agency) path += `&tenant_agency=ilike.*${encodeURIComponent(agency)}*`;
+    const r = await govCountQuery(path);
+    out.available_count = r.ok ? r.count : null;
+    out.available_sample = (r.data || []).slice(0, sampleLimit);
+    if (!r.ok) out.available_note = `Available-listings query failed (status ${r.status}); count unavailable.`;
+  }
+
+  if (status === 'sold' || status === 'both') {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - months);
+    const cutoffIso = cutoff.toISOString().slice(0, 10);
+    let path = `sales_transactions?state=eq.${encodeURIComponent(state)}` +
+      `&sale_date=gte.${cutoffIso}` +
+      `&select=address,city,state,agency,sold_price,sold_cap_rate,sale_date` +
+      `&order=sale_date.desc`;
+    if (agency) path += `&agency=ilike.*${encodeURIComponent(agency)}*`;
+    const r = await govCountQuery(path);
+    out.sold_window_months = months;
+    out.sold_since = cutoffIso;
+    out.sold_count = r.ok ? r.count : null;
+    out.sold_sample = (r.data || []).slice(0, sampleLimit);
+    if (!r.ok) out.sold_note = `Sales query failed (status ${r.status}); count unavailable.`;
+  }
+
+  return out;
 }
 
 async function handleDailyBriefing(params, user, workspaceId, req) {
