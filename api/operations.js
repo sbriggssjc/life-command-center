@@ -69,7 +69,7 @@ import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSugges
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
-import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
+import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import { ingestPdfWorker } from './intake.js';
 import {
@@ -3196,6 +3196,11 @@ async function handleChatRoute(req, res) {
 
     if (req.query.copilot_spec === 'manifest') {
       return res.status(200).json(generatePluginManifest(baseUrl));
+    }
+    // Swagger 2.0 variant — required for Power Platform custom-connector
+    // "Update from OpenAPI URL/file" (the 3.0 doc fails to parse there).
+    if (req.query.copilot_spec === 'swagger2' || req.query.format === 'swagger2') {
+      return res.status(200).json(generateSwagger2Spec(ACTION_REGISTRY, baseUrl));
     }
     const spec = generateOpenApiSpec(ACTION_REGISTRY, baseUrl);
     return res.status(200).json(spec);

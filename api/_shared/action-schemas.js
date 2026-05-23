@@ -1011,6 +1011,129 @@ export function generateOpenApiSpec(registry, baseUrl = process.env.LCC_BASE_URL
 }
 
 /**
+ * Generate a Swagger 2.0 (OpenAPI 2.0) spec from the same ACTION_REGISTRY +
+ * ACTION_SCHEMAS. Power Platform custom connectors require Swagger 2.0 for
+ * "Update from OpenAPI URL/file" (the 3.0 doc from generateOpenApiSpec fails to
+ * parse there). This mirrors generateOpenApiSpec() in the 2.0 dialect:
+ *   - servers[]            → host + basePath + schemes
+ *   - requestBody          → parameters[{in:'body'}]
+ *   - responses[].content  → responses[].schema
+ *   - components.security  → securityDefinitions (bearer represented as an
+ *                            apiKey Authorization header, since 2.0 has no
+ *                            native bearer scheme)
+ *
+ * @param {object} registry - The ACTION_REGISTRY from operations.js
+ * @param {string} baseUrl
+ * @returns {object} Swagger 2.0 spec object
+ */
+export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app') {
+  let host = baseUrl;
+  let schemes = ['https'];
+  try {
+    const u = new URL(baseUrl);
+    host = u.host;
+    schemes = [(u.protocol || 'https:').replace(':', '') || 'https'];
+  } catch { /* fall back to raw baseUrl */ }
+
+  const spec = {
+    swagger: '2.0',
+    info: {
+      title: 'Life Command Center — Copilot Actions API',
+      version: '1.0.0',
+      description: 'Copilot-facing action gateway for the Life Command Center. All actions route through a single gateway endpoint with typed schemas, tier-based confirmation, and full telemetry. LCC orchestrates; Copilot is a lens.'
+    },
+    host,
+    basePath: '/',
+    schemes,
+    consumes: ['application/json'],
+    produces: ['application/json'],
+    paths: {},
+    securityDefinitions: {
+      apiKey: { type: 'apiKey', in: 'header', name: 'X-LCC-Key', description: 'LCC API key for Power Automate / Copilot' },
+      bearerAuth: { type: 'apiKey', in: 'header', name: 'Authorization', description: 'LCC JWT or API key (Bearer)' }
+    },
+    security: [{ apiKey: [] }, { bearerAuth: [] }],
+    definitions: {}
+  };
+
+  const categories = {};
+  for (const [actionId, regEntry] of Object.entries(registry)) {
+    const schema = ACTION_SCHEMAS[actionId];
+    if (!schema) continue;
+    const cat = schema.category || 'other';
+    (categories[cat] = categories[cat] || []).push({ actionId, regEntry, schema });
+  }
+
+  // Unified gateway
+  spec.paths['/api/chat'] = {
+    post: {
+      operationId: 'dispatchCopilotAction',
+      summary: 'Copilot Action Gateway — dispatch any registered action',
+      description: 'Single entry point for all Copilot actions. Validates action_id against the registry, enforces tier-based confirmation, routes internally, and logs telemetry.',
+      'x-ms-summary': 'Dispatch Copilot Action',
+      parameters: [{
+        in: 'body',
+        name: 'body',
+        required: true,
+        schema: {
+          type: 'object',
+          properties: {
+            copilot_action: { type: 'string', description: 'Action ID from the registry', enum: Object.keys(registry) },
+            params: { type: 'object', description: 'Action-specific parameters (see individual action schemas)' },
+            surface: { type: 'string', enum: ['copilot_chat', 'teams', 'outlook', 'power_automate'], description: 'Which Microsoft surface is calling' }
+          },
+          required: ['copilot_action']
+        }
+      }],
+      responses: {
+        '200': {
+          description: 'Action executed successfully or confirmation required',
+          schema: {
+            type: 'object',
+            properties: {
+              ok: { type: 'boolean' },
+              source: { type: 'string' },
+              data: { type: 'object' },
+              requires_confirmation: { type: 'boolean' },
+              action: { type: 'string' },
+              tier: { type: 'integer' }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  // Per-action paths
+  for (const [category, actions] of Object.entries(categories)) {
+    for (const { actionId, regEntry, schema } of actions) {
+      const pathKey = `/api/copilot/${category}/${actionId.replace(/_/g, '-')}`;
+      const tierLabel = regEntry.tier === 0 ? 'read-only' : regEntry.tier === 1 ? 'lightweight-confirm' : regEntry.tier === 2 ? 'explicit-confirm' : 'human-approval';
+      spec.paths[pathKey] = {
+        post: {
+          operationId: actionId,
+          summary: (schema.description || actionId).slice(0, 80),
+          description: `**Tier ${regEntry.tier}** (${tierLabel})${regEntry.confirm ? ` — requires ${regEntry.confirm} confirmation` : ''}. Category: ${category}. ${schema.description || ''}`,
+          'x-ms-summary': actionId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          tags: [category],
+          parameters: [{
+            in: 'body',
+            name: 'body',
+            required: true,
+            schema: schema.inputs || { type: 'object' }
+          }],
+          responses: {
+            '200': { description: 'Success', schema: schema.outputs || { type: 'object' } }
+          }
+        }
+      };
+    }
+  }
+
+  return spec;
+}
+
+/**
  * Generate a Copilot plugin manifest (ai-plugin.json format).
  *
  * @param {string} baseUrl

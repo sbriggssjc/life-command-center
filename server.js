@@ -118,6 +118,7 @@ app.all('/api/copilot/outreach/:action', (req, res) => { req.query._route = 'cha
 app.all('/api/copilot/workflow/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
 app.all('/api/copilot/domain/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
 app.all('/api/copilot-spec', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'openapi'; operationsHandler(req, res); });
+app.all('/api/copilot-spec-v2', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'swagger2'; operationsHandler(req, res); });
 app.all('/api/copilot-manifest', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'manifest'; operationsHandler(req, res); });
 app.all('/api/chat', (req, res) => { req.query._route = 'chat'; operationsHandler(req, res); });
 app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHandler(req, res); });

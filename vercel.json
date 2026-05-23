@@ -46,6 +46,7 @@
     { "source": "/api/copilot/workflow/:action", "destination": "/api/operations?_route=chat&_copilot_path=:action" },
     { "source": "/api/copilot/domain/:action", "destination": "/api/operations?_route=chat&_copilot_path=:action" },
     { "source": "/api/copilot-spec", "destination": "/api/operations?_route=chat&copilot_spec=openapi" },
+    { "source": "/api/copilot-spec-v2", "destination": "/api/operations?_route=chat&copilot_spec=swagger2" },
     { "source": "/api/copilot-manifest", "destination": "/api/operations?_route=chat&copilot_spec=manifest" },
     { "source": "/api/chat", "destination": "/api/operations?_route=chat" },
     { "source": "/api/draft", "destination": "/api/operations?_route=draft" },
