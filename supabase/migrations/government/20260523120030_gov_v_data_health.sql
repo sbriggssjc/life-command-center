@@ -40,10 +40,10 @@ state_counts AS (
                        AND (sold_price IS NULL OR sold_price < 50000)
                        AND COALESCE(transaction_type, '') ILIKE '%ownership%stub%')
                                                                             AS sales_live_ownership_stub_in_live_lane,
+    -- Gov sales_transactions has sold_cap_rate but no plain cap_rate column.
     COUNT(*) FILTER (WHERE transaction_state = 'live'
-                       AND COALESCE(sold_cap_rate, cap_rate) IS NOT NULL
-                       AND (COALESCE(sold_cap_rate, cap_rate) < 0.03
-                            OR COALESCE(sold_cap_rate, cap_rate) > 0.10))
+                       AND sold_cap_rate IS NOT NULL
+                       AND (sold_cap_rate < 0.03 OR sold_cap_rate > 0.10))
                                                                             AS sales_live_cap_rate_outside_default_band,
     COUNT(*) AS sales_total
   FROM public.sales_transactions
@@ -87,11 +87,17 @@ props AS (
   FROM public.properties
 ),
 deeds AS (
+  -- Gov deed_records has no property_id column (links via parcel_id ->
+  -- parcel_records). parcel_records has no property_id either. C3 will add
+  -- property_id to parcel_records and rebuild this CTE to compute real
+  -- orphan counts. Until then, every row is by definition orphaned from
+  -- properties (the linkage column doesn't exist), so deed_orphans and
+  -- parcel_orphans equal the totals.
   SELECT
     COALESCE((SELECT COUNT(*) FROM public.deed_records),   0)                              AS deed_total,
-    COALESCE((SELECT COUNT(*) FROM public.deed_records WHERE property_id IS NULL), 0)      AS deed_orphans,
+    COALESCE((SELECT COUNT(*) FROM public.deed_records),   0)                              AS deed_orphans,
     COALESCE((SELECT COUNT(*) FROM public.parcel_records), 0)                              AS parcel_total,
-    COALESCE((SELECT COUNT(*) FROM public.parcel_records WHERE property_id IS NULL), 0)    AS parcel_orphans
+    COALESCE((SELECT COUNT(*) FROM public.parcel_records), 0)                              AS parcel_orphans
 )
 SELECT
   'gov'::TEXT                                          AS domain,
@@ -119,12 +125,16 @@ FROM props, oh, deeds;
 COMMENT ON VIEW public.v_data_health_ownership IS
   'Single-row dashboard view of ownership-side data-health (gov). Tracks G3 (deed/parcel orphans) and G10 (ownership_history hygiene).';
 
+-- Real gov schema (verified 2026-05-23):
+--   recorded_owners.name           (display name)
+--   recorded_owners.canonical_name (best-effort dedup key, may be NULL)
+--   No recorded_owner_name or normalized_name columns.
 CREATE OR REPLACE VIEW public.v_data_health_entities AS
 WITH norm AS (
   SELECT
     recorded_owner_id,
     LOWER(REGEXP_REPLACE(
-      COALESCE(canonical_name, normalized_name, recorded_owner_name, ''),
+      COALESCE(canonical_name, name, ''),
       '[\.,]|\m(llc|inc|corp|corporation|company|co|lp|llp|trust|holdings|properties|propco)\M',
       '', 'gi'
     ))                                                   AS canonical_key

@@ -135,12 +135,16 @@ COMMENT ON VIEW public.v_data_health_ownership IS
 -- COALESCE(normalized_name, lower(trim(recorded_owner_name))) matches at
 -- least one other row's normalized key. The B2 worker will drive this to
 -- 0 once A1 lands.
+-- Real dia schema (verified 2026-05-23):
+--   recorded_owners.name          (display name)
+--   recorded_owners.normalized_name (best-effort dedup key, may be NULL)
+--   No recorded_owner_name or canonical_name columns.
 CREATE OR REPLACE VIEW public.v_data_health_entities AS
 WITH norm AS (
   SELECT
     recorded_owner_id,
     LOWER(REGEXP_REPLACE(
-      COALESCE(normalized_name, recorded_owner_name, ''),
+      COALESCE(normalized_name, name, ''),
       '[\.,]|\m(llc|inc|corp|corporation|company|co|lp|llp|trust|holdings|properties|propco)\M',
       '', 'gi'
     ))                                                   AS canonical_key
