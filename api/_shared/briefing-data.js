@@ -709,7 +709,10 @@ export async function fetchIntelSnapshot(workspaceId) {
 export async function fetchRecentSalesComps(sinceDays = 14, limit = 5) {
   const sinceIso = new Date(Date.now() - sinceDays * 86400000)
     .toISOString().slice(0, 10);
-  const fields = 'property_id,sale_date,sale_price,cap_rate,buyer,seller,tenant,city,state';
+  // dia + gov both use sold_price (not sale_price) and store buyer/seller
+  // in *_name columns. property_id is the join key; no tenant col on the
+  // sales row itself in dia, so we project an empty placeholder server-side.
+  const fields = 'sale_id,property_id,sale_date,sold_price,cap_rate,buyer_name,seller_name';
   const headers = (key) => ({ apikey: key, Authorization: `Bearer ${key}` });
 
   const calls = [];
@@ -729,7 +732,7 @@ export async function fetchRecentSalesComps(sinceDays = 14, limit = 5) {
     calls.push(
       fetchWithTimeout(
         `${GOV_URL}/rest/v1/sales_transactions?sale_date=gte.${sinceIso}` +
-          `&order=sale_date.desc&limit=${limit}&select=${fields},tenant_agency`,
+          `&order=sale_date.desc&limit=${limit}&select=${fields}`,
         { headers: headers(GOV_KEY) },
         5000,
       ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
@@ -739,10 +742,20 @@ export async function fetchRecentSalesComps(sinceDays = 14, limit = 5) {
   }
 
   const [dia, gov] = await Promise.all(calls);
-  return {
-    dialysis: Array.isArray(dia) ? dia : [],
-    government: Array.isArray(gov) ? gov : [],
-  };
+  // Normalize the renderer's expected shape (sale_price, tenant, city/state)
+  // by mapping back from the projected columns. tenant/city/state aren't on
+  // the sales row in either DB — they come from the linked property; we
+  // leave those blank here and rely on tenant being filled via the join in
+  // a later round if needed.
+  const normalize = (rows) => (Array.isArray(rows) ? rows : []).map((r) => ({
+    property_id: r.property_id,
+    sale_date:   r.sale_date,
+    sale_price:  r.sold_price,
+    cap_rate:    r.cap_rate,
+    buyer:       r.buyer_name,
+    seller:      r.seller_name,
+  }));
+  return { dialysis: normalize(dia), government: normalize(gov) };
 }
 
 /**
@@ -810,13 +823,17 @@ export async function fetchNewActiveListings(sinceDays = 7, limit = 5) {
     .toISOString().slice(0, 10);
   const headers = (key) => ({ apikey: key, Authorization: `Bearer ${key}` });
 
+  // Both DBs use last_price as the current asking — gov has asking_price as
+  // a separate column but we COALESCE in the renderer. Cap rate column is
+  // current_cap_rate (falls back to cap_rate). No tenant/city/state on the
+  // listing row; those come from the joined property.
   const calls = [];
   if (DIA_URL && DIA_KEY) {
     calls.push(
       fetchWithTimeout(
         `${DIA_URL}/rest/v1/available_listings?listing_date=gte.${sinceIso}` +
           `&is_active=eq.true&order=listing_date.desc&limit=${limit}` +
-          `&select=property_id,listing_date,asking_price,cap_rate,tenant,city,state,listing_broker,listing_url`,
+          `&select=listing_id,property_id,listing_date,last_price,initial_price,current_cap_rate,cap_rate,listing_broker,listing_url`,
         { headers: headers(DIA_KEY) },
         5000,
       ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
@@ -829,7 +846,7 @@ export async function fetchNewActiveListings(sinceDays = 7, limit = 5) {
       fetchWithTimeout(
         `${GOV_URL}/rest/v1/available_listings?listing_date=gte.${sinceIso}` +
           `&is_active=eq.true&order=listing_date.desc&limit=${limit}` +
-          `&select=property_id,listing_date,asking_price,cap_rate,tenant_agency,city,state,listing_broker,listing_url`,
+          `&select=listing_id,property_id,listing_date,asking_price,last_price,initial_price,current_cap_rate,cap_rate,tenant_agency,listing_broker,listing_url`,
         { headers: headers(GOV_KEY) },
         5000,
       ).then((r) => (r.ok ? r.json() : [])).catch(() => []),
@@ -839,10 +856,18 @@ export async function fetchNewActiveListings(sinceDays = 7, limit = 5) {
   }
 
   const [dia, gov] = await Promise.all(calls);
-  return {
-    dialysis: Array.isArray(dia) ? dia : [],
-    government: Array.isArray(gov) ? gov : [],
-  };
+  // Normalize to {asking_price, cap_rate} for the renderer.
+  const normalize = (rows, isGov) => (Array.isArray(rows) ? rows : []).map((r) => ({
+    property_id:    r.property_id,
+    listing_date:   r.listing_date,
+    asking_price:   isGov ? (r.asking_price ?? r.last_price ?? r.initial_price)
+                          : (r.last_price ?? r.initial_price),
+    cap_rate:       r.current_cap_rate ?? r.cap_rate,
+    tenant_agency:  isGov ? r.tenant_agency : null,
+    listing_broker: r.listing_broker,
+    listing_url:    r.listing_url,
+  }));
+  return { dialysis: normalize(dia, false), government: normalize(gov, true) };
 }
 
 /**
@@ -961,4 +986,120 @@ export function normalizePersonalContext(body) {
   }
 
   return out;
+}
+
+// ===========================================================================
+// Market-stats RPC (TTM sales volume, cap-rate distribution, on-market count)
+//
+// Calls the per-domain lcc_briefing_market_stats(p_days) RPC defined in
+// migrations/{dialysis,government}_db/20260523_briefing_market_stats.sql.
+// Both RPCs return the same jsonb shape so callers can render either
+// domain through the same tile group.
+//
+// Returns the parsed object on success, or null on any failure.
+// ===========================================================================
+
+async function rpcDomain(domain, fnName, body, timeoutMs = 5000) {
+  const url = domain === 'dia' ? DIA_URL : GOV_URL;
+  const key = domain === 'dia' ? DIA_KEY : GOV_KEY;
+  if (!url || !key) return null;
+  try {
+    const r = await fetchWithTimeout(
+      `${url}/rest/v1/rpc/${fnName}`,
+      {
+        method:  'POST',
+        headers: {
+          apikey:        key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body || {}),
+      },
+      timeoutMs,
+    );
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pull TTM market stats for both verticals. Resolves to:
+ *   { dialysis: stats|null, government: stats|null }
+ * where each stats object is { window_days, ttm_volume, ttm_count, avg_cap,
+ * median_cap, q1_cap, q3_cap, on_market_count, on_market_volume }.
+ */
+export async function fetchMarketStats(days = 365) {
+  const [dia, gov] = await Promise.all([
+    rpcDomain('dia', 'lcc_briefing_market_stats', { p_days: days }),
+    rpcDomain('gov', 'lcc_briefing_market_stats', { p_days: days }),
+  ]);
+  return { dialysis: dia, government: gov };
+}
+
+/**
+ * Research progress: per-domain counts (comps + listings added, property
+ * coverage) plus workspace-wide engagement metrics (touchpoints, prospects).
+ *
+ * Returns:
+ *   {
+ *     window_days,
+ *     workspace: { touchpoints_this_week, prospects_added_this_week,
+ *                  total_entities, entities_with_recent_activity,
+ *                  pct_accounts_prospected },
+ *     dialysis:  { comps_added, listings_added, props_total,
+ *                  props_with_owner, props_with_developer,
+ *                  pct_owner, pct_developer },
+ *     government: { ...same... },
+ *   }
+ */
+export async function fetchResearchProgress(workspaceId, days = 7) {
+  const [wsRow, dia, gov] = await Promise.all([
+    workspaceId
+      ? opsQuery(
+          'POST',
+          'rpc/lcc_briefing_research_progress',
+          { p_workspace: workspaceId, p_days: days },
+        ).then((r) => (r.ok ? r.data : null)).catch(() => null)
+      : Promise.resolve(null),
+    rpcDomain('dia', 'lcc_briefing_research_counts', { p_days: days }),
+    rpcDomain('gov', 'lcc_briefing_research_counts', { p_days: days }),
+  ]);
+
+  const wrap = (row) => {
+    if (!row) return null;
+    const total = Number(row.props_total) || 0;
+    return {
+      comps_added:          Number(row.comps_added) || 0,
+      listings_added:       Number(row.listings_added) || 0,
+      props_total:          total,
+      props_with_owner:     Number(row.props_with_owner) || 0,
+      props_with_developer: Number(row.props_with_developer) || 0,
+      pct_owner:            total ? (Number(row.props_with_owner) || 0) / total : null,
+      pct_developer:        total ? (Number(row.props_with_developer) || 0) / total : null,
+    };
+  };
+
+  let workspace = null;
+  if (wsRow) {
+    const totalEnt = Number(wsRow.total_entities) || 0;
+    const withAct  = Number(wsRow.entities_with_recent_activity) || 0;
+    workspace = {
+      touchpoints_this_week:        Number(wsRow.touchpoints_this_week) || 0,
+      prospects_added_this_week:    Number(wsRow.prospects_added_this_week) || 0,
+      opportunities_open:           Number(wsRow.opportunities_open) || 0,
+      opportunities_opened_this_week: Number(wsRow.opportunities_opened_this_week) || 0,
+      total_entities:               totalEnt,
+      entities_with_recent_activity: withAct,
+      pct_accounts_prospected:      totalEnt ? withAct / totalEnt : null,
+    };
+  }
+
+  return {
+    window_days: days,
+    workspace,
+    dialysis:   wrap(dia),
+    government: wrap(gov),
+  };
 }
