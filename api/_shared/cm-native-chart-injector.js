@@ -2653,11 +2653,19 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     case 'available_market_size_combo': {
       // 4-series combo: 2 bars (count_total / count_core_10plus) on left
       // axis + 2 lines (avg_cap_total / avg_cap_core_10plus) on right axis.
-      // Colors per cm-chart-image-renderer.js line 1294:
-      //   count_total         sky    (palette[3])
-      //   count_core_10plus   sage   (palette[1])
-      //   avg_cap_total       navy   (palette[0])
-      //   avg_cap_core_10plus amber  #D97706
+      //
+      // R65 — colors realigned to Northmarq brand tokens (per user notes
+      // 2026-05-22 batch 5: "Color scheme doesn't match the brand
+      // standards"). Pre-R65 used off-brand sage (#4CB582) for the core
+      // 10+ bar and amber (#D97706) for the core 10+ line. R65 swaps to:
+      //   count_total         nm_sky  #62B5E5  (was sky — keep)
+      //   count_core_10plus   nm_pale #E0E8F4  (pale fill + sky border)
+      //   avg_cap_total       nm_navy #003DA5  solid line (was navy — keep)
+      //   avg_cap_core_10plus nm_navy #003DA5  DASHED line (same color, style differentiates)
+      // All four series now from the brand palette in
+      // public/reports/cm_brand_tokens.json. Same color + line style
+      // for the 2 cap lines is a brand-compliant convention also used
+      // for cohort overlays elsewhere (R35 P2 dom_price_change_active).
       const periodCol  = findCol('period_end');
       const cntTotCol  = findCol('count_total');
       const cntCoreCol = findCol('count_core_10plus');
@@ -2671,19 +2679,18 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — left integer count, right cap rate 5.5-7.5% pin
-          // (renderer line ~1337 — tightened from 5.5-10.0% so the cap
-          // lines fill the chart frame).
           yLeftNumFmt:  VAL_FMT_INTEGER,
           yRightRange:  { min: 0.055, max: 0.075 },
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
-            { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky    },
-            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '4CB582' },
+            { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky },
+            // R65 — core 10+ bar uses nm_pale fill + nm_sky border for distinguishability
+            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '#E0E8F4', borderColor: sky },
           ],
           lineSeries: [
-            { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy   },
-            { titleCol: capCoreCol, titleRow: headerRow, valCol: capCoreCol, color: 'D97706' },
+            { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy },
+            // R65 — core 10+ line uses navy (same color) with dashed style — brand-compliant cohort overlay
+            { titleCol: capCoreCol, titleRow: headerRow, valCol: capCoreCol, color: navy, dashed: true },
           ],
           anchor: standardAnchor,
         },
