@@ -26,7 +26,7 @@ These are prerequisites for all three tracks; build them first (Week 0).
 ### F2. Quarantine, don't delete
 - Add `transaction_state text` (e.g. `live`, `duplicate_superseded`, `ownership_stub`, `quarantined_implausible`, `needs_review`) to `sales_transactions` on both domains.
 - Add `ownership_state text` (e.g. `active`, `superseded`, `orphan_no_property`, `needs_review`) to `ownership_history`.
-- Every cleanup step tags rows; nothing is hard-deleted in Track A. A 90-day retention then sweeps `duplicate_superseded` rows after a confirmation report.
+- Every cleanup step tags rows; nothing is hard-deleted in Track A. Per decision #2 below, **`duplicate_superseded` rows are retained indefinitely** as an audit trail — no sweep job.
 
 ### F3. Run-id provenance for every cleanup write
 - Reuse `field_provenance` with `source='cleanup_run_<id>'` and `confidence` matching the rule's strength.
@@ -51,7 +51,7 @@ These are prerequisites for all three tracks; build them first (Week 0).
 ### C2. Sales writer refactor (addresses G1, G2a, G2b)
 - Replace `sidebar-pipeline.js::upsertDomainSales` two-stage match with: (1) doc_number match, (2) `dedup_natural_key` match, (3) optional fuzzy fallback that only *suggests* (writes to `sale_dedup_candidates`, doesn't insert).
 - Stop NULLing the stated cap rate on non-recent sales; instead write `cap_rate_source='costar_stated'`, `cap_rate_confidence='low'` and let the resolver pick.
-- Persist `buyer_address`, `seller_address` to their own columns (gov: add columns); persist phone/email/website to `contacts` with `contact_source='costar_sale_contacts'`, `contact_role='buyer'|'seller'|'broker'`, FK back to `sale_id`.
+- Per decision #5, persist full CoStar Contacts payload. Buyer/seller `address` to their own columns on `sales_transactions` (gov: add columns); `phone`, `email`, `website` to `contacts` with `contact_source='costar_sale_contacts'`, `contact_role IN ('buyer','seller','broker')`, FK back to `sale_id`.
 - Persist lat/long to `properties.latitude`/`longitude` (add columns if absent) sourced from the CoStar Public Record panel.
 
 ### C3. Deed / parcel scraper fix (addresses G3)
@@ -78,8 +78,10 @@ These are prerequisites for all three tracks; build them first (Week 0).
 - Route insert errors through the existing telemetry channel; fail loud, not silent.
 
 ### C7. SOS adapter framework (addresses G5)
-- Build per-state adapters under `api/_shared/sos/<state>.ts` starting with TX, FL, CA, GA, NC (covers ≥70% of the queue). Manual sidebar write-back stays as the fallback for the other 45 states.
+- Per decision #4, first cut ships TX, FL, CA, GA, NC adapters under `api/_shared/sos/<state>.ts` — covers ~70% of the 1,696 queued rows.
+- Manual sidebar write-back (`POST /api/sos-writeback`) stays as the fallback for the other 45 states.
 - Worker `llc-research-tick` pulls from `llc_research_queue` in batches of 25, respects per-state rate limits, writes results into `recorded_owners` via C4's trigger so dedup is automatic.
+- Second-wave queue (AZ, NV, CO, TN, OH) is tracked separately and not on this plan's critical path.
 
 ### C8. RCM / LoopNet auth fix (addresses G12)
 - Add `X-LCC-Key` header to the Power Automate webhook. Verify the endpoint accepts it. Replay last 7 days of inbound emails to backfill `marketing_leads`.
@@ -118,10 +120,12 @@ These are prerequisites for all three tracks; build them first (Week 0).
 - Detects ownership periods that don't cover the latest sale_date → tagged `ownership_missing_for_known_sale`.
 
 ### B5. Cron worker `cap-rate-quality-tick` (nightly) (addresses G6)
+- Reads bands from `cap_rate_bands(asset_class, min_pct, max_pct, effective_from, effective_until)` (per decision #3).
+- Seed bands: medical office 5–8%, industrial 5–9%, retail 6–10%, office 6–10%, dialysis 5.5–8%, government-leased 5–8%. Properties with no `asset_class` use a 3–10% fallback.
 - Validates `sold_cap_rate` against `gross_rent` and `noi` where present. Tags `cap_rate_quality`:
   - `verified` — derived cap matches stated ±0.5pp.
   - `stated_only` — no rent to verify.
-  - `implausible_unverified` — outside 3–10% (or class-tuned band, see §"Open Decisions").
+  - `implausible_unverified` — outside the class band.
 - Comp views read only `verified` or `stated_only`.
 
 ### B6. Cron worker `propagate-recompute-tick` (nightly)
@@ -183,8 +187,20 @@ These are prerequisites for all three tracks; build them first (Week 0).
 ### A8. CoStar Contacts retroactive harvest (G2a)
 - For sales captured by sidebar in the past 6 months, re-run the contacts extractor over the cached page payloads (if cache exists; if not, skip — going-forward C2 covers new captures).
 
-### A9. unified_contacts on dia (G7) — assuming the unified-vs-projection question resolves in favor of the gov pattern
-- Mirror the gov `unified_contacts` rollout on dia. Backfill 13,964 dia properties.
+### A9. unified_contacts consolidation in LCC Opps (G7)
+Per decision #1, LCC Opps becomes the single canonical hub; dia/gov contacts tables become projections.
+
+**A9a — Promote LCC Opps to authoritative.**
+- Migrate gov's 13,111 wired `unified_contacts` rows into LCC Opps `unified_contacts` (preserve `unified_id` UUIDs so existing FKs survive).
+- Backfill the link columns (`gov_contact_id`, `dia_contact_id`, `recorded_owner_id`, `true_owner_id`, `sf_account_id`, `outlook_contact_id`) from the entity-dedup output (A1).
+- Set up the projection-sync worker `unified-contacts-projection-tick` (runs every 5 min) that pushes diffs into per-domain `contacts` views.
+
+**A9b — Dia projection + backfill.**
+- Stand up the dia projection view / table.
+- Backfill 13,964 dia properties via the projection sync.
+- Verification: every dia property with an owner has a `unified_id`; LCC Opps `unified_contacts` row count = union of distinct canonical entities across both domains.
+
+Both A9a and A9b gate on A1 (entity dedup must be done first so we don't migrate duplicates into the new authoritative store).
 
 ---
 
@@ -228,15 +244,19 @@ Week 8                                  A9 + verification sweep
 
 ---
 
-## Open Decisions (Block Sequencing)
+## Decisions Confirmed (2026-05-23)
 
-These came out of the audit's §6 and need an answer this week:
+These were the open questions from the audit's §6; all are now answered and locked into the plan.
 
-1. **unified_contacts home** — dia adopts the gov pattern, or all unified data moves to LCC Opps with dia/gov as projections? Affects A9 + C9.
-2. **Duplicate-sale retention policy** — keep `duplicate_superseded` rows forever (audit trail) or sweep after 90 days?
-3. **Cap-rate plausibility band** — fixed 3–10% or per-asset-class (e.g. medical office 5–8%, industrial 5–9%, retail 6–10%)?
-4. **SOS scraper scope** — TX/FL/CA/GA/NC day-one (covers ≥70% of queue) and manual elsewhere, or full 50-state push?
-5. **CoStar Contacts PII** — confirm the CoStar TOS your team operates under permits storing buyer/seller phone/email. If not, A8 + C2's contact persistence must be reduced to address only.
+1. **Canonical contact/entity hub: LCC Opps as single hub.** All cross-domain entity data lives in LCC Opps `unified_contacts`. dia/gov contacts tables become projections that sync from LCC Opps. A9 expands accordingly: instead of mirroring the gov pattern onto dia, A9 migrates gov's 13,111 wired rows into LCC Opps and stands up the projection sync for both domains. C9's `OwnerIngestDTO` is the canonical write path; dia/gov-side writes become projection writes only. Sequencing: migration plan now adds **Track A.9a** (LCC Opps `unified_contacts` becomes authoritative, gov migrates in) and **A.9b** (dia projection + backfill). Both gate on C4 (entity dedup trigger) so the migration does not re-fragment owners.
+
+2. **Duplicate-superseded sales rows: kept forever as audit trail.** No sweep job. Rows tagged `transaction_state='duplicate_superseded'` are excluded from every live view, comp query, and metrics calculation but persist indefinitely with `dedup_group_id` pointing at the survivor. Storage impact is trivial (~870 rows). Maximum reversibility; investigators can always reconstruct the source of any merge. The 90-day-sweep language in F2 is therefore obsolete — the only sweep is the standard `audit_run_log` retention.
+
+3. **Cap-rate plausibility band: per-asset-class.** Seed defaults: medical office 5–8%, industrial 5–9%, retail 6–10%, office 6–10%, dialysis 5.5–8%, government-leased 5–8%. B5's `cap-rate-quality-tick` reads from a new `cap_rate_bands(asset_class, min_pct, max_pct, effective_from, effective_until)` reference table so bands are tunable without code changes. Rows whose property lacks an `asset_class` fall back to a wide 3–10% net. A5's retroactive tagging uses the same table.
+
+4. **SOS scraper scope: top 5 states first.** C7 ships TX, FL, CA, GA, NC adapters (covers ~70% of the 1,696 queued rows). Manual sidebar write-back stays as the fallback for the other 45 states. A second-wave plan (AZ, NV, CO, TN, OH) is queued for after the first 5 are stable; not on this plan's critical path.
+
+5. **CoStar Contacts persistence: full persistence approved.** C2 and A8 persist phone, email, website, and address from the CoStar Contacts tab to `contacts` with `contact_source='costar_sale_contacts'`, `contact_role IN ('buyer','seller','broker')`, and FK back to the originating `sale_id`. No feature flag needed.
 
 ---
 
