@@ -25,3 +25,8 @@ supabase/.temp/
 # QA-32: prevent truncation-investigation artifacts from leaking back
 audit/lcc-*-test*.txt
 audit/edit-tool-test.*
+
+# Ownership/Sales remediation snapshots (gitignored — local-only DB dumps,
+# may contain PII; produced by scripts/audit/snapshots/snapshot-take.mjs).
+scripts/audit/snapshots/*.sql
+scripts/audit/snapshots/*.sql.gz
