@@ -3029,6 +3029,81 @@ parent), so patterns are dia-focused for now. Adding gov-side
 rules (e.g., GSA-leased subsidiaries) would happen if/when that
 pattern emerges as a real BD signal.
 
+### 11.34 Topic 17 — Operator concentration + sale-leaseback + SPE override (2026-05-22)
+
+§11.33 shipped the operator-affiliate registry; this round wires the
+three downstream uses it unlocks.
+
+**What was added (migration `20260522350000_lcc_operator_concentration
+_and_spe_override.sql`):**
+
+1. **`v_lcc_operator_effective_portfolio`** — operator footprint
+   rollup: parent + every distinct affiliate, with summed total /
+   current property counts. The `member_count` is the row count
+   (includes zero-portfolio members like the 60+ legacy
+   "DaVita X Dialysis" entity-hub entries); `effective_*` columns
+   are the real signal.
+
+2. **`v_lcc_listing_event_queue` extended** with four new trailing
+   columns (per the §11.30 CREATE-OR-REPLACE-VIEW append rule):
+   - `seller_operator_parent_id` / `seller_operator_parent_name` —
+     resolved if the seller IS an operator parent, OR matches an
+     affiliate pattern.
+   - `buyer_operator_parent_id` / `buyer_operator_parent_name` —
+     same logic on the buyer side.
+   - `is_sale_leaseback` boolean — true when the seller has an
+     operator parent and the buyer either has no operator parent
+     or a *different* operator parent. Captures the doctrine's
+     definition of operator-led divestiture.
+
+3. **One-shot `behavioral_override='operator'`** for operator-
+   controlled SPEs: affiliates currently classified
+   developer/buyer with portfolio 1-3 and matched via a `prefix`
+   or `exact` pattern (not the fuzzier `contains` rules). The v5
+   BTS algorithm correctly flagged these as developer (the SPE
+   *did* execute the build-to-suit) but BD outreach should target
+   the parent operator, not the SPE shell. `owner_role` is
+   preserved so the underlying signal isn't lost; only the
+   effective role used by the priority queue is overridden.
+
+**Effective portfolios (current state):**
+
+| Parent | Member count | Effective total | Effective current |
+|---|--:|--:|--:|
+| Davita | 77 | 96 | 3 |
+| Fresenius Medical Care | 66 | 11 | 3 |
+| US Renal Care | 3 | 4 | 0 |
+| American Renal Associates | 2 | 0 | 0 |
+
+The high `member_count` for Davita (77) vs Fresenius (66) includes
+the long tail of "DaVita X Dialysis Center" entity-hub entries
+that match the `davita%` prefix but carry no portfolio (legacy
+outlook intake artifacts). The actionable signal is
+`effective_*_property_count`.
+
+**SPEs overridden:**
+
+| Affiliate | Original role | Parent |
+|---|---|---|
+| FMC INVESTMENT HOLDINGS, LLC | buyer | Fresenius Medical Care |
+| FMC Investment Opportunities or affiliated investors | buyer | Fresenius Medical Care |
+| DAVITA LLW AMIGO FRED VA LLC | developer | Davita |
+
+Priority queue impact: P0.5 dropped 473 → 472 because
+DAVITA LLW AMIGO FRED VA LLC was the only one of these three
+that was previously visible in a developer/user_owner-only band.
+The two FMC buyers were already excluded since buyers don't
+qualify for P0.5.
+
+**Sale-leaseback detected:**
+
+The first run of the enriched view immediately surfaced one
+real-world Davita sale-leaseback: dia Terre Haute property,
+seller Davita → buyer Pearl Wang (private), $3.73M,
+`is_sale_leaseback=true`. The operator console can now flag
+this row as "Davita corporate divestiture" instead of treating
+the buyer (a private individual) as the BD target.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
