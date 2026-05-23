@@ -4,6 +4,55 @@
 
 **Goal:** Move the system from "duplicates accumulate; orphans drift; entities fragment" to "the database self-cleans, ingestion writes the right thing the first time, and what's already there is fixed once and stays fixed."
 
+## Live Status (updated as work lands)
+
+Last updated: **2026-05-24**.
+
+| Phase | Step | Status | Notes / log_id |
+|---|---|---|---|
+| F | F1 audit_run_log + helpers | ✅ DONE | LCC Opps live; 10 runs logged |
+| F | F2 quarantine state columns | ✅ DONE | dia + gov live |
+| F | F3 record_cleanup_provenance helper | ✅ DONE | exercised in every cleanup |
+| F | F4 v_data_health_* views | ✅ DONE | v2 rev addresses join-table linkage |
+| F | cap_rate_bands seed (Decision #3) | ✅ DONE | 7 classes per domain |
+| C | C1 sales UNIQUE partial index | ✅ DONE | dia + gov live; verified to raise 23505 |
+| C | C2 sales writer refactor (contacts/lat-long) | ⬜ TODO | bigger JS refactor |
+| C | C3 deed/parcel scraper persists property_id | ✅ N/A | audit overstated; system uses join table |
+| C | C4 owner-entity BEFORE INSERT trigger | ⬜ TODO | gated on A1 |
+| C | C5 ownership_history EXCLUDE constraint | ⬜ TODO | gated on A6 |
+| C | C6 silent-failure fix on ownership_research_queue | ⬜ TODO | small JS fix |
+| C | C7 SOS adapters (TX/FL/CA/GA/NC) | ⬜ TODO | per-state code |
+| C | C8 RCM/LoopNet auth fix | ⬜ TODO | flow + endpoint |
+| C | C9 standard ingest contract | ⬜ TODO | TypeScript DTO refactor |
+| B | B1 sales-dedup-tick | ✅ DONE | `*/15 * * * *` both domains |
+| B | B2 owner-merge-tick | ⬜ TODO | needs A1 / C4 first |
+| B | B3 deed-relink-tick | ⬜ TODO | small; tiny backlog left |
+| B | B4 ownership-chain-tick | ⬜ TODO | needs entity dedup |
+| B | B5 cap-rate-quality-tick | ✅ DONE | nightly 03:15 UTC both domains |
+| B | B6 propagate-recompute-tick | ⬜ TODO | |
+| B | B7 backslide alarms | ⬜ TODO | small + high leverage |
+| B | B8 Data Health dashboard tile | ⬜ TODO | UI work in ops.js |
+| A | A1 entity dedup backfill | ⬜ TODO | 1,399 redundant owner rows |
+| A | A2 sales dedup quarantine | ✅ DONE | A2a; 1,077 rows quarantined (504 dia + 573 gov) |
+| A | A3 ownership-stub reclassify | ✅ DONE | A3a (3,313) + A3b (3,006) — total 6,319 reclassified |
+| A | A4 deed orphan recovery | ✅ PARTIAL | A4a synced 364 dia column-backfills; 232 dia + 88 gov true orphans remain (A4b) |
+| A | A5 cap-rate retro-tagging | ✅ DONE | 4,018 rows tagged (1,301 dia + 2,717 gov) |
+| A | A6 ownership_history overlap cleanup | ⬜ TODO | survey first |
+| A | A7 owner→SF link backfill | ⬜ TODO | depends on A1 |
+| A | A8 CoStar Contacts retroactive harvest | ⬜ TODO | depends on C2 |
+| A | A9 unified_contacts consolidation in LCC Opps | ⬜ TODO | A9a + A9b per Decision #1 |
+
+**Symptoms tracked against the original user complaint:**
+
+| Complaint | Status |
+|---|---|
+| "Duplicates for the same sale on the same property" | ✅ FIXED — 0 live duplicates remain; UNIQUE index prevents new ones; cron worker catches any that slip past |
+| "Missing many elements of a sales transaction" | ⏳ PARTIAL — missing-price live rows down 6,302→0 (reclassified, not abandoned); contact PII persistence (C2) still pending |
+
+See `docs/ownership_sales_remediation/2026-05-23_track_a_progress.md` for per-run details and `docs/ownership_sales_remediation/baselines/2026-05-23_post_week0_apply.md` for the original baseline.
+
+---
+
 The plan is three concurrent tracks. They reinforce each other, but the **safest sequencing is C → B → A** — fix the leak before mopping the floor.
 
 - **Track A — Backfill cleanup** of the existing ~50k sales rows and ~70k owner rows.
