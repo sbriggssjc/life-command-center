@@ -1992,8 +1992,17 @@ const MIN_YEAR_BY_TEMPLATE = {
   asking_cap_by_term_dot_plot:  2015,
   // TRUE-gap (trim to where data actually starts)
   nm_vs_market_cap:             2006,
-  seller_sentiment:             2006,
-  seller_sentiment_monthly:     2006,
+  // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
+  // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
+  // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).
+  // The chart visually shows "missing data before 2013" because most
+  // pre-2014 cells are NULL or single-sample.
+  // User notes 2026-05-23 batch 6: "Missing data for before 2013".
+  // Apply findFirstDenseYear with threshold n_all >= 5 to start the
+  // chart where the trailing-12-month sample becomes meaningful.
+  // Falls back to 2014 if data shape doesn't expose n_all.
+  seller_sentiment:             (rows) => findFirstDenseYear(rows, 'n_all', 5) ?? 2014,
+  seller_sentiment_monthly:     (rows) => findFirstDenseYear(rows, 'n_all', 5) ?? 2014,
   dom_and_pct_of_ask:           2013,
   dom_and_pct_of_ask_monthly:   2013,
   bid_ask_spread:               2014,
