@@ -2521,6 +2521,61 @@ maintains itself.
 All three are integration / UI work; the database doctrine is now
 complete.
 
+### 11.27 Topic A10-MVP — Same-owner listing fan-out (2026-05-22)
+
+Smallest atomic slice of the listing-event fan-out engine. The full A10
+needs three lanes (same-owner / buyer cohort / geographic proximity)
+plus a watcher that fires per new listing/sale row. This round ships
+**lane 1 only** — same-owner — since it's the only one that needs no
+additional data sync. Buyer cohort and geographic lanes will need a
+property-attribute sync (asset_type, size, lat/lng) which is a
+separate round.
+
+**What was added (migration `20260522270000_lcc_listing_fanout
+_same_owner.sql`):**
+
+`public.lcc_listing_same_owner_cohort(p_source_domain text,
+p_source_property_id text)` — SQL function. Given any (domain,
+property_id), returns the current owner of that property plus every
+OTHER property they own (in either vertical), enriched with:
+- Portfolio rollup: `total_property_count`,
+  `current_property_count`, `is_cross_vertical`
+- Cadence state: `cadence_id`, `phase`, `current_touch`,
+  `next_touch_type`, `days_overdue`
+- Opportunity state: `bd_opportunity_id`, `bd_opportunity_open`
+
+Uses `#variable_conflict use_column` because the RETURNS TABLE OUT
+parameters share names with several underlying column names
+(owner_role, source_domain, etc.).
+
+**Validation:**
+
+| Test | Result |
+|---|---|
+| `lcc_listing_same_owner_cohort('dia','26621')` (Elliott Bay current property) | 92 other-property rows, all current, portfolio_total=93 |
+| `lcc_listing_same_owner_cohort('gov','15840')` (former Truist Bank, now Truist Financial Corp) | Returns Truist Financial Corp (current owner) + their 1 other gov property — correctly walks ownership history rather than returning the long-departed Truist Bank |
+| `lcc_listing_same_owner_cohort('dia','24142')` (Truist Bank current dia) | Returns merged Truist Bank entity with 40 dia + 3 gov others, `is_cross_vertical=true`, 13 current + 30 former |
+
+**What's still deferred for the full A10 engine:**
+- **Lane 2 — Buyer cohort**: needs property attribute sync
+  (asset_type, size_sqft, MSA) so we can find "entities who bought
+  similar properties in the last 24 months."
+- **Lane 3 — Geographic proximity**: needs lat/lng sync from dia/gov
+  properties so we can compute "owners with properties within N
+  miles of this listing."
+- **Listing-event watcher**: cron + trigger combo that fires the
+  fan-out automatically when a new `available_listings` row lands
+  in dia/gov, or when a new sales_transactions row implies a sale
+  event. For now, the operator (or UI) calls the function
+  on-demand.
+
+**Impact:** with §11.27 in place, the operator console can show a
+"who owns this listing, and what else do they have?" panel for any
+property paste-in. Combined with the §11.26 cadence dashboard, the
+operator can decide at-a-glance whether to open an opportunity (if
+none yet) or just log the listing as a touch (if a cadence is
+already running).
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
