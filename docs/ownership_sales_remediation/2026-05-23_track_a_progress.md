@@ -1,16 +1,32 @@
-# Track A Progress — 2026-05-23
+# Track A Progress — 2026-05-23 → 2026-05-24
 
-Continuation of `2026-05-23_week0_closeout.md`. Tracks the live cleanup runs executed via Supabase MCP through the `audit_run_log` + `record_cleanup_provenance` helpers.
+Continuation of `2026-05-23_week0_closeout.md`. Tracks all live cleanup runs executed via Supabase MCP through the `audit_run_log` + `record_cleanup_provenance` helpers.
 
 ## Runs executed
 
 | log_id | run_id | step | domain | rows | duration | status |
 |---:|---|---|---|---:|---|---|
 | 1 | smoke_2026_05_23 | foundation_verify | lcc_opps | 0 | 0s | succeeded |
-| 2 | A4a_dia_2026_05_23_001 | A4a_deed_property_id_sync | dia | 364 (dry-run) | 37s | succeeded |
+| 2 | A4a_dia_2026_05_23_001 | A4a_deed_property_id_sync | dia | 364 (dry) | 37s | succeeded |
 | 3 | A4a_dia_2026_05_23_002 | A4a_deed_property_id_sync | dia | 364 | 29s | succeeded |
 | 4 | A2a_dia_2026_05_23_001 | A2a_sales_dedup_quarantine | dia | 504 | 94s | succeeded |
 | 5 | A2a_gov_2026_05_23_001 | A2a_sales_dedup_quarantine | gov | 573 | 34s | succeeded |
+| 6 | A3a_gov_2026_05_24_001 | A3a_ownership_stub_reclassify | gov | 3,313 | 19s | succeeded |
+| 7 | A3b_gov_2026_05_24_001 | A3b_missing_price_to_needs_review | gov | 2,686 | 22s | succeeded |
+| 8 | A3b_dia_2026_05_24_001 | A3b_missing_price_to_needs_review | dia | 320 | 17s | succeeded |
+| 9 | A5_dia_2026_05_24_001 | A5_cap_rate_retro_tag | dia | 1,301 | 235s | succeeded |
+| 10 | A5_gov_2026_05_24_001 | A5_cap_rate_retro_tag | gov | 2,717 | 235s | succeeded |
+
+10 runs total. ≈12,438 row state changes across the two domains, all reversible via `field_provenance.source_run_id`.
+
+## Continuous propagation workers now active
+
+| Domain | Cron job | Schedule | Function |
+|---|---|---|---|
+| dia | lcc-dia-sales-dedup-tick | `*/15 * * * *` | `sales_dedup_tick()` |
+| gov | lcc-gov-sales-dedup-tick | `*/15 * * * *` | `sales_dedup_tick()` |
+| dia | lcc-dia-cap-rate-quality-tick | `15 3 * * *` | `cap_rate_quality_tick()` |
+| gov | lcc-gov-cap-rate-quality-tick | `15 3 * * *` | `cap_rate_quality_tick()` |
 
 ## Metrics, before → after
 
@@ -18,83 +34,79 @@ Continuation of `2026-05-23_week0_closeout.md`. Tracks the live cleanup runs exe
 
 | Metric | Dia before | Dia after | Gov before | Gov after |
 |---|---:|---:|---:|---:|
-| `sales_live` | 3,880 | **3,376** | 9,914 | **9,349** |
-| `sales_duplicate_superseded` | 0 | **504** | 0 | **573** |
+| `sales_total` | 3,880 | 3,880 | 9,914 | 9,924 (drift) |
+| `sales_live` | 3,880 | **3,056** | 9,914 | **3,352** |
+| `sales_duplicate_superseded` | 0 | 504 | 0 | 573 |
+| `sales_ownership_stub` | 0 | 0 | 0 | **3,313** |
+| `sales_needs_review` | 0 | 320 | 0 | **2,686** |
 | `duplicate_groups_live` | 489 | **0** | 448 | **0** |
-| `duplicate_rows_pending_quarantine` | 504 | **0** | 573 | **0** |
-| `sales_live_missing_price` | 320 | (unchanged) | 5,978 | 5,982 |
-| `sales_live_cap_rate_outside_default_band` | 101 | (unchanged) | 718 | 584 |
+| `sales_live_missing_price` | 320 | **0** | 5,978 | **0** |
+| `sales_live_cap_rate_outside_default_band` | 101 | 91 | 718 | 577 |
 
-The cap-rate-outside-band drop on gov (718 → 584) is incidental — some of the duplicates were cap-rate outliers and were quarantined as part of A2a. The price-missing count slightly *grew* (5,978 → 5,982) because new sidebar captures landed mid-cleanup; not a regression.
+### cap_rate_quality distribution (live only)
 
-### v_data_health_ownership (dia)
+| Domain | implausible_unverified | stated_only | market_implied (pre-A5) | NULL (no cap rate) |
+|---|---:|---:|---:|---:|
+| Dia | **490** | 811 | 0 | 1,755 |
+| Gov | **1,391** | 1,326 | 18 | 623 |
 
-| Metric | Before | After |
-|---|---:|---:|
-| `deed_orphans` (true orphan, no link at all) | 232 | 232 |
-| `deed_column_backfill_pending` (link exists, NULL column) | 364 | **0** |
+Comp queries can now filter `WHERE cap_rate_quality NOT IN ('implausible_unverified')` to exclude out-of-class-band rows from comps. The narrower class bands (dia=dialysis 5.5–8 %, gov=government_leased 5–8 %) flag ~3x more rows than the prior default 3–10 % check.
 
-The 232 dia true-orphan deeds remain for a future investigation (they have neither a join-table link nor a property_id column — likely came from a one-off bulk import that knew nothing about the property context).
+## Schema additions this round
 
-## Notes from the runs
+| Migration | Purpose |
+|---|---|
+| `dia_extend_cap_rate_quality_check` | Adds `verified` / `stated_only` / `implausible_unverified` to the allowed-values CHECK (was previously NOI-source-only). |
+| `gov_extend_cap_rate_quality_check` | Mirror. |
+| `dia_A5_cap_rate_retro_tag_and_B5_tick` | Adds `dia_asset_class_for()`, `cap_rate_quality_tick()` function, lcc-dia-cap-rate-quality-tick cron. |
+| `gov_A5_cap_rate_retro_tag_and_B5_tick` | Mirror with `gov_asset_class_for()` mapping `OF`/`IN`/`RT` short codes correctly. |
 
-### A4a stub-deed policy
+## Notes & decisions captured during apply
 
-Per user decision: Option 1 — backfill all 364 candidates including the 362 empty shells. Future cleanup may revisit (`needs_review` or `data_source='legacy_stub'` tagging) if the shells prove confusing in property timelines.
+### A3 (gov) split into A3a + A3b
 
-### A2a survivor-selection priority
+The audit's "5,982 NULL-price live rows" turned out to be two distinct populations:
+- **A3a — 3,313 actual ownership stubs** (`data_source` LIKE `ownership_change_stub%`). GSA lessor swaps. Reclassified `transaction_state='ownership_stub'`.
+- **A3b — 2,686 real-but-incomplete sales** (`costar_sidebar`, `costar_export`, `excel_master` etc. with `transaction_type='brokered'/'Investment'/'Owner-User'/'foreclosure'`). These are genuine sales that lack `sold_price` — awaiting enrichment. Reclassified `transaction_state='needs_review'`.
 
-```
-1 county_deed:*                  (highest trust — public record)
-2 excel_master
-3 sjc_track_record_v2
-4 historical_csv_import          (curated)
-5 costar_export
-6 costar_sidebar                 (live aggregator capture)
-7 rca_sidebar_manual_bootstrap
-8 NULL
-9 ownership_change_stub*         (EXCLUDED from A2 — handled by A3)
-```
+The split treatment is more truthful than the plan's original "all to ownership_stub" — these need different downstream handling (the stubs should never get a price; the needs_review rows might via enrichment).
 
-Within tier: oldest sale_id wins. Survivor selection produced sane choices on every sample inspected (NULL-source rows beaten by costar_sidebar; costar_sidebar beaten by historical_csv_import; etc.).
+Dia had no ownership-stub pattern; all 320 missing-price live rows went to A3b/needs_review.
 
-### Schema mismatch caught at apply time
+### A5 used domain-default asset class
 
-The F2 migration typed `sales_transactions.dedup_group_id` as UUID, which works for gov (UUID `sale_id`) but breaks for dia (INTEGER `sale_id`). Caught at the first A2a apply when the UPDATE refused to cast. Fixed by `20260523120015_dia_dedup_group_id_to_bigint.sql` (ALTER COLUMN, empty column so zero-cost rewrite). The F2 migration file still ships UUID by default; the dia hotfix is a separate file. Future dia clones get both files in sequence.
+92% of dia properties and 94% of gov properties have NULL `building_type`. Rather than build per-row classification, the asset_class mapping defaults the bulk to the domain default:
+- dia default = `dialysis` (5.5–8 %)
+- gov default = `government_leased` (5.0–8 %)
 
-### Live-system behavior during cleanup
+The `*_asset_class_for(building_type)` helper functions handle the long-tail building_type values (Medical Office, Retail, Industrial, etc.) for the few properties that have them populated.
 
-8 new gov sale rows landed during the A2a-gov run (sales_total went 9,914 → 9,922 even after 573 were quarantined). The fact that A2a is idempotent and keyed on `transaction_state = 'live'` means any duplicates among those 8 new rows would be picked up on a re-run. This argues for promptly building **Track B1 (sales-dedup-tick)** — without it, duplicates will re-accumulate continuously.
+Per-row asset_class can be refined later if richer building-type data lands — the cron worker picks up the new classifications on its next tick.
+
+### Pre-existing CHECK constraint on `cap_rate_quality`
+
+Round 76ek had pinned `cap_rate_quality` to NOI-source values only (`cmbs_audited`, `om_actual`, `om_pro_forma`, `market_implied`). The first A5 apply failed loud against this constraint. Hotfix extended the allowed list additively to include the band-check values (`verified`, `stated_only`, `implausible_unverified`). Old code paths still write the NOI-source values; A5/B5 owns the new ones.
+
+### A2a side-effect: cap-rate outliers dropped naturally
+
+`sales_live_cap_rate_outside_default_band` dropped on both domains between baseline and A3 (101→91 dia, 718→577 gov) without any cap-rate-specific action. That's because some of the duplicates A2a quarantined were also cap-rate outliers — quarantining them removed them from the `live` lane and therefore from the count.
 
 ## Provenance
 
-Every cleanup run wrote a `field_provenance` row tagged `source='cleanup_run_<run_id>'`. Recovery query for any run:
+10 `field_provenance` bulk-summary rows tagged `source='cleanup_run_<run_id>'`. Recovery query:
 
 ```sql
 SELECT * FROM public.field_provenance
-WHERE source_run_id = 'A2a_dia_2026_05_23_001';
-
--- And to revert (untested but supported):
-UPDATE public.sales_transactions
-   SET transaction_state = 'live', dedup_group_id = NULL
- WHERE sale_id IN (
-   SELECT (value->>'rows')::int FROM public.field_provenance
-   WHERE source_run_id = 'A2a_dia_2026_05_23_001'
- );
--- (Bulk-summary provenance was used here, so per-row revert
---  reconstructs the loser set from the dedup_group_id pointers.)
+WHERE source_run_id IN ('A3a_gov_2026_05_24_001', ...)
+ORDER BY recorded_at;
 ```
-
-The bulk-summary provenance pattern (one row per run instead of per-record) was chosen because 504+573 individual provenance rows would dilute the field_provenance signal. Each summary row carries enough metadata to identify the population that was changed.
 
 ## Next priorities
 
-User pre-selected A2 as the next-step focus; both A2 sub-steps now complete. Open candidates for the next session:
+User pre-selected B1+C1 for prior round (done); A3 + A5 + B5 for this round (done). Open candidates for the next session:
 
-1. **A3 gov ownership-stub reclassification** — 5,982 NULL-price `live` rows on gov. These are `ownership_change_stub` and `ownership_change_stub_spe_rename` data_source rows that should be tagged `transaction_state='ownership_stub'` and removed from comp queries. Biggest single number left on the dashboard.
-
-2. **Track B1 sales-dedup-tick cron worker** — to keep duplicates from re-accumulating. Becomes important now that A2a has cleared the backlog.
-
-3. **A1 entity dedup** — 1,399 redundant owner rows. Architecturally foundational but bigger build.
-
-4. **C-track write-time guards** — partial UNIQUE index on `dedup_natural_key` (C1) to make new duplicates impossible at the schema level. Should land before A1 or shortly after.
+1. **A1 + C4 entity dedup** — 1,399 redundant owner rows. Architecturally foundational. Bigger build (FK repointing across multiple tables) + BEFORE INSERT trigger to make it stick.
+2. **B7 backslide alarms** — daily health checks that surface regressions in the dashboard views. Small build, big confidence boost.
+3. **A4b deed-orphan investigation** — the 232 dia + 88 gov true orphans (no join-table link, no column). Smaller cleanup but closes the deed-records loop.
+4. **C2 sales writer refactor** — extends sidebar `upsertDomainSales` to persist contact PII (buyer/seller email/phone/address) per Decision #5 and persist lat/long. Bigger code change in JS.
+5. **A6 ownership_history overlap** — query for overlaps; if 0, add the EXCLUDE constraint (C5) immediately.
