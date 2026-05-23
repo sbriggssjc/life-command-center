@@ -2944,6 +2944,91 @@ All structural A10 work is shipped. Remaining: cron scheduling
 (blocked on vault secrets) and the operator UI surface that calls
 the functions on click.
 
+### 11.33 Topic 16 — Operator-affiliate registry (2026-05-22)
+
+The dialysis vertical has a small number of operators (Davita,
+Fresenius, US Renal Care, American Renal Associates) that own
+properties through a fleet of subsidiary names — "Bio-Medical
+Applications of MA" (Fresenius), "Total Renal Care, Inc" (DaVita),
+"USRC Covington, LLC", "FMC Tudor", etc. The §11.31 fuzzy-name
+merge can't catch these because the subsidiary names share no
+normalized stem with the parent.
+
+**Doctrinal importance:** when an affiliate sells a property — even
+to an unrelated REIT or developer — the transaction is effectively
+operator-led. The BD operator needs to know that "Bio-Medical
+Applications of MA" sold its building because that's a *Fresenius*
+sale-leaseback signal, not a generic third-party transaction.
+
+**What was added (migration `20260522340000_lcc_operator_affiliate
+_registry.sql`):**
+
+1. **`lcc_operator_affiliate_patterns` table** — rules table with
+   `parent_entity_id` (FK to entities), `pattern_name`, and
+   `pattern_type` (`'prefix'`/`'contains'`/`'regex'`/`'exact'`).
+   Unique on (parent_entity_id, pattern_name, pattern_type) for
+   idempotent re-seeding.
+
+2. **Seed: ~20 patterns covering four operators:**
+   - **DaVita** (6 patterns): `davita%`, `da vita%`,
+     `total renal care%`, `renal treatment center%`, `dci %`,
+     contains `davita`
+   - **Fresenius** (7 patterns): `fresenius%`,
+     `bio-medical applications%`, `bma of %`, `spectra renal%`,
+     `fmc %`, `fkc %`, contains `fresenius`
+   - **US Renal Care** (3 patterns): `usrc %`, `us renal%`,
+     exact `usrc`
+   - **American Renal Associates** (2 patterns):
+     `american renal%`, `ara %`
+
+3. **`v_lcc_operator_affiliates` view** (SECURITY INVOKER) —
+   applies patterns to the entities table, returns one row per
+   (affiliate, matching pattern). Excludes the parent itself.
+   Includes `affiliate_portfolio_size` so the operator can see
+   which affiliates currently impact data (vs. legacy entries
+   with zero portfolio).
+
+**Affiliates surfaced with non-zero portfolio:**
+
+| Parent | Affiliate | Role | Props |
+|---|---|---|--:|
+| Davita | Davita Healthcare Prtnrs | operator | 27 |
+| Davita | Davita Healthcare Partners | operator | 5 |
+| Davita | Davita Dialysis Center | operator | 1 |
+| Davita | DAVITA LLW AMIGO FRED VA LLC | developer | 1 |
+| Fresenius Medical Care | FMC INVESTMENT HOLDINGS, LLC | buyer | 1 |
+| Fresenius Medical Care | FMC Investment Opportunities or affiliated investors | buyer | 1 |
+
+So Davita's *effective* portfolio footprint is ~96 properties
+(base 62 + 33 across the 4 affiliates) rather than the 62 the
+base entity alone shows. The DAVITA LLW AMIGO FRED VA LLC row is
+particularly interesting — classified as `developer` by the v5
+BTS algorithm but actually a Davita SPE that did a build-to-suit
+for Davita itself (textbook in-house BTS).
+
+**What this enables (future rounds):**
+- **Operator concentration math** — aggregate parent + all
+  affiliates' portfolio_facts to show true operator footprint.
+- **Sale-leaseback detection** — when an affiliate appears as
+  seller in `lcc_listing_events`, surface the transaction tagged
+  with the parent operator so the operator outreach is to
+  Fresenius corporate, not "Bio-Medical Applications of MA"
+  directly.
+- **Priority queue refinement** — an affiliate classified as
+  "developer" by BTS-explicit-first-gen rules can be tagged
+  "operator-controlled SPE" so the operator console knows the
+  outreach is fundamentally to the operator parent, not the
+  SPE shell.
+
+These three downstream uses are deferred to follow-up rounds —
+this topic ships only the lookup infrastructure.
+
+**Government vertical:** no operator concept in the same sense
+(the "operator" is always a federal agency, not a corporate
+parent), so patterns are dia-focused for now. Adding gov-side
+rules (e.g., GSA-leased subsidiaries) would happen if/when that
+pattern emerges as a real BD signal.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
