@@ -2576,6 +2576,76 @@ operator can decide at-a-glance whether to open an opportunity (if
 none yet) or just log the listing as a touch (if a cadence is
 already running).
 
+### 11.28 Topic 12 — Property attribute sync + A10 Lane 3 (2026-05-22)
+
+§11.27 shipped same-owner fan-out (Lane 1) but Lanes 2+3 needed
+property-level attributes (lat/lng, size, year built) that the
+portfolio sync didn't pull. This round adds the attribute sync, then
+delivers Lane 3 (geographic neighbors) on top of it. Lane 2 (buyer
+cohort by asset class + size) is left as a follow-up.
+
+**What was added:**
+
+1. **gov-side slim view** (`government/20260522280000_gov_v_property
+   _attributes_portfolio.sql`) — exposes non-financial structural
+   columns of `gov.properties` as `v_property_attributes_portfolio`
+   with `GRANT SELECT TO anon, authenticated`. Mirrors the pattern
+   from §11.23. Drops noi/expenses/treasury_spread/etc. that the
+   BD layer doesn't need.
+
+2. **`lcc_property_attributes` table** — PK `(source_domain,
+   source_property_id)`. Columns: address, city, state, postal_code,
+   county, metro_area, lat/lng, building_size_sqft, land_acres,
+   year_built, year_renovated, building_type, asset_class,
+   tenant_short, tenant_label. Gov-specific lease columns
+   (lease_commencement/lease_expiration/firm_term_remaining/
+   term_remaining) included for the future lease-renewal priority
+   queue bands. Three indexes (metro, state/city, lat/lng partial).
+
+3. **`lcc_sync_property_attributes(p_domain)`** /
+   **`lcc_finalize_property_attributes()`** — fire/finalize sync
+   functions following the now-established §11.22 / §11.23 pattern.
+   `dia` pulls from `properties` directly (no RLS), `gov` pulls
+   from the slim view.
+
+4. **Initial backfill** (manual pg_net pulls, 14 dia pages + 18
+   gov pages):
+
+   | Domain | Rows | with lat/lng | with size | with metro |
+   |---|--:|--:|--:|--:|
+   | dia | 12,934 | 10,829 (84%) | 9,415 (73%) | 0 (dia has no metro col) |
+   | gov | 17,691 | 15,803 (89%) | 14,733 (83%) | 6,663 (38%) |
+   | **Total** | **30,625** | **26,632** | **24,148** | |
+
+5. **`lcc_listing_geographic_neighbors(source_domain, source_property
+   _id, radius_miles, limit)`** — Lane 3 of A10. Plain haversine
+   arithmetic (no postgis dependency) with a coarse lat/lng
+   bounding-box pre-filter for performance. Returns up to `p_limit`
+   nearest other properties with their current owner (when known
+   to LCC), cadence state, and opportunity state. Sorted by
+   `distance_miles ASC`.
+
+**Validation:** A 50-mile probe around dia property 26621 (Michigan)
+returned 10 properties; notable BD-relevant hits:
+- TEP Grand Rapids Michigan, LLC at 19.36 mi — `developer`
+- Midwest Dialysis Centers at 19.08 mi — `buyer`
+- Vrei 99, LLC at 22.77 mi — `buyer`
+
+So if 26621 just listed, the operator immediately sees a classified
+developer within 20 miles to reach out to.
+
+**Still deferred:**
+- **Lane 2 (buyer cohort)** — recent buyers of similar properties
+  (same asset_class + size band ±30% + state). Now feasible since
+  attributes are synced; just needs the function.
+- **Listing-event watcher cron** — fires the fan-out (Lanes 1/2/3)
+  automatically when new `available_listings` or `sales_transactions`
+  rows land in dia/gov. Today the operator (or UI) calls these
+  on-demand.
+- **Future priority queue bands** (P1-P5) keyed on `lease_expiration`,
+  `year_built` (refi window), `firm_term_remaining` — now have the
+  data, just need the band definitions.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
