@@ -4052,8 +4052,10 @@ test('R38 B: VAL_FMT_INTEGER uses [Red] negative idiom in single-series specs', 
     'integer format uses [Red](N) negatives');
 });
 
-test('R38 B: VAL_FMT_CURRENCY uses [Red] negative idiom', () => {
-  // volume_ttm_by_quarter uses VAL_FMT_CURRENCY
+test('R38 B + R64: volume_ttm_by_quarter y-axis uses $X.XXB format with [Red] negatives', () => {
+  // R64 — volume_ttm_by_quarter switched from VAL_FMT_CURRENCY ("$1,800,000,000")
+  // to VAL_FMT_CURRENCY_B ("$1.80B") per user batch 5 ask. The format
+  // still preserves the [Red] negative idiom for back-compat.
   const spec = buildInjectionSpec({
     chart_template_id: 'volume_ttm_by_quarter',
     tabName: 'Data_Volume_TTM',
@@ -4064,8 +4066,8 @@ test('R38 B: VAL_FMT_CURRENCY uses [Red] negative idiom', () => {
     dataStart: 5, dataEnd: 60,
     brand: { palette: {} },
   });
-  assert.equal(spec.spec.valAxNumFmt, '$#,##0_);[Red]($#,##0)',
-    'currency format uses [Red]($N) negatives');
+  assert.equal(spec.spec.valAxNumFmt, '$#,##0.00,,,"B"_);[Red]($#,##0.00,,,"B")',
+    'R64: $X.XXB format with [Red](N) negative idiom');
 });
 
 test('R38 B: VAL_FMT_CURRENCY_M (millions) uses [Red] negative idiom', () => {
