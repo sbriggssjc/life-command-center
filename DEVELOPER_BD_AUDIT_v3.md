@@ -3246,6 +3246,53 @@ The priority queue is now at full doctrinal richness for the data
 synced into LCC. P9 and any further bands are gated on additional
 upstream data signals.
 
+### 11.37 Topic 20 — BD-data sync cron schedule (2026-05-22)
+
+§11.22 / §11.23 / §11.28 / §11.32 / §11.36 each built a (fire,
+finalize) pg_net sync pair but left them unscheduled because the
+four vault secrets they need (dia/gov url + anon key) hadn't been
+seeded. Every sync function gracefully RAISE NOTICEs and skips
+when its secrets are missing, so scheduling them now is safe — the
+jobs will no-op until secrets land, then start running
+automatically.
+
+**Migration `20260522380000_lcc_bd_data_sync_cron_schedule.sql`
+registers nine pg_cron jobs:**
+
+| Job | Schedule | What |
+|---|---|---|
+| `lcc-entity-sync-fire`         | `5 */4 * * *`  | fire pg_net pulls for true_owners |
+| `lcc-entity-sync-finalize`     | `10 */4 * * *` | consume + upsert entities |
+| `lcc-portfolio-sync-fire`      | `15 */4 * * *` | fire pulls for ownership_history |
+| `lcc-portfolio-sync-finalize`  | `20 */4 * * *` | consume + upsert portfolio_facts |
+| `lcc-listing-event-sync-fire`  | `25 */4 * * *` | fire pulls for sales_transactions (30-day lookback) |
+| `lcc-listing-event-sync-finalize` | `30 */4 * * *` | consume + insert listing_events |
+| `lcc-property-attrs-sync-fire`     | `35 4 * * *`   | daily fire pulls for property attributes |
+| `lcc-property-attrs-sync-finalize` | `40 4 * * *`   | daily consume + upsert |
+| `lcc-pg-net-response-cleanup`  | `45 * * * *`   | drop `net._http_response` rows > 24h old |
+
+**Cadence rationale:**
+- Entity classifications + portfolio edges + listing events update
+  continuously upstream (driven by the dia/gov reclassify cron, OM
+  intake, sales_transactions ingest, etc.). 4-hour pickup keeps
+  LCC fresh without thrashing pg_net.
+- Property attributes (address/lat/lng/year/agency/SAM-opps) are
+  effectively write-once for most rows. Daily refresh at 4 AM UTC
+  is more than enough.
+- pg_net response cleanup hourly to prevent
+  `net._http_response` from growing unbounded (~900 rows/day
+  expected = ~330k rows/year if not pruned).
+
+**Staggering:** each pair is separated by 5 minutes — gives pg_net
+enough time to issue all GETs and receive responses before the
+finalize step queries `net._http_response`. With 4-hour cycles
+between fire blocks, the 5-minute gap is generous; future tuning
+could compress to 2-3 minutes if needed.
+
+**Current state:** all nine jobs registered with `active = true`.
+They will start producing visible work the instant the four vault
+secrets are seeded.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
