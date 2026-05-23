@@ -7,6 +7,41 @@
 
 ---
 
+## Session summary — 2026-05-22 BD engine build-out
+
+In a single working session this date, topics 10–20 shipped end-to-end
+across 16 migrations and ~6,100 lines of code. The database doctrine
+is now substantively complete; remaining work is integration/UI layer
+outside the SQL surface.
+
+**Highlights:**
+- 4,003 classified owner entities synced from dia + gov into a unified
+  LCC entities table
+- 5,888 ownership edges materialized as `lcc_entity_portfolio_facts`
+- 306 duplicate entities merged (60 strict canonical-name + 246 fuzzy
+  normalized-name)
+- 5 cross-vertical entities surfaced (Truist Bank, Embree, Jamestown LP,
+  Jana Collins LLC, Northwood Properties LLC)
+- 30,625 property attribute rows synced (87% with lat/lng)
+- 293 listing events backfilled (90-day window, 242 gov + 51 dia)
+- 9-band priority queue (P0/P0.5/P1–P5/P7/P8) populated and validated
+- 7-touch onboarding state machine with auto-advance trigger
+- A10 fan-out trio (same-owner / buyer cohort / geographic neighbors)
+  + listing-event watcher
+- Operator-affiliate registry + sale-leaseback detection + SPE
+  behavioral override
+- 9 pg_cron jobs registered + active, will activate on vault secret seed
+
+**See:**
+- `docs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` — standalone post-work
+  audit with validation status, gotchas, deferred items, operational
+  readiness, and recommendations for the next session.
+- §11.22 – §11.37 of this document — full per-topic implementation log.
+- `CLAUDE.md` "BD Engine" section — quick-reference table of new
+  artifacts, gotchas, and queries.
+
+---
+
 ## Table of Contents
 
 1. [Executive Summary](#1-executive-summary)
