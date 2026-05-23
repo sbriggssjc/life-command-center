@@ -2758,6 +2758,82 @@ conversation with the specific asset.
   streaks, aged building / value-add proxies, ...) are squishier
   signals; deferred until a clearer definition lands.
 
+### 11.31 Topic 14 — Fuzzy entity resolution via normalized name (2026-05-22)
+
+§11.24's strict canonical-name merge caught 60 entities (3 cross-
+vertical + 57 legacy). 371 additional groups (757 entities) remained
+as same-entity variants distinguished only by case/punctuation/
+corporate suffix. This topic resolves them.
+
+**What was added (migrations `20260522305000_lcc_merge_entity
+_dedupe_fix.sql` + `20260522310000_lcc_fuzzy_entity_merge.sql`):**
+
+1. **Bugfix to `lcc_merge_entity`** — the original §11.24
+   implementation packed the dedupe DELETE and move UPDATE into
+   concurrent CTEs in one statement. Both saw the pre-snapshot,
+   so when winner + loser both had a portfolio_facts row for the
+   same (domain, property), the UPDATE tried to write a key the
+   DELETE was still "about to delete" — hitting
+   lcc_entity_portfolio_facts_pkey. §11.24's losers all had zero
+   portfolio edges so the bug never surfaced. Fix splits the
+   DELETE and UPDATE into two sequential statements. Same logic,
+   no concurrency hazard.
+
+2. **`public.lcc_normalize_entity_name(text)`** — IMMUTABLE
+   function. Lowercases, strips a whole-word list of corporate
+   suffixes (LLC/Inc/Corp/LP/LLP/Trust/Holdings/Properties/
+   Partners/Capital/Group/Co/N.A./Na/"the"/Corporation/Company)
+   and reduces non-alphanumeric to single spaces. Returns NULL
+   for results shorter than 4 chars to avoid matching tiny names.
+
+3. **`public.v_lcc_merge_candidates`** (SECURITY INVOKER) —
+   surfaces same-normalized-name groups with the winner picked by
+   the same role-priority order §11.24 used (developer > operator
+   > user_owner > buyer > unknown), then by portfolio_size DESC.
+   `auto_mergeable` = at least one member has a classified role.
+
+4. **`lcc_apply_fuzzy_merges(dry_run)`** — runs `lcc_merge_entity`
+   on each loser in each auto-mergeable group. Migration calls it
+   non-dry to apply the merges immediately as a data fix.
+
+**Results:**
+
+| Metric | Before §11.31 | After §11.31 | Delta |
+|---|--:|--:|--:|
+| Merged entities | 60 | 306 | +246 |
+| Cross-vertical entities | 3 | 5 | +2 |
+| Canonical organizations | 9066 | 8820 | -246 |
+
+The two new cross-vertical entities are **Jamestown LP** ("Jamestown"
+dia + "Jamestown LP" gov, 1+1 props) and **Northwood Properties LLC**
+("Northwood Inc" dia + "Northwood Properties LLC" gov, 1+1 props).
+Northwood is admittedly a slightly-risky merge — "Northwood" is a
+common corporate prefix — but the blast radius is small (2 total
+properties) and surfacing such cases for human-review is exactly
+what `v_lcc_merge_candidates` enables going forward.
+
+**Spot-check on short-normalized-name merges** (≤8 chars): all 19
+inspected cases were case/comma/suffix-variant duplicates of the
+same legal entity (e.g., "DaVita Inc." vs "Davita", "CBRE, Inc."
+vs "CBRE Group, Inc.", "Sage Capital LLC" vs "SAGE CAPITAL LLC").
+No clear false positives.
+
+**Conservative philosophy:** this round explicitly does NOT do
+trigram-similarity matching. Cases like "Truist Bank" ↔ "Truist
+Financial Corporation" (similarity ~0.3) remain distinct because
+they're distinct legal entities sharing a corporate parent — the
+false-positive cost of merging them is higher than the noise-
+reduction value.
+
+**Priority queue bands unchanged** (P0.5=473, P1=66, P2=30, P3=56,
+P7=164) because the 246 losers all had `merged_into_entity_id IS
+NULL` filter applied via the views, but they were already in the
+'merged-out / unknown' bucket pre-merge anyway. The downstream
+value is in the portfolio rollup: the winners now correctly own
+their losers' property edges, so portfolio counts reflect reality
+(e.g., the "Davita" operator entity now correctly includes the
+2 props from "DaVita Inc.").
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
