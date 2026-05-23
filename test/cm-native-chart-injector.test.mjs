@@ -2622,7 +2622,73 @@ function mkRows(startYear, endYear, valKey = 'ttm_weighted_cap_rate') {
   return rows;
 }
 
-test('R47: cap_rate_ttm_by_quarter shifts dataStart to row matching 2005', () => {
+test('R69: data-aware MIN_YEAR — gov-shaped dense rows from 2005 produce 2005 cutoff', () => {
+  // Gov-shaped synthetic: 2001-2024 monthly with n=30+ from the start
+  // (mirrors cm_gov_market_quarterly_master_m_mat where 2005 already
+  // has n=29-45 per TTM). The function-based MIN_YEAR for
+  // cap_rate_ttm_by_quarter should detect dense data immediately and
+  // return 2001 (no trim), not the 2009 fallback.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        ttm_weighted_cap_rate: 0.07,
+        transaction_count_ttm: 30,  // dense from year one
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols: [
+      { key: 'period_end',            col: 'A' },
+      { key: 'subspecialty',          col: 'B' },
+      { key: 'ttm_weighted_cap_rate', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // dense-from-2001 rows → cutoff = 2001 → no shift
+  assert.equal(spec.spec.dataStart, 5,
+    'R69: gov-shaped dense rows keep dataStart at 5 (no trim)');
+});
+
+test('R69: data-aware MIN_YEAR — dia-shaped sparse early rows trim to first dense year', () => {
+  // Dia-shaped: 2001-2024 monthly. 2001-2008 = sparse (n=9-14, real
+  // master_m pre-2009 numbers). 2009+ = dense (n=25). The function
+  // should detect 2009 as the first year with 4+ consecutive months
+  // at n≥15.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        ttm_weighted_cap_rate: 0.07,
+        // Sparse 9-14 through 2008, dense 25+ from 2009 onward
+        transaction_count_ttm: y < 2009 ? (9 + Math.floor((y - 2001) * 0.6)) : 25,
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap_Avg',
+    cols: [
+      { key: 'period_end',            col: 'A' },
+      { key: 'subspecialty',          col: 'B' },
+      { key: 'ttm_weighted_cap_rate', col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2001-01 to 2008-12 = 96 sparse rows → dataStart 5 + 96 = 101
+  assert.equal(spec.spec.dataStart, 5 + 96,
+    'R69: dia-shaped sparse rows trim to first 2009 row');
+});
+
+test('R47 → R69: cap_rate_ttm_by_quarter shifts dataStart to first 2009 row (master parity)', () => {
   const rows = mkRows(2001, 2024);
   const spec = buildInjectionSpec({
     chart_template_id: 'cap_rate_ttm_by_quarter',
@@ -2636,10 +2702,12 @@ test('R47: cap_rate_ttm_by_quarter shifts dataStart to row matching 2005', () =>
     brand: { palette: {} },
     rows,
   });
-  // 2001-01 to 2004-12 = 48 monthly rows before 2005-01
-  // dataStart 5 + 48 = row 53
-  assert.equal(spec.spec.dataStart, 53,
-    'dataStart shifted to first 2005 row (5 + 48)');
+  // R69: bumped 2005 → 2009 to match master Dialysis Comp Work
+  // MASTER.xlsx Charts tab which starts its "Cap (TTM)" series at row
+  // 23 = Sep-2009. 2001-01 to 2008-12 = 96 monthly rows before 2009-01.
+  // dataStart 5 + 96 = row 101.
+  assert.equal(spec.spec.dataStart, 5 + 96,
+    'R69: dataStart shifted to first 2009 row');
 });
 
 test('R47: bid_ask_spread trims to 2014 (TRUE-gap)', () => {
@@ -2787,11 +2855,11 @@ test('R47: chart XML series references shift to trimmed dataStart', async () => 
   const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [spec]);
   const zip = await JSZip.loadAsync(result);
   const xml = await zip.file('xl/charts/chart1.xml').async('string');
-  // chart should reference rows 53+ (= 5 + 48 months pre-2005)
-  assert.match(xml, /'Data_Cap_Avg'!\$A\$53:\$A\$\d+/,
-    'cat axis references start at row 53 (first 2005 row)');
-  assert.match(xml, /'Data_Cap_Avg'!\$C\$53:\$C\$\d+/,
-    'val series references start at row 53');
+  // R69: trimmed to 2009 = row 101 (5 + 96 pre-2009 months).
+  assert.match(xml, /'Data_Cap_Avg'!\$A\$101:\$A\$\d+/,
+    'R69: cat axis references start at row 101 (first 2009 row)');
+  assert.match(xml, /'Data_Cap_Avg'!\$C\$101:\$C\$\d+/,
+    'R69: val series references start at row 101');
 });
 
 test('buildInjectionSpec: bid_ask_spread R50 — stacked line + up-down bars when last_ask present', () => {

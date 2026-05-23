@@ -1922,9 +1922,53 @@ export const NATIVE_CHART_TEMPLATES = new Set([
 // the first row whose period_end >= cutoff year. The data tab keeps
 // every row from 2001+ (so historical context is preserved); only the
 // chart series references narrow. dataEnd is unchanged.
+// R69 — per-vertical TTM-density cutoff helper. Returns the first year
+// where 4+ consecutive months have transaction_count_ttm ≥ N. For
+// cap-rate-bearing charts the dia view has n=9-14 sales/TTM through
+// 2008 (so 2005 caps swing wildly on single-sample inputs) while gov
+// has n=29-45 from 2005 onward (no trim needed). This lets each chart
+// honestly start where the underlying sample is dense, automatically
+// per-vertical, instead of requiring a vertical-aware static cutoff.
+function findFirstDenseYear(rows, fieldKey, minN, consecutive = 4) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let run = 0;
+  let runStartYear = null;
+  for (const r of rows) {
+    const pe = r && r.period_end ? new Date(r.period_end) : null;
+    if (!pe || Number.isNaN(pe.getTime())) {
+      run = 0; runStartYear = null; continue;
+    }
+    const n = r[fieldKey];
+    if (n != null && Number(n) >= minN) {
+      if (run === 0) runStartYear = pe.getUTCFullYear();
+      run++;
+      if (run >= consecutive) return runStartYear;
+    } else {
+      run = 0; runStartYear = null;
+    }
+  }
+  return null;
+}
+
 const MIN_YEAR_BY_TEMPLATE = {
-  // FALSE-alarm (pin to 2005 — skip 2003-2004 sparseness)
-  cap_rate_ttm_by_quarter:      2005,
+  // R47 → R69. cap_rate_ttm_by_quarter and the two charts that share
+  // its baseline (cash_leveraged_returns, cost_of_capital) now use a
+  // data-aware cutoff. Per-vertical effective trims:
+  //   dia: ~2009 (TTM transaction_count first reaches 15 consistently
+  //               at Dec-2008 with n=27, then n=21-27 through 2009)
+  //   gov: ~2005 (n=29-45 from the start of the time series)
+  // User notes 2026-05-23 batch 6: "Same comment above about the 2005
+  // cap rates not being in the 4s" — the dia 2005 sparse-sample
+  // artifact disappears; gov is unaffected.
+  //
+  // master Excel's "Cap (TTM)" series (Dialysis Comp Work MASTER.xlsx
+  // chart15, col O) begins at row 23 = Sep-2009; chart now starts
+  // where the master starts. A separate ~80bps methodology gap
+  // (our 7.7-8.1% vs master 8.6-9.2% in 2009) is tracked in
+  // audit/cm-style-audit/R69-USER-NOTES-2026-05-24.md.
+  cap_rate_ttm_by_quarter:      (rows) => findFirstDenseYear(rows, 'transaction_count_ttm', 15) ?? 2009,
+  cash_leveraged_returns:       (rows) => findFirstDenseYear(rows, 'transaction_count_ttm', 15) ?? 2009,
+  cost_of_capital:              (rows) => findFirstDenseYear(rows, 'transaction_count_ttm', 15) ?? 2009,
   // R54 — cap_rate_top_bottom_quartile bumped from 2005 to 2007 because
   // 2005-2006 has 0-3 cap-rate samples per TTM window (sane band). With
   // n<4 the master_m view emits degenerate Q1=Med=Q3 (single sample
@@ -1935,8 +1979,6 @@ const MIN_YEAR_BY_TEMPLATE = {
   // where data is dense, matching user expectation that the chart
   // shouldn't "move wildly around 2006".
   cap_rate_top_bottom_quartile: 2007,
-  cash_leveraged_returns:       2005,
-  cost_of_capital:              2005,
   volume_cap_quartile_combo:    2005,
   // R67 — bumped from 2005 to 2015. User notes 2026-05-23 batch 6:
   // "missing quite a bit of data for before 2014 — suggesting a
@@ -1995,7 +2037,21 @@ export function buildInjectionSpec(args) {
   // period_end is >= cutoff year becomes the chart's dataStart; the
   // data tab is unchanged so all historical rows from 2001+ remain
   // visible in the worksheet.
-  const minYear = MIN_YEAR_BY_TEMPLATE[args.chart_template_id];
+  //
+  // R69 — MIN_YEAR_BY_TEMPLATE entry can be either a number (static cutoff,
+  // same for all verticals — R47's original behavior) or a function
+  // `(rows) => number | null`. The function form lets per-vertical
+  // sparseness drive the cutoff: e.g. for cap_rate_ttm_by_quarter, dia
+  // has n=9-14 sales per TTM through 2008 (master Excel doesn't show
+  // pre-2009 data at all) while gov has n=29-45 from 2005 onward, so a
+  // single static cutoff would either trim valid gov data or leave dia
+  // showing single-sample outlier-driven cap rates. The function reads
+  // each row's transaction_count_ttm to find the first chronological
+  // year where the underlying sample is dense enough to be honest.
+  const minYearEntry = MIN_YEAR_BY_TEMPLATE[args.chart_template_id];
+  const minYear = typeof minYearEntry === 'function'
+    ? minYearEntry(args.rows)
+    : minYearEntry;
   let effectiveStart = args.dataStart;
   if (minYear && Array.isArray(args.rows) && args.rows.length > 0) {
     // Find first row at or after the cutoff year. Rows arrive in
