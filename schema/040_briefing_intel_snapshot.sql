@@ -82,11 +82,13 @@ create table if not exists briefing_intel_snapshot (
   created_at      timestamptz not null default now()
 );
 
+-- Use NULLS NOT DISTINCT (PG15+) so PostgREST's on_conflict=as_of_date,workspace_id
+-- can target this index even for the global (workspace_id IS NULL) row.
+-- A previous version used COALESCE(...) to fold NULL into a sentinel UUID,
+-- but that produced an expression index which PostgREST cannot resolve
+-- for ON CONFLICT (error 42P10).
 create unique index if not exists ux_briefing_intel_snapshot_date_workspace
-  on briefing_intel_snapshot (
-    as_of_date,
-    coalesce(workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
-  );
+  on briefing_intel_snapshot (as_of_date, workspace_id) nulls not distinct;
 
 create index if not exists idx_briefing_intel_snapshot_generated_at
   on briefing_intel_snapshot (generated_at desc);

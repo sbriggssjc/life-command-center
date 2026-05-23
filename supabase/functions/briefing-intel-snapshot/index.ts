@@ -96,6 +96,23 @@ const OPS_URL = Deno.env.get("OPS_SUPABASE_URL") || "";
 const OPS_KEY = Deno.env.get("OPS_SUPABASE_SERVICE_KEY") || "";
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") || "";
 const ANTHROPIC_MODEL   = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-6";
+// LCC custom API key — pg_cron's lcc_cron_post(...,'edge') passes this as
+// Authorization: Bearer <key>. We deploy with verify_jwt=false (matches the
+// availability-checker pattern) and do our own bearer check against this
+// env var. The service-role key is also accepted so an operator can curl
+// the function directly with their Supabase admin token.
+const LCC_API_KEY = Deno.env.get("LCC_API_KEY") || "";
+
+function isAuthorized(req: Request): boolean {
+  const h = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  if (!m) return false;
+  const token = m[1].trim();
+  if (!token) return false;
+  if (LCC_API_KEY && token === LCC_API_KEY) return true;
+  if (OPS_KEY && token === OPS_KEY)         return true;
+  return false;
+}
 
 // Yahoo Finance ticker map. Yields are ^XXX series; everything else is the
 // raw ticker. The chart API returns OHLC for an arbitrary range.
@@ -264,11 +281,13 @@ async function fetchMarketData(): Promise<{
     if (!r) return;
     const group = all[i].group;
     const isYield = group === "yields";
-    // Yahoo returns yields in pct (^TNX = 42.5 means 4.25%). Divide by 10
-    // to convert their tenths-of-a-bp scaling to standard percent.
-    const value = isYield ? r.current / 10 : r.current;
+    // ^TNX / ^FVX / ^IRX / ^TYX from Yahoo's chart API are returned as
+    // direct percent values (4.62 = 4.62%), NOT scaled by 10 the way the
+    // /v6/finance/quote endpoint sometimes is. Use the raw value.
+    const value = r.current;
+    // bps delta: (currentPct - priorPct) * 100 = bps.
     const delta = isYield
-      ? fmtBps((r.current - r.prior) / 10)  // bps delta on yields
+      ? fmtBps(r.current - r.prior)
       : fmtChangePct(r.change_1d_pct);
     const delta_dir = (isYield ? r.current - r.prior : r.change_1d_pct) > 0 ? "up"
                     : (isYield ? r.current - r.prior : r.change_1d_pct) < 0 ? "down"
@@ -282,8 +301,8 @@ async function fetchMarketData(): Promise<{
       delta,
       delta_dir,
       raw_value: value,
-      raw_change_1d_pct: isYield ? (r.current - r.prior) / 10 : r.change_1d_pct,
-      raw_change_5d_pct: isYield ? (r.current - r.weekAgo) / 10 : r.change_5d_pct,
+      raw_change_1d_pct: isYield ? (r.current - r.prior) : r.change_1d_pct,
+      raw_change_5d_pct: isYield ? (r.current - r.weekAgo) : r.change_5d_pct,
     });
   });
   return buckets as any;
@@ -651,6 +670,10 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
 serve(async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
+
+  if (!isAuthorized(req)) {
+    return errorResponse(req, "Unauthorized: send Authorization: Bearer <LCC_API_KEY>", 401);
+  }
 
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("dry_run") === "1";
