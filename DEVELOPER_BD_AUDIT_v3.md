@@ -2066,7 +2066,9 @@ populates P0.5 (473 developers) accordingly.
 **Deferred to follow-up rounds:**
 - SF Opportunity sync writer (read-only mirror that populates
   bd_opportunities hourly from Salesforce). Schema is ready (Topic 9).
-- Audit Topic A6: 7-touch onboarding sequence UI + template progression
+- Audit Topic A6 templates + UI: state machine + cadence schedule
+  shipped §11.25; remaining is the actual message templates and the
+  operator UI that surfaces "send touch N" / "log touch N" actions.
 - Audit Topic A10: listing-event fan-out engine (Lane A buyer cohort +
   Lane B owner-geographic proximity)
 - Priority queue bands P1-P5, P8, P9 (each requires additional data views)
@@ -2326,6 +2328,100 @@ both verticals" badge.
 stripping like "Truist Bank" ↔ "Truist Securities Inc (Suntrust /
 Bb&T)"). The conservative pass shipped here catches only exact
 canonical-name matches.
+
+### 11.25 Topic A6 — 7-touch onboarding state machine (2026-05-22)
+
+**Doctrine recap (§7.2):** when a Prospect Opportunity opens against a
+classified developer, run the 7-touch onboarding cadence — email,
+voicemail, email, voicemail, email, voicemail, email — spaced
+**2/4/4/4/4/4 weeks** (~22 weeks total). After touch 7, graduate to
+steady-state at the entity's tier cadence (A=monthly, B=quarterly,
+C=every ~8 months, D=annual). This topic adds the actual state machine
+that drives `touchpoint_cadence` through that sequence.
+
+**What was added (migrations `20260522250000_lcc_onboarding_cadence
+_state_machine.sql` + `20260522250100_lcc_touchpoint_cadence
+_constraint_expansion.sql`):**
+
+1. **`lcc_onboarding_schedule`** lookup table — 7 rows defining
+   `(step_number, offset_weeks, touch_type, template_name)`. Edit the
+   table to retune cadence without code changes. Seeded with:
+   1 →  0w email · 2 →  2w vm · 3 → 4w email · 4 → 4w vm ·
+   5 → 4w email · 6 → 4w vm · 7 → 4w email
+2. **`lcc_steady_state_interval_days(tier)`** helper —
+   A=30d, B=91d, C=240d, D=365d. IMMUTABLE.
+3. **`lcc_seed_onboarding_cadence(entity, contact?, owner?, opp?,
+   domain?, tier?)`** — idempotent UPSERT into `touchpoint_cadence`
+   keyed on (entity_id, bd_opportunity_id). Sets `phase='onboarding'`,
+   `current_touch=0`, `next_touch_due=now()`, `next_touch_type='email'`.
+4. **`lcc_advance_onboarding_cadence(cadence, logged_type, logged_at,
+   email_opened?, email_replied?, call_connected?, meeting_held?)`** —
+   the heart of the state machine. Behavior matrix:
+   - `unsubscribe_status='opt_out'` → `phase='unsubscribed'`,
+     `next_touch_due=NULL`, no further work.
+   - `current_touch < 7` → look up step `current_touch+1`, compute
+     `next_touch_due = logged_at + offset_weeks·7d`, stamp
+     `next_touch_type` and `next_touch_template`.
+   - `current_touch >= 7` → `phase='steady_state'`,
+     `next_touch_due = logged_at + interval_days_for_tier`.
+   - 3+ consecutive unopened emails → bump the next email out to 90d
+     instead of the schedule interval (stall protection).
+   - Counters auto-increment: emails_sent / calls_made via
+     `logged_type`; emails_opened / replied / call_connected /
+     meeting_held via the optional booleans.
+5. **`lcc_bd_opportunity_auto_seed_cadence()`** trigger on
+   `bd_opportunities` AFTER INSERT — when a new
+   `is_open=true, type='prospect'` row lands (from the future SF
+   Opportunity sync), automatically seeds the cadence with the
+   entity's role-derived tier (developer→A, user_owner→B,
+   operator→C, default B).
+6. **Constraint expansion** (companion migration): `phase` now
+   accepts `'onboarding'`/`'steady_state'`/`'unsubscribed'`;
+   `priority_tier` now accepts `'D'`.
+
+**End-to-end simulation (Elliott Bay Capital, tier A):**
+
+Seeded a cadence and walked 7 touches at the scheduled offsets with
+`email_opened=true` throughout. Final state:
+- `current_touch=7`, `phase='steady_state'`, `priority_tier='A'`
+- `next_touch_type='email'`, `next_touch_template='steady_state_check_in'`
+- `next_touch_due` lands ~30 days after the last touch (tier-A
+  interval)
+- `emails_sent=4`, `calls_made=3` (matches the 4-email + 3-VM
+  schedule)
+
+Test cadence was cleaned up afterward.
+
+**What's now operational vs deferred:**
+- ✅ State machine logic
+- ✅ Schedule table (operator can edit cadence)
+- ✅ Auto-seed on bd_opportunity insert
+- ✅ Stall protection (3 unopened → 90d push)
+- ✅ Graduation to steady_state with per-tier interval
+- ⏸ Message **templates** themselves (subject/body content) — the
+  schedule names a template (`onboarding_email_1_introduction`) but
+  the actual message body lives wherever the email send path
+  resolves it. A future round adds an `onboarding_touch_template`
+  table or wires existing template storage.
+- ⏸ Operator **UI** — "send touch N now" and "log touch N as done"
+  buttons that wrap `lcc_advance_onboarding_cadence()`. Backend is
+  ready.
+- ⏸ Auto-advance on `activity_events` insert (currently explicit
+  call to `lcc_advance_…`).
+
+**Impact on the BD doctrine:**
+The four pieces that needed to come together for the priority queue
+to drive real BD execution are:
+1. ✅ Entity sync (§11.22) — the queue knows who exists
+2. ✅ Portfolio rollup (§11.23) — the queue knows portfolio size
+3. ✅ Cross-domain merge (§11.24) — the queue avoids duplicates
+4. ✅ Cadence state machine (this topic) — the queue knows what's
+   due next and can advance automatically
+
+The remaining big pieces are SF Opportunity inbound sync (so
+`bd_opportunities` actually populates from Salesforce) and the
+operator console UI itself. Both are non-database work and don't
+block the doctrine — the data and logic layers are complete.
 
 ---
 
