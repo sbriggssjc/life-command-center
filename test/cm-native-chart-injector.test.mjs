@@ -2076,16 +2076,23 @@ test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line comb
     ['E', 'F'],
     'lines: avg_cap_total, avg_cap_core_10plus'
   );
+  // R65 — brand-aligned colors:
+  //   sky bar + nm_pale-fill+sky-border bar (no off-brand sage)
+  //   navy solid line + navy DASHED line (no off-brand amber)
   assert.deepEqual(
     out.spec.barSeries.map(s => s.color),
-    ['62B5E5', '4CB582'],
-    'bar colors: sky / sage'
+    ['62B5E5', '#E0E8F4'],
+    'R65: brand bar colors — sky / nm_pale fill'
   );
+  assert.equal(out.spec.barSeries[1].borderColor, '62B5E5',
+    'R65: core 10+ bar has sky border for distinguishability');
   assert.deepEqual(
     out.spec.lineSeries.map(s => s.color),
-    ['003DA5', 'D97706'],
-    'line colors: navy / amber'
+    ['003DA5', '003DA5'],
+    'R65: both cap lines navy (cohort overlay convention)'
   );
+  assert.ok(out.spec.lineSeries[1].dashed,
+    'R65: core 10+ line is DASHED to differentiate from solid total line');
 });
 
 test('buildInjectionSpec: core_cap_rate_dot_plot — time-based scatter (x=period_end, y=cap_rate)', () => {
