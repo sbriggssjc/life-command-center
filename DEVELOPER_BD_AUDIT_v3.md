@@ -2698,6 +2698,66 @@ The watcher (a cron that fires the fan-out automatically when new
 `available_listings` / `sales_transactions` rows land in dia/gov)
 remains the only structural A10 piece outstanding.
 
+### 11.30 Topic 13 — Priority queue bands P1-P3 (2026-05-22)
+
+§11.19 shipped the initial priority queue with four bands (P0
+developer overdue, P0.5 no opp, P6 onboarding due, P7 steady-state
+due). With the §11.28 property attribute sync in place, three more
+of the doctrine's bands now have the data they need:
+
+| Band | Reason | Signal |
+|---|---|---|
+| **P1** | `lease_expiry_24mo` | gov property lease_expiration in next 0-24 months |
+| **P2** | `firm_term_ending_24mo` | gov property firm_term_remaining < 2 years |
+| **P3** | `ten_year_window` | gov property term_remaining 8-12 years (classic re-engagement window) |
+
+All three are scoped to entities classified as `developer` or
+`user_owner` (the BD-active universe) and emit one row per
+qualifying property with its `source_domain` and
+`source_property_id` populated, so the operator can lead the
+conversation with the specific asset.
+
+**Schema changes:**
+- `v_priority_queue` gained two nullable trailing columns
+  (`source_domain`, `source_property_id`) — populated for P1/P2/P3,
+  NULL for the entity-level bands P0/P0.5/P6/P7.
+- `v_priority_queue_enriched` gained eight new trailing columns:
+  `source_domain`, `source_property_id`, and six attribute columns
+  (address/city/state, lease_expiration, firm_term_remaining,
+  term_remaining) for property-level context.
+- **`CREATE OR REPLACE VIEW` constraint discovered:** Postgres only
+  allows appending columns to an existing view; inserting in the
+  middle is treated as a rename and rejected with 42P16. New
+  columns are therefore appended at the end of both views even
+  though logically the source_domain/property_id pair belongs
+  alongside the existing entity-level columns. Documented in the
+  migration so future edits avoid the rebuild dance.
+- `v_priority_queue_for_user(uuid)` continues to work unchanged — it
+  uses `SELECT pq.*` and `RETURNS SETOF v_priority_queue`, which
+  Postgres recompiles automatically when the view's row type
+  changes.
+
+**Counts post-deploy:**
+
+| Band | n | Description |
+|---|--:|---|
+| P0.5 | 473 | unchanged — developers/user_owners without an open prospect opp |
+| P1 | 66 | lease expiry within 24 months |
+| P2 | 30 | firm term < 2 years |
+| P3 | 56 | 10-year-remaining window |
+| P7 | 164 | steady-state cadence due (slight ±2 variance from previous count) |
+
+**Sample P1 row (enriched):**
+- CHI 2051 JAMIESON AVENUE LLC, gov property 14356 at
+  2051 Jamieson Ave, Alexandria VA — lease expires 2026-06-04
+  (11 days from today, days_overdue=11). Operator's next call is
+  about a renewal that's effectively past due.
+
+**What's left:**
+- P4/P5/P8/P9 — the doctrine's remaining bands (recent acquisition
+  streaks, aged building / value-add proxies, ...) are squishier
+  signals; deferred until a clearer definition lands.
+
 ---
 
 *End of DEVELOPER_BD_AUDIT_v3*
