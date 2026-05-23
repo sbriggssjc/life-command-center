@@ -1558,15 +1558,16 @@ ${lineXml}
 // ----------------------------------------------------------------------------
 
 /**
- * Generate a drawing.xml that anchors a single chart to a cell range.
- * Anchor: top-left at (col0, row0), bottom-right at (col1, row1) — both
- * zero-indexed.
+ * Generate one `<xdr:twoCellAnchor>` block for a single chart. Returns
+ * the XML fragment WITHOUT the surrounding `<xdr:wsDr>` root — caller
+ * concatenates fragments to build a multi-chart drawing.
+ *
+ * `nvIdx` (default 2) sets the `<xdr:cNvPr>` id; must be unique within
+ * the parent drawing.xml. Sequence id+1 per chart on the same sheet.
  */
-function buildDrawingXml({ chartRelId, anchor }) {
+function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
   const a = anchor || { col0: 0, row0: 0, col1: 13, row1: 21 };
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
-  <xdr:twoCellAnchor editAs="oneCell">
+  return `  <xdr:twoCellAnchor editAs="oneCell">
     <xdr:from>
       <xdr:col>${a.col0}</xdr:col><xdr:colOff>0</xdr:colOff>
       <xdr:row>${a.row0}</xdr:row><xdr:rowOff>0</xdr:rowOff>
@@ -1577,7 +1578,7 @@ function buildDrawingXml({ chartRelId, anchor }) {
     </xdr:to>
     <xdr:graphicFrame macro="">
       <xdr:nvGraphicFramePr>
-        <xdr:cNvPr id="2" name="Chart 1"/>
+        <xdr:cNvPr id="${nvIdx}" name="Chart ${nvIdx - 1}"/>
         <xdr:cNvGraphicFramePr/>
       </xdr:nvGraphicFramePr>
       <xdr:xfrm>
@@ -1591,7 +1592,41 @@ function buildDrawingXml({ chartRelId, anchor }) {
       </a:graphic>
     </xdr:graphicFrame>
     <xdr:clientData/>
-  </xdr:twoCellAnchor>
+  </xdr:twoCellAnchor>`;
+}
+
+/**
+ * Generate a drawing.xml that anchors a single chart to a cell range.
+ * Anchor: top-left at (col0, row0), bottom-right at (col1, row1) — both
+ * zero-indexed.
+ *
+ * Preserved as a thin wrapper around buildDrawingAnchorFrag for the
+ * single-chart path so existing tests (and callers that emit a single
+ * chart per sheet) work unchanged.
+ */
+function buildDrawingXml({ chartRelId, anchor }) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
+${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2 })}
+</xdr:wsDr>`;
+}
+
+/**
+ * R71 — generate a drawing.xml that anchors N charts on the same sheet.
+ * Each entry in `entries` is `{ chartRelId, anchor }`. Used when a
+ * single sheet (e.g. the aggregate "Charts" tab) hosts multiple native
+ * chart objects at tiled anchor positions.
+ *
+ * Excel requires `<xdr:cNvPr id>` values to be unique within a drawing,
+ * so we sequence ids starting at 2.
+ */
+function buildMultiChartDrawingXml(entries) {
+  const frags = entries.map((e, i) =>
+    buildDrawingAnchorFrag({ chartRelId: e.chartRelId, anchor: e.anchor, nvIdx: 2 + i })
+  ).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
+${frags}
 </xdr:wsDr>`;
 }
 
@@ -1635,7 +1670,49 @@ export async function injectNativeCharts(buffer, injections) {
   // Collect content-types overrides to append
   const newOverrides = [];
 
-  for (const { tabName, spec } of injections) {
+  // R71 — generate chart XML for a spec via the type→builder dispatch.
+  // Extracted so the multi-chart-per-sheet path (Charts aggregate tab)
+  // can reuse it.
+  const renderChartXml = (spec) => {
+    if (spec.type === 'stacked-bar') return buildStackedBarChartXml(spec);
+    if (spec.type === 'clustered-bar') {
+      // R35 P2 — shares the builder with stacked-bar but forces
+      // grouping='clustered'. Used for inventory_backlog and
+      // pace_of_cap_rate_expansion (multi-bar single-axis charts).
+      return buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
+    }
+    if (spec.type === 'bar') return buildSingleBarChartXml(spec);
+    if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
+    if (spec.type === 'combo') return buildComboChartXml(spec);
+    if (spec.type === 'area-combo') {
+      // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
+      return buildAreaComboChartXml(spec);
+    }
+    if (spec.type === 'scatter') return buildScatterChartXml(spec);
+    if (spec.type === 'doughnut') {
+      // R36 P2 — single-ring pie/donut chart with per-segment colors.
+      return buildDoughnutChartXml(spec);
+    }
+    // 'line' (default) and any future shapes that don't have their own
+    // builder yet fall back to the line builder.
+    return buildSingleLineChartXml(spec);
+  };
+
+  // R71 — collate injections by destination tabName so each sheet gets
+  // ONE drawing.xml with N <xdr:twoCellAnchor> blocks. Excel requires
+  // exactly one `<drawing r:id="..."/>` per sheet, so multiple charts
+  // on the same sheet MUST share a drawing. Pre-R71 the injector
+  // emitted one drawing per chart and silently dropped subsequent
+  // injections targeting the same sheet (see warning at L1714 in the
+  // R34-era code). Multi-chart-per-sheet is needed for the aggregate
+  // Charts tab — tiled native charts replacing the QuickChart PNGs.
+  const bySheetTab = new Map();
+  for (const inj of injections) {
+    if (!bySheetTab.has(inj.tabName)) bySheetTab.set(inj.tabName, []);
+    bySheetTab.get(inj.tabName).push(inj);
+  }
+
+  for (const [tabName, sheetInjections] of bySheetTab) {
     const rid = sheetNameToRid[tabName];
     if (!rid) {
       console.warn(`[cm-native-chart-injector] no rId for tab ${tabName}`);
@@ -1652,52 +1729,46 @@ export async function injectNativeCharts(buffer, injections) {
       ? `xl/${sheetPath.replace(/^xl\//, '')}`
       : sheetPath;
 
-    const chartFile   = `xl/charts/chart${nextChartId}.xml`;
+    // One drawing.xml per sheet, hosting all charts for that sheet
     const drawingFile = `xl/drawings/drawing${nextDrawingId}.xml`;
     const drawingRels = `xl/drawings/_rels/drawing${nextDrawingId}.xml.rels`;
     const sheetRels   = cleanSheetPath.replace(/^(xl\/worksheets\/)([^.]+)\.xml$/, '$1_rels/$2.xml.rels');
 
-    // 1. Generate chart XML — dispatch by spec.type
-    let chartXml;
-    if (spec.type === 'stacked-bar') {
-      chartXml = buildStackedBarChartXml(spec);
-    } else if (spec.type === 'clustered-bar') {
-      // R35 P2 — shares the builder with stacked-bar but forces
-      // grouping='clustered'. Used for inventory_backlog and
-      // pace_of_cap_rate_expansion (multi-bar single-axis charts).
-      chartXml = buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
-    } else if (spec.type === 'bar') {
-      chartXml = buildSingleBarChartXml(spec);
-    } else if (spec.type === 'multi-line') {
-      chartXml = buildMultiLineChartXml(spec);
-    } else if (spec.type === 'combo') {
-      chartXml = buildComboChartXml(spec);
-    } else if (spec.type === 'area-combo') {
-      // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
-      chartXml = buildAreaComboChartXml(spec);
-    } else if (spec.type === 'scatter') {
-      chartXml = buildScatterChartXml(spec);
-    } else if (spec.type === 'doughnut') {
-      // R36 P2 — single-ring pie/donut chart with per-segment colors.
-      chartXml = buildDoughnutChartXml(spec);
-    } else {
-      // 'line' (default) and any future shapes that don't have their own
-      // builder yet fall back to the line builder.
-      chartXml = buildSingleLineChartXml(spec);
+    // Generate each chart's XML and collect drawing-rels entries.
+    // Reserve chart numeric ids and per-drawing-rels rIds in lockstep.
+    const chartEntries = [];
+    for (let i = 0; i < sheetInjections.length; i++) {
+      const { spec } = sheetInjections[i];
+      const chartId = nextChartId++;
+      const chartFile = `xl/charts/chart${chartId}.xml`;
+      zip.file(chartFile, renderChartXml(spec));
+      newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
+      chartEntries.push({
+        chartId,
+        chartFile,
+        chartRelId: `rId${i + 1}`,  // sequenced within this sheet's drawing rels
+        anchor: spec.anchor,
+      });
     }
-    zip.file(chartFile, chartXml);
 
-    // 2. Generate drawing XML + its rels (drawing → chart)
-    zip.file(drawingFile, buildDrawingXml({ chartRelId: 'rId1', anchor: spec.anchor }));
-    zip.file(drawingRels, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    // 2. Drawing XML — single-chart path uses the legacy builder so
+    //    its byte-for-byte output is unchanged (preserving existing
+    //    snapshot-style assertions); multi-chart path tiles N anchors.
+    const drawingXml = chartEntries.length === 1
+      ? buildDrawingXml({ chartRelId: chartEntries[0].chartRelId, anchor: chartEntries[0].anchor })
+      : buildMultiChartDrawingXml(chartEntries);
+    zip.file(drawingFile, drawingXml);
+
+    // 3. Drawing rels — one Relationship per chart on this sheet
+    const drawingRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="${REL_CHART}" Target="../charts/chart${nextChartId}.xml"/>
-</Relationships>`);
+${chartEntries.map(e => `  <Relationship Id="${e.chartRelId}" Type="${REL_CHART}" Target="../charts/chart${e.chartId}.xml"/>`).join('\n')}
+</Relationships>`;
+    zip.file(drawingRels, drawingRelsXml);
 
-    // 3. Update sheet's rels to include the drawing reference
+    // 4. Update sheet's rels to include the drawing reference
     let sheetRelsXml = await (zip.file(sheetRels)?.async('string')) || `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
-    // Find next rId for this sheet's rels
     const usedRids = Array.from(sheetRelsXml.matchAll(/Id="rId(\d+)"/g)).map(m => Number(m[1]));
     const sheetRelNextId = usedRids.length ? Math.max(...usedRids) + 1 : 1;
     const drawingRid = `rId${sheetRelNextId}`;
@@ -1705,30 +1776,23 @@ export async function injectNativeCharts(buffer, injections) {
     sheetRelsXml = sheetRelsXml.replace('</Relationships>', `${newRel}</Relationships>`);
     zip.file(sheetRels, sheetRelsXml);
 
-    // 4. Update sheet XML to reference the drawing (insert <drawing r:id="..."/>
-    // before </worksheet>). If a <drawing/> already exists (PNG image was on
-    // this sheet), append the new chart drawing as a SECOND drawing entry —
-    // Excel will render both. Caller is responsible for omitting the PNG if
-    // they want the chart to replace it.
+    // 5. Update sheet XML to reference the drawing
     let sheetXml = await zip.file(cleanSheetPath).async('string');
-    if (!sheetXml.includes(`<drawing r:id="${drawingRid}"/>`)) {
-      // Excel requires only ONE <drawing/> element per sheet. If an existing
-      // drawing tag is present (from a PNG image), we leave it alone and
-      // rely on the caller having NOT embedded the PNG for migrated charts.
-      // If no drawing exists yet, insert ours before </worksheet>.
-      if (!/<drawing\s+r:id="[^"]+"\s*\/>/.test(sheetXml)) {
-        sheetXml = sheetXml.replace('</worksheet>', `  <drawing r:id="${drawingRid}"/>\n</worksheet>`);
-        zip.file(cleanSheetPath, sheetXml);
-      } else {
-        console.warn(`[cm-native-chart-injector] ${tabName} already has a drawing element — caller should suppress PNG for migrated charts`);
-      }
+    if (!/<drawing\s+r:id="[^"]+"\s*\/>/.test(sheetXml)) {
+      sheetXml = sheetXml.replace('</worksheet>', `  <drawing r:id="${drawingRid}"/>\n</worksheet>`);
+      zip.file(cleanSheetPath, sheetXml);
+    } else {
+      // Existing drawing on this sheet (e.g. PNG images embedded by
+      // ExcelJS for the aggregate Charts tab pre-R71). The caller is
+      // expected to suppress those PNGs when wiring native charts to
+      // the same sheet. If it didn't, we leave the existing drawing
+      // in place — Excel resolves only the rId already in the sheet
+      // XML, so our new drawing would render but ExcelJS's PNG drawing
+      // would also remain visible (double-render).
+      console.warn(`[cm-native-chart-injector] ${tabName} already has a drawing element — caller should suppress PNG for migrated charts`);
     }
 
-    // 5. Track content-types overrides
-    newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
     newOverrides.push(`<Override PartName="/${drawingFile}" ContentType="${CT_DRAWING}"/>`);
-
-    nextChartId++;
     nextDrawingId++;
   }
 
