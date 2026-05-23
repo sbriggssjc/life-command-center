@@ -1,9 +1,18 @@
 # LCC ↔ Microsoft (Copilot + Outlook) — Audit & Bridge Plan
 
-Date: 2026-05-22
+Date: 2026-05-22 (revised same day — see §0)
 Owner: LCC Control Plane / integration-audit track
 Scope: The daily-use loop between Life Command Center, its Supabase databases, Microsoft Copilot (Studio agent + M365 Copilot), and Outlook — for prompting Copilot, drafting emails, and responding to client/broker requests.
 Companion docs: `lcc-microsoft-salesforce-pipeline-gap-analysis.md` (Power Automate flow gaps), `LCC_Copilot_Bidirectional_Plan_2026-04-21.md` (the original plan), `om_intake_pipeline.md`, `power-automate-observability-standards.md`.
+
+---
+
+## 0. Revision note (2026-05-22, second pass)
+
+Two findings from Scott reshaped this plan after the first pass:
+
+1. **The direct Microsoft Graph path is almost certainly not authorized in the company tenant.** The first draft made a server-side Graph OAuth grant the foundation for outbound email. That is now demoted to a documented future option (gated on IT approval) and the plan is rebuilt around an **org-sanctioned path: LCC → a Power Automate HTTP flow → Power Automate's Office 365 Outlook connector → an Outlook draft.** That connector runs under Scott's existing, already-consented M365 connection — no app registration, no tenant-admin Graph grant.
+2. **The LCC Deal Agent in Copilot isn't working** — it chats but its actions don't fire, and it intermittently returns "something went wrong." This pass adds a triage (§4A) that found the root cause: **the imported custom connector still points at the dead Vercel host** (`copilot/lcc-deal-intelligence.connector.v1.swagger.json:2706` → `host: life-command-center-nine.vercel.app`). The app now lives on Railway. Every action call is hitting a host that no longer serves the app. This is the single highest-priority fix and it is owner-side in Power Platform.
 
 ---
 
@@ -11,13 +20,14 @@ Companion docs: `lcc-microsoft-salesforce-pipeline-gap-analysis.md` (Power Autom
 
 The headline finding is encouraging: **most of the machinery you want already exists in code.** The April plan (`LCC_Copilot_Bidirectional_Plan`) has largely been executed across the R2–R5 rounds (mid-May). The Copilot action layer is live, the email-intake pipeline is production-grade, entity-scoped memory and a context broker are deployed, and there is even a real path that writes an Outlook draft through the Graph API.
 
-The problem is not missing features — it is **the last mile and the connective tissue.** Three things keep this from being the seamless daily loop you described:
+The problem is not missing features — it is **the last mile, one broken connection, and the connective tissue.** Four things keep this from being the seamless daily loop you described:
 
-1. **Outbound email is fragile and half-wired.** A real "create Outlook draft" path exists but depends on a single hand-pasted Graph token (`MS_GRAPH_TOKEN`) that expires with no refresh. Meanwhile the conversational draft actions Copilot actually calls (`draft_outreach_email`, `draft_seller_update_email`) only return *text* — they don't route through the draft-creation path, so today they're copy-paste.
-2. **Auth posture is fail-open and not yet hardened for production.** Until `LCC_API_KEY` + `LCC_ENV=production` are set on the host, the API admits unauthenticated callers; M365 declarative-agent requests pass through on `_copilot_path` with no key; and the standing P0 (plaintext Supabase keys inlined in Power Automate flow exports) is still open.
-3. **The "respond to a client/broker email" loop isn't closed.** Inbound email is captured and entity context is retrievable, but nothing joins *this incoming email* → *its entity's context* → *a contextual reply drafted back into Outlook.* Each piece exists; the workflow that chains them does not.
+1. **The Copilot agent is currently down because its connector points at the old host.** The imported "LCC Deal Intelligence" connector still carries `host: life-command-center-nine.vercel.app`; the app now runs on Railway. Every action call hits a dead host, so the agent silently falls back to generic chat and intermittently throws SystemError. One owner-side edit fixes it (§4A).
+2. **Outbound email needs an org-sanctioned path.** The existing real-draft code (`create_outlook_draft`) calls Microsoft Graph directly with a hand-pasted token — and direct Graph is likely not permitted in the tenant. The replacement is a Power Automate Outlook-connector flow that drafts under your existing M365 connection. Separately, the conversational draft actions Copilot actually calls (`draft_outreach_email`, `draft_seller_update_email`) only return *text* today, so even the existing path isn't wired to them.
+3. **Auth posture is fail-open and not yet hardened for production.** Until `LCC_API_KEY` + `LCC_ENV=production` are set on Railway, the API admits unauthenticated callers; M365 declarative-agent requests pass through on `_copilot_path` with no key; and the standing P0 (plaintext Supabase keys inlined in Power Automate flow exports) is still open. Note: setting `LCC_API_KEY` will turn a *key mismatch* into a hard 401, so the connector's stored key must be reconciled at the same time (§4A, cause #2).
+4. **The "respond to a client/broker email" loop isn't closed.** Inbound email is captured and entity context is retrievable, but nothing joins *this incoming email* → *its entity's context* → *a contextual reply drafted back into Outlook.* Each piece exists; the workflow that chains them does not.
 
-Net: this is a **finish-and-harden** job, not a build-from-scratch job. The plan below sequences the last-mile wiring and the security hardening so the daily loop becomes real and reliable.
+Net: this is a **fix-one-thing, then finish-and-harden** job, not a build-from-scratch job. The plan below puts the connector-host fix first, rebuilds outbound around the org-sanctioned connector, then sequences the reply loop and the security hardening so the daily loop becomes real and reliable.
 
 ---
 
@@ -51,18 +61,39 @@ Q&A retrieval genuinely works: `context.retrieve.entity.v1` resolves a contact/p
 
 | Surface | Capability | State | Evidence |
 |---|---|---|---|
+| **Copilot connector host** | Connector points at the live app | **BROKEN — points at dead Vercel host** | `lcc-deal-intelligence.connector.v1.swagger.json:2706` |
 | Inbound email | Flagged-email → intake → DB promotion | **Built / production** | `api/intake.js:248`, `intake-om-pipeline.js`; base64/dedup bugs fixed |
-| Copilot Q&A | Entity context retrieval against DBs | **Built** | `context.retrieve.entity.v1`, `context-broker` edge fn |
-| Copilot actions | ~30 actions via `/api/chat` + 6 typed via `/api/intake` | **Built** | `ACTION_REGISTRY` `operations.js:641`; `intake.js:1671` |
+| Copilot Q&A | Entity context retrieval against DBs | **Built (blocked by connector host)** | `context.retrieve.entity.v1`, `context-broker` edge fn |
+| Copilot actions | ~30 actions via `/api/chat` + 6 typed via `/api/intake` | **Built (blocked by connector host)** | `ACTION_REGISTRY` `operations.js:641`; `intake.js:1671` |
 | Outbound email (text) | AI-drafted outreach / seller-update text | **Built (copy-paste only)** | `handleDraftOutreachEmail`, `handleDraftSellerUpdate` |
-| Outbound email (real draft) | Create Outlook draft via Graph | **Built but fragile** | `create_outlook_draft` `operations.js:2301`; static `MS_GRAPH_TOKEN` |
-| Copilot → real draft | Agent draft lands in Outlook, not chat | **Missing wiring** | text actions don't call `create_outlook_draft` |
+| Outbound email (real draft) | Create Outlook draft | **Built via Graph, but Graph likely unauthorized** | `create_outlook_draft` `operations.js:2301`; static `MS_GRAPH_TOKEN` |
+| Outbound email (org-sanctioned) | Draft via PA Office 365 Outlook connector | **Not built (this is the new primary path)** | new flow + LCC caller |
+| Copilot → real draft | Agent draft lands in Outlook, not chat | **Missing wiring** | text actions don't call any draft-creation path |
 | Client/broker reply loop | Incoming email → context → drafted reply | **Missing wiring** | pieces exist, chain does not |
 | Outlook add-in | In-mail context + actions | **Built (sideload), copy-paste reply** | `office-addins/outlook/` |
 | Calendar write-back | LCC → Outlook calendar event | **Proposed, not built** | `flows/lcc-outlook-calendar-write.md` |
-| Graph auth | OAuth/refresh for Graph calls | **Missing (static token)** | `MS_GRAPH_TOKEN`, no MSAL |
+| Direct Graph auth | OAuth/refresh for Graph calls | **Likely unauthorized in tenant — deprioritized** | `MS_GRAPH_TOKEN`, no MSAL |
 | API auth hardening | `LCC_API_KEY` + `LCC_ENV=production` | **Not enforced (fail-open)** | `auth.js:312` |
 | Secret hygiene (P0) | Rotate keys, remove inlined secrets | **Open** | gap-analysis Gap #7 |
+
+---
+
+## 4A. LCC Deal Agent triage — why the actions aren't firing
+
+Symptoms reported: the agent chats but its actions don't fire (generic answers, no LCC data, no drafts), and it intermittently returns "something went wrong." A code-verified triage produced a ranked cause list.
+
+**Cause #1 (root cause — confirmed). The imported connector points at the dead Vercel host.** The committed connector definition `copilot/lcc-deal-intelligence.connector.v1.swagger.json` is Swagger 2.0 with `"host": "life-command-center-nine.vercel.app"` (line 2706), `basePath: "/"`, `schemes: ["https"]`. Power Platform builds every operation URL as `schemes://host/basePath + path`, so the connector calls `https://life-command-center-nine.vercel.app/api/chat`, etc. The app now runs on **Railway** (`tranquil-delight-production-633f.up.railway.app`). The live spec served at `/api/copilot-spec` was updated to the Railway URL, but **re-pointing the served spec does not retro-update a connector that was already imported from the old file.** This one fact explains both symptoms: action calls hit a host that no longer serves the app (no data → generic fallback chat), and Vercel returns 404/410 HTML rather than the JSON Copilot expects (→ SystemError).
+*Fix (owner-side, Power Platform):* in the custom-connector editor, change Host to `tranquil-delight-production-633f.up.railway.app`, save, and re-publish the Copilot Studio agent. *Code-side (secondary):* update `host` in the committed swagger so the source artifact matches the live import.
+
+**Cause #2 (latent — will surface the moment auth is hardened). API-key mismatch.** The connector's `securityDefinitions` correctly declares the `X-LCC-Key` header. Today auth is fail-open (`LCC_API_KEY` unset), so a wrong/absent key still passes. But the planned hardening (set `LCC_API_KEY` + `LCC_ENV=production` on Railway) will turn any mismatch between the connector's stored key and the Railway env value into a hard 401 → SystemError on the primary `/api/chat` gateway (that gateway requires real auth; it does not ride the `_copilot_path` passthrough). *Fix:* reconcile the connector's stored key with the Railway `LCC_API_KEY` value at the same time you flip production on — never one without the other.
+
+**Cause #3 — routing parity on Railway: verified OK, low risk.** A diff of `vercel.json` rewrites against `server.js` route mounts confirms every advertised path resolves on Railway (`/api/chat`, `/api/copilot-spec`, `/api/copilot/{portfolio,ops,outreach,workflow,domain}/:action`, `/api/intake/stage-om`, `/api/copilot/action`). Not a current cause, but only exercised once Cause #1 sends traffic to Railway at all.
+
+**Cause #4 — spec↔handler drift: low risk.** The connector's action enum is generated from the live registry; unknown actions return a clean `{ok:false}` JSON, not a 500. No advertised action lacks a handler.
+
+**Cause #5 — error envelope: shapes the symptom, not the cause.** The gateways return structured JSON error envelopes (`intake.js:1738` R5-P-1; `/api/chat` dispatch). A handler exception would produce a soft 500-with-body, not a bare SystemError — which reinforces that the SystemError is transport-level (wrong host), i.e. Cause #1.
+
+**Triage bottom line:** fix the connector host (Cause #1) and the agent's actions should start firing immediately. Reconcile the API key (Cause #2) before enabling production auth. Everything else is verified healthy.
 
 ---
 
@@ -70,7 +101,7 @@ Q&A retrieval genuinely works: `context.retrieve.entity.v1` resolves a contact/p
 
 Three goals were stated: prompt Copilot for questions/requests; draft emails; help respond to client/broker requests. Mapped to gaps:
 
-**Gap A — Graph auth is a time-bomb (blocks all real outbound email).** Every real Outlook write depends on `MS_GRAPH_TOKEN`, a static delegated token with no refresh. When it expires, draft creation silently falls back to `mailto` and the "seamless" experience breaks with no alert. This is the single highest-leverage fix for email drafting. The right answer is a proper OAuth grant (delegated auth-code + refresh token, or app-only client-credentials with `Mail.ReadWrite` if a service mailbox is acceptable) with token caching/refresh in `api/_shared/`.
+**Gap A — there is no org-sanctioned outbound-email path (blocks all real Outlook drafting).** The only real-draft code today (`create_outlook_draft`) calls Microsoft Graph directly with a static `MS_GRAPH_TOKEN`. That approach is doubly blocked: the token expires with no refresh, *and* direct Graph access is almost certainly not authorized in the company tenant (an app registration with `Mail.ReadWrite` would need admin consent). The right answer avoids server-side Graph entirely: **LCC posts the rendered draft (subject, body, to/cc, optional attachment URL) to a Power Automate HTTP-trigger flow, and that flow uses the Office 365 Outlook connector's "Create draft" / "Create event" actions to write the draft into Outlook under Scott's existing, already-consented M365 connection.** No app registration, no Graph token, no tenant-admin grant — it reuses the same connector auth model that already powers the inbound intake flows. Direct Graph stays in the codebase as a documented, flag-gated future option if IT ever grants it.
 
 **Gap B — Copilot-drafted emails don't become Outlook drafts.** The actions Copilot invokes return text; only the capital-markets template path calls `create_outlook_draft`. So when you ask Copilot to "draft a reply to this broker," you get text to copy. Closing this means routing the AI draft actions through the same Graph draft-creation code so the output is a real Outlook draft with a `webLink`.
 
@@ -86,22 +117,22 @@ Three goals were stated: prompt Copilot for questions/requests; draft emails; he
 
 ## 5. Phased bridge plan
 
-The sequencing puts security and the shared Graph foundation first, because everything outbound depends on them, then closes the two wiring gaps that make the daily loop real, then optional reach.
+The sequencing now leads with the connector-host fix (it's a one-edit revival of a built system), then secures the foundation, then builds outbound on the org-sanctioned connector, then closes the reply loop.
 
-**Phase 0 — Secure the foundation (do first; mostly owner-action).**
-Set `LCC_API_KEY` and `LCC_ENV=production` on Railway to close the fail-open auth. Rotate the exposed Supabase key and the `X-LCC-Key`, move every secret in Power Automate to environment variables / secure references, and re-export to confirm redaction. Decide on the `_copilot_path` passthrough: either require a shared secret on it or document it as acceptable given M365-layer auth. This phase unblocks nothing technically but is the precondition for trusting the loop with client data.
+**Phase 0 — Revive the agent + secure the foundation (do first; owner-action).**
+*Step 0a (5 minutes, highest leverage):* in Power Platform, edit the "LCC Deal Intelligence" connector Host to `tranquil-delight-production-633f.up.railway.app` and re-publish the agent. This alone should make actions fire again. *Step 0b:* set `LCC_API_KEY` + `LCC_ENV=production` on Railway **and** set the connector's stored `X-LCC-Key` to the same value in the same change (Cause #2 — a mismatch becomes a hard 401). *Step 0c (P0):* rotate the exposed Supabase key and `X-LCC-Key`, move every Power Automate secret to environment variables / secure references, re-export to confirm redaction. Decide the `_copilot_path` passthrough policy. Acceptance: ask the agent "what's in my review queue" and it returns live data.
 
-**Phase 1 — Durable Graph authentication (foundation for all outbound).**
-Replace the static `MS_GRAPH_TOKEN` with a real OAuth flow and a token cache in `api/_shared/` (a `graph-auth.js` that returns a valid bearer, refreshing as needed). Recommended: delegated auth-code grant with an offline-access refresh token for *your* mailbox (preserves "from Scott" + your signature); app-only client-credentials is the fallback if a shared/service mailbox is acceptable. Add a health check that surfaces token expiry into the existing `lcc_health_alerts` plane so it never silently degrades again. Acceptance: `create_outlook_draft` succeeds without anyone pasting a token.
+**Phase 1 — Org-sanctioned outbound flow (foundation for all email drafting).**
+Build a Power Automate flow `LCC Create Outlook Draft` (HTTP trigger, `X-LCC-Key`/webhook-secret auth like the intake flows) that accepts `{to, cc, subject, body_html, in_reply_to?, attachment_url?}` and calls the Office 365 Outlook connector to create a draft (and, for replies, threads it to the original message). Add an `api/_shared/outlook-draft.js` helper that POSTs to this flow, plus a `create_outlook_draft_via_pa` action so the existing draft callers have an org-sanctioned target. Keep `MS_GRAPH_TOKEN`/`create_outlook_draft` in place but flag-gated and documented as the future direct path. Acceptance: an LCC action call results in a draft sitting in your Outlook, with no Graph token involved.
 
 **Phase 2 — Make Copilot drafts land in Outlook (close Gap B).**
-Refactor the Graph draft-creation block out of `create_outlook_draft` into a reusable helper, then have `draft_outreach_email` / `draft_seller_update_email` (and the add-in's Draft Reply) call it when the user wants a real draft. Return the `webLink` so Copilot/the add-in can say "draft is in your Outlook — open it here." Keep the text-only mode as a fallback. Acceptance: "Copilot, draft an outreach to Greg at DaVita" produces an editable Outlook draft, not chat text.
+Point `draft_outreach_email` / `draft_seller_update_email` (and the add-in's Draft Reply) at the Phase-1 helper when the user wants a real draft, returning the draft link/id so Copilot and the add-in can say "it's in your Outlook." Keep text-only mode as a fallback for when the flow is unreachable. Acceptance: "Copilot, draft an outreach to Greg at DaVita" produces an editable Outlook draft, not chat text. (The add-in can alternatively create the draft client-side via Office.js with no server round-trip — note as an option.)
 
 **Phase 3 — Close the client/broker reply loop (close Gap C).**
-Add a `draft.reply.from_inbox.v1` action: input an `inbox_item_id` (or message correlation id), resolve the linked entity, pull its context packet via the context broker, compose a contextual reply with the template engine, and create the Outlook draft (Phase 1/2 helper) as a reply to the original. Surface this from the Outlook add-in's Draft Reply button and as a Copilot action. Log the interaction to `activity_events` (the memory layer already exists). Acceptance: open a broker email → one click / one prompt → contextual reply draft waiting in Outlook.
+Add a `draft.reply.from_inbox.v1` action: input an `inbox_item_id` (or message correlation id), resolve the linked entity, pull its context packet via the context broker, compose a contextual reply with the template engine, and create the Outlook draft via the Phase-1 flow as a reply to the original. Surface from the Outlook add-in's Draft Reply button and as a Copilot action. Log the interaction to `activity_events` (the memory layer already exists). Acceptance: open a broker email → one click / one prompt → contextual reply draft waiting in Outlook.
 
 **Phase 4 — Reliability & observability retro-fit.**
-Fold the Graph token health and the outbound-draft path into the dead-letter / `lcc_health_alerts` plane that already covers 33 flows. Add the calendar-write flow (Gap F) only if calendar authoring is confirmed in scope. Add lightweight contract tests for the intake and draft payloads so hand-edits can't silently break the shape.
+Wire the new `LCC Create Outlook Draft` flow into the dead-letter / `lcc_health_alerts` plane that already covers 33 flows (so a failed draft surfaces, not silently drops). Add a connector-reachability check so a future host change can't silently break the agent again. Add the calendar-write flow (Gap F) only if calendar authoring is confirmed in scope — and build it on the same PA Outlook connector. Add lightweight contract tests for the intake and draft payloads so hand-edits can't silently break the shape.
 
 **Phase 5 — Optional reach.**
 Publish the Outlook add-in beyond sideload; add `bov.generate.from_intake.v1` (OM → BOV workbook) and `entity.resolve.ambiguous.v1` from the original Stage-E backlog; Salesforce event-driven inbound (separate gap-analysis track).
@@ -110,22 +141,22 @@ Publish the Outlook add-in beyond sideload; add `bov.generate.from_intake.v1` (O
 
 ## 6. Quick wins (safe, high-value, ready now)
 
-These are small and low-risk; I can implement Phase-2/3 code wiring on your review, but a few are owner-side toggles worth doing immediately:
-
-- **Set `LCC_API_KEY` + `LCC_ENV=production` on Railway.** One config change closes the fail-open hole. (Owner action.)
-- **Extract the Graph draft helper.** Refactoring the `create_outlook_draft` Graph block (`operations.js:2363–2429`) into `api/_shared/graph-draft.js` is mechanical and unblocks Phase 2 — no behavior change. (Claude can do this on approval.)
-- **Add a Graph-token expiry health check** into `lcc_health_alerts` so the current static token's expiry stops being silent until Phase 1 lands. (Claude can do this.)
-- **Wire the add-in "Draft Reply" to return the real `webLink`** once the helper exists, removing copy-paste for the most common case.
+- **Fix the connector host (≈5 min, owner action).** Edit the "LCC Deal Intelligence" connector Host to the Railway URL and re-publish. This revives the entire agent — it is by far the highest-value action in this document.
+- **Update the committed connector swagger.** Change `host` in `copilot/lcc-deal-intelligence.connector.v1.swagger.json:2706` to the Railway host so the source artifact matches the live import. (Claude can do this now on approval — pure config edit.)
+- **Reconcile + set `LCC_API_KEY` + `LCC_ENV=production` on Railway.** Closes the fail-open hole — but set the connector's stored key to the same value in the same change so it doesn't 401. (Owner action.)
+- **Scaffold the `api/_shared/outlook-draft.js` helper + the PA flow definition.** The helper and a ready-to-import flow JSON are mechanical and unblock Phase 2. (Claude can draft both on approval; you import/publish the flow.)
 
 ---
 
 ## 7. What only Scott can do
 
-- Rotate the exposed Supabase key and `X-LCC-Key`; move Power Automate secrets to secure references (Phase 0 / P0).
-- Set `LCC_API_KEY` + `LCC_ENV=production` on Railway.
-- Register / consent the Azure AD app for the new Graph OAuth grant (Phase 1) and complete the one-time auth-code consent for your mailbox.
-- Re-publish the Copilot Studio agent and refresh the custom connector's OpenAPI after any action-schema change.
+- **Fix the connector Host to the Railway URL and re-publish the agent** (Phase 0a — the one that revives everything).
+- Set `LCC_API_KEY` + `LCC_ENV=production` on Railway and set the connector's stored `X-LCC-Key` to the same value (Phase 0b).
+- Rotate the exposed Supabase key and `X-LCC-Key`; move Power Automate secrets to secure references (Phase 0c / P0).
+- Import and publish the `LCC Create Outlook Draft` Power Automate flow (Phase 1); confirm the Office 365 Outlook connection is authorized under your account.
+- Re-publish the Copilot Studio agent and refresh the custom connector after any action-schema change.
 - Sideload (or publish) the updated Outlook add-in.
+- *(Only if IT ever approves direct Graph)* register/consent the Azure AD app — otherwise this stays unused.
 
 ---
 
@@ -145,4 +176,5 @@ These are small and low-risk; I can implement Phase-2/3 code wiring on your revi
 
 ## 9. Change log
 
-- 2026-05-22 — Document created. Audited the Copilot + Outlook surfaces against live code, confirmed the April bidirectional plan is largely executed, identified the last-mile/auth gaps (Graph token, Copilot-draft wiring, reply-loop chain, fail-open auth, P0 secrets), and set a six-phase bridge plan.
+- 2026-05-22 — Document created. Audited the Copilot + Outlook surfaces against live code, confirmed the April bidirectional plan is largely executed, identified the last-mile/auth gaps, and set a phased bridge plan.
+- 2026-05-22 (second pass) — Reworked after two owner findings (§0): (1) direct Microsoft Graph is likely unauthorized in the tenant — outbound email rebuilt around the Power Automate Office 365 Outlook connector, with direct Graph demoted to a flag-gated future option; (2) the LCC Deal Agent's actions weren't firing — triage (§4A) found the imported connector still points at the dead Vercel host (`lcc-deal-intelligence.connector.v1.swagger.json:2706`), now the #1 fix. Phases re-sequenced to lead with the connector-host revival.
