@@ -563,6 +563,7 @@ function buildSingleBarChartXml(spec) {
           <c:spPr>
             <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
           </c:spPr>
+          <c:invertIfNegative val="0"/>
 ${dLblsFrag}
           <c:cat>
             <c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef>
@@ -677,6 +678,7 @@ function buildStackedBarChartXml(spec) {
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
           <c:spPr>${fillFrag}${lineFrag}</c:spPr>
+          <c:invertIfNegative val="0"/>
 ${segLblFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
@@ -974,6 +976,7 @@ function buildComboChartXml(spec) {
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
           <c:spPr>${fillFrag}${lineFrag}</c:spPr>
+          <c:invertIfNegative val="0"/>
 ${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
@@ -1320,7 +1323,9 @@ ${seriesXml}
         <c:axPos val="b"/>
         ${MAJOR_GRIDLINES_FRAG}
         ${xFmtFrag}
+        ${CAT_AX_VERTICAL_TXT}
         <c:crossAx val="2"/>
+        ${spec.xMajorUnit != null ? `<c:majorUnit val="${spec.xMajorUnit}"/>` : ''}
       </c:valAx>
       <c:valAx>
         <c:axId val="2"/>
@@ -1933,8 +1938,16 @@ const MIN_YEAR_BY_TEMPLATE = {
   cash_leveraged_returns:       2005,
   cost_of_capital:              2005,
   volume_cap_quartile_combo:    2005,
-  sold_cap_by_term_dot_plot:    2005,
-  asking_cap_by_term_dot_plot:  2005,
+  // R67 — bumped from 2005 to 2015. User notes 2026-05-23 batch 6:
+  // "missing quite a bit of data for before 2014 — suggesting a
+  // formula or data access issue in our database; these data sets
+  // should move in tandem and look closer to what we have in our
+  // Excel/PDF versions." Per-cohort TTM windows go sparse below ~2014
+  // for the longer-term buckets (12+ year had <5 samples per quarter
+  // until ~2014). 2015 is the first year where all 4 cohorts have
+  // dense, comparable coverage and the lines stop crossing erratically.
+  sold_cap_by_term_dot_plot:    2015,
+  asking_cap_by_term_dot_plot:  2015,
   // TRUE-gap (trim to where data actually starts)
   nm_vs_market_cap:             2006,
   seller_sentiment:             2006,
@@ -2590,10 +2603,18 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const domCol    = findCol('avg_dom');
       const pctCol    = findCol('pct_of_ask');
       if (!periodCol || !domCol || !pctCol) return null;
-      // R37 P3 — peak/trough/most-recent labels on pct_of_ask line
-      // (renderer line 914: buildAnnotations(rows, r => r.pct_of_ask, fmtPct1))
+      // R37 P3 — peak/trough/most-recent labels.
+      // R67 — added labels on avg_dom (bar) IN ADDITION to pct_of_ask (line).
+      // The chart title is "Days on Market & % of Ask Price"; users
+      // read the bar as the headline metric. Previously only the line
+      // carried labels which left the DOM peaks/troughs unannotated.
+      // User feedback 2026-05-23 batch 6: "data labels for high, low
+      // and most recent are off" → on the most-logical series per chart.
       const pctLabels = Array.isArray(rows)
         ? buildAnnotationsForSpec(rows, r => r.pct_of_ask, fmtPct1Native)
+        : undefined;
+      const domLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.avg_dom, (v) => `${Math.round(v)}d`)
         : undefined;
       return {
         tabName,
@@ -2607,7 +2628,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yRightRange:  PCT_OF_ASK_RANGE,
           yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
-            { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky },
+            { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky,
+              dataLabels: domLabels },
           ],
           lineSeries: [
             { titleCol: pctCol, titleRow: headerRow, valCol: pctCol, color: navy,
@@ -2690,8 +2712,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky },
-            // R65 — core 10+ bar uses nm_pale fill + nm_sky border for distinguishability
-            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '#E0E8F4', borderColor: sky },
+            // R67 — was pale-sky (#E0E8F4) which was too faint against the
+            // gridlines and the user couldn't see the core-10+ bar at all.
+            // Sage (#4CB582) is the next NM brand-palette color over from
+            // sky and creates clear visual separation in the clustered
+            // grouping. Keep sky border as a tint cue ("close cousin of
+            // total market"). User feedback 2026-05-23 batch 6.
+            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '4CB582', borderColor: sky },
           ],
           lineSeries: [
             { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy },
@@ -2716,6 +2743,36 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const xCol = findCol('period_end');
       const yCol = findCol('cap_rate');
       if (!xCol || !yCol) return null;
+      // R67 — pin scatter x-axis to data range so it doesn't extend
+      // before the first sale or compress everything to the right. User
+      // feedback 2026-05-23: "X-axis is messed up and goes back before
+      // we have data and scrunches up the data we do have. Quarter
+      // labels are wrong." Auto-scaling pulled the lower bound back to
+      // ~1900 (Excel's date-serial origin) on some workbooks. Walk the
+      // rows to find min/max sale dates and convert to Excel serials
+      // (days since 1900-01-01, with the 1900-leap-year offset).
+      // majorUnit=365 forces year-interval ticks (master uses year
+      // labels on its Core Cap Chart trendline plot).
+      let xAxisRange;
+      let xMajorUnit;
+      if (Array.isArray(rows) && rows.length > 0) {
+        const dates = rows
+          .map(r => r && r.period_end ? new Date(r.period_end) : null)
+          .filter(d => d && !Number.isNaN(d.getTime()));
+        if (dates.length > 0) {
+          const minMs = Math.min(...dates.map(d => d.getTime()));
+          const maxMs = Math.max(...dates.map(d => d.getTime()));
+          // Excel 1900-system serial: days since 1899-12-30 (accounts for
+          // the legacy 1900-leap-year bug). 86400000 ms per day.
+          const EPOCH = Date.UTC(1899, 11, 30);
+          const minSerial = Math.floor((minMs - EPOCH) / 86400000);
+          // Extend the upper bound by the trendline's 720-day forecast
+          // so the dashed forecast tail isn't clipped.
+          const maxSerial = Math.ceil((maxMs - EPOCH) / 86400000) + 720;
+          xAxisRange = { min: minSerial, max: maxSerial };
+          xMajorUnit = 365;  // ~year intervals
+        }
+      }
       return {
         tabName,
         spec: {
@@ -2723,17 +2780,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           dataStart, dataEnd,
           // R37 P2 — y axis cap rate 4-12% (renderer line ~2071).
-          // X axis is sale-date — leave auto-scaled (Excel auto-fits date range).
           yAxisRange: CAP_RATE_DOT_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
-          // R46 — scatter x axis renders raw dates by default; switch to the
-          // q"Q-"yyyy quarter format used elsewhere in the deck. Period_end
-          // cells are stored as Excel date serials (cm-excel-export.js
-          // converts ISO strings to Date for any column with format='date_short'),
-          // so the numFmt applies cleanly. User feedback 2026-05-21:
-          // "X-axis is messed up and we need to see quarters for the labels,
-          // not dates".
-          xAxisNumFmt: DEFAULT_CAT_AX_NUM_FMT,
+          // R67 — pin x-axis to data range (was auto-scaled).
+          xAxisRange,
+          xMajorUnit,
+          // R46 — quarter format. R67 — even with year-interval major
+          // ticks, the per-tick label format stays mmm-yy so users see
+          // the date span, not just the year number. Switch from
+          // q"Q-"yyyy → [$-409]mmm-yy;@ for master parity (master Core
+          // Cap Chart uses mmm-yy labels).
+          xAxisNumFmt: '[$-409]mmm-yy;@',
           series: [{
             titleCol: yCol, titleRow: headerRow, xCol, yCol, color: sky,
             // Polynomial order 3, dotted, navy, 720-day forecast forward.
@@ -3954,8 +4011,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           ],
           lineSeries: [
             // 4 diamond markers on the right axis with per-point callout labels (R60).
+            // R67 — was #00B1B0 (off-brand teal), swapped to navy #003DA5 so
+            // the headline "Avg Cap" dot reads as the primary series and the
+            // palette is brand-compliant. User feedback 2026-05-23 batch 6.
             { titleCol: avgCapCol,  titleRow: headerRow, valCol: avgCapCol,
-              color: '00B1B0', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              color: '003DA5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: dotLabelsAll },
             { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
               color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7,

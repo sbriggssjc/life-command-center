@@ -706,11 +706,11 @@ test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter com
   assert.deepEqual(out.spec.lineSeries.map(s => s.valCol),
     ['D', 'E', 'G', 'F'],
     'Avg Cap / Upper Q / Lower Q / Median order');
-  // R50 — colors realigned to master Market Size chart26 (user feedback
-  // 2026-05-22). Avg Cap teal/aquamarine (was navy), Lower Q sky (was gray).
+  // R50 → R67: Avg Cap re-swapped from R50's #00B1B0 teal (off-brand)
+  // back to navy #003DA5 per user batch 6: "match brand standards."
   assert.deepEqual(out.spec.lineSeries.map(s => s.color),
-    ['00B1B0', '7E6BAD', '62B5E5', '4CB582'],
-    'aquamarine / purple / sky / sage (R50 master-aligned)');
+    ['003DA5', '7E6BAD', '62B5E5', '4CB582'],
+    'R67: navy / purple / sky / sage (brand-aligned)');
   // All 4 are markers-only (no connecting line)
   assert.ok(out.spec.lineSeries.every(s => s.showMarker === true),
     'all 4 have showMarker=true');
@@ -2076,12 +2076,12 @@ test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line comb
     ['E', 'F'],
     'lines: avg_cap_total, avg_cap_core_10plus'
   );
-  // R65 — brand-aligned colors:
-  //   sky bar + nm_pale-fill+sky-border bar (no off-brand sage)
+  // R65 → R67 brand-aligned colors:
+  //   sky bar + sage-fill+sky-border bar (R67 — pale-sky was too faint per user batch 6)
   //   navy solid line + navy DASHED line (no off-brand amber)
   assert.deepEqual(
     out.spec.barSeries.map(s => s.color),
-    ['62B5E5', '#E0E8F4'],
+    ['62B5E5', '4CB582'],
     'R65: brand bar colors — sky / nm_pale fill'
   );
   assert.equal(out.spec.barSeries[1].borderColor, '62B5E5',
@@ -2412,7 +2412,7 @@ test('R41: scatter chart emits gridlines on both x + y val axes', async () => {
 //   • Buyer_Pool stacked-bar: per-segment in-bar % labels
 // ============================================================================
 
-test('R46: core_cap_rate_dot_plot spec sets xAxisNumFmt to quarter format', () => {
+test('R46 → R67: core_cap_rate_dot_plot spec uses mmm-yy x-axis format (master parity)', () => {
   const spec = buildInjectionSpec({
     chart_template_id: 'core_cap_rate_dot_plot',
     tabName: 'Data_Core_Cap_Dot',
@@ -2426,8 +2426,11 @@ test('R46: core_cap_rate_dot_plot spec sets xAxisNumFmt to quarter format', () =
     rows: [],
   });
   assert.ok(spec, 'spec produced');
-  assert.equal(spec.spec.xAxisNumFmt, 'q"Q-"yyyy',
-    'scatter x-axis uses quarter format');
+  // R67: switched from q"Q-"yyyy to [$-409]mmm-yy;@ to match master
+  // Core Cap Chart (Dialysis Comp Work MASTER.xlsx) which labels year-
+  // interval ticks with "Mar-25" style.
+  assert.equal(spec.spec.xAxisNumFmt, '[$-409]mmm-yy;@',
+    'R67: scatter x-axis uses mmm-yy format (master parity)');
 });
 
 test('R46: scatter chart emits xAxisNumFmt on x axis when set', async () => {
@@ -3863,13 +3866,22 @@ test('R37 P3: buildInjectionSpec wires data labels (dom_and_pct_of_ask on line s
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
     rows,
   });
-  // Bar series has no labels; line series (pct_of_ask) does
-  assert.ok(!spec.spec.barSeries[0].dataLabels, 'bar series has no labels');
-  assert.ok(spec.spec.lineSeries[0].dataLabels, 'line series (pct_of_ask) has labels');
-  // last is at idx 9 with value 0.92 + 9*0.005 = 0.965 → formatted "96.5%"
-  const last = spec.spec.lineSeries[0].dataLabels.find(l => l.idx === 9);
-  assert.ok(last, 'last-point label present');
-  assert.match(last.text, /%$/, 'percent format');
+  // R37 P3 → R67: line series (pct_of_ask) carries % labels, AND bar
+  // series (avg_dom) now ALSO carries day labels (R67 — user batch 6:
+  // dLbls should land on most-logical series per chart; DOM bars read
+  // as the headline metric of a "Days on Market" chart).
+  assert.ok(spec.spec.barSeries[0].dataLabels,
+    'R67: bar series (avg_dom) has labels');
+  assert.ok(spec.spec.lineSeries[0].dataLabels,
+    'line series (pct_of_ask) has labels');
+  // line: last at idx 9 with value 0.92 + 9*0.005 = 0.965 → "96.5%"
+  const lastPct = spec.spec.lineSeries[0].dataLabels.find(l => l.idx === 9);
+  assert.ok(lastPct, 'last-point % label present');
+  assert.match(lastPct.text, /%$/, 'percent format');
+  // bar: last at idx 9 with avg_dom = 80 + 9 = 89 → "89d"
+  const lastDom = spec.spec.barSeries[0].dataLabels.find(l => l.idx === 9);
+  assert.ok(lastDom, 'R67: last-point DOM label present');
+  assert.match(lastDom.text, /d$/, 'R67: DOM label suffixed with "d"');
 });
 
 test('R37 P3: buildInjectionSpec wires data labels (valuation_index navy line)', () => {
@@ -4933,3 +4945,28 @@ test('R66: catAx labels render with rot="-5400000" (vertical) to match master Ex
   assert.doesNotMatch(catAxBlock[0], /<a:bodyPr rot="0"/,
     'R66: catAx txPr does NOT emit rot="0" (the R63 regression)');
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// R67 — bar series invertIfNegative=0 (Inventory_Backlog Sold-bar
+//       fill regression fix)
+// ─────────────────────────────────────────────────────────────────────
+
+test('R67: combo bar series emits <c:invertIfNegative val="0"/>', () => {
+  // Without an explicit invertIfNegative=0, Excel applies its default
+  // "invert" rendering to negative-value bars: the fill becomes white
+  // with only a colored outline. The legend swatch keeps the solid
+  // color, so users see a chart-vs-legend mismatch. Inventory_Backlog's
+  // Sold series uses the negative-helper column (sold_neg) and was the
+  // user-reported bug: "The series in the chart for Sold is a blue
+  // outline with no fill on each bar but the legend shows a solid
+  // dark blue."
+  const xml = buildComboChartXml({
+    tabName: 'T', catCol: 'A', dataStart: 5, dataEnd: 10,
+    yLeftRange: { min: -100, max: 100 }, yLeftNumFmt: '#,##0',
+    barSeries: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5' }],
+    lineSeries: [{ titleCol: 'C', titleRow: 4, valCol: 'C', color: '6A748C' }],
+  });
+  assert.match(xml, /<c:invertIfNegative val="0"\/>/,
+    'R67: combo bar series pins invertIfNegative=0');
+});
+
