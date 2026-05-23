@@ -27,7 +27,7 @@ Last updated: **2026-05-24**.
 | B | B1 sales-dedup-tick | ✅ DONE | `*/15 * * * *` both domains |
 | B | B2 owner-merge-tick | ✅ DONE | hourly on both domains; uses canonical clusters view (dia) / canonical_name groups (gov) + apply_owner_merge() |
 | B | B3 deed-relink-tick | ⬜ TODO | small; tiny backlog left |
-| B | B4 ownership-chain-tick | ⬜ TODO | needs entity dedup |
+| B | B4 ownership-chain-tick | ✅ DONE | v_sales_chain_breaks view + nightly tick on both domains (03:45 UTC). Baselines: dia 416 breaks / 167 matches / 579 unverifiable; gov 483 breaks / 357 matches / 437 unverifiable. Alerts fire on >25 growth vs prior snapshot. |
 | B | B5 cap-rate-quality-tick | ✅ DONE | nightly 03:15 UTC both domains |
 | B | B6 propagate-recompute-tick | ⬜ TODO | |
 | B | B7 backslide alarms | ✅ DONE | data_health_snapshots + data_health_alerts tables, snapshot tick fn + nightly 02:30 UTC cron on both domains; 4 rule checks (dup_growth, missing_price_growth, entity_growth, coverage_regression) |
