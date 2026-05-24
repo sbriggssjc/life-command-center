@@ -686,9 +686,11 @@ export async function fetchIntelSnapshot(workspaceId) {
   const ctDate = ctNow.toISOString().slice(0, 10);
 
   // Prefer the workspace-specific row if present, else the global (null) row.
-  // Order by generated_at so a manual re-run overrides the cron row.
+  // PostgREST's in.() operator treats "null" as a string, not SQL NULL, so we
+  // need an or= clause to match the workspace-specific row OR the global row.
+  // Order by workspace_id desc (nullslast) so the workspace-specific row wins.
   const wsFilter = workspaceId
-    ? `workspace_id=in.(${encodeURIComponent(workspaceId)},null)`
+    ? `or=(workspace_id.eq.${encodeURIComponent(workspaceId)},workspace_id.is.null)`
     : 'workspace_id=is.null';
   const path =
     `briefing_intel_snapshot?as_of_date=eq.${ctDate}&${wsFilter}` +
