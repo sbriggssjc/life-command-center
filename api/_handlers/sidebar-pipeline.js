@@ -1782,7 +1782,10 @@ function stripContactLabelPrefix(name) {
     .trim();
 }
 
-function isJunkContactName(name) {
+// C9 (2026-05-27): exported so api/_shared/ingest-contract.js can re-export
+// as the canonical junk-name filter. Keep the regex source of truth here;
+// the contract module is the API surface.
+export function isJunkContactName(name) {
   if (typeof name !== 'string') return true;
   const trimmed = name.trim();
   if (trimmed.length < 3 || trimmed.length > 80) return true;
@@ -6381,7 +6384,8 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
 const FEDERAL_OWNER_ANTI_PATTERN_RE =
   /^(usa?|u\.?\s*s\.?\s*a?\.?|united\s+states(\s+of\s+america)?|u\.?\s*s\.?\s+government|federal\s+government|government)\s*$/i;
 
-function isFederalOwnerAntiPattern(name) {
+// C9 (2026-05-27): exported for the ingest-contract module.
+export function isFederalOwnerAntiPattern(name) {
   if (!name || typeof name !== 'string') return false;
   return FEDERAL_OWNER_ANTI_PATTERN_RE.test(name.trim());
 }
