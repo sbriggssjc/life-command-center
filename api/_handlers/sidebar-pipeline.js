@@ -6955,6 +6955,25 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
       }
       return id;
     }
+    // C4 (2026-05-24): write-time UNIQUE on the dedup key. A 23505 here means
+    // another writer (race) inserted the same canonical owner between our
+    // pre-fetch and this POST. Re-query by the dedup column, cache, and reuse
+    // the existing UUID — same semantics as the pre-fetch cache hit.
+    if (result.status === 409 && result.data?.code === '23505') {
+      const stateForLookup = addrFields.state || (addrFields.contact_info && addrFields.contact_info.state) || null;
+      const lookupParams = domain === 'government'
+        ? `canonical_name=eq.${encodeURIComponent(normalizedName)}` +
+          (stateForLookup ? `&state=eq.${encodeURIComponent(stateForLookup)}` : '&state=is.null')
+        : `normalized_name=eq.${encodeURIComponent(normalizedName)}`;
+      const refetch = await domainQuery(domain, 'GET',
+        `recorded_owners?${lookupParams}&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
+      if (refetch.ok && refetch.data?.length) {
+        const existingId = refetch.data[0].recorded_owner_id;
+        ownerIds.set(normalizedName, existingId);
+        return existingId;
+      }
+      console.warn(`[upsertDomainOwners] 23505 on recorded_owners but refetch found nothing for "${name}" (${domain})`);
+    }
     return null;
   }
 
@@ -7202,6 +7221,14 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
           if (toResult.ok && toResult.data) {
             const created = Array.isArray(toResult.data) ? toResult.data[0] : toResult.data;
             trueOwnerId = created?.true_owner_id || null;
+          } else if (toResult.status === 409 && toResult.data?.code === '23505') {
+            // C4 race: another writer just landed the same true_owner. Re-fetch by key.
+            const refetch = await domainQuery(domain, 'GET',
+              `true_owners?normalized_name=eq.${encodeURIComponent(normalizedName)}` +
+              `&merged_into_true_owner_id=is.null&select=true_owner_id&limit=1`);
+            if (refetch.ok && refetch.data?.length) {
+              trueOwnerId = refetch.data[0].true_owner_id;
+            }
           }
         }
 
