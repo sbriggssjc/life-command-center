@@ -692,23 +692,78 @@ export async function fetchIntelSnapshot(workspaceId) {
   const wsFilter = workspaceId
     ? `or=(workspace_id.eq.${encodeURIComponent(workspaceId)},workspace_id.is.null)`
     : 'workspace_id=is.null';
+
+  // Resilience: if today's snapshot is missing (cron miss, DB outage, late
+  // refresh), fall back to the freshest row from the last 3 days. The
+  // renderer surfaces a "Data from MM/DD" tag on stale rows so the broker
+  // knows. Without this, an email rendered before 5:30 AM CT — or on a day
+  // the cron got swallowed by an OPS outage — drops every macro/news
+  // section and ships a half-empty briefing.
+  const cutoff = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
   const path =
-    `briefing_intel_snapshot?as_of_date=eq.${ctDate}&${wsFilter}` +
-    `&order=workspace_id.desc.nullslast,generated_at.desc&limit=1`;
+    `briefing_intel_snapshot?as_of_date=gte.${cutoff}&${wsFilter}` +
+    `&order=as_of_date.desc,workspace_id.desc.nullslast,generated_at.desc&limit=1`;
   const res = await opsQuery('GET', path, undefined, { countMode: 'none' });
   if (!res.ok || !Array.isArray(res.data) || !res.data.length) return null;
-  return res.data[0];
+  const row = res.data[0];
+  // Decorate with staleness info so the renderer can flag old data.
+  row._is_today = row.as_of_date === ctDate;
+  return row;
+}
+
+/**
+ * Enrich a list of rows that carry property_id with tenant/city/state pulled
+ * from the domain's properties table. Used by listings + sales-comps fetchers
+ * so the email can render a meaningful tenant name and location, rather than
+ * "(tenant unknown)" / no city. Batches the property fetch into a single
+ * id=in.() call per domain. Mutates and returns the rows.
+ *
+ * Both dia.properties and gov.properties carry `tenant`, `city`, `state`.
+ * Gov also has `tenant_agency`; we keep an existing tenant_agency value if
+ * the row already had one (e.g. from gov.available_listings.tenant_agency).
+ */
+async function enrichPropertyContext(rows, domain) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const url = domain === 'dia' ? DIA_URL : GOV_URL;
+  const key = domain === 'dia' ? DIA_KEY : GOV_KEY;
+  if (!url || !key) return rows;
+  const ids = Array.from(new Set(rows.map((r) => r.property_id).filter(Boolean)));
+  if (!ids.length) return rows;
+  try {
+    const r = await fetchWithTimeout(
+      `${url}/rest/v1/properties?property_id=in.(${ids.map(encodeURIComponent).join(',')})` +
+        `&select=property_id,tenant,city,state,address`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+      4000,
+    );
+    if (!r.ok) return rows;
+    const props = await r.json();
+    if (!Array.isArray(props)) return rows;
+    const byId = new Map(props.map((p) => [String(p.property_id), p]));
+    for (const row of rows) {
+      const p = byId.get(String(row.property_id));
+      if (!p) continue;
+      if (!row.tenant_agency && p.tenant) row.tenant_agency = p.tenant;
+      if (!row.tenant) row.tenant = p.tenant || row.tenant || null;
+      if (!row.city)   row.city   = p.city  || null;
+      if (!row.state)  row.state  = p.state || null;
+      if (!row.address) row.address = p.address || null;
+    }
+  } catch {
+    /* leave rows unenriched */
+  }
+  return rows;
 }
 
 /**
  * Recently-closed sales transactions across dia + gov — surfaces comparable
  * deals a broker should be aware of for pricing conversations.
  *
- * @param {number} sinceDays  — lookback window (default 14 days)
- * @param {number} limit      — per-domain row cap (default 5)
+ * @param {number} sinceDays  — lookback window (default 60 days)
+ * @param {number} limit      — per-domain row cap (default 8)
  * @returns {Promise<{ dialysis: Array, government: Array }>}
  */
-export async function fetchRecentSalesComps(sinceDays = 14, limit = 5) {
+export async function fetchRecentSalesComps(sinceDays = 60, limit = 8) {
   const sinceIso = new Date(Date.now() - sinceDays * 86400000)
     .toISOString().slice(0, 10);
   // dia + gov both use sold_price (not sale_price) and store buyer/seller
@@ -744,20 +799,28 @@ export async function fetchRecentSalesComps(sinceDays = 14, limit = 5) {
   }
 
   const [dia, gov] = await Promise.all(calls);
-  // Normalize the renderer's expected shape (sale_price, tenant, city/state)
-  // by mapping back from the projected columns. tenant/city/state aren't on
-  // the sales row in either DB — they come from the linked property; we
-  // leave those blank here and rely on tenant being filled via the join in
-  // a later round if needed.
+  // Normalize the renderer's expected shape (sale_price + tenant/city/state).
+  // tenant/city/state aren't on the sales row — they're on the linked property,
+  // so we enrich via a follow-up batch fetch (enrichPropertyContext).
   const normalize = (rows) => (Array.isArray(rows) ? rows : []).map((r) => ({
-    property_id: r.property_id,
-    sale_date:   r.sale_date,
-    sale_price:  r.sold_price,
-    cap_rate:    r.cap_rate,
-    buyer:       r.buyer_name,
-    seller:      r.seller_name,
+    property_id:   r.property_id,
+    sale_date:     r.sale_date,
+    sale_price:    r.sold_price,
+    cap_rate:      r.cap_rate,
+    buyer:         r.buyer_name,
+    seller:        r.seller_name,
+    tenant_agency: null,
+    tenant:        null,
+    city:          null,
+    state:         null,
   }));
-  return { dialysis: normalize(dia), government: normalize(gov) };
+  const diaNorm = normalize(dia);
+  const govNorm = normalize(gov);
+  await Promise.all([
+    enrichPropertyContext(diaNorm, 'dia'),
+    enrichPropertyContext(govNorm, 'gov'),
+  ]);
+  return { dialysis: diaNorm, government: govNorm };
 }
 
 /**
@@ -806,10 +869,15 @@ export async function fetchUpcomingLeaseExpirations(windowDays = 90, limit = 6) 
   }
 
   const [dia, gov] = await Promise.all(calls);
-  return {
-    dialysis: Array.isArray(dia) ? dia : [],
-    government: Array.isArray(gov) ? gov : [],
-  };
+  const diaRows = Array.isArray(dia) ? dia : [];
+  const govRows = Array.isArray(gov) ? gov : [];
+  // Enrich with city/state so the email can render location next to each
+  // expiring lease (a 5-day-out DaVita with no city is much less actionable).
+  await Promise.all([
+    enrichPropertyContext(diaRows, 'dia'),
+    enrichPropertyContext(govRows, 'gov'),
+  ]);
+  return { dialysis: diaRows, government: govRows };
 }
 
 /**
@@ -858,7 +926,9 @@ export async function fetchNewActiveListings(sinceDays = 7, limit = 5) {
   }
 
   const [dia, gov] = await Promise.all(calls);
-  // Normalize to {asking_price, cap_rate} for the renderer.
+  // Normalize to {asking_price, cap_rate} for the renderer. tenant/city/state
+  // come from the linked property — enrich with a follow-up batch fetch so the
+  // email shows the operator name and location instead of "(tenant unknown)".
   const normalize = (rows, isGov) => (Array.isArray(rows) ? rows : []).map((r) => ({
     property_id:    r.property_id,
     listing_date:   r.listing_date,
@@ -866,10 +936,19 @@ export async function fetchNewActiveListings(sinceDays = 7, limit = 5) {
                           : (r.last_price ?? r.initial_price),
     cap_rate:       r.current_cap_rate ?? r.cap_rate,
     tenant_agency:  isGov ? r.tenant_agency : null,
+    tenant:         null,
+    city:           null,
+    state:          null,
     listing_broker: r.listing_broker,
     listing_url:    r.listing_url,
   }));
-  return { dialysis: normalize(dia, false), government: normalize(gov, true) };
+  const diaNorm = normalize(dia, false);
+  const govNorm = normalize(gov, true);
+  await Promise.all([
+    enrichPropertyContext(diaNorm, 'dia'),
+    enrichPropertyContext(govNorm, 'gov'),
+  ]);
+  return { dialysis: diaNorm, government: govNorm };
 }
 
 /**
