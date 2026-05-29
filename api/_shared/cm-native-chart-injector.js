@@ -2054,6 +2054,11 @@ const MIN_YEAR_BY_TEMPLATE = {
   // dense, comparable coverage and the lines stop crossing erratically.
   sold_cap_by_term_dot_plot:    2015,
   asking_cap_by_term_dot_plot:  2015,
+  // 2026-05-29 - the cap-by-term LINE chart was untrimmed (307 monthly
+  // points from 2001): thin pre-2015 cohorts made the lines erratic AND
+  // the 25-yr category count crowded out the quarterly x-axis labels.
+  // Match the dot-plot term variants (2015) so cohorts are dense + labels show.
+  cap_rate_by_lease_term:       2015,
   // TRUE-gap (trim to where data actually starts)
   nm_vs_market_cap:             2006,
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
