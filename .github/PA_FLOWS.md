@@ -183,16 +183,181 @@ as provided by the Power Automate Outlook connector's "When a new email arrives"
 
 ---
 
-## Flow 3: Live Listing Ingest (LoopNet/CoStar)
+## Flow 3: LoopNet Inquiry Email Ingest (marketing_leads)
+
+### Trigger
+Outlook — new email arrives in `Inbox/Property marketing/LoopNet` matching a
+LoopNet inquiry / lead notification (sender like `donotreply@loopnet.com`,
+subject containing "Inquiry" / "Lead" / "Contact"). Best built as an Outlook
+"When a new email arrives in a shared mailbox" trigger with a folder filter.
+
+### Purpose
+Parse the inquiry email body to extract lead name / email / phone / company /
+property reference / inquiry type, then INSERT a row into `dia.marketing_leads`
+with `source='loopnet'` and create a matching `salesforce_activities` Task
+(SF-matched on email when possible).
+
+### Endpoint
+```
+POST https://life-command-center.vercel.app/api/loopnet-ingest
+```
+Vercel rewrites this to `/api/sync?_route=loopnet-ingest`. The handler
+proxies to the `lead-ingest` Edge Function on the Dialysis_DB project
+(`zqzrriwuavgrquhisnoa`) at action `loopnet`.
+
+### Authentication
+```
+x-pa-webhook-secret: <PA_WEBHOOK_SECRET from Vercel env vars>
+```
+Constant-time compared in `authenticateWebhook()`. If `PA_WEBHOOK_SECRET`
+is unset (transitional mode), the endpoint accepts requests without a
+secret — but production should always send it.
+
+### Request Payload
+```json
+{
+  "source_ref": "<unique-per-email — e.g. Outlook InternetMessageId>",
+  "deal_name":  "<email subject, e.g. 'LoopNet Inquiry — 123 Main St'>",
+  "raw_body":   "<plain-text email body>",
+  "status":     "new"
+}
+```
+
+Only `raw_body` is strictly required — the parser extracts everything from
+it. `source_ref` is used for dedup; reusing the same value 409s as a
+duplicate (which the handler turns into `{ok:true, duplicate:true}`).
+
+### Parser fields extracted from `raw_body`
+The parser (`parseLoopNetEmail` in
+`supabase/functions/lead-ingest/index.ts:154`) looks for these labels
+case-insensitively:
+
+| Output field | Label patterns recognized |
+|---|---|
+| `lead_name` | Name:, Full Name:, Contact Name:, From:, Sender:, Inquirer:, Prospect Name:, Buyer Name: |
+| `lead_company` | Company:, Firm:, Organization:, Brokerage:, Company Name:, Buyer Company:, Investor Group: |
+| `activity_type` | Inquiry Type:, Request Type:, Type:, Action:, Interest:, Lead Type:, Inquiry About: |
+| `property_ref` (→ `deal_name`) | Property:, Listing:, Property Name:, Property Address:, Listing Name:, Asset:, Subject Property: |
+| `activity_detail` | Message:, Comments:, Notes:, Additional Info:, Inquiry Message: |
+| `lead_email` | First `\w+@\w+\.\w+` match anywhere in the body |
+| `lead_phone` | First `(NNN) NNN-NNNN` style match |
+| `listing_id` | `Listing ID:`, `Listing #:`, `Listing Number:` followed by digits |
+
+LoopNet's actual email format may not match all of these. If your captured
+emails use different label words, extend the regex lists in
+`parseLoopNetEmail` (NOT a frequent change — LoopNet's template is stable).
+
+### Power Automate build steps (one-time setup)
+
+1. New automated cloud flow, trigger: "When a new email arrives in a shared
+   mailbox (V3)" or "When a new email arrives (V3)". Folder filter:
+   `Inbox/Property marketing/LoopNet`.
+2. Optional: add a "Condition" step that requires the sender to be
+   `donotreply@loopnet.com` (or whatever LoopNet sends from) to avoid
+   triggering on forwards.
+3. Action: "HTTP" — Method `POST`, URI
+   `https://life-command-center.vercel.app/api/loopnet-ingest`, headers:
+   ```
+   Content-Type: application/json
+   x-pa-webhook-secret: @{variables('PA_WEBHOOK_SECRET')}
+   ```
+   Body:
+   ```json
+   {
+     "source_ref": "@{triggerOutputs()?['body/internetMessageId']}",
+     "deal_name":  "@{triggerOutputs()?['body/subject']}",
+     "raw_body":   "@{triggerOutputs()?['body/body/content']}",
+     "status":     "new"
+   }
+   ```
+4. (Optional) Parse JSON on the response and write `lead_id` to a tracking
+   table or Teams channel so missed parses are visible.
+
+### Verify the flow
+
+After enabling the flow, send yourself a synthetic LoopNet-shaped email,
+or use this PowerShell probe (no PA needed):
+
+```powershell
+$secret = "<PA_WEBHOOK_SECRET>"
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "https://life-command-center.vercel.app/api/loopnet-ingest" `
+  -Headers @{ "Content-Type" = "application/json"; "x-pa-webhook-secret" = $secret } `
+  -Body (@{
+    source_ref = "test-$(Get-Date -Format yyyyMMddHHmmss)"
+    deal_name  = "Test LoopNet Inquiry — 123 Main St"
+    raw_body   = "Name: Jane Tester`r`nCompany: Test LLC`r`nPhone: (555) 555-1234`r`nEmail: jane@example.com`r`nProperty: 123 Main St`r`nInquiry Type: Buyer Interest"
+    status     = "new"
+  } | ConvertTo-Json)
+```
+
+Expected response: `{ok: true, lead_id: "<uuid>", sf_activity_id: "<uuid>", parsed: {...}, sf_match: null}`. Then check
+`select * from dia.marketing_leads where source='loopnet' order by ingested_at desc limit 5;`
+in the Supabase dashboard.
+
+---
+
+## Flow 4: RCM Inquiry Email Ingest (marketing_leads)
+
+### Trigger
+Outlook — new email arrives in `Inbox/Property marketing/RCM` from RCM
+LightBox (typically `notifications@rcm1.com` / `noreply@rcmcapitalmarkets.com`).
+
+### Purpose
+Same pattern as Flow 3 but for RCM-sourced inquiries. Currently active:
+~3 leads per week land via this path.
+
+### Endpoint
+```
+POST https://life-command-center.vercel.app/api/rcm-ingest
+```
+Vercel rewrites to `/api/sync?_route=rcm-ingest` → proxies to `lead-ingest`
+Edge Function with action `rcm`.
+
+### Authentication
+Same `x-pa-webhook-secret` header pattern as Flow 3.
+
+### Request Payload
+Identical envelope to Flow 3 — `{source_ref, deal_name, raw_body, status}`.
+RCM's parser (`parseRcmEmail`, same file) understands an additional inline
+format common to RCM emails:
+
+```
+Name:James DurandCompany:Mapleton InvestmentsFrom Phone:(310) 209-7243
+```
+
+(All on one line because of `Html_to_text` collapsing.) The parser
+handles that via the `inlinePattern` regex; the standard label-based
+parser is the fallback.
+
+### Verify the flow
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "https://life-command-center.vercel.app/api/rcm-ingest" `
+  -Headers @{ "Content-Type" = "application/json"; "x-pa-webhook-secret" = $secret } `
+  -Body (@{
+    source_ref = "test-rcm-$(Get-Date -Format yyyyMMddHHmmss)"
+    deal_name  = "Test RCM Inquiry"
+    raw_body   = "Name:Test PersonCompany:Test LLCFrom Phone:(555) 555-1234"
+    status     = "new"
+  } | ConvertTo-Json)
+```
+
+---
+
+## Flow 5: Live Listing Ingest (LoopNet/CoStar saved searches)
 
 ### Trigger
 Scheduled — runs daily at 6:00 AM CT.
 
 ### Endpoint
 ```
-POST https://life-command-center.vercel.app/api/loopnet-ingest
+POST https://life-command-center.vercel.app/api/live-ingest
 ```
-Rewrites to: `api/sync?_route=loopnet-ingest`
+Rewrites to: `api/sync?_route=live-ingest`
 
 ### Authentication
 ```
@@ -200,8 +365,10 @@ x-pa-webhook-secret: <PA_WEBHOOK_SECRET>
 ```
 
 ### Purpose
-Ingests new LoopNet/CoStar listings matching saved search criteria into the
-LCC pipeline as potential acquisition targets or market intelligence.
+Ingests new LoopNet/CoStar listings matching saved search criteria into
+`dia.available_listings` as potential acquisition targets or market
+intelligence. NOT the same as Flow 3 (which is for inbound inquiry emails);
+this is the outbound discovery side.
 
 ---
 

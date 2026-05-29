@@ -147,9 +147,9 @@ const COMMODITY_TICKERS = [
 // RSS feeds grouped by stream. Keep concise — 3-5 per stream is enough.
 const RSS_FEEDS: Record<string, { url: string; source: string }[]> = {
   healthcare: [
-    { source: "Healio (Nephrology)", url: "https://www.healio.com/rss/site/nephrology" },
-    { source: "CMS Newsroom",        url: "https://www.cms.gov/about-cms/contact/newsroom/press-releases/rss.xml" },
-    { source: "Modern Healthcare",   url: "https://www.modernhealthcare.com/rss/all" },
+    { source: "MedCity News",    url: "https://medcitynews.com/feed/" },
+    { source: "KFF Health News", url: "https://kff.org/feed/" },
+    { source: "Health Affairs",  url: "https://www.healthaffairs.org/rss/site" },
   ],
   government: [
     { source: "GSA News",        url: "https://www.gsa.gov/about-us/newsroom/news-releases/rss" },
@@ -295,9 +295,9 @@ async function fetchMarketData(): Promise<{
     buckets[group].push({
       label:     r.label,
       value:     isYield ? fmtPct(value, 2)
-                : group === "indices" || group === "tenants" || group === "reits"
-                  ? `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-                  : value.toFixed(2),
+                : group === "commodities"
+                  ? `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`,
       delta,
       delta_dir,
       raw_value: value,
@@ -625,6 +625,19 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
   const readingList = buildReadingList(news);
   const weeklyChanges = variant === "friday_deep_dive" ? buildWeeklyChanges(market) : [];
 
+  // Derive EFFR baseline from 3-month T-bill (^IRX) — closest free proxy to
+  // the Fed's overnight target. Real CME FedWatch data is a future enhancement.
+  const irx = (market.yields || []).find((y: any) => y.label.startsWith("3M"));
+  const tnx = (market.yields || []).find((y: any) => y.label.startsWith("10Y"));
+  const fed_outlook = irx ? {
+    fed: {
+      effr_baseline: irx.value,
+      curve_spread: tnx
+        ? (tnx.raw_value - irx.raw_value).toFixed(2) + "pp"
+        : null,
+    },
+  } : {};
+
   // AI runs after data so the prompt has the freshest numbers and headlines.
   const ai = await generateAnalystTake(market, news, variant === "friday_deep_dive");
   warnings.push(...ai.warnings);
@@ -649,7 +662,7 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     generated_at:    new Date().toISOString(),
     key_numbers:     keyNumbers,
     market_data:     market,
-    fed_outlook:     {},       // future: pull Fed Funds futures
+    fed_outlook:     fed_outlook,
     analyst_take:    ai.analyst_take,
     capital_markets: ai.capital_markets,
     sector_news:     news,

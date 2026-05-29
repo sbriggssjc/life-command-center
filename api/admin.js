@@ -27,6 +27,7 @@ import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
+import { findSalesforceAccountByName, isSalesforceConfigured } from './_shared/salesforce.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
@@ -93,6 +94,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
+    case 'sf-link-tick':            return handleSfLinkTick(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
@@ -2778,6 +2780,249 @@ async function handleLlcResearchTick(req, res) {
           {
             status: 'failed',
             last_error: String(err?.message || err).slice(0, 500),
+          });
+        item.outcome = 'error';
+        item.error = err?.message || String(err);
+        summary.failed += 1;
+        result.failed += 1;
+      }
+      summary.items.push(item);
+    }
+
+    result.by_domain[dom] = summary;
+  }
+
+  return res.status(200).json(result);
+}
+
+// ============================================================================
+// SF-LINK-TICK (A7, 2026-05-27)
+// ============================================================================
+//
+// GET/POST /api/sf-link-tick
+//   Drains the per-domain `sf_link_research_queue` populated by the A7
+//   one-shot backfill. For each row, calls findSalesforceAccountByName
+//   (Power Automate flow proxy) and applies the result:
+//     - score >= 0.90 → auto-link, status='linked', PATCH the source row
+//     - 0.50 <= score < 0.90 → status='needs_review', candidate stored on
+//       the queue row (no source-table write — human triages later)
+//     - reason='no_match' / 'no_good_match' → status='no_match'
+//     - reason='sf_not_configured' → leave 'queued' for a future tick
+//     - other errors → status='failed', kept for retry
+//
+// Mirror of handleLlcResearchTick (Round 76ek.j Phase 2). GET = dry-run.
+// ============================================================================
+async function handleSfLinkTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia', 'gov', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia, gov, or both' });
+  }
+  const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit || '10', 10)));
+  const dryRun = req.method === 'GET';
+
+  const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    handler_configured: isSalesforceConfigured(),
+    scanned: 0,
+    linked: 0,
+    needs_review: 0,
+    no_match: 0,
+    failed: 0,
+    by_domain: {},
+  };
+
+  for (const target of targets) {
+    const dom = target === 'dia' ? 'dialysis' : 'government';
+    const summary = { scanned: 0, linked: 0, needs_review: 0, no_match: 0, failed: 0, items: [] };
+
+    const queueRes = await domainQuery(dom, 'GET',
+      'sf_link_research_queue?status=eq.queued' +
+      '&select=queue_id,source_table,source_id,owner_name,canonical_name,state,property_count,attempts' +
+      `&order=priority_score.desc,created_at.asc&limit=${limit}`
+    );
+    if (!queueRes.ok) {
+      summary.error = { stage: 'list', status: queueRes.status, detail: queueRes.data };
+      result.by_domain[dom] = summary;
+      continue;
+    }
+    const queued = Array.isArray(queueRes.data) ? queueRes.data : [];
+    summary.scanned = queued.length;
+    result.scanned += queued.length;
+
+    if (queued.length === 0 || dryRun) {
+      summary.items = queued.map(q => ({
+        queue_id: q.queue_id,
+        source_table: q.source_table,
+        owner_name: q.owner_name,
+        canonical_name: q.canonical_name,
+        property_count: q.property_count,
+      }));
+      result.by_domain[dom] = summary;
+      continue;
+    }
+
+    for (const q of queued) {
+      const item = {
+        queue_id: q.queue_id,
+        source_table: q.source_table,
+        owner_name: q.owner_name,
+      };
+      try {
+        // 1. Mark in_progress.
+        await domainQuery(dom, 'PATCH',
+          `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+          {
+            status: 'in_progress',
+            attempts: (q.attempts || 0) + 1,
+            last_attempted_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+
+        // 2. SF lookup. Uses the existing PA flow proxy.
+        const r = await findSalesforceAccountByName(q.canonical_name);
+
+        // 3. Map to terminal state.
+        if (!r.ok) {
+          // SF not configured OR PA flow returned error/timeout.
+          const status = r.reason === 'sf_not_configured' ? 'queued' : 'failed';
+          await domainQuery(dom, 'PATCH',
+            `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+            {
+              status,
+              last_error: r.reason || 'unknown',
+              resolved_at: status === 'queued' ? null : new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+          item.outcome = status;
+          if (status === 'queued') {
+            // Treated as not-yet-processed; counted as failed for telemetry
+            // but stays in the pool for the next tick after the env lands.
+            summary.failed += 1;
+            result.failed += 1;
+          } else {
+            summary.failed += 1;
+            result.failed += 1;
+          }
+          item.reason = r.reason;
+          summary.items.push(item);
+          continue;
+        }
+
+        if (!r.account) {
+          // SF responded but no candidate met the 0.50 threshold.
+          await domainQuery(dom, 'PATCH',
+            `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+            {
+              status: 'no_match',
+              last_error: r.reason || null,
+              resolved_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              sf_account_name_resolved: r.best_candidate_name || null,
+              score_resolved:           r.best_candidate_score ?? null,
+            });
+          item.outcome = 'no_match';
+          summary.no_match += 1;
+          result.no_match += 1;
+          summary.items.push(item);
+          continue;
+        }
+
+        const score    = Number(r.score) || 0;
+        const acctId   = r.account.Id;
+        const acctName = r.account.Name;
+
+        // 4a. score >= 0.90 → auto-link.
+        if (score >= 0.90) {
+          // Domain + source-table specific PATCH targets.
+          const isGov = dom === 'government';
+          let targetTable, targetCol, patchBody;
+          if (q.source_table === 'true_owners') {
+            targetTable = 'true_owners';
+            targetCol   = 'true_owner_id';
+            patchBody = isGov
+              ? { sf_account_id: acctId, sf_last_synced: new Date().toISOString() }
+              : { sf_company_id: acctId };
+          } else { // recorded_owners (gov only — dia.recorded_owners has no SF col)
+            targetTable = 'recorded_owners';
+            targetCol   = 'recorded_owner_id';
+            patchBody = isGov
+              ? { sf_account_id: acctId, sf_last_synced: new Date().toISOString() }
+              : null;
+          }
+
+          if (patchBody) {
+            await domainQuery(dom, 'PATCH',
+              `${targetTable}?${targetCol}=eq.${q.source_id}`,
+              patchBody);
+          }
+
+          await domainQuery(dom, 'PATCH',
+            `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+            {
+              status: 'linked',
+              sf_account_id_resolved:   acctId,
+              sf_account_name_resolved: acctName,
+              score_resolved:           score,
+              resolved_at:              new Date().toISOString(),
+              updated_at:               new Date().toISOString(),
+              last_error:               null,
+            });
+          item.outcome    = 'linked';
+          item.sf_account = acctId;
+          item.score      = score;
+          summary.linked += 1;
+          result.linked += 1;
+        }
+        // 4b. 0.50 <= score < 0.90 → human triage.
+        else if (score >= 0.50) {
+          await domainQuery(dom, 'PATCH',
+            `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+            {
+              status: 'needs_review',
+              sf_account_id_resolved:   acctId,
+              sf_account_name_resolved: acctName,
+              score_resolved:           score,
+              resolved_at:              new Date().toISOString(),
+              updated_at:               new Date().toISOString(),
+              last_error:               null,
+            });
+          item.outcome    = 'needs_review';
+          item.sf_account = acctId;
+          item.score      = score;
+          summary.needs_review += 1;
+          result.needs_review += 1;
+        }
+        // 4c. < 0.50 → no_match (defensive; findSalesforceAccountByName
+        // already returns account=null below 0.50, so this branch is rare).
+        else {
+          await domainQuery(dom, 'PATCH',
+            `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+            {
+              status: 'no_match',
+              sf_account_name_resolved: acctName,
+              score_resolved:           score,
+              resolved_at:              new Date().toISOString(),
+              updated_at:               new Date().toISOString(),
+            });
+          item.outcome = 'no_match';
+          summary.no_match += 1;
+          result.no_match += 1;
+        }
+      } catch (err) {
+        await domainQuery(dom, 'PATCH',
+          `sf_link_research_queue?queue_id=eq.${q.queue_id}`,
+          {
+            status: 'failed',
+            last_error: String(err?.message || err).slice(0, 500),
+            updated_at: new Date().toISOString(),
           });
         item.outcome = 'error';
         item.error = err?.message || String(err);

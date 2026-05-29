@@ -53,6 +53,12 @@ const GOV_READ_TABLES = new Set([
   // prospecting queue. Gov migration:
   // supabase/migrations/government/20260518230000_gov_qa25_v_prospect_targets.sql
   "v_prospect_targets",
+  // B8 (2026-05-27): Domain Health Summary tile reads the per-domain
+  // v_data_health_* + completeness + SF-link queue summary + 30-day
+  // trend view. Also v_sf_link_review_queue for the A7 triage UI.
+  "v_data_health_sales", "v_data_health_ownership", "v_data_health_entities",
+  "v_sales_completeness_summary", "v_sales_completeness",
+  "v_data_health_trend", "v_sf_link_queue_summary", "v_sf_link_review_queue",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -143,6 +149,10 @@ const DIA_READ_TABLES = new Set([
   // Owners" widget on the dia home dashboard. Dia migration:
   // supabase/migrations/dialysis/20260518230000_dia_qa25_v_prospect_targets.sql
   "v_prospect_targets",
+  // B8 (2026-05-27): Domain Health Summary tile — same set as gov.
+  "v_data_health_sales", "v_data_health_ownership", "v_data_health_entities",
+  "v_sales_completeness_summary", "v_sales_completeness",
+  "v_data_health_trend", "v_sf_link_queue_summary", "v_sf_link_review_queue",
 ]);
 
 const DIA_WRITE_TABLES = new Set([

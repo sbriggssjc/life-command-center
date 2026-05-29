@@ -1782,7 +1782,10 @@ function stripContactLabelPrefix(name) {
     .trim();
 }
 
-function isJunkContactName(name) {
+// C9 (2026-05-27): exported so api/_shared/ingest-contract.js can re-export
+// as the canonical junk-name filter. Keep the regex source of truth here;
+// the contract module is the API surface.
+export function isJunkContactName(name) {
   if (typeof name !== 'string') return true;
   const trimmed = name.trim();
   if (trimmed.length < 3 || trimmed.length > 80) return true;
@@ -3993,28 +3996,52 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
 }
 
 function classifySaleType(sale) {
+  // C2 Part C (2026-05-27): consult multiple signals, not just the
+  // sale.sale_type/transaction_type CoStar field (which is empty 90%+ of
+  // the time). Falls through to the SQL-side backfill patterns so new
+  // captures classify with the same rules as the historical run.
   const raw = (sale.sale_type || sale.transaction_type || '').toLowerCase();
-  if (raw.includes('land') || raw.includes('pre-development') ||
-      raw.includes('pre development') || raw.includes('ground lease') ||
-      raw.includes('vacant')) {
+  const deedType = (sale.deed_type || '').toLowerCase();
+  const buyer = (sale.buyer || sale.buyer_name || '').toLowerCase().trim();
+  const seller = (sale.seller || sale.seller_name || '').toLowerCase().trim();
+  const notes = (sale.sale_notes_raw || '').toLowerCase();
+
+  // Combined haystack for keyword searches
+  const hay = `${raw} ${deedType} ${notes}`;
+
+  if (/\b(land\s+sale|vacant\s+land|ground\s+lease|pre[\s-]?development|pre development)\b/.test(hay)) {
     return { transaction_type: 'Land Sale', exclude_from_market_metrics: true };
   }
-  if (/owner\s+user/.test(raw) || raw.includes('owner-user') ||
-      raw.includes('owner occupied') || raw.includes('user')) {
+  if (/\btrustee\s+(deed|sale)\b/.test(hay)) {
+    return { transaction_type: 'Foreclosure', exclude_from_market_metrics: true };
+  }
+  if (buyer && seller && buyer === seller) {
+    return { transaction_type: 'Nominal Transfer', exclude_from_market_metrics: true };
+  }
+  if (/owner\s+user|owner-user|owner occupied|\buser\b/.test(hay)) {
     return { transaction_type: 'Owner-User', exclude_from_market_metrics: true };
   }
-  if (raw.includes('build-to-suit') || raw.includes('build to suit') ||
-      raw.includes('bts') || raw.includes('built to suit')) {
-    return { transaction_type: 'Build-to-Suit', exclude_from_market_metrics: false };
-  }
-  if (raw.includes('portfolio')) {
+  if (/\bportfolio\b/.test(hay)) {
     return { transaction_type: 'Portfolio', exclude_from_market_metrics: false };
   }
-  if (raw.includes('1031') || raw.includes('exchange')) {
+  if (/1031|\bexchange\b/.test(hay)) {
     return { transaction_type: '1031 Exchange', exclude_from_market_metrics: false };
   }
-  if (raw.includes('investment') || raw.includes('resale')) {
+  if (/\bbts\b|build[\s-]?to[\s-]?suit|built to suit/.test(hay)) {
+    return { transaction_type: 'Build-to-Suit', exclude_from_market_metrics: false };
+  }
+  if (/\bnominal\b|\brelated\s+party\b/.test(hay)) {
+    return { transaction_type: 'Nominal Transfer', exclude_from_market_metrics: true };
+  }
+  if (/\binvestment\b|\bresale\b/.test(hay)) {
     return { transaction_type: 'Investment', exclude_from_market_metrics: false };
+  }
+  // Default for normal arm's-length deeds with a real sale price
+  if (/\b(warranty\s+deed|grant\s+deed|special\s+warranty)\b/.test(hay)) {
+    const price = Number(sale.sale_price || sale.sold_price);
+    if (Number.isFinite(price) && price > 50000) {
+      return { transaction_type: 'Investment', exclude_from_market_metrics: false };
+    }
   }
   return { transaction_type: null, exclude_from_market_metrics: false };
 }
@@ -4981,6 +5008,16 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       }
     }
 
+    // C2 Part B (2026-05-27): persist buyer/seller/broker PII from
+    // metadata.contacts to contacts table, linked to this sale. Idempotent.
+    if (loopSaleId) {
+      try {
+        await persistSaleContacts(domain, loopSaleId, propertyId, metadata, provCollect);
+      } catch (err) {
+        console.warn('[upsertDomainSales] persistSaleContacts failed (non-fatal):', err?.message || err);
+      }
+    }
+
     // Round 76gp.d: fire-and-forget per-capture diagnostic for empirical
     // miss-rate tracking. Logs to LCC Opps; failures are swallowed.
     await recordSalesParserDiagnostic({
@@ -4999,6 +5036,84 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
   }
 
   return count;
+}
+
+// ── Sale-contacts PII persistence (C2 Part B, 2026-05-27) ───────────────
+// Per Decision #5: when CoStar Sale Contacts carry phone/email/address/website
+// for the buyer / seller / brokers, persist them to contacts with sale_id +
+// sale_role so the relationship is queryable from the buyer-history view.
+// Idempotent: looks up an existing contact for (sale_id, sale_role, name)
+// before inserting and PATCHes new PII onto the existing row when found.
+// Skipped entirely when no contact has at least one PII field beyond the name.
+async function persistSaleContacts(domain, saleId, propertyId, metadata, provCollect) {
+  if (!saleId) return 0;
+  const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
+  if (contacts.length === 0) return 0;
+
+  const isDia = domain === 'dialysis';
+  const roleMap = {
+    buyer: 'buyer',
+    seller: 'seller',
+    listing_broker: 'broker_listing',
+    buyer_broker: 'broker_buyer',
+  };
+  const cols = isDia
+    ? { name: 'contact_name', email: 'contact_email', phone: 'contact_phone' }
+    : { name: 'name',         email: 'email',         phone: 'phone' };
+
+  let written = 0;
+  for (const c of contacts) {
+    if (!c || typeof c !== 'object') continue;
+    const saleRole = roleMap[c.role];
+    if (!saleRole) continue;
+    if (!c.name || typeof c.name !== 'string') continue;
+    const trimmedName = c.name.trim();
+    if (!trimmedName) continue;
+    if (isJunkContactName(trimmedName)) continue;
+
+    // Require at least one PII field beyond the name — a bare buyer-name
+    // contact is already captured on sales_transactions.{buyer,buyer_name}
+    // and writing it to contacts adds no information.
+    const hasPii = !!(c.phone || c.email || c.address || c.website);
+    if (!hasPii) continue;
+
+    const fields = stripNulls({
+      [cols.name]:  trimmedName,
+      [cols.email]: c.email   || null,
+      [cols.phone]: c.phone   || null,
+      address:      c.address || null,
+      website:      c.website || null,
+      property_id:  isDia ? parseInt(propertyId, 10) : propertyId,
+      sale_id:      saleId,
+      sale_role:    saleRole,
+      data_source:  'costar_sale_contacts',
+    });
+
+    const lookup = await domainQuery(domain, 'GET',
+      `contacts?sale_id=eq.${saleId}&sale_role=eq.${encodeURIComponent(saleRole)}` +
+      `&${cols.name}=ilike.${encodeURIComponent(trimmedName)}&select=contact_id&limit=1`);
+
+    if (lookup.ok && lookup.data?.length) {
+      const id = lookup.data[0].contact_id;
+      const res = await domainPatch(domain, `contacts?contact_id=eq.${id}`, fields, 'persistSaleContacts:patch');
+      if (res?.ok !== false) {
+        written++;
+        pushProvenance(provCollect, 'contacts', id, fields);
+      }
+    } else {
+      const result = await domainQuery(domain, 'POST', 'contacts', fields,
+        { label: 'persistSaleContacts:insert' });
+      if (result.ok) {
+        written++;
+        const created = Array.isArray(result.data) ? result.data[0] : result.data;
+        const newId = created?.contact_id;
+        if (newId) {
+          pushProvenance(provCollect, 'contacts', newId, fields);
+        }
+      }
+    }
+  }
+  return written;
 }
 
 // ── Per-capture diagnostics (Round 76gp.d) ────────────────────────────────
@@ -6269,7 +6384,8 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
 const FEDERAL_OWNER_ANTI_PATTERN_RE =
   /^(usa?|u\.?\s*s\.?\s*a?\.?|united\s+states(\s+of\s+america)?|u\.?\s*s\.?\s+government|federal\s+government|government)\s*$/i;
 
-function isFederalOwnerAntiPattern(name) {
+// C9 (2026-05-27): exported for the ingest-contract module.
+export function isFederalOwnerAntiPattern(name) {
   if (!name || typeof name !== 'string') return false;
   return FEDERAL_OWNER_ANTI_PATTERN_RE.test(name.trim());
 }
@@ -6955,6 +7071,25 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
       }
       return id;
     }
+    // C4 (2026-05-24): write-time UNIQUE on the dedup key. A 23505 here means
+    // another writer (race) inserted the same canonical owner between our
+    // pre-fetch and this POST. Re-query by the dedup column, cache, and reuse
+    // the existing UUID — same semantics as the pre-fetch cache hit.
+    if (result.status === 409 && result.data?.code === '23505') {
+      const stateForLookup = addrFields.state || (addrFields.contact_info && addrFields.contact_info.state) || null;
+      const lookupParams = domain === 'government'
+        ? `canonical_name=eq.${encodeURIComponent(normalizedName)}` +
+          (stateForLookup ? `&state=eq.${encodeURIComponent(stateForLookup)}` : '&state=is.null')
+        : `normalized_name=eq.${encodeURIComponent(normalizedName)}`;
+      const refetch = await domainQuery(domain, 'GET',
+        `recorded_owners?${lookupParams}&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
+      if (refetch.ok && refetch.data?.length) {
+        const existingId = refetch.data[0].recorded_owner_id;
+        ownerIds.set(normalizedName, existingId);
+        return existingId;
+      }
+      console.warn(`[upsertDomainOwners] 23505 on recorded_owners but refetch found nothing for "${name}" (${domain})`);
+    }
     return null;
   }
 
@@ -7202,6 +7337,14 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
           if (toResult.ok && toResult.data) {
             const created = Array.isArray(toResult.data) ? toResult.data[0] : toResult.data;
             trueOwnerId = created?.true_owner_id || null;
+          } else if (toResult.status === 409 && toResult.data?.code === '23505') {
+            // C4 race: another writer just landed the same true_owner. Re-fetch by key.
+            const refetch = await domainQuery(domain, 'GET',
+              `true_owners?normalized_name=eq.${encodeURIComponent(normalizedName)}` +
+              `&merged_into_true_owner_id=is.null&select=true_owner_id&limit=1`);
+            if (refetch.ok && refetch.data?.length) {
+              trueOwnerId = refetch.data[0].true_owner_id;
+            }
           }
         }
 

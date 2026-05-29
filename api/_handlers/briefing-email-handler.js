@@ -193,7 +193,11 @@ function bodyCell(innerHtml) {
 // ---------------------------------------------------------------------------
 
 function renderHeader({ subject, weather, intelSnapshot }) {
-  const generatedCt = ctNow().toLocaleString('en-US', {
+  // Format directly from new Date() — ctNow() does a CT-as-UTC double-conversion
+  // that's fine for getDay()/getDate() reads but produces a 5-6h offset when
+  // we go back through toLocaleString. (Pre-fix the email header read 2:30 AM
+  // CDT for an email sent at 7:30 AM CDT.)
+  const generatedCt = new Date().toLocaleString('en-US', {
     weekday: 'long', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
     timeZone: 'America/Chicago',
@@ -240,10 +244,17 @@ function renderHeader({ subject, weather, intelSnapshot }) {
       `width="100%" style="margin-top:14px;"><tr>${knCells}</tr></table>`
     : '';
 
-  const freshness = !intelSnapshot
-    ? `<div style="${FONT}font-size:11px;color:#ffffff;opacity:0.7;margin-top:8px;` +
-      `font-style:italic;">Market data unavailable — intel snapshot has not refreshed yet today.</div>`
-    : '';
+  let freshness = '';
+  if (!intelSnapshot) {
+    freshness =
+      `<div style="${FONT}font-size:11px;color:#ffffff;opacity:0.7;margin-top:8px;` +
+      `font-style:italic;">Market data unavailable — intel snapshot has not refreshed yet today.</div>`;
+  } else if (intelSnapshot._is_today === false && intelSnapshot.as_of_date) {
+    const tag = fmtMonthDay(intelSnapshot.as_of_date);
+    freshness =
+      `<div style="${FONT}font-size:11px;color:#ffffff;opacity:0.8;margin-top:8px;` +
+      `font-style:italic;">Market data as of ${escapeHtml(tag)} — today's refresh hasn't landed yet.</div>`;
+  }
 
   return (
     `<tr><td style="${FONT}background:linear-gradient(135deg, ${BRAND.navy} 0%, ${BRAND.blueMid} 100%);` +
@@ -660,6 +671,7 @@ function renderDealIntelligence({ pipelineRollup, salesComps, expirations }) {
 
   const expRows = expAll.map((e) => {
     const tenant = e.tenant_agency || e.tenant || '(tenant unknown)';
+    const loc = [e.city, e.state].filter(Boolean).join(', ');
     const exp = fmtMonthDay(e.lease_expiration);
     const rent = fmtMoney(e.annual_rent, { compact: true });
     const bits = [exp, rent ? `${rent}/yr` : null].filter(Boolean).join(' &middot; ');
@@ -668,6 +680,7 @@ function renderDealIntelligence({ pipelineRollup, salesComps, expirations }) {
       `border-bottom:1px solid ${BRAND.bgAlt};">` +
       `<strong>${escapeHtml(truncate(tenant, 36))}</strong> ` +
       `<span style="color:${BRAND.axis};font-size:11px;">[${e._domain}]</span>` +
+      (loc ? ` <span style="color:${BRAND.textMuted};font-size:11px;">${escapeHtml(loc)}</span>` : '') +
       `<div style="color:${BRAND.textMuted};font-size:11px;">${bits}</div>` +
       `</td></tr>`
     );
@@ -687,7 +700,7 @@ function renderDealIntelligence({ pipelineRollup, salesComps, expirations }) {
 
   const compsCell = compRows
     ? `<div style="${FONT}font-size:11px;color:${BRAND.navy};font-weight:600;` +
-      `text-transform:uppercase;letter-spacing:0.6px;padding-bottom:4px;">Recent Sales Comps (14d)</div>` +
+      `text-transform:uppercase;letter-spacing:0.6px;padding-bottom:4px;">Recent Sales Comps (60d)</div>` +
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${compRows}</table>`
     : '';
 
@@ -1103,7 +1116,7 @@ function renderText(ctx) {
   const allComps = [...(ctx.salesComps?.dialysis || []), ...(ctx.salesComps?.government || [])]
     .sort((a, b) => (b.sale_date || '').localeCompare(a.sale_date || '')).slice(0, 5);
   if (allComps.length) {
-    lines.push('  Recent sales comps (14d):');
+    lines.push('  Recent sales comps (60d):');
     allComps.forEach((c) => {
       const loc = [c.city, c.state].filter(Boolean).join(', ');
       lines.push(`    - ${c.tenant_agency || c.tenant || 'unknown'}  ${loc}  ` +
@@ -1252,7 +1265,7 @@ export async function briefingEmailHandler(req, res) {
     safe(() => fetchNewIntakes(workspaceId, 24, 10),
       { window_hours: 24, count: 0, items: [] }, 'fetchNewIntakes'),
     safe(() => fetchIntelSnapshot(workspaceId), null, 'fetchIntelSnapshot'),
-    safe(() => fetchRecentSalesComps(14, 5),
+    safe(() => fetchRecentSalesComps(60, 8),
       { dialysis: [], government: [] }, 'fetchRecentSalesComps'),
     safe(() => fetchUpcomingLeaseExpirations(90, 6),
       { dialysis: [], government: [] }, 'fetchUpcomingLeaseExpirations'),
