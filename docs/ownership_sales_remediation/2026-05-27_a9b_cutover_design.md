@@ -46,14 +46,10 @@ Status: **design / not executed.** A9a is done (gov→hub data migration complet
 ## Progress
 
 - **Phase 1a — schema parity columns: ✅ DONE (2026-05-29).** Added `teams_user_id`, `email_aliases text[]`, `last_activity_date`, `total_touches` to the hub (migration `20260527190000_lcc_a9b_unified_contacts_parity_columns.sql`, applied to LCC Opps). Full column-diff now shows **`in_gov_not_hub = NULL`** — the hub has every gov column (hub-only extra `sf_last_synced` is harmless). The cutover's "column does not exist" risk is eliminated. Audit log 51.
-- **Phase 1b — value backfill: staged.** `scripts/A9b_backfill_parity_cols.mjs` backfills the 3 populated parity columns (`teams_user_id` is all-null on gov) from gov onto the migrated hub rows. Bulk upsert with `merge-duplicates`, guarded by a hub-`unified_id` set so it only UPDATEs existing rows (never inserts junk for the 44 skips). DRY-RUN default. Run:
-  ```bash
-  node scripts/A9b_backfill_parity_cols.mjs            # dry-run (~17k rows with data)
-  node scripts/A9b_backfill_parity_cols.mjs --apply
-  ```
+- **Phase 1b — value backfill: ✅ DONE (2026-05-29).** `scripts/A9b_backfill_parity_cols.mjs --apply` backfilled the 3 populated parity columns from gov onto the migrated hub rows. 16,990 gov rows with parity data → **44 skipped** (the email-collision rows not in hub — update-only guard prevented junk inserts) → **16,946 updated**. Verified: hub total unchanged at 29,634; `last_activity_date` 16,892, `total_touches` 16,946, `email_aliases` 16,629 (each = gov count − 44). Audit log 52. **Hub now has full schema + value parity with gov.unified_contacts for the migrated set.**
 
-Remaining A9b phases (2–7) per the plan above are unstarted and gated on sign-off at the repoint step.
+Remaining A9b phases (3–7) per the plan above are unstarted and gated on sign-off at the repoint step.
 
 ## Audit / files
 
-A9a audit entries: 44 (staged), 47 (owners applied), 50 (SF applied). A9b: 51 (phase 1a parity columns).
+A9a audit entries: 44 (staged), 47 (owners applied), 50 (SF applied). A9b: 51 (phase 1a parity columns), 52 (phase 1b value backfill).
