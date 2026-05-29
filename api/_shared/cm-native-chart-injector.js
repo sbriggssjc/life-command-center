@@ -2083,6 +2083,9 @@ const MIN_YEAR_BY_TEMPLATE = {
   // to 2003 so YoY is computed against 2002 (which exists per R47
   // 12 sales/yr in 2001-2002).
   valuation_index:              2013,
+  // 2026-05-29 - start the credit-tier chart ~2000 (pre-2000 gov cap data
+  // is sparse/noisy). User: "stop the x-axis around 2000".
+  cap_rate_by_credit:           2000,
   yoy_volume_change:            2005,
   // R51 — active-listings family (user notes 2026-05-21 sparseness items
   // that R47 didn't sweep up). Each is a TRUE-gap: the active_listings
@@ -2330,7 +2333,7 @@ function shiftHelperColRefs(spec, oldFirst, newFirst, helperCount) {
   }
 }
 
-function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title, headerRowOverride }) {
+function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title, headerRowOverride, vertical }) {
   const palette = brand?.palette || {};
   const navy   = (palette.nm_navy   || '#003DA5').replace('#', '');
   const sky    = (palette.nm_sky    || '#62B5E5').replace('#', '');
@@ -3252,6 +3255,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           swapAxes: true,  // line on LEFT, bars on RIGHT (matches PDF)
+          // 2026-05-29 - pin the index (left) axis to its data band so the
+          // line's movement is visible (auto-scale from 0 flattened it).
+          // gov ~198-310, dia ~76-215.
+          yLeftRange: (vertical === 'gov' ? { min: 180, max: 320 } : { min: 60, max: 230 }),
           // R37 P2 — formats: LEFT integer (valuation index 200-400),
           // RIGHT percent (YoY %). Renderer auto-pins right to ±yoyMax
           // dynamically per dataset; native leaves auto-scale so the
@@ -3622,6 +3629,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           swapAxes: true,  // lines LEFT, bars RIGHT (PDF p.35/p.22)
+          // 2026-05-29 - pin the cap-rate (left) axis per vertical so the
+          // asking-cap line movement is legible (matches the PNG renderer's
+          // pins: dia 4.75-9.25%, gov 5.5-9.5%).
+          yLeftRange: (vertical === 'gov' ? { min: 0.055, max: 0.095 } : { min: 0.0475, max: 0.0925 }),
           // R37 P2 — left = cap rate (% 2dp), right = price change % (% 0dp).
           // Renderer pins per-vertical (dia 4.75-9.25% left, 0-70% right;
           // gov 5.5-9.5% left, 0-8% right). The spec builder doesn't have

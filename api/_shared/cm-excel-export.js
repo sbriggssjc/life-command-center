@@ -1505,6 +1505,9 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         // Production exports always opt in; unit tests don't (so they
         // continue to see the unwrapped pre-R53 spec shape).
         injectPeriodLabel: true,
+        // 2026-05-29 - pass vertical so specs can pin per-vertical y-axis
+        // ranges (seller_sentiment cap axis, valuation_index movement).
+        vertical,
       });
       if (spec) {
         nativeInjections.push(spec);
