@@ -100,6 +100,7 @@ const DIA_READ_TABLES = new Set([
   "v_clinic_lease_data_gaps", "v_clinic_lease_renewal_watchlist",
   "v_ingestion_reconciliation", "v_clinic_research_priority",
   "v_cms_data", "v_sales_comps", "v_available_listings", "v_loans",
+  "v_sjc_deal_book", "v_sjc_deal_book_summary",
   "v_sf_activity_feed", "v_marketing_deals", "v_marketing_crm_tasks",
   "v_crm_client_rollup", "v_sf_tasks_contact_rollup",
   "v_opportunity_domain_classified",
