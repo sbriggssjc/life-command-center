@@ -2983,41 +2983,92 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const periodCol  = findCol('period_end');
       const lastAskCol = findCol('avg_last_ask_cap');
       const spreadCol  = findCol('avg_bid_ask_spread');
+      const minCol      = findCol('min_last_ask_cap');
+      const maxCol      = findCol('max_last_ask_cap');
+      const achievedCol = findCol('achieved_last_ask_cap');
       if (!periodCol || !spreadCol) return null;
 
-      // Graceful fallback: if last_ask col missing (older view layout),
-      // fall back to single-line of the spread itself.
-      if (!lastAskCol) {
-        return singleSeries('line', 'avg_bid_ask_spread', sky, {
-          valAxNumFmt: VAL_FMT_PERCENT_2DP,
-        });
+      // 2026-05-29 — master/PDF p.34 idiom: a high-low RANGE chart. Per TTM
+      // period a gray bar spans the min->max of last asks, with a navy
+      // "Last Ask (TTM)" line and a sky "Achieved Cap (TTM)" line; the gap
+      // between the two lines IS the bid-ask spread. Built with the proven
+      // floating-bar pattern (invisible base + visible band, same as
+      // rent_psf_box_quarterly) so it reuses the combo builder.
+      if (minCol && maxCol && lastAskCol) {
+        // One helper column past the regular CHART_COLUMNS: the visible band
+        // height = max_last_ask - min_last_ask (range of last asks).
+        const rangeCol = String.fromCharCode(65 + cols.length);
+        const lineSeries = [
+          { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: navy },
+        ];
+        if (achievedCol) {
+          lineSeries.push({ titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: sky });
+        }
+        return {
+          tabName,
+          spec: {
+            type: 'combo',
+            tabName,
+            catCol: periodCol,
+            dataStart, dataEnd,
+            barGrouping: 'stacked',
+            sharedAxis: true,
+            // Last asks sit ~4-10%; the range band + both lines live here.
+            yLeftRange:  { min: 0.04, max: 0.10 },
+            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
+            barSeries: [
+              // Invisible base lifts the visible range bar to the TTM low.
+              { titleCol: minCol, titleRow: headerRow, valCol: minCol,
+                color: '003DA5', noFill: true },
+              // Visible gray range bar (min -> max of last asks).
+              { titleCol: rangeCol, titleRow: headerRow, valCol: rangeCol,
+                color: 'D9D9D9' },
+            ],
+            lineSeries,
+            anchor: standardAnchor,
+          },
+          helperCols: [
+            {
+              key: 'last_ask_range',
+              header: 'Last Ask Range (TTM)',
+              format: 'percent_basis_points',
+              width: 18,
+              getValue: (row) => {
+                const lo = row.min_last_ask_cap, hi = row.max_last_ask_cap;
+                return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
+              },
+            },
+          ],
+        };
       }
 
-      return {
-        tabName,
-        spec: {
-          type: 'multi-line',
+      // Fallback 1: range cols absent but last_ask present -> R50/R68
+      // stacked-line + upDownBars (prior behavior).
+      if (lastAskCol) {
+        return {
           tabName,
-          catCol: periodCol,
-          dataStart, dataEnd,
-          // R50 — stacked grouping + up-down bars. Y-axis covers the
-          // stacked top: last_ask (~5.5-8%) + spread (~0.1-1.5%) sums to
-          // about 5.5-9%. Pin 5-9.5% to give a small visual margin.
-          lineGrouping: 'stacked',
-          upDownBars:   true,
-          yAxisRange:   { min: 0.05, max: 0.095 },
-          valAxNumFmt:  VAL_FMT_PERCENT_2DP,
-          series: [
-            // Bottom: Last Ask Cap (sky) — visible baseline line
-            { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol,
-              color: sky },
-            // Top: Bid-Ask Spread (navy) — stacked = Last Ask + Spread
-            { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,
-              color: navy },
-          ],
-          anchor: standardAnchor,
-        },
-      };
+          spec: {
+            type: 'multi-line',
+            tabName,
+            catCol: periodCol,
+            dataStart, dataEnd,
+            lineGrouping: 'stacked',
+            upDownBars:   true,
+            yAxisRange:   { min: 0.05, max: 0.095 },
+            valAxNumFmt:  VAL_FMT_PERCENT_2DP,
+            series: [
+              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky },
+              { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,  color: navy },
+            ],
+            anchor: standardAnchor,
+          },
+        };
+      }
+
+      // Fallback 2: only the spread column -> single line.
+      return singleSeries('line', 'avg_bid_ask_spread', sky, {
+        valAxNumFmt: VAL_FMT_PERCENT_2DP,
+      });
     }
 
     case 'rent_psf_box_quarterly': {

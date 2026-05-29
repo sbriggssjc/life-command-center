@@ -2894,6 +2894,43 @@ test('buildInjectionSpec: bid_ask_spread R50 — stacked line + up-down bars whe
   assert.equal(out.spec.series[1].color, '003DA5');
 });
 
+test('buildInjectionSpec: bid_ask_spread high-low RANGE chart when min/max present (master p.34)', () => {
+  // 2026-05-29 — when the *_bid_ask_spread_m view exposes min/max/achieved,
+  // the chart becomes the master/PDF p.34 high-low range visual: a gray
+  // floating bar (min -> max of last asks) via stacked invisible-base +
+  // visible band, plus navy Last Ask and sky Achieved lines on a shared axis.
+  const cols = [
+    { key: 'period_end',            col: 'A' },
+    { key: 'subspecialty',          col: 'B' },
+    { key: 'avg_bid_ask_spread',    col: 'C' },
+    { key: 'avg_last_ask_cap',      col: 'D' },
+    { key: 'pct_price_change',      col: 'E' },
+    { key: 'min_last_ask_cap',      col: 'F' },
+    { key: 'max_last_ask_cap',      col: 'G' },
+    { key: 'achieved_last_ask_cap', col: 'H' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread',
+    tabName: 'Data_Bid_Ask',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.type, 'combo', 'high-low range uses the combo builder');
+  assert.equal(out.spec.barGrouping, 'stacked');
+  assert.equal(out.spec.sharedAxis, true);
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.barSeries[0].valCol, 'F', 'invisible base = min_last_ask_cap');
+  assert.equal(out.spec.barSeries[0].noFill, true, 'base is invisible');
+  assert.equal(out.spec.barSeries[1].valCol, 'I', 'visible band = range helper (one col past the 8 data cols)');
+  assert.equal(out.spec.lineSeries.length, 2, 'Last Ask + Achieved lines');
+  assert.equal(out.spec.lineSeries[0].valCol, 'D', 'navy Last Ask (TTM) line');
+  assert.equal(out.spec.lineSeries[1].valCol, 'H', 'sky Achieved Cap (TTM) line');
+  assert.ok(out.helperCols && out.helperCols[0].key === 'last_ask_range', 'declares the range helper col');
+  const v = out.helperCols[0].getValue({ min_last_ask_cap: 0.0489, max_last_ask_cap: 0.0846 });
+  assert.ok(Math.abs(v - 0.0357) < 1e-9, 'range helper = max - min');
+});
+
 test('buildInjectionSpec: bid_ask_spread (quarterly) gracefully degrades when last_ask missing', () => {
   // Backward-compat: if a view layout drops avg_last_ask_cap (legacy
   // catalogs, custom verticals), fall back to single-line of the spread.

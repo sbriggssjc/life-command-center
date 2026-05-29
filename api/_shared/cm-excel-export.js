@@ -546,6 +546,14 @@ const CHART_COLUMNS = {
     // chart of the spread alone, which is what users saw in 2026-03-31.
     { key: 'avg_last_ask_cap',   header: 'Last Asking Cap (TTM)', format: 'percent_basis_points', width: 19 },
     { key: 'pct_price_change',   header: '% Price Changes',     format: 'percent_one_decimal', width: 16 },
+    // Chart-parity (2026-05-29): TTM range of last asks + achieved cap so the
+    // bid_ask_spread chart can render the master/PDF p.34 high-low RANGE bar
+    // (gray min->max band) + Last Ask / Achieved lines instead of the
+    // stacked-line + upDownBars idiom. Columns come from the *_bid_ask_spread_m
+    // views (min_last_ask_cap / max_last_ask_cap / achieved_last_ask_cap).
+    { key: 'min_last_ask_cap',      header: 'Last Ask — Low (TTM)',  format: 'percent_basis_points', width: 19 },
+    { key: 'max_last_ask_cap',      header: 'Last Ask — High (TTM)', format: 'percent_basis_points', width: 19 },
+    { key: 'achieved_last_ask_cap', header: 'Achieved Cap (TTM)',    format: 'percent_basis_points', width: 19 },
   ],
 
   // Phase 2c additions (FRED macro)

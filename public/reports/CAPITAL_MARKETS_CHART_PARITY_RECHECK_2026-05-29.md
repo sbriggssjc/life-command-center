@@ -36,7 +36,13 @@ DOM & % of Ask (PDF p.33) was also visually confirmed to match: sky bars (DOM TT
 
 ## 3. Still NOT matching — actionable
 
-### 3.1 Bid-Ask Spread chart idiom (note #11) — **OPEN**
+### 3.1 Bid-Ask Spread chart idiom (note #11) — ✅ **FIXED 2026-05-29**
+
+**Resolution (shipped):** rebuilt `bid_ask_spread` as the master/PDF high-low range chart. Added `min_last_ask_cap` / `max_last_ask_cap` / `achieved_last_ask_cap` to `cm_dialysis_bid_ask_spread_m` + `cm_gov_bid_ask_spread_m` (both **applied live**), and rewrote the injector `bid_ask_spread` case to a combo: a gray floating **range bar** (min→max of last asks, via invisible-base + visible band) plus a navy **Last Ask (TTM)** line and a sky **Achieved Cap (TTM)** line — the gap between the two lines is the bid-ask spread. The visible band height (max−min) is a JS helper column. A graceful fallback preserves the prior stacked-line + upDownBars chart if a view ever lacks the range columns. CHART_COLUMNS extended; new test added (168/168 inject + 5/5 bundle pass). Live data check (dia 2026-Q1): low 4.89% / Last Ask 6.49% / high 8.46% / achieved 6.30% (spread 19 bps). Migrations: `DialysisProject/.../20260529160000_cm_dialysis_bid_ask_range.sql`, `GovernmentProject/sql/20260529_cm_gov_bid_ask_range.sql`. **JS chart change needs the LCC Vercel deploy to appear in the export.**
+
+The original finding, for reference:
+
+
 
 **Master / PDF (p.34, the authoritative "our version"):** a **high-low range chart** — per period: a gray vertical **range bar** (min–max of last asks for TTM sales), a navy **"Last Ask (ttm)" dash** marker, and a sky-blue **"Bid-Ask Spread"** segment at the base. Reads like an OHLC/stock chart.
 
