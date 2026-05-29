@@ -22,7 +22,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
-import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
