@@ -72,16 +72,37 @@ async function pageAll(baseUrl, key, table, select, filter, cursorCol, cursorSta
   return out;
 }
 
+// JS port of LCC's lcc_normalize_entity_name(). Used on BOTH entities.name and
+// dia.true_owners.name — since the SAME function normalizes both sides, the
+// keys match each other regardless of any tiny JS-vs-PG divergence (we do NOT
+// rely on the stored entities.canonical_name, which uses a lighter normalization).
+// Clean punctuation to spaces FIRST (so "L.L.C." → "l l c", "Inc." → "inc"),
+// THEN strip legal/suffix tokens including de-dotted acronym forms. This makes
+// "...LLC" and "...L.L.C." normalize identically — what the PG function's
+// boundary regex misses on trailing dots. Consistency across both sides is the
+// goal (we don't compare to the stored canonical_name).
+const _SUFFIX_RE = /\b(l l c|llc|l p|lp|llp|inc|corp|corporation|company|co|trust|holdings|properties|partners|capital|group|the|n a|na)\b/g;
+function normEntityName(name) {
+  if (name == null) return null;
+  let v = String(name).toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  v = v.replace(_SUFFIX_RE, ' ').replace(/\s+/g, ' ').trim();
+  return v.length < 4 ? null : v;
+}
+
 async function main() {
   console.log(`[G7-dia] apply=${APPLY} batch=${BATCH}`);
 
-  // Source 1: dia.true_owners.lcc_canonical_entity_id (owner → entity)
-  console.log('[G7-dia] loading dia.true_owners → entity map…');
+  // Source 1: dia.true_owners.lcc_canonical_entity_id (owner → entity, authoritative).
+  // Also pull name for the source-3 name-match. (lcc_canonical_entity_id is empty
+  // until/unless a write-back populates it — the BD sync is a one-way pull and does
+  // NOT populate it, so source 3 is the real coverage path today.)
+  console.log('[G7-dia] loading all dia.true_owners (id, canonical entity, name)…');
   const trueOwners = await pageAll(DIA_URL, DIA_KEY, 'true_owners',
-    'true_owner_id,lcc_canonical_entity_id', '&lcc_canonical_entity_id=not.is.null',
+    'true_owner_id,lcc_canonical_entity_id,name', '',
     'true_owner_id', '00000000-0000-0000-0000-000000000000');
-  const ownerToEntity = new Map(trueOwners.map(o => [o.true_owner_id, o.lcc_canonical_entity_id]));
-  console.log(`[G7-dia]   true_owners with canonical entity: ${ownerToEntity.size} (0 until the BD entity sync runs)`);
+  const ownerToEntity = new Map(
+    trueOwners.filter(o => o.lcc_canonical_entity_id).map(o => [o.true_owner_id, o.lcc_canonical_entity_id]));
+  console.log(`[G7-dia]   true_owners total: ${trueOwners.length}; with canonical entity: ${ownerToEntity.size}`);
 
   // Source 2: LCC lcc_entity_portfolio_facts (current owner → entity), dia only
   console.log('[G7-dia] loading lcc_entity_portfolio_facts (dia, current) → entity map…');
@@ -91,6 +112,30 @@ async function main() {
   const propToEntity = new Map(pf.map(f => [String(f.source_property_id), f.entity_id]));
   console.log(`[G7-dia]   portfolio_facts dia current links: ${propToEntity.size}`);
 
+  // Source 3: name-match dia.true_owners → LCC entities (organization, dia/dialysis).
+  // Re-normalize both sides with the same normEntityName; drop ambiguous keys
+  // (a normalized name that maps to >1 distinct entity — don't guess).
+  console.log('[G7-dia] loading LCC entities (organization, dia) for name-match…');
+  const ents = await pageAll(OPS_URL, OPS_KEY, 'entities',
+    'id,name', "&entity_type=eq.organization&domain=in.(dia,dialysis)&name=not.is.null",
+    'id', '00000000-0000-0000-0000-000000000000');
+  const normToEntity = new Map();   // norm-name → entity_id
+  const ambiguous = new Set();
+  for (const e of ents) {
+    const nn = normEntityName(e.name);
+    if (!nn) continue;
+    if (normToEntity.has(nn) && normToEntity.get(nn) !== e.id) { ambiguous.add(nn); }
+    else if (!normToEntity.has(nn)) { normToEntity.set(nn, e.id); }
+  }
+  for (const nn of ambiguous) normToEntity.delete(nn);
+  // owner → entity via name
+  const ownerToEntityByName = new Map();
+  for (const o of trueOwners) {
+    const nn = normEntityName(o.name);
+    if (nn && normToEntity.has(nn)) ownerToEntityByName.set(o.true_owner_id, normToEntity.get(nn));
+  }
+  console.log(`[G7-dia]   org entities: ${ents.length}; unambiguous norm-names: ${normToEntity.size} (${ambiguous.size} ambiguous dropped); owners name-matched: ${ownerToEntityByName.size}`);
+
   // dia properties with an owner
   console.log('[G7-dia] loading dia.properties (with an owner)…');
   const props = await pageAll(DIA_URL, DIA_KEY, 'properties',
@@ -99,7 +144,7 @@ async function main() {
     'property_id', '0');
   console.log(`[G7-dia]   dia properties with an owner: ${props.length}`);
 
-  const stats = { viaOwner: 0, viaPortfolio: 0, unresolved: 0, changed: 0, batches: 0 };
+  const stats = { viaOwner: 0, viaPortfolio: 0, viaNameMatch: 0, unresolved: 0, changed: 0, batches: 0 };
   let buffer = [];
   const flush = async () => {
     if (!buffer.length) return;
@@ -116,9 +161,13 @@ async function main() {
   for (const p of props) {
     let entityId = (p.true_owner_id && ownerToEntity.get(p.true_owner_id)) || null;
     if (entityId) stats.viaOwner++;
-    else {
+    if (!entityId) {
       entityId = propToEntity.get(String(p.property_id)) || null;
       if (entityId) stats.viaPortfolio++;
+    }
+    if (!entityId && p.true_owner_id) {
+      entityId = ownerToEntityByName.get(p.true_owner_id) || null;
+      if (entityId) stats.viaNameMatch++;
     }
     if (!entityId) { stats.unresolved++; continue; }
     if (p.unified_id === entityId) continue;  // already correct
@@ -131,12 +180,13 @@ async function main() {
 
   console.log('\n──────── G7-dia unified_id backfill summary ────────');
   console.log(`dia properties with an owner       : ${props.length}`);
-  console.log(`resolved via true_owner→entity     : ${stats.viaOwner}  (grows once the BD entity sync runs)`);
-  console.log(`resolved via portfolio_facts       : ${stats.viaPortfolio}  (authoritative, available now)`);
-  console.log(`unresolved (no entity link yet)    : ${stats.unresolved}`);
+  console.log(`resolved via true_owner→entity id  : ${stats.viaOwner}  (lcc_canonical_entity_id; ~0 unless written back)`);
+  console.log(`resolved via portfolio_facts       : ${stats.viaPortfolio}  (authoritative current owner)`);
+  console.log(`resolved via owner name-match      : ${stats.viaNameMatch}  (true_owner.name ↔ entity.name)`);
+  console.log(`unresolved (no entity link)        : ${stats.unresolved}`);
   console.log(`${APPLY ? 'rows updated' : 'rows that WOULD update'}            : ${stats.changed}`);
   if (!APPLY) console.log('\nDRY RUN — no writes. Re-run with --apply.');
-  else console.log('\nAPPLIED. Re-run after the BD entity sync populates dia.true_owners.lcc_canonical_entity_id for full coverage.');
+  else console.log('\nAPPLIED. Unresolved owners have no matching org entity (yet) — they fill in as entities/owners are added or deduped.');
 }
 
 main().catch((err) => { console.error('\n[G7-dia] FATAL:', err.message); process.exit(1); });
