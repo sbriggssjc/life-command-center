@@ -117,7 +117,7 @@ async function rest(baseUrl, key, method, path, body, extraHeaders = {}) {
 async function auditBegin(plannedCount) {
   try {
     const r = await rest(OPS_URL, OPS_KEY, 'POST', 'rpc/audit_run_begin', {
-      p_run_id: RUN_ID, p_step: 'A9a_unified_contacts_migration', p_target_database: 'gov',
+      p_run_id: RUN_ID, p_step: 'A9a_unified_contacts_migration', p_target_database: 'gov_db',
       p_dry_run: false, p_rows_before: plannedCount,
       p_notes: 'A9a: migrate gov.unified_contacts owner-linked rows into LCC Opps unified_contacts (preserve unified_id, A1-canonical remap, idempotent).',
       p_metadata: { scope: 'recorded_owner_id_not_null', run_id: RUN_ID },

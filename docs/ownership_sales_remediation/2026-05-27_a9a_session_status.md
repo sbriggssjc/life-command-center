@@ -1,6 +1,23 @@
 # Ownership & Sales Remediation — 2026-05-27 Session Status (A9a: unified_contacts consolidation, owner subset)
 
-LCC Opps recovered from its restart. Resumed **A9 — unified_contacts consolidation**, scoped (per decision) to **A9a owner-subset, staged**. This round delivers the investigation + a reversible, dry-run-first migration script; **no rows were written** (the live migration runs from a workstation).
+LCC Opps recovered from its restart. Resumed **A9 — unified_contacts consolidation**, scoped (per decision) to **A9a owner-subset, staged**. Delivered the investigation + a reversible, dry-run-first migration script, then **ran it to completion on the workstation**.
+
+## ✅ APPLIED + VERIFIED (2026-05-29)
+
+Dry-run → small live batch (200) → full `--apply`. Hub verification:
+
+| Metric | Value |
+|---|---|
+| hub total before → after | **197 → 13,600** (197 preexisting untouched + 13,403 migrated, **no unified_id collisions**) |
+| migrated rows | 13,403 |
+| with `recorded_owner_id` / `company_name` | 13,403 / 13,403 (names preserved) |
+| with `full_name` | 912 (person rows regenerated from first/last; 12,491 entity rows hold identity in `company_name`) |
+| distinct canonical owners | 13,397 (6 same-owner dupes migrated as-is) |
+| A1 remaps | 0 (no rows pointed at merged losers) |
+
+Idempotent (small batch + full run reconciled cleanly via `ON CONFLICT (unified_id) ignore-duplicates`). One non-fatal hiccup: the script's best-effort audit RPC passed `'gov'` for `p_target_database`, which the `audit_run_log` CHECK rejects (wants `'gov_db'`) — the migration continued, and the authoritative entry was recorded via MCP (log_id 47). Script arg fixed for future runs.
+
+Two schema mismatches surfaced + fixed during apply: `full_name` is a GENERATED column on the hub (dropped from insert; verified no name loss), and the audit `p_target_database` value.
 
 ## The landscape (investigated this round)
 
@@ -85,7 +102,8 @@ FROM unified_contacts;        -- migrated ≈ 13,403, total ≈ 13,600
 
 | log_id | run_id | domain | rows |
 |---:|---|---|---:|
-| 44 | A9a_script_authored_2026_05_27_001 | gov_db | 0 (script staged, dry-run pending) |
+| 44 | A9a_script_authored_2026_05_27_001 | gov_db | 0 (script staged) |
+| 47 | A9a_gov_owner_contacts_applied_2026_05_29_001 | gov_db | 13,403 (applied + verified) |
 
 ## Files changed
 
