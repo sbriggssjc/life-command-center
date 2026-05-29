@@ -40,12 +40,16 @@
 //   OPS_SUPABASE_URL, OPS_SUPABASE_SERVICE_KEY (or OPS_SUPABASE_KEY)
 //
 // Usage:
-//   node scripts/A9a_migrate_gov_owner_contacts.mjs                  # dry-run
-//   node scripts/A9a_migrate_gov_owner_contacts.mjs --limit=200      # dry-run, capped
-//   node scripts/A9a_migrate_gov_owner_contacts.mjs --apply          # live migrate
-//   node scripts/A9a_migrate_gov_owner_contacts.mjs --apply --batch=500
+//   node scripts/A9a_migrate_gov_owner_contacts.mjs                       # dry-run, owners
+//   node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf            # dry-run, SF rows
+//   node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf --apply    # live migrate SF rows
+//   node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=all --apply   # whole gov store (idempotent)
 //
 // Flags:
+//   --scope=S     owners (default) | sf | all — which gov rows to migrate.
+//                 owners = recorded_owner_id NOT NULL (done 2026-05-29).
+//                 sf     = recorded_owner_id IS NULL  (SF-only contacts).
+//                 Verified disjoint from the existing hub by sf_contact_id → clean insert.
 //   --apply       Write to OPS. Without it, fetch + transform + report only.
 //   --limit=N     Cap source rows processed (default: all).
 //   --batch=N     Rows per fetch page AND per upsert batch (default: 500).
@@ -63,7 +67,21 @@ const arg = (name, dflt) => {
 const LIMIT = parseInt(arg('limit', '0'), 10) || Infinity;
 const BATCH = Math.min(parseInt(arg('batch', '500'), 10), 1000);
 
-const RUN_ID = `A9a_gov_owner_contacts_${new Date().toISOString().slice(0, 10).replace(/-/g, '_')}`;
+// Which gov.unified_contacts rows to migrate:
+//   owners (default) : recorded_owner_id NOT NULL  — the ~13,403 owner contacts
+//   sf               : recorded_owner_id IS NULL    — the ~16,078 SF-only contacts
+//   all              : every row (ON CONFLICT skips already-migrated)
+// Verified 2026-05-29: the sf set is disjoint from the existing hub rows by
+// sf_contact_id (0 overlap), so it's a clean insert — no merge/dedup needed.
+const SCOPE = (arg('scope', 'owners') || 'owners').toLowerCase();
+const SCOPE_FILTER = {
+  owners: '&recorded_owner_id=not.is.null',
+  sf:     '&recorded_owner_id=is.null',
+  all:    '',
+}[SCOPE];
+if (SCOPE_FILTER === undefined) { console.error(`--scope must be owners|sf|all (got "${SCOPE}")`); process.exit(1); }
+
+const RUN_ID = `A9a_gov_${SCOPE}_contacts_${new Date().toISOString().slice(0, 10).replace(/-/g, '_')}`;
 
 const GOV_URL = env.GOV_SUPABASE_URL;
 const GOV_KEY = env.GOV_SUPABASE_SERVICE_KEY || env.GOV_SUPABASE_KEY;
@@ -117,7 +135,7 @@ async function rest(baseUrl, key, method, path, body, extraHeaders = {}) {
 async function auditBegin(plannedCount) {
   try {
     const r = await rest(OPS_URL, OPS_KEY, 'POST', 'rpc/audit_run_begin', {
-      p_run_id: RUN_ID, p_step: 'A9a_unified_contacts_migration', p_target_database: 'gov',
+      p_run_id: RUN_ID, p_step: 'A9a_unified_contacts_migration', p_target_database: 'gov_db',
       p_dry_run: false, p_rows_before: plannedCount,
       p_notes: 'A9a: migrate gov.unified_contacts owner-linked rows into LCC Opps unified_contacts (preserve unified_id, A1-canonical remap, idempotent).',
       p_metadata: { scope: 'recorded_owner_id_not_null', run_id: RUN_ID },
@@ -172,6 +190,7 @@ function toHubRow(govRow, remap, stats) {
   const fieldSources = (govRow.field_sources && typeof govRow.field_sources === 'object')
     ? { ...govRow.field_sources } : {};
   fieldSources._a9a_migrated = RUN_ID;
+  fieldSources._a9a_scope = SCOPE;
   fieldSources.recorded_owner_id = 'gov.unified_contacts';
   const row = {
     unified_id: govRow.unified_id,
@@ -186,7 +205,7 @@ function toHubRow(govRow, remap, stats) {
 }
 
 async function main() {
-  console.log(`[A9a] run_id=${RUN_ID} apply=${APPLY} limit=${LIMIT === Infinity ? 'all' : LIMIT} batch=${BATCH}`);
+  console.log(`[A9a] run_id=${RUN_ID} scope=${SCOPE} apply=${APPLY} limit=${LIMIT === Infinity ? 'all' : LIMIT} batch=${BATCH}`);
   console.log('[A9a] building A1 canonical remap map from gov.recorded_owners…');
   const remap = await buildA1RemapMap();
   console.log(`[A9a] A1 remap entries (merged losers): ${remap.size}`);
@@ -215,7 +234,7 @@ async function main() {
     const want = Math.min(BATCH, LIMIT - stats.fetched);
     const r = await rest(GOV_URL, GOV_KEY, 'GET',
       `unified_contacts?select=${SELECT_COLS}`
-      + `&recorded_owner_id=not.is.null`
+      + SCOPE_FILTER
       + `&unified_id=gt.${cursor}&order=unified_id.asc&limit=${want}`);
     if (!r.ok) throw new Error(`Source fetch failed: HTTP ${r.status} ${r.text}`);
     if (!r.data?.length) break;
