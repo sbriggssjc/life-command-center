@@ -316,6 +316,35 @@ export const ACTION_SCHEMAS = {
     }
   },
 
+  draft_reply_from_inbox: {
+    description: 'Draft a context-aware reply to a flagged email already in the LCC inbox. Provide inbox_item_id (UUID from inbox_items). The recipient is derived automatically from the original sender. Set create_draft=true to also create the reply as a real draft in the user\'s Outlook (returns draft_web_link).',
+    category: 'outreach',
+    inputs: {
+      type: 'object',
+      properties: {
+        inbox_item_id: { type: 'string', format: 'uuid', description: 'UUID of the inbox_items row (the flagged email).' },
+        intent: { type: 'string', description: 'Purpose of the reply (e.g., "answer the question", "schedule a call", "request more info", "decline politely"). Drives the call-to-action.' },
+        tone: { type: 'string', description: 'Desired tone (default: professional, warm, and responsive).' },
+        guidance: { type: 'string', description: 'Optional freeform instructions — facts to include, points to address, things to avoid.' },
+        create_draft: { type: 'boolean', description: 'If true, create the reply as a real draft in Outlook (recipient derived from the original sender).' },
+        cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' }
+      },
+      required: ['inbox_item_id']
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        subject: { type: 'string', description: 'Reply subject (typically "Re: <original subject>").' },
+        body: { type: 'string', description: 'AI-drafted reply body.' },
+        original_sender: { type: 'string', description: 'Email address the reply will be sent to.' },
+        original_subject: { type: 'string' },
+        provider: { type: 'string' },
+        draft_created: { type: 'boolean' },
+        draft_web_link: { type: 'string', description: 'Link that opens the created Outlook draft.' }
+      }
+    }
+  },
+
   // =========================================================================
   // TEMPLATE ENGINE
   // =========================================================================
