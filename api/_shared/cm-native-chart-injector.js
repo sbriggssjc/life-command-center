@@ -2059,8 +2059,12 @@ const MIN_YEAR_BY_TEMPLATE = {
   // the 25-yr category count crowded out the quarterly x-axis labels.
   // Match the dot-plot term variants (2015) so cohorts are dense + labels show.
   cap_rate_by_lease_term:       2015,
-  // TRUE-gap (trim to where data actually starts)
-  nm_vs_market_cap:             2006,
+  // 2026-05-29 - bumped 2006 -> 2011. NM-tagged gov sales are absent in
+  // 2008-2009 and sparse in 2003/2007/2010, so the line rendered with
+  // gaps + erratic jumps. From 2011 it's continuous and the 9-mo MA reads
+  // smooth (matches the PDF). User: 'missing quite a bit of data ... moves
+  // erratically'.
+  nm_vs_market_cap:             2011,
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).

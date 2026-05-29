@@ -2751,7 +2751,7 @@ test('R47: dom_and_pct_of_ask trims to 2013', () => {
   assert.equal(spec.spec.dataStart, 5 + 144, 'dataStart at first 2013 row');
 });
 
-test('R47: nm_vs_market_cap trims to 2006', () => {
+test('R47 -> 2026-05-29: nm_vs_market_cap trims to 2011 (continuous NM data)', () => {
   const rows = mkRows(2001, 2024, 'nm_cap_rate');
   for (const r of rows) r.market_cap_rate = 0.07;
   const spec = buildInjectionSpec({
@@ -2767,8 +2767,8 @@ test('R47: nm_vs_market_cap trims to 2006', () => {
     brand: { palette: {} },
     rows,
   });
-  // 2001-01 to 2005-12 = 60 rows before 2006-01
-  assert.equal(spec.spec.dataStart, 5 + 60, 'dataStart at first 2006 row');
+  // 2001-01 to 2010-12 = 120 rows before 2011-01
+  assert.equal(spec.spec.dataStart, 5 + 120, 'dataStart at first 2011 row');
 });
 
 test('R47: template not in MIN_YEAR_BY_TEMPLATE keeps original dataStart', () => {
