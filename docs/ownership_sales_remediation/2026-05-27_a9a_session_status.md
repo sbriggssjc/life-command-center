@@ -86,6 +86,24 @@ SELECT count(*) FILTER (WHERE field_sources ? '_a9a_migrated') AS migrated,
 FROM unified_contacts;        -- migrated ≈ 13,403, total ≈ 13,600
 ```
 
+## SF-rows phase (the rest of gov → hub) — READY, dry-run pending
+
+A key correction surfaced after the owner migration: **`contacts-handler.js` reads/writes `unified_contacts` via `govQuery`** — the app's Contacts feature is backed by **gov.unified_contacts** (the live store), *not* the LCC hub. So the remaining 16,078 SF-contact rows are **real app contacts**, not redundant (an earlier "hub has its own SF sync" assumption was wrong — there is no such sync). For Decision #1's eventual cutover (`govQuery` → the LCC hub) to be lossless, the hub must hold **all** of gov.unified_contacts first.
+
+Pre-flight for the SF set (the 16,078 rows with `recorded_owner_id IS NULL`):
+- **0 `sf_contact_id` overlap** with the existing hub rows → clean insert, no merge/dedup needed (the 139 original SF rows and gov's SF rows are disjoint populations).
+- `sf_contact_id` unique within gov (0 dup groups; 1,614 `sf_account_id` groups = normal multi-contact-per-account).
+- All 16,078 have `first_name`/`last_name` → generated `full_name` regenerates correctly; **0 name-loss risk**.
+- No FKs, no required-without-default on the hub (already verified).
+
+The migration script now takes `--scope=owners|sf|all`. The SF phase is a clean insert identical to owners:
+```bash
+node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf                 # dry-run (expect ~16,078)
+node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf --apply --limit=200   # small batch
+node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf --apply         # full
+```
+After it runs, the hub = a complete copy of gov.unified_contacts (13,403 owners + 16,078 SF + the 197 originals' unique cross-domain links) ≈ 29,678 rows — the prerequisite for the projection worker / `govQuery`→hub cutover (A9b territory).
+
 ## What's deferred (follow-on rounds)
 
 - **A9a remainder**: the 16,990 SF-linked-only gov rows; the `unified-contacts-projection-tick` worker (5-min) that pushes hub→domain diffs.
