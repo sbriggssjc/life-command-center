@@ -36,42 +36,56 @@ duplicating the lease-provenance system. The detector is now usable as an alarm.
 
 Audit log: `drift_detector_hygiene_2026_05_29_001`.
 
-## 2. G6 cap-rate exclusion — verified gap (recommend a targeted fix)
+## 2. G6 cap-rate exclusion — downstream enforcement ✅ (fixed)
 
-**What's solid:** the *tagging* half of G6 works — `cap_rate_quality_tick` (B5) +
-the A5 retro-tag flag implausible gov cap rates as `cap_rate_quality =
-'implausible_unverified'` (2,756 of 2,777 out-of-band live rows tagged).
+**What was solid:** the *tagging* half of G6 — `cap_rate_quality_tick` (B5) +
+the A5 retro-tag flag implausible cap rates as `cap_rate_quality =
+'implausible_unverified'` (tagged against an asset-class band, which is tighter
+than the generic 0.04–0.12 sanity band).
 
-**The gap:** the *consumer* side doesn't consume the tag. The dia `v_sales_comps`
-view filters `WHERE COALESCE(exclude_from_market_metrics,false) = false` — it does
-**not** filter `cap_rate_quality`. And only ~31% of out-of-band gov cap rates
-carry `exclude_from_market_metrics`. So the other ~69% of implausible cap rates
-**leak into comp/averaging consumers** that filter only the exclude flag. The
-cap-rate-TTM aggregation behind `capital-markets.js` (`avg_cap_rate_ttm` etc.)
-showed no `cap_rate_quality` filter either.
+**The gap (now closed):** the *consumer* side didn't consume the tag. Consumers
+filtered only `exclude_from_market_metrics` (or nothing). Live data showed the
+leak was real and **not** covered by the existing band filters:
+- dia `v_sales_comps`: **472** live implausible cap rates surfaced as comps.
+- gov `v_sale_comps` / `v_sales_comps`: surfaced raw `sold_cap_rate`.
+- gov **`cm_gov_market_quarterly`** (the quarterly capital-markets cap-rate chart,
+  via `cm_gov_cap_ttm_q` → `cap_rate_ttm_by_quarter`): averaged **raw
+  `sold_cap_rate` with no band filter and no quality filter** — the primary leak.
+- gov `cm_gov_market_quarterly_master_m` (monthly): **972** implausible rows were
+  *inside* the generic 0.04–0.12 band (so the band filter missed them); **702**
+  were live.
 
-So G6 is **"tagged but not enforced downstream"** — the symptom ("implausible cap
-rates pollute metrics") is only half-closed.
+**Fix — "null the cap rate, keep the row"** (chosen semantics: an implausible cap
+rate doesn't make the whole sale bad — the sale still counts in price/SF and
+volume/count comps). Migrations `…230000_dia_g6_null_implausible_cap_in_comps.sql`
+and `…230000_gov_g6_null_implausible_cap_rate.sql`. Applied to dia
+(`zqzrriwuavgrquhisnoa`) and gov (`scknotsqkcheojiaewwh`):
+- **Comp views** (dia `v_sales_comps`, gov `v_sale_comps`, gov `v_sales_comps`)
+  surface the stated cap rate directly → nulled when `implausible_unverified`.
+  Verified: implausible rows remain present, **0** still carry a cap rate.
+- **gov `cm_gov_market_quarterly`** → `sold_cap_rate` nulled at source (excluded
+  from `avg`/quartile, row still in volume/count). Headline `cm_gov_cap_ttm_q`
+  stays populated and sane (recent quarters 6.8–10.7%).
+- **gov `cm_gov_market_quarterly_master_m`** (TTM-A): this chain already
+  band-filters **and** prefers an NOI-recalculated `cap_rate_history` value over
+  the stated one (596 of the 702 in-band-live implausible rows have one, many
+  high-confidence `property_noi_confirmed`). To avoid discarding those good
+  recalcs, only the implausible **stated fallback** is nulled; the recalculated
+  value is preserved. `cm_gov_market_quarterly_master_m_mat` refreshed.
 
-**Recommended fix (has a design choice — needs your call):** exclude
-`cap_rate_quality = 'implausible_unverified'` from the cap-rate paths. Two options:
-- **Null the cap rate, keep the row** — implausible cap rate is hidden from
-  cap-rate averages, but the sale still counts in price/SF comps. *(Preferred —
-  an implausible cap rate doesn't make the whole sale bad.)*
-- **Exclude the whole row** — simpler, but drops the sale from price comps too.
+Patches are idempotent and read the live definition via `pg_get_viewdef`, so they
+adapt to orthogonal redefinitions — notably gov `v_sales_comps` was observed
+flipping matview→view (+ a `transaction_state='live'` filter) by a concurrent
+process mid-session; the gov patch detects relkind and branches accordingly.
 
-Locations to change: `v_sales_comps` (dia + a gov equivalent if/when one exists)
-and the cap-rate-TTM aggregation view/RPC behind capital-markets. Needs the
-exact aggregation source pinned + UI verification, so flagged rather than changed
-blind. dia impact is minimal (dia cap rates are mostly net-rent-derived,
-`cap_rate_quality` largely NULL); the gov capital-markets dashboard is where it
-matters.
+Audit log: `G6_caprate_consumer_enforcement_2026_05_29_001` (audit_run_log 63).
 
 ## Net
 
 - Drift detector: **fixed** (usable alarm again).
-- G6 downstream exclusion: **verified gap** — recommend the null-the-cap-rate fix
-  on the comp view + TTM aggregation, pending your choice of semantics.
+- G6 downstream exclusion: **fixed** — null-the-cap-rate enforcement applied to
+  the dia + gov comp views and the gov capital-markets cap-rate aggregations
+  (recalculated NOI cap rates preserved on the monthly chain).
 - Plus the earlier-noted owner-side items (BD vault secrets, entities-layer
   growth) and product decisions (gov.unified_contacts fate, owner-entity clutter,
   engagement-sort formula).
