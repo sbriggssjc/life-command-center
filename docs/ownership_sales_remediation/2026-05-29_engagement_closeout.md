@@ -20,9 +20,8 @@ complete; the two remaining items are documented workstation handoffs.
 - ✅ **DONE / RESOLVED (29):** F1-F4, C1, C2, C3 (N/A), C4, C5, C6, C8, B1, B2, B4, B5, B6, B7, B8, A1, A2, A3, A4, A5, A6, A7, A8 (N/A), B3 (N/A)
 - ⏳ **PARTIAL — documented remaining scope (2):**
   - **C9** — writer-validation sweep COMPLETE (deed-parser, OM promoter, RCM/LoopNet, CoStar sidebar all route through the ingest contract). Only the optional `commit_*` orchestrator convenience remains — a nicety, not a gap.
-  - **A9** — A9a gov→hub data migration DONE (hub = 29,634 rows: 13,403 owners + 16,034 SF + 197 originals). A9b phases 1–2 (schema + value parity) DONE; hub is cutover-ready (column-diff clean, create-path verified email-safe). The flag-gated `govQuery→opsQuery` cutover (phases 3–7) is a workstation task — see the runbook below.
-- 🛠 **WORKSTATION HANDOFFS (2):**
-  - **A9b cutover flip** — turnkey runbook ready (`2026-05-29_a9b_cutover_runbook.md`). Needs UI/Vercel runtime testing + a flip decision.
+  - **A9** — A9a gov→hub data migration DONE (hub = 29,639 rows). A9b schema/value parity DONE; **flag-gated cutover GO-LIVE on production 2026-05-29.** `CONTACTS_HUB=ops` set on Railway; the live Contacts feature now reads/writes the LCC Opps hub. Verified end-to-end: default-off deploy first confirmed the gov path intact, then the count flipped 29,486→29,639 on flip, and a hub-written test row surfaced live in the app's Contacts search (then cleaned up). Read path proven; the app write-path (UI create/edit) wasn't separately exercised but its code routing is verified. Low-priority follow-ups: optional `commit_*` orchestrators; the 44 email-collision broker-owners' `sf_contact_id` dedup; and a pre-existing "Engagement (High)" sort no-op (`engagement_score` never populated on gov *or* hub — badge is computed from touches).
+- 🛠 **WORKSTATION HANDOFFS (1):**
   - **C7 SOS adapters** — framework scaffolded in `llc-research.js`; per-state adapters need live SOS-site access (all 5 endpoints 403 from the remote env) + the code's "verify-live-before-enable" contract. Build from a workstation, FL bulk-mirror first.
 
 ## Workstation scripts delivered (dry-run-first, reversible, audit-wrapped)
@@ -53,6 +52,8 @@ complete; the two remaining items are documented workstation handoffs.
 | 50 | A9a_gov_sf_contacts | gov | 16,034 |
 | 51 | A9b_phase1a_parity_columns | lcc_opps | 0 |
 | 52 | A9b_phase1b_parity_backfill | lcc_opps | 16,946 |
+| 54 | A9b_delta_resync (pre-flip) | gov_db | 5 |
+| 55 | A9b_cutover_golive (CONTACTS_HUB=ops) | lcc_opps | live |
 
 ## Deploy reminders (carried, not yet confirmed live by me)
 
