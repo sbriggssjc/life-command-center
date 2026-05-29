@@ -84,6 +84,7 @@ const FMT = {
   currency_per_sf:      '"$"#,##0.00',
   percent_basis_points: '0.00%',
   percent_one_decimal:  '0.0%',
+  percent_signed:       '+0.0%;-0.0%',
   integer_count:        '#,##0',
   // Number with one decimal (used by months_of_supply, firm_term_years,
   // and R50 helper col monthly_clear_pace). Pre-existing references in
@@ -865,6 +866,7 @@ const TAB_NAMES = {
   // Tier 4 — KPI tile blocks
   value_proposition_results:    'KPI_Value_Prop',
   whatsnew_quarter_kpis:        'KPI_Whats_New',
+  trend_watch_callouts:         'KPI_Trend_Watch',
   // Phase 5 — Inventory Analysis (dia p.29-35)
   inventory_snapshot_kpis:      'KPI_Inv_Snapshot',
   available_market_size_combo:  'Data_Avail_Mkt_Size',
@@ -2459,6 +2461,7 @@ export function getExportBundleSchema() {
       'value_proposition_results',
       'whatsnew_quarter_kpis',
       'inventory_snapshot_kpis',
+      'trend_watch_callouts',
     ]),
   };
 }

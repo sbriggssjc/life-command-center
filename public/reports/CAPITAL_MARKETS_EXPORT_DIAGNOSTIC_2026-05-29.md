@@ -19,6 +19,13 @@
 
 **Not a bug (corrected from first pass):** the two scatter charts per workbook are correctly wired via `xVal`/`yVal`. High null-density on 300-row history tabs is expected (mid-century-onward quarterly series).
 
+### Batch 2 (2026-05-29) — Trend Watch KPI block
+
+| Item | What shipped | Where | Verification |
+|---|---|---|---|
+| **5. Trend Watch (Tier-4 KPI block)** | Built `cm_dialysis_trend_watch_kpis` — 4 data-driven directional tiles (Cap Rate Trend QoQ, TTM Volume Momentum YoY, Cap–Treasury Spread, Days-on-Market Trend QoQ) on the existing `kpi_block` contract. Registered in `cm_chart_catalog` (dialysis, phase 4); export wired via new `KPI_Trend_Watch` tab + `specialRenderers`; added the missing `percent_signed` FMT token (`+0.0%;-0.0%`), which also fixes the whatsnew Volume tile that previously rendered as a raw decimal. | dialysis view + LCC catalog **applied live**; `life-command-center/api/_shared/cm-excel-export.js` (**needs Vercel deploy**); migrations: `DialysisProject/supabase/migrations/20260529140000_cm_dialysis_trend_watch_kpis.sql`, `life-command-center/supabase/migrations/20260529140000_cm_chart_catalog_trend_watch.sql` | acorn OK; live 2026-Q1 tiles: Cap +0.66% QoQ, Volume +54.7% YoY, Cap–Treasury 3.48%, DOM +290.9d. View max period = 2026-03-31 (quarterly sources, no in-progress-quarter bleed). Dashboard card is catalog-driven (no frontend code change needed). |
+| **4. Gov NPV view** | **Skipped** per direction — master-workbook-only, no export tab today. Open for a future batch. | — | — |
+
 **Deferred within this batch:** "Sumitomo Bank" vs "SMBC" left distinct (same parent, different names — add a `cm_entity_alias` row to merge); Elliott Bay sub-fund family left distinct; display casing reflects source (e.g. "Aei"). The monthly TTM views still synthesize forward-filled future months at source — the export clamp fully hides this for any given `as_of`, but trimming it in the view is a separate lower-priority cleanup.
 
 ---
