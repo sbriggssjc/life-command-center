@@ -290,6 +290,12 @@ const CHART_COLUMNS = {
     { key: 'ttm_count',  header: 'Total Transactions', format: 'integer_count',    width: 18 },
     { key: 'ttm_volume', header: 'Total Volume ($)',    format: 'currency_dollars', width: 20 },
   ],
+  industry_participants: [
+    { key: 'rank',          header: '#',                 format: 'integer_count',    width: 5 },
+    { key: 'operator',      header: 'Operator / Chain',                              width: 32 },
+    { key: 'clinic_count',  header: 'U.S. Clinics',      format: 'integer_count',    width: 14 },
+    { key: 'pct_of_market', header: '% of U.S. Clinics', format: 'percent_one_decimal', width: 16 },
+  ],
   top_sellers_table: [
     { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
     { key: 'seller',     header: 'Seller',                                           width: 38 },
@@ -801,6 +807,7 @@ const TAB_NAMES = {
   pace_of_cap_rate_expansion:   'Data_Pace_Cap_Expand',
   // Audit-fix tab names (catalog rows existed; TAB_NAMES were missing):
   top_buyers_table:             'Data_Top_Buyers',
+  industry_participants:        'Data_Industry_Part',
   top_sellers_table:            'Data_Top_Sellers',
   nm_notable_transactions:      'Data_NM_Notable_Txns',
   // Round 5c — gov NM tracking tabs (lifts allow-list deferrals)
