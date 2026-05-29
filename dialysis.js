@@ -1471,6 +1471,28 @@ function renderDiaOverview() {
           t += '</tbody></table>';
           wrap.innerHTML = t;
         }
+
+        // Recent closed sale deals (drill list).
+        const recent = await diaQuery('v_sjc_deal_book',
+          'deal_name,sjc_team,state,closed_price,est_close_date,deal_side',
+          { filter: 'deal_stage=eq.closed', order: 'est_close_date.desc.nullslast', limit: 25 });
+        const recentRows = (Array.isArray(recent) ? recent : (recent && recent.data) || [])
+          .filter(r => r.deal_side === 'Sale Deal - Commercial').slice(0, 10);
+        const rwrap = document.getElementById('sjcRecentDeals');
+        if (rwrap && recentRows.length) {
+          let t = '<div style="font-size:11px;color:var(--text3);margin:6px 0 4px">Recent closed sales</div>'
+            + '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
+          recentRows.forEach(r => {
+            t += '<tr style="border-top:1px solid var(--border)">'
+              + '<td style="padding:4px 8px">' + esc((r.deal_name || '—').substring(0, 48)) + '</td>'
+              + '<td style="padding:4px 8px;color:var(--text3)">' + esc(r.sjc_team || '') + '</td>'
+              + '<td style="padding:4px 8px;color:var(--text3)">' + esc(r.state || '') + '</td>'
+              + '<td style="padding:4px 8px;text-align:right">' + (r.closed_price ? '$' + fmtN(Math.round(Number(r.closed_price) / 1e6 * 10) / 10) + 'M' : '—') + '</td>'
+              + '<td style="padding:4px 8px;text-align:right;color:var(--text3)">' + esc(r.est_close_date || '') + '</td></tr>';
+          });
+          t += '</tbody></table>';
+          rwrap.innerHTML = t;
+        }
       } catch (err) {
         console.warn('SJC deal book load failed:', err.message);
         const wrap = document.getElementById('diaSjcDealBook');
@@ -1731,7 +1753,7 @@ function renderDiaOverview() {
   html += infoCard({ title: 'Closed Volume', value: '...', sub: 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
   html += infoCard({ title: 'Active Listings', value: '...', sub: 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
   html += infoCard({ title: 'Under Contract', value: '...', sub: 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
-  html += '</div><div id="sjcDealBookTeams" style="margin-top:10px"></div></div>';
+  html += '</div><div id="sjcDealBookTeams" style="margin-top:10px"></div><div id="sjcRecentDeals" style="margin-top:10px"></div></div>';
 
   // ═══════════════════════════════════════════════
   // SECTION 7: ON MARKET
