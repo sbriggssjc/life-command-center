@@ -262,8 +262,9 @@ async function loadDiaSalesCompsFromTxns() {
     'land_area,lot_sf,year_built,year_renovated,tenant,operator,chain_canonical,',
     'medicare_id,linked_medicare_facility_id,building_type,zoning,',
     'latitude,longitude,lease_bump_pct,lease_bump_interval_mo,',
+    'anchor_rent,anchor_rent_source,',
     'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
-    'expense_structure,rent_per_sf,annual_rent,renewal_options,is_active,',
+    'expense_structure,rent_per_sf,annual_rent,rent,renewal_options,is_active,',
     'status,data_source,source_confidence))',
   ].join('');
 
@@ -536,6 +537,24 @@ function pickBest(/* ...[value, source] pairs */) {
   return { value: null, source: null };
 }
 
+// Rent escalated from the lease anchor to a target date — 1:1 port of the SQL
+// helper public.dia_project_rent_at_date (compounds bump_pct every
+// bump_interval_mo). Used to show rent AT SALE DATE on sales comps (2026-05-29
+// decision), matching v_sales_comps so the dashboard and detail panel agree.
+function diaProjectRentAtDate(anchorRent, anchorDate, targetDate, bumpPct, bumpIntervalMo) {
+  if (anchorRent == null || Number(anchorRent) <= 0) return null;
+  const ar = Number(anchorRent);
+  if (!anchorDate || !targetDate) return ar;
+  const a = new Date(anchorDate), t = new Date(targetDate);
+  if (isNaN(a.getTime()) || isNaN(t.getTime()) || t <= a) return ar;
+  const interval = (bumpIntervalMo && Number(bumpIntervalMo) > 0) ? Number(bumpIntervalMo) : 12;
+  const pct = (bumpPct == null || Number(bumpPct) === 0) ? 0 : Number(bumpPct);
+  if (pct === 0) return ar;
+  const monthsElapsed = (t.getFullYear() - a.getFullYear()) * 12 + (t.getMonth() - a.getMonth());
+  const bumps = Math.max(0, Math.floor(monthsElapsed / interval));
+  return Math.round(ar * Math.pow(1 + pct, bumps) * 100) / 100;
+}
+
 function normalizeSalesTxnRow(r, lookups) {
   const p = r.properties || {};
   const lease = pickCurrentLease(p.leases || r.leases);
@@ -729,10 +748,25 @@ function normalizeSalesTxnRow(r, lookups) {
     bumps = pct.toFixed(pct >= 10 ? 0 : 2) + '% / ' + p.lease_bump_interval_mo + 'mo';
   }
 
-  const annualRent = lease
-    ? (lease.annual_rent != null ? Number(lease.annual_rent) : null)
+  // Rent AT SALE DATE (2026-05-29 decision) — escalate the lease anchor to the
+  // sale date so the comp's rent matches the basis behind its cap rate, and
+  // matches v_sales_comps. Anchor = confirmed property anchor_rent, else the
+  // lease's Y1 annual_rent (fallback leases.rent); bumps from the property.
+  const baseAnnual = lease
+    ? (lease.annual_rent != null ? Number(lease.annual_rent)
+       : (lease.rent != null ? Number(lease.rent) : null))
     : null;
-  const rentPsf = lease && lease.rent_per_sf != null ? Number(lease.rent_per_sf) : null;
+  const anchorRent = ((p.anchor_rent_source === 'lease_confirmed' || p.anchor_rent_source === 'om_confirmed')
+                       && p.anchor_rent != null)
+    ? Number(p.anchor_rent) : baseAnnual;
+  const bumpPct = p.lease_bump_pct != null ? Number(p.lease_bump_pct) : 0.02;
+  const bumpInt = p.lease_bump_interval_mo != null ? Number(p.lease_bump_interval_mo) : 12;
+  const annualRent = diaProjectRentAtDate(anchorRent, lease ? lease.lease_start : null, r.sale_date, bumpPct, bumpInt);
+  const baseRentPsf = lease && lease.rent_per_sf != null ? Number(lease.rent_per_sf) : null;
+  // Scale PSF by the same escalation ratio so it tracks the projected rent.
+  const rentPsf = (baseRentPsf != null && anchorRent && anchorRent > 0 && annualRent != null)
+    ? Math.round(baseRentPsf * (annualRent / anchorRent) * 100) / 100
+    : baseRentPsf;
 
   return {
     sale_id:           r.sale_id,
