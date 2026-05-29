@@ -38,6 +38,7 @@ import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
+import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
@@ -617,11 +618,38 @@ async function promoteBrokerContact(domain, snapshot, match) {
     }
   }
 
+  // C9 Phase 2 (2026-05-27): validate the broker name through the ingest
+  // contract before writing. Keeps section-label leaks ("Listing Broker",
+  // "View More") and federal-anti-pattern strings out of the contacts table.
+  // Name-focused: a junk/federal NAME is nulled (the row falls back to email
+  // / 'Unknown Broker'); we never drop a contact that still has a usable
+  // email. Only skip when there's neither a usable name nor an email.
+  let effectiveBrokerName = brokerName;
+  {
+    const { errors: contactErrors } = validateContactIngest({
+      domain,
+      name: brokerName || null,
+      email: brokerEmail || null,
+      company: snapshot.listing_firm || null,
+      role: 'broker',
+      data_source: 'lcc_intake_om',
+    });
+    const nameErrors = contactErrors.filter(e => e.startsWith('name '));
+    if (nameErrors.length) {
+      console.warn(`[intake-promoter] broker name rejected by ingest contract, nulling: ${nameErrors.join('; ')}`);
+      effectiveBrokerName = '';
+    }
+    if (!effectiveBrokerName && !brokerEmail) {
+      console.warn('[intake-promoter] broker contact skipped — no usable name or email after validation');
+      return { ok: false, skipped: 'contact_no_identifier' };
+    }
+  }
+
   // No existing match → insert a fresh contact, now including property_id
   // so the detail-pane contacts lookup (property_id=eq.X) returns it.
   const row = isGov
     ? {
-        name:            brokerName || brokerEmail || 'Unknown Broker',
+        name:            effectiveBrokerName || brokerEmail || 'Unknown Broker',
         email:           brokerEmail || null,
         company:         snapshot.listing_firm || null,
         title:           'Listing Broker',
@@ -630,7 +658,7 @@ async function promoteBrokerContact(domain, snapshot, match) {
         property_id:     propertyId,
       }
     : {
-        contact_name:    brokerName || brokerEmail || 'Unknown Broker',
+        contact_name:    effectiveBrokerName || brokerEmail || 'Unknown Broker',
         contact_email:   brokerEmail || null,
         company:         snapshot.listing_firm || null,
         title:           'Listing Broker',
@@ -899,6 +927,14 @@ async function promoteProspectLead(domain, propertyId, snapshot, match, listingI
   if (!propertyId) return { ok: false, skipped: 'no_property_id' };
 
   const today = new Date().toISOString().split('T')[0];
+
+  // C9 Phase 2 (2026-05-27): suppress federal-anti-pattern owner strings
+  // ("U S A" / "Government" — CoStar personal-property bleed-through, Round
+  // 76ek.i) before they land as the prospect's owner. NULL rather than write
+  // a known-bad owner name.
+  const rawOwner = snapshot.seller_name || snapshot.owner_name || null;
+  const ownerName = rawOwner && !isFederalOwnerAntiPattern(rawOwner) ? rawOwner : null;
+
   const fields = {
     tenant_agency:        snapshot.tenant_agency || snapshot.tenant_name || null,
     agency_full_name:     snapshot.agency_full_name || null,
@@ -918,8 +954,8 @@ async function promoteProspectLead(domain, propertyId, snapshot, match, listingI
     square_feet:          snapshot.building_sf ? parseInt(snapshot.building_sf, 10) : null,
     annual_rent:          snapshot.annual_rent ? Number(snapshot.annual_rent) : null,
     lease_expiration:     snapshot.lease_expiration || null,
-    true_owner:           snapshot.seller_name || snapshot.owner_name || null,
-    recorded_owner:       snapshot.seller_name || snapshot.owner_name || null,
+    true_owner:           ownerName,
+    recorded_owner:       ownerName,
     is_already_listed:    true,
   };
   // Drop null fields so COALESCE doesn't pointlessly "update" to null.

@@ -20,6 +20,7 @@
 // ============================================================================
 
 import { domainQuery } from '../_shared/domain-db.js';
+import { validateDeedIngest, buildDeedDataHash } from '../_shared/ingest-contract.js';
 
 // ── Transfer tax rates by jurisdiction ─────────────────────────────────────
 // California standard: $1.10 per $1,000 of consideration
@@ -410,44 +411,89 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
     );
   }
 
-  // Step 3: Upsert deed_record if we have a document number
+  // Step 3: Upsert deed_record if we have a document number.
+  // C9 Phase 2 (2026-05-27): route through the standard ingest contract.
+  // Builds a DeedIngestDTO, runs validateDeedIngest, computes the canonical
+  // base64 data_hash via buildDeedDataHash. Validation failures log + skip
+  // the write rather than failing loudly mid-pipeline; the DB CHECK
+  // constraints would have rejected the same rows.
   if (parsed.document_number) {
-    const idCol = domain === 'government' ? 'parcel_id' : 'property_id';
-    const state = opts.state || parsed.recording_date ? null : null;
     const stateCol = domain === 'government' ? 'state_code' : 'state';
-
     const datePart = parseRecordingDate(parsed.recording_date);
-    const hashSource = `${parsed.document_number}|${opts.state || ''}|${datePart || ''}`;
-    const dataHash = Buffer.from(hashSource).toString('base64');
+    const dataHash = buildDeedDataHash(parsed.document_number, opts.state || '', datePart || '');
 
-    // Check for existing deed record
+    // Build the DTO + validate before any DB I/O
+    const dto = {
+      domain: domain === 'government' ? 'government' : 'dialysis',
+      property_id: domain === 'government' ? undefined : propertyId,
+      document_number: parsed.document_number,
+      [stateCol]: opts.state || null,
+      state: opts.state || null,
+      county: opts.county || null,
+      recording_date: datePart,
+      deed_type: parsed.deed_type || null,
+      grantor: parsed.grantor || null,
+      grantee: parsed.grantee || null,
+      consideration: parsed.implied_sale_price || parsed.stated_consideration || null,
+      data_hash: dataHash,
+      data_source: 'deed_parser',
+      raw_payload: { source: 'deed_parser', parsed, raw_text_length: rawText.length },
+    };
+
+    const { ok: dtoOk, errors: dtoErrors } = validateDeedIngest(dto);
+    if (!dtoOk) {
+      // Log all validation errors for observability. Hard-skip the write
+      // only when a showstopper would cause a DB CHECK violation; soft
+      // errors (e.g. missing state) get a warning but proceed — preserves
+      // pre-C9 behavior so this migration is non-breaking.
+      const hardErrors = dtoErrors.filter(e =>
+        e.includes('data_hash must be >=')             // A4b CHECK on dia
+     || e.includes('require property_id')              // Round 76ae guard on dia
+     || e.includes('document_number is required')      // hard NOT NULL
+     || e.includes('recording_date is required')       // hard NOT NULL
+      );
+      if (hardErrors.length) {
+        console.warn(
+          `[deed-parser] DeedIngestDTO HARD-skip doc=${parsed.document_number} ` +
+          `domain=${domain} property_id=${propertyId}: ${hardErrors.join('; ')}`
+        );
+        result.parsed.validation_errors = dtoErrors;
+        return result;
+      }
+      console.warn(
+        `[deed-parser] DeedIngestDTO soft warnings doc=${parsed.document_number} ` +
+        `domain=${domain} property_id=${propertyId}: ${dtoErrors.join('; ')}`
+      );
+      result.parsed.validation_warnings = dtoErrors;
+      // Fall through to the insert — the DB will accept or reject per its
+      // existing constraints. The warnings show up in Vercel logs for triage.
+    }
+
+    // Check for existing deed record (dedup by data_hash)
     const existing = await domainQuery(domain, 'GET',
       `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=deed_id&limit=1`
     );
 
     if (!existing.ok || !existing.data?.length) {
+      // Build the actual insert row from the validated DTO, dropping
+      // undefined/null fields (matches previous stripNulls behavior).
       const deedRow = {};
       if (domain !== 'government') deedRow.property_id = propertyId;
-      deedRow.document_number = parsed.document_number;
-      deedRow.deed_type = parsed.deed_type || null;
-      deedRow.grantor = parsed.grantor || null;
-      deedRow.grantee = parsed.grantee || null;
-      deedRow.recording_date = datePart;
-      deedRow.consideration = parsed.implied_sale_price || parsed.stated_consideration || null;
-      deedRow.county = opts.county || null;
+      deedRow.document_number = dto.document_number;
+      deedRow.deed_type = dto.deed_type;
+      deedRow.grantor = dto.grantor;
+      deedRow.grantee = dto.grantee;
+      deedRow.recording_date = dto.recording_date;
+      deedRow.consideration = dto.consideration;
+      deedRow.county = dto.county;
       deedRow[stateCol] = opts.state || null;
       deedRow.data_hash = dataHash;
-      deedRow.raw_payload = {
-        source: 'deed_parser',
-        parsed,
-        raw_text_length: rawText.length,
-      };
+      deedRow.raw_payload = dto.raw_payload;
 
-      // Remove null values
       for (const [k, v] of Object.entries(deedRow)) {
         if (v === null || v === undefined) delete deedRow[k];
       }
-      deedRow.data_hash = dataHash; // Always keep
+      deedRow.data_hash = dataHash; // Always keep (NOT NULL)
 
       const insertRes = await domainQuery(domain, 'POST', 'deed_records', deedRow,
         { 'Prefer': 'return=representation' }

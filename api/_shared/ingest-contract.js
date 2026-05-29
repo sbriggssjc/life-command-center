@@ -92,7 +92,64 @@ export { isJunkContactName, isFederalOwnerAntiPattern };
  * @property {string=}                 data_source
  */
 
+/**
+ * @typedef {Object} ContactIngestDTO
+ * @property {'dialysis'|'government'} domain
+ * @property {string=}                 name          Contact display name (broker / buyer / seller / owner contact). Person-shaped.
+ * @property {string=}                 email
+ * @property {string=}                 phone
+ * @property {string=}                 company       Firm name — kept separate from the person name.
+ * @property {string=}                 role          'broker' | 'buyer' | 'seller' | 'owner' | 'lender' | ...
+ * @property {string=}                 data_source
+ */
+
 // ── Validators ─────────────────────────────────────────────────────────────
+
+/**
+ * Validate a ContactIngestDTO. A contact needs at least one identifier
+ * (name OR email). When a name is present it must not be a junk/section-label
+ * pattern or a federal-anti-pattern. Used by the OM promoter's broker-contact
+ * write to keep CoStar/OM section-label leaks ("Listing Broker", "View More")
+ * and federal bleed-through out of the contacts table.
+ *
+ * Note on firms: callers should pass the PERSON name in `name` and the firm
+ * in `company`. isJunkContactName treats firm-suffix names as junk (correct
+ * for a person-name field). If a caller can't tell person from firm, it
+ * should null the name on a junk verdict and keep the email rather than
+ * hard-dropping the contact.
+ *
+ * @param {ContactIngestDTO} dto
+ * @returns {{ok: boolean, errors: string[]}}
+ */
+export function validateContactIngest(dto) {
+  const errors = [];
+  if (!dto || typeof dto !== 'object') {
+    return { ok: false, errors: ['DTO is not an object'] };
+  }
+  if (dto.domain !== 'dialysis' && dto.domain !== 'government') {
+    errors.push(`domain must be 'dialysis' or 'government'`);
+  }
+
+  const name = (dto.name || '').trim();
+  const email = (dto.email || '').trim();
+
+  if (!name && !email) {
+    errors.push('contact needs at least a name or an email');
+  }
+  if (name) {
+    if (isJunkContactName(name)) {
+      errors.push(`name is a junk/section-label pattern: ${JSON.stringify(name)}`);
+    }
+    if (isFederalOwnerAntiPattern(name)) {
+      errors.push(`name matches federal-anti-pattern: ${JSON.stringify(name)}`);
+    }
+  }
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    errors.push(`email is malformed: ${JSON.stringify(email)}`);
+  }
+
+  return { ok: errors.length === 0, errors };
+}
 
 /**
  * Validate a SaleIngestDTO. Returns {ok, errors}. Idempotent — safe to call
