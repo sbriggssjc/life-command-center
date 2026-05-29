@@ -867,6 +867,19 @@ if (typeof window !== 'undefined') {
   window.lccIsListingOnMarket = lccIsListingOnMarket;
 }
 
+// Canonical "is this OUR (Northmarq/SJC team) deal?" predicate for SALES rows.
+// Single source of truth — gates on the is_northmarq flag, which the audit
+// (2026-05-29) confirmed is a complete SUPERSET of broker-name matching on both
+// domains (every name-match is already flagged, and the flag also catches deals
+// whose broker lives in sale_brokers, which name-matching misses). The
+// capital-markets cm_* views and detail.js already key on this flag; this lets
+// the dia + gov dashboards use the identical definition so "% NM" reconciles
+// across every surface.
+function lccIsNorthmarq(row) {
+  return !!(row && row.is_northmarq === true);
+}
+if (typeof window !== 'undefined') window.lccIsNorthmarq = lccIsNorthmarq;
+
 function catClass(cat) {
   if (!cat) return 'cat-gen'; const c = cat.toLowerCase();
   if (c.includes('government')) return 'cat-gov';

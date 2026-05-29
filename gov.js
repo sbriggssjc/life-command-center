@@ -5030,7 +5030,11 @@ function renderGovNorthmarqMetrics() {
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
-  const isNM = r => r.is_northmarq || ((r.listing_broker||'')+(r.purchasing_broker||'')).toLowerCase().match(/northmarq|sjc[;:]|briggs|hellwig|corriston/);
+  // Canonical NM attribution = the is_northmarq flag (app.js lccIsNorthmarq) —
+  // identical to dia, the CM views, and detail.js so "% NM" reconciles across
+  // surfaces. The flag is a complete superset of broker-name matching here too
+  // (2026-05-29 audit: 0 name-matches were unflagged).
+  const isNM = r => lccIsNorthmarq(r);
   const nmSales = ttmSales.filter(isNM);
   const nmWithPrice = nmSales.filter(r => (r.sold_price || r.sale_price) > 0);
   const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
