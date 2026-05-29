@@ -139,7 +139,15 @@ async function handleObjects(req: Request, body: Record<string, unknown> | null)
         sf_object_type: objectType,
         sf_object_id: mapped.sfId,
         import_batch: batchId,
-        payload: mapped.raw,
+        // payload is only ever read back by handleRetry (status='error' rows).
+        // Persisting the full raw SF record on every success row pushed
+        // sf_sync_log's payload into TOAST; combined with autovacuum never
+        // reclaiming the backfill's churn it bloated to 5.5 GB and filled the
+        // LCC Opps disk, putting the DB read-only and locking out sign-in
+        // (2026-05-29 incident). Success rows keep their identifying columns
+        // (sf_object_id, import_batch, target_database) for audit but drop the
+        // redundant payload so it never TOASTs.
+        payload: null,
         status: "ok",
       });
 

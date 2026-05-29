@@ -632,3 +632,54 @@ FROM cron.job_run_details
 WHERE jobname LIKE 'lcc-%-sync%'
 ORDER BY start_time DESC LIMIT 10;
 ```
+
+## sf_sync_log retention + disk-pressure alert (2026-05-29 outage fix)
+
+Sign-in to LCC broke with HTTP 500 "Database error granting user". Root
+cause: the **LCC Opps** DB filled its disk and Supabase forced it
+**read-only**, so GoTrue (auth) could not INSERT session / refresh-token
+rows (`SQLSTATE 25006: cannot execute INSERT in a read-only transaction`).
+Reads kept working, so only sign-in appeared broken. **LCC auth lives on
+this DB — disk-full here = total sign-in lockout, not a degraded feature.**
+
+What filled it: a one-time Salesforce backfill (May 15-27) wrote 126k
+`object_intake` rows to `public.sf_sync_log`. Live `payload` was only
+~292 MB, but the table bloated to 5.5 GB (4 GB TOAST + 1.3 GB heap)
+because **autovacuum never ran on it** (`last_autovacuum = null`) and
+there was no retention policy.
+
+Fixes (migration `20260529120000_lcc_sf_sync_log_retention_and_disk_health.sql`,
+LCC Opps + edge-function change):
+
+- **Source trim** — `intake-salesforce/index.ts` no longer stores
+  `payload` on `status='ok'` rows. payload is only read back by
+  `handleRetry` (`status='error'` rows); success rows keep their ID
+  columns for audit. Stops payload from TOASTing going forward.
+- **`sf_sync_log_prune(interval, boolean)`** + cron `sf-sync-log-prune`
+  (04:50 UTC) — deletes terminal `object_intake` rows (`ok`/`skipped`)
+  older than 30d. NEVER touches `crawl_run` (watermark), `error` (retry
+  queue), `dead` (manual queue), or `link_all`. Bounds row count.
+- **Autovacuum hardening** on `sf_sync_log` (heap + TOAST scale_factor
+  0.05) so churn is reclaimed instead of bloating again.
+- **`lcc_check_disk_health(warn_gb, crit_gb)`** + cron
+  `lcc-disk-health-check` (hourly :50) — opens a `disk_pressure` alert in
+  `lcc_health_alerts` (surfaced by `v_cron_health_summary` + daily
+  briefing) when DB size crosses thresholds; auto-resolves when it drops.
+  Postgres can't read the disk cap, so defaults (warn 11 / crit 12.5 GB)
+  are tuned to the ~13 GB read-only point — **raise them after provisioning
+  more disk.**
+
+One-time reclamation (NOT in the migration — `VACUUM FULL` can't run in a
+migration tx; non-destructive, keeps every row, run in a low-traffic
+window):
+```sql
+UPDATE public.sf_sync_log SET payload = NULL
+ WHERE sync_type='object_intake' AND status IN ('ok','skipped') AND payload IS NOT NULL;
+VACUUM FULL public.sf_sync_log;   -- reclaims ~5 GB to the OS
+```
+
+NOT addressed here (separate, tested change needed): `staged_intake_artifacts`
+(~6 GB) stores large email/copilot OM files as base64 in `inline_data` at
+ingest (`intake-om-pipeline.js`, no `storage_path`). The durable fix is to
+offload those blobs to Supabase Storage (preserve file, free Postgres
+disk), not delete them — deletion is irreversible loss of the raw OM.
