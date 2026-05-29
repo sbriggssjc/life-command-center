@@ -73,6 +73,14 @@ CREATE TRIGGER trg_enforce_nonlive_excluded
   FOR EACH ROW
   EXECUTE FUNCTION public.enforce_nonlive_excluded_from_metrics();
 
+-- dia comp consumers that are MATERIALIZED VIEWS gating on
+-- exclude_from_market_metrics must be refreshed so the backfill is reflected
+-- (both retain their own refresh crons going forward):
+--   v_sales_comps        — detail.js entity comp lookups (gates on the flag).
+--   mv_property_value_signal — per-property signal off sales_transactions.
+REFRESH MATERIALIZED VIEW public.v_sales_comps;
+REFRESH MATERIALIZED VIEW public.mv_property_value_signal;
+
 COMMIT;
 
 -- Verify: should be 0 after this migration.

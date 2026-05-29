@@ -58,10 +58,12 @@ SELECT listing_id, status, is_active, off_market_reason, 'synthetic_reclass'
    AND listing_broker IS NULL AND seller_name IS NULL
 ON CONFLICT (listing_id) DO NOTHING;
 
+-- NB: off_market_reason is NOT set here — available_listings has a CHECK
+-- constraint (al_off_market_reason_check) on its allowed values, and is_active
+-- false alone is sufficient to exclude these from the gated view.
 UPDATE public.available_listings
    SET is_active = false,
-       status = 'Imported-Estimate',
-       off_market_reason = COALESCE(off_market_reason, 'non_marketed_import')
+       status = 'Imported-Estimate'
  WHERE (status IS NULL OR status = 'Draft-Commenced')
    AND listing_url IS NULL AND url IS NULL
    AND listing_broker IS NULL AND seller_name IS NULL;

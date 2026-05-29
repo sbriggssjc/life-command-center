@@ -7,6 +7,17 @@ Implements the decisions confirmed after
 workstream, not touched here). **No rows deleted; every data change is
 snapshotted and reversible.**
 
+## ✅ Applied to production 2026-05-29
+
+Applied live to dia (`zqzrriwuavgrquhisnoa`) and gov (`scknotsqkcheojiaewwh`),
+verified: dia `v_available_listings` = **265**, gov = **191**, dia
+available-backslide = 0. Note: gov `v_available_listings` was a **materialized
+view** (refreshed by cron `refresh-mv-available-listings`); it was converted to a
+**live regular view** and the refresh cron unscheduled, so the on-market set is
+always current. The dia synthetic reclassification omits `off_market_reason`
+(table CHECK constraint `al_off_market_reason_check`); `is_active=false` alone
+excludes those rows.
+
 ## Decisions implemented (user, 2026-05-29)
 
 | # | Decision | How |

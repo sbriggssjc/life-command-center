@@ -61,12 +61,19 @@ ALTER TABLE public.available_listings
   GENERATED ALWAYS AS (listing_status = ANY (ARRAY['active'::text, 'under_contract'::text])) STORED;
 
 -- ---------------------------------------------------------------------------
--- 2. Rewrite v_available_listings to gate on is_active.
---    Output columns unchanged (PostgREST `select=*` consumers unaffected).
+-- 2. Replace v_available_listings with a gated definition.
+--    NB: this object was a MATERIALIZED VIEW (refreshed by pg_cron job
+--    'refresh-mv-available-listings'). We convert it to a regular VIEW so the
+--    on-market set is always live (no stale snapshot) and drop the refresh cron.
+--    It had no dependents; its unique index (v_available_listings_listing_id_uniq)
+--    drops with the matview. Output columns unchanged.
 --    Closes are suppressed only when a LIVE sale falls on/after the listing's
 --    own window (listing_date - 60d), so historical sales don't hide re-lists.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW public.v_available_listings AS
+DROP MATERIALIZED VIEW IF EXISTS public.v_available_listings;
+SELECT cron.unschedule('refresh-mv-available-listings')
+  WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'refresh-mv-available-listings');
+CREATE VIEW public.v_available_listings AS
  SELECT al.listing_id,
     al.property_id,
     p.lease_number,

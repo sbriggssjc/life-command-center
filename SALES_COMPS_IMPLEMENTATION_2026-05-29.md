@@ -5,6 +5,29 @@ to `SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md` and
 `ON_MARKET_AVAILABILITY_IMPLEMENTATION_2026-05-29.md`. **No rows deleted; every
 change reversible.**
 
+## ✅ Applied to production 2026-05-29
+
+All four sales + available migrations applied live to dia (`zqzrriwuavgrquhisnoa`)
+and gov (`scknotsqkcheojiaewwh`) and verified. Final live numbers:
+
+| | dia | gov |
+|---|---|---|
+| On-market (`v_available_listings`) | 265 | 191 |
+| Sales comps all-time (option A) | 2,899 | 2,470 |
+| Sales comps TTM priced | 170 | 61 |
+| Non-live leak (target 0) | 0 | 0 |
+
+**Materialized-view discovery during apply:** gov `v_available_listings`, gov
+`v_sales_comps`, and dia `v_sales_comps` were **materialized views** (stale
+snapshots refreshed by cron), not plain views. The gov two were converted to
+**live regular views** (and their refresh crons unscheduled) so counts update
+immediately; dia `v_sales_comps` + `mv_property_value_signal` + gov
+`mv_gov_overview_stats` were refreshed (they keep their own refresh crons). All
+`cm_*` views are regular (live) views and reflect the backfill immediately.
+
+JS (`app.js`/`gov.js`/`dialysis.js`) deploys via the normal Vercel pipeline from
+the pushed branch.
+
 ## Categorization conclusion (reviewed before any change)
 
 `transaction_state` and `exclude_from_market_metrics` are **distinct, legitimate
