@@ -678,8 +678,28 @@ UPDATE public.sf_sync_log SET payload = NULL
 VACUUM FULL public.sf_sync_log;   -- reclaims ~5 GB to the OS
 ```
 
-NOT addressed here (separate, tested change needed): `staged_intake_artifacts`
-(~6 GB) stores large email/copilot OM files as base64 in `inline_data` at
-ingest (`intake-om-pipeline.js`, no `storage_path`). The durable fix is to
-offload those blobs to Supabase Storage (preserve file, free Postgres
-disk), not delete them — deletion is irreversible loss of the raw OM.
+### Artifact inline_data → Storage offload (follow-up)
+
+`staged_intake_artifacts` (~6 GB) is the next-largest consumer: large
+email/copilot OM files are stored base64 in `inline_data` at ingest
+(`intake-om-pipeline.js`, no `storage_path`). Rather than delete them
+(irreversible loss of the raw OM), they're offloaded to the
+`lcc-om-uploads` Storage bucket with `inline_data` cleared — transparent to
+readers (`intake-extractor.js` getArtifactBytes + the download handler fall
+back to `storage_path`).
+
+- Worker: `api/admin.js handleArtifactOffload` → `/api/artifact-offload`
+  (GET = dry-run, POST = drain). Eligible = `inline_data` not null,
+  `storage_path` null, older than `grace_minutes` (default 15, so the
+  inline-based initial extraction finishes first). Uploads with
+  `x-upsert` to a deterministic per-row path, then PATCHes
+  `storage_path`/`inline_data` guarded on `storage_path IS NULL` — so
+  partial failures and re-ticks are no-ops, never duplicates or data loss.
+  Time-budgeted (~7s) for the Vercel function limit.
+- Cron `lcc-artifact-offload` (`2-59/10 * * * *`, migration
+  `20260529130000_lcc_artifact_offload_cron.sql`) drains ~15/tick; the ~1k
+  large rows clear in ~11h, then it just offloads new inline artifacts as
+  they arrive (caps growth). **The cron + endpoint go live together on
+  deploy** — the endpoint 404s until `admin.js` ships, so don't apply the
+  cron migration ahead of the Vercel deploy. Verify post-deploy with a GET
+  dry-run before relying on the cron.

@@ -22,6 +22,7 @@
     { "source": "/api/ownership-reconcile", "destination": "/api/admin?_route=ownership-reconcile" },
     { "source": "/api/sf-sync-queue", "destination": "/api/admin?_route=sf-sync-queue" },
     { "source": "/api/storage-cleanup", "destination": "/api/admin?_route=storage-cleanup" },
+    { "source": "/api/artifact-offload", "destination": "/api/admin?_route=artifact-offload" },
     { "source": "/api/consolidate-property", "destination": "/api/admin?_route=consolidate-property" },
     { "source": "/api/npi-lookup", "destination": "/api/admin?_route=npi-lookup" },
     { "source": "/api/npi-registry-sync", "destination": "/api/admin?_route=npi-registry-sync" },
