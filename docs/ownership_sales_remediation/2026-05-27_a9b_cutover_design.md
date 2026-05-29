@@ -50,6 +50,16 @@ Status: **design / not executed.** A9a is done (gov→hub data migration complet
 
 Remaining A9b phases (3–7) per the plan above are unstarted and gated on sign-off at the repoint step.
 
+## Phase 4 finding (create-path email-safety) — already largely satisfied
+
+Investigated `ingestContact` (the create path). It does **Tier 0 = email exact match first** (`unified_contacts?email=ilike.<email>&limit=1`); on a hit it takes the MERGE/update branch, never inserting a second row for that email. So duplicate-email inserts are already prevented in the normal flow — the hub's `UNIQUE (lower(email))` won't break the cutover. (`ilike` exact ≈ case-insensitive equality, aligns with the `lower(email)` index.)
+
+Residual: a **concurrent-create race** (two requests, same email, both miss the lookup, both insert) → one hits 23505 and currently 500s. This only matters *after* the repoint (gov has no such constraint, so it can't fire today). The fix — catch 23505 and fall back to email-match-update — belongs **with the phase-5 repoint** (a gov-side fallback now would be unreachable dead code). So phases 4 + 5 are one unit.
+
+## Recommendation: treat phases 3–7 as a single, tested cutover unit
+
+The safe prep is done (A9a data migration + phase 1/2 schema & value parity, column-diff clean). What's left is the **actual cutover** — repoint `contacts-handler` `govQuery → opsQuery` behind a flag, with the 23505-race fallback, exercised against the hub in a low-traffic window with instant flag rollback — plus the 44-row dedup (folds into the systematic contact-dedup) and the dia projection (phases 6–7). These change live Contacts behavior and should be done deliberately as one tested chunk with sign-off, **not** bolted onto the live handler piecemeal.
+
 ## Audit / files
 
 A9a audit entries: 44 (staged), 47 (owners applied), 50 (SF applied). A9b: 51 (phase 1a parity columns), 52 (phase 1b value backfill).
