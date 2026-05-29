@@ -649,7 +649,7 @@ function renderDealIntelligence({ pipelineRollup, salesComps, expirations }) {
     const loc = [c.city, c.state].filter(Boolean).join(', ');
     const tenant = c.tenant_agency || c.tenant || '';
     const price = fmtMoney(c.sale_price, { compact: true });
-    const cap = fmtPct(c.cap_rate, 2);
+    const cap = c.cap_rate ? fmtPct(c.cap_rate, 2) : null;
     const date = fmtMonthDay(c.sale_date);
     const bits = [date, price, cap].filter(Boolean).join(' &middot; ');
     return (
@@ -825,7 +825,7 @@ function renderNewOnMarket({ newIntakes, newListings }) {
     const tenant = l.tenant_agency || l.tenant || '(tenant unknown)';
     const date = fmtMonthDay(l.listing_date);
     const price = fmtMoney(l.asking_price, { compact: true });
-    const cap = fmtPct(l.cap_rate, 2);
+    const cap = l.cap_rate ? fmtPct(l.cap_rate, 2) : null;
     const bits = [date, price, cap].filter(Boolean).join(' &middot; ');
     return (
       `<tr><td style="${FONT}padding:6px 0;font-size:12px;color:${BRAND.text};` +
@@ -1120,7 +1120,7 @@ function renderText(ctx) {
     allComps.forEach((c) => {
       const loc = [c.city, c.state].filter(Boolean).join(', ');
       lines.push(`    - ${c.tenant_agency || c.tenant || 'unknown'}  ${loc}  ` +
-        `${fmtMoney(c.sale_price, { compact: true }) || ''}  ${fmtPct(c.cap_rate, 2) || ''}`);
+        `${fmtMoney(c.sale_price, { compact: true }) || ''}  ${(c.cap_rate ? fmtPct(c.cap_rate, 2) : '') || ''}`);
     });
   }
   lines.push('');
