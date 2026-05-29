@@ -16,6 +16,29 @@ import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { rawQuery } from "../_shared/supabase-client.ts";
 import { authenticateWebhook, authenticateUser } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
+import { validateContactIngest } from "../_shared/ingest-contract.ts";
+
+// C9 Phase 2 (2026-05-27): sanitize a parsed lead's name through the ingest
+// contract before it's written to marketing_leads. A junk/section-label or
+// federal-anti-pattern name is nulled (the lead keeps its email/phone
+// identity); we never drop a lead that still has an email. Mutates the
+// parsed object in place and returns it.
+function sanitizeLeadName<T extends { lead_name?: string | null; lead_first_name?: string | null; lead_last_name?: string | null; lead_email?: string | null }>(parsed: T): T {
+  const { errors } = validateContactIngest({
+    domain: "dialysis",  // marketing_leads lives on dia
+    name: parsed.lead_name || null,
+    email: parsed.lead_email || null,
+    role: "lead",
+  });
+  const nameRejected = errors.some((e) => e.startsWith("name "));
+  if (nameRejected) {
+    console.warn(`[lead-ingest] lead name rejected by ingest contract, nulling: ${errors.filter((e) => e.startsWith("name ")).join("; ")}`);
+    parsed.lead_name = null;
+    parsed.lead_first_name = null;
+    parsed.lead_last_name = null;
+  }
+  return parsed;
+}
 
 // ── DIA Database Config ────────────────────────────────────────────────────
 
@@ -294,7 +317,7 @@ async function handleRcmIngest(req: Request, body: Record<string, unknown> | nul
   if (!raw_body) return errorResponse(req, "raw_body is required", 400);
   if (source !== "rcm") return errorResponse(req, 'source must be "rcm"', 400);
 
-  const parsed = parseRcmEmail(raw_body as string, (deal_name || subject || null) as string | null);
+  const parsed = sanitizeLeadName(parseRcmEmail(raw_body as string, (deal_name || subject || null) as string | null));
 
   const insertPayload = {
     source: "rcm", source_ref: source_ref || null,
@@ -343,7 +366,7 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
 
   if (!raw_body) return errorResponse(req, "raw_body is required", 400);
 
-  const parsed = parseLoopNetEmail(raw_body as string, (deal_name || null) as string | null);
+  const parsed = sanitizeLeadName(parseLoopNetEmail(raw_body as string, (deal_name || null) as string | null));
 
   const insertPayload = {
     source: "loopnet", source_ref: source_ref || null,

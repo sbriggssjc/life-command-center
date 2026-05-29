@@ -36,6 +36,27 @@ import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
+import { validateContactIngest } from './_shared/ingest-contract.js';
+
+// C9 Phase 2 (2026-05-27): null a junk/federal lead name (keep email/phone
+// identity) before writing to marketing_leads. Mirrors the lead-ingest Edge
+// Function's sanitizeLeadName — this is the Vercel fallback path.
+function sanitizeLeadName(parsed) {
+  if (!parsed) return parsed;
+  const { errors } = validateContactIngest({
+    domain: 'dialysis',  // marketing_leads lives on dia
+    name: parsed.lead_name || null,
+    email: parsed.lead_email || null,
+    role: 'lead',
+  });
+  if (errors.some(e => e.startsWith('name '))) {
+    console.warn(`[sync] lead name rejected by ingest contract, nulling: ${errors.filter(e => e.startsWith('name ')).join('; ')}`);
+    parsed.lead_name = null;
+    parsed.lead_first_name = null;
+    parsed.lead_last_name = null;
+  }
+  return parsed;
+}
 
 // Edge function base URL (existing ai-copilot deployment)
 const EDGE_FN_URL = process.env.EDGE_FUNCTION_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
@@ -1561,7 +1582,7 @@ async function handleRcmIngest(req, res) {
 
   // Power Automate sends `subject` (email subject line); API callers may send `deal_name`.
   // Use whichever is provided, preferring deal_name if both are present.
-  const parsed = parseRcmEmail(raw_body, deal_name || subject);
+  const parsed = sanitizeLeadName(parseRcmEmail(raw_body, deal_name || subject));
 
   const insertPayload = {
     source: 'rcm',
@@ -2068,7 +2089,7 @@ async function handleLoopNetIngest(req, res) {
     return res.status(400).json({ error: 'raw_body is required' });
   }
 
-  const parsed = parseLoopNetEmail(raw_body, deal_name);
+  const parsed = sanitizeLeadName(parseLoopNetEmail(raw_body, deal_name));
 
   const insertPayload = {
     source: 'loopnet',
