@@ -2,6 +2,8 @@
 
 Goal: repoint the live Contacts feature's `unified_contacts` operations from **gov** → the **LCC Opps hub**, behind a default-off flag, with full test + rollback. Execute from a workstation/staging context where the Contacts UI + Vercel runtime can be exercised (this remote agent can't runtime-test it).
 
+> **CODE LANDED (2026-05-29).** The flag-gated repoint is implemented in `api/_handlers/contacts-handler.js` (commit on branch `claude/gifted-wozniak-Y8rng`): `CONTACTS_HUB` flag (default `gov`), path-based routing inside `govQuery()` (unified_contacts → hub when `ops`; everything else stays gov), accurate audit `target_source`, and a clean-409 guard for the email-dup race. **Default off = zero behavior change today** (verified: routing branch is dead unless `CONTACTS_HUB=ops`; flag/path logic unit-tested). The agent could NOT runtime-test the Contacts UI against the hub — so Steps 0/5/6 below (delta re-sync → test on staging → flip) are still required before trusting the flag in production.
+
 Prereqs already satisfied (this engagement): A9a data migration (hub = 29,634 ≈ gov's contacts), A9b phase 1/2 schema + value parity (column-diff clean: `in_gov_not_hub = NULL`), create-path verified email-safe via Tier-0 match. Hub PK `unified_id`; partial `UNIQUE (lower(email))` = `idx_uc_email`; no FKs.
 
 ---
