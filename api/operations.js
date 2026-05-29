@@ -746,7 +746,20 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   }
 
   // Enforce confirmation for write/draft actions
-  if (spec.tier >= 1 && spec.confirm && !params?._confirmed) {
+  // Implicit confirmation: when a draft_* action is invoked with
+  // create_draft=true and a non-empty 'to' recipient, that IS the explicit
+  // confirmation — the user (via the Copilot agent) has already said "create a
+  // draft in my Outlook," so we don't make them resend with _confirmed:true.
+  // Without this, the Tier-1 gate fires and handleDraftOutreachEmail never
+  // runs — so _maybeCreateOutlookDraft never POSTs to PA_OUTLOOK_DRAFT_URL and
+  // no real Outlook draft is created.
+  const implicitlyConfirmed = (
+    /^draft_/.test(actionName)
+    && params?.create_draft === true
+    && typeof params?.to === 'string'
+    && params.to.length > 0
+  );
+  if (spec.tier >= 1 && spec.confirm && !params?._confirmed && !implicitlyConfirmed) {
     return {
       ok: false,
       requires_confirmation: true,
