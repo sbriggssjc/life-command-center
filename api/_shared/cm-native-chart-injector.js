@@ -1055,7 +1055,7 @@ ${dLblsFrag}
         <c:grouping val="${barGrouping}"/>
         <c:varyColors val="0"/>
 ${barXml}
-        <c:gapWidth val="60"/>
+        <c:gapWidth val="${spec.barGapWidth || 60}"/>
         <c:overlap val="${overlap}"/>
         <c:axId val="1"/>
         <c:axId val="${barAxId}"/>
@@ -3006,11 +3006,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // One helper column past the regular CHART_COLUMNS: the visible band
         // height = max_last_ask - min_last_ask (range of last asks).
         const rangeCol = String.fromCharCode(65 + cols.length);
+        // Markers-only (no connecting line) to match the PDF p.34 discrete
+        // "Last Ask" dash + spread markers sitting on each high-low range bar.
         const lineSeries = [
-          { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: navy },
+          { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: navy,
+            showMarker: true, markerShape: 'square', markerSize: 5 },
         ];
         if (achievedCol) {
-          lineSeries.push({ titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: sky });
+          lineSeries.push({ titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: sky,
+            showMarker: true, markerShape: 'circle', markerSize: 4 });
         }
         return {
           tabName,
@@ -3021,6 +3025,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             dataStart, dataEnd,
             barGrouping: 'stacked',
             sharedAxis: true,
+            // Thin range bars (high gapWidth) so each TTM month reads as a
+            // discrete high-low bar, matching the master/PDF p.34.
+            barGapWidth: 220,
             // Last asks sit ~4-10%; the range band + both lines live here.
             yLeftRange:  { min: 0.04, max: 0.10 },
             yLeftNumFmt: VAL_FMT_PERCENT_2DP,
