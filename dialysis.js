@@ -794,6 +794,7 @@ function normalizeSalesTxnRow(r, lookups) {
     listing_broker:    listingBrokerPick.value   || null,
     procuring_broker:  procuringBrokerPick.value || null,
     broker_companies:  extractBrokerCompanies(r),
+    is_northmarq:      r.is_northmarq === true,
     bid_ask_spread:    null,
     dom:               null,
     transaction_type:  r.transaction_type || null,
@@ -1747,15 +1748,12 @@ function renderNorthmarqInner() {
   // ("northmarq", "north marq", "nm capital") still match on their own.
   // r.broker_name / r.seller_broker / r.buyer_broker are dropped from the
   // concat — those keys never get set on the normalized row.
-  const isNM = r => {
-    var brokers = (
-      (r.listing_broker || '') + ' ' +
-      (r.procuring_broker || '') + ' ' +
-      (r.broker_companies || '')
-    ).toLowerCase();
-    if (brokers.includes('northmarq') || brokers.includes('north marq') || brokers.includes('nm capital')) return true;
-    return NM_TEAM.some(function(name) { return brokers.includes(name); });
-  };
+  // Canonical NM attribution = the is_northmarq flag (app.js lccIsNorthmarq),
+  // matching the capital-markets views, gov dashboard, and detail.js. The flag
+  // is a complete superset of the old broker-name match (which under-reported
+  // dia to ~0 because team deals are spelled "Scott Briggs"/"SJC; Briggs", not
+  // "Northmarq"). See 2026-05-29 NM attribution audit.
+  const isNM = r => lccIsNorthmarq(r);
   const nmComps = ttmComps.filter(isNM);
   const nmWithPrice = nmComps.filter(r => r.price > 0);
   const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.price || 0), 0);
