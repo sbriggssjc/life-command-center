@@ -1130,14 +1130,16 @@ function renderDiaOverview() {
     _diaAvailListingsLoading = true;
     (async () => {
       try {
-        // Filter to on-market statuses only: active, Active, Available, For Sale
-        // Use v_available_listings view which JOINs property data (address, city, state)
+        // v_available_listings is now gated on the authoritative lifecycle flag
+        // (is_active AND no sale; synthetic imports excluded) at the DB level —
+        // see SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md. No
+        // client-side status filter needed (it would only risk re-dropping
+        // genuine re-listings whose status text lags). Trust the view.
         let all = [], pg = 0;
         while (true) {
           const batch = await diaQuery('v_available_listings', '*', {
             order: 'listing_date.desc.nullslast',
             limit: 1000, offset: pg * 1000,
-            filter: 'status=in.(active,Active,Available,"For Sale")',
           });
           all = all.concat(batch || []);
           if (!batch || batch.length < 1000) break;

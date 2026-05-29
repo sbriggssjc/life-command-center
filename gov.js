@@ -4658,7 +4658,7 @@ function renderGovOverview() {
   }
 
   // Highlight 5: Active listings on market
-  const hlActiveListings = listings.filter(l => l.listing_status === 'active');
+  const hlActiveListings = listings.filter(l => lccIsListingActive(l));
   if (hlActiveListings.length > 0) {
     highlights.push({
       icon: '📋', color: '#22d3ee', urgency: 'info',
@@ -4909,8 +4909,8 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   // SECTION 10: ON MARKET
   // ═══════════════════════════════════════════════
-  const activeListings = listings.filter(l => l.listing_status === 'active');
-  const underContract = listings.filter(l => l.listing_status === 'under_contract');
+  const activeListings = listings.filter(l => lccIsListingActive(l));
+  const underContract = listings.filter(l => (l.listing_status || '').toLowerCase() === 'under_contract');
   const totalAsking = activeListings.reduce((s, l) => s + (l.asking_price || 0), 0);
   const listingCaps = activeListings.filter(l => l.asking_cap_rate > 0.01 && l.asking_cap_rate < 0.25).map(l => parseFloat(l.asking_cap_rate)).sort((a,b) => a-b);
   const avgAskingCap = listingCaps.length > 0 ? (listingCaps.reduce((s,v)=>s+v,0)/listingCaps.length*100).toFixed(2)+'%' : '—';
@@ -5404,10 +5404,9 @@ window.setGovListingOwnership = function(view) {
 function renderGovListings() {
   // Active-listing filter is normalized case-insensitively — older rows use
   // 'Active' / 'active' / 'For Sale' interchangeably.
-  const isActive = (l) => {
-    const s = (l.listing_status || '').toLowerCase();
-    return s === 'active' || s === 'for_sale' || s === 'for sale';
-  };
+  // Canonical predicate (app.js) — single source of truth; see
+  // SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md.
+  const isActive = (l) => lccIsListingActive(l);
   const activeRows  = govData.listings.filter(isActive);
   const activeCount = activeRows.length;
   const totalAsking = activeRows.reduce((sum, l) => sum + (l.asking_price || 0), 0);
