@@ -77,8 +77,11 @@ if (!OPS_URL || !OPS_KEY) { console.error('Missing OPS_SUPABASE_URL / _SERVICE_K
 // teams_user_id/last_activity_date/total_touches/email_aliases; LCC-only:
 // sf_last_synced — both intentionally omitted.) unified_id + recorded_owner_id
 // + field_sources are handled explicitly below, so they're excluded here.
+// NB: full_name is a GENERATED column on the LCC hub (computed from
+// first/last) — it must NOT be inserted (PostgREST 428C9). gov stores it as a
+// plain column; we drop it here and let the hub recompute.
 const CARRY_COLS = [
-  'contact_class', 'first_name', 'last_name', 'full_name',
+  'contact_class', 'first_name', 'last_name',
   'email', 'email_secondary', 'phone', 'mobile_phone', 'title', 'company_name',
   'city', 'state', 'website', 'entity_type', 'contact_type', 'industry',
   'is_1031_buyer', 'total_transactions', 'total_volume', 'avg_cap_rate',
