@@ -31,3 +31,88 @@ Drain `llc_research_queue` by looking up each owner LLC in its state's Secretary
 
 ## Sequence vs other work
 This is the **keystone unlock** — it (a) fills owner addresses (with the deed/county fix), enabling the address matcher; (b) supplies decision-maker contacts; (c) resolves recorded→true owner. Prioritize the top-N states by queued volume; sidebar-assisted capture covers the long tail immediately.
+
+---
+
+## Adapter contract + skeleton + wiring (turnkey — added 2026-05-29, G15/C7)
+
+The framework is live in `api/_shared/llc-research.js`: `lookupLlc({name,state})`
+checks `SOS_DIRECT_ADAPTERS[<ST>]` first and falls back to OpenCorporates.
+Adding a state = adding one registry entry. **The orchestrator is JS**, so
+adapters are `.js` (not `.ts` as the original plan wrote).
+
+### Uniform return shape (mirror `lookupViaOpenCorporates`)
+
+```js
+// SUCCESS
+{
+  found: true,
+  source: 'sos_FL',                 // 'sos_<state>'
+  filing_state, filing_id, filing_date, filing_status,
+  registered_agent_name, registered_agent_address,
+  manager_name, manager_role,
+  payload,                          // raw record, for audit
+}
+// MISS / NON-FATAL (orchestrator falls through to OpenCorporates except no_match)
+{ found: false, source: 'sos_FL', reason: 'no_match' }        // authoritative miss — DO NOT fall through
+{ found: false, source: 'sos_FL', reason: 'adapter_pending' } // not yet verified live — falls through
+{ found: false, source: 'sos_FL', reason: 'unreachable' }     // site/network error — falls through + retry
+{ found: false, source: 'sos_FL', reason: 'rate_limited' }    // back off — falls through
+```
+
+### Skeleton (`api/_shared/sos/<state>.js`)
+
+```js
+// api/_shared/sos/fl.js  — Florida Sunbiz. Build strategy #1: bulk-mirror.
+export async function lookupViaFloridaSunbiz({ name, state }) {
+  // GUARD until verified against the live source (audit contract):
+  // return { found: false, source: 'sos_FL', reason: 'adapter_pending' };
+
+  try {
+    // 1. Resolve: query the FL Sunbiz mirror (preferred) or live search.
+    //    const hit = await matchSunbizMirror(name);            // bulk-file mirror
+    //    if (!hit) return { found:false, source:'sos_FL', reason:'no_match' };
+    // 2. Map hit → uniform shape:
+    // return {
+    //   found: true, source: 'sos_FL',
+    //   filing_state: 'FL', filing_id: hit.documentNumber,
+    //   filing_date: hit.dateFiled, filing_status: hit.status,
+    //   registered_agent_name: hit.raName, registered_agent_address: hit.raAddr,
+    //   manager_name: hit.principals?.[0]?.name, manager_role: hit.principals?.[0]?.title,
+    //   payload: hit,
+    // };
+    return { found: false, source: 'sos_FL', reason: 'adapter_pending' };
+  } catch (err) {
+    return { found: false, source: 'sos_FL', reason: 'unreachable', error: err?.message };
+  }
+}
+```
+
+### Wiring (in `llc-research.js`)
+
+```js
+import { lookupViaFloridaSunbiz } from './sos/fl.js';
+const SOS_DIRECT_ADAPTERS = {
+  FL: lookupViaFloridaSunbiz,   // enable ONLY after verified against the live source
+};
+```
+
+### Build order + the hard gate
+
+1. **FL first via bulk-mirror** (Sunbiz publishes downloadable corporate data
+   files) — compliant, complete, no anti-bot, no per-request cost. Then the
+   other top-queued states (rank `llc_research_queue` by `guessed_state`).
+2. **Verify-before-enable (non-negotiable, per the registry contract):** keep an
+   adapter returning `adapter_pending` until it's validated against the live
+   source format. Enabling an unverified adapter risks writing garbage to
+   `recorded_owners`.
+
+### Why this is a workstation task (not remote-agent)
+
+All target SOS endpoints (TX/FL/CA/GA/NC) return **HTTP 403 from the
+Claude-on-the-web execution environment** (datacenter-IP / network policy), so
+adapters can't be developed or live-verified here. Build them from a
+workstation/residential context (or a proper data pipeline for the FL mirror).
+Until then the queue persists harmlessly (worker no-ops on `adapter_pending`);
+OpenCorporates remains the flagged fallback; `/api/sos-writeback` covers manual
+sidebar capture. See `docs/ownership_sales_remediation/2026-05-29_c7_status.md`.

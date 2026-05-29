@@ -64,7 +64,22 @@ ownership fields under provenance (identity + SOS/LLC enrichment, incl. the new
 guards (C5 EXCLUDE / A6a trigger / B4 chain-tick / C4 dedup), and the mapping to
 G4/G7/G13/G14/G15. Audit log 58.
 
-## C7 / G5 — SOS adapters ⬜ NEXT (workstation; framework scaffolded, sites 403 from remote env)
+## C7 / G5 — SOS adapters ✅ as-far-as-possible-here (framework + spec turnkey; implementation workstation-bound)
+
+Framework already live in `llc-research.js` (orchestrator + `SOS_DIRECT_ADAPTERS`
+registry + uniform shape + OpenCorporates fallback). Enhanced
+`SPEC_sos_direct_scraper.md` with a turnkey **adapter contract + copy-paste
+skeleton (`api/_shared/sos/<state>.js`) + registry wiring + build order +
+verify-before-enable gate**. Implementation can't be done/verified here — all 5
+target SOS endpoints (TX/FL/CA/GA/NC) return HTTP 403 from the remote env, and
+the contract forbids enabling an unverified adapter. Workstation task; queue
+persists harmlessly meanwhile. Audit log 59. See `2026-05-29_c7_status.md`.
+
+## Sweep complete — ready for re-audit
+
+All remaining audit gaps addressed to the extent possible from this environment:
+G14 ✅, G7-dia ✅ (column + authoritative backfill staged; full coverage on BD-sync
+activation), G15 ✅, C7/G5 ✅ (turnkey; implementation workstation-bound).
 
 ## Audit-log inventory (this sweep)
 
@@ -72,3 +87,5 @@ G4/G7/G13/G14/G15. Audit log 58.
 |---:|---|---:|
 | 56 | G14_ownership_priority_rules | 8 |
 | 57 | G7_dia_unified_id (column + script staged) | 0 |
+| 58 | G15_ownership_provenance_doc | 0 |
+| 59 | C7_sos_adapter_spec (turnkey; workstation impl) | 0 |
