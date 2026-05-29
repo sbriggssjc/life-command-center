@@ -1444,6 +1444,31 @@ function renderDiaOverview() {
         setTxt('sjcActiveVal', fmtN(activeDeals)); setTxt('sjcActiveSub', 'signed & marketing');
         setTxt('sjcUCVal', fmtN(ucDeals)); setTxt('sjcUCSub', 'LOI executed / in escrow');
 
+        // Closed-sales track record by year.
+        try {
+          const yrs = await diaQueryAll('v_sjc_deal_book_by_year', '*');
+          const yrRows = (Array.isArray(yrs) ? yrs : (yrs && yrs.data) || [])
+            .filter(r => r.close_year).sort((a, b) => b.close_year - a.close_year).slice(0, 10);
+          const ywrap = document.getElementById('sjcDealBookByYear');
+          if (ywrap && yrRows.length) {
+            const maxVol = Math.max.apply(null, yrRows.map(r => Number(r.closed_volume) || 0)) || 1;
+            let t = '<div style="font-size:11px;color:var(--text3);margin:6px 0 4px">Closed sales by year (Sale Deal - Commercial)</div>'
+              + '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
+            yrRows.forEach(r => {
+              const vol = Number(r.closed_volume) || 0;
+              const barPct = Math.round(vol / maxVol * 100);
+              t += '<tr style="border-top:1px solid var(--border)">'
+                + '<td style="padding:4px 8px;width:48px">' + r.close_year + '</td>'
+                + '<td style="padding:4px 8px;text-align:right;width:64px">' + fmtN(r.closed_deals) + '</td>'
+                + '<td style="padding:4px 8px;text-align:right;width:80px">$' + fmtN(Math.round(vol / 1e6)) + 'M</td>'
+                + '<td style="padding:4px 8px"><div style="background:var(--green,#34d399);height:8px;border-radius:4px;width:' + barPct + '%;min-width:2px"></div></td>'
+                + '<td style="padding:4px 8px;text-align:right;width:64px;color:var(--text3)">' + (r.avg_cap_rate ? (Number(r.avg_cap_rate) * 100).toFixed(2) + '%' : '') + '</td></tr>';
+            });
+            t += '</tbody></table>';
+            ywrap.innerHTML = t;
+          }
+        } catch (ye) { console.warn('sjc by-year load failed:', ye.message); }
+
         // Per-team rollup (sale-side), ranked by closed deals.
         const byTeam = {};
         sale.forEach(r => {
@@ -1753,7 +1778,7 @@ function renderDiaOverview() {
   html += infoCard({ title: 'Closed Volume', value: '...', sub: 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
   html += infoCard({ title: 'Active Listings', value: '...', sub: 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
   html += infoCard({ title: 'Under Contract', value: '...', sub: 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
-  html += '</div><div id="sjcDealBookTeams" style="margin-top:10px"></div><div id="sjcRecentDeals" style="margin-top:10px"></div></div>';
+  html += '</div><div id="sjcDealBookByYear" style="margin-top:10px"></div><div id="sjcDealBookTeams" style="margin-top:10px"></div><div id="sjcRecentDeals" style="margin-top:10px"></div></div>';
 
   // ═══════════════════════════════════════════════
   // SECTION 7: ON MARKET
