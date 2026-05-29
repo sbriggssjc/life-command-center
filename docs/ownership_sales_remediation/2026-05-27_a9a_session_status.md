@@ -102,7 +102,9 @@ node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf                 # dry
 node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf --apply --limit=200   # small batch
 node scripts/A9a_migrate_gov_owner_contacts.mjs --scope=sf --apply         # full
 ```
-After it runs, the hub = a complete copy of gov.unified_contacts (13,403 owners + 16,078 SF + the 197 originals' unique cross-domain links) ≈ 29,678 rows — the prerequisite for the projection worker / `govQuery`→hub cutover (A9b territory).
+**Unique-email guard (added after first apply attempt):** the hub has a partial `UNIQUE (lower(email)) WHERE email IS NOT NULL` (`idx_uc_email`); gov.unified_contacts does not. The same person can be both an owner row and an SF row with one email (e.g. Michael Bull, broker + owner), so ~some SF emails collide with already-migrated owner rows (bounded by the hub's 1,076 distinct emails; gov's SF set has 0 internal email dups). The script now pre-loads the hub's email set and **skips colliding rows (reported), inserting the rest** — deferring the same-identity merge to a later contact-dedup pass (consistent with the deferred 6 owner dupes). So the SF apply inserts ~15,000 clean rows and reports the ≤1,076 skipped.
+
+After it runs, the hub ≈ a near-complete copy of gov.unified_contacts (13,403 owners + ~15,000 SF, minus email-collision skips) plus the 197 originals — the prerequisite for the projection worker / `govQuery`→hub cutover (A9b territory). A follow-on contact-dedup pass merges the skipped same-email identities (backfilling `sf_contact_id` onto the existing owner rows).
 
 ## What's deferred (follow-on rounds)
 
