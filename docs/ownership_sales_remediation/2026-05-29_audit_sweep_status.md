@@ -52,9 +52,19 @@ node scripts/A9b_dia_property_unified_id.mjs --apply
 canonical mechanism. That's the durable path; the script auto-covers the full
 set once `lcc_canonical_entity_id` populates.
 
-## G15 — ownership provenance design doc ⬜ NEXT
+## G15 — ownership provenance design doc ✅ DONE
 
-## C7 / G5 — SOS adapters ⬜ (workstation; framework scaffolded, sites 403 from remote env)
+Authored `Ownership_Data_Provenance_Schema_Design.md` (companion to the lease
+provenance doc). Documents the **existing** ownership provenance design — it
+reuses the shared `field_provenance` + `field_source_priority` + `lcc_merge_field`
+fabric (not parallel tables): the ownership source-tier ladder
+(manual > recorded_deed > county > SOS > shell/cms > OM > sidebar), the
+ownership fields under provenance (identity + SOS/LLC enrichment, incl. the new
+`ownership_source`), the write-decision flow, the complementary structural
+guards (C5 EXCLUDE / A6a trigger / B4 chain-tick / C4 dedup), and the mapping to
+G4/G7/G13/G14/G15. Audit log 58.
+
+## C7 / G5 — SOS adapters ⬜ NEXT (workstation; framework scaffolded, sites 403 from remote env)
 
 ## Audit-log inventory (this sweep)
 
