@@ -31,6 +31,12 @@ import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
 // but actual UPDATEs are now narrowed to fields the registry approves.
 import { filterByFieldPriority } from '../_shared/field-priority-guard.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
+// C9 Phase 2 (2026-05-27): validate sale rows through the ingest contract.
+// NOTE: ingest-contract.js imports isJunkContactName/isFederalOwnerAntiPattern
+// back from THIS module — that's an intentional cycle. It's safe because all
+// cross-module bindings are hoisted function declarations resolved at call
+// time (runtime), never at module-load time.
+import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-contract.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -4715,8 +4721,15 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           sold_price_psf:   (soldPrice && parsedSF && parsedSF > 0)
                             ? Math.round(soldPrice / parsedSF * 100) / 100
                             : null,
-          // Financing details from deed entry
-          financing_type:   sale.financing_type || sale.deed_type || null,
+          // Financing details from deed entry.
+          // C9 Phase 2 (2026-05-27): dropped the `|| sale.deed_type` fallback
+          // — it leaked the deed type ("Quit Claim Deed", "Special Warranty
+          // Deed") into financing_type, which C2A then had to enrich around.
+          // deed_type is preserved in deed_records (upsertGovernmentDeedRecords)
+          // and financing_type is populated authoritatively from gov.loans by
+          // the C2A sales_enrich_from_loans() cron. validateSaleIngest below
+          // backstops any residual leak.
+          financing_type:   sale.financing_type || null,
           lender_name:      sale.lender_name    || null,
           guarantor:        metadata.guarantor  || null,
           gross_rent:       parseCurrency(metadata.annual_rent),
@@ -4770,6 +4783,36 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // Always write exclude flag since false is a valid value that should persist
     saleData.exclude_from_market_metrics = exclude_from_market_metrics ?? false;
     saleData.data_source                = 'costar_sidebar';
+
+    // C9 Phase 2 (2026-05-27): backstop the sale row through the ingest
+    // contract. Soft enforcement — log + sanitize, never block the write
+    // (sale_date is already guarded above; the SQL junk-party trigger is a
+    // second line of defense). financing_type leak is the main catch: if a
+    // deed-type string slipped into financing_type, null it rather than
+    // persist it in the wrong column.
+    {
+      const dto = {
+        domain,
+        property_id: propertyId,
+        sale_date: saleData.sale_date,
+        sold_price: saleData.sold_price,
+        buyer: saleData.buyer || saleData.buyer_name || null,
+        seller: saleData.seller || saleData.seller_name || null,
+        financing_type: saleData.financing_type || null,
+      };
+      const { ok: saleOk, errors: saleErrors } = validateSaleIngest(dto);
+      if (!saleOk) {
+        const financingLeak = saleErrors.some(e => e.startsWith('financing_type '));
+        if (financingLeak && saleData.financing_type != null) {
+          console.warn(`[upsertDomainSales] nulling financing_type leak on property=${propertyId}: ${JSON.stringify(saleData.financing_type)}`);
+          delete saleData.financing_type;
+        }
+        const otherErrors = saleErrors.filter(e => !e.startsWith('financing_type '));
+        if (otherErrors.length) {
+          console.warn(`[upsertDomainSales] ingest-contract warnings property=${propertyId}: ${otherErrors.join('; ')}`);
+        }
+      }
+    }
 
     // Link the sale to the listing campaign that produced it, if any.
     // Only written for dialysis — government sales_transactions does not
@@ -5069,7 +5112,15 @@ async function persistSaleContacts(domain, saleId, propertyId, metadata, provCol
     if (!c.name || typeof c.name !== 'string') continue;
     const trimmedName = c.name.trim();
     if (!trimmedName) continue;
-    if (isJunkContactName(trimmedName)) continue;
+    // C9 Phase 2 (2026-05-27): route through the ingest contract — catches
+    // junk/section-label names AND federal-anti-pattern (broader than the
+    // bare isJunkContactName check this replaced).
+    {
+      const { errors: cErrors } = validateContactIngest({
+        domain, name: trimmedName, email: c.email || null, role: saleRole,
+      });
+      if (cErrors.some(e => e.startsWith('name '))) continue;
+    }
 
     // Require at least one PII field beyond the name — a bare buyer-name
     // contact is already captured on sales_transactions.{buyer,buyer_name}
