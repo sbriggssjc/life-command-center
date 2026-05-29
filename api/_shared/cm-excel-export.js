@@ -299,12 +299,12 @@ const CHART_COLUMNS = {
     { key: 'rank',           header: '#',                  format: 'integer_count',    width: 5 },
     { key: 'sale_date',      header: 'Sale Date',          format: 'date_short',       width: 13 },
     { key: 'tenant_display', header: 'Tenant',                                          width: 22 },
-    { key: 'building_name',  header: 'Property',                                        width: 32 },
+    { key: 'property_display', header: 'Property',                                      width: 32 },
     { key: 'city',           header: 'City',                                            width: 18 },
     { key: 'state',          header: 'State',                                           width: 8 },
     { key: 'sale_price',     header: 'Sale Price ($)',     format: 'currency_dollars', width: 18 },
     { key: 'cap_rate',       header: 'Cap Rate',           format: 'percent_basis_points', width: 12 },
-    { key: 'buyer_type',     header: 'Buyer Type',                                      width: 16 },
+    { key: 'buyer_type_display', header: 'Buyer Type',                                  width: 16 },
   ],
   // Round 5c — gov NM tracking DataTables. Both views use cm_nm_* (no
   // vertical placeholder) and ship for gov only per the catalog.

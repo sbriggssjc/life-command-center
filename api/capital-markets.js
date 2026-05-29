@@ -523,6 +523,51 @@ function timeAxisColumnFor(template) {
 }
 
 /**
+ * Clamp a chart's rows to the requested as-of period.
+ *
+ * Bug (diagnosed 2026-05-29): the per-chart `Data_*` tabs in the workbook
+ * export were never clamped to `as_of`. Only the MasterPasteReady tab is
+ * (it's sourced from the `*_master_m` views, which clamp to
+ * `cm_last_completed_quarter_end()`). So a "2026-03-31" export still emitted
+ * tabs with rows dated after Q1-2026 - e.g. dialysis Data_DOM_Ask ran through
+ * 2026-05-31 with the trailing months forward-filled to identical values,
+ * which reads as fabricated data.
+ *
+ * This is a post-fetch JS filter, NOT a PostgREST filter, on purpose: the
+ * fetchView ladder already documents that strict PostgREST filters 400 and
+ * silently empty the tab (the "many empty tabs" gov complaint). Filtering in
+ * JS can never empty a tab by accident.
+ *
+ * Only genuine time-series tabs are clamped (data_shape `time_series*`,
+ * `monthly*`, `quarterly*`, or yearly). Snapshot / ranked-table / kpi /
+ * per-sale / per-listing shapes are point-in-time "as of now" views (active
+ * inventory, top-buyer leaderboards, dot clouds) and are intentionally left
+ * intact - clamping them by date would drop every row. Synthetic composers
+ * read these already-clamped rows, so the clamp cascades to combo/summary
+ * tabs for free.
+ */
+function clampRowsToAsOf(rows, template, asOf) {
+  if (!asOf || !Array.isArray(rows) || rows.length === 0) return rows;
+  const shape = String(template?.data_shape || '').toLowerCase();
+  const isTimeSeries =
+    shape.startsWith('time_series') ||
+    shape.startsWith('monthly') ||
+    shape.startsWith('quarterly') ||
+    shape.includes('yearly');
+  if (!isTimeSeries) return rows;
+  const col = timeAxisColumnFor(template); // 'year' | 'period_end'
+  if (col === 'year') {
+    const maxYear = new Date(asOf).getUTCFullYear();
+    return rows.filter((r) => r?.year == null || Number(r.year) <= maxYear);
+  }
+  // period_end is an ISO date string; YYYY-MM-DD compares correctly as text.
+  const cap = String(asOf).slice(0, 10);
+  return rows.filter(
+    (r) => r?.period_end == null || String(r.period_end).slice(0, 10) <= cap
+  );
+}
+
+/**
  * GET /api/capital-markets?action=chart&vertical=gov&chart_template_id=volume_ttm_by_quarter&subspecialty=all&from=&to=
  *   → { rows: [...], meta: { chart_template_id, vertical, view_name, ... } }
  */
@@ -823,7 +868,14 @@ async function exportWorkbook(req, res) {
         // (e.g. seller_sentiment axis ranges) can branch in the renderer.
         vertical,
         view_name,
-        rows: result.ok !== false ? (result.data || []) : [],
+        // 2026-05-29 - clamp time-series rows to the requested as-of period
+        // so Data_* tabs never bleed past the report quarter (see
+        // clampRowsToAsOf). Snapshot/table/kpi shapes pass through untouched.
+        rows: clampRowsToAsOf(
+          result.ok !== false ? (result.data || []) : [],
+          tmpl,
+          as_of
+        ),
       };
     } catch (e) {
       return {
