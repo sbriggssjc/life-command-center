@@ -86,7 +86,21 @@ SELECT count(*) FILTER (WHERE field_sources ? '_a9a_migrated') AS migrated,
 FROM unified_contacts;        -- migrated ≈ 13,403, total ≈ 13,600
 ```
 
-## SF-rows phase (the rest of gov → hub) — READY, dry-run pending
+## SF-rows phase (the rest of gov → hub) — ✅ APPLIED + VERIFIED (2026-05-29)
+
+Ran `--scope=sf --apply`. Result: 16,078 source → **44 email-collision skips** (broker-owners already in the hub, e.g. michael@bullrealty.com) → **16,034 upserted**. Hub verification:
+
+| Metric | Value |
+|---|---|
+| hub total | **29,634** (197 originals + 13,403 owners + 16,034 SF) |
+| SF migrated | 16,034 (all carry `sf_contact_id`) |
+| migrated total | 29,437 |
+| distinct emails | 16,826 |
+| audit | log_id 50, `succeeded`, rows_affected 16,034 (script self-logged — `gov_db` fix worked, no manual entry needed) |
+
+The hub is now a near-complete copy of gov.unified_contacts (29,481) — the 44 skips are same-email identities deferred to the contact-dedup merge pass. **gov→hub migration (A9a) is done.**
+
+### (historical) SF-rows phase plan — what shipped
 
 A key correction surfaced after the owner migration: **`contacts-handler.js` reads/writes `unified_contacts` via `govQuery`** — the app's Contacts feature is backed by **gov.unified_contacts** (the live store), *not* the LCC hub. So the remaining 16,078 SF-contact rows are **real app contacts**, not redundant (an earlier "hub has its own SF sync" assumption was wrong — there is no such sync). For Decision #1's eventual cutover (`govQuery` → the LCC hub) to be lossless, the hub must hold **all** of gov.unified_contacts first.
 
