@@ -85,6 +85,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ownership-reconcile': return handleOwnershipReconcile(req, res);
     case 'sf-sync-queue':       return handleSfSyncQueue(req, res);
     case 'storage-cleanup':     return handleStorageCleanup(req, res);
+    case 'artifact-offload':    return handleArtifactOffload(req, res);
     case 'consolidate-property': return handleConsolidateProperty(req, res);
     case 'npi-lookup':           return handleNpiLookupProxy(req, res);
     case 'npi-registry-sync':    return handleNpiRegistrySyncProxy(req, res);
@@ -2449,6 +2450,187 @@ async function handleStorageCleanup(req, res) {
     deleted,
     failures:     failures.slice(0, 20),
     failure_count: failures.length,
+  });
+}
+
+
+// ============================================================================
+// ARTIFACT OFFLOAD — staged_intake_artifacts inline_data → Supabase Storage
+// Routing: /api/admin?_route=artifact-offload  (rewritten to /api/artifact-offload)
+//   GET    : dry-run — counts eligible artifacts + reclaimable bytes, no writes
+//   POST   : drain a batch — upload inline bytes to Storage, null inline_data
+//
+// Why: large email/copilot OM files are stored base64 in
+// staged_intake_artifacts.inline_data at ingest (no storage_path). That table
+// reached ~6 GB and is the largest disk consumer on LCC Opps after the
+// 2026-05-29 sf_sync_log incident. This worker moves the bytes to the
+// lcc-om-uploads bucket (cheap object storage) and clears inline_data,
+// PRESERVING the file. Transparent to all readers: the extractor
+// (intake-extractor.js getArtifactBytes) and the download handler both fall
+// back to storage_path when inline_data is null.
+//
+// Safety / idempotency:
+//   * Only touches rows with inline_data NOT NULL and storage_path NULL that
+//     are older than grace_minutes (default 15) — gives the inline-based
+//     initial extraction time to finish before the bytes move.
+//   * Upload uses x-upsert:true; on partial failure (uploaded but row not
+//     patched) the next tick re-uploads to the same deterministic path and
+//     patches — no duplicates, no data loss. If upload fails, the row is left
+//     untouched and still readable via inline_data.
+//   * Time-budgeted (~7s) so it stays under the Vercel function limit;
+//     idempotent across many small ticks (run on a cron, like geocode-tick).
+//
+// Query/body params:
+//   ?limit=15            (max per tick; capped at 40)
+//   ?grace_minutes=15    (skip artifacts newer than this)
+//   ?bucket=lcc-om-uploads
+//
+// Auth: standard X-LCC-Key + workspace membership (via authenticate()).
+// ============================================================================
+
+const ARTIFACT_OFFLOAD_MIME_EXT = {
+  'application/pdf':                                                          '.pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':        '.xlsx',
+  'application/vnd.ms-excel':                                                 '.xls',
+  'application/msword':                                                       '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':  '.docx',
+  'text/plain':                                                               '.txt',
+  'message/rfc822':                                                           '.eml',
+};
+
+function artifactOffloadSafeName(fileName, mimeType) {
+  const fallbackExt = ARTIFACT_OFFLOAD_MIME_EXT[(mimeType || 'application/pdf').toLowerCase()] || '.bin';
+  let safe = String(fileName || 'upload')
+    .replace(/[^\w.\-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'upload';
+  if (!/\.[a-z0-9]{2,6}$/i.test(safe)) safe += fallbackExt;
+  return safe;
+}
+
+async function handleArtifactOffload(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST (offload) only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const opsUrl = process.env.OPS_SUPABASE_URL;
+  const opsKey = process.env.OPS_SUPABASE_KEY;
+  if (!opsUrl || !opsKey) {
+    return res.status(503).json({ error: 'ops_credentials_missing' });
+  }
+
+  const bucket       = String(req.query.bucket || 'lcc-om-uploads');
+  const graceMinutes = Math.max(0, parseInt(req.query.grace_minutes || '15', 10));
+  const limit        = Math.min(40, Math.max(1, parseInt(req.query.limit || '15', 10)));
+  const dryRun       = req.method === 'GET';
+  const cutoffIso    = new Date(Date.now() - graceMinutes * 60000).toISOString();
+
+  // 1. Find eligible rows. Do NOT select inline_data here — that column holds
+  //    multi-MB base64 and would blow up the response. Largest first so we
+  //    reclaim the most disk per tick.
+  const listFilter =
+    `staged_intake_artifacts?select=id,file_name,mime_type,size_bytes` +
+    `&inline_data=not.is.null&storage_path=is.null` +
+    `&created_at=lt.${pgFilterVal(cutoffIso)}` +
+    `&order=size_bytes.desc.nullslast&limit=${limit}`;
+  const listRes = await opsQuery('GET', listFilter, null, { countMode: 'exact' });
+  if (!listRes.ok) {
+    return res.status(listRes.status || 502).json({ error: 'artifact_list_failed', detail: listRes.data });
+  }
+  const rows = Array.isArray(listRes.data) ? listRes.data : [];
+
+  if (dryRun) {
+    return res.status(200).json({
+      mode:          'dry_run',
+      bucket,
+      grace_minutes: graceMinutes,
+      eligible_now:  rows.length,
+      eligible_total: listRes.count,
+      sample:        rows.slice(0, 10).map(r => ({ id: r.id, file_name: r.file_name, size_bytes: r.size_bytes })),
+    });
+  }
+
+  // 2. Offload one at a time, fetching inline_data per row to bound memory.
+  const startedAt = Date.now();
+  const TIME_BUDGET_MS = 7000;
+  const stats = { scanned: 0, offloaded: 0, skipped_empty: 0, errored: 0, bytes_freed: 0 };
+  const failures = [];
+
+  for (const row of rows) {
+    if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+    stats.scanned++;
+    try {
+      // 2a. Fetch the bytes for just this row.
+      const oneRes = await opsQuery('GET',
+        `staged_intake_artifacts?select=inline_data&id=eq.${pgFilterVal(row.id)}`,
+        null, { countMode: 'none' });
+      const inline = Array.isArray(oneRes.data) && oneRes.data[0]?.inline_data;
+      if (!inline) { stats.skipped_empty++; continue; }
+
+      const buf = Buffer.from(inline, 'base64');
+      if (!buf.length) { stats.skipped_empty++; continue; }
+
+      // 2b. Deterministic object path keyed by row id (re-tick-safe).
+      const datePart   = new Date(row.created_at || Date.now()).toISOString().slice(0, 10);
+      const safeName   = artifactOffloadSafeName(row.file_name, row.mime_type);
+      const objectPath = `${datePart}/${row.id}-${safeName}`;
+      const fullPath   = `${bucket}/${objectPath}`;
+      const encodedPath = objectPath.split('/').map(encodeURIComponent).join('/');
+
+      // 2c. Upload to Storage with the service key (x-upsert so re-ticks are safe).
+      const upRes = await fetchWithTimeout(
+        `${opsUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey':        opsKey,
+            'Authorization': `Bearer ${opsKey}`,
+            'Content-Type':  row.mime_type || 'application/octet-stream',
+            'x-upsert':      'true',
+          },
+          body: buf,
+        },
+        9000,
+      );
+      if (!upRes.ok) {
+        const detail = await upRes.text();
+        stats.errored++;
+        failures.push({ id: row.id, status: upRes.status, detail: detail.slice(0, 200) });
+        continue;
+      }
+
+      // 2d. Point the row at Storage and drop the inline copy. Guard the
+      //     UPDATE on storage_path IS NULL so we never clobber a concurrent
+      //     writer, and so a re-tick is a no-op once done.
+      const patchRes = await opsQuery('PATCH',
+        `staged_intake_artifacts?id=eq.${pgFilterVal(row.id)}&storage_path=is.null`,
+        { storage_path: fullPath, inline_data: null },
+        { headers: { Prefer: 'return=minimal' } });
+      if (!patchRes.ok) {
+        stats.errored++;
+        failures.push({ id: row.id, status: patchRes.status, detail: 'patch_failed' });
+        continue;
+      }
+
+      stats.offloaded++;
+      stats.bytes_freed += buf.length;
+    } catch (err) {
+      stats.errored++;
+      failures.push({ id: row.id, detail: err?.message?.slice(0, 200) });
+    }
+  }
+
+  return res.status(200).json({
+    mode:          'offload',
+    bucket,
+    grace_minutes: graceMinutes,
+    eligible_total: listRes.count,
+    ...stats,
+    bytes_freed_pretty: `${(stats.bytes_freed / 1024 / 1024).toFixed(1)} MB`,
+    failures: failures.slice(0, 20),
   });
 }
 
