@@ -26,6 +26,13 @@ import { govSupabaseKey } from '../_shared/supabase-keys.js';
 const GOV_URL = process.env.GOV_SUPABASE_URL;
 const GOV_KEY = govSupabaseKey();
 
+// A9b cutover flag. Default 'gov' = today's behavior (contacts live on gov).
+// Set CONTACTS_HUB=ops to repoint unified_contacts operations to the LCC Opps
+// hub. Path-based routing inside govQuery() (below) flips reads + the audited
+// write path together; everything else stays on gov.
+const CONTACTS_DB = (process.env.CONTACTS_HUB || 'gov').toLowerCase() === 'ops' ? 'ops' : 'gov';
+const UNIFIED_CONTACTS_PATH_RE = /^unified_contacts(\?|$)/;
+
 /** Encode a user-supplied value for safe use in PostgREST filter strings */
 function pgVal(v) { return encodeURIComponent(String(v)); }
 
@@ -176,6 +183,12 @@ async function upsertWebexToken(accessToken, refreshToken, expiresAt, refreshExp
  * Query Gov Supabase via PostgREST.
  */
 async function govQuery(method, path, body, extraHeaders = {}) {
+  // A9b: when the cutover flag is on, unified_contacts ops route to the LCC
+  // Opps hub. opsQuery returns the same {ok,status,data,count} shape and
+  // treats a plain headers object as legacy headers, so this is drop-in.
+  if (CONTACTS_DB === 'ops' && UNIFIED_CONTACTS_PATH_RE.test(path)) {
+    return opsQuery(method, path, body, extraHeaders);
+  }
   if (!GOV_URL || !GOV_KEY) {
     return { ok: false, status: 503, data: { error: 'Gov database not configured' } };
   }
@@ -219,6 +232,8 @@ async function auditedGovWrite({
 }) {
   const resolvedWorkspaceId = workspaceId || user?.memberships?.[0]?.workspace_id || null;
   const result = await govQuery(method, path, changedFields);
+  // Where the write actually landed (A9b path-routing) — for accurate audit metadata.
+  const writeTargetSource = (CONTACTS_DB === 'ops' && UNIFIED_CONTACTS_PATH_RE.test(path)) ? 'ops' : 'gov';
 
   if (!isOpsConfigured() || !resolvedWorkspaceId) {
     return result;
@@ -230,7 +245,7 @@ async function auditedGovWrite({
     actor,
     source_surface: sourceSurface,
     target_table: targetTable,
-    target_source: 'gov',
+    target_source: writeTargetSource,
     record_identifier: recordIdentifier != null ? String(recordIdentifier) : null,
     id_column: idColumn,
     changed_fields: changedFields || {},
@@ -242,7 +257,7 @@ async function auditedGovWrite({
   if (!result.ok) {
     await opsQuery('POST', 'pending_updates', {
       workspace_id: resolvedWorkspaceId,
-      target_source: 'gov',
+      target_source: writeTargetSource,
       target_table: targetTable,
       record_identifier: recordIdentifier != null ? String(recordIdentifier) : null,
       id_column: idColumn,
@@ -899,6 +914,19 @@ async function ingestContact(req, res, user) {
       propagationScope: 'unified_contact'
     });
     if (!result.ok) {
+      // A9b: the hub enforces UNIQUE(lower(email)) (gov doesn't). The Tier-0
+      // email match above prevents the common case; this catches a concurrent-
+      // create race so it returns a clean 409 (with the existing contact)
+      // instead of a 500. (Full merge-on-race is a documented follow-up.)
+      const detailStr = JSON.stringify(result.data || '');
+      if (result.status === 409 && /idx_uc_email|duplicate key|unique/i.test(detailStr) && email) {
+        const existing = (await govQuery('GET',
+          `unified_contacts?email=ilike.${encodeURIComponent(email)}&limit=1`)).data?.[0] || null;
+        return res.status(409).json({
+          error: 'A contact with this email already exists', deduped: true,
+          unified_id: existing?.unified_id || null, contact: existing
+        });
+      }
       return res.status(result.status).json({ error: 'Failed to create contact', detail: result.data });
     }
 
