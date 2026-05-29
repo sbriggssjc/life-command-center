@@ -184,6 +184,28 @@ function resolveCanonical(ownerId, remap) {
   return id;
 }
 
+// The hub enforces a partial UNIQUE index idx_uc_email ON (lower(email))
+// WHERE email IS NOT NULL. gov.unified_contacts does NOT — the same person can
+// appear as both an owner row and an SF row with the same email. We therefore
+// pre-load the hub's existing lower(email) set and skip any incoming row whose
+// email already exists (reported for a later dedup/merge pass). Null-email rows
+// are always insertable (exempt from the partial index).
+async function fetchHubEmailSet() {
+  const set = new Set();
+  let cursor = '00000000-0000-0000-0000-000000000000';
+  for (;;) {
+    const r = await rest(OPS_URL, OPS_KEY, 'GET',
+      `unified_contacts?select=unified_id,email&email=not.is.null`
+      + `&unified_id=gt.${cursor}&order=unified_id.asc&limit=1000`);
+    if (!r.ok) throw new Error(`Hub email fetch failed: HTTP ${r.status} ${r.text}`);
+    if (!r.data?.length) break;
+    for (const row of r.data) if (row.email) set.add(row.email.toLowerCase());
+    cursor = r.data[r.data.length - 1].unified_id;
+    if (r.data.length < 1000) break;
+  }
+  return set;
+}
+
 function toHubRow(govRow, remap, stats) {
   const canonical = resolveCanonical(govRow.recorded_owner_id, remap);
   if (canonical !== govRow.recorded_owner_id) stats.remapped++;
@@ -210,10 +232,15 @@ async function main() {
   const remap = await buildA1RemapMap();
   console.log(`[A9a] A1 remap entries (merged losers): ${remap.size}`);
 
-  const stats = { fetched: 0, transformed: 0, remapped: 0, upserted: 0, batches: 0 };
+  const stats = { fetched: 0, transformed: 0, remapped: 0, upserted: 0, batches: 0, skippedEmailDup: 0 };
   const pendingByCanonical = new Map(); // canonical_owner_id -> first unified_id (collapse observability only)
+  const skippedSample = [];
   let buffer = [];
   let cursor = '00000000-0000-0000-0000-000000000000';
+
+  console.log('[A9a] loading existing hub emails (unique-email guard)…');
+  const seenEmails = await fetchHubEmailSet();
+  console.log(`[A9a] hub already has ${seenEmails.size} distinct emails`);
 
   const flush = async () => {
     if (!buffer.length) return;
@@ -243,6 +270,15 @@ async function main() {
       stats.fetched++;
       const hubRow = toHubRow(govRow, remap, stats);
       stats.transformed++;
+      // Unique-email guard: skip a row whose email already exists in the hub
+      // (or earlier in this run). Deferred to a later dedup/merge pass.
+      const emailKey = hubRow.email ? hubRow.email.toLowerCase() : null;
+      if (emailKey && seenEmails.has(emailKey)) {
+        stats.skippedEmailDup++;
+        if (skippedSample.length < 10) skippedSample.push(emailKey);
+        continue;
+      }
+      if (emailKey) seenEmails.add(emailKey);
       const canon = hubRow.recorded_owner_id;
       if (canon != null) {
         if (pendingByCanonical.has(canon)) stats.collapseObserved = (stats.collapseObserved || 0) + 1;
@@ -261,11 +297,13 @@ async function main() {
   if (APPLY) logId = await auditBegin(stats.transformed);
 
   console.log('\n──────── A9a summary ────────');
-  console.log(`source owner-linked rows fetched : ${stats.fetched}`);
+  console.log(`scope                             : ${SCOPE}`);
+  console.log(`source rows fetched               : ${stats.fetched}`);
   console.log(`transformed                       : ${stats.transformed}`);
   console.log(`A1-remapped to canonical owner    : ${stats.remapped}`);
   console.log(`distinct canonical owners         : ${pendingByCanonical.size}`);
   console.log(`same-owner collapses observed     : ${stats.collapseObserved || 0} (migrated as-is, not collapsed)`);
+  console.log(`skipped (email already in hub)    : ${stats.skippedEmailDup}${skippedSample.length ? ' e.g. ' + skippedSample.slice(0, 5).join(', ') : ''}`);
   console.log(`${APPLY ? 'rows upserted to OPS' : 'rows that WOULD be upserted'} : ${stats.upserted}`);
   console.log(`batches                           : ${stats.batches}`);
   if (!APPLY) console.log('\nDRY RUN — no writes. Re-run with --apply to migrate.');
