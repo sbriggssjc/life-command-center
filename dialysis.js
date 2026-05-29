@@ -241,8 +241,10 @@ async function diaQueryPage(table, select, params = {}) {
 // with properties (and leases). The legacy v_sales_comps view mixed in entity
 // metadata sales_history, which produced duplicate rows (e.g. deed date vs
 // CoStar recordation date), conflicting prices/cap rates, and stale RBA/land
-// area values. sales_transactions is the deduplicated authoritative source
-// populated by the sidebar pipeline; properties holds the canonical RBA/land
+// area values. sales_transactions is the authoritative source populated by the
+// sidebar pipeline; this loader gates on exclude_from_market_metrics IS NOT TRUE
+// which (post-20260529 invariant) means transaction_state='live' AND not
+// stat-excluded — i.e. each unique real sale counted once. properties holds the canonical RBA/land
 // area; leases holds the current rent/expiration data.
 async function loadDiaSalesCompsFromTxns() {
   // Embed properties (1:1) and leases (1:many). Use !inner on properties so
@@ -273,6 +275,13 @@ async function loadDiaSalesCompsFromTxns() {
       let all = [];
       for (let pg = 0; pg <= 20; pg++) {
         const batch = await diaQuery('sales_transactions', select, {
+          // Canonical comp gate (2026-05-29): exclude_from_market_metrics IS NOT
+          // TRUE == transaction_state='live' AND not stat-excluded, because the
+          // 20260529170000 migration enforces the invariant "non-live ⇒
+          // excluded". This drops duplicate_superseded / ownership_stub /
+          // needs_review rows that previously leaked into the comp counts and
+          // TTM volume. See SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md.
+          filter: 'exclude_from_market_metrics=not.is.true',
           // Value-weighted sort (Item #9 Phase A, 2026-05-17): biggest comps
           // surface first. Tiebreaker on sale_date keeps recency where prices
           // are equal/null.
@@ -1130,14 +1139,16 @@ function renderDiaOverview() {
     _diaAvailListingsLoading = true;
     (async () => {
       try {
-        // Filter to on-market statuses only: active, Active, Available, For Sale
-        // Use v_available_listings view which JOINs property data (address, city, state)
+        // v_available_listings is now gated on the authoritative lifecycle flag
+        // (is_active AND no sale; synthetic imports excluded) at the DB level —
+        // see SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md. No
+        // client-side status filter needed (it would only risk re-dropping
+        // genuine re-listings whose status text lags). Trust the view.
         let all = [], pg = 0;
         while (true) {
           const batch = await diaQuery('v_available_listings', '*', {
             order: 'listing_date.desc.nullslast',
             limit: 1000, offset: pg * 1000,
-            filter: 'status=in.(active,Active,Available,"For Sale")',
           });
           all = all.concat(batch || []);
           if (!batch || batch.length < 1000) break;

@@ -835,6 +835,38 @@ function fmt(n) {
 function fmtN(n) { return n != null ? n.toLocaleString() : "—"; }
 function pct(n) { return n != null ? (n*100).toFixed(1)+"%" : "—"; }
 
+// ── Canonical "is this listing on the market?" predicate (single source of
+// truth — see SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md /
+// ON_MARKET_LIFECYCLE_CATEGORIZATION_REVIEW_2026-05-29.md).
+// Authoritative lifecycle gate: dia carries the is_active boolean; gov carries
+// listing_status (the gov RPC keeps it in sync). A listing is only "available"
+// when it is currently marketed AND not sold/withdrawn. off_market_date is
+// write-once evidence (sticky across re-listings) so it is NOT used as the gate.
+// `lccIsListingActive`  = strictly active.
+// `lccIsListingOnMarket` = available universe (active + under_contract) per the
+//   2026-05-29 decision that under-contract deals count as available.
+function lccIsListingActive(l) {
+  if (!l) return false;
+  if (l.sold_date != null || l.sale_transaction_id != null) return false;
+  if (typeof l.is_active === 'boolean') {
+    // dia: is_active is authoritative. Exclude reclassified non-marketed imports.
+    return l.is_active === true && String(l.status || '') !== 'Imported-Estimate';
+  }
+  const s = String(l.listing_status || l.status || '').trim().toLowerCase();
+  return s === 'active' || s === 'available' || s === 'for sale' || s === 'for_sale';
+}
+function lccIsListingOnMarket(l) {
+  if (!l) return false;
+  if (lccIsListingActive(l)) return true;
+  const s = String(l.listing_status || l.status || '').trim().toLowerCase();
+  return (s === 'under_contract' || s === 'under contract')
+    && l.sold_date == null && l.sale_transaction_id == null;
+}
+if (typeof window !== 'undefined') {
+  window.lccIsListingActive = lccIsListingActive;
+  window.lccIsListingOnMarket = lccIsListingOnMarket;
+}
+
 function catClass(cat) {
   if (!cat) return 'cat-gen'; const c = cat.toLowerCase();
   if (c.includes('government')) return 'cat-gov';
