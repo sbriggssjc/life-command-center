@@ -1015,12 +1015,33 @@ export async function fetchPipelineRollup() {
  * @param {any} body — raw POST body
  * @returns {{ events: Array, tasks: Array, weather: object|null }}
  */
+// Coerce a value that should be an array. Accepts:
+//   - a real array (returned as-is)
+//   - a JSON-stringified array (parsed back into an array)
+//   - anything else → returns []
+// Why: Power Automate's HTTP body field validates JSON statically and
+// rejects naked-array expressions like `"events": @{outputs(...)}` with
+// "Enter a valid JSON." Wrapping the expression in quotes (so it becomes
+// `"events": "@{outputs(...)}"`) passes validation but PA then stringifies
+// the array at substitution time. This coercion lets the briefing flow
+// use the string-quoted form without backend changes per flow update.
+function coerceArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string' && value.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { /* fall through */ }
+  }
+  return [];
+}
+
 export function normalizePersonalContext(body) {
   const out = { events: [], tasks: [], weather: null };
   if (!body || typeof body !== 'object') return out;
 
-  const events = body.calendar?.events;
-  if (Array.isArray(events)) {
+  const events = coerceArray(body.calendar?.events);
+  if (events.length) {
     out.events = events
       .map((e) => ({
         start:      e.start || e.startTime || e.start_time || null,
@@ -1038,8 +1059,8 @@ export function normalizePersonalContext(body) {
       .slice(0, 8);
   }
 
-  const tasks = body.todo?.tasks || body.tasks;
-  if (Array.isArray(tasks)) {
+  const tasks = coerceArray(body.todo?.tasks ?? body.tasks);
+  if (tasks.length) {
     out.tasks = tasks
       .filter((t) => !t.completed && !t.isCompleted)
       .map((t) => ({
