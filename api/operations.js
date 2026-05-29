@@ -657,6 +657,7 @@ const ACTION_REGISTRY = {
   generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
   draft_outreach_email:        { tier: 1, handler: 'draft_outreach', confirm: 'explicit' },
   draft_seller_update_email:   { tier: 1, handler: 'draft_seller_update', confirm: 'explicit' },
+  draft_reply_from_inbox:      { tier: 1, handler: 'draft_reply_from_inbox', confirm: 'explicit' },
 
   // Tier 2: Microsoft To Do task creation (Wave 2)
   create_todo_task:            { tier: 2, handler: 'create_todo_task', confirm: 'explicit' },
@@ -710,6 +711,8 @@ function deriveActionSummary(actionName, params, result) {
       return `Drafted outreach email${safeParams.contact_name ? ` for ${safeParams.contact_name}` : ''}`;
     case 'draft_seller_update_email':
       return `Drafted seller update${safeParams.property_name ? ` for ${safeParams.property_name}` : ''}`;
+    case 'draft_reply_from_inbox':
+      return `Drafted reply${safeParams.inbox_item_id ? ` to inbox item ${String(safeParams.inbox_item_id).slice(0, 8)}` : ''}`;
     case 'create_todo_task':
       return `Created To Do task${safeParams.title ? `: "${safeParams.title}"` : ''}`;
     case 'generate_document':
@@ -756,8 +759,12 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   const implicitlyConfirmed = (
     /^draft_/.test(actionName)
     && params?.create_draft === true
-    && typeof params?.to === 'string'
-    && params.to.length > 0
+    && (
+      (typeof params?.to === 'string' && params.to.length > 0)
+      || (actionName === 'draft_reply_from_inbox'
+          && typeof params?.inbox_item_id === 'string'
+          && params.inbox_item_id.length > 0)
+    )
   );
   if (spec.tier >= 1 && spec.confirm && !params?._confirmed && !implicitlyConfirmed) {
     return {
@@ -783,6 +790,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
       case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
+      case 'draft_reply_from_inbox': result = await handleDraftReplyFromInbox(params, user, workspaceId); break;
       case 'create_todo_task':        result = await createTodoTask(params, user, workspaceId); break;
       case 'listing_pursuit_dossier': result = await handleListingPursuitDossier(params, user, workspaceId); break;
       case 'teams_card':              result = await generateTeamsCard(params); break;
@@ -1445,6 +1453,125 @@ async function handleDraftSellerUpdate(params, user, workspaceId) {
     ...(draftInfo || {})
   };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 reply loop — context-aware reply to a flagged inbox email.
+// Reads the original message from inbox_items (the flagged-email intake row),
+// derives the recipient from the original sender, and drafts a reply via
+// invokeChatProvider. If create_draft=true, posts to PA_OUTLOOK_DRAFT_URL via
+// the same _maybeCreateOutlookDraft helper used by draft_outreach_email.
+// ---------------------------------------------------------------------------
+async function handleDraftReplyFromInbox(params, user, workspaceId) {
+  const { inbox_item_id, intent, tone, guidance } = params || {};
+
+  if (!inbox_item_id) {
+    return { ok: false, error: 'inbox_item_id is required', action: 'draft_reply_from_inbox' };
+  }
+
+  // Fetch the flagged-email inbox row.
+  const lookup = await opsQuery(
+    'GET',
+    `inbox_items?id=eq.${encodeURIComponent(inbox_item_id)}&limit=1&select=id,title,body,external_url,external_id,source_type,metadata,received_at,assigned_to,workspace_id`
+  );
+  const item = lookup.data?.[0];
+  if (!item) {
+    return {
+      ok: false,
+      action: 'draft_reply_from_inbox',
+      error: `Inbox item not found: ${inbox_item_id}`
+    };
+  }
+
+  const meta = item.metadata || {};
+  const senderName  = meta.sender_name  || 'the sender';
+  const senderEmail = meta.sender_email || null;
+  const receivedAt  = item.received_at || meta.received_at || null;
+  const originalSubject = item.title || '(no subject)';
+  const originalBody    = item.body  || '(no body preview was captured)';
+
+  if (!senderEmail) {
+    return {
+      ok: false,
+      action: 'draft_reply_from_inbox',
+      error: 'Original sender email is missing from this inbox item — cannot derive a reply recipient. Use draft_outreach_email with an explicit "to" instead.',
+      inbox_item_id
+    };
+  }
+
+  const replySubject = /^re:\s/i.test(originalSubject)
+    ? originalSubject
+    : `Re: ${originalSubject}`;
+
+  const toneGuide   = tone   || 'professional, warm, and responsive';
+  const intentGuide = intent || 'address the sender\'s message directly and propose a clear next step';
+  const guidanceBlock = guidance ? `\n\nAdditional guidance from the user:\n${guidance}` : '';
+  const receivedBlock = receivedAt ? `\nReceived: ${receivedAt}` : '';
+
+  const prompt = [
+    'Draft a personalized REPLY to a flagged business email for a commercial real estate broker (SVP, Investment Sales at Northmarq).',
+    '',
+    'Original email context:',
+    `- From: ${senderName} <${senderEmail}>${receivedBlock}`,
+    `- Subject: ${originalSubject}`,
+    '- Body / preview:',
+    '----- BEGIN ORIGINAL -----',
+    String(originalBody).slice(0, 6000),
+    '----- END ORIGINAL -----',
+    '',
+    `Reply intent: ${intentGuide}`,
+    `Tone: ${toneGuide}`,
+    guidanceBlock,
+    '',
+    'Requirements:',
+    '- Start the email body with a brief acknowledgement of what the sender said.',
+    '- Match the sender\'s register — concise if they were terse, fuller if they were detailed.',
+    '- Address every direct question or ask in the original.',
+    '- End with a clear but soft call-to-action (a specific next step, a question, or a time proposal).',
+    '- Keep the body under 180 words unless the original required substantive answers.',
+    '- Do NOT fabricate facts (specific dollar amounts, dates, addresses, names) — if a detail would be required, leave a clearly-marked placeholder like [confirm price] for the user to fill in.',
+    `- Produce a Subject line ("${replySubject}" or an improved variant) and a body. This is a DRAFT for the broker to review before sending.`
+  ].filter(Boolean).join('\n');
+
+  const aiResult = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'draft_reply_from_inbox', inbox_item_id },
+    history: Array.isArray(params?.history) ? params.history : [],
+    attachments: [],
+    user,
+    workspaceId
+  });
+
+  const responseText = aiResult.data?.response || '';
+
+  // _maybeCreateOutlookDraft pulls recipient from params.to OR fallbackTo.
+  // We pass the sender as fallback; user can still override by setting
+  // params.to explicitly (e.g., to route to a delegate).
+  const draftInfo = await _maybeCreateOutlookDraft({
+    params: { ...params, subject: replySubject },
+    responseText,
+    fallbackTo: senderEmail
+  });
+
+  return {
+    ok: true,
+    action: 'draft_reply_from_inbox',
+    response: responseText,
+    inbox_item_id,
+    original_sender: senderEmail,
+    original_sender_name: senderName,
+    original_subject: originalSubject,
+    received_at: receivedAt,
+    suggested_subject: replySubject,
+    requires_review: true,
+    note: draftInfo?.draft_created
+      ? `Reply draft created in your Outlook to ${senderEmail} — open it to review and send.`
+      : `Reply drafted (text only). Pass create_draft=true to also create the draft in Outlook.`,
+    provider: aiResult.provider,
+    inbox_item_url: item.external_url || null,
+    ...(draftInfo || {})
+  };
+}
+
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
