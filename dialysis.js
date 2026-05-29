@@ -57,6 +57,7 @@ let _diaFinancialEstimatesLoading = false;
 let _diaPatientCountsLoading = false;
 let _diaAvailListingsLoading = false;
 let _diaOwnershipCoverageLoading = false;
+let _diaSjcDealBookLoading = false;
 let diaSalesLoading = false;
 let diaSalesSearch = '';
 const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
@@ -1422,6 +1423,64 @@ function renderDiaOverview() {
   })();
   } // end ownership-coverage gate (Round 76eh)
 
+  // Lazy-load SJC Salesforce deal book (Section 6b). Reads the aggregated
+  // v_sjc_deal_book_summary (small) so it's cheap; gated to load once/session.
+  if (!_diaSjcDealBookLoading && !window._diaSjcDealBookRendered) {
+    _diaSjcDealBookLoading = true;
+    (async () => {
+      try {
+        const rows = await diaQueryAll('v_sjc_deal_book_summary', '*');
+        const data = Array.isArray(rows) ? rows : (rows.data || []);
+        const sale = data.filter(r => r.deal_side === 'Sale Deal - Commercial');
+        const sumF = (arr, f) => arr.reduce((s, r) => s + (Number(r[f]) || 0), 0);
+        const closedRows = sale.filter(r => r.deal_stage === 'closed');
+        const closedDeals = sumF(closedRows, 'closed_deals');
+        const closedVol = sumF(closedRows, 'closed_volume');
+        const activeDeals = sumF(sale.filter(r => r.deal_stage === 'active_listing'), 'deals');
+        const ucDeals = sumF(sale.filter(r => r.deal_stage === 'in_escrow' || r.deal_stage === 'under_loi'), 'deals');
+        const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        setTxt('sjcClosedVal', fmtN(closedDeals)); setTxt('sjcClosedSub', 'closed sale deals (all teams)');
+        setTxt('sjcVolVal', '$' + fmtN(Math.round(closedVol / 1e6)) + 'M'); setTxt('sjcVolSub', 'lifetime closed volume');
+        setTxt('sjcActiveVal', fmtN(activeDeals)); setTxt('sjcActiveSub', 'signed & marketing');
+        setTxt('sjcUCVal', fmtN(ucDeals)); setTxt('sjcUCSub', 'LOI executed / in escrow');
+
+        // Per-team rollup (sale-side), ranked by closed deals.
+        const byTeam = {};
+        sale.forEach(r => {
+          const t = r.sjc_team || '(unassigned)';
+          byTeam[t] = byTeam[t] || { team: t, closed: 0, vol: 0, active: 0, uc: 0 };
+          if (r.deal_stage === 'closed') { byTeam[t].closed += Number(r.closed_deals) || 0; byTeam[t].vol += Number(r.closed_volume) || 0; }
+          if (r.deal_stage === 'active_listing') byTeam[t].active += Number(r.deals) || 0;
+          if (r.deal_stage === 'in_escrow' || r.deal_stage === 'under_loi') byTeam[t].uc += Number(r.deals) || 0;
+        });
+        const teams = Object.values(byTeam).sort((a, b) => b.closed - a.closed).slice(0, 12);
+        const wrap = document.getElementById('sjcDealBookTeams');
+        if (wrap && teams.length) {
+          let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
+            + '<th style="padding:4px 8px">Team</th><th style="padding:4px 8px;text-align:right">Closed</th>'
+            + '<th style="padding:4px 8px;text-align:right">Closed Vol</th><th style="padding:4px 8px;text-align:right">Active</th>'
+            + '<th style="padding:4px 8px;text-align:right">Under Contract</th></tr></thead><tbody>';
+          teams.forEach(r => {
+            t += '<tr style="border-top:1px solid var(--border)">'
+              + '<td style="padding:4px 8px">' + esc(r.team) + '</td>'
+              + '<td style="padding:4px 8px;text-align:right">' + fmtN(r.closed) + '</td>'
+              + '<td style="padding:4px 8px;text-align:right">$' + fmtN(Math.round(r.vol / 1e6)) + 'M</td>'
+              + '<td style="padding:4px 8px;text-align:right">' + fmtN(r.active) + '</td>'
+              + '<td style="padding:4px 8px;text-align:right">' + fmtN(r.uc) + '</td></tr>';
+          });
+          t += '</tbody></table>';
+          wrap.innerHTML = t;
+        }
+      } catch (err) {
+        console.warn('SJC deal book load failed:', err.message);
+        const wrap = document.getElementById('diaSjcDealBook');
+        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">SJC deal book unavailable</div>';
+      }
+      _diaSjcDealBookLoading = false;
+      window._diaSjcDealBookRendered = true;
+    })();
+  }
+
   let html = '<div style="padding:4px 0">';
 
   // ── STYLE ──
@@ -1660,6 +1719,19 @@ function renderDiaOverview() {
   // ═══════════════════════════════════════════════
   html += sectionHeader('Northmarq Performance', '🏆', 'sales');
   html += '<div id="diaOverviewNM">' + renderNorthmarqInner() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 6b: SJC DEAL BOOK (Salesforce, all teams)
+  // Full attributed deal book straight from Salesforce (v_sjc_deal_book*).
+  // Auto-refreshes as the SF connector syncs. Loaded async below.
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('SJC Deal Book (Salesforce)', '📒', 'sales');
+  html += '<div id="diaSjcDealBook"><div class="dia-grid dia-grid-4">';
+  html += infoCard({ title: 'Closed Sales', value: '...', sub: 'loading Salesforce deal book', color: 'green', id: 'sjcClosedVal', subId: 'sjcClosedSub' });
+  html += infoCard({ title: 'Closed Volume', value: '...', sub: 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
+  html += infoCard({ title: 'Active Listings', value: '...', sub: 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
+  html += infoCard({ title: 'Under Contract', value: '...', sub: 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
+  html += '</div><div id="sjcDealBookTeams" style="margin-top:10px"></div></div>';
 
   // ═══════════════════════════════════════════════
   // SECTION 7: ON MARKET
