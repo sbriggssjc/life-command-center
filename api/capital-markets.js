@@ -1053,19 +1053,17 @@ async function exportWorkbook(req, res) {
         nm_cap_rate: r.nm_avg_cap_ttm,
         market_cap_rate: r.non_nm_avg_cap_ttm,
       })),
-      cap_rate_by_lease_term: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        cap_10plus: r.cap_10plus_year,
-        // Mid-term bucket: dialysis uses cap_6to10_year, gov uses
-        // cap_5to10_year (renamed in Round G4 because gov firm_term
-        // had ~6000 leases in the 5-6yr range that fell through).
-        // Output as both cap_6to10 (legacy renderer key) and cap_5to10
-        // so the renderer can prefer the more accurate one.
-        cap_6to10: r.cap_6to10_year ?? r.cap_5to10_year,
-        cap_5to10: r.cap_5to10_year ?? r.cap_6to10_year,
-        cap_less5: r.cap_less5_year,
-        cap_outside_firm: r.cap_outside_firm,
-      })),
+      // 2026-05-29 - shared `cap_rate_by_lease_term` master_m mapper REMOVED.
+      // master_m's gov cohort columns (cap_10plus_year / cap_5to10_year /
+      // cap_less5_year / cap_outside_firm) bucket on the leases-table join,
+      // which can't resolve a firm term for ~67% of recent sold gov properties
+      // (they dump into "outside firm term", starving 10+/6-10/<5 and inverting
+      // the ladder). cm_gov_cap_by_term_m was rebuilt to classify by firm-term
+      // REMAINING from gsa_leases.termination_date -- let gov fetch that wrapper
+      // directly via the realCharts path (same pattern as the R45 cap_by_credit
+      // and R12 seller_sentiment removals). Dialysis keeps its own
+      // cap_rate_by_lease_term override in verticalMappers below (its master_m
+      // cohorts are correct and PDF-aligned).
       // Round 12 — `dom_and_pct_of_ask` mapper REMOVED.
       // The wrapper views (cm_<vertical>_dom_pct_ask_m) carry the
       // sample-size gate (Round 10, gov) and widened DOM cap
