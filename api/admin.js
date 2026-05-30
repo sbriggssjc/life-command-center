@@ -92,6 +92,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     case 'availability-promotion-sweep': return handleAvailabilityPromotionSweep(req, res);
+    case 'resolve-listing-confirmation': return handleResolveListingConfirmation(req, res);
     case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
@@ -782,6 +783,63 @@ async function handleAvailabilityPromotionSweep(req, res) {
     (totalErrs > 0 && result.promoted_to_sold === 0) ? 502 :
     (totalErrs > 0) ? 207 : 200;
   return res.status(httpStatus).json(result);
+}
+
+// ============================================================================
+// RESOLVE LISTING CONFIRMATION (manual human follow-up — main app, not sidebar)
+// ============================================================================
+// POST { domain:'dia'|'gov', listing_id, action, sale_id?, sold_price?,
+//        sale_date?, off_market_reason?, notes? }
+// action: 'confirm_sold' | 'mark_withdrawn' | 'still_active'
+// Lets a user in the main app resolve a v_listings_needing_manual_confirmation
+// row without the Chrome sidebar. Writes through the same
+// lcc_record_listing_check RPC with method='manual_user' and
+// verified_by=user.id, so it's audited identically to the cron/sidebar paths.
+async function handleResolveListingConfirmation(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const b = req.body || {};
+  const domainParam = String(b.domain || '').toLowerCase();
+  if (!['dia', 'gov'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia or gov' });
+  }
+  const dom = domainParam === 'dia' ? 'dialysis' : 'government';
+  const listingId = b.listing_id;
+  if (listingId === undefined || listingId === null || listingId === '') {
+    return res.status(400).json({ error: 'listing_id required' });
+  }
+  const action = String(b.action || '');
+  const ACTIONS = {
+    confirm_sold:   { check_result: 'sold',            off_market_reason: 'sold' },
+    mark_withdrawn: { check_result: 'off_market',      off_market_reason: 'withdrawn' },
+    still_active:   { check_result: 'still_available',  off_market_reason: null },
+  };
+  if (!ACTIONS[action]) {
+    return res.status(400).json({ error: "action must be confirm_sold, mark_withdrawn, or still_active" });
+  }
+  const map = ACTIONS[action];
+
+  const rpcBody = {
+    p_listing_id: listingId,
+    p_method: 'manual_user',
+    p_check_result: map.check_result,
+    p_off_market_reason: b.off_market_reason || map.off_market_reason,
+    p_verified_by: user.id || null,
+    p_notes: b.notes
+      || `manual confirmation by user${b.sale_id ? ` (sale_id=${b.sale_id})` : ''}`,
+  };
+  // confirm_sold: stamp the effective date from the matched sale when supplied
+  // so off_market_date reflects the actual close, not "today".
+  if (action === 'confirm_sold' && b.sale_date) rpcBody.p_effective_at = b.sale_date;
+
+  const rpcRes = await domainQuery(dom, 'POST', 'rpc/lcc_record_listing_check', rpcBody,
+    { label: 'resolveListingConfirmation:recordCheck' });
+  if (!rpcRes.ok) {
+    return res.status(502).json({ error: 'rpc_failed', status: rpcRes.status, detail: rpcRes.data });
+  }
+  return res.status(200).json({ ok: true, domain: domainParam, listing_id: listingId, action, result: rpcRes.data });
 }
 
 // ============================================================================

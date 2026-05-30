@@ -58,6 +58,7 @@ let _diaPatientCountsLoading = false;
 let _diaAvailListingsLoading = false;
 let _diaOwnershipCoverageLoading = false;
 let _diaSjcDealBookLoading = false;
+let _diaListingConfirmLoading = false;
 let diaSalesLoading = false;
 let diaSalesSearch = '';
 const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
@@ -1533,6 +1534,24 @@ function renderDiaOverview() {
     })();
   }
 
+  // Lazy-load Listings Needing Confirmation (Section 7b). Loads once/session.
+  if (!_diaListingConfirmLoading && !window._diaListingConfirmRendered) {
+    _diaListingConfirmLoading = true;
+    (async () => {
+      try {
+        const rows = await diaQueryAll('v_listings_needing_manual_confirmation', '*');
+        window._lcConfirmRows = Array.isArray(rows) ? rows : (rows && rows.data) || [];
+        renderDiaListingConfirm();
+      } catch (err) {
+        console.warn('listing confirmation load failed:', err.message);
+        const wrap = document.getElementById('diaListingConfirm');
+        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Confirmation queue unavailable</div>';
+      }
+      _diaListingConfirmLoading = false;
+      window._diaListingConfirmRendered = true;
+    })();
+  }
+
   let html = '<div style="padding:4px 0">';
 
   // ── STYLE ──
@@ -1792,6 +1811,20 @@ function renderDiaOverview() {
   html += '<div id="diaOverviewMarket">' + renderOnMarketInner() + '</div>';
 
   // ═══════════════════════════════════════════════
+  // SECTION 7b: LISTINGS NEEDING CONFIRMATION (manual follow-up)
+  // The availability-checker parks "looks-sold" listings as
+  // unverified_assumed_off; the sweep promotes the deed-matched ones. The rest
+  // need a human. This panel surfaces them with one-click resolve actions
+  // (Confirm Sold / Withdrawn / Still Active) via v_listings_needing_manual_confirmation.
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Listings Needing Confirmation', '🔎', 'sales');
+  html += '<div id="diaListingConfirm"><div class="dia-grid dia-grid-3">';
+  html += infoCard({ title: 'Need Confirmation', value: '...', sub: 'loading', color: 'orange', id: 'lcNeedVal', subId: 'lcNeedSub' });
+  html += infoCard({ title: 'Sale Match Ready', value: '...', sub: 'one-click confirm sold', color: 'green', id: 'lcMatchVal', subId: 'lcMatchSub' });
+  html += infoCard({ title: 'Aged > 90d', value: '...', sub: 'needs research', color: 'red', id: 'lcAgedVal', subId: 'lcAgedSub' });
+  html += '</div><div id="lcConfirmList" style="margin-top:10px"></div></div>';
+
+  // ═══════════════════════════════════════════════
   // SECTION 8: RESEARCH PIPELINE
   // ═══════════════════════════════════════════════
   html += sectionHeader('Research Pipeline', '🔬', 'research');
@@ -1918,6 +1951,73 @@ function renderNorthmarqInner() {
   h += infoCard({ title: 'Seller Value Add', value: capAdvStr, sub: capAdv != null && Number(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: capAdv != null && Number(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
   h += '</div>';
   return h;
+}
+
+// Render the Listings Needing Confirmation panel from window._lcConfirmRows.
+function renderDiaListingConfirm() {
+  const rows = window._lcConfirmRows || [];
+  const matchReady = rows.filter(r => r.confirmation_state === 'sale_match_promote');
+  const aged = rows.filter(r => r.confirmation_state === 'aged_needs_research');
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('lcNeedVal', fmtN(rows.length)); setTxt('lcNeedSub', 'unverified_assumed_off');
+  setTxt('lcMatchVal', fmtN(matchReady.length)); setTxt('lcMatchSub', 'deed match — confirm sold');
+  setTxt('lcAgedVal', fmtN(aged.length)); setTxt('lcAgedSub', 'no deed match, aged');
+
+  // Show the highest-priority subset (match-ready first, then aged), cap 25.
+  const show = matchReady.concat(aged).concat(rows.filter(r => r.confirmation_state === 'awaiting_sweep')).slice(0, 25);
+  const wrap = document.getElementById('lcConfirmList');
+  if (!wrap) return;
+  if (!show.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">Nothing awaiting confirmation 🎉</div>'; return; }
+  let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
+    + '<th style="padding:4px 8px">Property</th><th style="padding:4px 8px">Off-Mkt</th>'
+    + '<th style="padding:4px 8px">Sale Match</th><th style="padding:4px 8px">Actions</th></tr></thead><tbody>';
+  show.forEach(r => {
+    const addr = esc([r.address, r.city, r.state].filter(Boolean).join(', ') || ('#' + r.property_id));
+    const url = r.listing_url ? '<a href="' + esc(r.listing_url) + '" target="_blank" rel="noopener">' + esc((r.tenant_operator || 'listing')) + '</a>' : esc(r.tenant_operator || '');
+    const match = r.candidate_sale_id
+      ? '$' + fmtN(Math.round((Number(r.candidate_sold_price) || 0) / 1e6 * 10) / 10) + 'M · ' + esc(r.candidate_sale_date || '')
+      : '<span style="color:var(--text3)">none</span>';
+    const lid = JSON.stringify(r.listing_id);
+    const sid = r.candidate_sale_id ? JSON.stringify(r.candidate_sale_id) : 'null';
+    const sd = r.candidate_sale_date ? JSON.stringify(r.candidate_sale_date) : 'null';
+    let actions = '';
+    if (r.candidate_sale_id) {
+      actions += '<button onclick=\'diaResolveListing(' + lid + ',"confirm_sold",' + sid + ',' + sd + ')\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--green,#34d399);background:rgba(52,211,153,.12);color:var(--green,#34d399);border-radius:4px;cursor:pointer">Confirm Sold</button>';
+    } else {
+      actions += '<button onclick=\'diaResolveListing(' + lid + ',"confirm_sold",null,null)\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">Confirm Sold</button>';
+    }
+    actions += '<button onclick=\'diaResolveListing(' + lid + ',"mark_withdrawn",null,null)\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">Withdrawn</button>';
+    actions += '<button onclick=\'diaResolveListing(' + lid + ',"still_active",null,null)\' style="font-size:11px;padding:3px 8px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">Still Active</button>';
+    t += '<tr style="border-top:1px solid var(--border)" id="lcRow-' + esc(String(r.listing_id)) + '">'
+      + '<td style="padding:4px 8px">' + addr + (r.tenant_operator ? '<br><span style="color:var(--text3);font-size:11px">' + url + '</span>' : '') + '</td>'
+      + '<td style="padding:4px 8px;color:var(--text3)">' + esc(r.off_market_date || '') + '<br><span style="font-size:11px">' + esc(r.confirmation_state) + '</span></td>'
+      + '<td style="padding:4px 8px">' + match + '</td>'
+      + '<td style="padding:4px 8px">' + actions + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  wrap.innerHTML = t;
+}
+
+// Resolve a confirmation row via the main-app endpoint (not sidebar).
+async function diaResolveListing(listingId, action, saleId, saleDate) {
+  const labels = { confirm_sold: 'Confirm as SOLD', mark_withdrawn: 'Mark WITHDRAWN', still_active: 'Mark STILL ACTIVE' };
+  if (!confirm(labels[action] + ' for this listing?')) return;
+  const rowEl = document.getElementById('lcRow-' + listingId);
+  if (rowEl) rowEl.style.opacity = '0.5';
+  try {
+    const resp = await fetch('/api/resolve-listing-confirmation', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'dia', listing_id: listingId, action, sale_id: saleId, sale_date: saleDate }),
+    });
+    if (!resp.ok) { const e = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + e); }
+    // Drop the resolved row from the cached set and re-render.
+    window._lcConfirmRows = (window._lcConfirmRows || []).filter(r => String(r.listing_id) !== String(listingId));
+    renderDiaListingConfirm();
+  } catch (err) {
+    console.error('resolve listing failed:', err);
+    if (rowEl) rowEl.style.opacity = '1';
+    alert('Could not resolve listing: ' + err.message);
+  }
 }
 
 function renderOnMarketInner() {
