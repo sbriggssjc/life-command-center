@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Data-Flow & IA Audit Map — 2026-05-30</title>
+<style>
+  :root{
+    --nm-navy:#003DA5; --nm-sky:#62B5E5; --nm-pale:#E0E8F4; --nm-mid:#265AB2;
+    --nm-axis:#6A748C; --nm-text:#191919; --nm-muted:#666; --nm-bg:#fff; --nm-alt:#E7E6E6;
+    --ok:#1B7F4B; --okbg:#E4F3EB; --warn:#B7791F; --warnbg:#FBF1DD; --bad:#B42318; --badbg:#FCE9E7;
+    --dead:#6B21A8; --deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--nm-text);background:#F4F6FA;line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:22px 28px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:600;letter-spacing:.2px}
+  header .sub{font-size:13px;opacity:.92}
+  header .meta{font-size:12px;opacity:.8;margin-top:6px}
+  nav.tabs{display:flex;flex-wrap:wrap;gap:2px;background:var(--nm-navy);padding:0 16px}
+  nav.tabs button{background:transparent;border:0;color:#cdddf5;font-family:inherit;font-size:13.5px;
+    padding:11px 16px;cursor:pointer;border-bottom:3px solid transparent}
+  nav.tabs button:hover{color:#fff}
+  nav.tabs button.active{color:#fff;border-bottom-color:var(--nm-sky);font-weight:600}
+  main{max-width:1280px;margin:0 auto;padding:22px}
+  .panel{display:none;animation:fade .2s ease}
+  .panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  h2{font-size:19px;font-weight:600;color:var(--nm-navy);margin:4px 0 6px;border-bottom:2px solid var(--nm-pale);padding-bottom:6px}
+  h3{font-size:15px;font-weight:600;margin:18px 0 8px;color:var(--nm-mid)}
+  p.lead{color:var(--nm-muted);font-size:13.5px;margin:6px 0 14px;max-width:900px}
+  /* flow columns */
+  .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start}
+  .flowcol h4{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--nm-axis);text-align:center}
+  .node{background:#fff;border:1px solid var(--nm-alt);border-left:4px solid var(--nm-axis);border-radius:7px;
+    padding:8px 10px;margin-bottom:8px;font-size:12.5px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .node b{display:block;font-size:13px;margin-bottom:2px}
+  .node small{color:var(--nm-muted);font-size:11.5px}
+  .node.db{border-left-color:var(--nm-navy)}
+  .node.api{border-left-color:var(--nm-mid)}
+  .node.src{border-left-color:var(--nm-axis)}
+  .node.ui{border-left-color:var(--nm-sky)}
+  .node.flag-bad{border-left-color:var(--bad);background:var(--badbg)}
+  .node.flag-warn{border-left-color:var(--warn);background:var(--warnbg)}
+  .node.flag-dead{border-left-color:var(--dead);background:var(--deadbg)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 18px;font-size:12px;color:var(--nm-muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid var(--nm-alt);border-radius:8px;overflow:hidden}
+  th{background:var(--nm-navy);color:#fff;text-align:left;padding:8px 10px;font-weight:600;font-size:12px;position:sticky;top:0}
+  td{padding:7px 10px;border-top:1px solid var(--nm-alt);vertical-align:top}
+  tr:nth-child(even) td{background:#FAFBFD}
+  .pill{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11px;font-weight:600;white-space:nowrap}
+  .p-ok{background:var(--okbg);color:var(--ok)} .p-warn{background:var(--warnbg);color:var(--warn)}
+  .p-bad{background:var(--badbg);color:var(--bad)} .p-dead{background:var(--deadbg);color:var(--dead)}
+  .p-na{background:#eee;color:#555}
+  .count{font-variant-numeric:tabular-nums;font-weight:700;font-size:13px}
+  .bar{height:7px;border-radius:4px;background:var(--nm-pale);margin-top:3px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--nm-navy)}
+  .filters{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 12px;align-items:center}
+  .filters select,.filters input{font-family:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--nm-alt);border-radius:6px;background:#fff}
+  .filters label{font-size:12px;color:var(--nm-muted)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+  .card{background:#fff;border:1px solid var(--nm-alt);border-radius:9px;padding:13px 15px;border-top:4px solid var(--nm-navy)}
+  .card.bad{border-top-color:var(--bad)} .card.warn{border-top-color:var(--warn)} .card.dead{border-top-color:var(--dead)}
+  .card h4{margin:0 0 4px;font-size:13.5px}
+  .card .big{font-size:26px;font-weight:700;color:var(--nm-navy);font-variant-numeric:tabular-nums}
+  .card.bad .big{color:var(--bad)} .card.dead .big{color:var(--dead)} .card.warn .big{color:var(--warn)}
+  .card p{margin:5px 0 0;font-size:12px;color:var(--nm-muted)}
+  /* IA trees */
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .tree{background:#fff;border:1px solid var(--nm-alt);border-radius:9px;padding:14px 16px}
+  .tree h3{margin-top:0}
+  .tree ul{list-style:none;margin:0;padding-left:6px}
+  .tree li{font-size:12.7px;padding:2px 0;border-left:2px solid var(--nm-pale);padding-left:10px;margin-left:4px}
+  .tree li.top{font-weight:600;color:var(--nm-navy);border-left-color:var(--nm-navy);margin-top:6px}
+  .tree li.new{color:var(--ok);border-left-color:var(--ok);font-weight:600}
+  .tree li.move{color:var(--warn);border-left-color:var(--warn)}
+  .tree .tag{font-size:10px;font-weight:700;padding:0 5px;border-radius:4px;margin-left:6px}
+  .tag.new{background:var(--okbg);color:var(--ok)} .tag.move{background:var(--warnbg);color:var(--warn)}
+  .callout{background:var(--nm-pale);border-left:4px solid var(--nm-navy);border-radius:6px;padding:11px 14px;margin:12px 0;font-size:13px}
+  .callout.bad{background:var(--badbg);border-left-color:var(--bad)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  footer{max-width:1280px;margin:10px auto 30px;padding:0 22px;color:var(--nm-muted);font-size:11.5px}
+  .src{color:var(--nm-muted);font-size:11px;font-style:italic}
+  @media(max-width:900px){.flow,.twocol,.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Life Command Center — Data-Flow &amp; Information-Architecture Audit</h1>
+  <div class="sub">How data moves from the databases to the app, where review work lives, and where the gaps are.</div>
+  <div class="meta">Fresh audit · 2026-05-30 · Read-only sweep of 3 live Supabase projects + frontend/API code · Counts are live row counts at audit time</div>
+</header>
+
+<nav class="tabs">
+  <button class="active" data-t="flow">1 · Flow Map</button>
+  <button data-t="queues">2 · Review-Queue Heatmap</button>
+  <button data-t="ia">3 · IA: Current → Proposed</button>
+  <button data-t="gaps">4 · Gap Register</button>
+  <button data-t="health">5 · Live Ops Health</button>
+</nav>
+
+<main>
+
+<!-- ============ 1. FLOW ============ -->
+<section class="panel active" id="flow">
+  <h2>The data flow at a glance</h2>
+  <p class="lead">Data originates in external systems, lands in three Supabase databases, is served by a 12-function API, and is presented across the app's surfaces. The columns below read left→right. Cards flagged in color are where the flow is broken, buried, or unsurfaced — those are the audit's focus.</p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--nm-axis)"></i>Source</span>
+    <span><i class="dot" style="background:var(--nm-navy)"></i>Database</span>
+    <span><i class="dot" style="background:var(--nm-mid)"></i>API</span>
+    <span><i class="dot" style="background:var(--nm-sky)"></i>UI surface</span>
+    <span><i class="dot" style="background:var(--bad)"></i>Broken / orphaned</span>
+    <span><i class="dot" style="background:var(--warn)"></i>Buried / partial</span>
+    <span><i class="dot" style="background:var(--dead)"></i>Dead worker (queue grows, nothing drains it)</span>
+  </div>
+
+  <div class="flow">
+    <div class="flowcol">
+      <h4>① Sources</h4>
+      <div class="node src"><b>Email / Power Automate</b><small>Flagged Outlook → OM intake, To-Do sync</small></div>
+      <div class="node src"><b>CoStar sidebar</b><small>Chrome ext capture → properties, leases, CMBS, owners</small></div>
+      <div class="node src"><b>Salesforce</b><small>Contacts, opportunities, activities, OM files</small></div>
+      <div class="node src"><b>SharePoint / Outlook / Calendar</b><small>Bridges → docs, email, events</small></div>
+      <div class="node src"><b>County records</b><small>Deeds, parcels, tax, recorded owners</small></div>
+      <div class="node src"><b>CMS (ESRD chain)</b><small>Dialysis facility + quality + patient data</small></div>
+      <div class="node src"><b>GSA / FRPP / SAM / OPM / USAJobs</b><small>Federal lease + workforce signals</small></div>
+      <div class="node src flag-warn"><b>LoopNet / RCM email</b><small>Lead parsing</small></div>
+    </div>
+
+    <div class="flowcol">
+      <h4>② Databases (Supabase)</h4>
+      <div class="node db"><b>LCC Opps</b><small>xengecqv… · orchestrator, auth, BD engine, field provenance, work/inbox queues</small></div>
+      <div class="node db"><b>Dialysis_DB</b><small>zqzrriwu… · 12.4K properties, CMS clinics, financials, ~180 views</small></div>
+      <div class="node db"><b>Government</b><small>scknotsq… · 17.8K properties, GSA/FRPP, ownership research, ~160 views</small></div>
+      <div class="node flag-warn"><b>Schema reality check</b><small>All three are single <code>public</code> schemas — the "dia."/"gov." prefixes in docs are logical, not Postgres schemas</small></div>
+      <div class="node flag-bad"><b>Field-priority registry</b><small>Only <b>8</b> rules live (docs describe 462). Provenance governance effectively un-deployed → 12,332 actionable items</small></div>
+    </div>
+
+    <div class="flowcol">
+      <h4>③ API (12 Vercel fns)</h4>
+      <div class="node api"><b>entity-hub</b><small>contacts, entities, property detail, cap-rate</small></div>
+      <div class="node api"><b>queue</b><small>my_work, team, inbox, research (v1+v2)</small></div>
+      <div class="node api"><b>operations</b><small>bridge actions, workflow, Copilot chat</small></div>
+      <div class="node api"><b>intake / intake-share</b><small>OM staging, extract, promote, iOS share</small></div>
+      <div class="node api"><b>admin</b><small>config, flags, edge proxies, 30+ review sub-routes</small></div>
+      <div class="node api"><b>sync / bridges</b><small>SF/SP/Outlook/Calendar, RCM, cross-domain match</small></div>
+      <div class="node api"><b>apply-change</b><small>audited domain writes + provenance</small></div>
+      <div class="node api"><b>actions · domains · capital-markets</b><small>work items, domain CRUD, CM reports</small></div>
+    </div>
+
+    <div class="flowcol">
+      <h4>④ UI surfaces</h4>
+      <div class="node ui"><b>Today</b><small>KPIs, Next Best Action, briefing, markets</small></div>
+      <div class="node ui"><b>Dialysis</b><small>11–14 inner tabs incl. its own Research queue</small></div>
+      <div class="node ui"><b>Gov</b><small>11 inner tabs incl. its own Research queue + Pending Updates</small></div>
+      <div class="node ui"><b>Pipeline / Inbox</b><small>My Work + Team Queue / email triage</small></div>
+      <div class="node ui"><b>Property Detail</b><small>6-tab slide-over (shared gov+dia)</small></div>
+      <div class="node ui flag-warn"><b>More drawer (10 items)</b><small>Contacts, Research, Metrics, Sync Health, Data Quality… flat &amp; cluttered</small></div>
+      <div class="node ui flag-bad"><b>No home for Ops Health</b><small>Broken cron jobs &amp; dead workers are invisible to any human in the app</small></div>
+      <div class="node ui flag-bad"><b>No unified review console</b><small>Review work is split across 3 separate research queues + buried panels</small></div>
+    </div>
+  </div>
+
+  <div class="callout"><b>The headline.</b> The plumbing (sources → DBs → API → UI) is mature and largely works. The problem is the <b>last mile</b>: enormous volumes of review-ready work sit in database views with no proportionate, consolidated UI home — and the system's own health (failing jobs, dead workers) has no surface at all. The next tab quantifies it.</div>
+</section>
+
+<!-- ============ 2. QUEUES ============ -->
+<section class="panel" id="queues">
+  <h2>Review-queue heatmap — where the work actually is</h2>
+  <p class="lead">Every manual-review queue found across the three databases, with its live row count and whether it has a real UI home. This is the core "visualize the gaps" view: the biggest backlogs are precisely the ones that are orphaned or buried.</p>
+
+  <div class="cards" style="margin-bottom:18px">
+    <div class="card bad"><h4>Gov ownership research</h4><div class="big">49,547</div><p>Largest single backlog in the system. No proportionate UI home.</p></div>
+    <div class="card bad"><h4>Dia next-best-research</h4><div class="big">27,974</div><p>Surfaced only thinly inside the Dialysis research tab.</p></div>
+    <div class="card warn"><h4>LCC stale identities</h4><div class="big">18,838</div><p>Identity-graph drift. No surface.</p></div>
+    <div class="card warn"><h4>Provenance actionable</h4><div class="big">12,332</div><p>Write conflicts; governance registry only 8 rules deployed.</p></div>
+    <div class="card dead"><h4>LLC/SOS research (dia+gov)</h4><div class="big">1,968</div><p>0 completed — worker never runs. Queue only grows.</p></div>
+    <div class="card warn"><h4>Gov duplicate-address clusters</h4><div class="big">6,912</div><p>Biggest data-quality liability anywhere.</p></div>
+  </div>
+
+  <div class="filters">
+    <label>DB:
+      <select id="qdb"><option value="">All</option><option>LCC Opps</option><option>Dialysis</option><option>Government</option></select>
+    </label>
+    <label>UI status:
+      <select id="qst"><option value="">All</option><option>Surfaced</option><option>Buried</option><option>Orphaned</option><option>Dead worker</option></select>
+    </label>
+    <span class="src" id="qcount"></span>
+  </div>
+
+  <table id="qtable">
+    <thead><tr><th>Queue / view</th><th>DB</th><th>Live count</th><th>UI home today</th><th>Status</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="src">Counts captured live via read-only SELECTs on 2026-05-30. "Orphaned" = no meaningful UI surface. "Buried" = reachable but ≥2–3 clicks deep or conditional. "Dead worker" = rows accumulate with no process draining them.</p>
+</section>
+
+<!-- ============ 3. IA ============ -->
+<section class="panel" id="ia">
+  <h2>Information architecture — current vs proposed</h2>
+  <p class="lead">The current IA is organized by <b>domain</b> (Gov vs Dialysis), which fragments identical review work into parallel, hard-to-find places. The proposed IA adds a <b>work-type spine</b>: a single Review Console and an Ops Health surface, so a reviewer goes to one place for all conflicts/merges/research regardless of domain.</p>
+
+  <div class="twocol">
+    <div class="tree">
+      <h3>Current</h3>
+      <ul>
+        <li class="top">Today</li>
+        <li>KPIs · Next Best Action · briefing · weather · markets</li>
+        <li class="top">Dialysis (11–14 inner tabs)</li>
+        <li>Overview · Search · Properties · CMS Data · Inventory Changes · NPI Intel · Sales · Leases · Loans · Players</li>
+        <li class="move">Research (6 modes) — quarantine, unmatched, clarification, property, lease, clinic_leads, staleness</li>
+        <li>Prospects · Activity (listing verification buried here) · Capital Markets</li>
+        <li class="top">Gov (11 inner tabs)</li>
+        <li>Overview · Search · Ownership · Pipeline · Sales · Prospects · Leases · Loans · Players</li>
+        <li class="move">Research (6 modes) — pending_updates, pipeline_control, ownership, leads, intel, financial_overrides</li>
+        <li>Capital Markets</li>
+        <li class="top">Pipeline</li><li>My Work · Team Queue</li>
+        <li class="top">Inbox</li><li>Flagged email triage</li>
+        <li class="top">More drawer (flat, 10 items)</li>
+        <li>Contacts · Business · Calendar · Messages · Entities · Research · Metrics · Sync Health · Data Quality · Settings</li>
+        <li class="top">Property Detail (slide-over, 6 tabs)</li>
+        <li>Overview · Rent Roll · Operations · Ownership &amp; CRM · Deal History · Activity Log</li>
+      </ul>
+    </div>
+    <div class="tree">
+      <h3>Proposed</h3>
+      <ul>
+        <li class="top">Today <span class="tag move">tune</span></li>
+        <li>Add: top "Needs your review" strip = live counts from the Review Console lanes</li>
+        <li class="new">Review Console <span class="tag new">NEW · top-level</span></li>
+        <li class="new">Lane: Data conflicts &amp; provenance (cross-domain)</li>
+        <li class="new">Lane: Ownership / LLC / SOS research</li>
+        <li class="new">Lane: Property merges &amp; duplicate addresses</li>
+        <li class="new">Lane: Listing verification &amp; lifecycle</li>
+        <li class="new">Lane: Intake staging &amp; unmatched</li>
+        <li class="new">Lane: Pending updates (gov state machine)</li>
+        <li class="new">Ops Health <span class="tag new">NEW · top-level</span></li>
+        <li class="new">Failing cron jobs · dead workers · write failures · disk/alerts</li>
+        <li class="top">Dialysis / Gov <span class="tag move">slim</span></li>
+        <li class="move">Keep domain Overview/Search/Sales/Leases/Players; route the 6 "Research modes" into the shared Review Console (deep-link, domain pre-filtered)</li>
+        <li class="top">Workspaces group (drawer → grouped)</li>
+        <li class="move">Work: Pipeline · Inbox · Review Console</li>
+        <li class="move">Intelligence: Contacts · Entities · Capital Markets · Metrics</li>
+        <li class="move">Admin: Sync Health · Ops Health · Settings</li>
+        <li class="top">Property Detail <span class="tag move">elevate</span></li>
+        <li class="move">Persistent "Needs review" banner surfacing provenance conflicts + merge candidates (today buried in tabs/Consolidate button)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout"><b>Why a work-type spine.</b> Today a reviewer resolving ownership data must hop between Gov→Research→ownership, Dialysis→Research→property, the Property-detail Ownership&amp;CRM tab, and the standalone Research page — four contexts for one job. A single Review Console with domain filters collapses that to one. The redesign mockups (separate file) show the lane layout.</div>
+</section>
+
+<!-- ============ 4. GAPS ============ -->
+<section class="panel" id="gaps">
+  <h2>Gap register</h2>
+  <p class="lead">Consolidated from this audit's live sweep plus prior internal audit docs (deduped). Filter by theme and severity. Full narrative and remediation sequencing are in the Word report.</p>
+  <div class="filters">
+    <label>Theme: <select id="gth"><option value="">All</option><option>Data-flow / wiring</option><option>IA / layout</option><option>Review workflow</option><option>Missing coverage</option><option>Ops health</option><option>Data integrity</option></select></label>
+    <label>Severity: <select id="gsev"><option value="">All</option><option>Critical</option><option>High</option><option>Medium</option></select></label>
+    <input id="gq" placeholder="search…" style="flex:1;min-width:160px">
+    <span class="src" id="gcount"></span>
+  </div>
+  <table id="gtable">
+    <thead><tr><th>Gap</th><th>Theme</th><th>Sev</th><th>Where</th><th>Status</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- ============ 5. HEALTH ============ -->
+<section class="panel" id="health">
+  <h2>Live ops health — invisible to the app today</h2>
+  <p class="lead">These were caught by querying the health/alert views during the audit. None of them surface anywhere a human would see them in the LCC UI, so they have been silently degrading. This is the single strongest argument for a top-level Ops Health surface.</p>
+  <div class="cards">
+    <div class="card dead"><h4>Dialysis auto-merge — failing hourly 24h+</h4><p><code>auto_merge_property_failures</code> fires every hour. FK violation: can't delete losing property because <code>sales_transactions</code> rows aren't reparented first. ~24 open warn alerts, one new each hour.</p></div>
+    <div class="card bad"><h4>Gov nightly hygiene sweep — partially broken</h4><p><code>data_hygiene_sweep_step_error</code>: tries <code>REFRESH MATERIALIZED VIEW</code> on <code>v_sales_comps</code> &amp; <code>v_available_listings</code>, which are plain VIEWS. Two steps error every night.</p></div>
+    <div class="card dead"><h4>LLC/SOS research stalled — 8+ days</h4><p><code>research_queue_stalled</code> open on both dia (1,304) &amp; gov (664). 0 completed — no worker drains the queue (deferred pending free SOS scraper).</p></div>
+    <div class="card warn"><h4>LCC — flow failure + write-failure pile-up</h4><p>Open <code>flow_failure</code>: PA "SF → LCC Daily Bulk File Backfill" failed at Apply-to-each. <code>ingest_write_failures</code> at 10,577 rows / 2,676 recent.</p></div>
+    <div class="card warn"><h4>Provenance governance un-deployed</h4><p><code>field_source_priority</code> = 8 rows live vs 462 documented → 37 unranked-field drift rows and 12,332 actionable conflicts ungoverned.</p></div>
+    <div class="card warn"><h4>Listing verification falling behind</h4><p>Gov: 200 listings never verified, 126 overdue 30d. Dia: 74 never verified, 26 overdue. Probe cadence outruns capacity.</p></div>
+  </div>
+  <div class="callout bad"><b>Recommendation.</b> Add an Ops Health surface fed by <code>v_cron_health_summary</code>, <code>v_lcc_health_alerts_open</code>, <code>v_flow_run_failures_open</code> and the two domain <code>v_data_quality_summary</code> views, plus an "open alerts" badge on Today. Two of the six issues above (auto-merge, hygiene sweep) are also code bugs with clear fixes noted in the report.</div>
+</section>
+
+</main>
+<footer>
+  Northmarq-branded internal audit artifact · palette &amp; type per <code>public/reports/cm_brand_tokens.json</code> · Generated 2026-05-30.
+  Companion files: <b>LCC_Proposed_Redesign_Mockups.html</b> and <b>LCC_Data_Flow_Audit_Report.docx</b>.
+</footer>
+
+<script>
+// ---- tab switching ----
+document.querySelectorAll('nav.tabs button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active'); document.getElementById(b.dataset.t).classList.add('active');
+    window.scrollTo({top:0,behavior:'smooth'});
+  };
+});
+
+// ---- queue data ----
+const Q=[
+ ['v_priority_queue','LCC Opps',1062,'Today (Next Best Action) + BD','Buried'],
+ ['v_field_provenance_actionable','LCC Opps',12332,'— none meaningful','Orphaned'],
+ ['v_field_provenance_conflicts','LCC Opps',228,'Property Detail › Ownership&CRM (conditional)','Buried'],
+ ['v_field_provenance_unranked','LCC Opps',37,'— none','Orphaned'],
+ ['v_lcc_merge_candidates','LCC Opps',156,'Property Detail › Consolidate button','Buried'],
+ ['v_duplicate_candidates','LCC Opps',424,'— none','Orphaned'],
+ ['v_unlinked_entities','LCC Opps',449,'— none','Orphaned'],
+ ['v_research_queue','LCC Opps',2325,'Research page','Surfaced'],
+ ['v_inbox_triage','LCC Opps',7974,'Inbox','Surfaced'],
+ ['v_my_work','LCC Opps',10299,'Pipeline › My Work','Surfaced'],
+ ['v_unassigned_work','LCC Opps',2596,'Pipeline › Team Queue','Surfaced'],
+ ['v_stale_identities','LCC Opps',18838,'— none','Orphaned'],
+ ['v_ingest_write_failures_recent','LCC Opps',2676,'— none','Orphaned'],
+ ['v_next_best_research','Dialysis',27974,'Dialysis › Research (thin)','Buried'],
+ ['v_clinic_research_priority','Dialysis',7526,'Dialysis › Research','Buried'],
+ ['v_ownership_research_backlog','Dialysis',4842,'Dialysis › Research › property','Buried'],
+ ['v_clinic_lease_backfill_candidates','Dialysis',3079,'Dialysis › Leases backfill','Buried'],
+ ['v_property_metadata_backfill_queue','Dialysis',1406,'— none','Orphaned'],
+ ['v_pending_updates_workbench','Dialysis',250,'Dialysis › Research mode','Buried'],
+ ['v_match_review_queue','Dialysis',447,'Property link review modal','Buried'],
+ ['v_cmbs_research_queue','Dialysis',232,'— none','Orphaned'],
+ ['v_clinic_property_link_review_queue','Dialysis',175,'Detail CMS match modal','Buried'],
+ ['v_property_merge_candidates','Dialysis',71,'Detail › Consolidate','Buried'],
+ ['llc_research_queue (dia)','Dialysis',1304,'Research page / gov mode','Dead worker'],
+ ['v_data_quality_issues (dia)','Dialysis',2300,'Data Quality page (partial)','Buried'],
+ ['v_listings_due_for_verification','Dialysis',26,'Dialysis › Activity (depth 3)','Buried'],
+ ['pending_updates','Government',5979,'Gov › Research › pending_updates','Surfaced'],
+ ['ownership_research_queue','Government',49547,'— none proportionate','Orphaned'],
+ ['v_ownership_gaps','Government',39191,'— none','Orphaned'],
+ ['v_next_best_research (gov)','Government',39191,'Gov › Research (thin)','Buried'],
+ ['prospect_leads','Government',11532,'Gov › Prospects','Surfaced'],
+ ['vw_lead_work_queue','Government',8133,'Gov › Prospects/Pipeline','Buried'],
+ ['v_property_metadata_backfill_queue (gov)','Government',3172,'— none','Orphaned'],
+ ['v_match_review_queue (gov)','Government',866,'Match review','Buried'],
+ ['v_sf_auto_created_pending_review','Government',586,'— none','Orphaned'],
+ ['v_recorded_vs_assessor_owner_divergence','Government',561,'— none','Orphaned'],
+ ['v_property_address_collisions','Government',226,'— none','Orphaned'],
+ ['llc_research_queue (gov)','Government',664,'Research page','Dead worker'],
+ ['duplicate_property_address (gov DQ)','Government',6912,'Data Quality page (partial)','Buried'],
+ ['expired_lease_not_superseded (gov DQ)','Government',5676,'— none','Orphaned'],
+];
+const maxQ=Math.max(...Q.map(r=>r[2]));
+const stPill={'Surfaced':'p-ok','Buried':'p-warn','Orphaned':'p-bad','Dead worker':'p-dead'};
+function renderQ(){
+  const db=qdb.value, st=qst.value;
+  const rows=Q.filter(r=>(!db||r[1]===db)&&(!st||r[4]===st)).sort((a,b)=>b[2]-a[2]);
+  qtable.querySelector('tbody').innerHTML=rows.map(r=>`<tr>
+    <td><b>${r[0]}</b></td><td>${r[1]}</td>
+    <td><span class="count">${r[2].toLocaleString()}</span><div class="bar"><i style="width:${Math.max(2,r[2]/maxQ*100)}%"></i></div></td>
+    <td>${r[3]}</td><td><span class="pill ${stPill[r[4]]}">${r[4]}</span></td></tr>`).join('');
+  qcount.textContent=rows.length+' queues · '+rows.reduce((s,r)=>s+r[2],0).toLocaleString()+' rows';
+}
+qdb.onchange=qst.onchange=renderQ; renderQ();
+
+// ---- gap register ----
+const G=[
+ ['Three fragmented research queues — no unified triage','IA / layout','High','LCC Research page + Gov Research + Dia Research','Open'],
+ ['No top-level home for Ops Health (failing jobs/dead workers invisible)','Ops health','Critical','App-wide','Open'],
+ ['Field-priority registry only 8 rules live (462 documented) — provenance ungoverned','Data-flow / wiring','Critical','LCC Opps field_source_priority','Open'],
+ ['LLC/SOS research worker dead — 1,968 rows queued, 0 completed, 8d alert','Ops health','Critical','dia+gov llc_research_queue','Open'],
+ ['Dialysis auto-merge job fails hourly (FK on sales_transactions) 24h+','Ops health','Critical','Dialysis auto_merge_property','Open · code bug'],
+ ['Gov hygiene sweep REFRESH MATVIEW on plain views — 2 steps fail nightly','Ops health','High','Gov data_hygiene_sweep','Open · code bug'],
+ ['Gov ownership research backlog 49,547 with no proportionate UI','Missing coverage','High','Gov ownership_research_queue','Open'],
+ ['Gov 6,912 duplicate-address clusters — largest DQ liability','Data integrity','High','Gov properties','Open'],
+ ['18,838 stale identities + 2,676 recent write failures unsurfaced','Data-flow / wiring','High','LCC Opps','Open'],
+ ['Provenance conflicts only visible via a conditional detail tab','IA / layout','Medium','Property Detail › Ownership&CRM','Open'],
+ ['Merge candidates reachable only via small Consolidate button','IA / layout','Medium','Property Detail header','Open'],
+ ['Listing verification buried 3 levels deep (Dia › Activity › expand)','IA / layout','Medium','Dialysis Activity tab','Open'],
+ ['Pending Updates: one "Approve" button = 3 different semantic actions','Review workflow','High','Gov Pending Updates','Open'],
+ ['Pending Updates: confidence pill computed on non-field-change actions','Review workflow','Medium','Gov Pending Updates','Open'],
+ ['Pending Updates: record IDs / context keys never shown to reviewer','Review workflow','Medium','Gov Pending Updates','Open'],
+ ['Sale-Link Resolver pattern excellent but only used for one reason code','IA / layout','Medium','Gov Pending Updates','Open'],
+ ['Monitor dashboard 100% placeholder data','IA / layout','High','Gov Pipeline › Monitor','Open'],
+ ['Missing success/confirm toasts + no destructive-action guards','Review workflow','Medium','Gov research saves','Open'],
+ ['Large views render all rows client-side → browser freeze','IA / layout','High','Dia Overview, Inbox (5000-row pulls)','Open'],
+ ['Former ownership / cross-vertical history never rendered on contacts','Missing coverage','High','Contact / entity hub','Open'],
+ ['Recorded vs assessor owner divergence (561) not surfaced','Missing coverage','Medium','Gov ownership','Open'],
+ ['SOS officer/manager/agent data shows 0 with no research prompt','Missing coverage','Medium','Ownership detail','Open'],
+ ['Next-Best-Research generator live but no UI widget renders it','Missing coverage','High','detail.js / research tab','Open'],
+ ['Rich data unsurfaced: clinic_financial_estimates 188K, patient_counts 145K','Missing coverage','Medium','Dialysis detail','Open'],
+ ['Gov property_financials 98K + CMBS loan history barely exposed in detail','Missing coverage','Medium','Gov detail','Open'],
+ ['Implausible cap rates (>10% / <3%) pollute market metrics','Data integrity','High','dia+gov cap_rate_history','Open'],
+ ['Triple-pipeline duplicate sales (490 dia / 380 gov groups)','Data integrity','High','sales_transactions','Open'],
+ ['Owner entity dedup gaps (373 dia / 1,349 gov) break ownership chains','Data integrity','High','recorded/true owners','Open'],
+ ['Salesforce prospecting link 97% missing (13,675 of 14,106 groups)','Data-flow / wiring','High','Ownership ↔ SF','Open'],
+ ['SAM.gov 0 rows + OPM/USAJobs ~64 days stale','Data-flow / wiring','Medium','Gov enrichment','Open'],
+ ['Marketing tab badge shows total opportunities, not actionable tasks','IA / layout','Medium','app.js Marketing badge','Open'],
+ ['Drawer is a flat list of 10 — critical items rank equal to Settings','IA / layout','Medium','More drawer','Open'],
+];
+const sevPill={'Critical':'p-bad','High':'p-warn','Medium':'p-na'};
+function renderG(){
+  const th=gth.value, sv=gsev.value, q=gq.value.toLowerCase();
+  const rows=G.filter(r=>(!th||r[1]===th)&&(!sv||r[2]===sv)&&(!q||r[0].toLowerCase().includes(q)||r[3].toLowerCase().includes(q)));
+  const order={'Critical':0,'High':1,'Medium':2};
+  rows.sort((a,b)=>order[a[2]]-order[b[2]]);
+  gtable.querySelector('tbody').innerHTML=rows.map(r=>`<tr>
+    <td><b>${r[0]}</b></td><td>${r[1]}</td>
+    <td><span class="pill ${sevPill[r[2]]}">${r[2]}</span></td>
+    <td>${r[3]}</td><td class="src">${r[4]}</td></tr>`).join('');
+  gcount.textContent=rows.length+' of '+G.length;
+}
+gth.onchange=gsev.onchange=renderG; gq.oninput=renderG; renderG();
+</script>
+</body>
+</html>

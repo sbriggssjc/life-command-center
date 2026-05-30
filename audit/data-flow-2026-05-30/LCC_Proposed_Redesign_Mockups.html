@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Proposed Redesign — Mockups</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;--dead:#6B21A8;--deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);background:#EEF1F6;color:var(--nm-text);line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:20px 28px}
+  header h1{margin:0;font-size:22px;font-weight:600}
+  header p{margin:5px 0 0;font-size:13px;opacity:.9;max-width:880px}
+  main{max-width:1180px;margin:0 auto;padding:24px}
+  .mock-label{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--nm-mid);font-weight:700;margin:30px 0 4px}
+  .mock-note{font-size:13px;color:var(--nm-muted);margin:0 0 12px;max-width:900px}
+  /* fake app chrome */
+  .app{background:#fff;border:1px solid var(--nm-alt);border-radius:12px;overflow:hidden;box-shadow:0 6px 22px rgba(0,40,90,.10)}
+  .appbar{display:flex;align-items:center;gap:10px;background:#0A2A5E;color:#fff;padding:9px 16px;font-size:13px}
+  .appbar .brand{font-weight:700;letter-spacing:.3px}
+  .appbar .sp{flex:1}
+  .appbar .chip{background:rgba(255,255,255,.14);padding:3px 9px;border-radius:20px;font-size:11.5px}
+  .appbar .chip.alert{background:var(--bad)}
+  .topnav{display:flex;gap:2px;background:var(--nm-navy);padding:0 10px}
+  .topnav span{color:#cdddf5;font-size:12.5px;padding:9px 13px;border-bottom:3px solid transparent}
+  .topnav span.on{color:#fff;font-weight:600;border-bottom-color:var(--nm-sky)}
+  .body{padding:16px 18px;background:#F7F9FC}
+  /* needs-review strip */
+  .strip{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px}
+  .skpi{background:#fff;border:1px solid var(--nm-alt);border-radius:9px;padding:10px 12px;border-left:4px solid var(--nm-navy)}
+  .skpi.bad{border-left-color:var(--bad)} .skpi.warn{border-left-color:var(--warn)} .skpi.dead{border-left-color:var(--dead)}
+  .skpi .n{font-size:21px;font-weight:700;color:var(--nm-navy);font-variant-numeric:tabular-nums}
+  .skpi.bad .n{color:var(--bad)} .skpi.warn .n{color:var(--warn)} .skpi.dead .n{color:var(--dead)}
+  .skpi .l{font-size:11px;color:var(--nm-muted);margin-top:1px}
+  /* lanes */
+  .lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .lane{background:#fff;border:1px solid var(--nm-alt);border-radius:10px;overflow:hidden}
+  .lane .lh{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--nm-pale);font-weight:600;font-size:13px;color:var(--nm-navy)}
+  .lane .lh .b{background:var(--nm-navy);color:#fff;border-radius:14px;font-size:11px;padding:1px 8px;font-variant-numeric:tabular-nums}
+  .lane.bad .lh{background:var(--badbg);color:var(--bad)} .lane.bad .lh .b{background:var(--bad)}
+  .lane.dead .lh{background:var(--deadbg);color:var(--dead)} .lane.dead .lh .b{background:var(--dead)}
+  .lane ul{list-style:none;margin:0;padding:6px 0}
+  .lane li{padding:7px 12px;font-size:12px;border-top:1px solid #f0f2f6;display:flex;justify-content:space-between;gap:8px}
+  .lane li:first-child{border-top:0}
+  .lane li .src{color:var(--nm-muted);font-size:11px}
+  .lane li b{font-variant-numeric:tabular-nums}
+  /* resolver */
+  .resolver{display:grid;grid-template-columns:1.1fr 1fr;gap:0;background:#fff;border:1px solid var(--nm-alt);border-radius:10px;overflow:hidden}
+  .rqueue{border-right:1px solid var(--nm-alt);background:#FAFBFD}
+  .rqueue .qi{padding:10px 12px;border-bottom:1px solid #eef1f6;font-size:12px;cursor:default}
+  .rqueue .qi.on{background:var(--nm-pale);border-left:3px solid var(--nm-navy)}
+  .rqueue .qi .t{font-weight:600} .rqueue .qi .m{color:var(--nm-muted);font-size:11px}
+  .rdetail{padding:14px 16px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12.5px;margin:8px 0}
+  .kv b{color:var(--nm-axis);font-weight:600}
+  .diff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+  .diff .col{border:1px solid var(--nm-alt);border-radius:7px;padding:8px 10px;font-size:12px}
+  .diff .col.cur{background:#FAFBFD} .diff .col.prop{background:var(--okbg)}
+  .diff .col h5{margin:0 0 4px;font-size:11px;text-transform:uppercase;color:var(--nm-axis)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+  .chip2{background:var(--nm-pale);color:var(--nm-mid);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600}
+  .btns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .btn{border:0;border-radius:7px;padding:8px 14px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:default}
+  .btn.pri{background:var(--nm-navy);color:#fff} .btn.ok{background:var(--ok);color:#fff}
+  .btn.gho{background:#fff;border:1px solid var(--nm-alt);color:var(--nm-text)} .btn.dng{background:var(--badbg);color:var(--bad)}
+  .src-line{font-size:11px;color:var(--nm-muted);margin-top:8px}
+  /* detail banner */
+  .needs{background:var(--warnbg);border:1px solid #F0DCB0;border-left:4px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12.5px;display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .needs .ct{background:var(--warn);color:#fff;border-radius:14px;padding:1px 8px;font-size:11px;font-weight:700}
+  .dtabs{display:flex;gap:2px;border-bottom:1px solid var(--nm-alt);margin-bottom:10px}
+  .dtabs span{font-size:12px;padding:7px 11px;color:var(--nm-muted);border-bottom:2px solid transparent}
+  .dtabs span.on{color:var(--nm-navy);font-weight:600;border-bottom-color:var(--nm-navy)}
+  /* ops health */
+  .ops{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .ohrow{background:#fff;border:1px solid var(--nm-alt);border-radius:9px;padding:11px 13px;border-left:4px solid var(--warn)}
+  .ohrow.crit{border-left-color:var(--bad)} .ohrow.dead{border-left-color:var(--dead)}
+  .ohrow h4{margin:0 0 3px;font-size:13px} .ohrow p{margin:0;font-size:11.5px;color:var(--nm-muted)}
+  .ohrow .st{float:right;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:5px}
+  .st.crit{background:var(--badbg);color:var(--bad)} .st.dead{background:var(--deadbg);color:var(--dead)} .st.warn{background:var(--warnbg);color:var(--warn)}
+  footer{max-width:1180px;margin:6px auto 34px;padding:0 24px;color:var(--nm-muted);font-size:11.5px}
+  @media(max-width:900px){.strip{grid-template-columns:repeat(3,1fr)}.lanes,.ops,.resolver{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>LCC — Proposed Redesign Mockups</h1>
+  <p>Low-fidelity, brand-accurate mockups of the recommended layout. These are illustrative wireframes, not production screens — they show where review work and system health should live. Counts shown are the live audit numbers.</p>
+</header>
+<main>
+
+  <!-- 1. TODAY -->
+  <div class="mock-label">Mockup 1 · "Today" with a Needs-Your-Review strip + alerts badge</div>
+  <p class="mock-note">A single glanceable strip pulls the live counts from the Review Console lanes, so the first thing a broker sees is what's waiting — across both verticals. An alert chip in the title bar exposes ops health that is invisible today.</p>
+  <div class="app">
+    <div class="appbar"><span class="brand">LIFE COMMAND CENTER</span><span class="sp"></span>
+      <span class="chip alert">⚠ 4 system alerts</span><span class="chip">Broker view</span></div>
+    <div class="topnav"><span class="on">Today</span><span>Dialysis</span><span>Gov</span><span>Review Console</span><span>Pipeline</span><span>Inbox</span><span>More ▾</span></div>
+    <div class="body">
+      <div class="strip">
+        <div class="skpi bad"><div class="n">49.5K</div><div class="l">Ownership research</div></div>
+        <div class="skpi warn"><div class="n">12.3K</div><div class="l">Data conflicts</div></div>
+        <div class="skpi"><div class="n">227</div><div class="l">Property merges</div></div>
+        <div class="skpi warn"><div class="n">426</div><div class="l">Listing verify</div></div>
+        <div class="skpi"><div class="n">5,979</div><div class="l">Pending updates</div></div>
+        <div class="skpi dead"><div class="n">1,968</div><div class="l">LLC/SOS (stalled)</div></div>
+      </div>
+      <p class="mock-note" style="margin:0">Below the strip: the existing Next Best Action, daily briefing, markets and schedule widgets stay as-is.</p>
+    </div>
+  </div>
+
+  <!-- 2. REVIEW CONSOLE -->
+  <div class="mock-label">Mockup 2 · Review Console (NEW top-level) — one place, organized by work type</div>
+  <p class="mock-note">Replaces the three separate research queues. Lanes are work-type, not domain; each lane carries a live badge and a domain filter. A reviewer picks a lane and works it; the domain (Gov/Dia) is just a filter, not a separate destination.</p>
+  <div class="app">
+    <div class="appbar"><span class="brand">REVIEW CONSOLE</span><span class="sp"></span>
+      <span class="chip">Domain: All ▾</span><span class="chip">Assignee: Me ▾</span><span class="chip">Sort: Oldest ▾</span></div>
+    <div class="body">
+      <div class="lanes">
+        <div class="lane bad"><div class="lh">Ownership &amp; LLC research <span class="b">94K</span></div>
+          <ul><li>Gov ownership gaps <b>39,191</b></li><li>Dia next-best-research <b>27,974</b><span class="src"></span></li><li>Gov ownership queue <b>49,547</b></li><li>Recorded≠assessor <b>561</b></li></ul></div>
+        <div class="lane warn"><div class="lh">Data conflicts &amp; provenance <span class="b">12.6K</span></div>
+          <ul><li>Actionable conflicts <b>12,332</b></li><li>Same-priority conflicts <b>228</b></li><li>Unranked-field drift <b>37</b></li><li>Write failures (recent) <b>2,676</b></li></ul></div>
+        <div class="lane"><div class="lh">Property merges &amp; dupes <span class="b">7.7K</span></div>
+          <ul><li>Gov dup-address clusters <b>6,912</b></li><li>Merge candidates (LCC) <b>156</b></li><li>Duplicate candidates <b>424</b></li><li>Dia merge candidates <b>71</b></li></ul></div>
+        <div class="lane warn"><div class="lh">Listing verification <span class="b">426</span></div>
+          <ul><li>Gov never verified <b>200</b></li><li>Gov overdue 30d <b>126</b></li><li>Dia never verified <b>74</b></li><li>Dia overdue <b>26</b></li></ul></div>
+        <div class="lane"><div class="lh">Pending updates (Gov) <span class="b">1,876</span></div>
+          <ul><li>Ownership discrepancy <b>—</b></li><li>Sale-link resolver <b>—</b></li><li>GSA link review <b>—</b></li><li>Intake unmatched <b>—</b></li></ul></div>
+        <div class="lane dead"><div class="lh">Intake &amp; identity <span class="b">21K</span></div>
+          <ul><li>Stale identities <b>18,838</b></li><li>Unlinked entities <b>449</b></li><li>Research queue <b>2,325</b></li><li>LLC/SOS (no worker) <b>1,968</b></li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. RESOLVER -->
+  <div class="mock-label">Mockup 3 · A lane opened — generalized resolver (queue + decision pane)</div>
+  <p class="mock-note">The excellent Sale-Link Resolver pattern (today only available for one reason code) generalized to every review type. Left: the queue with item N/M cursor. Right: full context — record IDs, source/confidence, current→proposed diff, and reason-aware actions. Fixes the "one Approve button means three things" problem.</p>
+  <div class="resolver">
+    <div class="rqueue">
+      <div class="qi on"><div class="t">Ownership discrepancy · #4 / 1,876</div><div class="m">7IL Properties LLC → FINCH, CARTHEL JACK</div></div>
+      <div class="qi"><div class="t">GSA link review · 12 dupes flagged</div><div class="m">Lease GS-07P-… · paired address</div></div>
+      <div class="qi"><div class="t">Sale-link · no candidates</div><div class="m">"PORT CHARLOTTE" looks like a city, not a street</div></div>
+      <div class="qi"><div class="t">Intake unmatched property</div><div class="m">previously linked → audit-nulled</div></div>
+    </div>
+    <div class="rdetail">
+      <div class="chips"><span class="chip2">sale_id 88213</span><span class="chip2">property_id 41902</span><span class="chip2">source: county deed</span><span class="chip2">confidence 60%</span></div>
+      <div class="diff">
+        <div class="col cur"><h5>Current (recorded owner)</h5>7IL Properties LLC<br><span class="src-line">filed 2019 · prior authoritative</span></div>
+        <div class="col prop"><h5>Proposed (raw deed extract)</h5>FINCH, CARTHEL JACK<br><span class="src-line">all-caps last-first · no filing date</span></div>
+      </div>
+      <div class="kv"><b>Why flagged</b><span>Grantee name on most-recent deed differs from recorded owner</span>
+        <b>Guidance</b><span>Confirm the LLC chain before overwriting — raw extract may be an individual signer, not the entity</span></div>
+      <div class="btns">
+        <button class="btn ok">Accept proposed</button>
+        <button class="btn pri">Keep current</button>
+        <button class="btn gho">Open in deed records ↗</button>
+        <button class="btn gho">Skip</button>
+        <button class="btn dng">Flag bad upstream data</button>
+      </div>
+      <div class="src-line">Distinct, reason-aware actions + a success toast on save. ‹ J / K › to move; cursor shows position.</div>
+    </div>
+  </div>
+
+  <!-- 4. PROPERTY DETAIL -->
+  <div class="mock-label">Mockup 4 · Property Detail — persistent "Needs review" banner</div>
+  <p class="mock-note">Provenance conflicts and merge candidates are surfaced the moment the panel opens, instead of being hidden inside the Ownership&amp;CRM tab and a small Consolidate button. The Next-Best-Research card (generator already exists in the backend) finally renders here.</p>
+  <div class="app">
+    <div class="appbar"><span class="brand">1450 Channelside Dr · Tampa FL</span><span class="sp"></span><span class="chip">DIA</span><span class="chip">Consolidate</span></div>
+    <div class="body">
+      <div class="needs"><span class="ct">3</span> Needs review: <b>2 provenance conflicts</b> (rent, owner) · <b>1 merge candidate</b> (same address, id 41977) · <span style="color:var(--warn)">Next best research: confirm SOS manager</span></div>
+      <div class="dtabs"><span class="on">Overview</span><span>Rent Roll</span><span>Operations</span><span>Ownership &amp; CRM</span><span>Deal History</span><span>Activity</span></div>
+      <p class="mock-note" style="margin:0">Tab bodies unchanged; the difference is the always-visible banner that routes a click straight to the relevant resolver in the Review Console with this property pre-filtered.</p>
+    </div>
+  </div>
+
+  <!-- 5. OPS HEALTH -->
+  <div class="mock-label">Mockup 5 · Ops Health (NEW) — the system watching itself</div>
+  <p class="mock-note">Fed by <code>v_cron_health_summary</code>, <code>v_lcc_health_alerts_open</code>, <code>v_flow_run_failures_open</code> and the domain data-quality summaries. Everything here is degrading silently today because there's no surface for it.</p>
+  <div class="app">
+    <div class="appbar"><span class="brand">OPS HEALTH</span><span class="sp"></span><span class="chip alert">4 open · 2 code bugs</span></div>
+    <div class="body">
+      <div class="ops">
+        <div class="ohrow dead"><span class="st dead">DEAD WORKER</span><h4>LLC / SOS research</h4><p>1,968 queued · 0 completed · stalled 8 days · no worker draining the queue</p></div>
+        <div class="ohrow crit"><span class="st crit">FAILING HOURLY</span><h4>Dialysis auto-merge</h4><p>FK violation on sales_transactions — reparent rows before delete · ~24 open alerts · code fix noted</p></div>
+        <div class="ohrow crit"><span class="st crit">NIGHTLY FAIL</span><h4>Gov hygiene sweep</h4><p>REFRESH MATERIALIZED VIEW on plain views (v_sales_comps, v_available_listings) · 2 steps error · code fix noted</p></div>
+        <div class="ohrow"><span class="st warn">OPEN</span><h4>SF → LCC file backfill</h4><p>Power Automate failed at Apply-to-each · 10,577 ingest write-failures accumulated</p></div>
+        <div class="ohrow"><span class="st warn">UNGOVERNED</span><h4>Provenance registry</h4><p>8 priority rules live vs 462 documented · 37 unranked-field drift rows</p></div>
+        <div class="ohrow"><span class="st warn">FALLING BEHIND</span><h4>Listing verification</h4><p>Gov 200 never-verified / Dia 74 · probe cadence outruns capacity</p></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+<footer>Illustrative wireframes · Northmarq palette per cm_brand_tokens.json · 2026-05-30 · Companion: LCC_Data_Flow_Audit_Map.html, LCC_Data_Flow_Audit_Report.docx</footer>
+</body>
+</html>

@@ -372,6 +372,202 @@ this is the outbound discovery side.
 
 ---
 
+## Flow 6: SJC Broker Contact Sync (Salesforce Contacts → dia.salesforce_contacts)
+
+### Why this flow exists
+The SJC deal book (`dia.public.v_sjc_deal_book`, fed by `sf_listing_staging`) stores
+each deal's listing broker as a **Salesforce Contact Id** in
+`Listing_Broker_sjc__c` (and `_2/_3/_4` + `Compliance_Broker_sjc__c`). We can show
+deals by TEAM ("Team Briggs") but **not by individual broker**, because those broker
+Contact records are not in `dia.public.salesforce_contacts` — the existing contact
+sync only pulls account/owner contacts, not internal SJC brokers. This flow closes
+that gap so we can join `v_sjc_deal_book.listing_broker_sf_id = salesforce_contacts.sf_contact_id`
+and surface a `broker_name`.
+
+### Architecture note — this is NOT an intake-salesforce flow
+`salesforce_contacts` is **not** written through the `intake-salesforce` edge
+function. That function only stages `property/comp/listing/deal` into the
+`sf_*_staging` tables and has no contact mapping. `salesforce_contacts` is a flat
+table written by **direct PostgREST upsert** (same pattern that already populates
+its ~5,000 rows). This flow follows that same direct-upsert path. Consequences:
+
+- **No `sf_sync_log` rows** are written → the `sf_sync_log` retention/payload
+  policy is automatically satisfied (nothing to keep off success rows).
+- **No watermark or allowlist** belonging to any other flow is touched. The broker
+  Contact set is tiny (a few dozen), so this flow **re-syncs the full set every run**
+  and needs no watermark store at all.
+
+### Trigger
+Scheduled — **Recurrence**, daily (align with the existing contact sync; the current
+contact rows refresh ~00:01 UTC). Volume is trivial, so a daily full re-sync is fine.
+
+### Target
+```
+POST https://zqzrriwuavgrquhisnoa.supabase.co/rest/v1/salesforce_contacts?on_conflict=sf_contact_id
+```
+(`zqzrriwuavgrquhisnoa` = Dialysis_DB project. The table is upsert-ready: UNIQUE on
+`sf_contact_id`.)
+
+### Authentication (Supabase REST, service role)
+```
+apikey:        @{variables('DIA_SUPABASE_SERVICE_KEY')}
+Authorization: Bearer @{variables('DIA_SUPABASE_SERVICE_KEY')}
+Content-Type:  application/json
+Prefer:        resolution=merge-duplicates,return=minimal
+```
+Use the **same Dialysis_DB service-role key** your existing contact-sync flow already
+holds. Service role bypasses RLS, so the upsert succeeds even though RLS is enabled
+on the table.
+
+### Field mapping (Salesforce Contact → salesforce_contacts)
+| Supabase column | Salesforce field |
+|---|---|
+| `sf_contact_id` | `Id` (use the 18-char Id) |
+| `first_name` | `FirstName` |
+| `last_name` | `LastName` |
+| `email` | `Email` |
+| `phone` | `Phone` |
+| `sf_account_id` | `AccountId` |
+| `updated_at` | `@{utcNow()}` (optional; column defaults are fine to omit) |
+
+`id` is the surrogate PK — **never send it**; let the DB assign it. Upsert keys on
+`sf_contact_id`.
+
+### Power Automate build steps
+
+**Step 1 — Recurrence trigger.** Daily.
+
+**Step 2 — Salesforce SOQL (the broker Contacts).** Use the connector's
+"Run a SOQL query" / list-records action.
+
+Robust (recommended) — covers current + future brokers automatically by reading the
+broker lookups straight off the deal object, then resolving them to Contacts. Build it
+as a two-pass query because SOQL can't union five lookup fields in one statement:
+
+> _Pass A_ — pull the broker lookups from the same SF object your existing
+> deal/listing sync queries (the one carrying the `*_sjc__c` broker lookups —
+> `Deal__c` / Opportunity):
+> ```sql
+> SELECT Listing_Broker_sjc__c, Listing_Broker_2_sjc__c, Listing_Broker_3_sjc__c,
+>        Listing_Broker_4_sjc__c, Compliance_Broker_sjc__c
+> FROM   Deal__c
+> WHERE  Listing_Broker_sjc__c != null
+> ```
+> _In PA_ — union the five columns into one array, keep only values that
+> `startsWith('003')` (drop the `a1s…` junction-object Ids — those are not Contacts),
+> and `union()` to dedupe. Then _Pass B_:
+> ```sql
+> SELECT Id, FirstName, LastName, Name, Email, Phone, AccountId,
+>        CreatedDate, LastModifiedDate
+> FROM   Contact
+> WHERE  Id IN (:distinctBrokerIds)
+> ```
+
+Backfill (run once now) — the 30 distinct broker Contact Ids currently referenced by
+our deals (superset of the 17 in the original request). Paste straight into the
+Contact SOQL:
+```sql
+SELECT Id, FirstName, LastName, Name, Email, Phone, AccountId,
+       CreatedDate, LastModifiedDate
+FROM Contact
+WHERE Id IN (
+  '0038W00002PR8mEQAT','0038W00002PR97EQAT','0038W00002PREhcQAH','0038W00002PREhiQAH',
+  '0038W00002PREhkQAH','0038W00002PREhoQAH','0038W00002PREhtQAH','0038W00002PREhVQAX',
+  '0038W00002PREhYQAX','0038W00002PREhzQAH','0038W00002PREhZQAX','0038W00002PREiaQAH',
+  '0038W00002PREidQAH','0038W00002PREiUQAX','0038W00002PREivQAH','0038W00002PREixQAH',
+  '0038W00002PREizQAH','0038W00002PREjbQAH','0038W00002PREjfQAH','0038W00002PREjiQAH',
+  '0038W00002PREjoQAH','0038W00002PREjqQAH','0038W00002PREjsQAH','0038W00002PREjvQAH',
+  '0038W00002PREjXQAX','0038W00002PREk0QAH','0038W00002PREkdQAH','0038W00002PREkeQAH',
+  '0038W00002PREnGQAX','0038W00002RhHhKQAV'
+)
+ORDER BY LastModifiedDate ASC
+```
+
+**Step 3 — Select (shape the rows).** Map each Contact record to the upsert shape:
+```
+sf_contact_id: @{item()?['Id']}
+first_name:    @{item()?['FirstName']}
+last_name:     @{item()?['LastName']}
+email:         @{item()?['Email']}
+phone:         @{item()?['Phone']}
+sf_account_id: @{item()?['AccountId']}
+```
+
+**Step 4 — HTTP upsert (one batched call).** PostgREST accepts a JSON **array**, so
+post the whole `Select` output in a single request:
+```
+Method:  POST
+URI:     https://zqzrriwuavgrquhisnoa.supabase.co/rest/v1/salesforce_contacts?on_conflict=sf_contact_id
+Headers: (the four auth/Prefer headers above)
+Body:    @{body('Select')}
+```
+A 2xx with empty body = success (`return=minimal`). Re-runs are idempotent
+(`merge-duplicates`).
+
+**Step 5 — Error branch.** "Run after" → has failed/timed out → email Scott the
+status code + response body.
+
+### Self-maintaining broker list (the endpoint)
+So the flow keeps covering **future** brokers without editing the SOQL, replace the
+hard-coded `IN (…)` list with a GET against the live broker-Id view (applied to both
+projects 2026-05-29):
+```
+GET https://zqzrriwuavgrquhisnoa.supabase.co/rest/v1/v_sjc_broker_contact_ids?select=sf_contact_id   (dia)
+GET https://scknotsqkcheojiaewwh.supabase.co/rest/v1/v_sjc_broker_contact_ids?select=sf_contact_id   (gov)
+Headers: apikey + Authorization: Bearer <that project's service-role key>
+```
+Returns the current distinct `003…` broker Contact Ids (a1s… junction Ids already
+excluded). In PA: GET → build the `IN (…)` clause from the returned ids
+(`join(...)`) → run the Contact SOQL → upsert. New brokers on new deals appear in
+the view automatically, so the flow never needs editing.
+
+### Both verticals — run dia AND gov
+SJC deals split across two Supabase projects by tenant type, and each has its **own**
+`salesforce_contacts` table. Run the same logic for both (parallel branches, or two
+flows):
+
+| Vertical | Project ref | Broker-Id view | Upsert target |
+|---|---|---|---|
+| Dialysis | `zqzrriwuavgrquhisnoa` | `v_sjc_broker_contact_ids` (30 ids) | `…zqzrriwuavgrquhisnoa.supabase.co/rest/v1/salesforce_contacts` |
+| Government | `scknotsqkcheojiaewwh` | `v_sjc_broker_contact_ids` (29 ids) | `…scknotsqkcheojiaewwh.supabase.co/rest/v1/salesforce_contacts` |
+
+The Salesforce Contact SOQL is identical for both — only the broker-Id source and the
+Supabase upsert URL/key differ. **Gov caveat:** `gov.salesforce_contacts` is created
+by `supabase/migrations/government/20260529290000_gov_sjc_broker_fanout.sql`, which is
+**staged, not yet applied** (it adds a table to the locked-down gov DB). The gov
+branch upserts will 404 until that migration is applied — apply it first, then enable
+the gov branch.
+
+### Phase 2 simplification (optional, after first run)
+Once the brokers land, check whether they share a single SF Account (the SJC house
+account) or a Contact RecordType:
+```sql
+-- run on dia (zqzrriwuavgrquhisnoa)
+SELECT sf_account_id, count(*)
+FROM salesforce_contacts
+WHERE sf_contact_id LIKE '0038W%'
+GROUP BY sf_account_id ORDER BY 2 DESC;
+```
+If they cluster on one `sf_account_id`, the robust Contact SOQL can be simplified to
+`WHERE AccountId = '<house account>'` and the two-pass deal scan dropped.
+
+### Acceptance
+Run on dia (`zqzrriwuavgrquhisnoa`):
+```sql
+SELECT count(*) FROM salesforce_contacts
+WHERE sf_contact_id IN (
+  '0038W00002PR97EQAT','0038W00002PREhcQAH','0038W00002PREhYQAX','0038W00002PREhzQAH',
+  '0038W00002PREhZQAX','0038W00002PREiaQAH','0038W00002PREidQAH','0038W00002PREiUQAX',
+  '0038W00002PREixQAH','0038W00002PREizQAH','0038W00002PREjfQAH','0038W00002PREjiQAH',
+  '0038W00002PREjoQAH','0038W00002PREjsQAH','0038W00002PREjXQAX','0038W00002PREkdQAH',
+  '0038W00002RhHhKQAV');
+```
+Expect **17** (the robust set lands ~30). Then ping the LCC team to apply the
+`v_sjc_deal_book.broker_name` join (migration staged in
+`supabase/migrations/20260529160000_dia_v_sjc_deal_book_broker_name.sql`).
+
+---
+
 ## Environment Variables Required
 
 | Variable | Location | Purpose |
@@ -380,6 +576,7 @@ this is the outbound discovery side.
 | `LCC_API_KEY` | Vercel env vars | Bearer token auth for PA flows using standard auth |
 | `SUPABASE_URL` | Vercel env vars | LCC Opps Supabase endpoint |
 | `SUPABASE_SERVICE_KEY` | Vercel env vars | LCC Opps service role key |
+| `DIA_SUPABASE_SERVICE_KEY` | Power Automate flow variable | Dialysis_DB (`zqzrriwuavgrquhisnoa`) service-role key — Flow 6 direct upsert to `salesforce_contacts` |
 
 ---
 
