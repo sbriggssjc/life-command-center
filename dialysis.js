@@ -59,6 +59,7 @@ let _diaAvailListingsLoading = false;
 let _diaOwnershipCoverageLoading = false;
 let _diaSjcDealBookLoading = false;
 let _diaListingConfirmLoading = false;
+let _diaLlcQueueLoading = false;
 let diaSalesLoading = false;
 let diaSalesSearch = '';
 const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
@@ -1552,6 +1553,28 @@ function renderDiaOverview() {
     })();
   }
 
+  // Lazy-load LLC Research Queue (Section 7c). Owner-enrichment backlog with a
+  // manual resolve path (SOS lookup link + Completed/No Match), since the
+  // automated tick is feature-flagged off (no OpenCorporates key).
+  if (!_diaLlcQueueLoading && !window._diaLlcQueueRendered) {
+    _diaLlcQueueLoading = true;
+    (async () => {
+      try {
+        const resp = await fetch('/api/llc-research-queue?domain=dialysis&limit=25');
+        const j = resp.ok ? await resp.json() : {};
+        window._llcQueueItems = (j && j.items) || [];
+        window._llcQueueTotal = (j && (j.total != null ? j.total : (j.items ? j.items.length : 0))) || 0;
+        renderDiaLlcQueue();
+      } catch (err) {
+        console.warn('llc queue load failed:', err.message);
+        const wrap = document.getElementById('diaLlcQueue');
+        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">LLC research queue unavailable</div>';
+      }
+      _diaLlcQueueLoading = false;
+      window._diaLlcQueueRendered = true;
+    })();
+  }
+
   let html = '<div style="padding:4px 0">';
 
   // ── STYLE ──
@@ -1825,6 +1848,19 @@ function renderDiaOverview() {
   html += '</div><div id="lcConfirmList" style="margin-top:10px"></div></div>';
 
   // ═══════════════════════════════════════════════
+  // SECTION 7c: LLC RESEARCH QUEUE (owner enrichment, manual resolve)
+  // The automated llc-research-tick is feature-flagged off (no OpenCorporates
+  // key); this panel makes the queue actionable — SOS lookup link + mark
+  // Completed/No Match via /api/resolve-llc-research.
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('LLC Research Queue', '🏛️', 'research');
+  html += '<div id="diaLlcQueue"><div class="dia-grid dia-grid-3">';
+  html += infoCard({ title: 'Queued Owners', value: '...', sub: 'pending enrichment', color: 'purple', id: 'llcTotalVal', subId: 'llcTotalSub' });
+  html += infoCard({ title: 'Shown', value: '...', sub: 'top by value', color: 'blue', id: 'llcShownVal', subId: 'llcShownSub' });
+  html += infoCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
+  html += '</div><div id="llcQueueList" style="margin-top:10px"></div></div>';
+
+  // ═══════════════════════════════════════════════
   // SECTION 8: RESEARCH PIPELINE
   // ═══════════════════════════════════════════════
   html += sectionHeader('Research Pipeline', '🔬', 'research');
@@ -2017,6 +2053,65 @@ async function diaResolveListing(listingId, action, saleId, saleDate) {
     console.error('resolve listing failed:', err);
     if (rowEl) rowEl.style.opacity = '1';
     alert('Could not resolve listing: ' + err.message);
+  }
+}
+
+// Render the LLC Research Queue panel from window._llcQueueItems.
+function renderDiaLlcQueue() {
+  const items = window._llcQueueItems || [];
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('llcTotalVal', fmtN(window._llcQueueTotal || items.length)); setTxt('llcTotalSub', 'status=queued');
+  setTxt('llcShownVal', fmtN(items.length)); setTxt('llcShownSub', 'highest value first');
+  const wrap = document.getElementById('llcQueueList');
+  if (!wrap) return;
+  if (!items.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">No owners queued for research 🎉</div>'; return; }
+  let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
+    + '<th style="padding:4px 8px">Owner</th><th style="padding:4px 8px">Property</th>'
+    + '<th style="padding:4px 8px">State</th><th style="padding:4px 8px">Actions</th></tr></thead><tbody>';
+  items.forEach(it => {
+    const nm = esc(it.search_name || '');
+    const st = esc(it.guessed_state || it.property_state || '');
+    const prop = esc([it.property_address, it.property_city, it.property_state].filter(Boolean).join(', ') || ('#' + (it.property_id || '')));
+    // SOS search helper (Google "<state> secretary of state business search <name>").
+    const sosUrl = 'https://www.google.com/search?q=' + encodeURIComponent((st ? st + ' ' : '') + 'secretary of state business search ' + (it.search_name || ''));
+    const qid = JSON.stringify(it.queue_id);
+    let actions = '<a href="' + sosUrl + '" target="_blank" rel="noopener" style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;text-decoration:none">SOS Lookup</a>';
+    actions += '<button onclick=\'diaResolveLlc(' + qid + ',"completed")\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--green,#34d399);background:rgba(52,211,153,.12);color:var(--green,#34d399);border-radius:4px;cursor:pointer">Completed</button>';
+    actions += '<button onclick=\'diaResolveLlc(' + qid + ',"no_match")\' style="font-size:11px;padding:3px 8px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">No Match</button>';
+    t += '<tr style="border-top:1px solid var(--border)" id="llcRow-' + esc(String(it.queue_id)) + '">'
+      + '<td style="padding:4px 8px">' + nm + (it.tenant ? '<br><span style="color:var(--text3);font-size:11px">' + esc(it.tenant) + '</span>' : '') + '</td>'
+      + '<td style="padding:4px 8px;color:var(--text3)">' + prop + '</td>'
+      + '<td style="padding:4px 8px">' + st + '</td>'
+      + '<td style="padding:4px 8px">' + actions + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  wrap.innerHTML = t;
+}
+
+// Resolve an LLC research queue row (mark completed / no_match).
+async function diaResolveLlc(queueId, status) {
+  const label = status === 'completed' ? 'Mark this owner research COMPLETED' : 'Mark NO MATCH';
+  let foundFilingId = null;
+  if (status === 'completed') {
+    foundFilingId = prompt(label + '.\nOptional: enter the SOS filing/entity number (or leave blank):', '');
+    if (foundFilingId === null) return; // cancelled
+  } else if (!confirm(label + ' for this owner?')) { return; }
+  const rowEl = document.getElementById('llcRow-' + queueId);
+  if (rowEl) rowEl.style.opacity = '0.5';
+  try {
+    const body = { queue_id: queueId, status };
+    if (foundFilingId) body.found_filing_id = foundFilingId;
+    const resp = await fetch('/api/resolve-llc-research', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!resp.ok) { const e = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + e); }
+    window._llcQueueItems = (window._llcQueueItems || []).filter(it => String(it.queue_id) !== String(queueId));
+    window._llcQueueTotal = Math.max(0, (window._llcQueueTotal || 1) - 1);
+    renderDiaLlcQueue();
+  } catch (err) {
+    console.error('resolve llc failed:', err);
+    if (rowEl) rowEl.style.opacity = '1';
+    alert('Could not resolve: ' + err.message);
   }
 }
 
