@@ -4347,6 +4347,51 @@ function renderGovOverview() {
     })();
   }
 
+  // ── Async-load Listings Needing Confirmation (mirrors dia) ──
+  if (!window.__govListingConfirmLoading && !window._govListingConfirmLoaded) {
+    window.__govListingConfirmLoading = true;
+    (async () => {
+      try {
+        let all = [], offset = 0;
+        while (true) {
+          const res = await govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000, offset });
+          const rows = res.data || [];
+          all = all.concat(rows);
+          if (rows.length < 1000) break;
+          offset += 1000;
+        }
+        window._govLcConfirmRows = all;
+        renderGovListingConfirm();
+      } catch (e) {
+        console.warn('gov listing confirmation load failed', e);
+        const wrap = document.getElementById('govListingConfirm');
+        if (wrap) wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">Confirmation queue unavailable</div>';
+      }
+      window._govListingConfirmLoaded = true;
+      window.__govListingConfirmLoading = false;
+    })();
+  }
+
+  // ── Async-load LLC Research Queue (mirrors dia) ──
+  if (!window.__govLlcQueueLoading && !window._govLlcQueueLoaded) {
+    window.__govLlcQueueLoading = true;
+    (async () => {
+      try {
+        const resp = await fetch('/api/llc-research-queue?domain=government&limit=25');
+        const j = resp.ok ? await resp.json() : {};
+        window._govLlcQueueItems = (j && j.items) || [];
+        window._govLlcQueueTotal = (j && (j.total != null ? j.total : (j.items ? j.items.length : 0))) || 0;
+        renderGovLlcQueue();
+      } catch (e) {
+        console.warn('gov llc queue load failed', e);
+        const wrap = document.getElementById('govLlcQueue');
+        if (wrap) wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">LLC research queue unavailable</div>';
+      }
+      window._govLlcQueueLoaded = true;
+      window.__govLlcQueueLoading = false;
+    })();
+  }
+
   // Lazy-load ownership coverage metrics (Section 12)
   (async () => {
     try {
@@ -4926,6 +4971,22 @@ function renderGovOverview() {
   html += govCard({ title: 'Avg DOM', value: avgDomVal, sub: 'days on market', color: 'yellow', tab: 'listings' });
   html += '</div>';
 
+  // ── Listings Needing Confirmation (manual follow-up) ──
+  html += govSectionHeader('Listings Needing Confirmation', '🔎', 'listings');
+  html += '<div id="govListingConfirm"><div class="gov-grid gov-grid-3">';
+  html += govCard({ title: 'Need Confirmation', value: '...', sub: 'loading', color: 'orange', id: 'govLcNeed', subId: 'govLcNeedSub' });
+  html += govCard({ title: 'Sale Match Ready', value: '...', sub: 'one-click confirm sold', color: 'green', id: 'govLcMatch', subId: 'govLcMatchSub' });
+  html += govCard({ title: 'Aged > 90d', value: '...', sub: 'needs research', color: 'red', id: 'govLcAged', subId: 'govLcAgedSub' });
+  html += '</div><div id="govLcConfirmList" style="margin-top:10px"></div></div>';
+
+  // ── LLC Research Queue (owner enrichment, manual resolve) ──
+  html += govSectionHeader('LLC Research Queue', '🏛️', 'research');
+  html += '<div id="govLlcQueue"><div class="gov-grid gov-grid-3">';
+  html += govCard({ title: 'Queued Owners', value: '...', sub: 'pending enrichment', color: 'purple', id: 'govLlcTotal', subId: 'govLlcTotalSub' });
+  html += govCard({ title: 'Shown', value: '...', sub: 'top by value', color: 'blue', id: 'govLlcShown', subId: 'govLlcShownSub' });
+  html += govCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
+  html += '</div><div id="govLlcQueueList" style="margin-top:10px"></div></div>';
+
   // ═══════════════════════════════════════════════
   // SECTION 11: GSA LEASE INTEL
   // ═══════════════════════════════════════════════
@@ -5404,6 +5465,120 @@ window.setGovListingOwnership = function(view) {
   govListingOwnership = view;
   renderGovTab();
 };
+
+// ── Gov: Listings Needing Confirmation panel (mirror of dia) ──
+function renderGovListingConfirm() {
+  const rows = window._govLcConfirmRows || [];
+  const matchReady = rows.filter(r => r.confirmation_state === 'sale_match_promote');
+  const aged = rows.filter(r => r.confirmation_state === 'aged_needs_research');
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('govLcNeed', fmtN(rows.length)); setTxt('govLcNeedSub', 'unverified_assumed_off');
+  setTxt('govLcMatch', fmtN(matchReady.length)); setTxt('govLcMatchSub', 'deed match — confirm sold');
+  setTxt('govLcAged', fmtN(aged.length)); setTxt('govLcAgedSub', 'no deed match, aged');
+  const show = matchReady.concat(aged).concat(rows.filter(r => r.confirmation_state === 'awaiting_sweep')).slice(0, 25);
+  const wrap = document.getElementById('govLcConfirmList');
+  if (!wrap) return;
+  if (!show.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">Nothing awaiting confirmation 🎉</div>'; return; }
+  let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
+    + '<th style="padding:4px 8px">Property</th><th style="padding:4px 8px">Off-Mkt</th>'
+    + '<th style="padding:4px 8px">Sale Match</th><th style="padding:4px 8px">Actions</th></tr></thead><tbody>';
+  show.forEach(r => {
+    const addr = esc([r.address, r.city, r.state].filter(Boolean).join(', ') || ('#' + r.property_id));
+    const url = r.listing_url ? '<a href="' + esc(r.listing_url) + '" target="_blank" rel="noopener">' + esc(r.tenant_operator || 'listing') + '</a>' : esc(r.tenant_operator || '');
+    const match = r.candidate_sale_id
+      ? '$' + fmtN(Math.round((Number(r.candidate_sold_price) || 0) / 1e6 * 10) / 10) + 'M · ' + esc(r.candidate_sale_date || '')
+      : '<span style="color:var(--text3)">none</span>';
+    const lid = JSON.stringify(r.listing_id);
+    const sd = r.candidate_sale_date ? JSON.stringify(r.candidate_sale_date) : 'null';
+    let actions = '<button onclick=\'govResolveListing(' + lid + ',"confirm_sold",' + sd + ')\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid ' + (r.candidate_sale_id ? 'var(--green,#34d399);background:rgba(52,211,153,.12);color:var(--green,#34d399)' : 'var(--border);background:var(--s2);color:var(--text)') + ';border-radius:4px;cursor:pointer">Confirm Sold</button>';
+    actions += '<button onclick=\'govResolveListing(' + lid + ',"mark_withdrawn",null)\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">Withdrawn</button>';
+    actions += '<button onclick=\'govResolveListing(' + lid + ',"still_active",null)\' style="font-size:11px;padding:3px 8px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">Still Active</button>';
+    t += '<tr style="border-top:1px solid var(--border)" id="govLcRow-' + esc(String(r.listing_id)) + '">'
+      + '<td style="padding:4px 8px">' + addr + (r.tenant_operator ? '<br><span style="color:var(--text3);font-size:11px">' + url + '</span>' : '') + '</td>'
+      + '<td style="padding:4px 8px;color:var(--text3)">' + esc(r.off_market_date || '') + '<br><span style="font-size:11px">' + esc(r.confirmation_state) + '</span></td>'
+      + '<td style="padding:4px 8px">' + match + '</td>'
+      + '<td style="padding:4px 8px">' + actions + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  wrap.innerHTML = t;
+}
+
+async function govResolveListing(listingId, action, saleDate) {
+  const labels = { confirm_sold: 'Confirm as SOLD', mark_withdrawn: 'Mark WITHDRAWN', still_active: 'Mark STILL ACTIVE' };
+  if (!confirm(labels[action] + ' for this listing?')) return;
+  const rowEl = document.getElementById('govLcRow-' + listingId);
+  if (rowEl) rowEl.style.opacity = '0.5';
+  try {
+    const resp = await fetch('/api/resolve-listing-confirmation', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'gov', listing_id: listingId, action, sale_date: saleDate }),
+    });
+    if (!resp.ok) { const e = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + e); }
+    window._govLcConfirmRows = (window._govLcConfirmRows || []).filter(r => String(r.listing_id) !== String(listingId));
+    renderGovListingConfirm();
+  } catch (err) {
+    console.error('gov resolve listing failed:', err);
+    if (rowEl) rowEl.style.opacity = '1';
+    alert('Could not resolve listing: ' + err.message);
+  }
+}
+
+// ── Gov: LLC Research Queue panel (mirror of dia) ──
+function renderGovLlcQueue() {
+  const items = window._govLlcQueueItems || [];
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('govLlcTotal', fmtN(window._govLlcQueueTotal || items.length)); setTxt('govLlcTotalSub', 'status=queued');
+  setTxt('govLlcShown', fmtN(items.length)); setTxt('govLlcShownSub', 'highest value first');
+  const wrap = document.getElementById('govLlcQueueList');
+  if (!wrap) return;
+  if (!items.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">No owners queued for research 🎉</div>'; return; }
+  let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
+    + '<th style="padding:4px 8px">Owner</th><th style="padding:4px 8px">Property</th>'
+    + '<th style="padding:4px 8px">State</th><th style="padding:4px 8px">Actions</th></tr></thead><tbody>';
+  items.forEach(it => {
+    const nm = esc(it.search_name || '');
+    const st = esc(it.guessed_state || it.property_state || '');
+    const prop = esc([it.property_address, it.property_city, it.property_state].filter(Boolean).join(', ') || ('#' + (it.property_id || '')));
+    const sosUrl = 'https://www.google.com/search?q=' + encodeURIComponent((st ? st + ' ' : '') + 'secretary of state business search ' + (it.search_name || ''));
+    const qid = JSON.stringify(it.queue_id);
+    let actions = '<a href="' + sosUrl + '" target="_blank" rel="noopener" style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;text-decoration:none">SOS Lookup</a>';
+    actions += '<button onclick=\'govResolveLlc(' + qid + ',"completed")\' style="font-size:11px;padding:3px 8px;margin-right:4px;border:1px solid var(--green,#34d399);background:rgba(52,211,153,.12);color:var(--green,#34d399);border-radius:4px;cursor:pointer">Completed</button>';
+    actions += '<button onclick=\'govResolveLlc(' + qid + ',"no_match")\' style="font-size:11px;padding:3px 8px;border:1px solid var(--border);background:var(--s2);color:var(--text);border-radius:4px;cursor:pointer">No Match</button>';
+    t += '<tr style="border-top:1px solid var(--border)" id="govLlcRow-' + esc(String(it.queue_id)) + '">'
+      + '<td style="padding:4px 8px">' + nm + (it.tenant ? '<br><span style="color:var(--text3);font-size:11px">' + esc(it.tenant) + '</span>' : '') + '</td>'
+      + '<td style="padding:4px 8px;color:var(--text3)">' + prop + '</td>'
+      + '<td style="padding:4px 8px">' + st + '</td>'
+      + '<td style="padding:4px 8px">' + actions + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  wrap.innerHTML = t;
+}
+
+async function govResolveLlc(queueId, status) {
+  const label = status === 'completed' ? 'Mark this owner research COMPLETED' : 'Mark NO MATCH';
+  let foundFilingId = null;
+  if (status === 'completed') {
+    foundFilingId = prompt(label + '.\nOptional: enter the SOS filing/entity number (or leave blank):', '');
+    if (foundFilingId === null) return;
+  } else if (!confirm(label + ' for this owner?')) { return; }
+  const rowEl = document.getElementById('govLlcRow-' + queueId);
+  if (rowEl) rowEl.style.opacity = '0.5';
+  try {
+    const body = { domain: 'government', queue_id: queueId, status };
+    if (foundFilingId) body.found_filing_id = foundFilingId;
+    const resp = await fetch('/api/resolve-llc-research', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!resp.ok) { const e = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + e); }
+    window._govLlcQueueItems = (window._govLlcQueueItems || []).filter(it => String(it.queue_id) !== String(queueId));
+    window._govLlcQueueTotal = Math.max(0, (window._govLlcQueueTotal || 1) - 1);
+    renderGovLlcQueue();
+  } catch (err) {
+    console.error('gov resolve llc failed:', err);
+    if (rowEl) rowEl.style.opacity = '1';
+    alert('Could not resolve: ' + err.message);
+  }
+}
 
 function renderGovListings() {
   // Active-listing filter is normalized case-insensitively — older rows use
