@@ -401,17 +401,31 @@
       if (row?.property_id && !propByPid.has(row.property_id)) propByPid.set(row.property_id, row);
     }
 
+    // Lease pick (2026-05-29 lease-comps audit): only consider ACTIVE,
+    // non-superseded leases — v_lease_detail returns all leases incl. ~46%
+    // inactive/superseded, and the old "prefer active else latest expiration"
+    // could surface a stale superseded lease as a comp. Now: exclude superseded/
+    // inactive entirely (a property with no active lease contributes no lease
+    // data rather than a stale one), and among active leases prefer the most
+    // recent commencement (lease_start DESC) to match v_available_listings.
+    const isActiveLease = (x) => x
+      && (x.is_active === true || x.is_active === 'true')
+      && String(x.status || '').toLowerCase() !== 'superseded';
     const leaseByProp = new Map();
+    const activeCountByProp = new Map();
     for (const l of leases) {
       const pid = l.property_id;
-      if (!pid) continue;
+      if (!pid || !isActiveLease(l)) continue;
+      activeCountByProp.set(pid, (activeCountByProp.get(pid) || 0) + 1);
       const cur = leaseByProp.get(pid);
       if (!cur) { leaseByProp.set(pid, l); continue; }
-      const isActive = (x) => x && (x.is_active === true || x.is_active === 'true');
-      if (isActive(l) && !isActive(cur)) { leaseByProp.set(pid, l); continue; }
-      const expA = new Date(l.lease_expiration || 0).getTime();
-      const expB = new Date(cur.lease_expiration || 0).getTime();
-      if (expA > expB) leaseByProp.set(pid, l);
+      const startA = new Date(l.lease_start || 0).getTime();
+      const startB = new Date(cur.lease_start || 0).getTime();
+      if (startA > startB) leaseByProp.set(pid, l);
+    }
+    // Multi-active guard: surface the known 1,007-property condition for review.
+    for (const [pid, c] of activeCountByProp) {
+      if (c > 1) console.warn('[lease-comps] property ' + pid + ' has ' + c + ' active leases; picked most-recent commencement');
     }
 
     const ownerByProp = new Map();
