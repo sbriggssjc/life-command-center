@@ -639,7 +639,12 @@ function normalizeSalesTxnRow(r, lookups) {
     [listingCap, 'available_listings.cap_rate'],
   );
   if (capPick.source && !String(capPick.source).startsWith('sales_transactions')) prov.cap_rate = capPick.source;
-  const capRate = capPick.value != null ? Number(capPick.value) : null;
+  // Null implausible-tagged cap rates so they don't skew dashboard cap stats —
+  // mirrors v_sales_comps (G6) so the dashboard, detail panel, and views agree
+  // ("null the cap, keep the row"). 2026-05-29 cap-rate consistency audit.
+  const capRate = (r.cap_rate_quality === 'implausible_unverified')
+    ? null
+    : (capPick.value != null ? Number(capPick.value) : null);
 
   // -- Brokers: sales_transactions.listing_broker / procuring_broker text
   // fields → sale_brokers row by role → brokers.broker_name → brokers.company.
