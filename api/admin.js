@@ -3590,6 +3590,10 @@ async function handleResolveLlcResearch(req, res) {
   const body = req.body || {};
   const queueId = Number(body.queue_id);
   const status  = String(body.status || '').toLowerCase();
+  const domain  = String(body.domain || 'dialysis').toLowerCase();
+  if (!['government', 'dialysis'].includes(domain)) {
+    return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+  }
   if (!Number.isFinite(queueId)) return res.status(400).json({ error: 'queue_id (number) required' });
   if (!['no_match', 'completed'].includes(status)) {
     return res.status(400).json({ error: "status must be 'no_match' or 'completed'" });
@@ -3608,10 +3612,10 @@ async function handleResolveLlcResearch(req, res) {
 
   try {
     const { domainQuery } = await import('./_shared/domain-db.js');
-    const r = await domainQuery('dialysis', 'PATCH',
+    const r = await domainQuery(domain, 'PATCH',
       'llc_research_queue?queue_id=eq.' + queueId, patch);
     if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
-    return res.status(200).json({ ok: true, queue_id: queueId, status, patch });
+    return res.status(200).json({ ok: true, domain, queue_id: queueId, status, patch });
   } catch (err) {
     console.error('[resolve-llc-research]', err?.message || err);
     return res.status(500).json({ error: 'resolve_failed', message: err?.message });
