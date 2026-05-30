@@ -24,13 +24,32 @@ dashboard were clean, but the exclusion was inconsistent:
 - Gov: `v_sales_comps` + `cm_gov_market_quarterly` were **already gated** (gov
   rounds did this earlier).
 
-**Follow-up:** the **14 gov standalone cap-detail views** (`cm_gov_cap_quartile_m`,
-`core_cap_rate_dots`, `valuation_index_*`, `nm_vs_market_q`, `cost_of_capital_m`,
-`returns_indexes_m`, `bid_ask_spread_*`, `cap_by_credit_q`, `cap_by_term_m`,
-`net_lease_spread_q`, `value_prop_kpis`) are still ungated. Their expressions
-reference `sold_cap_rate` in WHERE/FILTER/JOIN/`crh.cap_rate`-fallback contexts —
-a blind replace would corrupt them, so they need a **per-view pass** (gov primary
-cap is already clean, so this is detail-chart polish, not a headline error).
+**Gov standalone cap views — DONE** (migration `government/20260529280000`).
+Patched only genuine raw-cap *value* aggregates with a null-implausible CASE,
+never a boolean WHERE/JOIN/FILTER condition:
+- `core_cap_rate_dots`, `valuation_index_m/q`, `nm_vs_market_q`, `cap_by_credit_q`,
+  `cap_by_term_m`, `net_lease_spread_q`, `value_prop_kpis` — value aggregates
+  wrapped.
+- `bid_ask_spread_m/q` — the `avg(last_cap_rate - sold_cap_rate)` spread wraps the
+  sold term.
+- `cap_quartile_m`, `cap_ttm_m`, `cost_of_capital_m`, `returns_indexes_m` — were
+  **already correct**: they reference `sold_cap_rate` only in WHERE/band-count
+  conditions and take their cap *value* from `m.avg_cap_rate_ttm` (derived from
+  the already-gated `cm_gov_market_quarterly`). No change needed.
+
+**Verification (precise, both domains):** a regex for an aggregate
+(`avg`/`sum`/`percentile_cont ORDER BY`) directly over a raw cap column returns
+**0 rows** on dia and gov — every cap value metric is now implausible-gated.
+(An earlier crude detector flagged WHERE-only references as "ungated"; corrected.)
+
+**Merge-resurfacing caught:** the merged-in CM work recreated
+`cm_dialysis_cap_by_term_q` with a raw `avg(s.cap_rate)` and no gate; re-patched.
+This is exactly the **durability caveat** below — view recreations drop the gate.
+
+**Durability caveat:** the gate is applied via `CREATE OR REPLACE` on live view
+defs. Any future migration that recreates a `cm_*` cap view silently drops the
+gate (as cap_by_term_q just did) — re-include the implausible CASE, or re-run the
+idempotent gate migrations after such changes.
 
 ## 2. Lease comps — FIXED (Priority 1)
 
