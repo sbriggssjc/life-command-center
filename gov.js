@@ -4347,6 +4347,51 @@ function renderGovOverview() {
     })();
   }
 
+  // ── Async-load Listings Needing Confirmation (mirrors dia) ──
+  if (!window.__govListingConfirmLoading && !window._govListingConfirmLoaded) {
+    window.__govListingConfirmLoading = true;
+    (async () => {
+      try {
+        let all = [], offset = 0;
+        while (true) {
+          const res = await govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000, offset });
+          const rows = res.data || [];
+          all = all.concat(rows);
+          if (rows.length < 1000) break;
+          offset += 1000;
+        }
+        window._govLcConfirmRows = all;
+        renderGovListingConfirm();
+      } catch (e) {
+        console.warn('gov listing confirmation load failed', e);
+        const wrap = document.getElementById('govListingConfirm');
+        if (wrap) wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">Confirmation queue unavailable</div>';
+      }
+      window._govListingConfirmLoaded = true;
+      window.__govListingConfirmLoading = false;
+    })();
+  }
+
+  // ── Async-load LLC Research Queue (mirrors dia) ──
+  if (!window.__govLlcQueueLoading && !window._govLlcQueueLoaded) {
+    window.__govLlcQueueLoading = true;
+    (async () => {
+      try {
+        const resp = await fetch('/api/llc-research-queue?domain=government&limit=25');
+        const j = resp.ok ? await resp.json() : {};
+        window._govLlcQueueItems = (j && j.items) || [];
+        window._govLlcQueueTotal = (j && (j.total != null ? j.total : (j.items ? j.items.length : 0))) || 0;
+        renderGovLlcQueue();
+      } catch (e) {
+        console.warn('gov llc queue load failed', e);
+        const wrap = document.getElementById('govLlcQueue');
+        if (wrap) wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">LLC research queue unavailable</div>';
+      }
+      window._govLlcQueueLoaded = true;
+      window.__govLlcQueueLoading = false;
+    })();
+  }
+
   // Lazy-load ownership coverage metrics (Section 12)
   (async () => {
     try {
