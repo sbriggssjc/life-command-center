@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC — Ownership De-anon & Prospecting Convergence components</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;--dead:#6B21A8;--deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);background:#EEF1F6;color:var(--nm-text);line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:20px 28px}
+  header h1{margin:0;font-size:21px;font-weight:600}
+  header p{margin:5px 0 0;font-size:13px;opacity:.92;max-width:920px}
+  nav{display:flex;gap:2px;background:var(--nm-navy);padding:0 18px}
+  nav button{background:transparent;border:0;color:#cdddf5;font-family:inherit;font-size:13px;padding:10px 15px;cursor:pointer;border-bottom:3px solid transparent}
+  nav button.on{color:#fff;font-weight:600;border-bottom-color:var(--nm-sky)}
+  main{max-width:1080px;margin:0 auto;padding:22px}
+  .panel{display:none}.panel.on{display:block}
+  .note{background:#fff;border:1px solid var(--nm-alt);border-left:4px solid var(--nm-navy);border-radius:8px;padding:11px 15px;margin-bottom:16px;font-size:13px}
+  .note b{color:var(--nm-navy)}
+  .mock-label{font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--nm-mid);font-weight:700;margin:22px 0 4px}
+  .mock-note{font-size:12.5px;color:var(--nm-muted);margin:0 0 12px;max-width:900px}
+  /* panel card frame */
+  .comp{background:#fff;border:1px solid var(--nm-alt);border-radius:11px;overflow:hidden;box-shadow:0 4px 16px rgba(0,40,90,.08);margin-bottom:20px}
+  .comp .ch{display:flex;align-items:center;gap:10px;padding:11px 16px;background:linear-gradient(100deg,var(--nm-pale),#fff);border-bottom:1px solid var(--nm-alt)}
+  .comp .ch h3{margin:0;font-size:15px;color:var(--nm-navy);font-weight:600}
+  .comp .ch .badge{margin-left:auto;font-size:10.5px;font-weight:700;background:var(--nm-navy);color:#fff;border-radius:5px;padding:2px 8px}
+  .comp .cb{padding:15px 17px}
+  /* ownership ladder */
+  .ladder{display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:6px}
+  .step{border:1px solid var(--nm-alt);border-radius:9px;padding:11px 13px;background:#FAFBFD}
+  .step.true{background:var(--okbg);border-color:#BFE3CC}
+  .step.diverge{background:var(--warnbg);border-color:#EAD8AE}
+  .step h5{margin:0 0 3px;font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--nm-axis)}
+  .step .nm{font-size:14.5px;font-weight:600}
+  .step .meta{font-size:11.5px;color:var(--nm-muted);margin-top:3px}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--nm-mid);font-size:18px}
+  .conf{display:inline-flex;align-items:center;gap:5px;margin-top:6px;font-size:11px;font-weight:600}
+  .confbar{width:60px;height:6px;border-radius:3px;background:var(--nm-pale);overflow:hidden;display:inline-block}
+  .confbar i{display:block;height:100%;background:var(--ok)}
+  .confbar.lo i{background:var(--bad)} .confbar.mid i{background:var(--warn)}
+  .src-chip{font-family:var(--mono);font-size:10.5px;background:#F0F3F8;border:1px solid var(--nm-alt);border-radius:4px;padding:0 5px;color:var(--nm-mid)}
+  .divergerow{display:flex;align-items:center;gap:10px;background:var(--warnbg);border:1px solid #EAD8AE;border-radius:8px;padding:9px 12px;margin:10px 0;font-size:12.5px}
+  .divergerow .lbl{font-weight:700;color:var(--warn)}
+  .btns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .btn{border:0;border-radius:7px;padding:8px 13px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+  .btn.pri{background:var(--nm-navy);color:#fff} .btn.ok{background:var(--ok);color:#fff}
+  .btn.gho{background:#fff;border:1px solid var(--nm-alt);color:var(--nm-text)} .btn.sky{background:var(--nm-sky);color:#08294f}
+  .btn.dng{background:var(--badbg);color:var(--bad)}
+  .endpoint{font-family:var(--mono);font-size:10.5px;color:var(--nm-muted);margin-top:4px}
+  .endpoint b{color:var(--ok)} .endpoint .tb{color:var(--bad)}
+  /* states */
+  .states{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
+  .state{border:1px dashed var(--nm-alt);border-radius:8px;padding:9px 11px;font-size:11.5px;background:#FAFBFD}
+  .state h6{margin:0 0 3px;font-size:11px;color:var(--nm-mid);text-transform:uppercase;letter-spacing:.4px}
+  /* prospecting list */
+  .feed{display:flex;flex-direction:column;gap:9px}
+  .item{border:1px solid var(--nm-alt);border-radius:9px;padding:11px 13px;display:grid;grid-template-columns:42px 1fr auto;gap:12px;align-items:center}
+  .item .rank{display:flex;flex-direction:column;align-items:center}
+  .band{font-size:11px;font-weight:800;border-radius:6px;padding:2px 7px;color:#fff}
+  .band.p0{background:#7A1020} .band.p05{background:var(--bad)} .band.p1{background:var(--warn)}
+  .band.p3{background:var(--nm-mid)} .band.p7{background:var(--nm-axis)}
+  .item .why{font-size:12.5px}
+  .item .why b{font-size:13px}
+  .item .why .sub{color:var(--nm-muted);font-size:11.5px;margin-top:2px}
+  .item .why .conf{margin-top:5px}
+  .item .act{display:flex;flex-direction:column;gap:6px}
+  .item .act .btn{padding:6px 10px;font-size:11.5px;text-align:center}
+  .legend{font-size:11px;color:var(--nm-muted);margin:6px 0 0}
+  table.contract{width:100%;border-collapse:collapse;font-size:11.8px;margin-top:6px;background:#fff;border:1px solid var(--nm-alt);border-radius:8px;overflow:hidden}
+  table.contract th{background:var(--nm-navy);color:#fff;text-align:left;padding:6px 9px;font-size:11px}
+  table.contract td{padding:5px 9px;border-top:1px solid var(--nm-alt);vertical-align:top}
+  table.contract tr:nth-child(even) td{background:#FAFBFD}
+  table.contract code{font-family:var(--mono);font-size:10.8px;background:#F0F3F8;border-radius:3px;padding:0 3px}
+  .exist{color:var(--ok);font-weight:700} .tobuild{color:var(--bad);font-weight:700}
+  footer{max-width:1080px;margin:6px auto 30px;padding:0 22px;color:var(--nm-muted);font-size:11.5px}
+  @media(max-width:880px){.ladder{grid-template-columns:1fr}.arrow{transform:rotate(90deg);height:24px}.states,.item{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Build-ready components — Ownership De-anonymization (Phase 4) &amp; Prospecting Convergence (Phase 8)</h1>
+  <p>Wireframes wired to the real data contracts. Endpoint strings shown in <span style="font-family:var(--mono)">mono</span> under each action: <span style="color:#9fe3b8">green = exists today</span>, <span style="color:#ffb4ab">red = to build</span>. Values illustrative; fields are the actual view columns.</p>
+</header>
+<nav>
+  <button class="on" data-t="own">Phase 4 · Ownership</button>
+  <button data-t="pro">Phase 8 · Prospecting</button>
+  <button data-t="contract">Data contracts</button>
+</nav>
+<main>
+
+<!-- ============ OWNERSHIP ============ -->
+<section class="panel on" id="own">
+  <div class="note"><b>Where it lives:</b> replaces the current "Ownership &amp; CRM" card rendered by <code style="font-family:var(--mono)">_udTabOwnership()</code> in detail.js. Reads <code style="font-family:var(--mono)">v_ownership_current</code> (limit 1) + <code style="font-family:var(--mono)">v_ownership_chain</code> (limit 50) via the existing <code style="font-family:var(--mono)">qFn()</code> wrapper; confidence is joined from <code style="font-family:var(--mono)">true_owners.owner_role_confidence</code> / <code style="font-family:var(--mono)">ownership_research_queue.ai_confidence</code>.</div>
+
+  <div class="mock-label">Default state — owner resolved, with a divergence flag</div>
+  <div class="comp">
+    <div class="ch"><h3>Ownership de-anonymization</h3><span class="badge">GOV · property 16404</span></div>
+    <div class="cb">
+      <div class="ladder">
+        <div class="step">
+          <h5>Recorded owner (deed)</h5>
+          <div class="nm">3974 Loomis Pkwy LLC</div>
+          <div class="meta">Filing: OH · Reg. agent: CT Corporation · <span class="src-chip">recorded_owners</span></div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step true">
+          <h5>True owner (beneficial)</h5>
+          <div class="nm">Ravenna Healthcare Holdings</div>
+          <div class="meta">Manager: J. Okafor · principal_names captured</div>
+          <div class="conf">Confidence <span class="confbar"><i style="width:75%"></i></span> 0.75 <span class="src-chip">owner_role_confidence</span></div>
+        </div>
+      </div>
+      <div class="divergerow"><span class="lbl">⚠ Divergence</span> Assessor lists <b>&nbsp;Loomis Properties Trust&nbsp;</b> — differs from recorded owner. <span class="src-chip">v_recorded_vs_assessor_owner_divergence</span></div>
+      <div class="btns">
+        <button class="btn ok">Accept true owner</button>
+        <button class="btn pri">Edit / correct owner</button>
+        <button class="btn gho">Open owner ↗</button>
+        <button class="btn gho">View portfolio (Phase 7)</button>
+      </div>
+      <div class="endpoint">save → <b>POST /api/operations?action=save_ownership</b> { domain, external_id, owner_name, true_owner_name, notes } · owner ↗ → existing <b>_ownerLink()</b> drawer</div>
+    </div>
+  </div>
+
+  <div class="mock-label">Unresolved state — the gap becomes the action (dialysis, ~89% of assets land here for true owner)</div>
+  <div class="comp">
+    <div class="ch"><h3>Ownership de-anonymization</h3><span class="badge">DIA · property 27917</span></div>
+    <div class="cb">
+      <div class="ladder">
+        <div class="step diverge">
+          <h5>Recorded owner (deed)</h5>
+          <div class="nm" style="color:var(--bad)">— not on file —</div>
+          <div class="meta">No recorded_owner_id (81% of dia properties)</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step diverge">
+          <h5>True owner (beneficial)</h5>
+          <div class="nm" style="color:var(--bad)">— unresolved —</div>
+          <div class="meta">Queued for LLC/SOS research · <span class="src-chip">llc_research_queue</span></div>
+        </div>
+      </div>
+      <div class="divergerow" style="background:var(--badbg);border-color:#F0C7C1"><span class="lbl" style="color:var(--bad)">Research needed</span> Pull recorded owner for "730 Taylor Ave Columbus OH" — county deed / CoStar / RCA. <span class="src-chip">v_next_best_research · priority 52</span></div>
+      <div class="btns">
+        <button class="btn sky">Open Secretary of State ↗</button>
+        <button class="btn ok">Log resolved owner</button>
+        <button class="btn pri">Mark needs follow-up</button>
+      </div>
+      <div class="endpoint">SoS ↗ → existing <b>_udNextActionClick('missing_recorded_owner')</b> · log → <b>POST /api/operations?action=complete_research</b> { research_type:'llc_owner_lookup', outcome, entity_fields, notes } <span style="color:var(--warn)">⚠ but the LLC worker is dead — see spec §Dependencies</span></div>
+    </div>
+  </div>
+
+  <div class="states">
+    <div class="state"><h6>Loading</h6>Skeleton ladder; never block the rest of the detail panel (best-effort, matches current behavior).</div>
+    <div class="state"><h6>Operator-as-owner</h6>When <code>true_owner_is_operator=true</code>, label the true-owner step "Operator-owner" instead of hiding it (today it's hidden — a known gap).</div>
+    <div class="state"><h6>Save success</h6>Toast + re-fetch <code>v_ownership_current</code>; ladder re-renders resolved. No full reload.</div>
+  </div>
+</section>
+
+<!-- ============ PROSPECTING ============ -->
+<section class="panel" id="pro">
+  <div class="note"><b>Where it lives:</b> replaces the single-row sticky bar (<code style="font-family:var(--mono)">_udRenderNextActionBar()</code>, today <code style="font-family:var(--mono)">limit:1</code>) with a ranked feed for this property. Reads <code style="font-family:var(--mono)">v_next_best_research</code> (UNION-safe across domains) + the property's band from <code style="font-family:var(--mono)">v_priority_queue_enriched</code>. Two of the three actions need new endpoints.</div>
+
+  <div class="mock-label">Prospecting convergence — ranked actions for this property + one-click moves</div>
+  <div class="comp">
+    <div class="ch"><h3>What to do about this property</h3><span class="badge">Owner band P0.5 · cross-vertical</span></div>
+    <div class="cb">
+      <div class="feed">
+        <div class="item">
+          <div class="rank"><span class="band p05">P0.5</span></div>
+          <div class="why"><b>Resolve true owner, then open BD opportunity</b>
+            <div class="sub">Owner "Ravenna Healthcare Holdings" is a developer with 6 properties across gov + dia · reason: open_bd_opportunity_needed</div>
+            <div class="conf">role confidence <span class="confbar"><i style="width:75%"></i></span> 0.75 · <span class="src-chip">v_priority_queue_enriched</span></div>
+          </div>
+          <div class="act">
+            <button class="btn sky">Create lead</button>
+            <button class="btn pri">Add to cadence</button>
+            <button class="btn gho">Log call</button>
+          </div>
+        </div>
+        <div class="item">
+          <div class="rank"><span class="band p1">52</span></div>
+          <div class="why"><b>Pull recorded owner from county deed</b>
+            <div class="sub">"730 Taylor Ave Columbus OH" — county deed / CoStar / RCA · research_type: property_missing_recorded_owner</div>
+          </div>
+          <div class="act">
+            <button class="btn sky">Open SoS ↗</button>
+            <button class="btn ok">Log resolved</button>
+          </div>
+        </div>
+        <div class="item">
+          <div class="rank"><span class="band p3">38</span></div>
+          <div class="why"><b>Confirm lease expiration → renewal-window outreach</b>
+            <div class="sub">Lease expires in 14 months; firm term remaining 8mo · feeds cadence timing</div>
+          </div>
+          <div class="act">
+            <button class="btn pri">Add to cadence</button>
+            <button class="btn gho">Snooze</button>
+          </div>
+        </div>
+      </div>
+      <div class="endpoint" style="margin-top:12px">
+        Create lead → <span class="tb">POST /api/operations?action=create_lead</span> (TO BUILD) · Add to cadence → <span class="tb">POST /api/operations?action=initiate_cadence</span> (TO BUILD) ·
+        Log call → <b>POST /api/operations?action=log_call</b> · SoS ↗ → <b>_udNextActionClick()</b> · Log resolved → <b>complete_research</b> · cadence state → <b>action=cadence / advance_cadence</b>
+      </div>
+      <p class="legend">Ranking merges <code>v_priority_queue_enriched.priority_band</code> (entity-level BD) with <code>v_next_best_research.priority</code> (property-level gaps). The feed is sorted band-first, then priority score.</p>
+    </div>
+  </div>
+
+  <div class="states">
+    <div class="state"><h6>No open gaps</h6>Show a calm "Fully researched — in cadence" state with the next scheduled touch date from <code>v_bd_cadence_dashboard</code>.</div>
+    <div class="state"><h6>Create-lead result</h6>On success, the row collapses to "Lead created → opens in Review Console" and the owner is seeded into <code>bd_opportunities</code>.</div>
+    <div class="state"><h6>Cross-vertical</h6>When <code>is_cross_vertical=true</code>, badge the owner and link to Phase 7 portfolio so the call covers the whole relationship.</div>
+  </div>
+</section>
+
+<!-- ============ CONTRACTS ============ -->
+<section class="panel" id="contract">
+  <div class="note"><b>Action contract summary.</b> What each button calls, and whether it exists. Full request/response field lists are in the spec docx.</div>
+  <table class="contract">
+    <thead><tr><th>Action</th><th>Endpoint</th><th>Status</th><th>Key request fields</th></tr></thead>
+    <tbody>
+      <tr><td>Read ownership</td><td><code>qFn('v_ownership_current',…limit 1)</code></td><td class="exist">exists</td><td>property filter</td></tr>
+      <tr><td>Read chain</td><td><code>qFn('v_ownership_chain',…limit 50)</code></td><td class="exist">exists</td><td>property filter, order transfer_date.desc</td></tr>
+      <tr><td>Save resolved owner</td><td><code>operations?action=save_ownership</code></td><td class="exist">exists</td><td>domain, external_id, owner_name, true_owner_name, notes</td></tr>
+      <tr><td>Complete research</td><td><code>operations?action=complete_research</code></td><td class="exist">exists</td><td>research_type, outcome, entity_fields, follow_up_*</td></tr>
+      <tr><td>Open SoS portal</td><td><code>_udNextActionClick(gap_type)</code></td><td class="exist">exists</td><td>gap_type</td></tr>
+      <tr><td>Read research feed</td><td><code>v_next_best_research</code> (raise limit:1→N)</td><td class="exist">exists</td><td>property/owner filter, order priority.desc</td></tr>
+      <tr><td>Read priority band</td><td><code>v_priority_queue_enriched</code> (LCC)</td><td class="exist">exists</td><td>entity_id / source_property_id</td></tr>
+      <tr><td>Log call</td><td><code>operations?action=log_call</code></td><td class="exist">exists</td><td>subject, notes, outcome, sf_contact_id</td></tr>
+      <tr><td>Read/advance cadence</td><td><code>operations?action=cadence / advance_cadence</code></td><td class="exist">exists</td><td>entity_id, cadence_id, action_type, due_date</td></tr>
+      <tr><td>Create lead from property</td><td><code>operations?action=create_lead</code></td><td class="tobuild">TO BUILD</td><td>domain, property_id, entity_id, owner_name, source='property_flow'</td></tr>
+      <tr><td>Initiate cadence</td><td><code>operations?action=initiate_cadence</code></td><td class="tobuild">TO BUILD</td><td>entity_id, contact_id, property_id, phase='onboarding'</td></tr>
+      <tr><td>Restart LLC/SOS worker</td><td><code>llc-research-tick</code> (dead)</td><td class="tobuild">FIX</td><td>so resolved-owner actions actually drain the queue</td></tr>
+    </tbody>
+  </table>
+  <p class="legend" style="margin-top:10px">Cross-domain note: <code>v_ownership_current</code> / <code>v_ownership_chain</code> have different columns in dia vs gov; the component needs a per-domain field map. <code>property_id</code> is <code>integer</code> on dia, <code>bigint</code> on gov. <code>v_recorded_vs_assessor_owner_divergence</code> is gov-only — for dia, derive divergence from recorded vs true in <code>v_ownership_current</code>.</p>
+</section>
+
+</main>
+<footer>Northmarq palette per cm_brand_tokens.json · 2026-05-30 · Companion: LCC_Phase4_8_Component_Spec.docx, LCC_Property_Intelligence_Flow.html</footer>
+<script>
+document.querySelectorAll('nav button').forEach(b=>{b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');document.getElementById(b.dataset.t).classList.add('on');
+};});
+</script>
+</body>
+</html>

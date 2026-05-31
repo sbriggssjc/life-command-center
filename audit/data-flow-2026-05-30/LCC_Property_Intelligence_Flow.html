@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Property Intelligence Flow — 2026-05-30</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;--dead:#6B21A8;--deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--nm-text);background:#F4F6FA;line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:20px 28px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:600}
+  header .sub{font-size:13px;opacity:.92;max-width:960px}
+  header .meta{font-size:12px;opacity:.8;margin-top:6px}
+  .wrap{display:grid;grid-template-columns:248px 1fr;gap:0;max-width:1280px;margin:0 auto}
+  /* stepper rail */
+  .rail{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;background:#fff;border-right:1px solid var(--nm-alt);padding:14px 0}
+  .rail h3{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--nm-axis);margin:6px 16px 8px}
+  .step{display:flex;gap:10px;align-items:flex-start;padding:8px 14px;cursor:pointer;border-left:3px solid transparent}
+  .step:hover{background:#FAFBFD}
+  .step.on{background:var(--nm-pale);border-left-color:var(--nm-navy)}
+  .step .num{flex:none;width:24px;height:24px;border-radius:50%;background:var(--nm-pale);color:var(--nm-navy);
+    font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
+  .step.on .num{background:var(--nm-navy);color:#fff}
+  .step.payoff .num{background:var(--nm-sky);color:#08294f}
+  .step .lab{font-size:12.5px;line-height:1.25}
+  .step .lab b{display:block;font-size:13px}
+  .step .lab small{color:var(--nm-muted);font-size:11px}
+  .rail .legend{margin:14px 16px 4px;font-size:11px;color:var(--nm-muted)}
+  .rail .legend div{display:flex;align-items:center;gap:6px;margin-top:5px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  /* main */
+  main{padding:22px 26px}
+  .intro{background:#fff;border:1px solid var(--nm-alt);border-left:4px solid var(--nm-navy);border-radius:9px;padding:14px 18px;margin-bottom:18px}
+  .intro b{color:var(--nm-navy)}
+  .intro p{margin:6px 0 0;font-size:13.5px}
+  /* phase card */
+  .phase{background:#fff;border:1px solid var(--nm-alt);border-radius:11px;margin-bottom:16px;overflow:hidden;scroll-margin-top:12px;box-shadow:0 1px 3px rgba(0,40,90,.05)}
+  .phase .ph{display:flex;align-items:center;gap:13px;padding:13px 18px;background:linear-gradient(100deg,var(--nm-pale),#fff);border-bottom:1px solid var(--nm-alt)}
+  .phase .ph .pn{flex:none;width:34px;height:34px;border-radius:50%;background:var(--nm-navy);color:#fff;font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:center}
+  .phase.payoff .ph{background:linear-gradient(100deg,#DCEEFB,#fff)}
+  .phase.payoff .ph .pn{background:var(--nm-sky);color:#08294f}
+  .phase .ph h2{margin:0;font-size:17px;font-weight:600;color:var(--nm-navy)}
+  .phase .ph .q{font-size:12.5px;color:var(--nm-muted);margin-top:1px}
+  .phase .body{padding:14px 18px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .blk h4{margin:0 0 6px;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--nm-axis)}
+  .blk p,.blk li{font-size:12.8px}
+  .blk ul{margin:4px 0;padding-left:18px}
+  .src{font-size:11.5px;color:var(--nm-muted)}
+  code{background:#F0F3F8;border:1px solid var(--nm-alt);border-radius:4px;padding:0 4px;font-size:11.5px;font-family:'JetBrains Mono',ui-monospace,Consolas,monospace}
+  .pillrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .pill{font-size:11px;font-weight:600;border-radius:12px;padding:1px 9px;white-space:nowrap}
+  .p-data{background:var(--nm-pale);color:var(--nm-mid)}
+  .p-ok{background:var(--okbg);color:var(--ok)} .p-warn{background:var(--warnbg);color:var(--warn)}
+  .p-bad{background:var(--badbg);color:var(--bad)} .p-dead{background:var(--deadbg);color:var(--dead)}
+  .gap{background:var(--warnbg);border:1px solid #EAD8AE;border-left:4px solid var(--warn);border-radius:7px;padding:9px 12px;margin-top:12px;font-size:12.6px}
+  .gap.bad{background:var(--badbg);border-color:#F0C7C1;border-left-color:var(--bad)}
+  .gap b{color:var(--warn)} .gap.bad b{color:var(--bad)}
+  .cta{display:flex;align-items:center;gap:10px;background:#08294f;color:#fff;border-radius:8px;padding:10px 14px;margin-top:12px;font-size:13px}
+  .cta .arr{font-size:18px;color:var(--nm-sky)}
+  .cta b{color:var(--nm-sky)}
+  .num{font-variant-numeric:tabular-nums;font-weight:700}
+  .convergence .body{background:linear-gradient(180deg,#F7FBFF,#fff)}
+  .lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
+  .lane{border:1px solid var(--nm-alt);border-radius:8px;padding:10px 12px;border-top:3px solid var(--nm-navy)}
+  .lane h5{margin:0 0 4px;font-size:12.5px}
+  .lane p{margin:0;font-size:11.6px;color:var(--nm-muted)}
+  footer{max-width:1280px;margin:8px auto 30px;padding:0 26px;color:var(--nm-muted);font-size:11.5px}
+  @media(max-width:920px){.wrap{grid-template-columns:1fr}.rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--nm-alt)}.grid,.lanes{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Property Intelligence Flow — the guided journey from asset to prospect</h1>
+  <div class="sub">One property, walked end-to-end. Each phase presents its data, exposes the research gap inside it, and hands forward a concrete action — so the whole lifecycle reads as one story that ends in a prospecting move. Counts are live (2026-05-30).</div>
+  <div class="meta">Grounded in real schema lineage across Dialysis_DB, Government &amp; LCC Opps · Companion to the 2026-05-30 Data-Flow &amp; IA audit</div>
+</header>
+
+<div class="wrap">
+  <aside class="rail">
+    <h3>The journey</h3>
+    <div id="steps"></div>
+    <div class="legend">
+      <div><span class="dot" style="background:var(--nm-pale)"></span> data is solid</div>
+      <div><span class="dot" style="background:var(--warn)"></span> partial / weak link</div>
+      <div><span class="dot" style="background:var(--bad)"></span> broken / missing</div>
+      <div><span class="dot" style="background:var(--nm-sky)"></span> payoff phase</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="intro">
+      <b>The core idea:</b> the broken links in a property's chain are not defects to hide — they are the prospecting opportunities to surface.
+      <p>A property with an unresolved true owner, a name-only ownership timeline, and no known developer is exactly the research target worth pursuing. The system already computes every one of these gaps (the next-best-research and ownership-research queues hold <span class="num">67,000+</span> rows). This flow re-sequences the presentation so each phase pushes that intelligence forward instead of dead-ending in a tab. The two <span style="color:var(--nm-mid);font-weight:600">blue payoff phases</span> — de-anonymizing ownership to the developer, and converging on the next prospecting action — are where the value lands.</p>
+    </div>
+    <div id="phases"></div>
+  </main>
+</div>
+
+<footer>Northmarq-branded · palette per cm_brand_tokens.json · 2026-05-30 · Companion: LCC_Property_Intelligence_Flow_Spec.docx, LCC_Data_Flow_Audit_Map.html</footer>
+
+<script>
+const PH=[
+ {n:0,t:"Asset Identity",q:"What and where is this asset?",health:"ok",
+  purpose:"Anchor the whole journey on a single, trustworthy asset record — address, geography, size, vintage, type. Everything downstream hangs off this id.",
+  shows:["Address, city/state/zip, county","Lat/lng → map pin","Building SF, year built, property type/subtype","Domain badge (Dialysis / Gov)"],
+  data:[["properties","Dia 12,377 · Gov 17,895","p-data"],["/api/property → entity-hub","","p-data"]],
+  gap:{lvl:"warn",txt:"Geocoding gaps still leave some assets with no map pin; type/subtype occasionally blank. Minor — identity is the strongest stage."},
+  cta:"Confirm the asset, then ask: who occupies it?"},
+
+ {n:1,t:"Tenancy & Terms",q:"Who occupies it, and on what economics?",health:"ok",
+  purpose:"Present the lease(s) and escalation schedule as the income story — the basis for value and for the timing of any approach (expirations are prospecting triggers).",
+  shows:["Tenant, lease start/end, type","Base rent, rent/SF, escalations","Projected rent to today (v_sales_comps logic)","Expiration countdown"],
+  data:[["leases","Dia 12,323 · Gov 16,494","p-data"],["lease_escalations","Gov 93,669","p-data"],["v_sales_comps · /api/data-query","","p-data"]],
+  gap:{lvl:"warn",txt:"Async lease enrichment re-renders mid-view with no loading state; lease expirations are computed but not turned into a dated prospecting trigger."},
+  cta:"Lease economics set the table. Now: who actually runs the operation?"},
+
+ {n:2,t:"Occupier & Operations",q:"Who is the operator / agency, and how healthy is it?",health:"ok",
+  purpose:"Surface the operating reality behind the tenant — for dialysis, the CMS clinic (census, payer mix, quality); for gov, the occupying agency and its footprint. Operational health is a leading indicator of renewal and replacement risk.",
+  shows:["Dialysis: CMS facility, CCN, chain, stations, patient census, payer mix, quality star / QIP","Gov: agency, occupancy SF, GSA lease #, expiration","Operator/agency concentration signals"],
+  data:[["medicare_clinics","Dia 8,535","p-data"],["property_agencies","Gov 64,386","p-data"],["clinic_financial_estimates","188K (unsurfaced)","p-warn"],["facility_patient_counts","145K (unsurfaced)","p-warn"]],
+  gap:{lvl:"warn",txt:"Richest data in the system (188K financial estimates, 145K patient counts) sits in a third tab with nothing summarized on the asset overview. ~372 dia properties have an orphan Medicare id — operation not joined to asset."},
+  cta:"We know the asset, the lease, and the operation. Now: what has the market done with it?"},
+
+ {n:3,t:"Market Activity & Value",q:"What has it sold for, and is it on the market now?",health:"warn",
+  purpose:"Combine closed sales (with derived cap rates) and live listings (with verification status) into one liquidity-and-value read. Separates 'what it's worth' from 'is it available' — two different prospecting signals.",
+  shows:["Sales: date, price, derived cap rate, buyer, seller, $/SF","Listings: asking price/cap, DOM, status","Listing verification: sold / off-market / unreachable","Cap-rate provenance (cmbs_audited → market_implied)"],
+  data:[["sales_transactions","Dia 3,067 · Gov 10,474","p-data"],["cap_rate_history","Dia 8,790","p-data"],["available_listings","Dia 265 · Gov 169 active","p-data"],["listing_verification_history","","p-warn"]],
+  gap:{lvl:"warn",txt:"Sales and listings are co-mingled in one tab, out of lifecycle order (after ownership). Verification status (is the listing still live?) is computed but never shown. Implausible cap rates (>10% / <3%) still pollute comps."},
+  cta:"The market view raises the real question: who actually owns this — and can we reach them?"},
+
+ {n:4,t:"Ownership De-anonymization",q:"Who is the recorded owner — and the true owner behind the LLC?",health:"bad",payoff:true,
+  purpose:"The first payoff. Move from the deed-level recorded owner to the beneficial true owner, exposing confidence and divergence explicitly. This is the hardest, highest-value research — and where most assets go dark.",
+  shows:["Recorded owner: name, mailing address, owner type","LLC research: manager, registered agent, filing state","True owner: name, type, parent entity","Recorded ≠ true ≠ assessor divergence, with confidence"],
+  data:[["recorded_owners","Dia 4,104 · Gov 15,615","p-data"],["true_owners","Dia 3,953 · Gov 14,128","p-warn"],["v_recorded_vs_assessor_owner_divergence","Gov 561","p-warn"],["llc_research_queue","1,968 · 0 drained","p-dead"]],
+  gap:{lvl:"bad",txt:"81% of dialysis properties have no recorded-owner FK (gov 55%); true owner is NULL on 24% of dia / 60% of gov. Gov recorded_owners has no true_owner_id column at all — the deed→beneficial link exists only inside ownership_history. Recorded≠true divergence (561 gov) is never surfaced, and the LLC/SOS research worker is dead (1,968 queued, 0 completed, 8+ days). The biggest break in the chain."},
+  cta:"Resolve the owner → then trace ownership backward through time."},
+
+ {n:5,t:"Ownership Timeline",q:"Who has owned it over time — and how did it change hands?",health:"bad",
+  purpose:"Render ownership history as a true chain (acquisition → disposition → next owner), not a flat list. The transitions are the story: a recent sale-leaseback or a developer who sold to a REIT is a prospecting signal.",
+  shows:["Chronological owner chain with acquisition/disposition dates","Sale price per transition","Sale-leaseback / portfolio-deal flags","Link each entry to a canonical entity"],
+  data:[["ownership_history","Dia 7,797 · Gov 14,727","p-warn"],["lcc_listing_events","58","p-data"]],
+  gap:{lvl:"bad",txt:"61% of dia ownership_history rows (and ~5,800 gov) carry no sale_id, so most transfers can't be priced or anchored to a transaction. The chain renders today as a flat, 50-row-capped list — oldest-first, no continuity check (seller N ≠ buyer N-1 is never flagged), no entity links, no portfolio expansion."},
+  cta:"Follow the chain to its origin: who built this asset?"},
+
+ {n:6,t:"The Principal / Developer",q:"Who built it, and what is their pattern?",health:"bad",payoff:true,
+  purpose:"The second payoff and the strategic prize. Trace the chain back to the developer / principal decision-maker — the entity worth a relationship, not a one-off call. Build-to-suit assets point straight at a developer who repeats.",
+  shows:["Developer entity: name, HQ, specialty","Build-to-suit flag + first-generation status","Developer's pattern: how many they've built/sold","Role classification (developer vs REIT vs flipper)"],
+  data:[["properties.developer (free text)","Dia 315 (2.5%) · Gov 17","p-bad"],["true_owners.developer_flag (dia)","2 TRUE","p-bad"],["is_build_to_suit (gov)","155 TRUE","p-warn"],["v_*_developer_candidates (inferred)","","p-warn"]],
+  gap:{lvl:"bad",txt:"Developer is represented four inconsistent ways and never rendered as an entity: properties.developer is free text (dia 315 rows / 2.5%, gov 17); dia true_owners.developer_flag has 2 TRUE; gov true_owners has no developer columns; developer_scorecard is empty. Real attribution depends entirely on the inference candidate views. Today the UI shows only a binary flag — no first-generation/BTS detection, no current-vs-former, no portfolio."},
+  cta:"Once you know the principal, see everything they touch."},
+
+ {n:7,t:"Portfolio & Cross-Vertical Fusion",q:"What else does this owner / developer control?",health:"bad",
+  purpose:"Expand from one asset to the principal's whole footprint across both verticals. 'This true owner holds 14 dialysis clinics and 3 gov buildings' turns a single property into a relationship-sized opportunity.",
+  shows:["Owner's other properties (both domains)","Concentration / affiliate rollup","Cross-vertical entity identity","Effective portfolio incl. affiliates"],
+  data:[["lcc_entity_portfolio_facts","5,873 (dia 1,664 · gov 4,209)","p-warn"],["entities (canonical)","15,546","p-warn"],["v_entity_portfolio_all / v_lcc_operator_affiliates","","p-data"]],
+  gap:{lvl:"bad",txt:"No 'owner's other properties' view is reachable from the property — the Portfolio tab requires opening a separate owner drawer first. LCC joins to the domains only by (source_domain, source_property_id) string match (no FK), so any domain-side merge silently breaks the rollup. Cross-vertical fusion stays invisible in the property flow."},
+  cta:"Portfolio context makes the prospecting move obvious — converge."},
+
+ {n:8,t:"Prospecting Convergence",q:"So what do I DO about this property, right now?",health:"warn",payoff:true,convergence:true,
+  purpose:"The destination. Every gap surfaced upstream becomes a ranked, concrete action: the missing true owner, the name-only history, the absent developer, the recorded≠true divergence. The flow ends not in an audit log but in a call, a research task, and a cadence placement.",
+  shows:["Ranked next-best-research for THIS property","Priority band (P0–P8) + why","One-click: add to cadence / create lead / log call","Open the relevant Review Console lane pre-filtered"],
+  data:[["v_next_best_research","Dia 27,974 · Gov 39,191","p-warn"],["ownership_research_queue","Gov 49,547 · Dia 4,842","p-bad"],["v_priority_queue","1,062","p-data"],["v_bd_cadence_dashboard","270","p-data"]],
+  gap:{lvl:"warn",txt:"The generator and queues exist but never render on the property. Prospecting is today a 1–3 chip afterthought on the Overview tab. The convergence — property → ranked actions → cadence — is not wired, so the flow dead-ends at the Activity Log."},
+  cta:"This is the whole point: turn the asset into a move that advances the pipeline."},
+];
+
+const railIcons={ok:"var(--ok)",warn:"var(--warn)",bad:"var(--bad)"};
+const stepsEl=document.getElementById('steps');
+PH.forEach(p=>{
+  const d=document.createElement('div');
+  d.className='step'+(p.payoff?' payoff':'');
+  d.dataset.n=p.n;
+  const dotc=p.payoff?'var(--nm-sky)':railIcons[p.health];
+  d.innerHTML=`<div class="num">${p.n}</div><div class="lab"><b>${p.t}</b><small><span class="dot" style="background:${dotc};width:8px;height:8px"></span> ${p.q}</small></div>`;
+  d.onclick=()=>{document.getElementById('phase'+p.n).scrollIntoView({behavior:'smooth',block:'start'});};
+  stepsEl.appendChild(d);
+});
+
+const phEl=document.getElementById('phases');
+PH.forEach(p=>{
+  const sec=document.createElement('section');
+  sec.className='phase'+(p.payoff?' payoff':'')+(p.convergence?' convergence':'');
+  sec.id='phase'+p.n;
+  const dataPills=p.data.map(d=>`<span class="pill ${d[2]}">${d[0]}${d[1]?' · '+d[1]:''}</span>`).join('');
+  let extra='';
+  if(p.convergence){
+    extra=`<div class="lanes">
+      <div class="lane"><h5>Resolve</h5><p>Missing true owner, name-only history, recorded≠true divergence → Review Console</p></div>
+      <div class="lane"><h5>Reach</h5><p>Create lead / log call / draft outreach against the resolved principal</p></div>
+      <div class="lane"><h5>Cadence</h5><p>Place the entity in the BD cadence at the right priority band</p></div>
+    </div>`;
+  }
+  sec.innerHTML=`
+    <div class="ph"><div class="pn">${p.n}</div><div><h2>${p.t}</h2><div class="q">${p.q}</div></div></div>
+    <div class="body">
+      <div class="grid">
+        <div class="blk"><h4>Purpose in the flow</h4><p>${p.purpose}</p>
+          <h4 style="margin-top:12px">What it presents</h4><ul>${p.shows.map(s=>`<li>${s}</li>`).join('')}</ul></div>
+        <div class="blk"><h4>Data sources (live)</h4><div class="pillrow">${dataPills}</div>
+          <div class="gap ${p.gap.lvl==='bad'?'bad':''}"><b>Research gap to surface:</b> ${p.gap.txt}</div></div>
+      </div>
+      ${extra}
+      <div class="cta"><span class="arr">▶</span><div><b>Advance:</b> ${p.cta}</div></div>
+    </div>`;
+  phEl.appendChild(sec);
+});
+
+// scroll-spy
+const secs=[...document.querySelectorAll('.phase')];
+const io=new IntersectionObserver(es=>{
+  es.forEach(e=>{ if(e.isIntersecting){
+    const n=e.target.id.replace('phase','');
+    document.querySelectorAll('.step').forEach(s=>s.classList.toggle('on',s.dataset.n===n));
+  }});
+},{rootMargin:'-45% 0px -45% 0px'});
+secs.forEach(s=>io.observe(s));
+</script>
+</body>
+</html>
