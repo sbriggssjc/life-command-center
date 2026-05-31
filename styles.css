@@ -446,6 +446,19 @@ input, select { font-family: inherit; }
 .ql-icon { font-size: 14px; line-height: 1; }
 .ql-label { font-size: 12px; }
 .detail-empty { text-align: center; padding: 32px 16px; color: var(--text3); font-size: 13px; }
+/* UX move #4 (2026-05-31): action-oriented empty state. Replaces flat gray
+   text for high-traffic gaps (e.g. ownership not-on-file) with a headline +
+   guidance + the one action that resolves it. Additive .ud-empty* classes. */
+.ud-empty { text-align: center; padding: 28px 18px; background: var(--s1);
+  border: 1px dashed var(--border); border-radius: 10px; }
+.ud-empty-headline { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 5px; }
+.ud-empty-sub { font-size: 12px; color: var(--text3); max-width: 380px; margin: 0 auto 14px; line-height: 1.5; }
+.ud-empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.ud-empty-btn { padding: 8px 14px; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; background: var(--s2); border: 1px solid var(--border); color: var(--text); }
+.ud-empty-btn:hover { border-color: var(--accent); }
+.ud-empty-btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.ud-empty-btn-primary:hover { filter: brightness(1.08); }
 .clickable-row { cursor: pointer; transition: background 0.15s; }
 .clickable-row:hover { background: var(--s2) !important; }
 tr.clickable-row:hover td { background: var(--s2); }

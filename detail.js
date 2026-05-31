@@ -5675,6 +5675,28 @@ function _udResolveGap(action) {
 
 window._udResolveGap = _udResolveGap;
 
+// ── Reusable action-oriented empty state (UX move #4, 2026-05-31) ──────────
+// Replaces the flat '.detail-empty' gray text for high-traffic gaps. Turns
+// 'nothing here' into 'here is the one thing to do.' actions = array of
+// { label, onclick, primary } objects; onclick is a JS expression string.
+function _udEmptyState(headline, sub, actions) {
+  actions = Array.isArray(actions) ? actions : [];
+  let h = '<div class="ud-empty">';
+  h += '<div class="ud-empty-headline">' + esc(headline || '') + '</div>';
+  if (sub) h += '<div class="ud-empty-sub">' + esc(sub) + '</div>';
+  if (actions.length) {
+    h += '<div class="ud-empty-actions">';
+    actions.forEach(function (a) {
+      const cls = a.primary ? 'ud-empty-btn ud-empty-btn-primary' : 'ud-empty-btn';
+      h += '<button type="button" class="' + cls + '" onclick="' + (a.onclick || '') + '">' + esc(a.label || '') + '</button>';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+window._udEmptyState = _udEmptyState;
+
 /** Sync & Begin Prospecting: search SF for this owner, set prospecting_status, open owner drawer. */
 async function _udOwnerBeginProspecting(trueOwnerId, ownerName) {
   if (!trueOwnerId) { showToast('No true owner linked — resolve ownership first', 'info'); return; }
@@ -6095,7 +6117,14 @@ function _udTabOwnership() {
   if (!own) {
     html += '<div class="detail-section">';
     html += '<div class="detail-section-title">Current Ownership</div>';
-    html += '<div class="detail-empty">No ownership record found. Use Research Quick Links to identify the owner and log it below.</div>';
+    html += _udEmptyState(
+      'No owner on file yet',
+      'This property has no recorded or true owner. Resolving it is the next best action - pull the deed, then log who really owns it.',
+      [
+        { label: 'Pull recorded owner', onclick: "_udResolveGap('focus:udOwnRecorded')", primary: true },
+        { label: 'Open Secretary of State', onclick: "_udResolveGap('focus:udOwnTrue')" }
+      ]
+    );
     html += '</div>';
   } else {
     html += '<div class="detail-section">';
