@@ -3054,6 +3054,25 @@ async function handleLlcResearchTick(req, res) {
     const dom = target === 'dia' ? 'dialysis' : 'government';
     const summary = { scanned: 0, enriched: 0, no_match: 0, unsupported_state: 0, failed: 0, items: [] };
 
+    // Reclaim (2026-05-31): rows can strand in 'in_progress' when a prior tick
+    // hit the function wall-clock limit after marking them but before the
+    // lookup/reset ran. Since the work fetch only pulls status=queued, those
+    // rows would never retry — the queue silently bleeds into a dead state
+    // (observed: 50 -> 200+ stuck per domain). Reset any in_progress row whose
+    // last_attempt_at is older than the stale window back to queued so it
+    // re-enters the working set. Window via LLC_INPROGRESS_STALE_MIN (default 15).
+    const _staleMin = parseInt(process.env.LLC_INPROGRESS_STALE_MIN || '15', 10);
+    const _staleCut = new Date(Date.now() - _staleMin * 60000).toISOString();
+    try {
+      const reclaimed = await domainQuery(dom, 'PATCH',
+        `llc_research_queue?status=eq.in_progress&last_attempt_at=lt.${_staleCut}`,
+        { status: 'queued' }, { 'Prefer': 'return=representation,count=exact' });
+      if (reclaimed && reclaimed.ok) {
+        const n = reclaimed.count || (Array.isArray(reclaimed.data) ? reclaimed.data.length : 0);
+        if (n) { summary.reclaimed = n; result.reclaimed = (result.reclaimed || 0) + n; }
+      }
+    } catch (_e) { /* non-fatal: reclaim is best-effort */ }
+
     // Pull queued rows. Sort by created_at so older entries get drained first.
     const queueRes = await domainQuery(dom, 'GET',
       `llc_research_queue?status=eq.queued` +
@@ -3079,7 +3098,12 @@ async function handleLlcResearchTick(req, res) {
       continue;
     }
 
+    // Time budget (2026-05-31): stop before the function wall-clock limit so we
+    // never leave a half-processed batch stranded in_progress. LLC_TICK_BUDGET_MS
+    // default 20s (Vercel/Railway ~30s ceiling).
+    const _tickDeadline = Date.now() + parseInt(process.env.LLC_TICK_BUDGET_MS || '20000', 10);
     for (const q of queued) {
+      if (Date.now() > _tickDeadline) { summary.budget_stopped = true; break; }
       const item = { queue_id: q.queue_id, search_name: q.search_name };
       try {
         // 1. Mark in_progress so concurrent ticks don't double-process.
