@@ -333,9 +333,14 @@ async function loadGovData() {
     // Loads leads, portfolio properties, property count, listings first
     // so the dashboard renders quickly (~3-5s) before heavier tables arrive
     var [leadsRes, portfolioPropsRes, propsCountRes, listingsRes] = await Promise.all([
-      govQueryAll('prospect_leads',
+      // PERF (2026-05-31): was govQueryAll (unbounded serial pagination of all
+      // ~11.5k leads -> the 14.6s Gov-tab freeze). The leads array is a
+      // prioritized WORKING SET (pipeline already caps at 1,000 via atCap), not
+      // the authoritative total. Load the top-1,000 by priority_score in ONE
+      // bounded call; the same call returns the exact DB count for true totals.
+      govQuery('prospect_leads',
         'lead_id, lease_number, location_code, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
-        { order: 'priority_score.desc' }
+        { order: 'priority_score.desc', limit: 1000 }
       ),
       _loadPaginatedQuery('properties',
         // Identifier + research handles + financials + intel signals.
@@ -377,6 +382,9 @@ async function loadGovData() {
     ]);
 
     govData.leads = leadsRes.data || [];
+    // True DB total (exact count from the bounded query above) — distinct from
+    // the loaded working-set length. Used where the real total must be shown.
+    govData.leadsTotal = (typeof leadsRes.count === 'number' && leadsRes.count > 0) ? leadsRes.count : govData.leads.length;
     govData.portfolioProperties = portfolioPropsRes || [];
     govData.properties = [{ count: propsCountRes.count || 0 }];
     govData.listings = listingsRes.data || [];
@@ -387,7 +395,7 @@ async function loadGovData() {
     _govDataLoading = false;
 
     var _p1Sec = ((Date.now() - _govLoadStart) / 1000).toFixed(1);
-    showToast('Gov: ' + govData.leads.length + ' leads, ' + govData.portfolioProperties.length + ' properties (' + _p1Sec + 's)', 'success');
+    showToast('Gov: ' + govData.leadsTotal.toLocaleString() + ' leads' + (govData.leads.length < govData.leadsTotal ? ' (top ' + govData.leads.length.toLocaleString() + ' loaded)' : '') + ', ' + govData.portfolioProperties.length + ' properties (' + _p1Sec + 's)', 'success');
     if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government') renderGovTab();
 
     // ── PHASE 2: Background load — remaining tables ───────────────────
@@ -7322,11 +7330,24 @@ async function loadGovMonitorData() {
   if (govMonitorLoading) return;
   govMonitorLoading = true;
   try {
-    // Load lead gaps from prospect_leads
+    // Lead gaps from prospect_leads. PERF (2026-05-31): govData.leads is now a
+    // top-1,000 working set, so counting gaps off it would understate the true
+    // population. Pull authoritative gap counts server-side via count=exact
+    // (limit:1 + the count header), falling back to the working set if a count
+    // query fails so the monitor still renders.
     const leads = govData.leads || [];
-    const noMatch = leads.filter(l => !l.matched_property_id).length;
-    const noContact = leads.filter(l => !l.contact_email && !l.contact_phone).length;
-    const noResearch = leads.filter(l => !l.research_status || l.research_status === 'pending').length;
+    const _gapCount = async (filter) => {
+      try { const r = await govQuery('prospect_leads', 'lead_id', { filter, limit: 1 }); return (typeof r.count === 'number') ? r.count : null; }
+      catch (_e) { return null; }
+    };
+    const [_nm, _nc, _nr] = await Promise.all([
+      _gapCount('matched_property_id=is.null'),
+      _gapCount('contact_email=is.null&contact_phone=is.null'),
+      _gapCount('or=(research_status.is.null,research_status.eq.pending)'),
+    ]);
+    const noMatch = (_nm != null) ? _nm : leads.filter(l => !l.matched_property_id).length;
+    const noContact = (_nc != null) ? _nc : leads.filter(l => !l.contact_email && !l.contact_phone).length;
+    const noResearch = (_nr != null) ? _nr : leads.filter(l => !l.research_status || l.research_status === 'pending').length;
 
     // Load data freshness from ingestion metadata if available
     let freshness = [];
@@ -7551,7 +7572,7 @@ function renderGovResearch() {
       totalRecords = portfolio.length;
       pendingCount = intelCount;
     } else {
-      totalRecords = govData.leads.length;
+      totalRecords = govData.leadsTotal || govData.leads.length;
       pendingCount = ldCount;
     }
 
