@@ -20,6 +20,18 @@
 //     the officers list + registered_agent that we actually want for
 //     enrichment. Each is one billable lookup.
 
+import { opsQuery } from './ops-db.js';
+
+// Name normalizer mirroring scripts/ingest-sunbiz-fl.mjs::normName so the FL
+// adapter's lookup key matches sos_fl_entities.name_norm exactly.
+function _normLlcName(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[.,'"]/g, '')
+    .replace(/\b(llc|l\.l\.c|inc|incorporated|corp|corporation|company|co|lp|llp|ltd|limited|trust|holdings|partners|partnership)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 const OPENCORPORATES_BASE = 'https://api.opencorporates.com/v0.4';
 
 // Map US state code → OpenCorporates jurisdiction code.
@@ -92,8 +104,57 @@ export async function lookupLlc({ name, state }) {
 // Adapters MUST be verified against the live/source format before enabling
 // (return {found:false, reason:'adapter_pending'} until then).
 const SOS_DIRECT_ADAPTERS = {
-  // FL: lookupViaFloridaSunbizMirror,   // enable after the FL data-file mirror + parser are built & verified
+  FL: lookupViaFloridaSunbiz,   // Sunbiz Corporate Data File mirror (sos_fl_entities on LCC Opps)
 };
+
+// FL adapter — queries the Sunbiz mirror (sos_fl_entities) on LCC Opps. Returns
+// the same uniform shape as lookupViaOpenCorporates. source:'sos_fl'. When the
+// mirror is empty/unreachable, returns adapter_pending so the orchestrator
+// falls through to OpenCorporates rather than reporting a false no_match.
+async function lookupViaFloridaSunbiz({ name }) {
+  const norm = _normLlcName(name);
+  if (!norm || norm.length < 3) return { found: false, source: 'sos_fl', reason: 'invalid_input' };
+  // Prefer an exact normalized match on an ACTIVE filing; the trigram index
+  // also supports the ilike fallback. Limit small — we only need the best hit.
+  let rows = null;
+  try {
+    const enc = encodeURIComponent(norm);
+    const r = await opsQuery('GET',
+      `sos_fl_entities?name_norm=eq.${enc}&order=status.asc&limit=5` +
+      `&select=corp_number,corp_name,status,filing_type,file_date,ra_name,ra_address,ra_city,ra_state,ra_zip,officer1_title,officer1_name`);
+    if (!r.ok) return { found: false, source: 'sos_fl', reason: 'adapter_pending' };
+    rows = Array.isArray(r.data) ? r.data : [];
+  } catch (_e) {
+    return { found: false, source: 'sos_fl', reason: 'adapter_pending' };
+  }
+  if (rows.length === 0) {
+    // Mirror is reachable but no exact hit. Treat as an authoritative FL miss
+    // ONLY if the mirror is actually populated; otherwise let OC try.
+    try {
+      const probe = await opsQuery('GET', 'sos_fl_entities?select=corp_number&limit=1', undefined, { countMode: 'estimated' });
+      const populated = probe.ok && (probe.count || (Array.isArray(probe.data) && probe.data.length));
+      return { found: false, source: 'sos_fl', reason: populated ? 'no_match' : 'adapter_pending' };
+    } catch (_e) {
+      return { found: false, source: 'sos_fl', reason: 'adapter_pending' };
+    }
+  }
+  // Prefer an Active ('A') row; rows are ordered status.asc so 'A' sorts first.
+  const best = rows.find(x => (x.status || '').toUpperCase() === 'A') || rows[0];
+  const officerName = best.officer1_name || null;
+  return {
+    found:                    true,
+    source:                   'sos_fl',
+    filing_state:             'FL',
+    filing_id:                best.corp_number || null,
+    filing_date:              best.file_date || null,
+    filing_status:            best.status === 'A' ? 'Active' : (best.status === 'I' ? 'Inactive' : (best.status || null)),
+    registered_agent_name:    best.ra_name || null,
+    registered_agent_address: [best.ra_address, best.ra_city, best.ra_state, best.ra_zip].filter(Boolean).join(', ') || null,
+    manager_name:             officerName,
+    manager_role:             best.officer1_title || null,
+    payload:                  best,
+  };
+}
 
 async function lookupViaOpenCorporates({ name, state, apiKey }) {
   const jurisdiction = stateToJurisdiction(state);
