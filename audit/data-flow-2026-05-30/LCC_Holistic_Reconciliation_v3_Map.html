@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Holistic Reconciliation v3 — 2026-05-31</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-bg:#fff;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;
+    --part:#265AB2;--partbg:#E0E8F4;--dead:#6B21A8;--deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--nm-text);background:#F4F6FA;line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:22px 28px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:600}
+  header .sub{font-size:13px;opacity:.92}
+  header .meta{font-size:12px;opacity:.8;margin-top:6px}
+  nav.tabs{display:flex;flex-wrap:wrap;gap:2px;background:var(--nm-navy);padding:0 16px}
+  nav.tabs button{background:transparent;border:0;color:#cdddf5;font-family:inherit;font-size:13.5px;padding:11px 16px;cursor:pointer;border-bottom:3px solid transparent}
+  nav.tabs button:hover{color:#fff}
+  nav.tabs button.active{color:#fff;border-bottom-color:var(--nm-sky);font-weight:600}
+  main{max-width:1280px;margin:0 auto;padding:22px}
+  .panel{display:none;animation:fade .2s ease}.panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+  h2{font-size:19px;font-weight:600;color:var(--nm-navy);margin:4px 0 6px;border-bottom:2px solid var(--nm-pale);padding-bottom:6px}
+  p.lead{color:var(--nm-muted);font-size:13.5px;margin:6px 0 14px;max-width:980px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:#fff;border:1px solid var(--nm-alt);border-radius:10px;padding:13px 15px;border-top:4px solid var(--nm-navy)}
+  .card.ok{border-top-color:var(--ok)}.card.part{border-top-color:var(--part)}.card.bad{border-top-color:var(--bad)}.card.warn{border-top-color:var(--warn)}
+  .card .big{font-size:28px;font-weight:700;color:var(--nm-navy);font-variant-numeric:tabular-nums}
+  .card.ok .big{color:var(--ok)}.card.part .big{color:var(--part)}.card.bad .big{color:var(--bad)}.card.warn .big{color:var(--warn)}
+  .card .l{font-size:12px;color:var(--nm-muted);margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid var(--nm-alt);border-radius:8px;overflow:hidden}
+  th{background:var(--nm-navy);color:#fff;text-align:left;padding:8px 10px;font-weight:600;font-size:12px}
+  td{padding:7px 10px;border-top:1px solid var(--nm-alt);vertical-align:top}
+  tr:nth-child(even) td{background:#FAFBFD}
+  .grade{font-size:20px;font-weight:800}
+  .gA{color:var(--ok)}.gB{color:var(--part)}.gC{color:var(--warn)}.gD{color:var(--bad)}
+  .arrow{color:var(--nm-muted)} .up{color:var(--ok);font-weight:700}.down{color:var(--bad);font-weight:700}.flat{color:var(--nm-muted)}
+  .callout{background:var(--nm-pale);border-left:4px solid var(--nm-navy);border-radius:6px;padding:11px 14px;margin:12px 0;font-size:13px}
+  .callout.ok{background:var(--okbg);border-left-color:var(--ok)}.callout.bad{background:var(--badbg);border-left-color:var(--bad)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;background:#F0F3F8;border-radius:3px;padding:0 4px}
+  footer{max-width:1280px;margin:10px auto 30px;padding:0 22px;color:var(--nm-muted);font-size:11.5px}
+  @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>LCC Holistic Reconciliation v3 — the regression is healing</h1>
+  <div class="sub">Re-graded after Ops Health, the LLC reclaim fix, component tokenization, and the Gov-tab perf refactor — with live post-deploy verification.</div>
+  <div class="meta">2026-05-31 · Evidence: live DB sweep (3 projects, post-deploy) + deployed code + engagement history</div>
+</header>
+<nav class="tabs">
+  <button class="active" data-t="head">1 · Headline</button>
+  <button data-t="verify">2 · Live Verification</button>
+  <button data-t="design">3 · Design Grades</button>
+  <button data-t="next">4 · Remaining Work</button>
+</nav>
+<main>
+
+<section class="panel active" id="head">
+  <h2>Headline</h2>
+  <div class="cards">
+    <div class="card ok"><div class="big">13</div><div class="l">Audit items Landed (was 11)</div></div>
+    <div class="card ok"><div class="big">✓</div><div class="l">LLC regression healing (verified live)</div></div>
+    <div class="card warn"><div class="big">B−</div><div class="l">Design grade (was C+)</div></div>
+    <div class="card part"><div class="big">1</div><div class="l">Blocker remaining: research handler</div></div>
+  </div>
+  <div class="callout ok"><b>The standout: a fix we shipped is verifiably healing the live system.</b> The LLC worker reclaim/time-budget fix is working in production on both domains — stuck <span class="mono">in_progress</span> rows fell from 214→50 (dia) and 200→50 (gov), and the stranded rows returned to <span class="mono">queued</span> (dia 1,044→1,208, gov 460→610). The active data-loss regression flagged in v2 is reversed. And the open SF-backfill alert that degraded silently for days is now <i>visible</i> via the Ops Health surface we built.</div>
+  <div class="callout">Since v2 we also shipped: <b>Ops Health</b> (system self-monitoring), <b>component tokenization</b> (207 inline styles → 7 shared classes), and the <b>Gov-tab perf refactor</b> (the 14.6s freeze → one bounded query). Design grade moved C+ → B−.</div>
+</section>
+
+<section class="panel" id="verify">
+  <h2>Live post-deploy verification</h2>
+  <p class="lead">The most important check: did the fixes actually work in production? Measured read-only just now.</p>
+  <table>
+    <thead><tr><th>Metric</th><th>v2 (broken)</th><th>v3 (now)</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>dia LLC in_progress (stuck)</td><td>214</td><td>50</td><td class="up">healed — reclaim working</td></tr>
+      <tr><td>dia LLC queued (recovered)</td><td>1,044</td><td>1,208</td><td class="up">stranded rows returned</td></tr>
+      <tr><td>gov LLC in_progress (stuck)</td><td>200</td><td>50</td><td class="up">healed</td></tr>
+      <tr><td>gov LLC queued (recovered)</td><td>460</td><td>610</td><td class="up">stranded rows returned</td></tr>
+      <tr><td>Gov-tab load (14.6s freeze)</td><td>~11,534 rows serial</td><td>top-1,000 + 1 count</td><td class="up">one bounded query</td></tr>
+      <tr><td>Open alerts visible in-app</td><td>0 (DB-only)</td><td>1 (Ops Health page)</td><td class="up">now surfaced</td></tr>
+      <tr><td>field_source_priority rules</td><td>1,735</td><td>1,735</td><td class="flat">stable</td></tr>
+      <tr><td>provenance actionable</td><td>12,516</td><td>12,524</td><td class="flat">governable, not worked</td></tr>
+      <tr><td>LLC completions</td><td>0</td><td>0</td><td class="down">still needs a handler</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Read carefully:</b> the worker now <i>cycles cleanly</i> (queued → in_progress → queued, no stranding) but still <i>doesn't resolve</i> — completions stay 0 because no research handler is configured. That's the right behavior while waiting for a handler: rows are safe, not dying. The one remaining blocker is unchanged.</div>
+</section>
+
+<section class="panel" id="design">
+  <h2>Design grades — full trajectory</h2>
+  <table>
+    <thead><tr><th>Dimension</th><th>Audit</th><th>v2</th><th>v3</th><th>What moved it (v2→v3)</th></tr></thead>
+    <tbody>
+      <tr><td>Visual hierarchy</td><td><span class="grade gC">C</span></td><td><span class="grade gB">B</span></td><td><span class="grade gB">B</span></td><td>(held — Today hierarchy)</td></tr>
+      <tr><td>Navigation coherence</td><td><span class="grade gD">D</span></td><td><span class="grade gB">B−</span></td><td><span class="grade gB">B</span></td><td>Ops Health gave Admin group a second real destination; nav now genuinely grouped + purposeful.</td></tr>
+      <tr><td>Order vs data flow</td><td><span class="grade gC">C</span></td><td><span class="grade gB">B+</span></td><td><span class="grade gB">B+</span></td><td>(held — lifecycle re-order)</td></tr>
+      <tr><td>Interaction & state</td><td><span class="grade gD">D</span></td><td><span class="grade gC">C+</span></td><td><span class="grade gB">B−</span></td><td>Gov-tab freeze fixed (14.6s → bounded); Ops Health surfaces system state. Skeletons still pending.</td></tr>
+      <tr><td>Component & brand consistency</td><td><span class="grade gD">D</span></td><td><span class="grade gC">C</span></td><td><span class="grade gC">C+</span></td><td>207 inline styles tokenized into shared classes; ~800 remain (incremental).</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Overall C+ → B−.</b> Four of five dimensions are now B-range. The lone C+ (consistency) is purely the remaining inline-style debt — a known, incremental grind, not a design problem.</div>
+</section>
+
+<section class="panel" id="next">
+  <h2>Remaining work — prioritized (v3)</h2>
+  <table>
+    <thead><tr><th>#</th><th>Item</th><th>Why now</th><th>Effort</th></tr></thead>
+    <tbody>
+      <tr><td><b>1</b></td><td>Configure an LLC/SOS research handler (SOS-direct adapter or OpenCorporates key)</td><td>The last blocker. Worker now cycles safely but resolves nothing. This is what finally makes owner coverage climb and fills the ladder/feed/Review-Console with real owners instead of "not on file." Env/build decision.</td><td>M</td></tr>
+      <tr><td><b>2</b></td><td>Review Console lane worklists + generalized resolver</td><td>Shell ships counts + deep-links; next layer opens each lane in-console with reason-aware resolve actions.</td><td>L</td></tr>
+      <tr><td><b>3</b></td><td>Data-integrity sweep (6,912 dup addresses, owner dedup, cap-rate bands)</td><td>Unchanged liabilities corrupting comps + ownership chains. Now visible via Ops Health / Data Quality.</td><td>M–L</td></tr>
+      <tr><td><b>4</b></td><td>Continue tokenization + add skeleton-loader pattern</td><td>Finishes consistency C+→B and interaction/state B−→B. Incremental, low-risk.</td><td>M</td></tr>
+      <tr><td><b>5</b></td><td>Resolve the open SF-backfill flow failure (now visible in Ops Health)</td><td>A real open alert; the Power Automate flow fails at Apply-to-each. Ops fix on the PA side.</td><td>S</td></tr>
+    </tbody>
+  </table>
+  <div class="callout ok"><b>How close are we now?</b> On presentation/structure/flow: <b>essentially there</b> — four of five design dimensions in B-range, the cohesive surfaces (property flow, Review Console, Ops Health) all live and on-brand. On system reliability: <b>materially better</b> — the data-loss regression is healed and now self-monitored. On data completion: <b>still one decision away</b> — configure the research handler and the elegant surfaces start filling with resolved owners. The end product we set out to build is in clear view.</div>
+</section>
+
+</main>
+<footer>Northmarq holistic reconciliation v3 · 2026-05-31 · Companions: v1/v2 reconciliations, UX/design audit, data-flow audit · Live counts read-only; will drift.</footer>
+<script>
+document.querySelectorAll('nav.tabs button').forEach(b=>{b.onclick=()=>{
+ document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+ document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+ b.classList.add('active');document.getElementById(b.dataset.t).classList.add('active');
+ window.scrollTo({top:0,behavior:'smooth'});};});
+</script>
+</body>
+</html>
