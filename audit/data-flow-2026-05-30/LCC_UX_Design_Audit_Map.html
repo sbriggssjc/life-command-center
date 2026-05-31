@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC UX & Design Audit — 2026-05-31</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-bg:#fff;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;
+    --part:#265AB2;--partbg:#E0E8F4;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--nm-text);background:#F4F6FA;line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:22px 28px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:600}
+  header .sub{font-size:13px;opacity:.92}
+  header .meta{font-size:12px;opacity:.8;margin-top:6px}
+  nav.tabs{display:flex;flex-wrap:wrap;gap:2px;background:var(--nm-navy);padding:0 16px}
+  nav.tabs button{background:transparent;border:0;color:#cdddf5;font-family:inherit;font-size:13.5px;padding:11px 16px;cursor:pointer;border-bottom:3px solid transparent}
+  nav.tabs button:hover{color:#fff}
+  nav.tabs button.active{color:#fff;border-bottom-color:var(--nm-sky);font-weight:600}
+  main{max-width:1280px;margin:0 auto;padding:22px}
+  .panel{display:none;animation:fade .2s ease}.panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+  h2{font-size:19px;font-weight:600;color:var(--nm-navy);margin:4px 0 6px;border-bottom:2px solid var(--nm-pale);padding-bottom:6px}
+  h3{font-size:15px;font-weight:600;color:var(--nm-mid);margin:18px 0 8px}
+  p.lead{color:var(--nm-muted);font-size:13.5px;margin:6px 0 14px;max-width:980px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:#fff;border:1px solid var(--nm-alt);border-radius:10px;padding:13px 15px;border-left:4px solid var(--nm-navy)}
+  .card.bad{border-left-color:var(--bad)}.card.warn{border-left-color:var(--warn)}.card.ok{border-left-color:var(--ok)}
+  .card h4{margin:0 0 4px;font-size:13.5px}
+  .card .score{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+  .card .score.bad{color:var(--bad)}.card .score.warn{color:var(--warn)}.card .score.ok{color:var(--ok)}
+  .card p{margin:5px 0 0;font-size:12px;color:var(--nm-muted)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid var(--nm-alt);border-radius:8px;overflow:hidden}
+  th{background:var(--nm-navy);color:#fff;text-align:left;padding:8px 10px;font-weight:600;font-size:12px}
+  td{padding:7px 10px;border-top:1px solid var(--nm-alt);vertical-align:top}
+  tr:nth-child(even) td{background:#FAFBFD}
+  .pill{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11px;font-weight:700;white-space:nowrap}
+  .p-bad{background:var(--badbg);color:var(--bad)}.p-warn{background:var(--warnbg);color:var(--warn)}.p-ok{background:var(--okbg);color:var(--ok)}
+  .grade{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+  .grade.A{color:var(--ok)}.grade.B{color:var(--part)}.grade.C{color:var(--warn)}.grade.D{color:var(--bad)}.grade.F{color:var(--bad)}
+  .mono{font-family:var(--mono);font-size:11.5px;background:#F0F3F8;border-radius:3px;padding:0 4px}
+  .callout{background:var(--nm-pale);border-left:4px solid var(--nm-navy);border-radius:6px;padding:11px 14px;margin:12px 0;font-size:13px}
+  .callout.bad{background:var(--badbg);border-left-color:var(--bad)}
+  .filters{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 12px;align-items:center}
+  .filters select,.filters input{font-family:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--nm-alt);border-radius:6px;background:#fff}
+  .src{color:var(--nm-muted);font-size:12px}
+  /* nav-depth visual */
+  .navtree{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+  .navrow{display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .navrow .lvl{font-size:10px;font-weight:700;color:#fff;background:var(--nm-axis);border-radius:4px;padding:1px 7px;min-width:54px;text-align:center}
+  .navrow.l1 .lvl{background:var(--nm-navy)}.navrow.l2 .lvl{background:var(--nm-mid)}.navrow.l3 .lvl{background:var(--nm-sky);color:#08294f}.navrow.l4 .lvl{background:var(--nm-pale);color:var(--nm-navy)}
+  .navrow .items{color:var(--nm-text)}
+  .navrow .depth{margin-left:auto;font-size:11px;color:var(--nm-muted)}
+  /* order comparison */
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .ordcol{background:#fff;border:1px solid var(--nm-alt);border-radius:9px;padding:14px 16px}
+  .ordcol h3{margin-top:0}
+  .ordcol ol{margin:0;padding-left:20px}
+  .ordcol li{font-size:12.7px;padding:3px 0}
+  .ordcol li.move{color:var(--warn);font-weight:600}
+  .ordcol li.new{color:var(--ok);font-weight:600}
+  .swatch{display:inline-block;width:13px;height:13px;border-radius:3px;border:1px solid #0003;vertical-align:middle;margin-right:5px}
+  footer{max-width:1280px;margin:10px auto 30px;padding:0 22px;color:var(--nm-muted);font-size:11.5px}
+  @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.twocol{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>LCC UX &amp; Design Audit — does the app's look, order &amp; feel match the data flow?</h1>
+  <div class="sub">The fifth audit lens: visual hierarchy, navigation, element ordering vs. data flow, interaction &amp; state design, and component/brand consistency.</div>
+  <div class="meta">2026-05-31 · Live walkthrough (Today/Gov/Dia/Property Detail) + styles.css &amp; index.html structural read · Graded A–F per dimension</div>
+</header>
+
+<nav class="tabs">
+  <button class="active" data-t="grades">1 · Dimension Grades</button>
+  <button data-t="nav">2 · Navigation Depth</button>
+  <button data-t="order">3 · Order vs Data Flow</button>
+  <button data-t="findings">4 · Findings Register</button>
+  <button data-t="proposed">5 · Proposed Direction</button>
+</nav>
+
+<main>
+
+<!-- 1 GRADES -->
+<section class="panel active" id="grades">
+  <h2>Design dimension grades</h2>
+  <p class="lead">Each dimension scored against the goal: the app's appearance, interaction, order and structure should mirror how the data flows and how a deal actually progresses, so the UI is self-evidently intuitive.</p>
+  <div class="cards">
+    <div class="card warn"><h4>Visual hierarchy <span class="grade C">C</span></h4><p>Clean dark theme, but the eye doesn't travel in task order — KPIs, NBA, My Work and Inbox compete for primacy with no clear "do this first."</p></div>
+    <div class="card bad"><h4>Navigation coherence <span class="grade D">D</span></h4><p>Four nesting levels (bottom nav → domain top-tabs → inner pills → sub-tabs) plus a flat 10-item More drawer. Users must know where things live.</p></div>
+    <div class="card warn"><h4>Order vs data flow <span class="grade C">C</span></h4><p>Property detail roughly tracks the lifecycle but front-loads Overview and buries Ownership (the payoff) at tab 4, prospecting inside it.</p></div>
+    <div class="card bad"><h4>Interaction &amp; state <span class="grade D">D</span></h4><p>14.6s loads, screenshot-freezing renders, pervasive empty states ("not on file"), inconsistent loading/skeleton treatment.</p></div>
+    <div class="card bad"><h4>Component &amp; brand consistency <span class="grade D">D</span></h4><p>~1,000 inline styles in one file; brand hierarchy inverted (Sky used as primary, NM Blue as secondary); body font is system stack, not brand.</p></div>
+  </div>
+  <div class="callout"><b>Overall: C− / D+.</b> The app is <i>functional and information-dense</i>, but it is organized for the <i>system's</i> convenience (by domain, by table) rather than the <i>user's task flow</i> (find a deal → understand it → identify the owner → act). The structure audit (lens 1) proposed the right re-org; this lens says the <i>visual &amp; interaction execution</i> needs to follow, or the re-org alone won't feel intuitive.</div>
+</section>
+
+<!-- 2 NAV -->
+<section class="panel" id="nav">
+  <h2>Navigation depth — the four-level problem</h2>
+  <p class="lead">To reach a government property's ownership data today, a user passes through four distinct navigation mechanisms. Each is a place they must <i>learn</i>.</p>
+  <div class="navtree">
+    <div class="navrow l1"><span class="lvl">LEVEL 1</span><span class="items">Bottom nav: Today · Dialysis · Gov · Pipeline · Inbox · <b>More ▾</b></span><span class="depth">tap 1</span></div>
+    <div class="navrow l2"><span class="lvl">LEVEL 2</span><span class="items">Domain top-tabs: Dialysis · Government · National ST · Marketing · Prospects · All Other</span><span class="depth">tap 2</span></div>
+    <div class="navrow l3"><span class="lvl">LEVEL 3</span><span class="items">Inner pills: Overview · Pipeline · Research · Reference · Capital Markets</span><span class="depth">tap 3</span></div>
+    <div class="navrow l4"><span class="lvl">LEVEL 4</span><span class="items">Sub-tabs: Overview · Search · CMS Data · NPI Intel</span><span class="depth">tap 4</span></div>
+    <div class="navrow l4"><span class="lvl">+DRAWER</span><span class="items">More drawer (flat 10): Contacts · Business · Calendar · Messages · Entities · Research · Metrics · Sync Health · Data Quality · Settings</span><span class="depth">parallel</span></div>
+  </div>
+  <div class="callout bad"><b>The two concrete problems.</b> (1) <b>Research lives in three places at once</b> — a Level-3 inner pill in <i>both</i> Gov and Dia, AND a top-level item in the More drawer — so the same job has three doors and no single home. (2) <b>The More drawer is a flat list of 10</b> where Data Quality and Research (operational, high-frequency) rank visually identical to Settings (rare). Nothing signals importance or grouping.</div>
+  <h3>What good looks like</h3>
+  <p class="lead">Collapse to three coherent groups and a single home per job: <b>Work</b> (Pipeline · Inbox · Review Console), <b>Intelligence</b> (Contacts · Entities · Capital Markets · Metrics), <b>Admin</b> (Sync Health · Ops Health · Settings) — with the domain dashboards kept for browsing, not as the entry point for review work.</p>
+</section>
+
+<!-- 3 ORDER -->
+<section class="panel" id="order">
+  <h2>Element order vs. the data flow</h2>
+  <p class="lead">The property-intelligence flow doc defined the natural lifecycle order. The live property detail mostly follows it but front-loads a generic Overview and buries the payoff. Reordering to match the flow makes the panel self-guiding.</p>
+  <div class="twocol">
+    <div class="ordcol">
+      <h3>Live property-detail tab order</h3>
+      <ol>
+        <li>Overview <span class="src">(generic dump — identity + pipeline + financials mixed)</span></li>
+        <li>Rent Roll <span class="src">(lease / tenancy)</span></li>
+        <li>Operations <span class="src">(agency / operator)</span></li>
+        <li class="move">Ownership &amp; CRM <span class="src">← the payoff, buried at #4</span></li>
+        <li>Deal History <span class="src">(sales)</span></li>
+        <li>Activity Log</li>
+      </ol>
+      <p class="src" style="margin-top:8px">Prospecting actions live <i>inside</i> the Ownership tab and at the bottom of the panel, not as a destination.</p>
+    </div>
+    <div class="ordcol">
+      <h3>Lifecycle / data-flow order (proposed)</h3>
+      <ol>
+        <li>Identity &amp; snapshot <span class="src">(who/what/where + the "needs review" banner)</span></li>
+        <li>Tenancy &amp; terms <span class="src">(lease)</span></li>
+        <li>Operation &amp; agency</li>
+        <li>Market activity &amp; value <span class="src">(sales / cap rate)</span></li>
+        <li class="new">Ownership de-anonymization <span class="src">← elevated; the ladder is the spine</span></li>
+        <li class="new">Prospecting convergence <span class="src">← a real destination, not buried</span></li>
+        <li>Activity log</li>
+      </ol>
+      <p class="src" style="margin-top:8px">Order mirrors the flow: identify the asset → understand its economics → resolve who owns it → act. Each tab ends by pointing at the next.</p>
+    </div>
+  </div>
+  <div class="callout">The Phase 4 ladder &amp; Phase 8 feed already shipped — but they sit <i>inside</i> the old tab order. Reordering the panel so they're the climax (not a mid-list tab + a footer) is the design change that makes the data flow legible at a glance.</div>
+</section>
+
+<!-- 4 FINDINGS -->
+<section class="panel" id="findings">
+  <h2>Design findings register</h2>
+  <div class="filters">
+    <label>Dimension: <select id="fd"><option value="">All</option><option>Visual hierarchy</option><option>Navigation</option><option>Order vs flow</option><option>Interaction/state</option><option>Consistency/brand</option></select></label>
+    <label>Severity: <select id="fs"><option value="">All</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+    <span class="src" id="fc"></span>
+  </div>
+  <table id="ftable">
+    <thead><tr><th>Finding</th><th>Dimension</th><th>Sev</th><th>Evidence (live)</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- 5 PROPOSED -->
+<section class="panel" id="proposed">
+  <h2>Proposed design direction</h2>
+  <p class="lead">Five moves, ordered by how much "intuitive-ness" they buy. None require re-plumbing data — they re-order and re-skin what exists so the surface matches the flow.</p>
+  <table>
+    <thead><tr><th>#</th><th>Move</th><th>What it fixes</th><th>Effort</th></tr></thead>
+    <tbody>
+      <tr><td><b>1</b></td><td>Re-order property detail to lifecycle order + elevate Ownership &amp; Prospecting as the climax</td><td>Order-vs-flow; makes the panel self-guiding without new data</td><td>S–M</td></tr>
+      <tr><td><b>2</b></td><td>Collapse navigation: group the More drawer into Work / Intelligence / Admin; give Review one home</td><td>Navigation coherence (D→B); kills the 3-doors-for-Research problem</td><td>M</td></tr>
+      <tr><td><b>3</b></td><td>Fix brand hierarchy: NM Blue primary, Sky accent; load brand font for body; standardize on tokenized component classes</td><td>Consistency/brand (D→B); ~1,000 inline styles → shared classes</td><td>M–L</td></tr>
+      <tr><td><b>4</b></td><td>Establish a state system: consistent skeleton loaders, a single empty-state pattern ("not on file → here's the action"), virtualize 5k-row renders</td><td>Interaction/state (D→B); kills the 14.6s freezes</td><td>M</td></tr>
+      <tr><td><b>5</b></td><td>Add a "do this first" visual hierarchy on Today: one primary surface (Review/NBA), demote KPIs to a strip</td><td>Visual hierarchy (C→B)</td><td>S</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Sequencing note.</b> #1 and #5 are quick wins that immediately make the app feel flow-aligned. #2 pairs naturally with building the Review Console (already the structure audit's #1). #3 is the larger investment but it's what makes every future screen consistent — best done as a shared component pass, not per-screen.</div>
+</section>
+
+</main>
+<footer>Northmarq UX &amp; design audit · palette per cm_brand_tokens.json · 2026-05-31 · Companion: LCC_UX_Design_Audit_Report.docx · Fifth lens on the LCC data-flow &amp; IA audit.</footer>
+
+<script>
+document.querySelectorAll('nav.tabs button').forEach(b=>{
+  b.onclick=()=>{document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');document.getElementById(b.dataset.t).classList.add('active');
+  window.scrollTo({top:0,behavior:'smooth'});};
+});
+const F=[
+ ['Four nav levels + flat 10-item drawer to reach ownership data','Navigation','High','bottom-nav → domain top-tabs → inner pills → sub-tabs; More drawer is a flat grid of 10 in index.html'],
+ ['Research has three doors, no single home','Navigation','High','Inner pill in Gov AND Dia, plus a top-level More-drawer item — same job, three entry points'],
+ ['More drawer ranks Data Quality/Research equal to Settings','Navigation','Medium','Flat more-drawer-grid, no grouping or priority weighting'],
+ ['Ownership (the payoff) is tab #4; prospecting buried inside it','Order vs flow','High','detail.js tabs: Overview, Rent Roll, Operations, Ownership & CRM, Deal History, Activity Log'],
+ ['Overview tab is a generic dump (identity+pipeline+financials mixed)','Order vs flow','Medium','No single "what is this + what do I do" focal point on entry'],
+ ['Brand hierarchy inverted: Sky is --accent (primary), NM Blue is --accent2','Consistency/brand','High','styles.css: --accent #62B5E5 (Sky) used as primary; --accent2 #003DA5 (NM Blue) secondary — opposite of the brand book'],
+ ['Body font is system stack, not brand font','Consistency/brand','Medium','styles.css body font-family: -apple-system…; Outfit loaded for headings only, no Futura/Arial brand fallback for body'],
+ ['~1,000 inline styles in detail.js — ad-hoc, not tokenized','Consistency/brand','High','Pervasive inline style="" attributes instead of shared component classes; drives visual drift'],
+ ['14.6s Gov search load; a screenshot froze mid-session','Interaction/state','High','Live: Gov search status chip showed 14.6s; CDP screenshot timed out (large client-side render)'],
+ ['Pervasive empty states with no consistent treatment','Interaction/state','Medium','"not on file" / "No ownership record" appear constantly (81% dia owners unresolved); empty-state styling varies'],
+ ['Inconsistent loading treatment (spinner vs skeleton vs blank)','Interaction/state','Medium','Mix of "Loading…", spinners, and skeletons across surfaces; no single pattern'],
+ ['No "do this first" hierarchy on Today','Visual hierarchy','Medium','KPIs, NBA, My Work, Inbox all compete; no single primary action surface'],
+ ['Inflated "3,000 flagged emails" hero stat','Visual hierarchy','Medium','Today shows a capped/inflated count as a prominent number — erodes trust in the numbers shown'],
+ ['Dense KPI cards with low signal','Visual hierarchy','Low','Four KPI cards (Open Activities 0, Flagged 3000, Events 0, Due 0) — mostly zeros, take prime real estate'],
+ ['Domain-first IA forces vertical choice before task','Navigation','High','User must pick Dialysis vs Gov before choosing what they want to do — task is subordinate to domain'],
+ ['Consolidate / merge only behind a small header button','Order vs flow','Low','Consolidate button present but easy to miss; merge candidates not surfaced proactively'],
+];
+const sev={'High':'p-bad','Medium':'p-warn','Low':'p-ok'};
+function rf(){const d=fd.value,s=fs.value;const o={'High':0,'Medium':1,'Low':2};
+ const rows=F.filter(r=>(!d||r[1]===d)&&(!s||r[2]===s)).sort((a,b)=>o[a[2]]-o[b[2]]);
+ ftable.querySelector('tbody').innerHTML=rows.map(r=>`<tr><td><b>${r[0]}</b></td><td>${r[1]}</td><td><span class="pill ${sev[r[2]]}">${r[2]}</span></td><td>${r[3]}</td></tr>`).join('');
+ fc.textContent=rows.length+' of '+F.length;}
+fd.onchange=fs.onchange=rf;rf();
+</script>
+</body>
+</html>

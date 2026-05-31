@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Audit Reconciliation — 2026-05-31</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-bg:#fff;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;
+    --part:#265AB2;--partbg:#E0E8F4;--dead:#6B21A8;--deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--nm-text);background:#F4F6FA;line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:22px 28px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:600}
+  header .sub{font-size:13px;opacity:.92}
+  header .meta{font-size:12px;opacity:.8;margin-top:6px}
+  nav.tabs{display:flex;flex-wrap:wrap;gap:2px;background:var(--nm-navy);padding:0 16px}
+  nav.tabs button{background:transparent;border:0;color:#cdddf5;font-family:inherit;font-size:13.5px;padding:11px 16px;cursor:pointer;border-bottom:3px solid transparent}
+  nav.tabs button:hover{color:#fff}
+  nav.tabs button.active{color:#fff;border-bottom-color:var(--nm-sky);font-weight:600}
+  main{max-width:1280px;margin:0 auto;padding:22px}
+  .panel{display:none;animation:fade .2s ease}
+  .panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  h2{font-size:19px;font-weight:600;color:var(--nm-navy);margin:4px 0 6px;border-bottom:2px solid var(--nm-pale);padding-bottom:6px}
+  p.lead{color:var(--nm-muted);font-size:13.5px;margin:6px 0 14px;max-width:980px}
+  /* scorecard tiles */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:#fff;border:1px solid var(--nm-alt);border-radius:10px;padding:14px 16px;border-top:4px solid var(--nm-navy)}
+  .card.ok{border-top-color:var(--ok)} .card.part{border-top-color:var(--part)} .card.bad{border-top-color:var(--bad)} .card.warn{border-top-color:var(--warn)}
+  .card .big{font-size:30px;font-weight:700;color:var(--nm-navy);font-variant-numeric:tabular-nums}
+  .card.ok .big{color:var(--ok)} .card.part .big{color:var(--part)} .card.bad .big{color:var(--bad)} .card.warn .big{color:var(--warn)}
+  .card .l{font-size:12px;color:var(--nm-muted);margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid var(--nm-alt);border-radius:8px;overflow:hidden}
+  th{background:var(--nm-navy);color:#fff;text-align:left;padding:8px 10px;font-weight:600;font-size:12px}
+  td{padding:7px 10px;border-top:1px solid var(--nm-alt);vertical-align:top}
+  tr:nth-child(even) td{background:#FAFBFD}
+  .pill{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11px;font-weight:700;white-space:nowrap}
+  .p-ok{background:var(--okbg);color:var(--ok)} .p-part{background:var(--partbg);color:var(--part)}
+  .p-open{background:var(--badbg);color:var(--bad)} .p-warn{background:var(--warnbg);color:var(--warn)}
+  .p-new{background:var(--deadbg);color:var(--dead)}
+  .filters{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 12px;align-items:center}
+  .filters select,.filters input{font-family:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--nm-alt);border-radius:6px;background:#fff}
+  .filters .src{color:var(--nm-muted);font-size:12px}
+  .delta-up{color:var(--ok);font-weight:700} .delta-down{color:var(--bad);font-weight:700} .delta-flat{color:var(--nm-muted)}
+  .callout{background:var(--nm-pale);border-left:4px solid var(--nm-navy);border-radius:6px;padding:11px 14px;margin:12px 0;font-size:13px}
+  .callout.bad{background:var(--badbg);border-left-color:var(--bad)} .callout.ok{background:var(--okbg);border-left-color:var(--ok)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 16px;font-size:12px;color:var(--nm-muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+  footer{max-width:1280px;margin:10px auto 30px;padding:0 22px;color:var(--nm-muted);font-size:11.5px}
+  .count{font-variant-numeric:tabular-nums;font-weight:700}
+  @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>LCC Audit Reconciliation — where we are vs. where we need to be</h1>
+  <div class="sub">The 2026-05-30 data-flow & IA audit, re-graded against the live deployed app and a fresh read-only DB sweep.</div>
+  <div class="meta">Reconciliation date: 2026-05-31 · Method: live browser walkthrough (Today/Gov/Dia/Property Detail) + deployed-code check + live DB re-count across 3 Supabase projects</div>
+</header>
+
+<nav class="tabs">
+  <button class="active" data-t="score">1 · Scorecard</button>
+  <button data-t="moved">2 · What Moved (live deltas)</button>
+  <button data-t="register">3 · Re-graded Gap Register</button>
+  <button data-t="new">4 · New Findings</button>
+  <button data-t="next">5 · Where To Go Next</button>
+</nav>
+
+<main>
+
+<!-- 1 SCORECARD -->
+<section class="panel active" id="score">
+  <h2>Scorecard</h2>
+  <p class="lead">Status of every gap in the original register, graded against live evidence. "Landed" = shipped and verified live. "Partial" = mechanism shipped but blocked or incomplete downstream. "Open" = unchanged.</p>
+  <div class="cards">
+    <div class="card ok"><div class="big">6</div><div class="l">Landed — shipped & verified live</div></div>
+    <div class="card part"><div class="big">4</div><div class="l">Partial — shipped but blocked downstream</div></div>
+    <div class="card bad"><div class="big">21</div><div class="l">Open — unchanged from audit</div></div>
+    <div class="card warn"><div class="big">3</div><div class="l">New findings this sweep</div></div>
+  </div>
+  <div class="callout ok"><b>The headline.</b> The property-intelligence payoff phases (ownership ladder + prospecting feed) and the data-governance registry are genuinely live and working. But the system's two biggest <i>structural</i> gaps — a unified Review Console and an Ops Health surface — remain unbuilt, and the single dependency that makes the new UI <i>useful</i> (the LLC/SOS research worker that resolves owners) is still not draining. So the app now <i>presents</i> the work beautifully; it still can't <i>complete</i> the owner-resolution work that feeds it.</div>
+  <div class="callout"><b>Coverage note.</b> Today, Gov, Dialysis and the Property Detail slide-over were walked live in the browser. Pipeline, Inbox and the More drawer were graded from deployed source (their structure is unambiguous there) and are marked <span class="mono">code-verified</span> in the register — not re-clicked this session because the focused Chrome window was the installed-app shell, which blocks automation tab-grouping.</div>
+</section>
+
+<!-- 2 WHAT MOVED -->
+<section class="panel" id="moved">
+  <h2>What moved since 2026-05-30 (live DB deltas)</h2>
+  <p class="lead">Read-only re-count across the three Supabase projects. The standout is the field-priority registry; the standout non-movement is every owner-research queue.</p>
+  <table>
+    <thead><tr><th>Metric</th><th>DB</th><th>2026-05-30</th><th>Live 2026-05-31</th><th>Delta</th><th>Read</th></tr></thead>
+    <tbody>
+      <tr><td>field_source_priority registry</td><td>LCC</td><td>8</td><td class="count">1,735</td><td class="delta-up">+1,727</td><td>Governance registry massively populated — the audit's most-cited "ungoverned" gap is now largely deployed.</td></tr>
+      <tr><td>provenance actionable conflicts</td><td>LCC</td><td>12,332</td><td class="count">12,468</td><td class="delta-flat">+136</td><td>Still unsurfaced in UI; registry now exists to govern them but the conflicts aren't worked down.</td></tr>
+      <tr><td>stale identities</td><td>LCC</td><td>18,838</td><td class="count">18,824</td><td class="delta-flat">−14</td><td>Flat. No surface, no drain.</td></tr>
+      <tr><td>LLC research queue (dia)</td><td>Dia</td><td>1,306 · 0 done</td><td class="count">1,306 · 0 done · 50 stuck</td><td class="delta-flat">0</td><td>No 'deferred', no completions. 50 rows stuck in_progress. Worker still not resolving.</td></tr>
+      <tr><td>LLC research queue (gov)</td><td>Gov</td><td>665 · 0 done</td><td class="count">665 · 0 done · 50 stuck</td><td class="delta-flat">0</td><td>Same pattern.</td></tr>
+      <tr><td>next_best_research (dia)</td><td>Dia</td><td>27,974</td><td class="count">27,974</td><td class="delta-flat">0</td><td>Feed reads this fine; backlog itself unchanged.</td></tr>
+      <tr><td>ownership_research_queue (gov)</td><td>Gov</td><td>49,547</td><td class="count">49,547</td><td class="delta-flat">0</td><td>Largest backlog in the system. Untouched.</td></tr>
+      <tr><td>pending_updates (gov)</td><td>Gov</td><td>5,979</td><td class="count">5,979</td><td class="delta-flat">0</td><td>1,876 still 'pending'. Workbench unchanged.</td></tr>
+      <tr><td>duplicate-address clusters (gov)</td><td>Gov</td><td>6,912</td><td class="count">6,912</td><td class="delta-flat">0</td><td>Biggest DQ liability. Unchanged.</td></tr>
+      <tr><td>bd_opportunities (from property flow)</td><td>LCC</td><td>—</td><td class="count">0</td><td class="delta-flat">0</td><td>create_lead deployed & auth-gated, but no leads created yet (expected — needs user clicks).</td></tr>
+      <tr><td>touchpoint_cadence onboarding rows</td><td>LCC</td><td>—</td><td class="count">0</td><td class="delta-flat">0</td><td>initiate_cadence deployed; only 271 'prospecting' rows exist, no onboarding yet.</td></tr>
+      <tr><td>true-owner coverage (dia)</td><td>Dia</td><td>~24% null</td><td class="count">9,451 / 12,400 = 76%</td><td class="delta-flat">~same</td><td>Recorded-owner FK only 2,302 / 12,400 (19%) — the ladder's "not on file" state is the norm.</td></tr>
+      <tr><td>true-owner coverage (gov)</td><td>Gov</td><td>~40%</td><td class="count">7,032 / 17,792 = 40%</td><td class="delta-flat">~same</td><td>60% of gov properties have no resolved true owner.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 3 REGISTER -->
+<section class="panel" id="register">
+  <h2>Re-graded gap register</h2>
+  <p class="lead">Every original gap with its live status. Filter by status or theme.</p>
+  <div class="legend">
+    <span><i class="pill p-ok">LANDED</i> shipped & verified</span>
+    <span><i class="pill p-part">PARTIAL</i> shipped, blocked downstream</span>
+    <span><i class="pill p-open">OPEN</i> unchanged</span>
+    <span><i class="pill p-new">NEW</i> found this sweep</span>
+  </div>
+  <div class="filters">
+    <label>Status: <select id="gst"><option value="">All</option><option>Landed</option><option>Partial</option><option>Open</option><option>New</option></select></label>
+    <label>Theme: <select id="gth"><option value="">All</option><option>Data-flow / wiring</option><option>IA / layout</option><option>Review workflow</option><option>Missing coverage</option><option>Ops health</option><option>Data integrity</option></select></label>
+    <input id="gq" placeholder="search…" style="flex:1;min-width:160px">
+    <span class="src" id="gcount"></span>
+  </div>
+  <table id="gtable">
+    <thead><tr><th>Gap (from 2026-05-30 audit)</th><th>Theme</th><th>Status</th><th>Live evidence</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- 4 NEW -->
+<section class="panel" id="new">
+  <h2>New findings this sweep</h2>
+  <p class="lead">Issues not in the original register, surfaced by the live walkthrough + DB re-count.</p>
+  <table>
+    <thead><tr><th>Finding</th><th>Severity</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td><b>LLC worker leaves rows stuck <span class="mono">in_progress</span></b></td><td><span class="pill p-open">High</span></td><td>50 rows in each of dia + gov queues are stuck <span class="mono">in_progress</span> — a tick marks them, then the handler returns on <span class="mono">no_handler_configured</span> without resetting them. The backoff-to-<span class="mono">deferred</span> path isn't firing because the no-handler branch re-queues before the cap logic on the stuck rows. Net: queue can't even cycle cleanly now.</td></tr>
+      <tr><td><b>Backoff fix deployed but inert</b></td><td><span class="pill p-warn">Med</span></td><td>The <span class="mono">deferred</span> backoff (committed in 62a61bd) shows zero <span class="mono">deferred</span> rows live — because no handler is configured, the cap path that would defer is never reached for the bulk of rows. The fix only helps once a handler exists OR the in_progress reset is added.</td></tr>
+      <tr><td><b>Open <span class="mono">flow_failure</span> alert (SF→LCC backfill)</b></td><td><span class="pill p-warn">Med</span></td><td>Power Automate "SF → LCC Daily Bulk File Backfill" failed at Apply-to-each, 2026-05-31 11:26 UTC. Surfaced only in <span class="mono">lcc_health_alerts</span> — invisible in-app (reinforces the Ops Health gap).</td></tr>
+    </tbody>
+  </table>
+  <div class="callout ok"><b>Also confirmed fixed (not a gap):</b> the priority-band endpoint now routes correctly on Railway (returns 401 auth, not the HTML fallback I caught earlier), the briefing weekend guard is committed, and the field-priority registry is populated. The DialysisProject CMS build failure was an unrelated <span class="mono">mise</span> attestation issue, fix drafted.</div>
+</section>
+
+<!-- 5 NEXT -->
+<section class="panel" id="next">
+  <h2>Where to go next — prioritized</h2>
+  <p class="lead">Ranked by leverage: what unblocks the most value relative to effort.</p>
+  <table>
+    <thead><tr><th>#</th><th>Action</th><th>Why it's the priority</th><th>Effort</th></tr></thead>
+    <tbody>
+      <tr><td><b>1</b></td><td>Configure an LLC/SOS research handler (free SOS-direct adapter, e.g. FL/OH bulk, or OpenCorporates key)</td><td>The single highest-leverage move. The ladder + feed are live but mostly render "unresolved" because 81% of dia / 60% of gov owners aren't resolved. This worker is what fills them. Until it runs, the whole property-intelligence flow shows empty states.</td><td>M–L</td></tr>
+      <tr><td><b>2</b></td><td>Fix the stuck-<span class="mono">in_progress</span> reset + verify the deferred backoff</td><td>Small code fix so the queue cycles cleanly and the cap actually defers. Pairs with #1.</td><td>S</td></tr>
+      <tr><td><b>3</b></td><td>Build the Ops Health surface</td><td>Views already exist (<span class="mono">v_cron_health_summary</span>, <span class="mono">lcc_health_alerts</span>). The open SF-backfill <span class="mono">flow_failure</span> is invisible today. Mostly wiring.</td><td>S–M</td></tr>
+      <tr><td><b>4</b></td><td>Build the Review Console (work-type spine)</td><td>The audit's #1 IA recommendation, still unbuilt. Consolidates the two 6-mode Research tabs + the provenance/merge/listing queues into one place. Biggest UX win, biggest build.</td><td>L</td></tr>
+      <tr><td><b>5</b></td><td>Work the now-governable provenance conflicts (12,468) down</td><td>Registry is populated (8→1,735) so these are finally arbitrable. Needs the conflict-resolution surface (part of the Review Console).</td><td>M</td></tr>
+      <tr><td><b>6</b></td><td>Data-integrity sweep: 6,912 dup addresses, owner dedup, cap-rate bands</td><td>Unchanged liabilities that corrupt comps + break ownership chains.</td><td>M–L</td></tr>
+      <tr><td><b>7</b></td><td>Perf: paginate/virtualize the 5k-row client renders (Gov search 14.6s)</td><td>Confirmed live — Gov search took 14.6s, a screenshot timed out mid-session.</td><td>M</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</main>
+<footer>Northmarq internal reconciliation · palette per cm_brand_tokens.json · 2026-05-31 · Companion: LCC_Audit_Reconciliation_Report.docx · Baseline: LCC_Data_Flow_Audit_Map.html (2026-05-30)</footer>
+
+<script>
+document.querySelectorAll('nav.tabs button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');document.getElementById(b.dataset.t).classList.add('active');
+    window.scrollTo({top:0,behavior:'smooth'});
+  };
+});
+const G=[
+ ['Three fragmented research queues — no unified triage','IA / layout','Open','Gov + Dia each still have a 6-mode Research tab; no Review Console in code or live. (code-verified)'],
+ ['No top-level Ops Health home (failing jobs invisible)','Ops health','Open','No ops-health surface in code. An open SF-backfill flow_failure alert sits unseen in lcc_health_alerts.'],
+ ['Field-priority registry only 8 rules — provenance ungoverned','Data-flow / wiring','Landed','Registry now 1,735 rows (was 8). The governance layer is deployed.'],
+ ['LLC/SOS research worker dead — queue grows, 0 completed','Ops health','Partial','Backoff fix shipped (62a61bd) + cron fires every 30min & succeeds, but still 0 completions and 50 rows stuck in_progress. No handler configured.'],
+ ['Dialysis auto-merge job failing hourly (FK)','Ops health','Open','Not addressed in the PRs; no evidence of fix. Needs the sales_transactions reparent.'],
+ ['Gov hygiene sweep REFRESH MATVIEW on plain views','Ops health','Open','Not addressed. Two steps still error nightly.'],
+ ['Gov ownership research backlog 49,547 with no UI','Missing coverage','Open','Still 49,547, no proportionate surface.'],
+ ['Gov 6,912 duplicate-address clusters','Data integrity','Open','Still 6,912. Unchanged.'],
+ ['18,838 stale identities + write failures unsurfaced','Data-flow / wiring','Open','18,824 now; still no surface.'],
+ ['Provenance conflicts only via conditional detail tab','IA / layout','Partial','Registry populated so conflicts are now governable, but still no dedicated surface — Property Detail tab only.'],
+ ['Merge candidates only behind small Consolidate button','IA / layout','Open','Consolidate button confirmed live on the detail header; still the only path.'],
+ ['Listing verification buried 3 levels deep','IA / layout','Open','Unchanged.'],
+ ['Pending Updates: one Approve button = 3 actions','Review workflow','Open','pending_updates still 5,979 (1,876 pending); workbench unchanged.'],
+ ['Pending Updates: confidence pill on non-field actions','Review workflow','Open','Unchanged.'],
+ ['Pending Updates: record IDs / context never shown','Review workflow','Open','Unchanged.'],
+ ['Sale-Link Resolver used for one reason code only','IA / layout','Open','Not generalized.'],
+ ['Monitor dashboard 100% placeholder data','IA / layout','Open','Placeholder strings still present in gov.js.'],
+ ['Missing success toasts + destructive-action guards','Review workflow','Partial','New ladder/feed actions use showToast; the older gov research saves unchanged.'],
+ ['Large views render all rows client-side → freeze','IA / layout','Open','Confirmed live: Gov search 14.6s, a screenshot timed out mid-session.'],
+ ['Former ownership / cross-vertical history not on contacts','Missing coverage','Open','Unchanged.'],
+ ['Recorded vs assessor owner divergence (561) not surfaced','Missing coverage','Partial','The ladder now renders the gov divergence flag when present — surfaced at the property level (not yet a queue).'],
+ ['SOS officer/manager/agent shows 0 with no prompt','Missing coverage','Partial','Ladder shows manager/agent when present + an unresolved prompt; data still mostly empty pending the worker.'],
+ ['Next-best-research generator live but no UI widget','Missing coverage','Landed','The "What to do about this property" feed renders ranked v_next_best_research rows live.'],
+ ['Rich data unsurfaced: clinic estimates 188K, patient 145K','Missing coverage','Open','Not surfaced in detail.'],
+ ['Gov property_financials 98K + CMBS barely exposed','Missing coverage','Open','Unchanged.'],
+ ['Implausible cap rates pollute market metrics','Data integrity','Open','Unchanged.'],
+ ['Triple-pipeline duplicate sales','Data integrity','Open','Unchanged.'],
+ ['Owner entity dedup gaps break ownership chains','Data integrity','Open','Unchanged.'],
+ ['Salesforce prospecting link 97% missing','Data-flow / wiring','Open','Unchanged.'],
+ ['SAM.gov 0 rows + OPM/USAJobs stale','Data-flow / wiring','Open','Unchanged.'],
+ ['Marketing badge shows total opps, not actionable tasks','IA / layout','Open','Marketing badge still present; unchanged.'],
+ ['Drawer is a flat list of 10','IA / layout','Open','More drawer still a flat grid in index.html. (code-verified)'],
+ ['Inflated "3,000 flagged emails" on Today','Data integrity','Open','Confirmed live: Today still shows "3,000 flagged emails".'],
+ ['Ownership de-anonymization ladder (Phase 4 build)','Missing coverage','Landed','Verified live on Wyandot Dialysis detail: recorded→true ladder, arrow, gap-as-prompt copy, Resolve/Pull buttons.'],
+ ['Prospecting convergence feed (Phase 8 build)','Missing coverage','Landed','Verified live: "What to do about this property" ranked feed with rank tokens + CTAs.'],
+ ['create_lead / initiate_cadence endpoints','Data-flow / wiring','Landed','Deployed & auth-gated (401 live, not 404). No leads created yet (needs user action).'],
+ ['Duplicate weekly deep-dive emails (Fri/Sat/Sun)','Ops health','Landed','Weekend guard + snapshot-demote committed; should_send flag + Mon–Fri recurrence.'],
+ ['priority-band endpoint Railway route parity','Data-flow / wiring','Landed','Returns 401 on Railway (routing to handler), not the HTML fallback.'],
+];
+const stPill={'Landed':'p-ok','Partial':'p-part','Open':'p-open','New':'p-new'};
+function renderG(){
+  const st=gst.value,th=gth.value,q=gq.value.toLowerCase();
+  const order={'Landed':0,'Partial':1,'New':2,'Open':3};
+  const rows=G.filter(r=>(!st||r[2]===st)&&(!th||r[1]===th)&&(!q||r[0].toLowerCase().includes(q)||r[3].toLowerCase().includes(q)));
+  rows.sort((a,b)=>order[a[2]]-order[b[2]]);
+  gtable.querySelector('tbody').innerHTML=rows.map(r=>`<tr>
+    <td><b>${r[0]}</b></td><td>${r[1]}</td>
+    <td><span class="pill ${stPill[r[2]]}">${r[2].toUpperCase()}</span></td>
+    <td>${r[3]}</td></tr>`).join('');
+  gcount.textContent=rows.length+' of '+G.length;
+}
+gst.onchange=gth.onchange=renderG;gq.oninput=renderG;renderG();
+</script>
+</body>
+</html>
