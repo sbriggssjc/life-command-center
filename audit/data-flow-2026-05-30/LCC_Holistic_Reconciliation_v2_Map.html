@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Holistic Reconciliation v2 — 2026-05-31</title>
+<style>
+  :root{
+    --nm-navy:#003DA5;--nm-sky:#62B5E5;--nm-pale:#E0E8F4;--nm-mid:#265AB2;--nm-axis:#6A748C;
+    --nm-text:#191919;--nm-muted:#666;--nm-bg:#fff;--nm-alt:#E7E6E6;
+    --ok:#1B7F4B;--okbg:#E4F3EB;--warn:#B7791F;--warnbg:#FBF1DD;--bad:#B42318;--badbg:#FCE9E7;
+    --part:#265AB2;--partbg:#E0E8F4;--dead:#6B21A8;--deadbg:#F2E8FB;
+    --font:'Calibri Light','Calibri','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--nm-text);background:#F4F6FA;line-height:1.45}
+  header{background:linear-gradient(110deg,var(--nm-navy),var(--nm-mid));color:#fff;padding:22px 28px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:600}
+  header .sub{font-size:13px;opacity:.92}
+  header .meta{font-size:12px;opacity:.8;margin-top:6px}
+  nav.tabs{display:flex;flex-wrap:wrap;gap:2px;background:var(--nm-navy);padding:0 16px}
+  nav.tabs button{background:transparent;border:0;color:#cdddf5;font-family:inherit;font-size:13.5px;padding:11px 16px;cursor:pointer;border-bottom:3px solid transparent}
+  nav.tabs button:hover{color:#fff}
+  nav.tabs button.active{color:#fff;border-bottom-color:var(--nm-sky);font-weight:600}
+  main{max-width:1280px;margin:0 auto;padding:22px}
+  .panel{display:none;animation:fade .2s ease}.panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+  h2{font-size:19px;font-weight:600;color:var(--nm-navy);margin:4px 0 6px;border-bottom:2px solid var(--nm-pale);padding-bottom:6px}
+  p.lead{color:var(--nm-muted);font-size:13.5px;margin:6px 0 14px;max-width:980px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:#fff;border:1px solid var(--nm-alt);border-radius:10px;padding:13px 15px;border-top:4px solid var(--nm-navy)}
+  .card.ok{border-top-color:var(--ok)}.card.part{border-top-color:var(--part)}.card.bad{border-top-color:var(--bad)}.card.warn{border-top-color:var(--warn)}
+  .card .big{font-size:28px;font-weight:700;color:var(--nm-navy);font-variant-numeric:tabular-nums}
+  .card.ok .big{color:var(--ok)}.card.part .big{color:var(--part)}.card.bad .big{color:var(--bad)}.card.warn .big{color:var(--warn)}
+  .card .l{font-size:12px;color:var(--nm-muted);margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid var(--nm-alt);border-radius:8px;overflow:hidden}
+  th{background:var(--nm-navy);color:#fff;text-align:left;padding:8px 10px;font-weight:600;font-size:12px}
+  td{padding:7px 10px;border-top:1px solid var(--nm-alt);vertical-align:top}
+  tr:nth-child(even) td{background:#FAFBFD}
+  .pill{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11px;font-weight:700;white-space:nowrap}
+  .p-ok{background:var(--okbg);color:var(--ok)}.p-part{background:var(--partbg);color:var(--part)}
+  .p-open{background:var(--badbg);color:var(--bad)}.p-warn{background:var(--warnbg);color:var(--warn)}.p-new{background:var(--deadbg);color:var(--dead)}
+  .grade{font-size:22px;font-weight:800}
+  .gA{color:var(--ok)}.gB{color:var(--part)}.gC{color:var(--warn)}.gD{color:var(--bad)}
+  .arrow{color:var(--nm-muted);font-weight:400;font-size:14px}
+  .up{color:var(--ok);font-weight:700}.down{color:var(--bad);font-weight:700}.flat{color:var(--nm-muted)}
+  .callout{background:var(--nm-pale);border-left:4px solid var(--nm-navy);border-radius:6px;padding:11px 14px;margin:12px 0;font-size:13px}
+  .callout.ok{background:var(--okbg);border-left-color:var(--ok)}.callout.bad{background:var(--badbg);border-left-color:var(--bad)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;background:#F0F3F8;border-radius:3px;padding:0 4px}
+  footer{max-width:1280px;margin:10px auto 30px;padding:0 22px;color:var(--nm-muted);font-size:11.5px}
+  @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>LCC Holistic Reconciliation v2 — how close are we now?</h1>
+  <div class="sub">The full audit (5 lenses) re-graded after six UX moves, Phase 4/8, PRs 1–4, and the briefing fix all landed.</div>
+  <div class="meta">2026-05-31 · Evidence: live DB sweep (3 projects) + deployed-code + the build history of this engagement</div>
+</header>
+<nav class="tabs">
+  <button class="active" data-t="head">1 · Headline</button>
+  <button data-t="design">2 · Design Grades (then → now)</button>
+  <button data-t="moved">3 · What Moved</button>
+  <button data-t="regression">4 · Active Regression</button>
+  <button data-t="next">5 · Remaining Work</button>
+</nav>
+<main>
+
+<section class="panel active" id="head">
+  <h2>Headline</h2>
+  <div class="cards">
+    <div class="card ok"><div class="big">11</div><div class="l">Audit items now Landed (was 6)</div></div>
+    <div class="card part"><div class="big">3</div><div class="l">Partial / in progress</div></div>
+    <div class="card bad"><div class="big">17</div><div class="l">Still Open</div></div>
+    <div class="card warn"><div class="big">C+</div><div class="l">Design grade (was C− / D+)</div></div>
+  </div>
+  <div class="callout ok"><b>Real progress, honestly measured.</b> Across this engagement we shipped the property-intelligence payoff (Phase 4 ladder + Phase 8 feed), the data-governance registry (8→1,735 rules), the duplicate-briefing fix, and <b>six UX moves</b> — property-detail re-order, Today hierarchy, drawer grouping, action-oriented empty states, the brand-hierarchy/contrast fix, and the <b>Review Console</b> (the structure audit's #1). The app is materially more cohesive and on-brand than the 2026-05-30 baseline.</div>
+  <div class="callout bad"><b>But one thing got worse, not better.</b> The LLC/SOS research worker is now <b>actively losing data</b>: stuck-<span class="mono">in_progress</span> rows climbed from 50 → <b>214 (dia)</b> / <b>200 (gov)</b> since the last sweep, while <span class="mono">queued</span> counts <i>drop</i> as rows get pulled into the dead state. Zero completions, zero <span class="mono">deferred</span>. This is the single most urgent item — it's not just stalled, it's degrading. Detail in tab 4.</div>
+</section>
+
+<section class="panel" id="design">
+  <h2>Design dimension grades — before → after the six moves</h2>
+  <p class="lead">Re-graded against the live app. The moves measurably lifted four of five dimensions; consistency stays mid-grade pending the full tokenization pass.</p>
+  <table>
+    <thead><tr><th>Dimension</th><th>Was</th><th></th><th>Now</th><th>What changed</th></tr></thead>
+    <tbody>
+      <tr><td>Visual hierarchy</td><td><span class="grade gC">C</span></td><td class="arrow">→</td><td><span class="grade gB">B</span></td><td>Move #5: Today leads with Next Best Action; KPIs demoted to compact strip.</td></tr>
+      <tr><td>Navigation coherence</td><td><span class="grade gD">D</span></td><td class="arrow">→</td><td><span class="grade gB">B−</span></td><td>Move #2a grouped the drawer (Work/Intelligence/Admin); #2b gave Research a single front door via the Review Console.</td></tr>
+      <tr><td>Order vs data flow</td><td><span class="grade gC">C</span></td><td class="arrow">→</td><td><span class="grade gB">B+</span></td><td>Move #1: property detail now Overview → Rent Roll → Operations → Deal History → Ownership → Activity (economics before ownership).</td></tr>
+      <tr><td>Interaction & state</td><td><span class="grade gD">D</span></td><td class="arrow">→</td><td><span class="grade gC">C+</span></td><td>Move #4: reusable action-oriented empty state (applied to ownership). Skeletons + 5k-row virtualization still pending.</td></tr>
+      <tr><td>Component & brand consistency</td><td><span class="grade gD">D</span></td><td class="arrow">→</td><td><span class="grade gC">C</span></td><td>Move #3: NM Blue primary (contrast-correct), Sky accent, Outfit body font. ~1,000 inline styles still to tokenize (#3b).</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">Overall <b>C− / D+ → C+</b>, trending B. The structure and order are now genuinely flow-aligned; the remaining drag is execution consistency (the inline-style debt) and the deferred perf/skeleton work.</div>
+</section>
+
+<section class="panel" id="moved">
+  <h2>What moved (live DB, vs 2026-05-30 baseline)</h2>
+  <table>
+    <thead><tr><th>Metric</th><th>Baseline</th><th>Now</th><th>Delta</th></tr></thead>
+    <tbody>
+      <tr><td>field_source_priority rules</td><td>8</td><td>1,735</td><td class="up">+1,727 ✓ governance deployed</td></tr>
+      <tr><td>provenance actionable conflicts</td><td>12,332</td><td>12,516</td><td class="flat">+184 (now governable, not yet worked)</td></tr>
+      <tr><td>stale identities</td><td>18,838</td><td>18,798</td><td class="flat">−40 (flat)</td></tr>
+      <tr><td>dia LLC in_progress (stuck)</td><td>0 → 50</td><td>214</td><td class="down">+164 ⚠ worsening</td></tr>
+      <tr><td>gov LLC in_progress (stuck)</td><td>0 → 50</td><td>200</td><td class="down">+150 ⚠ worsening</td></tr>
+      <tr><td>LLC completions (dia+gov)</td><td>0</td><td>0</td><td class="down">still 0 — no handler</td></tr>
+      <tr><td>gov ownership_research_queue</td><td>49,547</td><td>49,547</td><td class="flat">0</td></tr>
+      <tr><td>gov pending_updates (pending)</td><td>1,876</td><td>1,876</td><td class="flat">0</td></tr>
+      <tr><td>dia true-owner coverage</td><td>9,451 / 12,400</td><td>9,451 / 12,400 (76%)</td><td class="flat">flat</td></tr>
+      <tr><td>gov true-owner coverage</td><td>7,032 / 17,792</td><td>7,032 / 17,792 (40%)</td><td class="flat">flat</td></tr>
+      <tr><td>bd_opportunities / onboarding cadence</td><td>0 / 0</td><td>0 / 0</td><td class="flat">endpoints live, no user clicks yet</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">The pattern is clear: <b>everything we shipped on the presentation + governance side moved</b>; <b>everything dependent on the dead research worker is flat or worsening</b>. Owner coverage can't improve until the worker resolves owners — which is why it's the top remaining item.</div>
+</section>
+
+<section class="panel" id="regression">
+  <h2>Active regression — the LLC worker is losing data</h2>
+  <p class="lead">This deserves its own tab because it changed character since the last sweep: it's no longer just "stalled," it's actively pulling rows into a dead state.</p>
+  <table>
+    <thead><tr><th>Queue state</th><th>2026-05-30</th><th>last sweep</th><th>now</th><th>direction</th></tr></thead>
+    <tbody>
+      <tr><td>dia queued</td><td>1,258</td><td>1,208</td><td>1,044</td><td class="down">draining ↓</td></tr>
+      <tr><td>dia in_progress (stuck)</td><td>0</td><td>50</td><td>214</td><td class="down">climbing ↑</td></tr>
+      <tr><td>gov queued</td><td>657</td><td>607</td><td>460</td><td class="down">draining ↓</td></tr>
+      <tr><td>gov in_progress (stuck)</td><td>0</td><td>50</td><td>200</td><td class="down">climbing ↑</td></tr>
+      <tr><td>completions</td><td>0</td><td>0</td><td>0</td><td class="flat">none</td></tr>
+    </tbody>
+  </table>
+  <div class="callout bad"><b>Mechanism.</b> Each 30-min tick marks a fresh batch <span class="mono">in_progress</span>, calls the lookup, gets <span class="mono">no_handler_configured</span>, and returns <i>without resetting the rows</i>. The backoff-to-<span class="mono">deferred</span> path never fires because it's gated behind a resolved lookup. So <span class="mono">queued</span> rows migrate to a permanent <span class="mono">in_progress</span> limbo and never come back. At this rate both queues fully convert to dead rows within days.</div>
+  <div class="callout"><b>Two-part fix (the recommended next build):</b> (1) a small reset so a tick that bails on <span class="mono">no_handler_configured</span> returns rows to <span class="mono">queued</span> (or moves them to <span class="mono">deferred</span> after the cap) instead of stranding them <span class="mono">in_progress</span>; (2) configure an actual research handler (free SOS-direct adapter or OpenCorporates key) so lookups resolve and owner coverage finally climbs.</div>
+</section>
+
+<section class="panel" id="next">
+  <h2>Remaining work — prioritized</h2>
+  <table>
+    <thead><tr><th>#</th><th>Item</th><th>Why now</th><th>Effort</th></tr></thead>
+    <tbody>
+      <tr><td><b>1</b></td><td>Fix LLC worker stuck-in_progress reset + configure a research handler</td><td>Active regression (losing rows to limbo) + the dependency that unblocks all owner coverage. Highest urgency AND highest leverage.</td><td>S + M</td></tr>
+      <tr><td><b>2</b></td><td>Review Console lane worklists + generalized resolver</td><td>Shell ships counts + deep-links; the next layer opens each lane's worklist in-console with reason-aware resolve actions. Turns the conflicts/pending/research backlogs into worked-down queues.</td><td>L</td></tr>
+      <tr><td><b>3</b></td><td>Ops Health surface</td><td>The stuck-worker regression was invisible in-app — caught only by a manual DB sweep. An Ops Health page makes this class of problem self-evident. Views exist.</td><td>S–M</td></tr>
+      <tr><td><b>4</b></td><td>Component tokenization (#3b)</td><td>Retire the ~1,000 inline styles into shared classes; lifts consistency C→B and makes every future screen uniform.</td><td>M–L</td></tr>
+      <tr><td><b>5</b></td><td>Virtualize 5k-row renders (#4b)</td><td>The 14.6s Gov-search freeze. Isolated perf refactor.</td><td>M</td></tr>
+      <tr><td><b>6</b></td><td>Data-integrity sweep (6,912 dup addresses, owner dedup, cap-rate bands)</td><td>Unchanged liabilities corrupting comps + ownership chains.</td><td>M–L</td></tr>
+    </tbody>
+  </table>
+  <div class="callout ok"><b>How close are we?</b> On <b>presentation, structure, and flow</b> — the cohesive-design goal you set — we're most of the way: six moves landed, four of five design dimensions up a full grade, the Review Console live. On <b>data completion</b> — the system actually finishing the owner-resolution work it now presents so well — we're blocked on one thing: the research worker. Fix that, and the elegant new surfaces start filling with real resolved owners instead of "not on file."</div>
+</section>
+
+</main>
+<footer>Northmarq holistic reconciliation v2 · 2026-05-31 · Companions: LCC_Audit_Reconciliation_Report.docx (v1), LCC_UX_Design_Audit_*, LCC_Data_Flow_Audit_* · Live counts read-only; will drift.</footer>
+<script>
+document.querySelectorAll('nav.tabs button').forEach(b=>{b.onclick=()=>{
+ document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+ document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+ b.classList.add('active');document.getElementById(b.dataset.t).classList.add('active');
+ window.scrollTo({top:0,behavior:'smooth'});};});
+</script>
+</body>
+</html>
