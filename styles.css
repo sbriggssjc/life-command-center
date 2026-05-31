@@ -1994,3 +1994,11 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .prospect-cta,.prospect-cta-primary{border:none;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:600;cursor:pointer}
 .prospect-cta{background:var(--s3);color:var(--text);border:1px solid var(--border)}
 .prospect-cta-primary{background:var(--accent);color:#fff}
+
+/* UX move #2a (2026-05-31): group the More drawer into labeled sections
+   (Work & Review / Intelligence / Personal & Admin) so priority + grouping are
+   signaled instead of a flat 10-item list. Additive classes only. */
+.more-drawer-section { margin-bottom: 14px; }
+.more-drawer-section:last-child { margin-bottom: 0; }
+.more-drawer-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--text3); margin: 0 0 8px 2px; }
