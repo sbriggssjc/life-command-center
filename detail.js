@@ -135,7 +135,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // Render tab bar — highlight initialTab if provided, else first tab.
   // Tabs restructured to match broker workflow (2026-04-15).
   // Legacy tab names still resolve to the correct new tab via _udMapLegacyTab().
-  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Ownership & CRM', 'Deal History', 'Activity Log'];
+  // Tab order follows the property-intelligence lifecycle (2026-05-31, UX move #1):
+  // identity -> tenancy -> operation -> market activity/value -> OWNERSHIP (the
+  // de-anonymization climax + prospecting feed) -> activity. Ownership & CRM moved
+  // after Deal History so the user understands the economics before resolving who
+  // owns it. Dispatch is a name-keyed switch (_udRenderTab), so order is display-only.
+  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership & CRM', 'Activity Log'];
   const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
   const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
