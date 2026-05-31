@@ -109,14 +109,6 @@
         <div class="greeting-date" id="greetingDate"></div>
         <div class="home-layout">
           <div class="home-main">
-            <!-- Stats -->
-            <div class="widget-grid" id="homeStats">
-              <div class="stat-card clickable" onclick="navTo('pageMyWork')" title="Promoted / assigned action items only — does not include raw flagged emails. See the Flagged Emails stat (next card) for the triage queue."><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Action Items</div></div>
-              <div class="stat-card clickable" onclick="navTo('pageMessages')"><div class="stat-label">Flagged Emails</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Outlook</div></div>
-              <div class="stat-card clickable" onclick="navTo('pageCal')"><div class="stat-label">Today's Events</div><div class="stat-value" id="statEvents">-</div><div class="stat-sub">Calendar</div></div>
-              <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
-            </div>
-
             <!-- Next Best Action — cross-domain prioritized broker queue (Item #4 Phase C, 2026-05-17) -->
             <div class="widget" id="nextBestActionWidget">
               <div class="widget-title">
@@ -131,6 +123,14 @@
                 </div>
               </div>
               <div id="nextBestActionContent"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
+
+            <!-- Stats -->
+            <div class="widget-grid" id="homeStats">
+              <div class="stat-card clickable" onclick="navTo('pageMyWork')" title="Promoted / assigned action items only — does not include raw flagged emails. See the Flagged Emails stat (next card) for the triage queue."><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Action Items</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageMessages')"><div class="stat-label">Flagged Emails</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Outlook</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageCal')"><div class="stat-label">Today's Events</div><div class="stat-value" id="statEvents">-</div><div class="stat-sub">Calendar</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
             </div>
 
             <!-- Weather -->

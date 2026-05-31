@@ -1129,6 +1129,16 @@ body.compact .greeting { font-size: 18px; }
 /* Home layout — mobile-first stacking, sidebar below main */
 .home-layout { display: flex; flex-direction: column; gap: 12px; }
 .home-main { min-width: 0; }
+/* UX move #5 (2026-05-31): Today "do this first" hierarchy. The Next Best
+   Action widget now leads; the KPI cards are demoted to a compact 4-up strip
+   (scoped to #homeStats so the shared .widget-grid/.stat-card styles used
+   elsewhere are untouched). Lower visual weight = clear primary action. */
+#homeStats { grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+#homeStats .stat-card { padding: 9px 11px; background: var(--s1); border: 1px solid var(--border); }
+#homeStats .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--text3); }
+#homeStats .stat-value { font-size: 18px; font-weight: 700; line-height: 1.1; }
+#homeStats .stat-sub { font-size: 10px; color: var(--text3); }
+@media (max-width: 640px) { #homeStats { grid-template-columns: repeat(2, 1fr); } }
 .home-sidebar { min-width: 0; }
 
 /* Clickable stat cards */
