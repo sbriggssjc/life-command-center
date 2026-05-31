@@ -690,7 +690,12 @@ function buildChartConfig(chart, brand) {
             borderWidth: 2.5,
           }],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
+        // R66 — dia tightened to 5.75-8.5% (2026-05-31 export feedback);
+        // gov stays on CAP_RATE_RANGE (5-10%).
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisRange: (chart.vertical === 'dialysis' ? { min: 0.0575, max: 0.085 } : CAP_RATE_RANGE),
+        }),
       };
     }
 
@@ -869,9 +874,10 @@ function buildChartConfig(chart, brand) {
         data: { labels, datasets },
         // Round 21 — y range widened 5-10% → 4-11% (gov cap_less5
         // tops at 10.06%, occasionally clipping at the prior 10% cap).
+        // R66 — gov-only template; tightened to 5.5-8.5% (2026-05-31 export feedback).
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange:  { min: 0.04, max: 0.11 },
+          yAxisRange:  { min: 0.055, max: 0.085 },
         }),
       };
     }
@@ -897,12 +903,17 @@ function buildChartConfig(chart, brand) {
           ],
         },
         options: (() => {
+          // R66 — dia tightened (2026-05-31 export feedback): left DOM days
+          // 75-300, right % of ask 70-100%. Gov keeps PCT_OF_ASK_RANGE and
+          // auto-scaled left axis.
+          const isDia = chart.vertical === 'dialysis';
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_INTEGER,
             yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+            yLeftRange:   (isDia ? { min: 75, max: 300 } : undefined),
             // PCT_OF_ASK_RANGE pinned to 0.84-0.96 (matches dialysis
             // PDF p.33 + gov PDF p.20 right-axis labels).
-            yRightRange:  PCT_OF_ASK_RANGE,
+            yRightRange:  (isDia ? { min: 0.70, max: 1.00 } : PCT_OF_ASK_RANGE),
           });
           // Annotations: peak/trough/last on % of Ask line.
           // Round 17 — pin annotations to the right-axis ('y1') so
@@ -1028,9 +1039,10 @@ function buildChartConfig(chart, brand) {
       // User: "We also have a y-axis issue with the cap rate lines not
       // displaying in view on the chart" (dia) and "Y-axis does not
       // allow the data to be in view on the chart" (gov).
+      // R66 — tightened per 2026-05-31 export feedback: dia 5-9%, gov 6-9%.
       const yLeftRange  = govLike
-        ? { min: 0.055, max: 0.095 }      // gov: tightened 5.5-9.5% (data 6.05-8.78%)
-        : { min: 0.0475, max: 0.0925 };   // dia: widened to 4.75-9.25% (long-term max 8.87%)
+        ? { min: 0.06, max: 0.09 }        // gov: 6-9%
+        : { min: 0.05, max: 0.09 };       // dia: 5-9%
       // Round 17 — tightened gov price-change axis 0.14 → 0.08. Actual
       // gov data tops at ~7% TTM (was specced 0-14% from the dialysis
       // p.35 deck assumption). User: "Sentiment needs the y-axis
@@ -1096,8 +1108,13 @@ function buildChartConfig(chart, brand) {
         .map(v => v == null ? 0 : Math.abs(Number(v)))
         .reduce((a, b) => Math.max(a, b), 0);
       const yoyMax = Math.max(0.05, Math.ceil(yoyMag * 11) / 10);  // round up to nearest 10%
+      // R66 — pin the index (left) axis per vertical so the line movement is
+      // legible (2026-05-31 export feedback): dia 75-250, gov 210-350 ($/SF
+      // dollar axis on gov, not a percent).
+      const govLikeVi = chart.vertical === 'gov' || chart.vertical === 'government_leased';
       const opts = comboOpts({
         yLeftFormat:  AXIS_FORMAT_INTEGER,
+        yLeftRange:   (govLikeVi ? { min: 210, max: 350 } : { min: 75, max: 250 }),
         yRightFormat: AXIS_FORMAT_PERCENT_1DP,
         yRightRange:  { min: -yoyMax, max: yoyMax },
       });
@@ -1237,7 +1254,14 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_1DP }),
+        // R66 — pin y-axis per vertical (2026-05-31 export feedback):
+        // dia 4.5-11%, gov 7.5-10%.
+        options: commonOpts({
+          yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
+          yAxisRange: ((chart.vertical === 'gov' || chart.vertical === 'government_leased')
+            ? { min: 0.075, max: 0.10 }
+            : { min: 0.045, max: 0.11 }),
+        }),
       };
     }
 
@@ -2485,12 +2509,22 @@ function buildChartConfig(chart, brand) {
           borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 1.5, borderDash: [3,3] },
       ];
+      // R66 — per-template + per-vertical ranges (2026-05-31 export
+      // feedback). sold_cap dia 5-9.75% / gov 6-11%; asking_cap dia-only
+      // 5-8%. Default keeps 4-11% for any un-flagged combination.
+      const govLikeDot = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+      let dotRange = { min: 0.04, max: 0.11 };
+      if (chart.chart_template_id === 'sold_cap_by_term_dot_plot') {
+        dotRange = govLikeDot ? { min: 0.06, max: 0.11 } : { min: 0.05, max: 0.0975 };
+      } else if (chart.chart_template_id === 'asking_cap_by_term_dot_plot') {
+        dotRange = { min: 0.05, max: 0.08 };  // dia-only template
+      }
       return {
         type: 'line',
         data: { labels, datasets },
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange:  { min: 0.04, max: 0.11 },
+          yAxisRange:  dotRange,
         }),
       };
     }

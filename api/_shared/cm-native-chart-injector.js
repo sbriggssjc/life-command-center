@@ -2422,8 +2422,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     // P3 — simple single-series line + bar charts
     case 'cap_rate_ttm_by_quarter':
+      // R66 — dia tightened to 5.75-8.5% (2026-05-31 export feedback);
+      // gov stays on shared CAP_RATE_RANGE (5-10%).
       return singleSeries('line', 'ttm_weighted_cap_rate', navy, {
-        yAxisRange: CAP_RATE_RANGE,           // 5-10% — matches renderer line ~693
+        yAxisRange: (vertical === 'dialysis' ? { min: 0.0575, max: 0.085 } : CAP_RATE_RANGE),
         valAxNumFmt: VAL_FMT_PERCENT_2DP,
       });
     case 'transaction_count_ttm':
@@ -2686,6 +2688,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         .map(s => ({ ...s, col: findCol(s.key) }))
         .filter(s => s.col);
       if (series.length === 0) return null;
+      // R66 — per-template + per-vertical cohort ranges (2026-05-31 export
+      // feedback). sold_cap dia 5-9.75% / gov 6-11%; asking_cap dia-only
+      // 5-8%; cap_rate_by_lease_term gov-only 5.5-8.5%. Default keeps
+      // CAP_RATE_COHORT_RANGE (4-11%) for any un-flagged combination.
+      let cohortRange = CAP_RATE_COHORT_RANGE;
+      if (chart_template_id === 'sold_cap_by_term_dot_plot') {
+        cohortRange = (vertical === 'dialysis')
+          ? { min: 0.05, max: 0.0975 }
+          : { min: 0.06, max: 0.11 };
+      } else if (chart_template_id === 'asking_cap_by_term_dot_plot') {
+        cohortRange = { min: 0.05, max: 0.08 };   // dia-only template
+      } else if (chart_template_id === 'cap_rate_by_lease_term') {
+        cohortRange = { min: 0.055, max: 0.085 }; // gov-only template
+      }
       return {
         tabName,
         spec: {
@@ -2694,7 +2710,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           // R37 P2 — 4-line cohort caps: 4-11% pin (renderer line ~874)
-          yAxisRange: CAP_RATE_COHORT_RANGE,
+          yAxisRange: cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: series.map(s => ({
             titleCol: s.col, titleRow: headerRow,
@@ -2765,8 +2781,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           // R37 P2 — left integer days, right percent 85-105% (renderer ~905)
+          // R66 — dia tightened (2026-05-31 export feedback): left DOM days
+          // 75-300, right % of ask 70-100%. Gov keeps PCT_OF_ASK_RANGE and
+          // auto-scaled left axis.
           yLeftNumFmt:  VAL_FMT_INTEGER,
-          yRightRange:  PCT_OF_ASK_RANGE,
+          yLeftRange:   (vertical === 'dialysis' ? { min: 75, max: 300 } : undefined),
+          yRightRange:  (vertical === 'dialysis' ? { min: 0.70, max: 1.00 } : PCT_OF_ASK_RANGE),
           yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
             { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky,
@@ -3274,7 +3294,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 2026-05-29 - pin the index (left) axis to its data band so the
           // line's movement is visible (auto-scale from 0 flattened it).
           // gov ~198-310, dia ~76-215.
-          yLeftRange: (vertical === 'gov' ? { min: 180, max: 320 } : { min: 60, max: 230 }),
+          // R66 — tightened per 2026-05-31 export feedback: dia 75-250,
+          // gov 210-350 ($/SF dollar axis on gov, not a percent).
+          yLeftRange: (vertical === 'gov' ? { min: 210, max: 350 } : { min: 75, max: 250 }),
           // R37 P2 — formats: LEFT integer (valuation index 200-400),
           // RIGHT percent (YoY %). Renderer auto-pins right to ±yoyMax
           // dynamically per dataset; native leaves auto-scale so the
@@ -3432,6 +3454,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
           // R37 P2 — percent 1dp (renderer line ~1240)
+          // R66 — pin y-axis per vertical (2026-05-31 export feedback):
+          // dia 4.5-11%, gov 7.5-10%.
+          yAxisRange: (vertical === 'gov' ? { min: 0.075, max: 0.10 } : { min: 0.045, max: 0.11 }),
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
@@ -3648,7 +3673,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 2026-05-29 - pin the cap-rate (left) axis per vertical so the
           // asking-cap line movement is legible (matches the PNG renderer's
           // pins: dia 4.75-9.25%, gov 5.5-9.5%).
-          yLeftRange: (vertical === 'gov' ? { min: 0.055, max: 0.095 } : { min: 0.0475, max: 0.0925 }),
+          // R66 — tightened per 2026-05-31 export feedback: dia 5-9%, gov 6-9%.
+          yLeftRange: (vertical === 'gov' ? { min: 0.06, max: 0.09 } : { min: 0.05, max: 0.09 }),
           // R37 P2 — left = cap rate (% 2dp), right = price change % (% 0dp).
           // Renderer pins per-vertical (dia 4.75-9.25% left, 0-70% right;
           // gov 5.5-9.5% left, 0-8% right). The spec builder doesn't have
