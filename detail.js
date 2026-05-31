@@ -553,23 +553,23 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
 /** Key fields bar under the header */
 function _udKeyFields(db, prop, own) {
   let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
-  if (prop.address) html += `<div><span style="color:var(--text3)">Address:</span> <span style="color:var(--text)">${esc(prop.address)}</span></div>`;
-  if (prop.lease_number) html += `<div><span style="color:var(--text3)">Lease:</span> <span style="color:var(--text);font-family:monospace">${esc(prop.lease_number)}</span></div>`;
+  if (prop.address) html += `<div><span class="t-muted3">Address:</span> <span class="t-body">${esc(prop.address)}</span></div>`;
+  if (prop.lease_number) html += `<div><span class="t-muted3">Lease:</span> <span style="color:var(--text);font-family:monospace">${esc(prop.lease_number)}</span></div>`;
   if (db === 'dia') {
     // Dialysis: show operator, not agency — check property data then fallback record
     const fb = _udCache?.fallback || {};
     const opName = prop.operator_name || fb.operator_name || fb.chain_organization || prop.facility_name || fb.facility_name || '';
-    if (opName) html += `<div><span style="color:var(--text3)">Operator:</span> <span style="color:var(--text)">${esc(opName)}</span></div>`;
+    if (opName) html += `<div><span class="t-muted3">Operator:</span> <span class="t-body">${esc(opName)}</span></div>`;
   } else {
-    if (prop.agency_short || prop.agency_full) html += `<div><span style="color:var(--text3)">Agency:</span> <span style="color:var(--text)">${esc(prop.agency_short || prop.agency_full)}</span></div>`;
+    if (prop.agency_short || prop.agency_full) html += `<div><span class="t-muted3">Agency:</span> <span class="t-body">${esc(prop.agency_short || prop.agency_full)}</span></div>`;
   }
   if (own) {
     // Prefer canonical names (Layer H.2.a) so casing/SPE variants collapse to one consistent label.
     const ownerName = own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner || '';
-    if (ownerName) html += `<div><span style="color:var(--text3)">Owner:</span> <span style="color:var(--text)">${esc(ownerName)}</span></div>`;
+    if (ownerName) html += `<div><span class="t-muted3">Owner:</span> <span class="t-body">${esc(ownerName)}</span></div>`;
   }
-  if (prop.estimated_value) html += `<div><span style="color:var(--text3)">Est. Value:</span> <span style="color:var(--green);font-weight:600">${fmt(prop.estimated_value)}</span></div>`;
-  if (prop.deal_grade) html += `<div><span style="color:var(--text3)">Grade:</span> <span style="color:var(--accent);font-weight:600">${esc(prop.deal_grade)}</span></div>`;
+  if (prop.estimated_value) html += `<div><span class="t-muted3">Est. Value:</span> <span style="color:var(--green);font-weight:600">${fmt(prop.estimated_value)}</span></div>`;
+  if (prop.deal_grade) html += `<div><span class="t-muted3">Grade:</span> <span style="color:var(--accent);font-weight:600">${esc(prop.deal_grade)}</span></div>`;
   html += '</div>';
   return html;
 }
@@ -916,7 +916,7 @@ function _udRenderMatchFacilityCard() {
     const topPct = d.top_score != null ? Math.round(d.top_score * 100) + '%' : '—';
     html += '<div style="margin-top:8px;padding:6px 10px;background:rgba(148,163,184,0.08);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text3)">';
     html += 'Scanned ' + d.candidate_count + ' nearby CMS facility record' + (d.candidate_count === 1 ? '' : 's') + '. ';
-    html += 'Best score: <strong style="color:var(--text2)">' + topPct + '</strong> ';
+    html += 'Best score: <strong class="t-muted2">' + topPct + '</strong> ';
     html += '(needs ≥ ' + Math.round((d.confident_threshold || 0.8) * 100) + '% to auto-link).';
     html += '</div>';
   }
@@ -2338,15 +2338,15 @@ function _udTabOverview() {
     extra += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-loan\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Loan / Debt</div>';
     extra += '<div class="intel-loan" style="display:none">';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Lender</label>';
+    extra += '<div><label class="t-label">Lender</label>';
     extra += '<input id="intelLender" type="text" placeholder="Bank or fund name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Amount ($)</label>';
+    extra += '<div><label class="t-label">Loan Amount ($)</label>';
     extra += '<input id="intelLoanAmount" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '</div>';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Interest Rate (%)</label>';
+    extra += '<div><label class="t-label">Interest Rate (%)</label>';
     extra += '<input id="intelInterestRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Type</label>';
+    extra += '<div><label class="t-label">Loan Type</label>';
     extra += '<select id="intelLoanType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
     extra += '<option value="">—</option>';
     ['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Other'].forEach(t => {
@@ -2355,15 +2355,15 @@ function _udTabOverview() {
     extra += '</select></div>';
     extra += '</div>';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Origination Date</label>';
+    extra += '<div><label class="t-label">Origination Date</label>';
     extra += '<input id="intelOrigDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Maturity Date</label>';
+    extra += '<div><label class="t-label">Maturity Date</label>';
     extra += '<input id="intelMatDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '</div>';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Amortization (years)</label>';
+    extra += '<div><label class="t-label">Amortization (years)</label>';
     extra += '<input id="intelAmortization" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Recourse</label>';
+    extra += '<div><label class="t-label">Recourse</label>';
     extra += '<select id="intelRecourse" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
     extra += '<option value="">—</option>';
     ['Recourse', 'Non-Recourse', 'Partial'].forEach(t => {
@@ -2371,7 +2371,7 @@ function _udTabOverview() {
     });
     extra += '</select></div>';
     extra += '</div>';
-    extra += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">LTV (%)</label>';
+    extra += '<div style="margin-top:8px"><label class="t-label">LTV (%)</label>';
     extra += '<input id="intelLTV" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '<button onclick="_udBtnGuard(this, _intelSaveLoan)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Loan Info</button>';
     extra += '</div></div>';
@@ -2381,17 +2381,17 @@ function _udTabOverview() {
     extra += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-cashflow\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Cash Flow / Valuation</div>';
     extra += '<div class="intel-cashflow" style="display:none">';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Annual Rent / NOI ($)</label>';
+    extra += '<div><label class="t-label">Annual Rent / NOI ($)</label>';
     extra += '<input id="intelAnnualRent" type="number" placeholder="0" value="' + esc(_ovPrefillRent) + '" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Rent Per SF ($/SF)</label>';
+    extra += '<div><label class="t-label">Rent Per SF ($/SF)</label>';
     extra += '<input id="intelRentPerSF" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '</div>';
-    extra += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Expense Type (NNN, Gross, etc.)</label>';
+    extra += '<div style="margin-top:8px"><label class="t-label">Expense Type (NNN, Gross, etc.)</label>';
     extra += '<input id="intelExpenseType" type="text" placeholder="e.g., NNN, Modified Gross" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Estimated Value ($)</label>';
+    extra += '<div><label class="t-label">Estimated Value ($)</label>';
     extra += '<input id="intelEstValue" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Current Cap Rate (%)</label>';
+    extra += '<div><label class="t-label">Current Cap Rate (%)</label>';
     extra += '<input id="intelCurrentCapRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '</div>';
     extra += '<button onclick="_udBtnGuard(this, _intelSaveCashFlow)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Cash Flow</button>';
@@ -2668,7 +2668,7 @@ function _udTabRentRoll() {
     }
     html += '</div>';
     if (activeTerm.guarantor || em.guarantor) {
-      html += `<div style="font-size:11px;color:var(--text3)">Guarantor: <span style="color:var(--text)">${esc(activeTerm.guarantor || em.guarantor)}</span></div>`;
+      html += `<div class="t-meta3">Guarantor: <span class="t-body">${esc(activeTerm.guarantor || em.guarantor)}</span></div>`;
     }
     html += '</div>';
 
@@ -2805,7 +2805,7 @@ function _udTabRentRoll() {
           html += `<div style="font-size:12px;padding:4px 0;color:var(--text)">`;
           html += `<span style="color:var(--accent);font-weight:600">#${opt.option_number || '?'}</span> `;
           html += `${esc(optType)}${optYears ? ' · ' + esc(optYears) : ''}`;
-          if (optTerms) html += ` <span style="color:var(--text3)">· ${esc(optTerms)}</span>`;
+          if (optTerms) html += ` <span class="t-muted3">· ${esc(optTerms)}</span>`;
           if (optExercised) html += `<span style="color:var(--green);font-size:11px">${esc(optExercised)}</span>`;
           html += '</div>';
         });
@@ -2886,7 +2886,7 @@ function _udGroupLeasesByTenant(leases) {
 
 /** Build a clickable tenant link that opens the TenantDrawer. */
 function _udTenantLink(tenantName, leaseRow, em) {
-  if (!tenantName) return '<span style="color:var(--text3)">\u2014</span>';
+  if (!tenantName) return '<span class="t-muted3">\u2014</span>';
   const ctx = {
     name: tenantName,
     tenant_id: leaseRow?.tenant_id || em?.tenant_id || null,
@@ -2904,7 +2904,7 @@ function _udTenantLink(tenantName, leaseRow, em) {
 
 /** Build a clickable broker link that opens the BrokerDrawer. */
 function _udBrokerLink(brokerName, record) {
-  if (!brokerName) return '<span style="color:var(--text3)">\u2014</span>';
+  if (!brokerName) return '<span class="t-muted3">\u2014</span>';
   const ctx = {
     name: brokerName,
     broker_firm: record?.broker_firm || null,
@@ -3952,7 +3952,7 @@ function _udTabOperations() {
     h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;font-size:13px">';
     const row = (label, val) =>
       `<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:2px">${esc(label)}</div>` +
-      `<div style="color:var(--text)">${val || '<span style=\"color:var(--text3)\">—</span>'}</div></div>`;
+      `<div class="t-body">${val || '<span style=\"color:var(--text3)\">—</span>'}</div></div>`;
     h += row('Agency (Short)', agency ? esc(agency) : null);
     h += row('Agency (Full)', agencyFull ? esc(agencyFull) : null);
     h += row('Cabinet Department', cabinetDept ? esc(cabinetDept) : null);
@@ -4051,10 +4051,10 @@ function _udTabOperations() {
       timeline.forEach(t => {
         h += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">';
         h += `<span style="font-weight:700;color:var(--text);font-family:'JetBrains Mono',monospace;min-width:80px">${esc(t.lease_number || '—')}</span>`;
-        if (t.current_lessor_name)       h += `<span style="color:var(--text)">${esc(t.current_lessor_name)}</span>`;
+        if (t.current_lessor_name)       h += `<span class="t-body">${esc(t.current_lessor_name)}</span>`;
         if (t.current_annual_rent)       h += `<span style="color:var(--green)">${fmtMoney(t.current_annual_rent)}</span>`;
-        if (t.current_lease_rsf)         h += `<span style="color:var(--text2)">${fmtNum(t.current_lease_rsf)} RSF</span>`;
-        if (t.current_expiration_date)   h += `<span style="color:var(--text2)">exp. ${esc(_fmtDate(t.current_expiration_date))}</span>`;
+        if (t.current_lease_rsf)         h += `<span class="t-muted2">${fmtNum(t.current_lease_rsf)} RSF</span>`;
+        if (t.current_expiration_date)   h += `<span class="t-muted2">exp. ${esc(_fmtDate(t.current_expiration_date))}</span>`;
         if (t.extension_count > 0)       h += `<span style="color:#f59e0b;font-size:11px">${t.extension_count} extension${t.extension_count > 1 ? 's' : ''}</span>`;
         if (t.landlord_change_count > 0) h += `<span style="color:#8b5cf6;font-size:11px">${t.landlord_change_count} landlord change${t.landlord_change_count > 1 ? 's' : ''}</span>`;
         if (t.bridge_lease_flag)         h += `<span style="color:#ef4444;font-size:11px;font-weight:600">BRIDGE LEASE</span>`;
@@ -4189,9 +4189,9 @@ function _udTabOperations() {
     }[cmsLink.match_method] || cmsLink.match_method;
     html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;font-size:11px">';
     html += '<span style="color:#3b82f6;font-weight:600">&#x1F517; CMS link:</span>';
-    html += '<span style="color:var(--text)">CCN ' + esc(String(cmsLink.medicare_id)) + '</span>';
-    html += '<span style="color:var(--text3)">·</span>';
-    html += '<span style="color:var(--text2)">' + esc(methodLabel) + (cmsLink.match_score != null ? ' · ' + pct + ' confidence' : '') + '</span>';
+    html += '<span class="t-body">CCN ' + esc(String(cmsLink.medicare_id)) + '</span>';
+    html += '<span class="t-muted3">·</span>';
+    html += '<span class="t-muted2">' + esc(methodLabel) + (cmsLink.match_score != null ? ' · ' + pct + ' confidence' : '') + '</span>';
     html += '<span style="flex:1"></span>';
     html += '<button onclick="_udCmsClearLink()" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer">Change</button>';
     html += '</div>';
@@ -4597,9 +4597,9 @@ function _udTabOperations() {
     html += '<div style="margin-top:14px;padding:10px 12px;background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:8px">';
     html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (isLargeGap ? '&#x26A0;&#xFE0F;' : '&#x1F4CA;') + ' Modeled vs. HCRIS Actual (FY' + (costRpt.fiscal_year || '?') + ')</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
-    html += '<div style="color:var(--text3)">Modeled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
-    html += '<div style="color:var(--text3)">HCRIS Actual</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
-    html += '<div style="color:var(--text3)">Variance</div><div style="text-align:right;font-weight:600;color:' + varColor + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
+    html += '<div class="t-muted3">Modeled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
+    html += '<div class="t-muted3">HCRIS Actual</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
+    html += '<div class="t-muted3">Variance</div><div style="text-align:right;font-weight:600;color:' + varColor + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
     html += '</div>';
     if (isLargeGap) {
       // Determine which source is more trustworthy
@@ -4642,7 +4642,7 @@ function _udTabOperations() {
   const trendConf = trends.trend_confidence || '';
   html += '<div style="display:flex;gap:8px;align-items:center;margin:10px 0">';
   html += '<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;background:' + trendColor + '22;color:' + trendColor + '">' + trendArrowIcon + ' ' + esc(trendLabel) + '</span>';
-  if (trendConf) html += '<span style="font-size:11px;color:var(--text3)">Confidence: ' + esc(String(trendConf)) + '</span>';
+  if (trendConf) html += '<span class="t-meta3">Confidence: ' + esc(String(trendConf)) + '</span>';
   html += '</div>';
 
   html += '<div class="detail-grid">';
@@ -4746,7 +4746,7 @@ function _udTabOperations() {
           return _fmt12h(open) + ' – ' + _fmt12h(close);
         }).join(', ');
         html += '<div style="color:var(--text2);font-weight:' + fontWeight + '">' + label + todayDot + '</div>';
-        html += '<div style="color:var(--text)">' + formatted + '</div>';
+        html += '<div class="t-body">' + formatted + '</div>';
       }
     });
     html += '</div>';
@@ -4759,10 +4759,10 @@ function _udTabOperations() {
       html += '<span>' + (hoursInfo.late_shift ? '&#x1F319; Late shift offered' : 'No late shift') + '</span>';
     }
     if (hoursInfo.hours_source) {
-      html += '<span style="color:var(--text3)">Source: ' + esc(hoursInfo.hours_source) + '</span>';
+      html += '<span class="t-muted3">Source: ' + esc(hoursInfo.hours_source) + '</span>';
     }
     if (hoursInfo.hours_last_checked_at) {
-      html += '<span style="color:var(--text3)">Updated: ' + _fmtDate(hoursInfo.hours_last_checked_at) + '</span>';
+      html += '<span class="t-muted3">Updated: ' + _fmtDate(hoursInfo.hours_last_checked_at) + '</span>';
     }
     html += '</div>';
   } else {
@@ -4813,7 +4813,7 @@ function _udTabOperations() {
   html += '</div>';
 
   // Component breakdown
-  html += '<div style="font-size:11px;color:var(--text3)">';
+  html += '<div class="t-meta3">';
   const riskComponents = [
     { label: 'Patient Trend', value: riskScores.patientTrend, weight: '30%' },
     { label: 'Financial', value: riskScores.financial, weight: '25%' },
@@ -4850,7 +4850,7 @@ function _udTabOperations() {
     });
     const opSummary = Object.entries(opCounts).sort((a, b) => b[1] - a[1]).map(([op, ct]) => op + ' (' + ct + ')').join(', ');
     html += '<div style="font-size:12px;color:var(--text3);margin-bottom:10px">' + competitors.length + ' competing facilities &nbsp;\u00B7&nbsp; ' + totalChairs + ' total chairs &nbsp;\u00B7&nbsp; ' + fmtN(totalPts) + ' patients</div>';
-    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px"><strong style="color:var(--text2)">Operators:</strong> ' + opSummary + '</div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px"><strong class="t-muted2">Operators:</strong> ' + opSummary + '</div>';
     // Table
     html += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">';
     html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
@@ -4908,23 +4908,23 @@ function _udTabOperations() {
 
   html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer blended rate (~$357/tx): Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). Chair-based model (chairs × 3 shifts × 5.5 days × 52 wks × 65% utilization) is primary where station data is available (validated median 1.00x vs TTM, n=7,115). Concurrent-ratio model (annual patients × 0.245 × 156 tx/yr) used as fallback. TTM-reported and 10-K filing data preferred over modeled estimates.</p>';
 
-  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Risk Score Components:</strong></p>';
-  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Patient Trend (30%):</strong> Measures YoY patient growth/decline and regression trend direction. Declining census signals potential revenue erosion and operator dissatisfaction.</p>';
-  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Financial Health (25%):</strong> Based on operating margin. Margins above 15% are healthy; below 3% indicate financial stress and higher risk of closure or relocation.</p>';
-  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Quality Metrics (20%):</strong> CMS star rating (1-5). Lower ratings correlate with regulatory scrutiny, patient attrition, and potential operator exit.</p>';
-  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Lease Expiration (15%):</strong> Remaining months on lease. Shorter terms increase vacancy risk and reduce investor certainty.</p>';
-  html += '<p style="margin:0 0 8px;padding-left:8px"><strong style="color:var(--text2)">Market Conditions (10%):</strong> Uses capacity utilization as a demand proxy. High utilization (85%+) signals strong market demand; low utilization suggests oversupply.</p>';
+  html += '<p style="margin:0 0 8px"><strong class="t-muted2">Risk Score Components:</strong></p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong class="t-muted2">Patient Trend (30%):</strong> Measures YoY patient growth/decline and regression trend direction. Declining census signals potential revenue erosion and operator dissatisfaction.</p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong class="t-muted2">Financial Health (25%):</strong> Based on operating margin. Margins above 15% are healthy; below 3% indicate financial stress and higher risk of closure or relocation.</p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong class="t-muted2">Quality Metrics (20%):</strong> CMS star rating (1-5). Lower ratings correlate with regulatory scrutiny, patient attrition, and potential operator exit.</p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong class="t-muted2">Lease Expiration (15%):</strong> Remaining months on lease. Shorter terms increase vacancy risk and reduce investor certainty.</p>';
+  html += '<p style="margin:0 0 8px;padding-left:8px"><strong class="t-muted2">Market Conditions (10%):</strong> Uses capacity utilization as a demand proxy. High utilization (85%+) signals strong market demand; low utilization suggests oversupply.</p>';
 
-  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Quality Benchmarks:</strong> Mortality, hospitalization, and readmission rates are per 100 patient-years. Figures are compared against national CMS Dialysis Facility Compare averages (mortality ~15, hospitalization ~150, readmission ~25). Lower is better for all three metrics.</p>';
+  html += '<p style="margin:0 0 8px"><strong class="t-muted2">Quality Benchmarks:</strong> Mortality, hospitalization, and readmission rates are per 100 patient-years. Figures are compared against national CMS Dialysis Facility Compare averages (mortality ~15, hospitalization ~150, readmission ~25). Lower is better for all three metrics.</p>';
 
   // Data freshness
   const latestSnapshot = patientHistory.length > 0 ? patientHistory[patientHistory.length - 1].snapshot_date : null;
   const qualityDate = quality.snapshot_date || null;
-  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Data Freshness:</strong> ';
+  html += '<p style="margin:0 0 8px"><strong class="t-muted2">Data Freshness:</strong> ';
   html += 'Patient data as of ' + (latestSnapshot ? _fmtDate(latestSnapshot) : 'N/A') + '. ';
   html += 'Quality metrics as of ' + (qualityDate ? _fmtDate(qualityDate) : 'N/A') + '.</p>';
 
-  html += '<p style="margin:0"><strong style="color:var(--text2)">Sources:</strong> CMS Dialysis Facility Compare, USRDS, DaVita 10-K, MedPAC Reports, Census ACS, CDC PLACES.</p>';
+  html += '<p style="margin:0"><strong class="t-muted2">Sources:</strong> CMS Dialysis Facility Compare, USRDS, DaVita 10-K, MedPAC Reports, Census ACS, CDC PLACES.</p>';
   html += '</div>';
   html += '</div>';
 
@@ -5261,7 +5261,7 @@ function _starsCompact(n) {
   const color = n >= 4 ? 'var(--green)' : n >= 3 ? 'var(--yellow)' : 'var(--red)';
   return '<span style="color:' + color + ';letter-spacing:1px">' +
     '&#9733;'.repeat(full) +
-    '<span style="color:var(--text3)">' + '&#9734;'.repeat(5 - full) + '</span>' +
+    '<span class="t-muted3">' + '&#9734;'.repeat(5 - full) + '</span>' +
     '</span>';
 }
 
@@ -5388,7 +5388,7 @@ function _trendArrow(pct, label) {
   const v = Number(pct);
   const arrow = v > 0 ? '&#9650;' : v < 0 ? '&#9660;' : '&#9654;';
   const color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
-  return '<span style="font-size:12px;color:' + color + '">' + arrow + ' ' + (v > 0 ? '+' : '') + v.toFixed(1) + '%' + (label ? ' <span style="color:var(--text3)">' + esc(label) + '</span>' : '') + '</span>';
+  return '<span style="font-size:12px;color:' + color + '">' + arrow + ' ' + (v > 0 ? '+' : '') + v.toFixed(1) + '%' + (label ? ' <span class="t-muted3">' + esc(label) + '</span>' : '') + '</span>';
 }
 
 /** Trend badge (colored pill) */
@@ -5830,7 +5830,7 @@ function _udOwnershipLadder(own, db) {
     if (_sfAccId) h += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce →</a>';
   } else {
     h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— not on file —</div>';
-    h += '<div style="font-size:11px;color:var(--text3)">No recorded owner. Pull from county deed / CoStar / RCA.</div>';
+    h += '<div class="t-meta3">No recorded owner. Pull from county deed / CoStar / RCA.</div>';
   }
   h += '</div>';
   h += '<div style="display:flex;align-items:center;justify-content:center;color:var(--purple);font-size:18px">→</div>';
@@ -5860,7 +5860,7 @@ function _udOwnershipLadder(own, db) {
     h += '<div style="font-size:11px;color:var(--yellow)">Operator-owner — verify this is the real-estate owner, not the chain operator.</div>';
   } else {
     h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— unresolved —</div>';
-    h += '<div style="font-size:11px;color:var(--text3)">Beneficial owner not yet identified. Queue LLC / SoS research.</div>';
+    h += '<div class="t-meta3">Beneficial owner not yet identified. Queue LLC / SoS research.</div>';
   }
   h += '</div>';
   h += '</div>';
@@ -5868,7 +5868,7 @@ function _udOwnershipLadder(own, db) {
     const label = divergence.kind === 'assessor' ? 'Assessor disagrees' : 'Recorded vs true differ';
     h += '<div style="display:flex;align-items:center;gap:10px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);border-radius:8px;padding:9px 12px;margin:0 0 12px;font-size:12px">';
     h += '<span style="font-weight:700;color:var(--yellow)">⚠ ' + esc(label) + '</span>';
-    h += '<span style="color:var(--text2)">' + esc(divergence.a || '—') + '  vs  <b>' + esc(divergence.b || '—') + '</b></span>';
+    h += '<span class="t-muted2">' + esc(divergence.a || '—') + '  vs  <b>' + esc(divergence.b || '—') + '</b></span>';
     h += '</div>';
   }
   h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">';
@@ -6187,34 +6187,34 @@ function _udTabOwnership() {
   html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Update or create the ownership record for this property. Traces the chain back to the developer.</div>';
 
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Recorded Owner</label>';
+  html += '<div><label class="t-label">Recorded Owner</label>';
   html += `<input id="udOwnRecorded" type="text" value="${esc(own?.recorded_owner || '')}" placeholder="Entity name on deed" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">True Owner / Developer</label>';
+  html += '<div><label class="t-label">True Owner / Developer</label>';
   html += `<input id="udOwnTrue" type="text" value="${esc(own?.true_owner || '')}" placeholder="Parent entity, developer, fund" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
 
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Owner Type</label>';
+  html += '<div><label class="t-label">Owner Type</label>';
   html += '<select id="udOwnType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
   html += '<option value="">—</option>';
   ['individual','llc','reit','developer','fund','operator','other'].forEach(t => {
     html += `<option value="${t}" ${own?.owner_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`;
   });
   html += '</select></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Contact Name</label>';
+  html += '<div><label class="t-label">Contact Name</label>';
   html += `<input id="udOwnContact" type="text" value="${esc(own?.contact_1_name || own?.contact_name || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Contact Phone</label>';
+  html += '<div><label class="t-label">Contact Phone</label>';
   html += `<input id="udOwnPhone" type="tel" value="${esc(own?.contact_phone || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
 
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Contact Email</label>';
+  html += '<div><label class="t-label">Contact Email</label>';
   html += `<input id="udOwnEmail" type="email" value="${esc(own?.contact_email || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">State of Incorporation</label>';
+  html += '<div><label class="t-label">State of Incorporation</label>';
   html += `<input id="udOwnState" type="text" value="${esc(own?.recorded_owner_state || own?.true_owner_state || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
 
-  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Notes</label>';
+  html += '<div style="margin-top:8px"><label class="t-label">Notes</label>';
   html += '<textarea id="udOwnNotes" rows="2" placeholder="Research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea></div>';
 
   html += `<button onclick="_udBtnGuard(this, _udSaveOwnership)" style="margin-top:10px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership Resolution</button>`;
@@ -6257,14 +6257,14 @@ function _udTabOwnership() {
         html += `<div class="detail-card-date">${esc(_fmtDate(h.transfer_date) || 'Unknown date')}</div>`;
         html += `<div class="detail-card-title">${govOwnerName ? _ownerLink(govOwnerName, _ownerCtxFromChain(h, db)) : '\u2014'}</div>`;
         html += '<div class="detail-card-body">';
-        if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
+        if (h.from_owner) html += `<span class="t-meta3-sm">From:</span> ${esc(h.from_owner)}<br>`;
         if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
         if (h.cap_rate) html += `Cap Rate: ${_fmtCapRate(h.cap_rate)}<br>`;
         if (h.annual_rent) html += `Rent: ${fmt(h.annual_rent)}<br>`;
         if (h.square_feet) html += `SF: ${fmtN(h.square_feet)}<br>`;
-        if (h.recorded_owner_name && h.recorded_owner_name !== govOwnerName) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${_ownerLink(h.recorded_owner_name, _ownerCtxFromChain(h, db))}<br>`;
-        if (h.true_owner_name && h.true_owner_name !== govOwnerName) html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}<br>`;
-        if (h.principal_names) html += `<span style="font-size:12px;color:var(--text3)">Principals:</span> ${esc(h.principal_names)}<br>`;
+        if (h.recorded_owner_name && h.recorded_owner_name !== govOwnerName) html += `<span class="t-meta3-sm">Recorded:</span> ${_ownerLink(h.recorded_owner_name, _ownerCtxFromChain(h, db))}<br>`;
+        if (h.true_owner_name && h.true_owner_name !== govOwnerName) html += `<span class="t-meta3-sm">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}<br>`;
+        if (h.principal_names) html += `<span class="t-meta3-sm">Principals:</span> ${esc(h.principal_names)}<br>`;
         if (h._merged_count > 1) html += `<span class="detail-badge" style="background:var(--s3);color:var(--text2);margin-top:4px">${h._merged_count} entries merged</span>`;
         if (h.research_status) html += `<span class="detail-badge">${esc(cleanLabel(h.research_status))}</span>`;
         html += '</div>';
@@ -6329,15 +6329,15 @@ function _udTabOwnership() {
         html += '<div class="detail-card-body">';
         if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
           const _tn = _cleanOwnerName(h.true_owner_name);
-          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(_tn, Object.assign(_ownerCtxFromChain(h, db), { name: _tn }))}<br>`;
+          html += `<span class="t-meta3-sm">True Owner:</span> ${_ownerLink(_tn, Object.assign(_ownerCtxFromChain(h, db), { name: _tn }))}<br>`;
         }
-        html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span style="color:var(--text3)">|</span> Cap rate: <span${capSource ? ' title="' + esc(capSource) + '"' : ''}>${esc(capStr)}</span></div>`;
+        html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span class="t-muted3">|</span> Cap rate: <span${capSource ? ' title="' + esc(capSource) + '"' : ''}>${esc(capStr)}</span></div>`;
         if (h.listing_broker) html += `<div style="font-size:11px;color:var(--text2);margin-top:2px">Listing Broker: ${esc(h.listing_broker)}</div>`;
         if (h.procuring_broker) html += `<div style="font-size:11px;color:var(--text2)">Procuring Broker: ${esc(h.procuring_broker)}</div>`;
         if (h.buyer_name) html += `<div style="font-size:11px;color:var(--text2)">Buyer: ${esc(_cleanOwnerName(h.buyer_name))}</div>`;
         if (h.seller_name) html += `<div style="font-size:11px;color:var(--text2)">Seller: ${esc(_cleanOwnerName(h.seller_name))}</div>`;
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
-        if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
+        if (h.ownership_source) html += `<div class="t-meta3">Source: ${esc(h.ownership_source)}</div>`;
         if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
         // CRM coverage bar — shows what intel we have on this owner
         {
@@ -6459,7 +6459,7 @@ function _udTabOwnership() {
   html += '<div id="udDraftPreview" style="display:none;margin-top:16px">';
   html += '<label>Subject</label>';
   html += '<input type="text" id="udDraftSubject" style="font-size:13px;width:100%;margin-bottom:8px">';
-  html += '<label>Body <span style="font-size:11px;color:var(--text3)">(editable — your changes will be tracked for template improvement)</span></label>';
+  html += '<label>Body <span class="t-meta3">(editable — your changes will be tracked for template improvement)</span></label>';
   html += '<textarea id="udDraftBody" style="font-size:12px;min-height:240px;line-height:1.6;font-family:inherit;width:100%"></textarea>';
   html += '<div style="font-size:11px;color:var(--text3);margin-top:4px" id="udDraftMeta"></div>';
   html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
@@ -6495,9 +6495,9 @@ function _udTabOwnership() {
     html += '<div class="intel-notes" style="display:none">';
     html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-    html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Source / Date</label>';
+    html += '<div><label class="t-label">Source / Date</label>';
     html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Date Found</label>';
+    html += '<div><label class="t-label">Date Found</label>';
     html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     html += '</div>';
     html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
@@ -6653,7 +6653,7 @@ async function _loadActivityFeed(own) {
     if (!activities || activities.length === 0) {
       let emptyHtml = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div>';
       emptyHtml += '<div class="detail-empty">No CRM activity found for this owner';
-      if (resolvedAccountName) emptyHtml += ' <span style="color:var(--text3)">(searched ' + esc(resolvedAccountName) + ')</span>';
+      if (resolvedAccountName) emptyHtml += ' <span class="t-muted3">(searched ' + esc(resolvedAccountName) + ')</span>';
       emptyHtml += '</div>';
       if (!resolvedAccountId) {
         emptyHtml += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">';
@@ -6680,8 +6680,8 @@ async function _loadActivityFeed(own) {
       html += '<div class="detail-card-body">';
       html += `<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:${typeColor};color:#fff;margin-bottom:4px">${esc(a.feed_type || '')}</span>`;
       if (a.activity_type) html += ` <span style="font-size:12px;color:var(--text2)">${esc(a.activity_type)}</span>`;
-      if (a.status) html += `<br><span style="font-size:12px;color:var(--text3)">Status: ${esc(a.status)}</span>`;
-      if (a.assigned_to) html += `<br><span style="font-size:12px;color:var(--text3)">Assigned: ${esc(a.assigned_to)}</span>`;
+      if (a.status) html += `<br><span class="t-meta3-sm">Status: ${esc(a.status)}</span>`;
+      if (a.assigned_to) html += `<br><span class="t-meta3-sm">Assigned: ${esc(a.assigned_to)}</span>`;
       if (a.notes) html += `<br><span style="font-size:12px;color:var(--text2);white-space:pre-wrap">${esc(a.notes.substring(0, 200))}${a.notes.length > 200 ? '...' : ''}</span>`;
       html += '</div></div>';
     });
@@ -6751,15 +6751,15 @@ function _udTabIntel() {
   html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-loan\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Loan / Debt</div>';
   html += '<div class="intel-loan" style="display:block">';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Lender</label>';
+  html += '<div><label class="t-label">Lender</label>';
   html += '<input id="intelLender" type="text" placeholder="Bank or fund name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Amount ($)</label>';
+  html += '<div><label class="t-label">Loan Amount ($)</label>';
   html += '<input id="intelLoanAmount" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Interest Rate (%)</label>';
+  html += '<div><label class="t-label">Interest Rate (%)</label>';
   html += '<input id="intelInterestRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Type</label>';
+  html += '<div><label class="t-label">Loan Type</label>';
   html += '<select id="intelLoanType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
   html += '<option value="">—</option>';
   ['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Other'].forEach(t => {
@@ -6768,15 +6768,15 @@ function _udTabIntel() {
   html += '</select></div>';
   html += '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Origination Date</label>';
+  html += '<div><label class="t-label">Origination Date</label>';
   html += '<input id="intelOrigDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Maturity Date</label>';
+  html += '<div><label class="t-label">Maturity Date</label>';
   html += '<input id="intelMatDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Amortization (years)</label>';
+  html += '<div><label class="t-label">Amortization (years)</label>';
   html += '<input id="intelAmortization" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Recourse</label>';
+  html += '<div><label class="t-label">Recourse</label>';
   html += '<select id="intelRecourse" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
   html += '<option value="">—</option>';
   ['Recourse', 'Non-Recourse', 'Partial'].forEach(t => {
@@ -6784,7 +6784,7 @@ function _udTabIntel() {
   });
   html += '</select></div>';
   html += '</div>';
-  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">LTV (%)</label>';
+  html += '<div style="margin-top:8px"><label class="t-label">LTV (%)</label>';
   html += '<input id="intelLTV" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '<button onclick="_udBtnGuard(this, _intelSaveLoan)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Loan Info</button>';
   html += '</div></div>';
@@ -6794,17 +6794,17 @@ function _udTabIntel() {
   html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-cashflow\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Cash Flow / Valuation</div>';
   html += '<div class="intel-cashflow" style="display:block">';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Annual Rent / NOI ($)</label>';
+  html += '<div><label class="t-label">Annual Rent / NOI ($)</label>';
   html += '<input id="intelAnnualRent" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Rent Per SF ($/SF)</label>';
+  html += '<div><label class="t-label">Rent Per SF ($/SF)</label>';
   html += '<input id="intelRentPerSF" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
-  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Expense Type (NNN, Gross, etc.)</label>';
+  html += '<div style="margin-top:8px"><label class="t-label">Expense Type (NNN, Gross, etc.)</label>';
   html += '<input id="intelExpenseType" type="text" placeholder="e.g., NNN, Modified Gross" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Estimated Value ($)</label>';
+  html += '<div><label class="t-label">Estimated Value ($)</label>';
   html += '<input id="intelEstValue" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Current Cap Rate (%)</label>';
+  html += '<div><label class="t-label">Current Cap Rate (%)</label>';
   html += '<input id="intelCurrentCapRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
   html += '<button onclick="_udBtnGuard(this, _intelSaveCashFlow)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Cash Flow</button>';
@@ -6816,9 +6816,9 @@ function _udTabIntel() {
   html += '<div class="intel-notes" style="display:block">';
   html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Source / Date</label>';
+  html += '<div><label class="t-label">Source / Date</label>';
   html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Date Found</label>';
+  html += '<div><label class="t-label">Date Found</label>';
   html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
   html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
@@ -7189,7 +7189,7 @@ function _salesRenderListing(l) {
 
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
   html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${status.color};padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid ${status.color}">${esc(status.label)}</span>`;
-  html += `<span style="font-size:11px;color:var(--text3)">Listing${autoClosed ? ' · auto-matched to prior sale' : ''}</span>`;
+  html += `<span class="t-meta3">Listing${autoClosed ? ' · auto-matched to prior sale' : ''}</span>`;
   html += '</div>';
 
   // Dates row. For auto-closed listings, off_market_date is a back-stamp of the
@@ -7197,12 +7197,12 @@ function _salesRenderListing(l) {
   // (date inversion), so label that field explicitly as the matched-sale date
   // rather than the listing's own off-market event.
   const dateBits = [];
-  if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
+  if (l.listing_date) dateBits.push(`<span class="t-muted3">On Market:</span> <span class="t-body">${esc(_fmtDate(l.listing_date))}</span>`);
   if (l.off_market_date) {
     if (autoClosed) {
-      dateBits.push(`<span style="color:var(--text3)">Matched sale on:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+      dateBits.push(`<span class="t-muted3">Matched sale on:</span> <span class="t-body">${esc(_fmtDate(l.off_market_date))}</span>`);
     } else {
-      dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+      dateBits.push(`<span class="t-muted3">Off Market:</span> <span class="t-body">${esc(_fmtDate(l.off_market_date))}</span>`);
     }
   }
   if (dateBits.length) {
@@ -7215,16 +7215,16 @@ function _salesRenderListing(l) {
   if (initial != null || last != null) {
     html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
     if (initial != null) {
-      html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Original Ask</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(initial)}</div></div>`;
+      html += `<div><div class="t-cap">Original Ask</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(initial)}</div></div>`;
     }
     if (last != null && Number(last) !== Number(initial)) {
-      html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Last Price</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
+      html += `<div><div class="t-cap">Last Price</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
     }
     html += '</div>';
   }
 
   if (l.listing_broker) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(l.listing_broker)}</span></div>`;
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Broker:</span> <span class="t-body">${esc(l.listing_broker)}</span></div>`;
   }
 
   // OM artifact icon — surface the staged OM PDF on the property detail
@@ -7265,7 +7265,7 @@ function _salesRenderSale(s) {
   }
   html += `</div>`;
   if (s.sale_date) {
-    html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(s.sale_date))}</span>`;
+    html += `<span class="t-meta3">${esc(_fmtDate(s.sale_date))}</span>`;
   }
   html += '</div>';
 
@@ -7285,10 +7285,10 @@ function _salesRenderSale(s) {
   const seller = s.seller_name || s.seller;
   const broker = s.broker_name || s.listing_broker;
   const procBroker = s.procuring_broker || null;
-  if (buyer)  html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(buyer)}</span></div>`;
-  if (seller) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(seller)}</span></div>`;
-  if (broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
-  if (procBroker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(procBroker)}</span></div>`;
+  if (buyer)  html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Buyer:</span> <span class="t-body">${esc(buyer)}</span></div>`;
+  if (seller) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Seller:</span> <span class="t-body">${esc(seller)}</span></div>`;
+  if (broker) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Listing Broker:</span> <span class="t-body">${esc(broker)}</span></div>`;
+  if (procBroker) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Procuring Broker:</span> <span class="t-body">${esc(procBroker)}</span></div>`;
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
@@ -7322,7 +7322,7 @@ function _salesRenderCombined(l, s) {
   }
   html += '</div>';
   if (s.sale_date) {
-    html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(s.sale_date))}</span>`;
+    html += `<span class="t-meta3">${esc(_fmtDate(s.sale_date))}</span>`;
   }
   html += '</div>';
 
@@ -7332,10 +7332,10 @@ function _salesRenderCombined(l, s) {
   // line instead.
   const _bestCap2 = s.stated_cap_rate || s.calculated_cap_rate || s.cap_rate || null;
   if (autoClosed) {
-    let line = '<span style="color:var(--text2)">Sale recorded';
+    let line = '<span class="t-muted2">Sale recorded';
     if (s.sale_date) line += ` ${esc(_fmtDate(s.sale_date))}`;
     if (soldPrice != null) line += ` at <span style="color:var(--green);font-weight:600">${fmt(soldPrice)}</span>`;
-    if (_bestCap2 != null) line += ` <span style="color:var(--text3)">/</span> <span style="color:var(--green);font-weight:600">${_fmtCapRate(_bestCap2)} Cap</span>`;
+    if (_bestCap2 != null) line += ` <span class="t-muted3">/</span> <span style="color:var(--green);font-weight:600">${_fmtCapRate(_bestCap2)} Cap</span>`;
     line += '</span>';
     html += `<div style="font-size:13px;margin-bottom:6px;line-height:1.7">${line}</div>`;
     if (l.listing_date) {
@@ -7345,9 +7345,9 @@ function _salesRenderCombined(l, s) {
     // Normal "Listed → [price] → Sold [date] at [price]/[cap rate]"
     const parts = [];
     if (l.listing_date) {
-      parts.push(`<span style="color:var(--text2)">Listed ${esc(_fmtDate(l.listing_date))}</span>`);
+      parts.push(`<span class="t-muted2">Listed ${esc(_fmtDate(l.listing_date))}</span>`);
     } else {
-      parts.push(`<span style="color:var(--text2)">Listed</span>`);
+      parts.push(`<span class="t-muted2">Listed</span>`);
     }
     if (initial != null) {
       parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(initial)}</span>`);
@@ -7362,24 +7362,24 @@ function _salesRenderCombined(l, s) {
     if (_bestCap2 != null) soldTail += ` / ${_fmtCapRate(_bestCap2)} Cap`;
     parts.push(`<span style="color:var(--green);font-weight:600">${soldTail}</span>`);
 
-    html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
+    html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span class="t-muted3">→</span> ')}</div>`;
   }
 
   // Price grid — suppress "Final Ask" if it equals sold price (CoStar last_price = sold price, not last asking)
   const showFinalAsk = last != null && Number(last) !== Number(initial) && (soldPrice == null || Math.abs(Number(last) - Number(soldPrice)) > 1);
   html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
   if (initial != null) {
-    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Original Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(initial)}</div></div>`;
+    html += `<div><div class="t-cap">Original Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(initial)}</div></div>`;
   }
   if (showFinalAsk) {
-    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Final Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(last)}</div></div>`;
+    html += `<div><div class="t-cap">Final Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(last)}</div></div>`;
   }
   if (soldPrice != null) {
-    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Sold Price</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fmt(soldPrice)}</div></div>`;
+    html += `<div><div class="t-cap">Sold Price</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fmt(soldPrice)}</div></div>`;
   }
   if (_bestCap2 != null) {
     const _capSrc2 = s.stated_cap_rate ? ' (stated)' : (s.calculated_cap_rate ? ' (calc)' : '');
-    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(_bestCap2)}${_capSrc2 ? '<span style="font-size:9px;color:var(--text3)">' + _capSrc2 + '</span>' : ''}</div></div>`;
+    html += `<div><div class="t-cap">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(_bestCap2)}${_capSrc2 ? '<span style="font-size:9px;color:var(--text3)">' + _capSrc2 + '</span>' : ''}</div></div>`;
   }
   html += '</div>';
 
@@ -7390,8 +7390,8 @@ function _salesRenderCombined(l, s) {
   // inversion the trigger creates.
   if (!autoClosed) {
     const dateBits = [];
-    if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
-    if (l.off_market_date) dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+    if (l.listing_date) dateBits.push(`<span class="t-muted3">On Market:</span> <span class="t-body">${esc(_fmtDate(l.listing_date))}</span>`);
+    if (l.off_market_date) dateBits.push(`<span class="t-muted3">Off Market:</span> <span class="t-body">${esc(_fmtDate(l.off_market_date))}</span>`);
     if (dateBits.length) {
       html += `<div style="font-size:12px;margin-bottom:6px;display:flex;gap:14px;flex-wrap:wrap">${dateBits.join('')}</div>`;
     }
@@ -7401,20 +7401,20 @@ function _salesRenderCombined(l, s) {
   const buyer = s.buyer_name || s.buyer;
   const seller = s.seller_name || s.seller;
   if (buyer) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(buyer)}</span></div>`;
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Buyer:</span> <span class="t-body">${esc(buyer)}</span></div>`;
   }
   if (seller) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(seller)}</span></div>`;
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Seller:</span> <span class="t-body">${esc(seller)}</span></div>`;
   }
 
   // Broker: prefer sale record, fall back to listing
   const broker = s.broker_name || s.listing_broker || l.listing_broker;
   const procBroker2 = s.procuring_broker || null;
   if (broker) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Listing Broker:</span> <span class="t-body">${esc(broker)}</span></div>`;
   }
   if (procBroker2) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(procBroker2)}</span></div>`;
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Procuring Broker:</span> <span class="t-body">${esc(procBroker2)}</span></div>`;
   }
 
   if (s.source) {
@@ -7436,14 +7436,14 @@ function _salesFormHtml() {
   <div class="detail-section" style="margin-top:12px">
     <div class="detail-section-title">Add Transaction</div>
     <div class="detail-grid" style="grid-template-columns:1fr 1fr;gap:10px">
-      <div><label style="font-size:11px;color:var(--text3)">Sale Date</label><input id="salesFDate" type="date" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div><label style="font-size:11px;color:var(--text3)">Sale Price ($)</label><input id="salesFPrice" type="number" placeholder="0" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div><label style="font-size:11px;color:var(--text3)">Buyer</label><input id="salesFBuyer" type="text" placeholder="Buyer name" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div><label style="font-size:11px;color:var(--text3)">Seller</label><input id="salesFSeller" type="text" placeholder="Seller name" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div><label style="font-size:11px;color:var(--text3)">Price/SF</label><input id="salesFPsf" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div><label style="font-size:11px;color:var(--text3)">Cap Rate (%)</label><input id="salesFCap" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div><label style="font-size:11px;color:var(--text3)">Source</label><input id="salesFSource" type="text" placeholder="CoStar, County Records, etc." style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
-      <div style="grid-column:1/-1"><label style="font-size:11px;color:var(--text3)">Notes</label><textarea id="salesFNotes" rows="2" placeholder="Optional notes" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;resize:vertical"></textarea></div>
+      <div><label class="t-meta3">Sale Date</label><input id="salesFDate" type="date" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label class="t-meta3">Sale Price ($)</label><input id="salesFPrice" type="number" placeholder="0" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label class="t-meta3">Buyer</label><input id="salesFBuyer" type="text" placeholder="Buyer name" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label class="t-meta3">Seller</label><input id="salesFSeller" type="text" placeholder="Seller name" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label class="t-meta3">Price/SF</label><input id="salesFPsf" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label class="t-meta3">Cap Rate (%)</label><input id="salesFCap" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label class="t-meta3">Source</label><input id="salesFSource" type="text" placeholder="CoStar, County Records, etc." style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div style="grid-column:1/-1"><label class="t-meta3">Notes</label><textarea id="salesFNotes" rows="2" placeholder="Optional notes" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;resize:vertical"></textarea></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
       <button onclick="_salesToggleForm()" style="padding:7px 16px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:var(--s2);color:var(--text)">Cancel</button>
@@ -7839,24 +7839,24 @@ function _udDealRenderOwnership(h, db, isCurrent) {
 
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
   html += '<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#a55eea;padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid #a55eea">Ownership</span>';
-  html += `<span style="font-size:11px;color:var(--text3)">${esc(transferDate)} → ${esc(endDate)}</span>`;
+  html += `<span class="t-meta3">${esc(transferDate)} → ${esc(endDate)}</span>`;
   html += '</div>';
 
   html += `<div style="font-size:14px;font-weight:700;margin-bottom:6px">${_ownerLink(ownerName, _ownerCtxFromChain(h, db))}</div>`;
 
   if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
-    html += `<div style="font-size:12px;color:var(--text2);margin-bottom:4px"><span style="color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}</div>`;
+    html += `<div style="font-size:12px;color:var(--text2);margin-bottom:4px"><span class="t-muted3">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}</div>`;
   }
-  if (h.from_owner || h.seller_name) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">From:</span> <span style="color:var(--text)">${esc(h.from_owner || h.seller_name)}</span></div>`;
-  if (h.buyer_name && h.buyer_name !== (h.recorded_owner_name || h.true_owner_name)) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(h.buyer_name)}</span></div>`;
-  if (h.sale_price) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Sale:</span> <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span></div>`;
+  if (h.from_owner || h.seller_name) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">From:</span> <span class="t-body">${esc(h.from_owner || h.seller_name)}</span></div>`;
+  if (h.buyer_name && h.buyer_name !== (h.recorded_owner_name || h.true_owner_name)) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Buyer:</span> <span class="t-body">${esc(h.buyer_name)}</span></div>`;
+  if (h.sale_price) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Sale:</span> <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span></div>`;
   const _capVal = h.stated_cap_rate || h.calculated_cap_rate || h.cap_rate || null;
   const _capSrc = h.stated_cap_rate ? 'stated' : (h.calculated_cap_rate ? 'calc' : null);
-  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${_fmtCapRate(_capVal)}</span>${_capSrc ? ' <span style="font-size:9px;color:var(--text3)">(' + _capSrc + ')</span>' : ''}</div>`;
-  if (h.listing_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(h.listing_broker)}</span></div>`;
-  if (h.procuring_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(h.procuring_broker)}</span></div>`;
+  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Cap Rate:</span> <span class="t-body">${_fmtCapRate(_capVal)}</span>${_capSrc ? ' <span style="font-size:9px;color:var(--text3)">(' + _capSrc + ')</span>' : ''}</div>`;
+  if (h.listing_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Listing Broker:</span> <span class="t-body">${esc(h.listing_broker)}</span></div>`;
+  if (h.procuring_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Procuring Broker:</span> <span class="t-body">${esc(h.procuring_broker)}</span></div>`;
   if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:4px">Type: ${esc(h.ownership_type)}</div>`;
-  if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
+  if (h.ownership_source) html += `<div class="t-meta3">Source: ${esc(h.ownership_source)}</div>`;
 
   return html;
 }
@@ -8115,7 +8115,7 @@ function _udRenderActivityLog(events) {
     html += '<div style="background:var(--s2);border-radius:8px;padding:10px 12px;border:1px solid var(--border)">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:4px">';
     html += `<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${ev.color};padding:1px 6px;border-radius:10px;border:1px solid ${ev.color}">${esc((ev.kind || 'event').replace(/_/g, ' '))}</span>`;
-    html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(ev.date))}</span>`;
+    html += `<span class="t-meta3">${esc(_fmtDate(ev.date))}</span>`;
     html += '</div>';
     html += `<div style="font-size:13px;font-weight:600;color:var(--text)">${ev.ownerCtx ? _ownerLink(ev.title.replace(/^Ownership transfer to /, ''), ev.ownerCtx) : esc(ev.title || '')}</div>`;
     if (ev.detail) html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(ev.detail)}</div>`;
@@ -8161,14 +8161,14 @@ function _udTabHistory() {
     if (db === 'gov') {
       html += `<div class="detail-card-title">${esc(h.to_owner || '—')}</div>`;
       html += '<div class="detail-card-body">';
-      if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
+      if (h.from_owner) html += `<span class="t-meta3-sm">From:</span> ${esc(h.from_owner)}<br>`;
       if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
       if (h.cap_rate) html += `Cap Rate: ${_fmtCapRate(h.cap_rate)}<br>`;
       if (h.annual_rent) html += `Rent: ${fmt(h.annual_rent)}<br>`;
       if (h.square_feet) html += `SF: ${fmtN(h.square_feet)}<br>`;
-      if (h.recorded_owner_name) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${esc(h.recorded_owner_name)}<br>`;
-      if (h.true_owner_name) html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
-      if (h.principal_names) html += `<span style="font-size:12px;color:var(--text3)">Principals:</span> ${esc(h.principal_names)}<br>`;
+      if (h.recorded_owner_name) html += `<span class="t-meta3-sm">Recorded:</span> ${esc(h.recorded_owner_name)}<br>`;
+      if (h.true_owner_name) html += `<span class="t-meta3-sm">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
+      if (h.principal_names) html += `<span class="t-meta3-sm">Principals:</span> ${esc(h.principal_names)}<br>`;
       if (h.research_status) html += `<span class="detail-badge">${esc(cleanLabel(h.research_status))}</span>`;
       html += '</div>';
     } else {
@@ -8177,14 +8177,14 @@ function _udTabHistory() {
       html += `<div class="detail-card-title">${esc(ownerLabel)}</div>`;
       html += '<div class="detail-card-body">';
       if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
-        html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
+        html += `<span class="t-meta3-sm">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
       }
       if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
       if (h.cap_rate) html += `Cap Rate: ${_fmtCapRate(h.cap_rate)}<br>`;
       if (h.rent) html += `Rent: ${fmt(h.rent)}<br>`;
-      if (h.ownership_type) html += `<span style="font-size:12px;color:var(--text3)">Type:</span> ${esc(h.ownership_type)}<br>`;
-      if (h.ownership_source) html += `<span style="font-size:12px;color:var(--text3)">Source:</span> ${esc(h.ownership_source)}<br>`;
-      if (h.ownership_end) html += `<span style="font-size:12px;color:var(--text3)">End:</span> ${esc(_fmtDate(h.ownership_end))}<br>`;
+      if (h.ownership_type) html += `<span class="t-meta3-sm">Type:</span> ${esc(h.ownership_type)}<br>`;
+      if (h.ownership_source) html += `<span class="t-meta3-sm">Source:</span> ${esc(h.ownership_source)}<br>`;
+      if (h.ownership_end) html += `<span class="t-meta3-sm">End:</span> ${esc(_fmtDate(h.ownership_end))}<br>`;
       html += '</div>';
     }
     html += '</div>';
@@ -9240,7 +9240,7 @@ function _rowResolve(label, field) {
   const handler = `_udResolveViaConnector('${esc(field)}')`;
   return `<div class="detail-row">
     <div class="detail-lbl">${esc(label)}</div>
-    <div class="detail-val" style="color:var(--text3)">—
+    <div class="detail-val t-muted3">—
       <a href="#" onclick="event.preventDefault();${handler}" style="margin-left:8px;font-size:11px;color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">Resolve via ChromeConnector</a>
     </div>
   </div>`;
@@ -9499,7 +9499,7 @@ function _stars(n) {
   return '<span style="color:var(--yellow);letter-spacing:2px">' +
     '&#9733;'.repeat(full) +
     (half ? '&#9734;' : '') +
-    '<span style="color:var(--text3)">' + '&#9734;'.repeat(empty) + '</span>' +
+    '<span class="t-muted3">' + '&#9734;'.repeat(empty) + '</span>' +
     '</span> <span style="font-size:12px;color:var(--text2)">' + n.toFixed(1) + '</span>';
 }
 
@@ -10319,7 +10319,7 @@ async function _loadTouchpoints(own) {
       html += '</div>';
       html += '<div class="detail-card-body">';
       html += `<span style="font-size:11px;color:${color}">${esc(cleanLabel(r.status || ''))}</span>`;
-      if (r.user_name) html += ` <span style="font-size:11px;color:var(--text3)">by ${esc(r.user_name)}</span>`;
+      if (r.user_name) html += ` <span class="t-meta3">by ${esc(r.user_name)}</span>`;
       html += '</div></div>';
     });
 
@@ -10634,7 +10634,7 @@ async function _intelRenderPriorSaleSummaryAsync() {
   if (!slot) return;
   const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
   if (!propertyId) {
-    slot.innerHTML = '<span style="color:var(--text3)">No property ID — cannot load sale history.</span>';
+    slot.innerHTML = '<span class="t-muted3">No property ID — cannot load sale history.</span>';
     return;
   }
   const db = _udCache.db;
@@ -10711,18 +10711,18 @@ async function _intelRenderPriorSaleSummaryAsync() {
   }
 
   if (!latest) {
-    slot.innerHTML = '<span style="color:var(--text3)">No sale recorded for this property yet.</span>';
+    slot.innerHTML = '<span class="t-muted3">No sale recorded for this property yet.</span>';
     return;
   }
 
   const price = latest.price != null ? latest.price : latest.sold_price;
   const bits = [];
-  if (latest.sale_date) bits.push(`<span style="color:var(--text3)">Date:</span> <span style="color:var(--text)">${esc(_fmtDate(latest.sale_date))}</span>`);
-  if (price != null)    bits.push(`<span style="color:var(--text3)">Price:</span> <span class="mono" style="color:var(--green);font-weight:600">${fmt(price)}</span>`);
-  if (latest.cap_rate != null) bits.push(`<span style="color:var(--text3)">Cap:</span> <span style="color:var(--text);font-weight:600">${_fmtCapRate(latest.cap_rate)}</span>`);
-  if (latest.buyer_name)  bits.push(`<span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(latest.buyer_name)}</span>`);
-  if (latest.seller_name) bits.push(`<span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(latest.seller_name)}</span>`);
-  if (latest.broker_name) bits.push(`<span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(latest.broker_name)}</span>`);
+  if (latest.sale_date) bits.push(`<span class="t-muted3">Date:</span> <span class="t-body">${esc(_fmtDate(latest.sale_date))}</span>`);
+  if (price != null)    bits.push(`<span class="t-muted3">Price:</span> <span class="mono" style="color:var(--green);font-weight:600">${fmt(price)}</span>`);
+  if (latest.cap_rate != null) bits.push(`<span class="t-muted3">Cap:</span> <span style="color:var(--text);font-weight:600">${_fmtCapRate(latest.cap_rate)}</span>`);
+  if (latest.buyer_name)  bits.push(`<span class="t-muted3">Buyer:</span> <span class="t-body">${esc(latest.buyer_name)}</span>`);
+  if (latest.seller_name) bits.push(`<span class="t-muted3">Seller:</span> <span class="t-body">${esc(latest.seller_name)}</span>`);
+  if (latest.broker_name) bits.push(`<span class="t-muted3">Broker:</span> <span class="t-body">${esc(latest.broker_name)}</span>`);
 
   let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;font-size:12px">';
   html += bits.map(b => `<div>${b}</div>`).join('');
@@ -11376,7 +11376,7 @@ async function openEntityDetailByName(name) {
     }
 
     // No matches — show not found with helpful message
-    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">No entity found matching "' + esc(name) + '".<br><span style="font-size:12px;color:var(--text3)">Try the Entities page to search or create one.</span></div>';
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">No entity found matching "' + esc(name) + '".<br><span class="t-meta3-sm">Try the Entities page to search or create one.</span></div>';
   } catch (err) {
     console.error('Entity lookup error:', err);
     if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error searching entities: ' + esc(err.message) + '</div>';
@@ -11587,10 +11587,10 @@ function _entityTabOverview() {
   // Quick stats
   html += '<div class="detail-section"><div class="detail-section-title">Summary</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-top:4px">';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.portfolio?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Properties</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div style="font-size:11px;color:var(--text3)">Contacts</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.transactions?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Transactions</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.activities?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Activities</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.portfolio?.length || 0) + '</div><div class="t-meta3">Properties</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div class="t-meta3">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.transactions?.length || 0) + '</div><div class="t-meta3">Transactions</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.activities?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
   html += '</div></div>';
 
   return html;
@@ -11656,7 +11656,7 @@ function _entityTabPortfolio() {
     html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + '</div>';
     html += '</div>';
     html += '<div style="text-align:right;font-size:11px;flex-shrink:0">';
-    if (propType) html += '<div style="color:var(--text3)">' + esc(propType) + '</div>';
+    if (propType) html += '<div class="t-muted3">' + esc(propType) + '</div>';
     if (tenant) html += '<div style="color:var(--accent)">' + esc(tenant) + '</div>';
     html += '</div></div></div>';
   }
@@ -11739,7 +11739,7 @@ function _renderContactTab(contact) {
     html += '<div onclick="openEntityDetail(\'' + esc(c.entity_id) + '\')" style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:8px">';
     html += '<span style="color:var(--accent);font-size:16px">🏢</span>';
     html += '<div><div style="font-weight:600;color:var(--accent)">' + esc(c.company_name || c.entity_id) + '</div>';
-    html += '<div style="font-size:11px;color:var(--text3)">Click to view entity details</div></div>';
+    html += '<div class="t-meta3">Click to view entity details</div></div>';
     html += '</div></div>';
   }
 
@@ -11846,7 +11846,7 @@ let _ownerDrawerNavStack = [];
  * contain apostrophes, backslashes, or non-ASCII characters.
  */
 function _ownerLink(displayName, ctx) {
-  if (!displayName) return '<span style="color:var(--text3)">\u2014</span>';
+  if (!displayName) return '<span class="t-muted3">\u2014</span>';
   const ctxObj = ctx || { name: displayName };
   // Encode payload for safe embedding in the HTML attribute. Double-encoded
   // (JSON → URI) so ampersands, quotes, and braces can't break the attribute
@@ -12192,9 +12192,9 @@ function _ownerDrawerOverview(c) {
 
   html += '<div class="detail-section"><div class="detail-section-title">Engagement Snapshot</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + (c.contacts ? c.contacts.length : 0) + '</div><div style="font-size:11px;color:var(--text3)">Contacts</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + c.open_activities.length + '</div><div style="font-size:11px;color:var(--text3)">Open Tasks</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + c.activity_history.length + '</div><div style="font-size:11px;color:var(--text3)">Activities Logged</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + (c.contacts ? c.contacts.length : 0) + '</div><div class="t-meta3">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + c.open_activities.length + '</div><div class="t-meta3">Open Tasks</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + c.activity_history.length + '</div><div class="t-meta3">Activities Logged</div></div>';
   html += '</div></div>';
 
   return html;
@@ -12218,11 +12218,11 @@ function _ownerDrawerContacts(c) {
     html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">' + esc(initial) + '</div>';
     html += '<div style="flex:1;min-width:0">';
     html += '<div style="font-weight:600;color:var(--text)">' + esc(name) + '</div>';
-    html += '<div style="font-size:11px;color:var(--text3)">' + esc(ct.title || '') + '</div>';
+    html += '<div class="t-meta3">' + esc(ct.title || '') + '</div>';
     html += '</div>';
     html += '<div style="text-align:right;font-size:11px">';
     if (ct.email) html += '<div><a href="mailto:' + esc(ct.email) + '" onclick="event.stopPropagation()" style="color:var(--accent)">' + esc(ct.email) + '</a></div>';
-    if (ct.phone || ct.mobile_phone) html += '<div><a href="tel:' + esc(ct.phone || ct.mobile_phone) + '" onclick="event.stopPropagation()" style="color:var(--text2)">' + esc(ct.phone || ct.mobile_phone) + '</a></div>';
+    if (ct.phone || ct.mobile_phone) html += '<div><a href="tel:' + esc(ct.phone || ct.mobile_phone) + '" onclick="event.stopPropagation()" class="t-muted2">' + esc(ct.phone || ct.mobile_phone) + '</a></div>';
     html += '</div></div></div>';
   });
   html += '</div></div>';
@@ -12256,9 +12256,9 @@ function _ownerDrawerActivities(c, mode) {
     html += '<div class="detail-card-body">';
     html += '<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:' + typeColor + ';color:#fff;margin-bottom:4px">' + esc(a.feed_type || a.activity_type || '') + '</span>';
     if (a.activity_type) html += ' <span style="font-size:12px;color:var(--text2)">' + esc(a.activity_type) + '</span>';
-    if (a.status) html += '<br><span style="font-size:12px;color:var(--text3)">Status: ' + esc(a.status) + '</span>';
-    if (a.assigned_to) html += '<br><span style="font-size:12px;color:var(--text3)">Assigned: ' + esc(a.assigned_to) + '</span>';
-    if (a.contact_name) html += '<br><span style="font-size:12px;color:var(--text3)">Contact: ' + esc(a.contact_name) + '</span>';
+    if (a.status) html += '<br><span class="t-meta3-sm">Status: ' + esc(a.status) + '</span>';
+    if (a.assigned_to) html += '<br><span class="t-meta3-sm">Assigned: ' + esc(a.assigned_to) + '</span>';
+    if (a.contact_name) html += '<br><span class="t-meta3-sm">Contact: ' + esc(a.contact_name) + '</span>';
     if (a.notes) html += '<br><span style="font-size:12px;color:var(--text2);white-space:pre-wrap">' + esc(String(a.notes).substring(0, 220)) + (a.notes.length > 220 ? '...' : '') + '</span>';
     html += '</div></div>';
   });
@@ -12313,7 +12313,7 @@ async function _loadOwnerPortfolio(ownerName, db, elId) {
       html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
       html += '<div style="font-weight:600;color:var(--text);font-size:13px">' + esc(propName) + '</div>';
       if (p.address && p.address !== propName) html += '<div style="font-size:11px;color:var(--text2)">' + esc(p.address) + '</div>';
-      if (loc) html += '<div style="font-size:11px;color:var(--text3)">' + esc(loc) + '</div>';
+      if (loc) html += '<div class="t-meta3">' + esc(loc) + '</div>';
       html += '<div style="display:flex;gap:12px;margin-top:4px;font-size:11px;color:var(--text3)">';
       if (p.sale_price) html += '<span>Sale: <span class="mono" style="color:var(--green)">' + fmt(p.sale_price) + '</span></span>';
       if (p.transfer_date) html += '<span>' + esc(_fmtDate(p.transfer_date)) + '</span>';
@@ -12609,8 +12609,8 @@ function _tenantDrawerOverview(c) {
 
   html += '<div class="detail-section"><div class="detail-section-title">Engagement Snapshot</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + (c.contacts?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Contacts</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.activities?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Activities</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + (c.contacts?.length || 0) + '</div><div class="t-meta3">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.activities?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
   html += '</div></div>';
 
   return html;
@@ -12838,8 +12838,8 @@ function _brokerDrawerOverview(c) {
 
   html += '<div class="detail-section"><div class="detail-section-title">Engagement Snapshot</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.activities?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Activities</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.deals?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Deals (this property)</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.activities?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.deals?.length || 0) + '</div><div class="t-meta3">Deals (this property)</div></div>';
   html += '</div></div>';
   return html;
 }
