@@ -3337,14 +3337,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R60 → R63 → R66 — IQR-visibility round-trip continues. R63's
-          // 5-9% still drew user complaints ("y-axis is too zoomed in and
-          // we miss much of the data" — batch 6 2026-05-23). The TTM
-          // statistical quartile bands hover 6.0-8.1% with rare outliers
-          // (e.g. 2024 dia top quartile briefly to 8.12%). Widen to 4-10%
-          // (600bps) to match CAP_RATE_RANGE master parity and visually
-          // separate the upper and lower quartile lines from the median.
-          yAxisRange: { min: 0.04, max: 0.10 },
+          // R60 → R63 — IQR-visibility. R63 set 5-9% (batch 6 2026-05-23).
+          // NOTE: Data_Cap_Quartile was NOT in the 2026-05-31 export feedback,
+          // so R66 leaves it at the R63 5-9% band (no scope creep).
+          yAxisRange: { min: 0.05, max: 0.09 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
@@ -3485,12 +3481,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R37 P2 → R66 — was CAP_RATE_TIGHT_RANGE 5-8%, but the active-
-          // listing quartile lines hug the median tightly and a 300bps
-          // span makes upper/lower hard to distinguish. Widen to 4-10%
-          // (CAP_RATE_RANGE) to match the closed-cap-quartile chart's R66
-          // widening and give the four lines visual separation.
-          yAxisRange: CAP_RATE_RANGE,
+          // R66 — Data_Active_Cap_Quart flagged 2026-05-31: "adjust y-axis so
+          // we can see the movement in the lines." Measured quartile bands are
+          // upper 5.73-7.29% / lower 5.17-6.00%, so tighten to 5.0-7.5% (was
+          // CAP_RATE_TIGHT_RANGE 5-8%) to surface the movement. A wider band
+          // compresses the lines and is what the user is complaining about.
+          yAxisRange: { min: 0.05, max: 0.075 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol,

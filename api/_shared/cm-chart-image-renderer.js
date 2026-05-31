@@ -1402,8 +1402,10 @@ function buildChartConfig(chart, brand) {
               borderDash: [5, 4] },
           ],
         },
-        // 5-8% range — quartile data lives 5.3-7.7%; tighter axis shows movement
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_TIGHT_RANGE }),
+        // R66 — Data_Active_Cap_Quart flagged 2026-05-31 ("see the movement in
+        // the lines"). Measured bands upper 5.73-7.29% / lower 5.17-6.00%, so
+        // tighten 5-8% -> 5.0-7.5% (parity with native injector).
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.05, max: 0.075 } }),
       };
     }
 
