@@ -960,40 +960,49 @@ function buildChartConfig(chart, brand) {
                   const spread = r.avg_bid_ask_spread;
                   return (last != null && spread != null) ? [last, last + spread] : null;
                 }),
-                backgroundColor: 'rgba(224,232,244,0.6)',  // pale blue fill
-                borderColor: palette[1],                    // sky border
+                // R66b — neutral gray dispersion band (matches the native Excel
+                // D9D9D9 band) so PDF and xlsx read the same.
+                backgroundColor: 'rgba(217,217,217,0.55)',
+                borderColor: 'rgba(191,191,191,0.9)',
                 borderWidth: 1,
                 borderSkipped: false,
                 barPercentage: 0.5,
                 categoryPercentage: 0.85,
                 order: 2 },
-              // Last Ask Cap dots at bar bottom
+              // R66b — match MASTER chart7: DASH markers (no line), Last Ask =
+              // Sky, Achieved/Spread = Navy. Was circle dots with the colors
+              // swapped (the "doesn't match our Excel" note, 2026-05-31).
               { type: 'line', label: 'Last Ask Cap (TTM)',
                 data: rows.map(r => r.avg_last_ask_cap),
-                borderColor: 'transparent',
+                borderColor: palette[1],            // sky
                 backgroundColor: palette[1],
-                pointRadius: 2.5,
-                pointStyle: 'circle',
+                borderWidth: 2,
+                pointRadius: 6,
+                pointStyle: 'dash',
                 showLine: false,
                 order: 0 },
               // Bid-Ask spread (achieved cap) at bar top — derived
-              { type: 'line', label: 'Bid-Ask Spread Top (Achieved Cap)',
+              { type: 'line', label: 'Bid-Ask Spread (Achieved Cap, TTM)',
                 data: rows.map(r => {
                   const last = r.avg_last_ask_cap;
                   const spread = r.avg_bid_ask_spread;
                   return (last != null && spread != null) ? last + spread : null;
                 }),
-                borderColor: 'transparent',
-                backgroundColor: palette[0],  // navy dot
-                pointRadius: 2.5,
-                pointStyle: 'circle',
+                borderColor: palette[0],            // navy
+                backgroundColor: palette[0],
+                borderWidth: 2,
+                pointRadius: 6,
+                pointStyle: 'dash',
                 showLine: false,
                 order: 0 },
             ],
           },
           options: commonOpts({
             yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            yAxisRange: CAP_RATE_BID_ASK_RANGE,
+            // R66b — dia matches MASTER chart7 (5.25-8.0%); gov caps run higher.
+            yAxisRange: ((chart.vertical === 'gov' || chart.vertical === 'government_leased')
+              ? CAP_RATE_BID_ASK_RANGE
+              : { min: 0.0525, max: 0.08 }),
           }),
         };
       }

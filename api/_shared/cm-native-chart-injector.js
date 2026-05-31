@@ -3030,15 +3030,18 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // One helper column past the regular CHART_COLUMNS: the visible band
         // height = max_last_ask - min_last_ask (range of last asks).
         const rangeCol = String.fromCharCode(65 + cols.length);
-        // Markers-only (no connecting line) to match the PDF p.34 discrete
-        // "Last Ask" dash + spread markers sitting on each high-low range bar.
+        // R66b — match Dialysis Comp Work MASTER.xlsx chart7 (the Bid-Ask
+        // exhibit) exactly: markers-only (no connecting line) using DASH
+        // markers size 7, with Last Ask = Sky (62B5E5) and Achieved/Spread =
+        // Navy (003DA5). The prior square/circle + navy/sky-swapped styling is
+        // what drew the "colors don't match our Excel" note (2026-05-31).
         const lineSeries = [
-          { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: navy,
-            showMarker: true, markerShape: 'square', markerSize: 5 },
+          { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
+            showMarker: true, markerShape: 'dash', markerSize: 7 },
         ];
         if (achievedCol) {
-          lineSeries.push({ titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: sky,
-            showMarker: true, markerShape: 'circle', markerSize: 4 });
+          lineSeries.push({ titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+            showMarker: true, markerShape: 'dash', markerSize: 7 });
         }
         return {
           tabName,
@@ -3052,8 +3055,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // Thin range bars (high gapWidth) so each TTM month reads as a
             // discrete high-low bar, matching the master/PDF p.34.
             barGapWidth: 220,
-            // Last asks sit ~4-10%; the range band + both lines live here.
-            yLeftRange:  { min: 0.04, max: 0.10 },
+            // R66b — match MASTER chart7 valAx (5.25-8.0%) for dia; gov last-ask
+            // caps run higher (~7.7-8.5% + dispersion band) so keep the wider
+            // 5.5-10% band there to avoid clipping the bar tops.
+            yLeftRange:  ((vertical === 'gov' || vertical === 'government_leased')
+              ? { min: 0.055, max: 0.10 }
+              : { min: 0.0525, max: 0.08 }),
             yLeftNumFmt: VAL_FMT_PERCENT_2DP,
             barSeries: [
               // Invisible base lifts the visible range bar to the TTM low.

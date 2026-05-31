@@ -187,21 +187,38 @@ chart.
 
 ---
 
-## 4. Bid_Ask style/color note
+## 4. Bid_Ask style/color match (R66b — done)
 
-The data issue on Bid_Ask (the additive-identity formula) is fixed above. The
-remaining note — *"style and colors still don't match our Excel/PDF versions"* —
-is a visual-parity item. Recommendation, pending the master workbook for exact
-matching:
+The data issue on Bid_Ask (the additive-identity formula) is fixed in §3. The
+visual note — *"style and colors still don't match our Excel/PDF versions"* — is
+now matched against the supplied **`Dialysis Comp Work MASTER.xlsx`** (its
+`xl/charts/chart7.xml` is the Bid-Ask exhibit). What the master actually uses:
 
-- Render the bar as a **floating bar** from `avg_last_ask_cap` up to the achieved
-  sold cap, with the spread segment in the NM accent (Sky `#62B5E5`) and the base
-  in NM Blue `#003DA5`, matching the master deck's bid-ask exhibit.
-- Pull all colors from `public/reports/cm_brand_tokens.json` (never inline hex) so
-  the chart tracks the brand tokens the rest of the suite uses.
-- To pixel-match, drop the corresponding page of the master Excel/PDF into the next
-  round and we'll align bar fill, gridlines, and label placement exactly. Without
-  that reference the colors are a best-guess at the target.
+- A 2-series **line chart with NO connecting line** — each point is a **`dash`
+  marker, size 7**.
+- **"Last Ask (ttm)" = Sky `62B5E5`**; **"Bid-Ask Spread" = Navy `003DA5`**
+  (the navy series sits at `last_ask + spread`, i.e. the achieved cap; the visual
+  gap between the two rows of dashes *is* the spread).
+- Single left value axis **5.25%–8.00%**, format `0.00%`; date cat-axis `mmm-yy`;
+  axis text `9EA9B7` 8 pt; gridlines on; legend bottom.
+
+Changes applied (both `cm-native-chart-injector.js` and
+`cm-chart-image-renderer.js`):
+
+- Markers switched from square(5)/circle(4) → **`dash` size 7** (Chart.js
+  `pointStyle:'dash'` in the renderer).
+- **Colors un-swapped** to match the master: Last Ask → Sky, Achieved/Spread →
+  Navy (we previously had them reversed — the actual cause of the "colors don't
+  match" note). Colors come from the `navy`/`sky` brand tokens (`003DA5`/`62B5E5`).
+- Y-axis pinned to the master's **5.25–8.0%** for dialysis; gov keeps the wider
+  5.5–10% band (its last-ask caps run to ~8.5% plus the dispersion band).
+
+**One judgment call:** the master plots *only* the two dash series. Our chart also
+draws a faint min→max **dispersion band** (recolored to neutral gray `D9D9D9` to
+match across xlsx/PDF) — kept because your note called the current layout "much
+better." If you'd rather match the master exactly (no band), it's a one-line
+change: drop the `barSeries` block in the `bid_ask_spread` case so it renders as a
+pure 2-series dash chart. Say the word and I'll strip it.
 
 ---
 
