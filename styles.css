@@ -1970,3 +1970,17 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 }
 .pu-resolver-portfolio-confirm-btn:hover:not(:disabled) { opacity: 0.85; }
 .pu-resolver-portfolio-confirm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Property Intelligence Phase 8 — prospecting feed (PR1, 2026-05-30) ── */
+.prospect-feed{display:flex;flex-direction:column;gap:8px;padding:10px 14px;background:var(--s1);border-top:1px solid var(--border)}
+.prospect-feed-header{display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3)}
+.nab-xv-chip{background:var(--purple);color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;text-transform:none}
+.prospect-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;background:var(--s2);border:1px solid var(--border);border-radius:9px;padding:9px 12px}
+.prospect-band{font-size:11px;font-weight:800;color:#fff;border-radius:6px;padding:2px 8px;min-width:34px;text-align:center}
+.prospect-rank{font-size:12px;font-weight:700;color:var(--text2);background:var(--s3);border-radius:6px;padding:2px 8px;min-width:30px;text-align:center}
+.prospect-why b{font-size:13px;color:var(--text)}
+.prospect-sub{font-size:11.5px;color:var(--text3);margin-top:2px}
+.prospect-actions{display:flex;gap:6px}
+.prospect-cta,.prospect-cta-primary{border:none;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:600;cursor:pointer}
+.prospect-cta{background:var(--s3);color:var(--text);border:1px solid var(--border)}
+.prospect-cta-primary{background:var(--accent);color:#fff}

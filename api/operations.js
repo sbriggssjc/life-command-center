@@ -234,6 +234,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'complete_research':  return await bridgeCompleteResearch(req, res, user, workspaceId);
       case 'log_call':           return await bridgeLogCall(req, res, user, workspaceId);
       case 'save_ownership':     return await bridgeSaveOwnership(req, res, user, workspaceId);
+      case 'create_lead':        return await bridgeCreateLead(req, res, user, workspaceId);
+      case 'initiate_cadence':   return await bridgeInitiateCadence(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
 
@@ -250,7 +252,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage'
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence'
         });
     }
   }
@@ -560,6 +562,213 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
     entity_id: entityId,
     fields_updated: fieldCount
   });
+}
+
+// ============================================================================
+// BRIDGE: Prospecting Convergence (Phase 8, PR2 2026-05-30)
+// create_lead       — property + resolved owner -> tracked lead + entity + BD opp
+// initiate_cadence  — place an owner entity into the BD cadence (onboarding)
+// Schema verified read-only against live DBs 2026-05-30. See
+// audit/data-flow-2026-05-30/DRAFT_operations_create_lead_initiate_cadence.js
+// ============================================================================
+
+async function domainInsert(domain, table, row) {
+  const isGov = domain === 'gov' || domain === 'government';
+  const baseUrl = isGov ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = isGov ? govSupabaseKey() : diaSupabaseKey();
+  if (!baseUrl || !key) {
+    return { ok: false, status: 503, error: (isGov ? 'GOV' : 'DIA') + ' database not configured' };
+  }
+  try {
+    const resp = await fetch(baseUrl + '/rest/v1/' + table, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify(row),
+      signal: AbortSignal.timeout(8000),
+    });
+    const text = await resp.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (_e) { data = text; }
+    if (!resp.ok) return { ok: false, status: resp.status, error: 'Domain insert failed', detail: data };
+    return { ok: true, data: Array.isArray(data) ? data[0] : data };
+  } catch (err) {
+    return { ok: false, status: 500, error: 'Domain insert threw', detail: err.message };
+  }
+}
+
+async function bridgeCreateLead(req, res, user, workspaceId) {
+  const {
+    domain, property_id, entity_id, owner_name, true_owner_name,
+    owner_role, label, property_address, notes, source,
+  } = req.body || {};
+
+  if (!domain || (domain !== 'gov' && domain !== 'dia' && domain !== 'government' && domain !== 'dialysis')) {
+    return res.status(400).json({ error: "domain is required ('gov' or 'dia')" });
+  }
+  if (!property_id) {
+    return res.status(400).json({ error: 'property_id is required' });
+  }
+
+  const normDomain = (domain === 'government') ? 'gov' : (domain === 'dialysis') ? 'dia' : domain;
+  const leadSource = source || 'property_flow';
+  const ownerDisplay = true_owner_name || owner_name || label || ('Property ' + property_id);
+
+  // 1. Resolve/create the canonical owner entity, anchored to the asset.
+  let resolvedEntityId = entity_id || null;
+  let createdEntity = false;
+  if (!resolvedEntityId) {
+    const link = await ensureEntityLink({
+      workspaceId, userId: user.id,
+      sourceSystem: normDomain,
+      sourceType: 'asset',
+      externalId: String(property_id),
+      domain: normDomain,
+      seedFields: { name: ownerDisplay, org_type: 'owner', owner_role: owner_role || null, address: property_address || null },
+    });
+    if (!link.ok) {
+      return res.status(link.status || 500).json({ error: link.error || 'Entity link failed', detail: link.detail });
+    }
+    resolvedEntityId = link.entityId;
+    createdEntity = !!link.createdEntity;
+  }
+
+  // 2. Insert the domain lead row (prospect_leads on gov, marketing_leads on dia).
+  let leadRow, leadTable;
+  if (normDomain === 'gov') {
+    leadTable = 'prospect_leads';
+    leadRow = {
+      lead_source: leadSource,
+      matched_property_id: property_id,
+      address: property_address || label || null,
+      recorded_owner: owner_name || null,
+      true_owner: true_owner_name || null,
+      owner_type: owner_role || null,
+      pipeline_status: 'new',
+      research_status: 'pending',
+      research_notes: notes || null,
+    };
+  } else {
+    leadTable = 'marketing_leads';
+    leadRow = {
+      source: leadSource,
+      lead_name: ownerDisplay,
+      lead_company: owner_name || true_owner_name || null,
+      property_address: property_address || label || null,
+      status: 'new',
+      priority: 'normal',
+      notes: notes || null,
+    };
+  }
+  const leadResult = await domainInsert(normDomain, leadTable, leadRow);
+  if (!leadResult.ok) {
+    return res.status(leadResult.status || 500).json({ error: leadResult.error, detail: leadResult.detail });
+  }
+  const leadId = (leadResult.data && (leadResult.data.lead_id || leadResult.data.id)) || null;
+
+  // 3. Open a BD opportunity on LCC (is_open is GENERATED — omit it).
+  let bdOpportunityId = null;
+  const oppResult = await opsQuery('POST', 'bd_opportunities', {
+    workspace_id: workspaceId,
+    entity_id: resolvedEntityId,
+    type: 'prospect',
+    stage: 'identified',
+    vertical: normDomain,
+    owner_user_id: user.id,
+    opened_at: new Date().toISOString(),
+    metadata: { origin: 'property_flow', source_domain: normDomain, source_property_id: String(property_id), lead_id: leadId },
+  });
+  if (oppResult.ok) {
+    const opp = Array.isArray(oppResult.data) ? oppResult.data[0] : oppResult.data;
+    bdOpportunityId = (opp && opp.id) || null;
+  } else {
+    console.warn('[create_lead] bd_opportunity insert failed (non-fatal):', oppResult.data);
+  }
+
+  // 4. Canonical activity for the timeline.
+  await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId, actor_id: user.id,
+    category: 'status_change',
+    title: 'Lead created from property: ' + ownerDisplay,
+    body: notes || null,
+    entity_id: resolvedEntityId,
+    source_type: 'system', domain: normDomain,
+    visibility: 'shared',
+    metadata: { bridge_source: 'create_lead', lead_id: leadId, bd_opportunity_id: bdOpportunityId, source_property_id: String(property_id) },
+    occurred_at: new Date().toISOString(),
+  });
+
+  // 5. Best-effort Teams alert.
+  sendTeamsAlert({
+    title: 'New BD Lead Created',
+    summary: ownerDisplay,
+    severity: 'success',
+    facts: [
+      ['Owner', ownerDisplay],
+      ['Property', property_address || label || String(property_id)],
+      ['Vertical', normDomain],
+      ['Next action', 'Add to cadence / begin outreach'],
+    ],
+    actions: [{ label: 'View in LCC', url: (process.env.LCC_BASE_URL || '') + '/' + normDomain }],
+  }).catch(function () {});
+
+  return res.status(201).json({
+    ok: true,
+    lead_id: leadId,
+    entity_id: resolvedEntityId,
+    bd_opportunity_id: bdOpportunityId,
+    created_entity: createdEntity,
+  });
+}
+
+async function bridgeInitiateCadence(req, res, user, workspaceId) {
+  const {
+    entity_id, contact_id, sf_contact_id,
+    property_id, property_address, domain,
+    phase, priority_tier,
+  } = req.body || {};
+
+  if (!entity_id && !contact_id && !sf_contact_id) {
+    return res.status(400).json({ error: 'At least one of entity_id, contact_id, sf_contact_id is required' });
+  }
+
+  const state = await getCadenceState(
+    { entity_id, contact_id, sf_contact_id },
+    { property_id, property_address, domain }
+  );
+  if (!state.ok) {
+    return res.status(state.status || 500).json({ error: state.error || 'Failed to initialize cadence', detail: state.detail });
+  }
+
+  const cadence = state.cadence;
+  const wantPhase = phase || 'onboarding';
+  const wantTier = priority_tier || cadence.priority_tier || 'B';
+
+  if (state.is_new || cadence.phase !== wantPhase || cadence.priority_tier !== wantTier) {
+    const patch = await opsQuery('PATCH', 'touchpoint_cadence?id=eq.' + pgFilterVal(cadence.id), { phase: wantPhase, priority_tier: wantTier });
+    if (patch.ok && Array.isArray(patch.data) && patch.data[0]) {
+      Object.assign(cadence, patch.data[0]);
+    } else {
+      console.warn('[initiate_cadence] phase/tier patch failed (non-fatal):', patch.data);
+    }
+  }
+
+  await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId, actor_id: user.id,
+    category: 'status_change',
+    title: 'Added to ' + wantPhase + ' cadence',
+    entity_id: entity_id || cadence.entity_id || null,
+    source_type: 'system', domain: domain || cadence.domain || null,
+    visibility: 'shared',
+    metadata: { bridge_source: 'initiate_cadence', cadence_id: cadence.id, phase: wantPhase, priority_tier: wantTier, source_property_id: property_id ? String(property_id) : null },
+    occurred_at: new Date().toISOString(),
+  });
+
+  return res.status(201).json({ ok: true, cadence_id: cadence.id, next_touch_due: cadence.next_touch_due || null, is_new: !!state.is_new });
 }
 
 // ============================================================================

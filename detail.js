@@ -404,7 +404,20 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     try { _udRenderCompletenessRail(); } catch (e) { console.warn('completeness rail render failed', e); }
     // Render the next-action bar at the bottom of the detail panel.
     // Best-effort: never throws upward (Item #8 Phase A, 2026-05-17).
-    try { _udRenderNextActionBar(); } catch (e) { console.warn('next-action bar render failed', e); }
+    // Phase 8: ranked prospecting feed (PR1). Falls back to the single-row
+    // bar on empty feed or render error, so this degrades to prior behavior.
+    Promise.allSettled([_udFetchProspectingFeed(6), _udFetchPriorityBand()]).then(function () {
+      try { _udRenderProspectingFeed(); }
+      catch (e) { console.warn('prospecting feed render failed', e); try { _udRenderNextActionBar(); } catch (_e) {} }
+    });
+    // Enrich ownership ladder signals (confidence + divergence); re-render the
+    // Ownership tab if it's the active one once they load.
+    _udEnrichOwnershipSignals().then(function () {
+      try {
+        var _bodyEl = document.getElementById('detailBody');
+        if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership & CRM') _bodyEl.innerHTML = _udRenderTab('Ownership & CRM');
+      } catch (_e) {}
+    });
 
     // ── Dialysis Operations tab: auto-match CMS facility when rankings is empty ──
     // Uses the /api/cms-match?action=resolve endpoint to fuzzy-match the property's
@@ -5717,6 +5730,294 @@ window._udOwnerBeginProspecting = _udOwnerBeginProspecting;
  * Earliest transfer_date wins; latest ownership_end wins; counts how many
  * source rows were merged so the UI can surface it.
  */
+// ============================================================================
+// Property Intelligence Phase 4 + 8 — read-only UI (PR1, 2026-05-30)
+// Ownership de-anonymization ladder + ranked prospecting feed.
+// Reads only; the Create-lead / Add-to-cadence actions call operations.js
+// sub-routes (create_lead / initiate_cadence) that ship in PR2 — until then
+// they surface a toast. See audit/data-flow-2026-05-30/ drafts + apply guide.
+// ============================================================================
+
+async function _udEnrichOwnershipSignals() {
+  if (!_udCache || !_udCache.ownership) return;
+  const own = _udCache.ownership;
+  const db = _udCache.db;
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+  if (own.true_owner_id && _udCache.ownerConf === undefined) {
+    try {
+      const res = await qFn('true_owners', 'true_owner_id,owner_role,owner_role_confidence,owner_role_source', {
+        filter: 'true_owner_id=eq.' + encodeURIComponent(own.true_owner_id), limit: 1,
+      });
+      const row = Array.isArray(res) ? res[0] : (res && res.data ? res.data[0] : null);
+      if (row) {
+        const num = row.owner_role_confidence == null ? null : Number(row.owner_role_confidence);
+        _udCache.ownerConf = { value: (num != null && !isNaN(num)) ? num : null, role: row.owner_role || null, source: row.owner_role_source || null };
+      } else { _udCache.ownerConf = null; }
+    } catch (_e) { _udCache.ownerConf = null; }
+  }
+  if (_udCache.ownerDivergence === undefined) {
+    if (db === 'gov') {
+      const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
+      if (pid != null) {
+        try {
+          const res = await qFn('v_recorded_vs_assessor_owner_divergence',
+            'property_id,recorded_owner_name,assessor_owner_name', {
+              filter: 'property_id=eq.' + encodeURIComponent(pid), limit: 1 });
+          const row = Array.isArray(res) ? res[0] : (res && res.data ? res.data[0] : null);
+          _udCache.ownerDivergence = row
+            ? { kind: 'assessor', a: row.recorded_owner_name, b: row.assessor_owner_name } : null;
+        } catch (_e) { _udCache.ownerDivergence = null; }
+      } else { _udCache.ownerDivergence = null; }
+    } else {
+      const rec = own.recorded_owner_canonical || own.recorded_owner;
+      const tru = own.true_owner_canonical || own.true_owner;
+      _udCache.ownerDivergence = (rec && tru && rec !== tru && !own.true_owner_is_operator)
+        ? { kind: 'true', a: rec, b: tru } : null;
+    }
+  }
+  if (typeof _setUdCache === 'function') _setUdCache(_udCache);
+}
+
+function _udOwnershipLadder(own, db) {
+  const recDisplay = own.recorded_owner_canonical || own.recorded_owner || '';
+  const trueDisplay = own.true_owner_canonical || own.true_owner || '';
+  const trueIsOperator = !!own.true_owner_is_operator;
+  const trueResolved = trueDisplay && !trueIsOperator;
+  const conf = _udCache.ownerConf || null;
+  const divergence = _udCache.ownerDivergence || null;
+  const _sfAccId = own.sf_account_id || own.sf_company_id;
+  let h = '';
+  h += '<div style="display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:12px">';
+  // Recorded owner
+  h += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
+  h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">Recorded Owner (deed)</div>';
+  if (recDisplay) {
+    h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) + '</div>';
+    if (own.recorded_owner_type || own.owner_type) h += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
+    const llcBits = [];
+    if (own.manager_name) llcBits.push('Mgr: ' + esc(own.manager_name));
+    if (own.registered_agent_name) llcBits.push('Agent: ' + esc(own.registered_agent_name));
+    const filingState = own.state_of_incorporation || own.filing_state || own.recorded_owner_state;
+    if (filingState) llcBits.push('Filed: ' + esc(filingState));
+    if (llcBits.length) h += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + llcBits.join(' · ') + '</div>';
+    if (_sfAccId) h += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce →</a>';
+  } else {
+    h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— not on file —</div>';
+    h += '<div style="font-size:11px;color:var(--text3)">No recorded owner. Pull from county deed / CoStar / RCA.</div>';
+  }
+  h += '</div>';
+  h += '<div style="display:flex;align-items:center;justify-content:center;color:var(--purple);font-size:18px">→</div>';
+  // True owner
+  const trueStepBg = trueResolved
+    ? 'linear-gradient(135deg,rgba(165,94,234,0.08),rgba(165,94,234,0.04));border:1px solid rgba(165,94,234,0.3)'
+    : 'var(--s2);border:1px solid var(--border)';
+  h += '<div style="background:' + trueStepBg + ';border-radius:10px;padding:14px 16px">';
+  h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--purple);margin-bottom:6px">True Owner / Decision Maker</div>';
+  if (trueResolved) {
+    h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(trueDisplay, _ownerCtxFromCurrent(own, db, 'true')) + '</div>';
+    if (own.true_owner_type) h += '<div style="font-size:11px;color:var(--text2)">' + esc(own.true_owner_type) + '</div>';
+    if (conf && conf.value != null) {
+      const pct = Math.round(conf.value * 100);
+      const band = conf.value >= 0.8 ? 'var(--green)' : conf.value >= 0.5 ? 'var(--yellow)' : 'var(--red)';
+      h += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;font-weight:600;color:var(--text2)">Confidence'
+         + '<span style="display:inline-block;width:54px;height:6px;border-radius:3px;background:var(--s3);overflow:hidden">'
+         + '<span style="display:block;height:100%;width:' + pct + '%;background:' + band + '"></span></span>'
+         + '<span style="color:' + band + '">' + pct + '%</span>'
+         + (conf.role ? '<span style="color:var(--text3);font-weight:400">· ' + esc(conf.role) + '</span>' : '') + '</div>';
+    } else {
+      h += '<div style="margin-top:6px;font-size:11px;color:var(--text3)">Confidence: unscored</div>';
+    }
+    if (own.true_owner_sec_cik) h += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px">SEC filings →</a>';
+  } else if (trueIsOperator) {
+    h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + esc(trueDisplay) + '</div>';
+    h += '<div style="font-size:11px;color:var(--yellow)">Operator-owner — verify this is the real-estate owner, not the chain operator.</div>';
+  } else {
+    h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— unresolved —</div>';
+    h += '<div style="font-size:11px;color:var(--text3)">Beneficial owner not yet identified. Queue LLC / SoS research.</div>';
+  }
+  h += '</div>';
+  h += '</div>';
+  if (divergence) {
+    const label = divergence.kind === 'assessor' ? 'Assessor disagrees' : 'Recorded vs true differ';
+    h += '<div style="display:flex;align-items:center;gap:10px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);border-radius:8px;padding:9px 12px;margin:0 0 12px;font-size:12px">';
+    h += '<span style="font-weight:700;color:var(--yellow)">⚠ ' + esc(label) + '</span>';
+    h += '<span style="color:var(--text2)">' + esc(divergence.a || '—') + '  vs  <b>' + esc(divergence.b || '—') + '</b></span>';
+    h += '</div>';
+  }
+  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">';
+  if (trueResolved) {
+    h += '<button onclick="_udBtnGuard(this,_udCreateLeadFromProperty)" style="padding:8px 13px;background:var(--accent);color:#fff;border:none;border-radius:7px;font-weight:600;font-size:12.5px;cursor:pointer">Create lead</button>';
+    h += '<button onclick="_udBtnGuard(this,_udAddToCadence)" style="padding:8px 13px;background:var(--s2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-weight:600;font-size:12.5px;cursor:pointer">Add to cadence</button>';
+  } else {
+    h += '<button onclick="_udResolveGap(\'focus:udOwnTrue\')" style="padding:8px 13px;background:var(--accent);color:#fff;border:none;border-radius:7px;font-weight:600;font-size:12.5px;cursor:pointer">Resolve owner</button>';
+    h += '<button onclick="_udResolveGap(\'focus:udOwnRecorded\')" style="padding:8px 13px;background:var(--s2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-weight:600;font-size:12.5px;cursor:pointer">Pull recorded owner</button>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function _udBandClass(band) {
+  const b = String(band || '').toUpperCase();
+  if (b === 'P0') return { bg: '#7A1020', label: 'P0' };
+  if (b === 'P0.5') return { bg: 'var(--red)', label: 'P0.5' };
+  if (b === 'P1') return { bg: 'var(--yellow)', label: 'P1' };
+  if (b === 'P2' || b === 'P3') return { bg: 'var(--purple)', label: b };
+  return { bg: 'var(--text3)', label: b || '—' };
+}
+function _udResearchCta(researchType) {
+  const t = String(researchType || '');
+  if (t.indexOf('missing_recorded_owner') !== -1) return { label: 'Pull recorded owner →', tab: 'Ownership & CRM' };
+  if (t.indexOf('llc') !== -1 || t.indexOf('true_owner') !== -1) return { label: 'Resolve true owner →', tab: 'Ownership & CRM' };
+  if (t.indexOf('lease') !== -1) return { label: 'Confirm lease →', tab: 'Rent Roll' };
+  if (t.indexOf('sale') !== -1) return { label: 'Review sale →', tab: 'Deal History' };
+  return { label: 'Take action →', tab: 'Ownership & CRM' };
+}
+function _udResearchTitle(r) {
+  const t = String(r.research_type || '');
+  if (t.indexOf('missing_recorded_owner') !== -1) return 'Pull recorded owner';
+  if (t.indexOf('llc') !== -1) return 'Resolve LLC / true owner';
+  if (t.indexOf('true_owner') !== -1) return 'Resolve true owner';
+  if (t.indexOf('lease') !== -1) return 'Confirm lease / expiration';
+  if (t.indexOf('sale') !== -1) return 'Review sale record';
+  return t.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }) || 'Research action';
+}
+
+async function _udFetchProspectingFeed(limit) {
+  limit = limit || 6;
+  if (!_udCache) return [];
+  const db = _udCache.db;
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+  const pid = (_udCache.ids && _udCache.ids.property_id) || (_udCache.property && _udCache.property.property_id);
+  if (pid == null) { _udCache.researchFeed = []; return []; }
+  try {
+    const res = await qFn('v_next_best_research', 'research_type,entity_kind,entity_id,label,priority,instructions,domain', {
+      filter: 'entity_kind=eq.property&entity_id=eq.' + encodeURIComponent(String(pid)),
+      order: 'priority.desc.nullslast', limit: limit });
+    const rows = Array.isArray(res) ? res : (res && res.data ? res.data : []);
+    _udCache.researchFeed = rows || [];
+  } catch (_e) { _udCache.researchFeed = []; }
+  if (typeof _setUdCache === 'function') _setUdCache(_udCache);
+  return _udCache.researchFeed;
+}
+
+async function _udFetchPriorityBand() {
+  if (!_udCache) return null;
+  if (_udCache.priorityBand !== undefined) return _udCache.priorityBand;
+  const db = _udCache.db;
+  const pid = (_udCache.ids && _udCache.ids.property_id) || (_udCache.property && _udCache.property.property_id);
+  if (pid == null) { _udCache.priorityBand = null; return null; }
+  try {
+    const doFetch = (window.LCC_AUTH && window.LCC_AUTH.apiFetch) ? window.LCC_AUTH.apiFetch : fetch;
+    const res = await doFetch('/api/priority-band?domain=' + encodeURIComponent(db) + '&property_id=' + encodeURIComponent(pid));
+    if (res && res.ok) { const data = await res.json(); _udCache.priorityBand = (data && data.priority_band) ? data : null; }
+    else { _udCache.priorityBand = null; }
+  } catch (_e) { _udCache.priorityBand = null; }
+  if (typeof _setUdCache === 'function') _setUdCache(_udCache);
+  return _udCache.priorityBand;
+}
+
+function _udRenderProspectingFeed() {
+  const bar = document.getElementById('detailNextActionBar');
+  if (!bar) return;
+  const band = _udCache && _udCache.priorityBand;
+  const feed = (_udCache && _udCache.researchFeed) || [];
+  const legacy = _udCache && _udCache.nextAction;
+  if (!band && feed.length === 0 && (!legacy || !legacy.gap_type)) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const rows = [];
+  rows.push('<div class="prospect-feed-header"><span class="nab-label">What to do about this property</span>'
+    + (band && band.is_cross_vertical ? '<span class="nab-xv-chip" title="Owner holds assets in both verticals">cross-vertical</span>' : '') + '</div>');
+  if (band && band.priority_band) {
+    const bc = _udBandClass(band.priority_band);
+    const conf = band.owner_role_confidence != null ? Number(band.owner_role_confidence) : null;
+    const why = esc(band.reason || 'BD priority') + (band.total_property_count ? ' · ' + esc(String(band.total_property_count)) + ' properties' : '');
+    rows.push('<div class="prospect-row">');
+    rows.push('<span class="prospect-band" style="background:' + bc.bg + '">' + esc(bc.label) + '</span>');
+    rows.push('<div class="prospect-why"><b>Owner: ' + esc(band.owner_name || (_udCache.ownership && (_udCache.ownership.true_owner || _udCache.ownership.recorded_owner)) || '—') + '</b>'
+      + '<div class="prospect-sub">' + why + (conf != null && !isNaN(conf) ? ' · role conf ' + Math.round(conf * 100) + '%' : '') + '</div></div>');
+    rows.push('<div class="prospect-actions"><button type="button" class="prospect-cta-primary" onclick="event.stopPropagation();_udBtnGuard(this,_udCreateLeadFromProperty)">Create lead</button>'
+      + '<button type="button" class="prospect-cta" onclick="event.stopPropagation();_udBtnGuard(this,_udAddToCadence)">Add to cadence</button></div>');
+    rows.push('</div>');
+  }
+  feed.forEach(function (r) {
+    const cta = _udResearchCta(r.research_type);
+    rows.push('<div class="prospect-row">');
+    rows.push('<span class="prospect-rank" title="priority score">' + esc(String(r.priority != null ? r.priority : '—')) + '</span>');
+    rows.push('<div class="prospect-why"><b>' + esc(_udResearchTitle(r)) + '</b><div class="prospect-sub">' + esc(r.instructions || r.label || '') + '</div></div>');
+    rows.push('<div class="prospect-actions"><button type="button" class="prospect-cta" onclick="event.stopPropagation();switchUnifiedTab(&quot;' + esc(cta.tab) + '&quot;)">' + esc(cta.label) + '</button></div>');
+    rows.push('</div>');
+  });
+  if (feed.length === 0 && legacy && legacy.gap_type) {
+    const dispatch = (typeof _udNextActionDispatchFor === 'function') ? _udNextActionDispatchFor(legacy.gap_type) : { label: 'Take action →' };
+    const valStr = (typeof _udFormatNabValue === 'function') ? _udFormatNabValue(legacy.gap_value) : '';
+    rows.push('<div class="prospect-row">');
+    rows.push('<span class="prospect-rank">' + esc(String(legacy.gap_severity || '').toUpperCase()) + '</span>');
+    rows.push('<div class="prospect-why"><b>' + esc(legacy.suggested_action || legacy.gap_label || 'Next action') + '</b>' + (valStr ? '<div class="prospect-sub">' + esc(valStr) + ' value</div>' : '') + '</div>');
+    rows.push('<div class="prospect-actions"><button type="button" class="prospect-cta" onclick="event.stopPropagation();_udNextActionClick(&quot;' + esc(legacy.gap_type) + '&quot;)">' + esc(dispatch.label) + '</button></div>');
+    rows.push('</div>');
+  }
+  bar.className = 'prospect-feed';
+  bar.onclick = null;
+  bar.innerHTML = rows.join('');
+  bar.style.display = '';
+}
+
+async function _udApiPost(path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (window.LCC_USER && window.LCC_USER.workspace_id) headers['x-lcc-workspace'] = window.LCC_USER.workspace_id;
+  const doFetch = (window.LCC_AUTH && window.LCC_AUTH.apiFetch) ? window.LCC_AUTH.apiFetch : fetch;
+  const res = await doFetch(path, { method: 'POST', headers: headers, body: JSON.stringify(body) });
+  const text = await res.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch (_e) { data = { error: text }; }
+  if (!res.ok && data && data.ok === undefined) data.ok = false;
+  return data;
+}
+
+async function _udCreateLeadFromProperty() {
+  if (!_udCache) return;
+  const own = _udCache.ownership || {};
+  const db = _udCache.db;
+  const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
+  if (!pid) { showToast('No property id in context', 'error'); return; }
+  const body = {
+    domain: db, property_id: pid, entity_id: own.owner_entity_id || null,
+    owner_name: own.recorded_owner_canonical || own.recorded_owner || null,
+    true_owner_name: own.true_owner_canonical || own.true_owner || null,
+    owner_role: own.owner_type || null,
+    label: (_udCache.property && _udCache.property.address) || (_udCache.fallback && _udCache.fallback.address) || null,
+    property_address: (_udCache.property && _udCache.property.address) || null,
+    source: 'property_flow',
+  };
+  try {
+    const resp = await _udApiPost('/api/operations?action=create_lead', body);
+    if (resp && resp.ok) { showToast('Lead created' + (resp.bd_opportunity_id ? ' · BD opportunity opened' : ''), 'success'); }
+    else { showToast('Create lead failed: ' + ((resp && resp.error) || 'unknown'), 'error'); }
+  } catch (e) { showToast('Create lead error: ' + e.message, 'error'); }
+}
+
+async function _udAddToCadence() {
+  if (!_udCache) return;
+  const own = _udCache.ownership || {};
+  const db = _udCache.db;
+  const entityId = own.owner_entity_id || null;
+  const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
+  if (!entityId) { showToast('Resolve the owner first (Create lead) so a cadence can be attached', 'info'); return; }
+  const body = { entity_id: entityId, property_id: pid, property_address: (_udCache.property && _udCache.property.address) || null, domain: db, phase: 'onboarding', priority_tier: 'B' };
+  try {
+    const resp = await _udApiPost('/api/operations?action=initiate_cadence', body);
+    if (resp && resp.ok) { showToast('Added to onboarding cadence', 'success'); }
+    else { showToast('Add to cadence failed: ' + ((resp && resp.error) || 'unknown'), 'error'); }
+  } catch (e) { showToast('Cadence error: ' + e.message, 'error'); }
+}
+
+window._udCreateLeadFromProperty = _udCreateLeadFromProperty;
+window._udAddToCadence = _udAddToCadence;
+window._udRenderProspectingFeed = _udRenderProspectingFeed;
+window._udFetchProspectingFeed = _udFetchProspectingFeed;
+window._udFetchPriorityBand = _udFetchPriorityBand;
+window._udEnrichOwnershipSignals = _udEnrichOwnershipSignals;
+window._udOwnershipLadder = _udOwnershipLadder;
+// ============================================================================
+
 function _udTabOwnership() {
   const own = _udCache.ownership;
   const chain = _udCache.chain || [];
@@ -5811,54 +6112,9 @@ function _udTabOwnership() {
     // Finance Inc" + 9 other SMBC variants -> "SMBC Leasing & Finance
     // Inc"). Prefer canonical in display contexts; the Resolve Ownership
     // form below keeps the raw deed text so edits preserve verbatim names.
-    const _recDisplay  = own.recorded_owner_canonical || own.recorded_owner;
-    const _trueDisplay = own.true_owner_canonical     || own.true_owner;
-    // Equality check uses canonical so casing-only dups don't flip
-    // _hasTrueOwner to true and render two identical cards.
-    const _hasTrueOwner = _trueDisplay
-                       && _trueDisplay !== _recDisplay
-                       && !own.true_owner_is_operator;
+    // (display vars now computed inside _udOwnershipLadder — PR1)
     html += '</div></div>'; // close detail-grid opened above — we'll use cards instead
-    html += '<div style="display:grid;grid-template-columns:' + (_hasTrueOwner ? '1fr 1fr' : '1fr') + ';gap:12px;margin-bottom:12px">';
-
-    // Recorded Owner card
-    html += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
-    html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">Recorded Owner</div>';
-    html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + (_recDisplay ? _ownerLink(_recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) : '<span style="color:var(--text3)">\u2014</span>') + '</div>';
-    if (own.recorded_owner_type || own.owner_type) html += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
-    if (own.recorded_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.recorded_owner_state) + '</div>';
-    if (own.recorded_owner_address) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.recorded_owner_address) + (own.recorded_owner_city ? ', ' + esc(own.recorded_owner_city) : '') + '</div>';
-    const _sfAccId = own.sf_account_id || own.sf_company_id;
-    if (_sfAccId) html += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce \u2192</a>';
-    // EDGAR link on Recorded Owner card \u2014 only when the True Owner card is
-    // hidden (deed directly names the canonical CIK-filer, e.g. "Realty
-    // Income Corp" on the deed). Otherwise the link appears on the True
-    // Owner card below.
-    if (!_hasTrueOwner && own.true_owner_sec_cik) {
-      const _sfShownR = !!_sfAccId;
-      html += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px' + (_sfShownR ? ';margin-left:10px' : '') + '" title="View SEC EDGAR filings (CIK ' + esc(own.true_owner_sec_cik) + ')">SEC filings \u2192</a>';
-    }
-    html += '</div>';
-
-    // True Owner card
-    if (_hasTrueOwner) {
-      html += '<div style="background:linear-gradient(135deg,rgba(165,94,234,0.08),rgba(165,94,234,0.04));border:1px solid rgba(165,94,234,0.3);border-radius:10px;padding:14px 16px">';
-      html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--purple);margin-bottom:6px">True Owner / Decision Maker</div>';
-      html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(_trueDisplay, _ownerCtxFromCurrent(own, db, 'true')) + '</div>';
-      if (own.true_owner_type) html += '<div style="font-size:11px;color:var(--text2)">' + esc(own.true_owner_type) + '</div>';
-      if (own.true_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.true_owner_state) + '</div>';
-      if (own.true_owner_city) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.true_owner_city) + '</div>';
-      if (_sfAccId) html += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce \u2192</a>';
-      // EDGAR link on True Owner card \u2014 when the canonical is a public
-      // CIK-filer. Sits next to "View in Salesforce" with a 10px gap
-      // when both are present.
-      if (own.true_owner_sec_cik) {
-        const _sfShownT = !!_sfAccId;
-        html += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px' + (_sfShownT ? ';margin-left:10px' : '') + '" title="View SEC EDGAR filings (CIK ' + esc(own.true_owner_sec_cik) + ')">SEC filings \u2192</a>';
-      }
-      html += '</div>';
-    }
-    html += '</div>';
+    html += _udOwnershipLadder(own, db);
 
     // Additional details below cards
     html += '<div class="detail-grid" style="margin-bottom:0">';

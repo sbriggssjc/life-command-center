@@ -109,10 +109,81 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-orphan-sale':     return handleResolveOrphanSale(req, res);
     case 'resolve-lease-tenant-drift': return handleResolveLeaseTenantDrift(req, res);
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
+    case 'priority-band':              return handlePriorityBand(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// PRIORITY BAND (Phase 8, PR3 2026-05-30)
+// GET /api/priority-band?domain=gov&property_id=16404
+//   -> the owner's BD priority band for a property, from v_priority_queue_enriched
+//      on LCC Opps. Powers the owner-level row at the top of the property-detail
+//      prospecting feed. Returns null-ish ({band:null}) when the property's owner
+//      is not in the queue, so the front-end degrades gracefully.
+// Also accepts ?entity_id=<uuid> to look up an entity-level band directly.
+// ============================================================================
+async function handlePriorityBand(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'GET only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainRaw = String(req.query.domain || '').toLowerCase();
+  const domain = domainRaw === 'government' ? 'gov' : domainRaw === 'dialysis' ? 'dia' : domainRaw;
+  const propertyId = req.query.property_id != null ? String(req.query.property_id) : null;
+  const entityId = req.query.entity_id ? String(req.query.entity_id) : null;
+
+  if (!entityId && !(domain && propertyId)) {
+    return res.status(400).json({ error: 'Provide entity_id, or domain + property_id' });
+  }
+
+  const selectCols = [
+    'entity_id', 'name', 'vertical', 'priority_band', 'reason',
+    'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
+    'total_property_count', 'current_property_count', 'next_touch_due',
+    'days_overdue', 'source_domain', 'source_property_id', 'source_property_address',
+  ].join(',');
+
+  let path;
+  if (entityId) {
+    path = 'v_priority_queue_enriched?select=' + selectCols
+         + '&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1';
+  } else {
+    // source_domain on the view uses the long form ('dialysis'/'government').
+    const srcDomain = domain === 'gov' ? 'government' : domain === 'dia' ? 'dialysis' : domain;
+    path = 'v_priority_queue_enriched?select=' + selectCols
+         + '&source_domain=eq.' + pgFilterVal(srcDomain)
+         + '&source_property_id=eq.' + pgFilterVal(propertyId)
+         + '&limit=1';
+  }
+
+  const r = await opsQuery('GET', path);
+  if (!r.ok) {
+    // Soft-fail: the front-end treats a non-ok / empty result as "no band".
+    console.warn('[priority-band] query failed:', r.status, r.data);
+    return res.status(200).json({ priority_band: null });
+  }
+  const row = Array.isArray(r.data) ? r.data[0] : (r.data || null);
+  if (!row) return res.status(200).json({ priority_band: null });
+
+  // Normalize owner name + numeric confidence for the UI.
+  return res.status(200).json({
+    priority_band: row.priority_band || null,
+    reason: row.reason || null,
+    owner_name: row.name || null,
+    owner_role: row.effective_owner_role || null,
+    owner_role_confidence: row.owner_role_confidence != null ? Number(row.owner_role_confidence) : null,
+    is_cross_vertical: !!row.is_cross_vertical,
+    total_property_count: row.total_property_count != null ? Number(row.total_property_count) : null,
+    next_touch_due: row.next_touch_due || null,
+    days_overdue: row.days_overdue != null ? Number(row.days_overdue) : null,
+    entity_id: row.entity_id || null,
+    source_property_address: row.source_property_address || null,
+  });
+}
 
 // ============================================================================
 // CONSOLIDATE PROPERTY (Round 76be, 2026-04-28)
@@ -2955,22 +3026,37 @@ async function handleLlcResearchTick(req, res) {
 
         // 3. Map result → terminal state.
         if (!r.found) {
-          const status =
+          // Backoff (2026-05-31): when no handler is configured we used to
+          // re-queue the row indefinitely, which let the head of the queue
+          // (the oldest ~50 rows) cycle every tick and starve everything
+          // behind it (some rows hit 400+ attempts while ~1,860 were never
+          // reached). Now, after LLC_NO_HANDLER_ATTEMPT_CAP attempts on a
+          // no_handler_configured result, park the row as 'deferred' so it
+          // drops out of the status=queued working set. A later run (once a
+          // handler/API key lands) can re-queue deferred rows in bulk.
+          const LLC_NO_HANDLER_ATTEMPT_CAP = parseInt(process.env.LLC_NO_HANDLER_ATTEMPT_CAP || '3', 10);
+          const attemptsNow = (q.attempts || 0) + 1;
+          let status =
             r.reason === 'no_match'              ? 'no_match' :
             r.reason === 'unsupported_state'     ? 'unsupported_state' :
-            r.reason === 'no_handler_configured' ? 'queued' :  // re-queue: the key may land later
+            r.reason === 'no_handler_configured'
+              ? (attemptsNow >= LLC_NO_HANDLER_ATTEMPT_CAP ? 'deferred' : 'queued') :
                                                    'failed';
+          const isReQueue = (status === 'queued');
           await domainQuery(dom, 'PATCH',
             `llc_research_queue?queue_id=eq.${q.queue_id}`,
             {
               status,
               last_error: r.reason || 'unknown',
-              resolved_at: status === 'queued' ? null : new Date().toISOString(),
+              resolved_at: isReQueue ? null : new Date().toISOString(),
             });
           item.outcome = status;
-          summary[status === 'queued' ? 'failed' : status] += 1;
-          if (status === 'queued') result.failed += 1;
-          else result[status] += 1;
+          // 'deferred' is a terminal-for-now state; count it like the other
+          // non-resolving outcomes under failed so the tick summary is honest.
+          const bucket = isReQueue ? 'failed' : (status === 'deferred' ? 'failed' : status);
+          summary[bucket] = (summary[bucket] || 0) + 1;
+          if (bucket === 'failed') result.failed += 1;
+          else result[bucket] += 1;
           continue;
         }
 
