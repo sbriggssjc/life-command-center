@@ -1049,6 +1049,87 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
 // Unified work-type review lanes. Reads /api/review-counts (one batched call)
 // and renders a lane card per work type with a live count + deep-link into the
 // surface that currently owns that work, until each lane gets its own view.
+// ── Ops Health (2026-05-31) ────────────────────────────────────────────────
+// Surfaces failing crons, stalled workers, open alerts, flow failures, and
+// write-failure pile-ups in-app. Reads /api/ops-health (one batched call).
+// Built because the stuck-LLC-worker regression degraded silently for days,
+// visible only via a manual DB sweep — this makes that class of problem self-evident.
+async function renderOpsHealthPage() {
+  const el = document.getElementById('opsHealthContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = (typeof opsPerf === 'function') ? opsPerf('render:ops_health') : { end() {} };
+
+  const res = await opsApi('/api/ops-health');
+  if (!res.ok) {
+    el.innerHTML = '<div class="ops-empty">Could not load Ops Health.<br><small>' + esc(res.error || '') + '</small></div>';
+    perf.end();
+    return;
+  }
+  const d = res.data || {};
+  const s = d.summary || {};
+  const sevClass = (sev) => {
+    const v = String(sev || '').toLowerCase();
+    return v === 'critical' || v === 'error' ? 'red' : v === 'warning' || v === 'warn' ? 'yellow' : '';
+  };
+
+  let html = '<div class="ops-header"><h2>Ops Health</h2></div>';
+  html += '<div class="oh-intro">System self-monitoring: failing jobs, stalled workers, open alerts. If this page is all-clear, the pipelines are healthy.</div>';
+
+  // Summary KPI row.
+  html += '<div class="metrics-grid">';
+  html += metricCardHTML('Open Alerts', s.open_alerts == null ? '—' : s.open_alerts, 'health alerts', (s.open_alerts > 0) ? 'red' : 'green');
+  html += metricCardHTML('Workers Stuck', s.workers_stuck == null ? '—' : s.workers_stuck, 'queues degrading', (s.workers_stuck > 0) ? 'red' : 'green');
+  html += metricCardHTML('Flow Failures', s.open_flow_failures == null ? '—' : s.open_flow_failures, 'Power Automate', (s.open_flow_failures > 0) ? 'yellow' : 'green');
+  html += metricCardHTML('Cron Issues', s.open_cron_issues == null ? '—' : s.open_cron_issues, 'unresolved', (s.open_cron_issues > 0) ? 'yellow' : 'green');
+  html += metricCardHTML('Write Failures', s.write_failures_recent == null ? '—' : s.write_failures_recent, 'recent', (s.write_failures_recent > 0) ? 'yellow' : 'green');
+  html += '</div>';
+
+  // Workers.
+  html += '<div class="widget"><div class="widget-title">Background Workers</div>';
+  (d.workers || []).forEach(function (w) {
+    const stuck = w.status === 'stuck';
+    const badge = stuck ? '<span class="q-badge pri-high">STUCK</span>'
+      : (w.status === 'idle_backlog' ? '<span class="q-badge">backlog</span>' : '<span class="q-badge" style="background:var(--okbg);color:var(--green)">ok</span>');
+    html += '<div class="q-item"><div class="q-item-header"><span class="q-item-title">' + esc(w.label) + '</span><div class="q-item-badges">' + badge + '</div></div>'
+          + '<div class="q-item-meta">queued: ' + (w.queued == null ? '—' : w.queued.toLocaleString())
+          + ' · in&nbsp;progress: ' + (w.in_progress == null ? '—' : w.in_progress.toLocaleString())
+          + (stuck ? ' — rows accumulating in_progress; check the reclaim/handler' : '') + '</div></div>';
+  });
+  if (!(d.workers || []).length) html += '<div class="ops-empty">No worker data.</div>';
+  html += '</div>';
+
+  // Open alerts.
+  html += '<div class="widget"><div class="widget-title">Open Alerts</div>';
+  if (!(d.alerts || []).length) {
+    html += '<div class="ops-empty">No open alerts.</div>';
+  } else {
+    d.alerts.forEach(function (a) {
+      html += '<div class="q-item oh-' + sevClass(a.severity) + '"><div class="q-item-header"><span class="q-item-title">' + esc(a.alert_kind || 'alert') + '</span>'
+            + '<div class="q-item-badges"><span class="q-badge ' + (sevClass(a.severity) === 'red' ? 'pri-high' : '') + '">' + esc(a.severity || '') + '</span></div></div>'
+            + '<div class="q-item-meta">' + esc(a.summary || '') + (a.source ? ' · <span style="color:var(--text3)">' + esc(a.source) + '</span>' : '')
+            + (a.age_hours != null ? ' · ' + Math.round(a.age_hours) + 'h old' : '') + '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  // Flow failures.
+  html += '<div class="widget"><div class="widget-title">Flow Failures (Power Automate)</div>';
+  if (!(d.flow_failures || []).length) {
+    html += '<div class="ops-empty">No open flow failures.</div>';
+  } else {
+    d.flow_failures.forEach(function (f) {
+      html += '<div class="q-item oh-' + sevClass(f.severity) + '"><div class="q-item-header"><span class="q-item-title">' + esc(f.flow_name || 'flow') + '</span></div>'
+            + '<div class="q-item-meta">' + esc(f.failed_action || '') + (f.error_detail_short ? ' — ' + esc(f.error_detail_short) : '') + '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  el.innerHTML = html;
+  perf.end();
+}
+window.renderOpsHealthPage = renderOpsHealthPage;
+
 async function renderReviewConsolePage() {
   const el = document.getElementById('reviewConsoleContent');
   if (!el) return;

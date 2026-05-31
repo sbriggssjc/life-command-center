@@ -111,10 +111,78 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
+    case 'ops-health':                 return handleOpsHealth(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// OPS HEALTH (2026-05-31)
+// GET /api/ops-health -> one batched read of the system-health views so a human
+//   can finally see failing crons, dead/stalled workers, open alerts, flow
+//   failures, and write-failure pile-ups in-app. Every section is best-effort:
+//   a failed sub-read yields null so the surface still renders. The stuck-LLC
+//   regression that degraded silently for days is exactly what this surfaces.
+// ============================================================================
+async function handleOpsHealth(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const opsRead = async (path) => {
+    try { const r = await opsQuery('GET', path); return r.ok ? (Array.isArray(r.data) ? r.data : []) : null; }
+    catch (_e) { return null; }
+  };
+  const opsCount = async (path) => {
+    try { const r = await opsQuery('GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', undefined, { countMode: 'exact' }); return r.ok ? (r.count || 0) : null; }
+    catch (_e) { return null; }
+  };
+  // Cross-domain LLC worker health: queued vs in_progress (stuck) per domain.
+  const domCount = async (dom, path) => {
+    try { const r = await domainQuery(dom, 'GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', { 'Prefer': 'count=exact' }); return r.ok ? (r.count || 0) : null; }
+    catch (_e) { return null; }
+  };
+
+  const [
+    openAlerts, openFlowFailures, cronSummary,
+    writeFailRecent,
+    diaLlcQueued, diaLlcInProgress, govLlcQueued, govLlcInProgress,
+  ] = await Promise.all([
+    opsRead('v_lcc_health_alerts_open?select=alert_kind,source,severity,summary,detected_at,age_hours&order=detected_at.desc&limit=50'),
+    opsRead('v_flow_run_failures_open?select=flow_name,failed_action,error_kind,error_detail_short,severity,detected_at&order=detected_at.desc&limit=50'),
+    opsRead('v_cron_health_summary?select=alert_kind,source,severity,summary,detected_at,resolved_at&order=detected_at.desc&limit=50'),
+    opsCount('v_ingest_write_failures_recent'),
+    domCount('dia', 'llc_research_queue?status=eq.queued'),
+    domCount('dia', 'llc_research_queue?status=eq.in_progress'),
+    domCount('gov', 'llc_research_queue?status=eq.queued'),
+    domCount('gov', 'llc_research_queue?status=eq.in_progress'),
+  ]);
+
+  // Worker health rollup: flag stuck-in_progress (the regression signature).
+  const workers = [
+    { key: 'llc_research_dia', label: 'LLC/SOS research (Dialysis)', queued: diaLlcQueued, in_progress: diaLlcInProgress,
+      status: (diaLlcInProgress != null && diaLlcInProgress > 25) ? 'stuck' : (diaLlcQueued ? 'idle_backlog' : 'ok') },
+    { key: 'llc_research_gov', label: 'LLC/SOS research (Government)', queued: govLlcQueued, in_progress: govLlcInProgress,
+      status: (govLlcInProgress != null && govLlcInProgress > 25) ? 'stuck' : (govLlcQueued ? 'idle_backlog' : 'ok') },
+  ];
+
+  const alerts = openAlerts || [];
+  const flows = openFlowFailures || [];
+  const crons = (cronSummary || []).filter(r => !r.resolved_at);
+
+  return res.status(200).json({
+    generated_at: new Date().toISOString(),
+    summary: {
+      open_alerts: alerts.length,
+      open_flow_failures: flows.length,
+      open_cron_issues: crons.length,
+      write_failures_recent: writeFailRecent,
+      workers_stuck: workers.filter(w => w.status === 'stuck').length,
+    },
+    alerts, flow_failures: flows, cron_issues: crons, workers,
+  });
+}
 
 // ============================================================================
 // REVIEW CONSOLE COUNTS (UX move #2b, 2026-05-31)

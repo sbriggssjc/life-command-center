@@ -2032,3 +2032,8 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .rc-lane-label { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 3px; }
 .rc-lane-parts { font-size: 11px; color: var(--text3); margin-top: 6px; line-height: 1.5; }
 .rc-lane-cta { font-size: 12px; font-weight: 600; color: var(--accent); margin-top: 10px; }
+
+/* Ops Health (2026-05-31) */
+.oh-intro { font-size: 13px; color: var(--text3); max-width: 720px; margin: 0 0 16px; line-height: 1.5; }
+.q-item.oh-red { border-left: 3px solid var(--red); }
+.q-item.oh-yellow { border-left: 3px solid var(--yellow); }

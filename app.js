@@ -1005,6 +1005,7 @@ function handlePageLoad(pageId) {
     case 'pageReviewConsole': if (typeof renderReviewConsolePage === 'function') renderReviewConsolePage(); break;
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
     case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
+    case 'pageOpsHealth': if (typeof renderOpsHealthPage === 'function') renderOpsHealthPage(); break;
     case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;
     case 'pageDataQuality': if (typeof renderDataQualityPage === 'function') renderDataQualityPage(); break;
     case 'pageCal': renderCalendarFull(); break;
