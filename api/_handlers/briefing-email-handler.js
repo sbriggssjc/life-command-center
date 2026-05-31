@@ -1312,6 +1312,16 @@ export async function briefingEmailHandler(req, res) {
       : intelSnapshot;
   const variant = effectiveSnapshot?.variant || (isFridayCt ? 'friday_deep_dive' : 'daily');
 
+  // Weekday guard (2026-05-31): the briefing is a weekday product. Weekends
+  // would otherwise re-send Friday's stale snapshot. should_send is the
+  // authoritative signal for the Power Automate flow to branch on; it is
+  // false on Sat/Sun unless the caller explicitly forces a send
+  // (?force=true / { force: true } — used for QA/manual). The handler still
+  // returns the rendered subject/html so a forced or ad-hoc GET preview works.
+  const forceSend = String((req.query && req.query.force) || (req.body && req.body.force) || '').toLowerCase() === 'true';
+  const isWeekendCt = ctWeekday === 0 || ctWeekday === 6;
+  const should_send = forceSend || !isWeekendCt;
+
   const subject = formatSubject(ctNow(), variant);
   const ctx = {
     subject, generatedAt,
@@ -1331,6 +1341,9 @@ export async function briefingEmailHandler(req, res) {
     text,
     generated_at: generatedAt,
     role_view: roleView,
+    should_send,
+    suppressed_reason: should_send ? null : 'weekend_non_send',
+    weekday: DAYS[ctWeekday],
     intel_freshness: intelSnapshot
       ? {
           has_snapshot: true,

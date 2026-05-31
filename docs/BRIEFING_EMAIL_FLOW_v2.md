@@ -119,8 +119,10 @@ Build this as a new flow named `LCC Morning Briefing v2`.
 
 ### Trigger
 - **Recurrence** — frequency Day, interval 1, start time 06:00 America/Chicago.
-  Days of week: Mon–Fri. (The handler also supports weekend runs; pick
-  whichever cadence you want.)
+  **Days of week: Mon–Fri only.** Weekends are intentionally excluded — the
+  intel-snapshot cron runs Mon–Fri, so a weekend send would re-mail Friday's
+  stale snapshot. Belt-and-suspenders: the handler also returns `should_send`
+  (see Step 5b) which is `false` on Sat/Sun.
 
 ### Step 1 — Get calendar events for today
 - **Action:** `Get events (V4)` (Office 365 Outlook connector)
@@ -174,6 +176,16 @@ Build this as a new flow named `LCC Morning Briefing v2`.
   - `Content-Type`: `application/json`
 - **Body:** `@{outputs('Compose')}`
 - Stored as: `briefing_response`
+
+### Step 5b — Guard: only send on weekdays
+Add a **Condition**: `@{body('HTTP')?['should_send']}` is equal to `true`.
+- **If yes** → proceed to Step 6 (Send the email).
+- **If no** → do nothing (or log `suppressed_reason` = `weekend_non_send`).
+
+This is defense-in-depth alongside the Mon–Fri recurrence: even if the flow
+is triggered manually or the recurrence is widened, the email is suppressed
+on weekends. To force a weekend send for QA, call the endpoint with
+`?force=true` (or POST `{ "force": true }`) — that flips `should_send` to true.
 
 ### Step 6 — Send the email
 - **Action:** `Send an email (V2)` (Office 365 Outlook)
