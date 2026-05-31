@@ -246,6 +246,13 @@
     </div>
 
     <!-- RESEARCH — research task queue -->
+    <!-- REVIEW CONSOLE — unified work-type review lanes (UX move #2b, 2026-05-31) -->
+    <div class="page" id="pageReviewConsole">
+      <div class="page-inner">
+        <div id="reviewConsoleContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
     <div class="page" id="pageResearch">
       <div class="page-inner">
         <div id="researchContent"><div class="loading"><span class="spinner"></span></div></div>
@@ -347,6 +354,10 @@
     <div class="more-drawer-section">
       <div class="more-drawer-section-label">Work & Review</div>
       <div class="more-drawer-grid">
+        <button class="more-drawer-item" data-page="pageReviewConsole" onclick="navToFromMore('pageReviewConsole')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Review Console
+      </button>
         <button class="more-drawer-item" data-page="pageResearch" onclick="navToFromMore('pageResearch')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         Research

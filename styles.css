@@ -2019,3 +2019,16 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .more-drawer-section:last-child { margin-bottom: 0; }
 .more-drawer-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .6px; color: var(--text3); margin: 0 0 8px 2px; }
+
+/* Review Console lanes (UX move #2b, 2026-05-31) */
+.rc-intro { font-size: 13px; color: var(--text3); max-width: 720px; margin: 0 0 16px; line-height: 1.5; }
+.rc-lanes { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.rc-lane { text-align: left; background: var(--s1); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: 10px; padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s; font-family: inherit; }
+.rc-lane:hover { border-color: var(--accent); transform: translateY(-1px); }
+.rc-lane-red { border-left-color: var(--red); }
+.rc-lane-yellow { border-left-color: var(--yellow); }
+.rc-lane-count { font-size: 28px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.rc-lane-label { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 3px; }
+.rc-lane-parts { font-size: 11px; color: var(--text3); margin-top: 6px; line-height: 1.5; }
+.rc-lane-cta { font-size: 12px; font-weight: 600; color: var(--accent); margin-top: 10px; }

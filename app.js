@@ -1002,6 +1002,7 @@ function handlePageLoad(pageId) {
     case 'pageTeamQueue': navTo('pagePipeline'); return;
     case 'pageInbox': if (typeof renderInboxTriage === 'function') renderInboxTriage(); break;
     case 'pageEntities': if (typeof renderEntitiesPage === 'function') renderEntitiesPage(); break;
+    case 'pageReviewConsole': if (typeof renderReviewConsolePage === 'function') renderReviewConsolePage(); break;
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
     case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
     case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;

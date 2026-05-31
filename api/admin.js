@@ -110,10 +110,80 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-lease-tenant-drift': return handleResolveLeaseTenantDrift(req, res);
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     case 'priority-band':              return handlePriorityBand(req, res);
+    case 'review-counts':              return handleReviewCounts(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// REVIEW CONSOLE COUNTS (UX move #2b, 2026-05-31)
+// GET /api/review-counts -> one batched call returning live counts for each
+//   work-type lane of the Review Console, across LCC Opps + gov + dia. Every
+//   count is best-effort: a failed sub-query yields null for that metric so the
+//   console still renders. Counts use ?select=..&limit=1 + count=exact header,
+//   read from result.count (content-range), never pulling row bodies.
+// ============================================================================
+async function handleReviewCounts(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  // Helper: count rows in a view on a given db. Returns number or null.
+  const opsCount = async (path) => {
+    try { const r = await opsQuery('GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', undefined, { countMode: 'exact' }); return r.ok ? (r.count || 0) : null; }
+    catch (_e) { return null; }
+  };
+  const domCount = async (dom, path) => {
+    try { const r = await domainQuery(dom, 'GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', { 'Prefer': 'count=exact' }); return r.ok ? (r.count || 0) : null; }
+    catch (_e) { return null; }
+  };
+
+  // Fire all lane sub-counts in parallel. Each is wrapped so one failure
+  // doesn't sink the batch.
+  const [
+    provConflicts, staleIdentities, unlinkedEntities,
+    diaResearch, govOwnershipQueue, diaLlc, govLlc,
+    govDupAddr, govPending,
+  ] = await Promise.all([
+    opsCount('v_field_provenance_actionable'),
+    opsCount('v_stale_identities'),
+    opsCount('v_unlinked_entities'),
+    domCount('dia', 'v_next_best_research'),
+    domCount('gov', 'ownership_research_queue'),
+    domCount('dia', 'llc_research_queue?status=eq.queued'),
+    domCount('gov', 'llc_research_queue?status=eq.queued'),
+    domCount('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
+    domCount('gov', 'pending_updates?status=eq.pending'),
+  ]);
+
+  const sum = (...xs) => { const v = xs.filter(x => typeof x === 'number'); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
+
+  // Lanes mirror the audit's work-type spine. label/icon are UI hints; count
+  // is the headline; href is the existing surface to deep-link into until each
+  // lane gets its own dedicated worker view.
+  const lanes = [
+    { key: 'ownership_research', label: 'Ownership & LLC research',
+      count: sum(diaResearch, govOwnershipQueue, diaLlc, govLlc),
+      parts: { dia_next_best: diaResearch, gov_ownership_queue: govOwnershipQueue, dia_llc_queued: diaLlc, gov_llc_queued: govLlc },
+      href: 'pageResearch', tone: 'red' },
+    { key: 'data_conflicts', label: 'Data conflicts & provenance',
+      count: sum(provConflicts), parts: { actionable: provConflicts },
+      href: 'pageDataQuality', tone: 'yellow' },
+    { key: 'merges_dupes', label: 'Property merges & duplicates',
+      count: sum(govDupAddr), parts: { gov_dup_address: govDupAddr },
+      href: 'pageDataQuality', tone: 'yellow' },
+    { key: 'pending_updates', label: 'Pending updates (Gov)',
+      count: sum(govPending), parts: { pending: govPending },
+      href: 'pageResearch', tone: '' },
+    { key: 'intake_identity', label: 'Intake & identity',
+      count: sum(staleIdentities, unlinkedEntities),
+      parts: { stale_identities: staleIdentities, unlinked_entities: unlinkedEntities },
+      href: 'pageDataQuality', tone: 'yellow' },
+  ];
+
+  return res.status(200).json({ generated_at: new Date().toISOString(), lanes });
+}
 
 // ============================================================================
 // PRIORITY BAND (Phase 8, PR3 2026-05-30)

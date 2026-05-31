@@ -1045,6 +1045,59 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
   perf.end();
 }
 
+// ── Review Console (UX move #2b, 2026-05-31) ───────────────────────────────
+// Unified work-type review lanes. Reads /api/review-counts (one batched call)
+// and renders a lane card per work type with a live count + deep-link into the
+// surface that currently owns that work, until each lane gets its own view.
+async function renderReviewConsolePage() {
+  const el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = (typeof opsPerf === 'function') ? opsPerf('render:review_console') : { end() {} };
+
+  const res = await opsApi('/api/review-counts');
+  if (!res.ok) {
+    el.innerHTML = '<div class="ops-empty">Could not load review counts.<br><small>' + esc(res.error || '') + '</small></div>';
+    perf.end();
+    return;
+  }
+  const lanes = (res.data && Array.isArray(res.data.lanes)) ? res.data.lanes : [];
+
+  let html = '<div class="ops-header"><h2>Review Console</h2></div>';
+  html += '<div class="rc-intro">One home for review work, organized by what the job is — not which domain it lives in. Each lane opens the surface that owns that work today.</div>';
+
+  if (!lanes.length) {
+    html += '<div class="ops-empty">No review lanes returned.</div>';
+  } else {
+    html += '<div class="rc-lanes">';
+    lanes.forEach(function (ln) {
+      const c = ln.count;
+      const countStr = (typeof c === 'number') ? c.toLocaleString() : '—';
+      const toneClass = ln.tone === 'red' ? 'rc-lane-red' : ln.tone === 'yellow' ? 'rc-lane-yellow' : '';
+      const href = ln.href || 'pageResearch';
+      // Build the parts sub-line from the parts object (skip nulls).
+      let parts = '';
+      if (ln.parts && typeof ln.parts === 'object') {
+        const bits = Object.keys(ln.parts)
+          .filter(function (k) { return typeof ln.parts[k] === 'number'; })
+          .map(function (k) { return esc(k.replace(/_/g, ' ')) + ': ' + ln.parts[k].toLocaleString(); });
+        parts = bits.join(' · ');
+      }
+      html += '<button type="button" class="rc-lane ' + toneClass + '" onclick="navTo(\'' + esc(href) + '\')">'
+            + '<div class="rc-lane-count">' + countStr + '</div>'
+            + '<div class="rc-lane-label">' + esc(ln.label || ln.key || '') + '</div>'
+            + (parts ? '<div class="rc-lane-parts">' + parts + '</div>' : '')
+            + '<div class="rc-lane-cta">Open →</div>'
+            + '</button>';
+    });
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+  perf.end();
+}
+window.renderReviewConsolePage = renderReviewConsolePage;
+
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');
   if (!el) return;

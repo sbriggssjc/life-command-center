@@ -75,6 +75,7 @@ app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-clea
 app.all('/api/consolidate-property', (req, res) => { req.query._route = 'consolidate-property'; adminHandler(req, res); });
 app.all('/api/geocode-tick', (req, res) => { req.query._route = 'geocode-tick'; adminHandler(req, res); });
 app.all('/api/priority-band', (req, res) => { req.query._route = 'priority-band'; adminHandler(req, res); });
+app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'; adminHandler(req, res); });
 // Round 77 (2026-05-21): SOS write-back (extension sidebar posts here via LCC_RAILWAY_URL) + research-task generator. Without these the Express server 404s them — vercel.json rewrites only apply on Vercel.
 app.all('/api/sos-writeback', (req, res) => { req.query._route = 'sos-writeback'; adminHandler(req, res); });
 app.all('/api/generate-research-tasks', (req, res) => { req.query._route = 'generate-research-tasks'; adminHandler(req, res); });

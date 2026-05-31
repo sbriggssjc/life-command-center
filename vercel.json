@@ -37,6 +37,7 @@
     { "source": "/api/generate-research-tasks", "destination": "/api/admin?_route=generate-research-tasks" },
     { "source": "/api/geocode-tick", "destination": "/api/admin?_route=geocode-tick" },
     { "source": "/api/priority-band", "destination": "/api/admin?_route=priority-band" },
+    { "source": "/api/review-counts", "destination": "/api/admin?_route=review-counts" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
