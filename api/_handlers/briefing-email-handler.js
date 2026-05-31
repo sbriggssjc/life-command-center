@@ -1294,15 +1294,28 @@ export async function briefingEmailHandler(req, res) {
     };
   }
 
-  // Friday detection — the snapshot variant overrides; otherwise infer from
-  // today's weekday in America/Chicago.
+  // Friday detection — only Friday (CT) gets the Weekly Deep Dive. The intel
+  // snapshot cron runs Mon–Fri only, so on Sat/Sun the email handler would
+  // otherwise pick up FRIDAY's stale snapshot (variant 'friday_deep_dive')
+  // and re-send it as a "Weekly Deep Dive" two more times (2026-05-31 fix).
+  // Guard: if today is not actually Friday CT, demote a carried-over deep-dive
+  // snapshot to 'daily' and drop its weekly-only section so the title, the
+  // Weekly Changes block, and the footer all stay consistent.
   const ctWeekday = ctNow().getDay();
-  const variant = intelSnapshot?.variant || (ctWeekday === 5 ? 'friday_deep_dive' : 'daily');
+  const isFridayCt = ctWeekday === 5;
+  // Non-mutating: intelSnapshot is a const from the Promise.all destructure.
+  // On Sat/Sun, demote a carried-over Friday deep-dive snapshot to a daily
+  // briefing via a derived copy used everywhere downstream.
+  const effectiveSnapshot =
+    (intelSnapshot && intelSnapshot.variant === 'friday_deep_dive' && !isFridayCt)
+      ? { ...intelSnapshot, variant: 'daily', weekly_changes: [] }
+      : intelSnapshot;
+  const variant = effectiveSnapshot?.variant || (isFridayCt ? 'friday_deep_dive' : 'daily');
 
   const subject = formatSubject(ctNow(), variant);
   const ctx = {
     subject, generatedAt,
-    personalContext, intelSnapshot,
+    personalContext, intelSnapshot: effectiveSnapshot,
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress,
@@ -1323,7 +1336,8 @@ export async function briefingEmailHandler(req, res) {
           has_snapshot: true,
           as_of_date: intelSnapshot.as_of_date,
           generated_at: intelSnapshot.generated_at,
-          variant: intelSnapshot.variant,
+          variant: effectiveSnapshot.variant,
+          stored_variant: intelSnapshot.variant,
         }
       : { has_snapshot: false, as_of_date: null, generated_at: null, variant: null },
     personal_context_present:
