@@ -3563,12 +3563,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'asking_cap_quartiles_active': {
-      // 4-line: total market (solid) + 10+ year core (dashed), each
-      // with upper_q (light blue) and lower_q (dark blue). Colors per
-      // cm-chart-image-renderer.js line ~1354 (literal hex, palette-
-      // independent so it survives brand-tokens overrides).
-      const COLOR_LIGHT_BLUE = '9DC3E6';
-      const COLOR_DARK_BLUE  = '1F4E79';
+      // R66s — match the deck (Dialysis Market Filter p.31, top chart): FOUR solid
+      // lines in four distinct colors (no dashes), tightly clustered. Prior build
+      // used solid-total / dashed-core in just two colors, which the deck does not.
+      //   upper_q_total = mauve/amethyst, lower_q_total = sky,
+      //   upper_q_core  = teal/aquamarine, lower_q_core  = NM navy.
+      const C_MAUVE = '9B7EBD';
+      const C_SKY   = '62B5E5';
+      const C_TEAL  = '3FA39B';
+      const C_NAVY  = '003DA5';
       const periodCol = findCol('period_end');
       const upTotCol  = findCol('upper_q_total');
       const loTotCol  = findCol('lower_q_total');
@@ -3580,23 +3583,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R66b — the chart has FOUR lines, not two: the Total-market quartiles
-          // (5.12-7.31%) AND the Core-10+ quartiles, which are far more volatile
-          // (4.94-8.86% in the live export). R66's 5.0-7.5% clipped the core
-          // lines badly at both ends. Widen to 4.75-9.0% so every line is fully
-          // visible without clipping (the core-10+ cohort is thin/noisy — its
-          // 8.86% upper-quartile spike is flagged for data review separately).
-          yAxisRange: { min: 0.0475, max: 0.09 },
+          // R66s — the core-10+ quartile spikes (to 8.86% on 1-2 listings) are now
+          // gated out at the view (n_core>=5) and all four series are smoothed, so
+          // the data sits in the deck's tight 4.94-7.3% band. Tighten the axis to
+          // the deck's 4.5-7.75% (was 4.75-9.0% to accommodate the now-removed spikes).
+          yAxisRange: { min: 0.045, max: 0.0775 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
-            { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol,
-              color: COLOR_LIGHT_BLUE },                          // total upper, solid light
-            { titleCol: loTotCol, titleRow: headerRow, valCol: loTotCol,
-              color: COLOR_DARK_BLUE },                           // total lower, solid dark
-            { titleCol: upCorCol, titleRow: headerRow, valCol: upCorCol,
-              color: COLOR_LIGHT_BLUE, dashed: true },            // core upper, dashed light
-            { titleCol: loCorCol, titleRow: headerRow, valCol: loCorCol,
-              color: COLOR_DARK_BLUE, dashed: true },             // core lower, dashed dark
+            { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol, color: C_MAUVE }, // total upper
+            { titleCol: loTotCol, titleRow: headerRow, valCol: loTotCol, color: C_SKY   }, // total lower
+            { titleCol: upCorCol, titleRow: headerRow, valCol: upCorCol, color: C_TEAL  }, // core upper
+            { titleCol: loCorCol, titleRow: headerRow, valCol: loCorCol, color: C_NAVY  }, // core lower
           ],
           anchor: standardAnchor,
         },

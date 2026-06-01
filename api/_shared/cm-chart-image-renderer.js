@@ -1360,8 +1360,9 @@ function buildChartConfig(chart, brand) {
       //   - Light blue = upper quartile, dark blue = lower quartile.
       //   - Total Market = solid; 10+ Year Term (core) = dashed (same hue
       //     so eye groups them as "the same market subset, different cut").
-      const COLOR_LIGHT_BLUE = '#9DC3E6';  // upper quartile
-      const COLOR_DARK_BLUE  = '#1F4E79';  // lower quartile
+      // R66s — match deck p.31: four SOLID lines in four distinct colors.
+      const C_MAUVE = '#9B7EBD'; const C_SKY = '#62B5E5';
+      const C_TEAL  = '#3FA39B'; const C_NAVY = '#003DA5';
       return {
         type: 'line',
         data: {
@@ -1369,30 +1370,25 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { label: 'Total Market — Upper Quartile',
               data: rows.map(r => r.upper_q_total),
-              borderColor: COLOR_LIGHT_BLUE, backgroundColor: 'transparent',
+              borderColor: C_MAUVE, backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'Total Market — Lower Quartile',
               data: rows.map(r => r.lower_q_total),
-              borderColor: COLOR_DARK_BLUE,  backgroundColor: 'transparent',
+              borderColor: C_SKY,  backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: '10+ Year Term — Upper Quartile',
               data: rows.map(r => r.upper_q_core),
-              borderColor: COLOR_LIGHT_BLUE, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2,
-              borderDash: [5, 4] },
+              borderColor: C_TEAL, backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: '10+ Year Term — Lower Quartile',
               data: rows.map(r => r.lower_q_core),
-              borderColor: COLOR_DARK_BLUE,  backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2,
-              borderDash: [5, 4] },
+              borderColor: C_NAVY,  backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
           ],
         },
-        // R66 — Data_Active_Cap_Quart flagged 2026-05-31 ("see the movement in
-        // the lines"). Measured bands upper 5.73-7.29% / lower 5.17-6.00%, so
-        // tighten 5-8% -> 5.0-7.5% (parity with native injector).
-        // R66b — 4 lines incl. volatile Core-10+ quartiles (4.94-8.86% live);
-        // 5.0-7.5% clipped them badly, so widen to 4.75-9.0% (no clip).
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.0475, max: 0.09 } }),
+        // R66s — core spikes gated out at the view (n_core>=5) + all 4 smoothed,
+        // so the band is the deck's tight 4.94-7.3%. Axis 4.5-7.75% (was 4.75-9.0%).
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.045, max: 0.0775 } }),
       };
     }
 
