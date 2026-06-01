@@ -947,61 +947,33 @@ function buildChartConfig(chart, brand) {
       //     ~6.50%–10.00% gov).
       const hasLastAsk = rows.some(r => r.avg_last_ask_cap != null);
       if (hasLastAsk) {
+        // R66c — DUAL-AXIS (per user direction 2026-06-01). Match the master's
+        // two dash-marker series with NO gray band, but give the raw spread its
+        // own RIGHT axis so it's visible instead of clipped at the bottom of the
+        // cap axis (the master plots both on one cap axis, hiding the spread).
+        const isGovBA = chart.vertical === 'gov' || chart.vertical === 'government_leased';
         return {
-          type: 'bar',
+          type: 'line',
           data: {
             labels,
             datasets: [
-              // Floating bar: spread range from Last Ask up by spread amount
-              { type: 'bar', label: 'Bid-Ask Spread Range',
-                data: rows.map(r => {
-                  const last = r.avg_last_ask_cap;
-                  const spread = r.avg_bid_ask_spread;
-                  return (last != null && spread != null) ? [last, last + spread] : null;
-                }),
-                // R66b — neutral gray dispersion band (matches the native Excel
-                // D9D9D9 band) so PDF and xlsx read the same.
-                backgroundColor: 'rgba(217,217,217,0.55)',
-                borderColor: 'rgba(191,191,191,0.9)',
-                borderWidth: 1,
-                borderSkipped: false,
-                barPercentage: 0.5,
-                categoryPercentage: 0.85,
-                order: 2 },
-              // R66b — match MASTER chart7: DASH markers (no line), Last Ask =
-              // Sky, Achieved/Spread = Navy. Was circle dots with the colors
-              // swapped (the "doesn't match our Excel" note, 2026-05-31).
-              { type: 'line', label: 'Last Ask Cap (TTM)',
+              { label: 'Last Ask Cap (TTM)',
                 data: rows.map(r => r.avg_last_ask_cap),
-                borderColor: palette[1],            // sky
-                backgroundColor: palette[1],
-                borderWidth: 2,
-                pointRadius: 6,
-                pointStyle: 'dash',
-                showLine: false,
-                order: 0 },
-              // Bid-Ask spread (achieved cap) at bar top — derived
-              { type: 'line', label: 'Bid-Ask Spread (Achieved Cap, TTM)',
-                data: rows.map(r => {
-                  const last = r.avg_last_ask_cap;
-                  const spread = r.avg_bid_ask_spread;
-                  return (last != null && spread != null) ? last + spread : null;
-                }),
-                borderColor: palette[0],            // navy
-                backgroundColor: palette[0],
-                borderWidth: 2,
-                pointRadius: 6,
-                pointStyle: 'dash',
-                showLine: false,
-                order: 0 },
+                yAxisID: 'y',
+                borderColor: palette[1], backgroundColor: palette[1],   // sky, left
+                borderWidth: 2, pointRadius: 6, pointStyle: 'dash', showLine: false },
+              { label: 'Bid-Ask Spread (TTM)',
+                data: rows.map(r => r.avg_bid_ask_spread),
+                yAxisID: 'y1',
+                borderColor: palette[0], backgroundColor: palette[0],   // navy, right
+                borderWidth: 2, pointRadius: 6, pointStyle: 'dash', showLine: false },
             ],
           },
-          options: commonOpts({
-            yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            // R66b — dia matches MASTER chart7 (5.25-8.0%); gov caps run higher.
-            yAxisRange: ((chart.vertical === 'gov' || chart.vertical === 'government_leased')
-              ? CAP_RATE_BID_ASK_RANGE
-              : { min: 0.0525, max: 0.08 }),
+          options: comboOpts({
+            yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
+            yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+            yLeftRange:   isGovBA ? CAP_RATE_BID_ASK_RANGE : { min: 0.0525, max: 0.08 },
+            yRightRange:  { min: -0.015, max: 0.02 },   // signed spread band
           }),
         };
       }

@@ -1553,6 +1553,96 @@ ${lineXml}
 </c:chartSpace>`;
 }
 
+/**
+ * R66c — Bid-Ask DUAL-AXIS chart. Matches the master (Dialysis Comp Work
+ * MASTER.xlsx chart7) "two dash-marker series, no band" idiom but fixes the
+ * master's one flaw: the master plots Last-Ask cap (~5-8%) and the raw
+ * Bid-Ask Spread (~0.2-0.8%) on a SINGLE cap axis, so the spread line falls
+ * off the bottom and is invisible. Here the spread gets its own RIGHT axis so
+ * both dash series are legible.
+ *
+ *   LEFT  axis (id 2): Last Ask cap — Sky dash markers, no connecting line
+ *   RIGHT axis (id 3): Bid-Ask Spread — Navy dash markers, no connecting line
+ *
+ * spec: { tabName, catCol, dataStart, dataEnd, title,
+ *         leftCol, leftColor, leftRange, leftNumFmt, leftTitleRow,
+ *         rightCol, rightColor, rightRange, rightNumFmt, rightTitleRow }
+ */
+function buildBidAskDualAxisChartXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const hdr = spec.headerRow || 4;
+  const markerSer = (col, color, idx, axCat, axVal) => `      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>'${sheet}'!$${col}$${hdr}</c:f></c:strRef></c:tx>
+          <c:spPr><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:marker>
+            <c:symbol val="dash"/>
+            <c:size val="7"/>
+            <c:spPr>
+              <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
+              <a:ln><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>
+            </c:spPr>
+          </c:marker>
+          <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>'${sheet}'!$${col}$${spec.dataStart}:$${col}$${spec.dataEnd}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>
+        <c:marker val="1"/>
+        <c:axId val="${axCat}"/>
+        <c:axId val="${axVal}"/>
+      </c:lineChart>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
+  <c:chart>
+    ${chartTitleXml(spec.title)}
+    <c:plotArea>
+      <c:layout/>
+${markerSer(spec.leftCol,  (spec.leftColor  || '62B5E5').replace('#',''), 0, 1, 2)}
+${markerSer(spec.rightCol, (spec.rightColor || '003DA5').replace('#',''), 1, 1, 3)}
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        ${catAxNumFmtFrag(spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT)}
+        ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        ${valAxScalingFrag(spec.leftRange)}
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
+        ${valAxNumFmtFrag(spec.leftNumFmt)}
+        <c:crossAx val="1"/>
+      </c:valAx>
+      <c:valAx>
+        <c:axId val="3"/>
+        ${valAxScalingFrag(spec.rightRange)}
+        <c:delete val="0"/>
+        <c:axPos val="r"/>
+        ${valAxNumFmtFrag(spec.rightNumFmt)}
+        <c:crossAx val="1"/>
+        <c:crosses val="max"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="b"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -1684,6 +1774,7 @@ export async function injectNativeCharts(buffer, injections) {
     if (spec.type === 'bar') return buildSingleBarChartXml(spec);
     if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
     if (spec.type === 'combo') return buildComboChartXml(spec);
+    if (spec.type === 'bidask-dual') return buildBidAskDualAxisChartXml(spec);
     if (spec.type === 'area-combo') {
       // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
       return buildAreaComboChartXml(spec);
@@ -3023,103 +3114,43 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const periodCol  = findCol('period_end');
       const lastAskCol = findCol('avg_last_ask_cap');
       const spreadCol  = findCol('avg_bid_ask_spread');
-      const minCol      = findCol('min_last_ask_cap');
-      const maxCol      = findCol('max_last_ask_cap');
-      const achievedCol = findCol('achieved_last_ask_cap');
       if (!periodCol || !spreadCol) return null;
 
-      // 2026-05-29 — master/PDF p.34 idiom: a high-low RANGE chart. Per TTM
-      // period a gray bar spans the min->max of last asks, with a navy
-      // "Last Ask (TTM)" line and a sky "Achieved Cap (TTM)" line; the gap
-      // between the two lines IS the bid-ask spread. Built with the proven
-      // floating-bar pattern (invisible base + visible band, same as
-      // rent_psf_box_quarterly) so it reuses the combo builder.
-      if (minCol && maxCol && lastAskCol) {
-        // One helper column past the regular CHART_COLUMNS: the visible band
-        // height = max_last_ask - min_last_ask (range of last asks).
-        const rangeCol = String.fromCharCode(65 + cols.length);
-        // R66b — match Dialysis Comp Work MASTER.xlsx chart7 (the Bid-Ask
-        // exhibit) exactly: markers-only (no connecting line) using DASH
-        // markers size 7, with Last Ask = Sky (62B5E5) and Achieved/Spread =
-        // Navy (003DA5). The prior square/circle + navy/sky-swapped styling is
-        // what drew the "colors don't match our Excel" note (2026-05-31).
-        const lineSeries = [
-          { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
-            showMarker: true, markerShape: 'dash', markerSize: 7 },
-        ];
-        if (achievedCol) {
-          lineSeries.push({ titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-            showMarker: true, markerShape: 'dash', markerSize: 7 });
-        }
-        return {
-          tabName,
-          spec: {
-            type: 'combo',
-            tabName,
-            catCol: periodCol,
-            dataStart, dataEnd,
-            barGrouping: 'stacked',
-            sharedAxis: true,
-            // Thin range bars (high gapWidth) so each TTM month reads as a
-            // discrete high-low bar, matching the master/PDF p.34.
-            barGapWidth: 220,
-            // R66b — match MASTER chart7 valAx (5.25-8.0%) for dia; gov last-ask
-            // caps run higher (~7.7-8.5% + dispersion band) so keep the wider
-            // 5.5-10% band there to avoid clipping the bar tops.
-            yLeftRange:  ((vertical === 'gov' || vertical === 'government_leased')
-              ? { min: 0.055, max: 0.10 }
-              : { min: 0.0525, max: 0.08 }),
-            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
-            barSeries: [
-              // Invisible base lifts the visible range bar to the TTM low.
-              { titleCol: minCol, titleRow: headerRow, valCol: minCol,
-                color: '003DA5', noFill: true },
-              // Visible gray range bar (min -> max of last asks).
-              { titleCol: rangeCol, titleRow: headerRow, valCol: rangeCol,
-                color: 'D9D9D9' },
-            ],
-            lineSeries,
-            anchor: standardAnchor,
-          },
-          helperCols: [
-            {
-              key: 'last_ask_range',
-              header: 'Last Ask Range (TTM)',
-              format: 'percent_basis_points',
-              width: 18,
-              getValue: (row) => {
-                const lo = row.min_last_ask_cap, hi = row.max_last_ask_cap;
-                return (lo != null && hi != null) ? Number(hi) - Number(lo) : null;
-              },
-            },
-          ],
-        };
-      }
-
-      // Fallback 1: range cols absent but last_ask present -> R50/R68
-      // stacked-line + upDownBars (prior behavior).
+      // R66c — DUAL-AXIS, per user direction 2026-06-01. Matches the master
+      // (Dialysis Comp Work MASTER.xlsx chart7) "two dash-marker series, NO
+      // gray band" look, but fixes the master's flaw: it plots Last-Ask cap
+      // (~5-8%) and the raw Bid-Ask Spread (~0.2-0.8%) on ONE cap axis, so the
+      // spread line falls off the bottom and is invisible. Here the spread
+      // gets its own RIGHT axis so both dash series read clearly.
+      //   LEFT  (Sky):  Last Ask cap (5.25-8% dia / 5.5-10% gov)
+      //   RIGHT (Navy): Bid-Ask Spread (signed sold-minus-ask; -1.5%..+2%)
       if (lastAskCol) {
         return {
           tabName,
           spec: {
-            type: 'multi-line',
+            type: 'bidask-dual',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            lineGrouping: 'stacked',
-            upDownBars:   true,
-            yAxisRange:   { min: 0.05, max: 0.095 },
-            valAxNumFmt:  VAL_FMT_PERCENT_2DP,
-            series: [
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky },
-              { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,  color: navy },
-            ],
+            headerRow,
+            leftCol:   lastAskCol,
+            leftColor: sky,
+            leftRange: ((vertical === 'gov' || vertical === 'government_leased')
+              ? { min: 0.055, max: 0.10 }
+              : { min: 0.0525, max: 0.08 }),
+            leftNumFmt: VAL_FMT_PERCENT_2DP,
+            rightCol:   spreadCol,
+            rightColor: navy,
+            // signed spread (sold - last ask); dia bulk ~ -1.2%..+0.3%, so a
+            // -1.5%..+2.0% right axis shows the line without clipping the tails.
+            rightRange:  { min: -0.015, max: 0.02 },
+            rightNumFmt: VAL_FMT_PERCENT_1DP,
             anchor: standardAnchor,
           },
         };
       }
 
-      // Fallback 2: only the spread column -> single line.
+      // Fallback: only the spread column present -> single line.
       return singleSeries('line', 'avg_bid_ask_spread', sky, {
         valAxNumFmt: VAL_FMT_PERCENT_2DP,
       });
