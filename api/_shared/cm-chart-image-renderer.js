@@ -913,8 +913,9 @@ function buildChartConfig(chart, brand) {
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_INTEGER,
             yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-            yLeftRange:   (isDia ? { min: 75, max: 450 } : undefined),
-            yRightRange:  (isDia ? { min: 0.82, max: 1.00 } : PCT_OF_ASK_RANGE),
+            // R66n — match deck p.33: DOM 0-300 baseline, % of ask 84-96%.
+            yLeftRange:   (isDia ? { min: 0, max: 300 } : undefined),
+            yRightRange:  (isDia ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
           });
           // Annotations: peak/trough/last on % of Ask line.
           // Round 17 — pin annotations to the right-axis ('y1') so
