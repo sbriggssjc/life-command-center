@@ -424,8 +424,8 @@ const CHART_COLUMNS = {
   inventory_backlog: [
     { key: 'period_end',         header: 'Month End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',       header: 'Subspecialty',      width: 14 },
-    { key: 'added_ttm',          header: 'No. Added (TTM)',   format: 'integer_count',       width: 17 },
-    { key: 'sold_ttm',           header: 'No. Sold (TTM)',    format: 'integer_count',       width: 16 },
+    { key: 'added_month',        header: 'No. Added (Monthly)', format: 'integer_count',     width: 18 },
+    { key: 'sold_month',         header: 'No. Sold (Monthly)',  format: 'integer_count',     width: 18 },
     { key: 'active_count',       header: 'Active Listings',   format: 'integer_count',       width: 16 },
     { key: 'months_of_supply',   header: 'Months of Supply',  format: 'number_one_decimal',  width: 17 },
   ],
@@ -1007,10 +1007,10 @@ const NAME_OVERRIDES_BY_VERTICAL = {
     // Supply" (catalog default) but R50/R54 restructured the chart to
     // show Added/Sold/Net flow, not active listings + months. User notes
     // 2026-05-22: "chart titles don't depict what is displayed".
-    inventory_backlog: 'Inventory Backlog — Added vs Sold (TTM) + Net to Market',
+    inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
   },
   gov: {
-    inventory_backlog: 'Inventory Backlog — Added vs Sold (TTM) + Net to Market',
+    inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
   },
 };
 

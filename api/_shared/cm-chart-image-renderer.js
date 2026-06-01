@@ -2299,23 +2299,27 @@ function buildChartConfig(chart, brand) {
       // movement prior to 2018? This also doesn't match the formatting
       // or style of the chart in our Excel."
       // Source views extended to 2014-01-01 (was 2018-01-01).
+      // R66v — MONTHLY turnover (master "Market Turnover"): Added (positive, sky),
+      // Sold (negative, navy), Net to Market (line, gray) = added - sold.
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'No. Added to Market (TTM)',
-              data: rows.map(r => Number(r.added_ttm) || 0),
-              backgroundColor: palette[1],         // sky
-              borderColor: palette[1],
-              borderRadius: 1,
-              yAxisID: 'y', order: 1 },
-            { type: 'bar', label: 'No. Sold (TTM)',
-              data: rows.map(r => Number(r.sold_ttm ?? r.ttm_sales) || 0),
-              backgroundColor: palette[0],         // navy
-              borderColor: palette[0],
-              borderRadius: 1,
-              yAxisID: 'y', order: 2 },
+            { type: 'bar', label: 'No. Added to Market (Monthly)',
+              data: rows.map(r => Number(r.added_month) || 0),
+              backgroundColor: palette[1], borderColor: palette[1],
+              borderRadius: 1, yAxisID: 'y', order: 2 },
+            { type: 'bar', label: 'No. Sold (Monthly)',
+              data: rows.map(r => -(Number(r.sold_month) || 0)),
+              backgroundColor: palette[0], borderColor: palette[0],
+              borderRadius: 1, yAxisID: 'y', order: 3 },
+            { type: 'line', label: 'Net to Market (Monthly)',
+              data: rows.map(r => (r.net_to_market_month != null
+                ? Number(r.net_to_market_month)
+                : (Number(r.added_month) || 0) - (Number(r.sold_month) || 0))),
+              borderColor: '#6A748C', backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y', order: 1 },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),

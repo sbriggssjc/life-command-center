@@ -3820,9 +3820,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //   Sky bar at +50 (Added) ──────────┐
       //   Net line at +20 (gray, can be ±)  │
       //   Navy bar at -30 (Sold, helper) ───┘
+      // R66v — MONTHLY basis (added/sold in the month), matching the master's
+      // Market Turnover chart. Was TTM rolling sums (added_ttm/sold_ttm, +/-300).
       const periodCol = findCol('period_end');
-      const addedCol  = findCol('added_ttm');
-      const soldCol   = findCol('sold_ttm');
+      const addedCol  = findCol('added_month');
+      const soldCol   = findCol('sold_month');
       if (!periodCol || !addedCol || !soldCol) return null;
       // Helper col letters — net_ttm at G, sold_neg at H (relative to the
       // 6 regular cols A-F). After R53 wrapper inserts period_label at G,
@@ -3858,12 +3860,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         helperCols: [
           {
             key: 'net_ttm',
-            header: 'Net to Market (TTM)',
+            header: 'Net to Market (Monthly)',
             format: 'integer_count',
-            width: 20,
+            width: 22,
             getValue: (row) => {
-              const a = row.added_ttm;
-              const s = row.sold_ttm;
+              const a = row.added_month;
+              const s = row.sold_month;
               return (a == null || s == null) ? null : Number(a) - Number(s);
             },
           },
@@ -3872,10 +3874,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             header: 'No. Sold (chart)',
             format: 'integer_count',
             width: 18,
-            // R54 — negated sold_ttm for the chart bar (renders below 0).
-            // Data tab still has the original positive sold_ttm for users
-            // reading the numbers.
-            getValue: (row) => row.sold_ttm == null ? null : -Number(row.sold_ttm),
+            // R66v — negated MONTHLY sold for the chart bar (renders below 0).
+            getValue: (row) => row.sold_month == null ? null : -Number(row.sold_month),
           },
         ],
       };
