@@ -1187,6 +1187,55 @@ async function readPostBody(req) {
 // Handler
 // ---------------------------------------------------------------------------
 
+// In-memory render cache. The 2026-06-01 incident had Power Automate
+// triggering two flows three minutes apart, each calling /api/briefing-email
+// and sending the rendered HTML — two emails to the broker and two full
+// passes through the ~25-query OPS fan-out + intel-snapshot read. This cache
+// makes the second render within 10 minutes return the first call's payload
+// without touching OPS, AI, or any domain DB. PA still sends whatever it
+// gets, so this doesn't dedupe the email itself — that's a PA-side fix —
+// but it stops the server from paying for the duplicate work.
+//
+// Keyed on (workspace_id, CT date). Body content (calendar/tasks/weather
+// from POST) is intentionally not in the key: in the duplicate-flow scenario
+// the two calls send identical bodies, and the cache returning the first
+// body's render is exactly the desired behavior. Pass ?nocache=1 in dev
+// to bypass.
+const RENDER_CACHE = new Map();
+const RENDER_CACHE_TTL_MS = 10 * 60 * 1000;
+const RENDER_CACHE_MAX_ENTRIES = 8;
+
+function renderCacheKey(workspaceId) {
+  const ctDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }))
+    .toISOString().slice(0, 10);
+  return `${workspaceId}|${ctDate}`;
+}
+
+function renderCacheGet(workspaceId) {
+  const k = renderCacheKey(workspaceId);
+  const entry = RENDER_CACHE.get(k);
+  if (!entry) return null;
+  if (Date.now() - entry.cached_at > RENDER_CACHE_TTL_MS) {
+    RENDER_CACHE.delete(k);
+    return null;
+  }
+  return entry;
+}
+
+function renderCachePut(workspaceId, payload) {
+  const k = renderCacheKey(workspaceId);
+  RENDER_CACHE.set(k, { cached_at: Date.now(), payload });
+  if (RENDER_CACHE.size > RENDER_CACHE_MAX_ENTRIES) {
+    // Drop oldest entry — bounded memory for cross-workspace / cross-day spillover.
+    let oldestKey = null;
+    let oldestT = Infinity;
+    for (const [kk, vv] of RENDER_CACHE) {
+      if (vv.cached_at < oldestT) { oldestT = vv.cached_at; oldestKey = kk; }
+    }
+    if (oldestKey) RENDER_CACHE.delete(oldestKey);
+  }
+}
+
 export async function briefingEmailHandler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -1218,6 +1267,23 @@ export async function briefingEmailHandler(req, res) {
     return;
   }
   const userId = req.headers['x-lcc-user-id'] || process.env.LCC_SYSTEM_USER_ID || '';
+
+  // Per-day render cache — short-circuits duplicate PA-flow invocations so
+  // the second render within 10 minutes returns the first call's payload
+  // without re-running the OPS fan-out. Bypass with ?nocache=1.
+  const bypassCache = req.query?.nocache === '1' || req.query?.nocache === 'true';
+  if (!bypassCache) {
+    const hit = renderCacheGet(workspaceId);
+    if (hit) {
+      const ageSec = Math.round((Date.now() - hit.cached_at) / 1000);
+      console.log(`[BriefingEmail] cache hit (workspace=${workspaceId} age=${ageSec}s)`);
+      res.status(200).json({
+        ...hit.payload,
+        _cache: { hit: true, age_seconds: ageSec, ttl_seconds: RENDER_CACHE_TTL_MS / 1000 },
+      });
+      return;
+    }
+  }
 
   let personalContext = { events: [], tasks: [], weather: null };
   if (req.method === 'POST') {
@@ -1335,7 +1401,7 @@ export async function briefingEmailHandler(req, res) {
   const html = renderHtml(ctx);
   const text = renderText(ctx);
 
-  res.status(200).json({
+  const payload = {
     subject,
     html,
     text,
@@ -1355,5 +1421,12 @@ export async function briefingEmailHandler(req, res) {
       : { has_snapshot: false, as_of_date: null, generated_at: null, variant: null },
     personal_context_present:
       !!(personalContext.events.length || personalContext.tasks.length || personalContext.weather),
+  };
+
+  if (!bypassCache) renderCachePut(workspaceId, payload);
+
+  res.status(200).json({
+    ...payload,
+    _cache: { hit: false, ttl_seconds: RENDER_CACHE_TTL_MS / 1000 },
   });
 }
