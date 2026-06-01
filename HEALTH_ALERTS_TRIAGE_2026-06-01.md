@@ -11,9 +11,11 @@ channels. Investigated against the live Supabase projects (LCC Opps
 |---|-------|----------|------------------------|
 | 1 | `[gov] gov hygiene sweep had 2 failing step(s)` | error (daily) | **FIXED** — root cause removed, open alerts resolved |
 | 2 | `[pg_net:no_response] 1 HTTP call … to unknown` | error | Auto-resolved by design; attribution gap documented (rec. below) |
-| 3 | `[SF -> LCC: Daily Bulk File Backfill] … Apply to each (has_failed)` | error (daily) | **Needs decision** — Azure flow; only open LCC alert |
-| 4 | `dia auto-merge: 1 of N merges failed` (FK) | warn (hourly) | **Needs decision** — root cause diagnosed, fix not auto-applied |
+| 3 | `[SF -> LCC: Daily Bulk File Backfill] … Apply to each (has_failed)` | error (daily) | **Off was intentional** (half-built flow) — recommend disabling in PA |
+| 4 | `dia auto-merge: 1 of N merges failed` (FK) | warn (hourly) | **FIXED** — per-row repoint + duplicate collapse |
 | 5 | `research_queue_stalled` (SOS enrichment) | warning (11 days, gov+dia) | Flagged — depends on SOS-direct scraper rollout |
+| 6 | pg_net failures always attributed "to unknown" | (quality) | **FIXED** — request_id→endpoint logged at post time |
+| 7 | weekly `/api/npi-lookup` 404 on Railway | error (weekly) | **FIXED** — route registered in server.js |
 
 ---
 
@@ -88,7 +90,68 @@ join to that table. Then alerts read e.g. "502 to /api/sf-link-tick" instead of
 
 ---
 
-## 3. SF -> LCC: Daily Bulk File Backfill — needs a decision
+## Round 2 (follow-ups) — actions applied
+
+After the gov sweep fix, the remaining items were worked as follows.
+
+### 3. SF -> LCC: Daily Bulk File Backfill — off was intentional
+
+`docs/architecture/sf_file_backfill_flow6_next_steps.md:332` confirms the flow
+was a deliberately-incomplete shell: *"PA flow shell cloned from Flow 6 … currently
+off. Trigger restructure + outer Comp loop still to be wired."* `FLOW_CHANGES_LOG.md`
+notes it was saved with a terminal `Apply to each 1`. So the inner loop was never
+finished — it failing daily at `Apply to each` means the flow was switched **on**
+before its build was complete.
+
+**Recommendation: turn the flow back OFF in Power Automate** until the outer Comp
+loop + manifest body are wired per the spec doc. It is not yet a working pipeline.
+No code change is possible from the repo (it's an Azure Logic App). Once it's off,
+the open alert (#475) can be resolved; leaving it on will re-fire ~11:26 UTC daily.
+Separately, when the build resumes, update the PA fault branch to POST the actual
+failed-action error body into `lcc_record_flow_failure` (today it posts only the
+run header, so `error_detail` is empty and the failure is undiagnosable).
+
+### 4. dia auto-merge FK failures — FIXED
+
+`dia_merge_property` repointed `sales_transactions.property_id` drop→keep in a bulk
+UPDATE inside an `EXCEPTION WHEN OTHERS` that swallowed unique-violation collisions,
+leaving a drop-side row that aborted the final `DELETE FROM properties`.
+
+The collision is on the **generated** column `dedup_natural_key`
+(`property_id | round(sold_price/1000)*1000 | <year>-<month>`, unique where
+`transaction_state='live'`) — a coarser key than the exact date/price index. The fix
+(`20260601160000_dia_merge_property_per_row_repoint.sql`) repoints drop-side sales
+**row by row**; on any `unique_violation` the drop row is a true duplicate of a
+keep-side sale, so it's deleted (with its NO ACTION children) instead. This needs no
+per-index knowledge and leaves nothing behind for the property delete to trip on.
+Applied to dia; the 73 open warnings were resolved.
+
+(An earlier pass, `20260601150000`, collapsed only the exact-price index and was
+insufficient — superseded by `…160000`.)
+
+### 6. pg_net "to unknown" attribution — FIXED
+
+`20260601140000_lcc_pg_net_url_attribution.sql` (LCC Opps): `lcc_cron_post()` now
+logs `request_id → endpoint` into a new bounded `lcc_cron_post_log` table at post
+time, and `lcc_check_cron_health()` falls back to it when pg_net has already pruned
+`net.http_request_queue`. Future HTTP-failure alerts read e.g.
+`pg_net:404 [/api/npi-lookup]` instead of `[unknown]`. A `lcc-cron-post-log-cleanup`
+cron prunes the log after 48h.
+
+### 7. weekly `/api/npi-lookup` 404 — FIXED
+
+The 07:00 `404 "Cannot POST /api…"` was `weekly-npi-lookup` (Mondays) hitting the
+Railway backend. `lcc_cron_post`'s default target is Railway (`server.js`), but
+`/api/npi-lookup` and `/api/npi-registry-sync` were only in `vercel.json` rewrites,
+not registered in `server.js` — so Express 404'd them. Registered both routes in
+`server.js` (same pattern + rationale as the existing `/api/sos-writeback` /
+`/api/generate-research-tasks` entries). Ships on the next Railway deploy.
+
+---
+
+## Appendix: original decision write-ups (pre-round-2)
+
+### 3. SF -> LCC: Daily Bulk File Backfill — needs a decision
 
 **Alert:** the **only currently-open LCC Opps alert** (`lcc_health_alerts` #475).
 Power Automate / Azure Logic App `3d8be768-cfe7-41c9-81f4-e6b6f024ee5e` posts a

@@ -80,6 +80,10 @@ app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; admi
 // Round 77 (2026-05-21): SOS write-back (extension sidebar posts here via LCC_RAILWAY_URL) + research-task generator. Without these the Express server 404s them — vercel.json rewrites only apply on Vercel.
 app.all('/api/sos-writeback', (req, res) => { req.query._route = 'sos-writeback'; adminHandler(req, res); });
 app.all('/api/generate-research-tasks', (req, res) => { req.query._route = 'generate-research-tasks'; adminHandler(req, res); });
+// NPI proxies posted by pg_cron (weekly-npi-lookup, weekly-npi-registry-sync) via lcc_cron_post → Railway.
+// vercel.json rewrites only apply on Vercel, so without these the Express server returns "Cannot POST /api/npi-lookup".
+app.all('/api/npi-lookup', (req, res) => { req.query._route = 'npi-lookup'; adminHandler(req, res); });
+app.all('/api/npi-registry-sync', (req, res) => { req.query._route = 'npi-registry-sync'; adminHandler(req, res); });
 
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
