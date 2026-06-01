@@ -1282,6 +1282,11 @@ async function exportWorkbook(req, res) {
   const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  // R66b — never cache the export at the browser/edge/proxy layer. The workbook
+  // is regenerated live from the views on every request; a cached copy is the
+  // source of "my export never changes even after re-downloading".
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
 
   // 5a. Round 34 — Default is back to data_tabs (one chart per tab)
   //     per user direction: "I like the format of the Excel export

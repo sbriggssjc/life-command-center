@@ -2026,9 +2026,15 @@
           const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
           const asOf = latestVol?.period_end || '';
 
-          const url = `/api/capital-markets?action=export&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx`;
+          // R66b — cache-bust. The export URL was deterministic, so the browser
+          // (and any edge cache) could replay a stale prior workbook even after
+          // the user deleted the downloaded file — the source of the "my export
+          // never changes" reports. A unique _t param makes every request a new
+          // URL, and cache:'no-store' forces a live render each click.
+          const url = `/api/capital-markets?action=export&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx&_t=${Date.now()}`;
           const r = await fetch(url, {
             credentials: 'include',
+            cache: 'no-store',
             headers: { 'x-lcc-workspace': window.LCC?.workspaceId || '' },
           });
           if (!r.ok) {
