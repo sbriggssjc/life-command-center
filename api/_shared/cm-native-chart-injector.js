@@ -2107,7 +2107,9 @@ const MIN_YEAR_BY_TEMPLATE = {
   // no-op for verticals where the catalog doesn't include the template.
   asking_cap_quartiles_active:  2015,  // 2 rows in 2014 → trim to first full year
   available_market_size_combo:  2016,  // 3 rows in 2015 → trim to first full year
-  dom_price_change_active:      2013,  // full from Q1-2013
+  dom_price_change_active:      2018,  // R66b: pre-2018 had <12 active listings/mo,
+                                       // so the DOM average stair-stepped on 2-5 listings.
+                                       // View now gates n>=8 + 3-mo smooths; trim display to 2018.
 };
 
 export function buildInjectionSpec(args) {
@@ -2422,10 +2424,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     // P3 — simple single-series line + bar charts
     case 'cap_rate_ttm_by_quarter':
-      // R66 — dia tightened to 5.75-8.5% (2026-05-31 export feedback);
-      // gov stays on shared CAP_RATE_RANGE (5-10%).
+      // R66b — dia retuned to displayed data 6.48-8.57% -> 6.25-8.75% (R66's
+      // 5.75-8.5% clipped the 8.57% peak and left ~0.7% empty below); gov stays
+      // on shared CAP_RATE_RANGE (5-10%).
       return singleSeries('line', 'ttm_weighted_cap_rate', navy, {
-        yAxisRange: (vertical === 'dialysis' ? { min: 0.0575, max: 0.085 } : CAP_RATE_RANGE),
+        yAxisRange: (vertical === 'dialysis' ? { min: 0.0625, max: 0.0875 } : CAP_RATE_RANGE),
         valAxNumFmt: VAL_FMT_PERCENT_2DP,
       });
     case 'transaction_count_ttm':
@@ -2688,19 +2691,23 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         .map(s => ({ ...s, col: findCol(s.key) }))
         .filter(s => s.col);
       if (series.length === 0) return null;
-      // R66 — per-template + per-vertical cohort ranges (2026-05-31 export
-      // feedback). sold_cap dia 5-9.75% / gov 6-11%; asking_cap dia-only
-      // 5-8%; cap_rate_by_lease_term gov-only 5.5-8.5%. Default keeps
-      // CAP_RATE_COHORT_RANGE (4-11%) for any un-flagged combination.
+      // R66b — re-tuned to the DISPLAYED (cropped) data window, measured from
+      // the live export (2026-06-01). R66's ranges came from full-view p5/p95
+      // and left the cohort lines compressed (sold dia filled only ~46%) or
+      // clipping (asking dia low 4.94%, gov sold high 11.81%). New ranges hug
+      // the plotted data with ~0.25% pad, no clipping:
+      //   sold_cap  dia 5.67-7.87% -> 5.5-8.0% ; gov 6.40-11.81% -> 6.0-12.0%
+      //   asking    dia 4.94-7.80% -> 4.75-8.0%
+      //   cap_term  gov 5.38-7.79% -> 5.25-8.0%
       let cohortRange = CAP_RATE_COHORT_RANGE;
       if (chart_template_id === 'sold_cap_by_term_dot_plot') {
         cohortRange = (vertical === 'dialysis')
-          ? { min: 0.05, max: 0.0975 }
-          : { min: 0.06, max: 0.11 };
+          ? { min: 0.055, max: 0.08 }
+          : { min: 0.06,  max: 0.12 };
       } else if (chart_template_id === 'asking_cap_by_term_dot_plot') {
-        cohortRange = { min: 0.05, max: 0.08 };   // dia-only template
+        cohortRange = { min: 0.0475, max: 0.08 };  // dia-only template
       } else if (chart_template_id === 'cap_rate_by_lease_term') {
-        cohortRange = { min: 0.055, max: 0.085 }; // gov-only template
+        cohortRange = { min: 0.0525, max: 0.08 };  // gov-only template
       }
       return {
         tabName,
@@ -2781,12 +2788,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           // R37 P2 — left integer days, right percent 85-105% (renderer ~905)
-          // R66 — dia tightened (2026-05-31 export feedback): left DOM days
-          // 75-300, right % of ask 70-100%. Gov keeps PCT_OF_ASK_RANGE and
-          // auto-scaled left axis.
+          // R66b — dia retuned to displayed data (2026-06-01): DOM days run to
+          // ~400 (was clipping at 300) -> left 75-450; % of ask bulk 85-96% so
+          // tighten right to 82-100% (R66's 70% floor wasted half the height and
+          // the movement still read flat). Gov keeps PCT_OF_ASK_RANGE + auto left.
           yLeftNumFmt:  VAL_FMT_INTEGER,
-          yLeftRange:   (vertical === 'dialysis' ? { min: 75, max: 300 } : undefined),
-          yRightRange:  (vertical === 'dialysis' ? { min: 0.70, max: 1.00 } : PCT_OF_ASK_RANGE),
+          yLeftRange:   (vertical === 'dialysis' ? { min: 75, max: 450 } : undefined),
+          yRightRange:  (vertical === 'dialysis' ? { min: 0.82, max: 1.00 } : PCT_OF_ASK_RANGE),
           yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
             { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky,
@@ -3457,9 +3465,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
           // R37 P2 — percent 1dp (renderer line ~1240)
-          // R66 — pin y-axis per vertical (2026-05-31 export feedback):
-          // dia 4.5-11%, gov 7.5-10%.
-          yAxisRange: (vertical === 'gov' ? { min: 0.075, max: 0.10 } : { min: 0.045, max: 0.11 }),
+          // R66b — retuned to displayed data (2026-06-01): dia 6.03-11.03% ->
+          // 5.75-11.5%; gov 7.25-11.28% -> 7.0-11.5% (R66's 7.5-10% clipped
+          // both ends — leveraged-return line ran to 11.28%).
+          yAxisRange: (vertical === 'gov' ? { min: 0.07, max: 0.115 } : { min: 0.0575, max: 0.115 }),
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
@@ -3488,12 +3497,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R66 — Data_Active_Cap_Quart flagged 2026-05-31: "adjust y-axis so
-          // we can see the movement in the lines." Measured quartile bands are
-          // upper 5.73-7.29% / lower 5.17-6.00%, so tighten to 5.0-7.5% (was
-          // CAP_RATE_TIGHT_RANGE 5-8%) to surface the movement. A wider band
-          // compresses the lines and is what the user is complaining about.
-          yAxisRange: { min: 0.05, max: 0.075 },
+          // R66b — the chart has FOUR lines, not two: the Total-market quartiles
+          // (5.12-7.31%) AND the Core-10+ quartiles, which are far more volatile
+          // (4.94-8.86% in the live export). R66's 5.0-7.5% clipped the core
+          // lines badly at both ends. Widen to 4.75-9.0% so every line is fully
+          // visible without clipping (the core-10+ cohort is thin/noisy — its
+          // 8.86% upper-quartile spike is flagged for data review separately).
+          yAxisRange: { min: 0.0475, max: 0.09 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol,
@@ -3676,8 +3686,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 2026-05-29 - pin the cap-rate (left) axis per vertical so the
           // asking-cap line movement is legible (matches the PNG renderer's
           // pins: dia 4.75-9.25%, gov 5.5-9.5%).
-          // R66 — tightened per 2026-05-31 export feedback: dia 5-9%, gov 6-9%.
-          yLeftRange: (vertical === 'gov' ? { min: 0.06, max: 0.09 } : { min: 0.05, max: 0.09 }),
+          // R66b — dia retuned to displayed last-ask-cap data 5.51-7.84% ->
+          // 5.25-8.0% (R66's 5-9% left it ~58% fill, still flat). gov last-ask
+          // cap 6.05-8.78% already fills 6-9% well, so gov unchanged.
+          yLeftRange: (vertical === 'gov' ? { min: 0.06, max: 0.09 } : { min: 0.0525, max: 0.08 }),
           // R37 P2 — left = cap rate (% 2dp), right = price change % (% 0dp).
           // Renderer pins per-vertical (dia 4.75-9.25% left, 0-70% right;
           // gov 5.5-9.5% left, 0-8% right). The spec builder doesn't have

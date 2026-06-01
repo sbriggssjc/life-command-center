@@ -15,6 +15,18 @@ functions were added, so the Vercel 12-function cap is unaffected.
 
 ---
 
+## 0. Deployment status
+
+- **2026-05-31 — view migrations APPLIED to production** (both atomically, verified
+  post-apply): `20260693` → Dialysis_DB (`zqzrriwuavgrquhisnoa`), `20260694` →
+  government (`scknotsqkcheojiaewwh`). The data side of round-66 is live. Because
+  every statement is `CREATE OR REPLACE VIEW`, re-running these files through the
+  normal repo migration pipeline later is idempotent (no conflict).
+- **PENDING — code deploy.** The y-axis rescaling and the Bid_Ask restyle live in
+  `api/_shared/cm-*.js`; they take effect only after the `cm/round66-export-feedback`
+  branch is merged + deployed. Until then an export shows corrected *data* on
+  old-style *charts*.
+
 ## 1. Files changed
 
 | File | Change |
