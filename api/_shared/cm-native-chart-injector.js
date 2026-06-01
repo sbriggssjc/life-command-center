@@ -2809,7 +2809,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       let cohortRange = CAP_RATE_COHORT_RANGE;
       if (chart_template_id === 'sold_cap_by_term_dot_plot') {
         cohortRange = (vertical === 'dialysis')
-          ? { min: 0.055, max: 0.08 }
+          ? { min: 0.055, max: 0.0775 }   // R66x — +/-3mo smoothed cohorts span 5.69-7.40%
           : { min: 0.06,  max: 0.12 };
       } else if (chart_template_id === 'asking_cap_by_term_dot_plot') {
         cohortRange = { min: 0.0475, max: 0.08 };  // dia-only template
