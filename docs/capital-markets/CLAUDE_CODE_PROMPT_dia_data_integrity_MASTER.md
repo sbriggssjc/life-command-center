@@ -86,6 +86,20 @@ instead of captured independently. Both can be fixed together (same table, same 
    initial_price=sold_price drops toward 0; had_price_change reflects real list reductions
    and the sentiment % lands near the deck's band.
 
+2C. listing_date set to the IMPORT date on a bulk capture (Available Market Size chart).
+   Symptom: a CoStar capture in Apr-May 2026 stamped ~806 historical listings with
+   listing_date = the scrape date (clustered on 2026-04-27/28, 2026-05-xx), many already
+   Sold/Superseded/'Imported-Estimate'. Effect: the trailing-12-month "clinics marketed"
+   count (cm_dialysis_available_market_size_q, rebuilt R66t) reads correctly 2017-2024 but
+   2025 is UNDERCOUNTED (real 2025 listings misdated to 2026; 2025-12 shows ~9 vs a true
+   ~100+) and 2026 is inflated. Interim view guard excludes rows with sold_date<=listing_date
+   (221 of 806) but ~585 bad rows remain.
+   Tasks: identify the mis-stamped batch (capture/import date vs true on-market date — check
+   created_at, status='Imported-Estimate', and the date clusters) and restore listing_date to
+   the true first-marketed date (or null it and re-derive from listing history). VALIDATE:
+   the TTM "marketed" count for 2025 and 2026 returns to the ~100-150/yr range consistent
+   with 2017-2024, and the Available Market Size chart's current-quarter bar is credible.
+
 Interim chart-side patches already shipped (so you know what's already mitigated, not data):
    - % of ask view now trims sold/initial to strict <1.0 (R66n).
    - Seller Sentiment view gates thin months + uses 10+yr cohort + smoothing (R66p).

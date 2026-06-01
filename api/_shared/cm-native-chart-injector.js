@@ -2210,7 +2210,10 @@ const MIN_YEAR_BY_TEMPLATE = {
   // dia-only templates (gov doesn't carry these views); the trim is a
   // no-op for verticals where the catalog doesn't include the template.
   asking_cap_quartiles_active:  2015,  // 2 rows in 2014 → trim to first full year
-  available_market_size_combo:  2016,  // 3 rows in 2015 → trim to first full year
+  // R66t — bumped 2016 -> 2017. The chart is now on a trailing-12-month "marketed"
+  // basis (cm_dialysis_available_market_size_q); listing capture is sparse pre-2017
+  // (1-55 listings/yr) so 2015-2016 TTM counts are thin. Deck starts Q3-17.
+  available_market_size_combo:  2017,
   dom_price_change_active:      2018,  // R66b: pre-2018 had <12 active listings/mo,
                                        // so the DOM average stair-stepped on 2-5 listings.
                                        // View now gates n>=8 + 3-mo smooths; trim display to 2018.
@@ -2997,7 +3000,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           yLeftNumFmt:  VAL_FMT_INTEGER,
-          yRightRange:  { min: 0.055, max: 0.075 },
+          // R66t — TTM-basis core cap dips to ~5.4% and total reaches ~7.0%; widen
+          // from 5.5-7.5% so neither cap line clips (deck right axis is 4.5-7.0%).
+          yRightRange:  { min: 0.05, max: 0.0725 },
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky },

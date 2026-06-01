@@ -1343,7 +1343,7 @@ function buildChartConfig(chart, brand) {
         options: comboOpts({
           yLeftFormat:  AXIS_FORMAT_INTEGER,
           yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-          yRightRange:  { min: 0.055, max: 0.075 },
+          yRightRange:  { min: 0.05, max: 0.0725 },  // R66t — TTM-basis caps 5.4-7.0%
         }),
       };
     }
