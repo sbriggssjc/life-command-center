@@ -1,104 +1,75 @@
 # LCC Template Health Report
 
-**Week of:** May 25, 2026
+**Week of:** June 1, 2026
 **Lookback window:** 120 days
 **Run mode:** Live API call against `https://life-command-center-nine.vercel.app/api/operations?_route=draft&action=health` with `X-LCC-Key` from `.env.local`.
-**Status:** ⚠️ **COULD NOT COMPLETE — endpoint returning HTTP 500**
+**Status:** ✅ Completed — HTTP 200. Endpoint recovered from last week's HTTP 500.
 
 > Destination note: the task asks for this report at
 > `C:\Users\scott\OneDrive\Documents\Claude\Scheduled\lcc-template-health-weekly\latest-report.md`,
 > but that OneDrive folder isn't in the session's connected mounts (same as prior weeks).
-> Written to the LCC workspace path instead. To restore the OneDrive destination, connect
-> that folder to Cowork or update the SKILL.md to write here permanently.
+> Written to the LCC workspace path instead.
 
 ---
 
 ## Executive Summary
 
-For the first time in this report's history, the call **failed**. The template
-health endpoint returned **HTTP 500 ("Internal server error")** on every attempt
-this morning, so **no template data was retrieved and no health metrics could be
-computed**. This breaks the four-week streak of clean (if empty) 200 responses.
+The `draft` route is healthy again — the HTTP 500 that blocked last Monday's run has cleared, and the health endpoint returned a clean 200. **No templates need revision and none are underperforming.** All 14 active templates are flagged `stale` for the same standing reason as prior weeks: no broker sends have been recorded in the lookback window.
 
-This is a **backend availability problem, not a templates result** — do not read
-it as "all clear."
-
-| Metric | This week | Last week (May 18) |
+| Metric | This week | Last week (May 25) |
 |---|---|---|
-| Endpoint response | **HTTP 500** | HTTP 200 |
-| Total templates evaluated | **n/a — no data** | 14 |
-| Need revision (edit rate >40%) | **n/a** | 0 |
-| Underperforming vs targets | **n/a** | 0 |
-| Stale (no sends 90+ days) | **n/a** | 14 |
+| Endpoint response | **HTTP 200** | HTTP 500 |
+| Total templates evaluated | **14** | n/a — no data |
+| Need revision (edit rate >40%) | **0** | n/a |
+| Underperforming vs targets | **0** | n/a |
+| Stale (no sends in window) | **14** | n/a |
+| Healthy | **0** | n/a |
 
----
-
-## What happened (diagnostics)
-
-Two corrections to the task's call spec were needed before auth even succeeded —
-the SKILL.md is pointing at the wrong host and the wrong auth scheme:
-
-| SKILL.md says | Actually works |
-|---|---|
-| Host `life-command-center.vercel.app` | **`life-command-center-nine.vercel.app`** (the bare host returns the frontend 404 for all `/api/*`) |
-| `Authorization: Bearer <key>` | **`X-LCC-Key: <key>` header** (Bearer returns 401) |
-
-Probes against the **correct** host with a valid `X-LCC-Key`:
-
-| Request | Result |
-|---|---|
-| `POST /api/operations?_route=draft&action=health` (×2) | **500** `{"error":"Internal server error"}` (fast fail) |
-| `GET /api/draft` (list templates — tier 0, no data needed) | **500** `{"error":"Internal server error"}` |
-| `GET /api/queue` | **timeout** (no response in 18s) |
-| `GET /api/sync?action=health` | **timeout** (no response in 25s) |
-| `GET /` (site root) | 200 — frontend is up |
-
-The 500 is returned *after* auth passes (it's a handler-level failure, not 401/404),
-and it hits even the tier-0 list call that needs no send data — so the whole
-`draft` route is failing, not just the `health` action. Adjacent routes
-(`queue`, `sync`) are timing out entirely. Pattern points to a backend
-dependency outage (e.g. the LCC Opps Supabase / data layer the draft route reads
-from) or a deploy regression introduced since last Monday's healthy run.
+Cross-checked against the LCC Opps DB directly: `template_sends` has **0 rows all-time**, which confirms the "all stale" result is a data-availability artifact, not a copy-quality problem.
 
 ---
 
 ## Templates Needing Revision
 
-**Unknown — no data retrieved.** Endpoint errored before producing any
-evaluations. This section will populate once the route returns 200 again.
+**None.** Flagging requires ≥5 sends carrying edit-distance data; no template has any send history, so the revision-suggestion path produced nothing this week.
 
-For reference, last week (May 18) all 14 active templates were `stale` with
-**0** flagged for revision and **0** underperforming, because no broker sends had
-been recorded in the prior 120 days.
+---
+
+## All active templates (all currently `stale`)
+
+| ID | Name | Category | Domain | Avg edit dist | Sends (120d) |
+|---|---|---|---|---|---|
+| T-001 | First Touch | seller_bd | — | — | 0 |
+| T-002 | Cadence Follow-Up | seller_bd | — | — | 0 |
+| T-003 | Capital Markets Update | mass_marketing | — | — | 0 |
+| T-004 | Listing Announcement | buyer_bd | — | — | 0 |
+| T-005 | Early Look Preview | buyer_bd | — | — | 0 |
+| T-006 | OM Download Follow-Up | buyer_bd | — | — | 0 |
+| T-007 | Seller Weekly Activity Report | seller_communication | — | — | 0 |
+| T-008 | BOV Delivery Cover | seller_bd | — | — | 0 |
+| T-009 | Closing Announcement | listing_marketing | — | — | 0 |
+| T-010 | Cold Ownership Inquiry | research_outreach | — | — | 0 |
+| T-011 | Listing BD — Same Asset Type / Same State | buyer_bd | — | — | 0 |
+| T-012 | Listing BD — Owner Located Near Listing | buyer_bd | — | — | 0 |
+| T-013 | GSA Lease Award Congratulations | seller_bd | government | — | 0 |
+| T-014 | Report Request Fulfillment | seller_bd | — | — | 0 |
 
 ---
 
 ## What needs attention this week
 
-1. **Investigate the 500 on the `draft` route.** Pull the Vercel function logs
-   for `api/operations` (and check the LCC Opps Supabase status) around this
-   morning's run. The fast 500 on a tier-0 list call suggests a failing
-   dependency or unhandled exception at route entry, not a data-specific bug.
-   The `queue`/`sync` timeouts suggest the problem may be broader than `draft`.
-2. **Fix the scheduled-task spec.** Update the SKILL.md so future runs don't
-   waste a cycle rediscovering this:
-   - Host → `life-command-center-nine.vercel.app`
-   - Auth header → `X-LCC-Key: <LCC_API_KEY>` (not `Authorization: Bearer`)
-3. **Re-run manually once the route is healthy:**
-   `POST /api/operations?_route=draft&action=health` with `{"lookback_days":120}`
-   and the `X-LCC-Key` header.
-4. **Standing item (unchanged 4 weeks running):** the refinement loop still has
-   nothing to score because no `template_sends` rows exist. Once the endpoint is
-   back, the report will again show "all stale" until `record_send` is wired up
-   or sends start flowing. Consider dialing this task to monthly until send
-   volume returns.
+1. **Standing item (5 weeks running):** the refinement loop has nothing to score because `template_sends` is empty all-time. Until `record_send` is wired into the send flow (Chrome extension / email path → `POST /api/operations?_route=draft&action=record_send`), this report will keep reading "14 stale, 0 actionable." Consider dialing this task to monthly until send volume appears.
+2. **Fix the scheduled-task spec (carried over, still unfixed).** The SKILL.md continues to point at the wrong host and auth scheme; every run rediscovers this:
+   - Host → `life-command-center-nine.vercel.app` (the bare `life-command-center.vercel.app` returns the frontend 404 for all `/api/*`).
+   - Auth → `X-LCC-Key: <LCC_API_KEY>` header (the spec's `Authorization: Bearer` returns 401).
+3. **Last week's 500 is resolved** — no further action needed there, but worth noting the `draft` route had a backend outage on May 25 that self-cleared.
 
 ---
 
 ## Run Notes
 
 - Endpoint (corrected): `POST /api/operations?_route=draft&action=health` on `life-command-center-nine.vercel.app`
-- Auth: `X-LCC-Key` header sourced from `.env.local` (Bearer format → 401)
+- Auth: `X-LCC-Key` header sourced from `.env.local`
 - Body: `{"lookback_days": 120}`
-- Response: **HTTP 500 `{"error":"Internal server error"}`**, reproduced on retry; tier-0 `GET /api/draft` also 500; `queue`/`sync` routes timed out
-- Last healthy run: May 18, 2026 (HTTP 200, 14 evaluations, all `stale`)
+- Response: HTTP 200 — `{"ok":true,"total_templates":14,"summary":{"needs_revision":0,"underperforming":0,"stale":14,"healthy":0}}`
+- Independent verification: direct query of LCC Opps (`xengecqvemvfknjvbvrq`) — `template_sends` = 0 rows all-time, 14 active `template_definitions`.
