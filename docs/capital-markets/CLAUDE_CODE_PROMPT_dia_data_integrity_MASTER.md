@@ -100,6 +100,18 @@ instead of captured independently. Both can be fixed together (same table, same 
    the TTM "marketed" count for 2025 and 2026 returns to the ~100-150/yr range consistent
    with 2017-2024, and the Available Market Size chart's current-quarter bar is credible.
 
+2D. off_market_date completeness (DOM inflation on the DOM & Price-Change chart).
+   Symptom: ~53% of listings counted as "active" at recent quarter-ends have
+   days_on_market > 3 years because off_market_date was never recorded — they never drop
+   out of the active snapshot and accumulate, inflating avg DOM to ~1,100-1,300 days vs the
+   deck's ~300-400. The chart (R66u) currently proxies around this by capping the active
+   universe at days_on_market <= 1095, but that's a band-aid.
+   Tasks: populate off_market_date (from sold_date, a withdrawn/expired status, the
+   availability-checker's off_market signal, or a max-marketing-window assumption) so closed
+   listings actually close out. VALIDATE: avg DOM on the un-capped active set returns to the
+   deck's ~300-650 range and the share of >3-year "active" listings drops toward 0; then the
+   R66u 1095-day cap can be relaxed.
+
 Interim chart-side patches already shipped (so you know what's already mitigated, not data):
    - % of ask view now trims sold/initial to strict <1.0 (R66n).
    - Seller Sentiment view gates thin months + uses 10+yr cohort + smoothing (R66p).
