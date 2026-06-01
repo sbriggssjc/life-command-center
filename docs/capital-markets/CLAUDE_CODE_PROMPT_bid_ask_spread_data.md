@@ -53,4 +53,23 @@ because the spread data is ~0. This fix makes the chart match the deck.
 - Follow the repo's git rules (feature branch, PR, copy/paste merge + test commands).
 - Backfills record provenance; never clobber a manually-corrected `last_cap_rate`.
 - Don't change the sold `cap_rate` — it's the achieved side and is correct.
+
+## SAME-FAMILY follow-on: available_listings.initial_price copy bug (% of Ask chart)
+The "Days on Market & % of Ask Price" chart (Dialysis Market Filter p.33) has the
+identical defect on the PRICE side of available_listings:
+- `cm_dialysis_dom_pct_ask_m` computes % of ask as `sold_price / initial_price`.
+- Of 828 sold listings with both prices in range, 278 (33.6%) have `initial_price`
+  EXACTLY equal to `sold_price` (copied, not the true broadly-marketed first ask),
+  and another 174 (21%) have `sold_price > initial_price` (implausible). Median
+  ratio = 100%. That inflated the line to ~98-100% (sale price >= ask, which can't
+  be right); the deck shows a realistic 88-95% band (avg ~93.7%).
+- Display was patched (view now trims `sold/initial_price` to a strict `< 1.0`
+  window, R66n, ~91.4% on 348 genuine deals), but the DATA is still wrong.
+- TASK: trace every writer of `available_listings.initial_price` (and `last_price`),
+  find where it defaults to / is set equal to `sold_price`, and fix capture so
+  `initial_price` = the FIRST broadly-marketed asking price (independent of the
+  eventual sale). Where the true initial ask is unknown, leave NULL rather than
+  copying `sold_price`. Backfill from listing-history/price-change records where they
+  exist. Validate: post-fix `avg(sold_price/initial_price)` over genuine deals ~ the
+  deck's 88-95% and the share of `initial_price = sold_price` rows drops toward 0.
 ```
