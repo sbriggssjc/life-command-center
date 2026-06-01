@@ -2506,7 +2506,7 @@ function buildChartConfig(chart, brand) {
       if (chart.chart_template_id === 'sold_cap_by_term_dot_plot') {
         dotRange = govLikeDot ? { min: 0.06, max: 0.12 } : { min: 0.055, max: 0.0775 };  // R66x — smoothed dia cohorts 5.69-7.40%
       } else if (chart.chart_template_id === 'asking_cap_by_term_dot_plot') {
-        dotRange = { min: 0.0475, max: 0.08 };  // dia-only template
+        dotRange = { min: 0.0475, max: 0.085 };  // R66y — cohorts span 4.94-8.33%
       }
       return {
         type: 'line',
