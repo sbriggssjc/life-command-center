@@ -1239,9 +1239,10 @@ function buildChartConfig(chart, brand) {
         // 5.75-11.5%; gov 7.25-11.28% -> 7.0-11.5% (R66's 7.5-10% clipped both).
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_1DP,
+          // R66m — match deck axis (4-13%); pairs with view-side +/-3-mo smoothing.
           yAxisRange: ((chart.vertical === 'gov' || chart.vertical === 'government_leased')
-            ? { min: 0.07, max: 0.115 }
-            : { min: 0.0575, max: 0.115 }),
+            ? { min: 0.04, max: 0.13 }
+            : { min: 0.04, max: 0.13 }),
         }),
       };
     }

@@ -3116,37 +3116,58 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const spreadCol  = findCol('avg_bid_ask_spread');
       if (!periodCol || !spreadCol) return null;
 
-      // R66c — DUAL-AXIS, per user direction 2026-06-01. Matches the master
-      // (Dialysis Comp Work MASTER.xlsx chart7) "two dash-marker series, NO
-      // gray band" look, but fixes the master's flaw: it plots Last-Ask cap
-      // (~5-8%) and the raw Bid-Ask Spread (~0.2-0.8%) on ONE cap axis, so the
-      // spread line falls off the bottom and is invisible. Here the spread
-      // gets its own RIGHT axis so both dash series read clearly.
-      //   LEFT  (Sky):  Last Ask cap (5.25-8% dia / 5.5-10% gov)
-      //   RIGHT (Navy): Bid-Ask Spread (signed sold-minus-ask; -1.5%..+2%)
+      // R66l — match the deliverable PDF (Dialysis Market Filter p.34 / gov p.21)
+      // STRUCTURE exactly: a single cap-rate axis where each month is a solid
+      // light-gray FLOATING BAR from Last Ask (bottom) up to Achieved cap (top =
+      // last_ask + spread), with a SKY dash marker at the bottom (Last Ask) and a
+      // NAVY dash marker at the top (Achieved). The bar height = the bid-ask
+      // spread. Built as a stacked combo: invisible base bar (last_ask) + visible
+      // gray bar (spread) + two marker-only line series.
+      //   NOTE: with current data the bars are ~flat because our per-deal spread
+      //   is ~0 (71% of sold listings have last_cap_rate copied from sold cap);
+      //   the structure is correct and will render like the master once the
+      //   spread data is captured independently (tracked in the data workstream).
       if (lastAskCol) {
         return {
           tabName,
           spec: {
-            type: 'bidask-dual',
+            type: 'combo',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            headerRow,
-            leftCol:   lastAskCol,
-            leftColor: sky,
-            leftRange: ((vertical === 'gov' || vertical === 'government_leased')
+            barGrouping: 'stacked',
+            sharedAxis:  true,
+            barGapWidth: 60,
+            yLeftRange: ((vertical === 'gov' || vertical === 'government_leased')
               ? { min: 0.055, max: 0.10 }
               : { min: 0.0525, max: 0.08 }),
-            leftNumFmt: VAL_FMT_PERCENT_2DP,
-            rightCol:   spreadCol,
-            rightColor: navy,
-            // signed spread (sold - last ask); dia bulk ~ -1.2%..+0.3%, so a
-            // -1.5%..+2.0% right axis shows the line without clipping the tails.
-            rightRange:  { min: -0.015, max: 0.02 },
-            rightNumFmt: VAL_FMT_PERCENT_1DP,
+            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
+            barSeries: [
+              // invisible base lifts the visible bar to the Last Ask level
+              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: '003DA5', noFill: true },
+              // visible light-gray bar = the spread (Last Ask -> Achieved)
+              { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,  color: 'D8DFDF', borderColor: '9EA9B7' },
+            ],
+            lineSeries: [
+              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
+                showMarker: true, markerShape: 'dash', markerSize: 7 },
+              { titleCol: '__achieved__', titleRow: headerRow, valCol: '__achieved__', color: navy,
+                showMarker: true, markerShape: 'dash', markerSize: 7 },
+            ],
             anchor: standardAnchor,
           },
+          helperCols: [
+            {
+              key: 'achieved_cap',
+              header: 'Achieved Cap (TTM)',
+              format: 'percent_basis_points',
+              width: 18,
+              getValue: (row) => {
+                const la = row.avg_last_ask_cap, sp = row.avg_bid_ask_spread;
+                return (la != null && sp != null) ? Number(la) + Number(sp) : null;
+              },
+            },
+          ],
         };
       }
 
@@ -3496,10 +3517,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
           // R37 P2 — percent 1dp (renderer line ~1240)
-          // R66b — retuned to displayed data (2026-06-01): dia 6.03-11.03% ->
-          // 5.75-11.5%; gov 7.25-11.28% -> 7.0-11.5% (R66's 7.5-10% clipped
-          // both ends — leveraged-return line ran to 11.28%).
-          yAxisRange: (vertical === 'gov' ? { min: 0.07, max: 0.115 } : { min: 0.0575, max: 0.115 }),
+          // R66m — match the published deck's axis. The PDF (Dialysis Market
+          // Filter p.18) uses a wide 4-13% scale; our prior tight 5.75-11.5%
+          // axis visually exaggerated month-to-month movement. Combined with
+          // the view-side +/-3-mo smoothing (cm_*_returns_indexes_m), this makes
+          // the lines read like the deck instead of a noisy staircase.
+          yAxisRange: (vertical === 'gov' ? { min: 0.04, max: 0.13 } : { min: 0.04, max: 0.13 }),
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
             { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
