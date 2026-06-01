@@ -54,3 +54,13 @@ because the spread data is ~0. This fix makes the chart match the deck.
 - Backfills record provenance; never clobber a manually-corrected `last_cap_rate`.
 - Don't change the sold `cap_rate` — it's the achieved side and is correct.
 ```
+
+## Related downstream symptom: Seller Sentiment "% price change" (same initial_price bug)
+`cm_dialysis_seller_sentiment_m` derives `had_price_change = (initial_price <> last_price)`.
+Because `initial_price` is copy-corrupted (== `sold_price` on ~34% of rows), the price-change
+rate is inflated/erratic — e.g. 43-68% in recent thin months vs the deck's ~18-25% for all
+deals (Dialysis Market Filter p.35). The chart (R66p) now uses a 10+yr cohort and gates thin
+months, but the all-deals % can't be corrected from the view. The SAME `initial_price`
+capture fix above resolves it: after `initial_price` reflects the true first broadly-marketed
+ask, re-validate that `had_price_change` captures real list-price reductions and the % lands
+near the deck's band.

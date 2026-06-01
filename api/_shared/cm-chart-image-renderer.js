@@ -705,22 +705,24 @@ function buildChartConfig(chart, brand) {
       // Average Cap). Master uses 0.0525..0.09250 fixed range; tighter
       // window than the default CAP_RATE_RANGE so the two cap lines
       // fill the chart frame.
+      // R66o — match deck p.38: NM line is the hero (sky) sitting BELOW the
+      // Non-NM market line (gray); axis tightened to 4.75-7.75%.
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
-            { label: 'NM Average Cap (TTM)',     data: rows.map(r => r.nm_cap_rate),
-              borderColor: palette[0], backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'Non-NM Average Cap (TTM)', data: rows.map(r => r.market_cap_rate),
-              borderColor: palette[1], backgroundColor: 'transparent',
+              borderColor: '#8A8F98', backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            { label: 'NM Average Cap (TTM)',     data: rows.map(r => r.nm_cap_rate),
+              borderColor: palette[1], backgroundColor: 'transparent',
+              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
           ],
         },
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange: { min: 0.0525, max: 0.0925 },
+          yAxisRange: { min: 0.0475, max: 0.0775 },
         }),
       };
     }

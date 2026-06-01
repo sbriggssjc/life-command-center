@@ -806,6 +806,15 @@ ${dLblsFrag}
   // renders gray bars connecting the first-vs-last series at each x point,
   // creating the "drop bar above the last ask" visual the master uses.
   const lineGrouping = spec.lineGrouping === 'stacked' ? 'stacked' : 'standard';
+  // R66o — optional thin vertical connectors between the series at each x point
+  // (the deck's "drop lines" on the NM-vs-Market page). <c:hiLowLines> draws a
+  // line from the min to the max series value per category. Per CT_LineChart
+  // schema it precedes <c:upDownBars>. Default color = deck market-gray.
+  const hiLowColor = (spec.hiLowLines && spec.hiLowLines !== true)
+    ? String(spec.hiLowLines).replace('#', '') : 'C9CED6';
+  const hiLowLinesFrag = spec.hiLowLines
+    ? `        <c:hiLowLines><c:spPr><a:ln w="9525" cap="rnd"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>`
+    : '';
   const upDownBarsFrag = spec.upDownBars
     ? `        <c:upDownBars>
           <c:gapWidth val="150"/>
@@ -825,6 +834,7 @@ ${dLblsFrag}
         <c:grouping val="${lineGrouping}"/>
         <c:varyColors val="0"/>
 ${seriesXml}
+${hiLowLinesFrag}
 ${upDownBarsFrag}
         <c:marker val="0"/>
         <c:axId val="1"/>
@@ -2155,7 +2165,10 @@ const MIN_YEAR_BY_TEMPLATE = {
   // gaps + erratic jumps. From 2011 it's continuous and the 9-mo MA reads
   // smooth (matches the PDF). User: 'missing quite a bit of data ... moves
   // erratically'.
-  nm_vs_market_cap:             2011,
+  // R66o — bumped 2011 -> 2020 to match the deck's Value Proposition Results
+  // window (Sep-20 to Dec-25). The recent 5-6yr window + 4.75-7.75% axis makes
+  // the NM-below-market gap legible; the 2011-19 history compressed it.
+  nm_vs_market_cap:             2020,
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).
@@ -2822,13 +2835,22 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'nm_vs_market_cap': {
-      // 2-series line — NM Average Cap (navy) vs Non-NM Average Cap (sky).
-      // Color order from cm-chart-image-renderer.js around line 707:
-      // palette[0] navy / palette[1] sky.
+      // R66o — match the deck's Value Proposition Results page (Dialysis Market
+      // Filter p.38): NM line is the hero in SKY blue and sits BELOW the Non-NM
+      // market line in GRAY. (Prior build used navy NM / sky market, which both
+      // inverted the visual hierarchy and — on a stale pre-R66 build — showed NM
+      // tangled above market. Live data now has NM below market throughout.)
+      const NM_GRAY   = '8A8F98'; // deck market-line gray
       const periodCol = findCol('period_end');
       const nmCol     = findCol('nm_cap_rate');
       const marketCol = findCol('market_cap_rate');
       if (!periodCol || !nmCol || !marketCol) return null;
+      // R66o — deck labels both lines (peak / trough / most-recent per our
+      // convention) so the current NM-vs-market gap is callout-legible.
+      const nmLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.nm_cap_rate, fmtPct2Native) : undefined;
+      const mktLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(rows, r => r.market_cap_rate, fmtPct2Native) : undefined;
       return {
         tabName,
         spec: {
@@ -2836,12 +2858,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — tightened cap range 5.25-9.25% (renderer line ~718)
-          yAxisRange: { min: 0.0525, max: 0.0925 },
+          // R66o — tighten to the deck axis (4.75-7.75%). Pairs with the recent
+          // window (MIN_YEAR_BY_TEMPLATE.nm_vs_market_cap bumped to 2020) so the
+          // NM-below-market gap is legible instead of compressed on a 5.25-9.25%
+          // scale that had to accommodate the 2011-13 ~9% early history.
+          yAxisRange: { min: 0.0475, max: 0.0775 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
+          // R66o — thin gray vertical connectors between the two lines (deck style).
+          hiLowLines: '#C9CED6',
           series: [
-            { titleCol: nmCol,     titleRow: headerRow, valCol: nmCol,     color: navy },
-            { titleCol: marketCol, titleRow: headerRow, valCol: marketCol, color: sky  },
+            { titleCol: marketCol, titleRow: headerRow, valCol: marketCol, color: NM_GRAY, dataLabels: mktLabels },
+            { titleCol: nmCol,     titleRow: headerRow, valCol: nmCol,     color: sky, dataLabels: nmLabels },
           ],
           anchor: standardAnchor,
         },

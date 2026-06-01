@@ -581,10 +581,10 @@ const CHART_COLUMNS = {
     { key: 'period_end',                  header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'n_all',                       header: 'N (all)',             format: 'integer_count',       width: 10 },
     { key: 'pct_price_change_all',        header: 'Price Chg % (all)',   format: 'percent_one_decimal', width: 18 },
-    { key: 'n_long_term',                 header: 'N (8+ yr)',           format: 'integer_count',       width: 10 },
-    { key: 'pct_price_change_long_term',  header: 'Price Chg % (8+ yr)', format: 'percent_one_decimal', width: 20 },
+    { key: 'n_long_term',                 header: 'N (10+ yr)',          format: 'integer_count',       width: 10 },
+    { key: 'pct_price_change_long_term',  header: 'Price Chg % (10+ yr)',format: 'percent_one_decimal', width: 20 },
     { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 19 },
-    { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (8+ yr)',format: 'percent_basis_points', width: 21 },
+    { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (10+ yr)',format: 'percent_basis_points', width: 21 },
   ],
   sources_of_capital: [
     { key: 'rank_15y',          header: 'Rank',                width: 6 },
@@ -780,11 +780,11 @@ const CHART_COLUMNS = {
     { key: 'period_end',                  header: 'Month End',           format: 'date_short',           width: 13 },
     { key: 'subspecialty',                header: 'Subspecialty',        width: 14 },
     { key: 'n_all',                       header: 'N (all)',             format: 'integer_count',        width: 10 },
-    { key: 'n_long_term',                 header: 'N (8+ Yr)',           format: 'integer_count',        width: 12 },
+    { key: 'n_long_term',                 header: 'N (10+ Yr)',          format: 'integer_count',        width: 12 },
     { key: 'pct_price_change_all',        header: 'Price Chg % (all)',   format: 'percent_one_decimal',  width: 18 },
-    { key: 'pct_price_change_long_term',  header: 'Price Chg % (8+ Yr)', format: 'percent_one_decimal',  width: 20 },
+    { key: 'pct_price_change_long_term',  header: 'Price Chg % (10+ Yr)',format: 'percent_one_decimal',  width: 20 },
     { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 18 },
-    { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (8+ Yr)',format: 'percent_basis_points', width: 20 },
+    { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (10+ Yr)',format: 'percent_basis_points', width: 20 },
   ],
 
   // Lease-rent 5-number summary per quarter (StockChart input)
