@@ -41,6 +41,7 @@ import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_sh
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
+import { deriveListingDate } from '../_shared/listing-date.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -255,9 +256,15 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
   // sale_date as a guard; using today() instead of the inferred date
   // accidentally protects OM listings from being closed by older sales.
   const omEst = estimateOmCreatedDate(snapshot);
+  // Round 77d (2026-06-02): when lease-math inference is unavailable, fall back
+  // to the snapshot's own on-market signal (listing_date / days_on_market the
+  // CoStar capture carries) via the shared deriveListingDate, and only then to
+  // the capture date — same logic the sidebar writer uses. Previously this
+  // hard-stamped today(), so OM-staged listings (incl. our own) all read as
+  // listed "today", collapsing the recent edge of the supply-side charts.
   const listingDate = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
     ? omEst.om_created_estimate
-    : new Date().toISOString().slice(0, 10);
+    : deriveListingDate(snapshot).listing_date;
 
   // Round 76ej.f (2026-05-04): capture the source listing URL on the
   // available_listings row so the LCC UI has a clickable "View Listing"
@@ -314,10 +321,12 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     : null;
 
   // Round 76u (2026-04-27): infer OM date from lease metadata. Same as gov.
+  // Round 77d (2026-06-02): unknown inference now falls back to the snapshot's
+  // on-market signal (deriveListingDate) before the capture date.
   const omEst = estimateOmCreatedDate(snapshot);
   const listingDate = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
     ? omEst.om_created_estimate
-    : new Date().toISOString().slice(0, 10);
+    : deriveListingDate(snapshot).listing_date;
 
   // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
   // so the Sales/Available table's Price/SF column populates without a

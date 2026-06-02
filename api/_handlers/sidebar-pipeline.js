@@ -37,6 +37,11 @@ import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 // cross-module bindings are hoisted function declarations resolved at call
 // time (runtime), never at module-load time.
 import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-contract.js';
+// Round 77d (2026-06-02): listing_date derivation moved to a shared module so
+// the CoStar sidebar and the OM-intake promoter stay consistent. Re-exported
+// here for the existing test/derive-listing-date.test.js import path.
+import { deriveListingDate } from '../_shared/listing-date.js';
+export { deriveListingDate };
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -8858,41 +8863,6 @@ async function upsertLeaseEscalations(propertyId, leaseId, metadata) {
     effective_date:     new Date().toISOString().split('T')[0],
   });
   return r.ok ? 1 : 0;
-}
-
-/**
- * Round 77 (2026-06-02): derive a listing's listing_date from CoStar's real
- * on-market signal instead of stamping the capture date. Stamping "today" on
- * every INSERT poisoned the recent edge of the supply-side Capital Markets
- * charts (Market Turnover / Inventory Backlog / Available Market Size): a
- * listing on the market for months was recorded as brand-new, and a bulk
- * re-capture made a whole cohort look like it listed on the scrape date.
- *
- * Pure + deterministic given `nowMs` so it is unit-testable. Priority:
- *   1. explicit CoStar on-market date (metadata.listing_date), when ≤ capture day
- *   2. capture_date − days_on_market (DOM bounded to [0, 1825] days = 5y)
- *   3. capture date (last resort — CoStar carried neither signal)
- * Never returns a future date. Returns { listing_date, source }.
- *
- * @param {object} metadata  capture metadata (listing_date, days_on_market)
- * @param {number} [nowMs]   capture instant in ms (injectable for tests)
- * @returns {{listing_date: string, source: string}}
- */
-export function deriveListingDate(metadata = {}, nowMs = Date.now()) {
-  const capturePart = new Date(nowMs).toISOString().split('T')[0];
-  const onMarket = parseDate(metadata?.listing_date)?.split('T')[0] || null;
-  const domRaw   = parseInt(metadata?.days_on_market, 10);
-  const domDays  = Number.isFinite(domRaw) && domRaw >= 0 && domRaw <= 1825 ? domRaw : null;
-  if (onMarket && onMarket <= capturePart) {
-    return { listing_date: onMarket, source: 'costar_on_market_date' };
-  }
-  if (domDays != null) {
-    return {
-      listing_date: new Date(nowMs - domDays * 86400 * 1000).toISOString().split('T')[0],
-      source: 'costar_days_on_market',
-    };
-  }
-  return { listing_date: capturePart, source: 'capture_date_fallback' };
 }
 
 // ── Step 5f: Upsert available_listings ─────────────────────────────────────
