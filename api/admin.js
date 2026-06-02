@@ -214,7 +214,7 @@ async function handleReviewCounts(req, res) {
   const [
     provConflicts, staleIdentities, unlinkedEntities,
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
-    govDupAddr, govPending,
+    govDupAddr, govPending, govSosLinks,
   ] = await Promise.all([
     opsCount('v_field_provenance_actionable'),
     opsCount('v_stale_identities'),
@@ -225,6 +225,7 @@ async function handleReviewCounts(req, res) {
     domCount('gov', 'llc_research_queue?status=eq.queued'),
     domCount('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
     domCount('gov', 'pending_updates?status=eq.pending'),
+    domCount('gov', 'v_recorded_owner_link_review'),
   ]);
 
   const sum = (...xs) => { const v = xs.filter(x => typeof x === 'number'); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
@@ -250,6 +251,9 @@ async function handleReviewCounts(req, res) {
       count: sum(staleIdentities, unlinkedEntities),
       parts: { stale_identities: staleIdentities, unlinked_entities: unlinkedEntities },
       href: 'pageDataQuality', tone: 'yellow' },
+    { key: 'sos_owner_links', label: 'Owner-contact links to confirm',
+      count: sum(govSosLinks), parts: { fl_sos_weak_links: govSosLinks },
+      href: 'pageDataQuality', tone: '' },
   ];
 
   return res.status(200).json({ generated_at: new Date().toISOString(), lanes });
