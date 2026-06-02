@@ -918,8 +918,9 @@ function buildChartConfig(chart, brand) {
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_INTEGER,
             yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-            // R66n — match deck p.33: DOM 0-300 baseline, % of ask 84-96%.
-            yLeftRange:   (isDia ? { min: 0, max: 300 } : undefined),
+            // R66n/R66t — % of ask 84-96%; DOM widened 300 -> 450 (gated n>=10,
+            // smoothed; recent climb to 345/411 is real slowdown, was clipping).
+            yLeftRange:   (isDia ? { min: 0, max: 450 } : undefined),
             yRightRange:  (isDia ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
           });
           // Annotations: peak/trough/last on % of Ask line.

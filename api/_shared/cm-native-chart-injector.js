@@ -3078,14 +3078,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           // R37 P2 — left integer days, right percent 85-105% (renderer ~905)
-          // R66n — match the published deck (Dialysis Market Filter p.33): DOM bars
-          // on a true 0-300 baseline (deck tops at 283; our recent thin-n months
-          // spike higher but those are <15-sale artifacts), and % of ask on 84-96%.
-          // The % of ask view now trims sold/initial_ask to a strict <1.0 window
-          // (cm_dialysis_dom_pct_ask_m, R66n) so the line is a realistic 87-95%
-          // band instead of the prior ~98-100% (initial_price copy-bug inflation).
+          // R66n — % of ask view trims sold/initial_ask to a strict <1.0 window
+          // (cm_dialysis_dom_pct_ask_m) so the line is a realistic 87-95% band.
+          // R66t — DOM left axis widened 300 -> 450. The view is gated at n>=10
+          // and smoothed, so the recent climb (297 -> 345 in-export, 411 live and
+          // still rising) is REAL deal-slowdown, not a thin-sample artifact; the
+          // 300 ceiling was clipping it. % of ask max is 95.85%, fits 84-96%.
           yLeftNumFmt:  VAL_FMT_INTEGER,
-          yLeftRange:   (vertical === 'dialysis' ? { min: 0, max: 300 } : undefined),
+          yLeftRange:   (vertical === 'dialysis' ? { min: 0, max: 450 } : undefined),
           yRightRange:  (vertical === 'dialysis' ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
           yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
