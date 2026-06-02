@@ -1048,11 +1048,17 @@ async function exportWorkbook(req, res) {
         upper_quartile: r.upper_quartile_cap_ttm,
         lower_quartile: r.lower_quartile_cap_ttm,
       })),
-      nm_vs_market_cap: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        nm_cap_rate: r.nm_avg_cap_ttm,
-        market_cap_rate: r.non_nm_avg_cap_ttm,
-      })),
+      // R66w — `nm_vs_market_cap` mapper REMOVED (same fix as cap_rate_by_lease_term,
+      // dom_and_pct_of_ask, seller_sentiment, cap_by_credit above). master_m's
+      // nm_avg_cap_ttm / non_nm_avg_cap_ttm are the RAW UNGATED cap averages
+      // (8%+ on thin gov NM cohorts) — mapping them here was overriding the
+      // dedicated wrapper view (cm_<vertical>_nm_vs_market_q/_m), which is gated
+      // (n>=3) and +/-4mo smoothed. The 2026-03-31 gov export showed NM clipping
+      // at 8.2-8.4% on the 6-7.75% axis because of this override. Let the chart
+      // fetch the gated wrapper directly via the realCharts path.
+      // NOTE: net_lease_spread (below) still reads nm_avg_cap_ttm / non_nm_avg_cap_ttm
+      // from master_m — if NL_Spread shows the same ungated NM line, it needs the
+      // same treatment (or gate those two columns in the master_m view).
       // 2026-05-29 - shared `cap_rate_by_lease_term` master_m mapper REMOVED.
       // master_m's gov cohort columns (cap_10plus_year / cap_5to10_year /
       // cap_less5_year / cap_outside_firm) bucket on the leases-table join,
