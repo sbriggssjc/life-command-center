@@ -1793,7 +1793,11 @@ function buildChartConfig(chart, brand) {
               barPercentage: 0.22, categoryPercentage: 0.9,
               yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Avg Renewal Rent CAGR',
-              data: rows.map(r => r.cagr_5yr),
+              // Per-lease renewal CAGR (deck p.32): new renewal rate vs the
+              // building's earliest-observed rate, annualized over elapsed
+              // years, TTM-averaged. Flat ~1% from 2014 (cagr_5yr was a
+              // market-average that couldn't start before 2018).
+              data: rows.map(r => r.cagr_per_lease),
               borderColor: PDF_COLORS.cap_mid, // sky #62B5E5
               backgroundColor: 'transparent', tension: 0.3,
               pointRadius: 0, borderWidth: 2.5,
