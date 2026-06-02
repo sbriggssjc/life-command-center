@@ -27,6 +27,7 @@ import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
+import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured } from './_shared/salesforce.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
@@ -112,6 +113,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
+    case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res, user);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
