@@ -2178,8 +2178,11 @@ const MIN_YEAR_BY_TEMPLATE = {
   // Apply findFirstDenseYear with threshold n_all >= 5 to start the
   // chart where the trailing-12-month sample becomes meaningful.
   // Falls back to 2014 if data shape doesn't expose n_all.
-  seller_sentiment:             (rows) => findFirstDenseYear(rows, 'n_all', 5) ?? 2014,
-  seller_sentiment_monthly:     (rows) => findFirstDenseYear(rows, 'n_all', 5) ?? 2014,
+  // R66cc — floor at 2017: the 10+ cohort (now gated n>=3) is clean from 2017, but
+  // 2015-2016 (n=3-4) carry cap inversions. Starting 2017 shows the continuous 10+
+  // series without the early noise.
+  seller_sentiment:             (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2017),
+  seller_sentiment_monthly:     (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2017),
   // R66aa — start 2018 (was 2013). Pre-2018 TTM months are thin and volatile even
   // after the n>=10 gate; deck's DOM chart also starts 2018. With the gate+smoothing
   // the 2018+ window lands DOM 168-290 (0-300 axis) / % ask 86.9-95.8% (84-96% axis).
@@ -3406,9 +3409,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 2026-05-29 - pin the index (left) axis to its data band so the
           // line's movement is visible (auto-scale from 0 flattened it).
           // gov ~198-310, dia ~76-215.
-          // R66 — tightened per 2026-05-31 export feedback: dia 75-250,
-          // gov 210-350 ($/SF dollar axis on gov, not a percent).
-          yLeftRange: (vertical === 'gov' ? { min: 210, max: 350 } : { min: 75, max: 250 }),
+          // R66dd — dia index now sits 98-157 (post-R66r gate+smooth), so the prior
+          // 75-250 axis showed it in the lower third (~30% fill). Tighten to 90-165 so
+          // the index movement fills the frame. gov 210-350 unchanged.
+          yLeftRange: (vertical === 'gov' ? { min: 210, max: 350 } : { min: 90, max: 165 }),
           // R37 P2 — formats: LEFT integer (valuation index 200-400),
           // RIGHT percent (YoY %). Renderer auto-pins right to ±yoyMax
           // dynamically per dataset; native leaves auto-scale so the
@@ -3766,11 +3770,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const lineAllCol = findCol('last_ask_cap_all');
       const lineLongCol = findCol('last_ask_cap_long_term');
       if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
-      // R37 P3 — peak/trough/most-recent labels on the all-cap navy line
-      // (renderer line 1041: buildAnnotations(rows, r => r.last_ask_cap_all, fmtPct2))
-      const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.last_ask_cap_all, fmtPct2Native)
-        : undefined;
+      // R37 P3 — peak/trough/most-recent labels on the all-cap navy line.
+      // R66cc — compute over the DISPLAYED window (>= 2017) only; the chart trims to
+      // 2017+ but the full-history peak (e.g. an ~8.2% pre-2017 value) was being
+      // stamped onto a windowed point (same idx-vs-trim bug fixed on NM-vs-Market).
+      const sentWindowRows = Array.isArray(rows)
+        ? rows.filter(r => r && r.period_end && new Date(r.period_end).getFullYear() >= 2017)
+        : [];
+      const capLabels = buildAnnotationsForSpec(sentWindowRows, r => r.last_ask_cap_all, fmtPct2Native);
       return {
         tabName,
         spec: {
@@ -3782,10 +3789,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 2026-05-29 - pin the cap-rate (left) axis per vertical so the
           // asking-cap line movement is legible (matches the PNG renderer's
           // pins: dia 4.75-9.25%, gov 5.5-9.5%).
-          // R66b — dia retuned to displayed last-ask-cap data 5.51-7.84% ->
-          // 5.25-8.0% (R66's 5-9% left it ~58% fill, still flat). gov last-ask
-          // cap 6.05-8.78% already fills 6-9% well, so gov unchanged.
-          yLeftRange: (vertical === 'gov' ? { min: 0.06, max: 0.09 } : { min: 0.0525, max: 0.08 }),
+          // R66b — dia retuned to displayed last-ask-cap data 5.51-7.84% -> 5.25-8.0%.
+          // R66cc — dia floor lowered to 4.5% so the recovered 10+ cohort's 2023 dip
+          // (~4.7%, long-WALT assets asking low caps in the low-rate window) shows
+          // instead of clipping below 5.25%. gov unchanged.
+          yLeftRange: (vertical === 'gov' ? { min: 0.06, max: 0.09 } : { min: 0.045, max: 0.08 }),
           // R37 P2 — left = cap rate (% 2dp), right = price change % (% 0dp).
           // Renderer pins per-vertical (dia 4.75-9.25% left, 0-70% right;
           // gov 5.5-9.5% left, 0-8% right). The spec builder doesn't have

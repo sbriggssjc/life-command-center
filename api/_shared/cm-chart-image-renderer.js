@@ -1032,7 +1032,7 @@ function buildChartConfig(chart, brand) {
       // (R66's 5-9% left it ~58% fill). gov 6.05-8.78% fills 6-9% fine.
       const yLeftRange  = govLike
         ? { min: 0.06, max: 0.09 }        // gov: 6-9%
-        : { min: 0.0525, max: 0.08 };     // dia: 5.25-8.0%
+        : { min: 0.045, max: 0.08 };      // R66cc dia: 4.5-8% (10+ 2023 dip ~4.7%)
       // Round 17 — tightened gov price-change axis 0.14 → 0.08. Actual
       // gov data tops at ~7% TTM (was specced 0-14% from the dialysis
       // p.35 deck assumption). User: "Sentiment needs the y-axis
@@ -1104,7 +1104,7 @@ function buildChartConfig(chart, brand) {
       const govLikeVi = chart.vertical === 'gov' || chart.vertical === 'government_leased';
       const opts = comboOpts({
         yLeftFormat:  AXIS_FORMAT_INTEGER,
-        yLeftRange:   (govLikeVi ? { min: 210, max: 350 } : { min: 75, max: 250 }),
+        yLeftRange:   (govLikeVi ? { min: 210, max: 350 } : { min: 90, max: 165 }),  // R66dd dia index 98-157
         yRightFormat: AXIS_FORMAT_PERCENT_1DP,
         yRightRange:  { min: -yoyMax, max: yoyMax },
       });
