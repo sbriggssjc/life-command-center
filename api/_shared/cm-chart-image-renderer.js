@@ -722,7 +722,7 @@ function buildChartConfig(chart, brand) {
         },
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange: { min: 0.0475, max: 0.0775 },
+          yAxisRange: { min: 0.0575, max: 0.0725 },  // R66bb — tight fit to 2020+ data
         }),
       };
     }

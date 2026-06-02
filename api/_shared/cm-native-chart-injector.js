@@ -2853,10 +2853,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (!periodCol || !nmCol || !marketCol) return null;
       // R66o — deck labels both lines (peak / trough / most-recent per our
       // convention) so the current NM-vs-market gap is callout-legible.
-      const nmLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.nm_cap_rate, fmtPct2Native) : undefined;
-      const mktLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.market_cap_rate, fmtPct2Native) : undefined;
+      // R66bb — compute the peak/trough/last over the DISPLAYED window only
+      // (>= MIN_YEAR 2020). The chart trims to 2020+, but buildAnnotationsForSpec
+      // ran over the full 2001+ rows, so the data-label INDICES referenced points
+      // outside the plotted range — e.g. a 4.73% trough from ~2004 got stamped
+      // onto a 2024 point. Filtering to the window aligns idx with the plotted
+      // series so labels land on the right points.
+      const nmWindowRows = Array.isArray(rows)
+        ? rows.filter(r => r && r.period_end && new Date(r.period_end).getFullYear() >= 2020)
+        : [];
+      const nmLabels  = buildAnnotationsForSpec(nmWindowRows, r => r.nm_cap_rate, fmtPct2Native);
+      const mktLabels = buildAnnotationsForSpec(nmWindowRows, r => r.market_cap_rate, fmtPct2Native);
       return {
         tabName,
         spec: {
@@ -2864,11 +2871,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R66o — tighten to the deck axis (4.75-7.75%). Pairs with the recent
-          // window (MIN_YEAR_BY_TEMPLATE.nm_vs_market_cap bumped to 2020) so the
-          // NM-below-market gap is legible instead of compressed on a 5.25-9.25%
-          // scale that had to accommodate the 2011-13 ~9% early history.
-          yAxisRange: { min: 0.0475, max: 0.0775 },
+          // R66bb — tighten further to the 2020+ data (NM 6.09-6.78%, market to
+          // 7.05%). The 4.75-7.75% range left ~1.3% of dead space below the lines;
+          // 5.75-7.25% fills the frame so the NM-vs-market movement/gap reads clearly.
+          yAxisRange: { min: 0.0575, max: 0.0725 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           // R66o — thin gray vertical connectors between the two lines (deck style).
           hiLowLines: '#C9CED6',
