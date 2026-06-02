@@ -2955,7 +2955,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (chart_template_id === 'sold_cap_by_term_dot_plot') {
         cohortRange = (vertical === 'dialysis')
           ? { min: 0.055, max: 0.0775 }   // R66x — +/-3mo smoothed cohorts span 5.69-7.40%
-          : { min: 0.06,  max: 0.12 };
+          : { min: 0.0575, max: 0.08 };   // R66q — gov ladder cohorts span 6.07-7.72% (was 6-12%, top half empty)
       } else if (chart_template_id === 'asking_cap_by_term_dot_plot') {
         cohortRange = { min: 0.0475, max: 0.085 };  // R66y — cohorts span 4.94-8.33%
       } else if (chart_template_id === 'cap_rate_by_lease_term') {
