@@ -4705,6 +4705,43 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const allowStatedCapRate =
       isMostRecentSale && soldPrice != null && capRateVal != null;
 
+    // Round 77 (2026-06-02): persist the CoStar listing's price history onto
+    // the gov sale row. The sidebar already captures metadata.list_price (the
+    // original ask), metadata.asking_price (the final/current ask),
+    // metadata.listing_date (on-market) and metadata.days_on_market, but
+    // upsertDomainSales previously DROPPED all of them on the gov sale —
+    // leaving only ~8% of gov market sales with any listing history, which
+    // starved the supply-side Capital Markets charts (Seller Sentiment
+    // "Price Chg %", DOM & Price-Change, Bid-Ask Spread). We now map them onto
+    // initial_price / last_price / on_market_date / days_on_market and derive
+    // had_price_change / pct_of_initial. Only the most-recent sale on the
+    // property is stamped — CoStar's listing fields describe the listing that
+    // just transacted, not older historical deeds — and we never fabricate an
+    // ask: a field stays null when CoStar didn't carry it (so the sale simply
+    // stays out of the price-change / bid-ask metrics). The field-priority
+    // guard + manual_override below keep curated values from being clobbered.
+    const govListingHistory = {};
+    if (domain === 'government' && isMostRecentSale) {
+      const lastAsk  = parseCurrency(metadata.asking_price);
+      const origAsk  = parseCurrency(metadata.list_price);
+      const onMarket = parseDate(metadata.listing_date)?.split('T')[0] || null;
+      const domRaw   = parseInt(metadata.days_on_market, 10);
+      const domDays  = Number.isFinite(domRaw) ? domRaw : null;
+      if (lastAsk != null && lastAsk > 0) govListingHistory.last_price = lastAsk;
+      if (origAsk != null && origAsk > 0) govListingHistory.initial_price = origAsk;
+      if (onMarket && onMarket <= datePart) govListingHistory.on_market_date = onMarket;
+      if (domDays != null && domDays >= 0 && domDays <= 1825) govListingHistory.days_on_market = domDays;
+      const ip = govListingHistory.initial_price ?? null;
+      const lp = govListingHistory.last_price ?? null;
+      // had_price_change is only knowable when BOTH asks were captured.
+      if (ip != null && lp != null) govListingHistory.had_price_change = ip !== lp;
+      // pct_of_initial = sold / initial ask, guarded to a sane capitulation band.
+      if (ip != null && ip > 0 && soldPrice != null && soldPrice > 0) {
+        const pct = soldPrice / ip;
+        if (pct >= 0.5 && pct <= 1.05) govListingHistory.pct_of_initial = Math.round(pct * 10000) / 10000;
+      }
+    }
+
     const domainSaleFields = domain === 'government'
       ? {
           sold_cap_rate:    capRateVal,
@@ -4735,6 +4772,10 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           gross_rent:       parseCurrency(metadata.annual_rent),
           gross_rent_psf:   parseCurrency(metadata.rent_per_sf),
           transaction_type: null,  // set below by classifySaleType
+          // Round 77: listing price-history (initial/last ask, on-market date,
+          // DOM, had_price_change, pct_of_initial). Only present on the
+          // most-recent sale and only for fields CoStar actually carried.
+          ...govListingHistory,
           data_source:      'costar_sidebar',
         }
       : {
@@ -4959,6 +5000,13 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
         cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
         cap_rate_quality:          saleData.cap_rate_quality || null,
+        // Round 77: listing price-history (gov only; null/absent on dia)
+        initial_price:    saleData.initial_price ?? null,
+        last_price:       saleData.last_price ?? null,
+        on_market_date:   saleData.on_market_date || null,
+        days_on_market:   saleData.days_on_market ?? null,
+        had_price_change: saleData.had_price_change ?? null,
+        pct_of_initial:   saleData.pct_of_initial ?? null,
       });
     } else {
       // Create new
