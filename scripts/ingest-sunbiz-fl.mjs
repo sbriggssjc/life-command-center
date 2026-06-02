@@ -22,13 +22,14 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 
-const FILE = process.argv[2];
+const FILES = process.argv.slice(2);
+const ACTIVE_LLC_ONLY = process.env.SUNBIZ_ACTIVE_LLC_ONLY === '1';
 const OPS_URL = process.env.OPS_SUPABASE_URL;
 const OPS_KEY = process.env.OPS_SUPABASE_SERVICE_KEY;
 
-if (!FILE) { console.error('Usage: node scripts/ingest-sunbiz-fl.mjs <CCYYMMDDx.txt>'); process.exit(1); }
+if (!FILES.length) { console.error('Usage: node scripts/ingest-sunbiz-fl.mjs <file.txt> [more...]  (SUNBIZ_ACTIVE_LLC_ONLY=1 for active LLCs only)'); process.exit(1); }
 if (!OPS_URL || !OPS_KEY) { console.error('Missing OPS_SUPABASE_URL / OPS_SUPABASE_SERVICE_KEY'); process.exit(1); }
-if (!fs.existsSync(FILE)) { console.error('File not found: ' + FILE); process.exit(1); }
+for (const f of FILES) { if (!fs.existsSync(f)) { console.error('File not found: ' + f); process.exit(1); } }
 
 const col = (line, start, len) => line.slice(start - 1, start - 1 + len).trim();
 
@@ -44,10 +45,14 @@ function normName(s) {
 }
 
 function parseFileDate(raw) {
-  // CCYYMMDD -> YYYY-MM-DD; blank/zero -> null
+  // Sunbiz File Date is MMDDYYYY (e.g. 11301992 = 1992-11-30), NOT CCYYMMDD.
+  // Convert to ISO YYYY-MM-DD; anything malformed or out-of-range -> null so a
+  // single bad value never 400s the batch.
   const v = String(raw || '').trim();
   if (!/^\d{8}$/.test(v) || v === '00000000') return null;
-  return v.slice(0, 4) + '-' + v.slice(4, 6) + '-' + v.slice(6, 8);
+  const mm = +v.slice(0, 2), dd = +v.slice(2, 4), yyyy = +v.slice(4, 8);
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || yyyy < 1800 || yyyy > 2200) return null;
+  return `${yyyy}-${v.slice(0, 2)}-${v.slice(2, 4)}`;
 }
 
 function parseOfficers(line) {
@@ -76,13 +81,16 @@ function parseRow(line) {
   const corp_number = col(line, 1, 12);
   const corp_name   = col(line, 13, 192);
   if (!corp_number || !corp_name) return null;
+  const _status = col(line, 205, 1);
+  const _ftype  = col(line, 206, 15);
+  if (ACTIVE_LLC_ONLY && !(_status === 'A' && (_ftype === 'FLAL' || _ftype === 'FORL'))) return null;
   const officers = parseOfficers(line);
   const o1 = officers[0] || {};
   return {
     corp_number,
     corp_name,
-    status:        col(line, 205, 1) || null,
-    filing_type:   col(line, 206, 15) || null,
+    status:        _status || null,
+    filing_type:   _ftype || null,
     file_date:     parseFileDate(col(line, 473, 8)),
     ra_name:       col(line, 545, 42) || null,
     ra_type:       col(line, 587, 1) || null,
@@ -94,7 +102,7 @@ function parseRow(line) {
     officer1_name:  o1.name || null,
     officers_json:  officers,
     name_norm:      normName(corp_name),
-    source_file:    FILE.split(/[\\/]/).pop(),
+    source_file:    CURRENT_FILE.split(/[\\/]/).pop(),
   };
 }
 
@@ -115,16 +123,23 @@ async function flush(batch) {
   }
 }
 
+let CURRENT_FILE = null;
 (async () => {
-  const rl = readline.createInterface({ input: fs.createReadStream(FILE, 'latin1'), crlfDelay: Infinity });
-  let batch = [], total = 0, skipped = 0;
+  let total = 0, skipped = 0;
   const BATCH = 500;
-  for await (const line of rl) {
-    const row = parseRow(line);
-    if (!row) { skipped++; continue; }
-    batch.push(row);
-    if (batch.length >= BATCH) { await flush(batch); total += batch.length; batch = []; if (total % 10000 === 0) console.log(`  ${total} upserted...`); }
+  if (ACTIVE_LLC_ONLY) console.log('Filter: ACTIVE LLC filings only (status=A, type FLAL/FORL).');
+  for (const f of FILES) {
+    CURRENT_FILE = f;
+    console.log('Ingesting ' + f + ' ...');
+    const rl = readline.createInterface({ input: fs.createReadStream(f, 'latin1'), crlfDelay: Infinity });
+    let batch = [];
+    for await (const line of rl) {
+      const row = parseRow(line);
+      if (!row) { skipped++; continue; }
+      batch.push(row);
+      if (batch.length >= BATCH) { await flush(batch); total += batch.length; batch = []; if (total % 50000 === 0) console.log(`  ${total} upserted...`); }
+    }
+    if (batch.length) { await flush(batch); total += batch.length; batch = []; }
   }
-  if (batch.length) { await flush(batch); total += batch.length; }
-  console.log(`Done. Upserted ${total} FL entities (${skipped} lines skipped). Mirror: public.sos_fl_entities on LCC Opps.`);
+  console.log(`Done. Upserted ${total} FL entities (${skipped} skipped/filtered). Mirror: public.sos_fl_entities on LCC Opps.`);
 })().catch(e => { console.error('Ingest failed:', e.message); process.exit(1); });
