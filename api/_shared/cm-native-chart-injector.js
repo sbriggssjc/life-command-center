@@ -2180,8 +2180,11 @@ const MIN_YEAR_BY_TEMPLATE = {
   // Falls back to 2014 if data shape doesn't expose n_all.
   seller_sentiment:             (rows) => findFirstDenseYear(rows, 'n_all', 5) ?? 2014,
   seller_sentiment_monthly:     (rows) => findFirstDenseYear(rows, 'n_all', 5) ?? 2014,
-  dom_and_pct_of_ask:           2013,
-  dom_and_pct_of_ask_monthly:   2013,
+  // R66aa — start 2018 (was 2013). Pre-2018 TTM months are thin and volatile even
+  // after the n>=10 gate; deck's DOM chart also starts 2018. With the gate+smoothing
+  // the 2018+ window lands DOM 168-290 (0-300 axis) / % ask 86.9-95.8% (84-96% axis).
+  dom_and_pct_of_ask:           2018,
+  dom_and_pct_of_ask_monthly:   2018,
   bid_ask_spread:               2014,
   bid_ask_spread_monthly:       2014,
   // Pace recipe inherits dia/gov coverage; safe to skip 2003-2004 here too

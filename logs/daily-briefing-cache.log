@@ -1,0 +1,7 @@
+[2026-06-02T11:36:33Z] lcc-daily-briefing-cache run
+  GET  /api/activities?_route=daily-briefing            -> HTTP 404 (Next.js app 404, retried once after 30s, still 404)
+  POST /api/operations?_route=draft&action=health       -> HTTP 404 (Next.js app 404)
+  LCC_API_KEY env: NOT PRESENT in sandbox (Authorization sent as empty Bearer)
+  Outcome: FAILED — both endpoints return frontend 404, not an API auth/500. Routes not matched.
+  Note: CLAUDE.md indicates daily-briefing was absorbed into admin.js + Supabase Edge Functions;
+        the /api/activities and /api/operations paths may no longer be valid rewrites.
