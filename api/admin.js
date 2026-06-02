@@ -113,7 +113,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
-    case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res, user);
+    case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }

@@ -16,6 +16,7 @@
 // ============================================================================
 import { opsQuery } from './ops-db.js';
 import { domainQuery } from './domain-db.js';
+import { authenticate } from './auth.js';
 
 const DOM = 'government'; // FL engine is gov-side for now (dia extends later)
 
@@ -160,7 +161,9 @@ async function compareAndLink({ limit = 100, dryRun = false }) {
 }
 
 // ── Handler: GET = dry-run, POST = apply. ?stage=enrich|link|both ────────────
-export async function handleFlSosEnrichLink(req, res, authedUser) {
+export async function handleFlSosEnrichLink(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
   const dryRun = req.method === 'GET';
   const stage = String(req.query.stage || 'both');
   const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '100', 10)));
