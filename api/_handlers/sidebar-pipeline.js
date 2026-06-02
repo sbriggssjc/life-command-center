@@ -8860,6 +8860,41 @@ async function upsertLeaseEscalations(propertyId, leaseId, metadata) {
   return r.ok ? 1 : 0;
 }
 
+/**
+ * Round 77 (2026-06-02): derive a listing's listing_date from CoStar's real
+ * on-market signal instead of stamping the capture date. Stamping "today" on
+ * every INSERT poisoned the recent edge of the supply-side Capital Markets
+ * charts (Market Turnover / Inventory Backlog / Available Market Size): a
+ * listing on the market for months was recorded as brand-new, and a bulk
+ * re-capture made a whole cohort look like it listed on the scrape date.
+ *
+ * Pure + deterministic given `nowMs` so it is unit-testable. Priority:
+ *   1. explicit CoStar on-market date (metadata.listing_date), when ≤ capture day
+ *   2. capture_date − days_on_market (DOM bounded to [0, 1825] days = 5y)
+ *   3. capture date (last resort — CoStar carried neither signal)
+ * Never returns a future date. Returns { listing_date, source }.
+ *
+ * @param {object} metadata  capture metadata (listing_date, days_on_market)
+ * @param {number} [nowMs]   capture instant in ms (injectable for tests)
+ * @returns {{listing_date: string, source: string}}
+ */
+export function deriveListingDate(metadata = {}, nowMs = Date.now()) {
+  const capturePart = new Date(nowMs).toISOString().split('T')[0];
+  const onMarket = parseDate(metadata?.listing_date)?.split('T')[0] || null;
+  const domRaw   = parseInt(metadata?.days_on_market, 10);
+  const domDays  = Number.isFinite(domRaw) && domRaw >= 0 && domRaw <= 1825 ? domRaw : null;
+  if (onMarket && onMarket <= capturePart) {
+    return { listing_date: onMarket, source: 'costar_on_market_date' };
+  }
+  if (domDays != null) {
+    return {
+      listing_date: new Date(nowMs - domDays * 86400 * 1000).toISOString().split('T')[0],
+      source: 'costar_days_on_market',
+    };
+  }
+  return { listing_date: capturePart, source: 'capture_date_fallback' };
+}
+
 // ── Step 5f: Upsert available_listings ─────────────────────────────────────
 
 /**
@@ -8887,9 +8922,9 @@ async function upsertDialysisListings(propertyId, metadata) {
   // missed it. Validation: sale_price must be >= $1,000 AND there must NOT
   // already be a closed sale of that price in sales_history (which would
   // mean it's a historical sold price, not the current asking).
+  const sourceUrl = String(metadata.page_url || metadata.url || '');
+  const onForSaleUrl = /\/detail\/for-sale\//i.test(sourceUrl);
   if (!parsedAskingPrice) {
-    const sourceUrl = String(metadata.page_url || metadata.url || '');
-    const onForSaleUrl = /\/detail\/for-sale\//i.test(sourceUrl);
     const sp = parseCurrency(metadata.sale_price);
     if (onForSaleUrl && sp && sp >= 1000) {
       const matchesClosedSale = (metadata.sales_history || []).some(s =>
@@ -8902,15 +8937,34 @@ async function upsertDialysisListings(propertyId, metadata) {
     }
   }
 
-  if (!parsedAskingPrice && !currentListings.length) {
-    console.log('[upsertDialysisListings] early-exit: no asking_price and no current sale', {
+  if (!parsedAskingPrice && !currentListings.length && !onForSaleUrl) {
+    console.log('[upsertDialysisListings] early-exit: no asking_price, no current sale, not a for-sale listing page', {
       propertyId,
       raw_asking_price: metadata.asking_price,
       parsed_asking_price: parsedAskingPrice,
       sales_history_count: Array.isArray(metadata.sales_history) ? metadata.sales_history.length : 0,
+      source_url: sourceUrl || null,
     });
     // Item #1: every return path uses { count, insertedListingId } shape.
     return { count: 0, insertedListingId: null };
+  }
+
+  // Round 77b (2026-06-02): a CoStar /for-sale/ page is itself authoritative
+  // evidence the property is actively on the market, even when the price reads
+  // "Not Disclosed". Dialysis is full of price-on-request listings; dropping
+  // them at the guard above made genuinely-active listings invisible to the
+  // supply-side Capital Markets charts (Market Turnover / Inventory Backlog /
+  // Available Market Size, which count by listing_date, not price). Proceed to
+  // create a price-less Active row — initial_price/last_price stay null
+  // (stripNulls drops them), but the derived listing_date + DOM still flow into
+  // the charts; cap-rate metrics simply skip the null. Only the explicit
+  // /for-sale/ URL qualifies — a property captured from a non-listing page
+  // still early-exits above.
+  if (!parsedAskingPrice && !currentListings.length) {
+    console.log('[upsertDialysisListings] Round 77b: price-undisclosed /for-sale/ listing — creating price-less Active row', {
+      propertyId,
+      source_url: sourceUrl,
+    });
   }
 
   try {
@@ -8997,30 +9051,9 @@ async function upsertDialysisListings(propertyId, metadata) {
   }
 
   // Round 77 (2026-06-02): derive listing_date from CoStar's real on-market
-  // signal instead of stamping today's capture date. Stamping "today" on every
-  // INSERT poisoned the recent edge of the supply-side Capital Markets charts
-  // (Market Turnover / Inventory Backlog / Available Market Size): a listing
-  // that had been on the market for months was recorded as brand-new, and a
-  // bulk re-capture made a whole cohort look like it listed on the scrape date.
-  // Priority: explicit CoStar on-market date → capture_date − days_on_market →
-  // today (last resort, only when CoStar carried neither signal). Never produce
-  // a future date. DOM is capped at 1825d (5y) to match the gov path; a DOM
-  // beyond that is treated as suspect and falls through to the capture date.
-  const capturePart = new Date().toISOString().split('T')[0];
-  let derivedListingDate = capturePart;
-  let listingDateSource = 'capture_date_fallback';
-  const lstgOnMarket = parseDate(metadata.listing_date)?.split('T')[0] || null;
-  const lstgDomRaw   = parseInt(metadata.days_on_market, 10);
-  const lstgDomDays  = Number.isFinite(lstgDomRaw) && lstgDomRaw >= 0 && lstgDomRaw <= 1825
-    ? lstgDomRaw : null;
-  if (lstgOnMarket && lstgOnMarket <= capturePart) {
-    derivedListingDate = lstgOnMarket;
-    listingDateSource = 'costar_on_market_date';
-  } else if (lstgDomDays != null) {
-    derivedListingDate = new Date(Date.now() - lstgDomDays * 86400 * 1000)
-      .toISOString().split('T')[0];
-    listingDateSource = 'costar_days_on_market';
-  }
+  // signal instead of stamping the capture date — see deriveListingDate().
+  const { listing_date: derivedListingDate, source: listingDateSource } =
+    deriveListingDate(metadata);
 
   const record = stripNulls({
     property_id: propertyIdInt,
@@ -9047,8 +9080,8 @@ async function upsertDialysisListings(propertyId, metadata) {
     seller: sellerContact?.name || '(none)',
     listing_date: derivedListingDate,
     listing_date_source: listingDateSource,
-    costar_on_market: lstgOnMarket,
-    costar_days_on_market: lstgDomDays,
+    costar_on_market_raw: metadata.listing_date ?? null,
+    costar_days_on_market_raw: metadata.days_on_market ?? null,
     record_keys: Object.keys(record),
   });
 
