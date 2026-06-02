@@ -8922,9 +8922,9 @@ async function upsertDialysisListings(propertyId, metadata) {
   // missed it. Validation: sale_price must be >= $1,000 AND there must NOT
   // already be a closed sale of that price in sales_history (which would
   // mean it's a historical sold price, not the current asking).
+  const sourceUrl = String(metadata.page_url || metadata.url || '');
+  const onForSaleUrl = /\/detail\/for-sale\//i.test(sourceUrl);
   if (!parsedAskingPrice) {
-    const sourceUrl = String(metadata.page_url || metadata.url || '');
-    const onForSaleUrl = /\/detail\/for-sale\//i.test(sourceUrl);
     const sp = parseCurrency(metadata.sale_price);
     if (onForSaleUrl && sp && sp >= 1000) {
       const matchesClosedSale = (metadata.sales_history || []).some(s =>
@@ -8937,15 +8937,34 @@ async function upsertDialysisListings(propertyId, metadata) {
     }
   }
 
-  if (!parsedAskingPrice && !currentListings.length) {
-    console.log('[upsertDialysisListings] early-exit: no asking_price and no current sale', {
+  if (!parsedAskingPrice && !currentListings.length && !onForSaleUrl) {
+    console.log('[upsertDialysisListings] early-exit: no asking_price, no current sale, not a for-sale listing page', {
       propertyId,
       raw_asking_price: metadata.asking_price,
       parsed_asking_price: parsedAskingPrice,
       sales_history_count: Array.isArray(metadata.sales_history) ? metadata.sales_history.length : 0,
+      source_url: sourceUrl || null,
     });
     // Item #1: every return path uses { count, insertedListingId } shape.
     return { count: 0, insertedListingId: null };
+  }
+
+  // Round 77b (2026-06-02): a CoStar /for-sale/ page is itself authoritative
+  // evidence the property is actively on the market, even when the price reads
+  // "Not Disclosed". Dialysis is full of price-on-request listings; dropping
+  // them at the guard above made genuinely-active listings invisible to the
+  // supply-side Capital Markets charts (Market Turnover / Inventory Backlog /
+  // Available Market Size, which count by listing_date, not price). Proceed to
+  // create a price-less Active row — initial_price/last_price stay null
+  // (stripNulls drops them), but the derived listing_date + DOM still flow into
+  // the charts; cap-rate metrics simply skip the null. Only the explicit
+  // /for-sale/ URL qualifies — a property captured from a non-listing page
+  // still early-exits above.
+  if (!parsedAskingPrice && !currentListings.length) {
+    console.log('[upsertDialysisListings] Round 77b: price-undisclosed /for-sale/ listing — creating price-less Active row', {
+      propertyId,
+      source_url: sourceUrl,
+    });
   }
 
   try {
