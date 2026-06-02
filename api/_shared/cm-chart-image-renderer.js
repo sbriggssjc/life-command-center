@@ -722,7 +722,11 @@ function buildChartConfig(chart, brand) {
         },
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange: { min: 0.0575, max: 0.0725 },  // R66bb — tight fit to 2020+ data
+          // R66bb — tight fit to 2020+ data. dia 5.75-7.25%; R66l — gov sits
+          // higher (NM 6.32-7.42%, market to 7.27%) so it gets a 6.0-7.75% frame.
+          yAxisRange: (chart.vertical === 'dialysis')
+            ? { min: 0.0575, max: 0.0725 }
+            : { min: 0.06, max: 0.0775 },
         }),
       };
     }
@@ -876,11 +880,12 @@ function buildChartConfig(chart, brand) {
         data: { labels, datasets },
         // Round 21 — y range widened 5-10% → 4-11% (gov cap_less5
         // tops at 10.06%, occasionally clipping at the prior 10% cap).
-        // R66b — gov-only; retuned to displayed data 5.38-7.79% -> 5.25-8.0%
-        // (R66's 5.5-8.5% clipped the Outside-Firm cohort at the bottom).
+        // R66k — gov view rebuilt on the unified term ladder; all four cohorts
+        // now span a tight 5.91-7.56% band (Outside Firm no longer a wild grab-
+        // bag). Tightened 5.25-8.0% -> 5.5-7.75% to surface the cohort movement.
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange:  { min: 0.0525, max: 0.08 },
+          yAxisRange:  { min: 0.055, max: 0.0775 },
         }),
       };
     }

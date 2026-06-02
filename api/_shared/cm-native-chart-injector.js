@@ -2820,7 +2820,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       } else if (chart_template_id === 'asking_cap_by_term_dot_plot') {
         cohortRange = { min: 0.0475, max: 0.085 };  // R66y — cohorts span 4.94-8.33%
       } else if (chart_template_id === 'cap_rate_by_lease_term') {
-        cohortRange = { min: 0.0525, max: 0.08 };  // gov-only template
+        // R66k — gov view rebuilt on the unified term ladder (cm_gov_cap_by_term_q);
+        // all four cohorts now sit in a tight 5.91-7.56% band. Tightened from
+        // 5.25-8.0% so the cohort movement is readable.
+        cohortRange = { min: 0.055, max: 0.0775 };  // gov-only template
       }
       return {
         tabName,
@@ -2874,10 +2877,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R66bb — tighten further to the 2020+ data (NM 6.09-6.78%, market to
-          // 7.05%). The 4.75-7.75% range left ~1.3% of dead space below the lines;
-          // 5.75-7.25% fills the frame so the NM-vs-market movement/gap reads clearly.
-          yAxisRange: { min: 0.0575, max: 0.0725 },
+          // R66bb — tighten to the 2020+ data. dia: NM 6.09-6.78%, market to 7.05%
+          // -> 5.75-7.25%. R66l — gov data sits higher (NM 6.32-7.42%, market
+          // 6.40-7.27% over 2020+), so the dia range clipped the gov peaks; gov
+          // gets its own 6.0-7.75% frame. (The 4.75-7.75% original left ~1.3% of
+          // dead space below the lines on both.)
+          yAxisRange: (vertical === 'dialysis')
+            ? { min: 0.0575, max: 0.0725 }
+            : { min: 0.06, max: 0.0775 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           // R66o — thin gray vertical connectors between the two lines (deck style).
           hiLowLines: '#C9CED6',
