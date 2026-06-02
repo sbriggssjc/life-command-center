@@ -99,6 +99,22 @@ instead of captured independently. Both can be fixed together (same table, same 
    the true first-marketed date (or null it and re-derive from listing history). VALIDATE:
    the TTM "marketed" count for 2025 and 2026 returns to the ~100-150/yr range consistent
    with 2017-2024, and the Available Market Size chart's current-quarter bar is credible.
+   STATUS 2026-06-02 — PARTIALLY APPLIED, NOT COMPLETE. A first pass shrank the 2026 cluster
+   (806 -> 232 listings) but 2025 is still broken: available_listings has only 9 rows with
+   listing_date in 2025 (vs ~120-150 expected), so the Available Market Size count still
+   erodes 122 (2024-Q4) -> 91 -> 53 -> 28 -> 8 across 2025. The remaining work is to RESTORE
+   the true 2025 listing_dates (the genuine 2025 listings appear to still carry 2026 import
+   dates, or were collapsed into the 2026 batch). Of the 232 listings now dated 2026, ~224
+   are still-open — those are the genuinely-active current inventory whose listing_date needs
+   correcting to its real on-market quarter. Re-validate the per-year count after the fix.
+   ALSO AFFECTS the Market Turnover / Inventory Backlog chart, which computes monthly "added"
+   from eff_start = COALESCE(listing_date, sold_date - 196 days). The 196-day synthetic
+   backdating produces a spurious "added" spike (Aug-Oct 2025 = 61/59/63) from recently-sold
+   listings that lack a real listing_date, then 0 added Dec-2025..Mar-2026 from the import
+   bug. Restoring real listing_dates (and, for listings that legitimately lack one, sourcing a
+   real on-market date rather than backdating 196 days off the sale) fixes both the spike and
+   the zeros. Validate: monthly "added" in 2025-2026 is a smooth ~8-20/mo with no 60+ spike
+   and no 0 cliff.
 
 2D. off_market_date completeness (DOM inflation on the DOM & Price-Change chart).
    Symptom: ~53% of listings counted as "active" at recent quarter-ends have
