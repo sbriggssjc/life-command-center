@@ -3154,13 +3154,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // STRUCTURE exactly: a single cap-rate axis where each month is a solid
       // light-gray FLOATING BAR from Last Ask (bottom) up to Achieved cap (top =
       // last_ask + spread), with a SKY dash marker at the bottom (Last Ask) and a
-      // NAVY dash marker at the top (Achieved). The bar height = the bid-ask
-      // spread. Built as a stacked combo: invisible base bar (last_ask) + visible
-      // gray bar (spread) + two marker-only line series.
-      //   NOTE: with current data the bars are ~flat because our per-deal spread
-      //   is ~0 (71% of sold listings have last_cap_rate copied from sold cap);
-      //   the structure is correct and will render like the master once the
-      //   spread data is captured independently (tracked in the data workstream).
+      // NAVY dash marker at the top (Achieved). The bar height = the bid-ask spread.
+      // R66z — the spread data is now real (~30-284 bps; Achieved reaches ~9.8%), so:
+      //   (a) the Achieved (top) marker series must reference the helper col's actual
+      //       letter (String.fromCharCode(65 + cols.length)), NOT the literal
+      //       '__achieved__' which is not a column and never rendered; the R53 wrapper
+      //       then shifts it +1 when period_label is prepended; and
+      //   (b) the dia axis is widened to 5.5-10% so the Achieved tops + markers fit
+      //       (was 5.25-8%, which clipped everything above 8%).
+      const achievedCol = String.fromCharCode(65 + cols.length);
       if (lastAskCol) {
         return {
           tabName,
@@ -3174,7 +3176,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             barGapWidth: 60,
             yLeftRange: ((vertical === 'gov' || vertical === 'government_leased')
               ? { min: 0.055, max: 0.10 }
-              : { min: 0.0525, max: 0.08 }),
+              : { min: 0.055, max: 0.10 }),
             yLeftNumFmt: VAL_FMT_PERCENT_2DP,
             barSeries: [
               // invisible base lifts the visible bar to the Last Ask level
@@ -3185,7 +3187,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             lineSeries: [
               { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 7 },
-              { titleCol: '__achieved__', titleRow: headerRow, valCol: '__achieved__', color: navy,
+              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
                 showMarker: true, markerShape: 'dash', markerSize: 7 },
             ],
             anchor: standardAnchor,

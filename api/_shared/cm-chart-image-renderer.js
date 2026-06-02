@@ -950,33 +950,39 @@ function buildChartConfig(chart, brand) {
       //     ~6.50%–10.00% gov).
       const hasLastAsk = rows.some(r => r.avg_last_ask_cap != null);
       if (hasLastAsk) {
-        // R66c — DUAL-AXIS (per user direction 2026-06-01). Match the master's
-        // two dash-marker series with NO gray band, but give the raw spread its
-        // own RIGHT axis so it's visible instead of clipped at the bottom of the
-        // cap axis (the master plots both on one cap axis, hiding the spread).
+        // R66z — match the injector's combo (deck p.34): single cap axis, a light-gray
+        // FLOATING BAR from Last Ask (bottom) up to Achieved cap (top), a sky dash
+        // marker at the bottom (Last Ask) and a navy dash marker at the top (Achieved).
+        // Now that the spread data is real (~30-284 bps; Achieved reaches ~9.8%), the
+        // axis is 5.5-10% so the bar tops + top markers are visible.
         const isGovBA = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+        const achievedOf = (r) => (r.achieved_last_ask_cap != null)
+          ? r.achieved_last_ask_cap
+          : ((r.avg_last_ask_cap != null && r.avg_bid_ask_spread != null)
+              ? Number(r.avg_last_ask_cap) + Number(r.avg_bid_ask_spread) : null);
         return {
-          type: 'line',
+          type: 'bar',
           data: {
             labels,
             datasets: [
-              { label: 'Last Ask Cap (TTM)',
+              { type: 'bar', label: 'Bid-Ask Spread',
+                data: rows.map(r => (r.avg_last_ask_cap != null && achievedOf(r) != null)
+                  ? [Number(r.avg_last_ask_cap), Number(achievedOf(r))] : null),
+                backgroundColor: '#D8DFDF', borderColor: '#9EA9B7', borderWidth: 1,
+                barPercentage: 0.45, categoryPercentage: 0.8, order: 3 },
+              { type: 'line', label: 'Last Asking Cap (TTM)',
                 data: rows.map(r => r.avg_last_ask_cap),
-                yAxisID: 'y',
-                borderColor: palette[1], backgroundColor: palette[1],   // sky, left
-                borderWidth: 2, pointRadius: 6, pointStyle: 'dash', showLine: false },
-              { label: 'Bid-Ask Spread (TTM)',
-                data: rows.map(r => r.avg_bid_ask_spread),
-                yAxisID: 'y1',
-                borderColor: palette[0], backgroundColor: palette[0],   // navy, right
-                borderWidth: 2, pointRadius: 6, pointStyle: 'dash', showLine: false },
+                borderColor: palette[1], backgroundColor: palette[1],
+                pointStyle: 'dash', pointRadius: 6, borderWidth: 2, showLine: false, order: 1 },
+              { type: 'line', label: 'Achieved Cap (TTM)',
+                data: rows.map(r => achievedOf(r)),
+                borderColor: palette[0], backgroundColor: palette[0],
+                pointStyle: 'dash', pointRadius: 6, borderWidth: 2, showLine: false, order: 0 },
             ],
           },
-          options: comboOpts({
-            yLeftFormat:  AXIS_FORMAT_PERCENT_2DP,
-            yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-            yLeftRange:   isGovBA ? CAP_RATE_BID_ASK_RANGE : { min: 0.0525, max: 0.08 },
-            yRightRange:  { min: -0.015, max: 0.02 },   // signed spread band
+          options: commonOpts({
+            yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+            yAxisRange:  isGovBA ? { min: 0.055, max: 0.10 } : { min: 0.055, max: 0.10 },
           }),
         };
       }
