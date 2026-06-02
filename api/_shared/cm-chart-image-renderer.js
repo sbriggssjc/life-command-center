@@ -1764,29 +1764,46 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'renewal_rent_growth': {
-      // Round 10 — Originally a 3-series combo (bar + quartile whisker
-      // + CAGR dots).
-      // Round 33 Tier D — Re-inspected the master Excel chart 14
-      // ('Renewal Rent/SF'): grouping=clustered, single bar series
-      // 'Renewal Rent/SF' (currency format). No quartile whisker,
-      // no CAGR overlay — those live on the separate CPI_CAGR chart.
-      // Simplify to match master.
+      // R66m — rebuilt to the deck p.32 combo ("Renewal Rent and its Growth
+      // Rate Over Time"), mirroring the native injector's renewal-combo:
+      //   • pale-blue TTM renewal rent/SF bars (left $ axis)
+      //   • dark-blue upper/lower-quartile floating bar (left $ axis) — reads
+      //     as the deck's vertical quartile marker
+      //   • sky Avg Renewal Rent CAGR line (right % axis)
+      // Underlying view now outlier-trims rent_psf to [$5,$100] so rent sits
+      // at ~$30 (was inflating to $54+) and CAGR reads ~1-3% (was 10.6%).
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'Renewal Rent / SF',
-              data: rows.map(r => r.avg_renewal_rent_psf),
-              backgroundColor: PDF_COLORS.cap_mid, // sky #62B5E5
-              borderColor: PDF_COLORS.cap_mid,
-              borderRadius: 1,
-              barPercentage: 0.85, categoryPercentage: 0.9 },
+            { type: 'bar', label: 'Renewal Rent / SF (TTM)',
+              data: rows.map(r => r.ttm_avg_renewal_rent_psf),
+              backgroundColor: '#BBDDF2', borderColor: '#BBDDF2',
+              borderRadius: 1, barPercentage: 0.85, categoryPercentage: 0.9,
+              yAxisID: 'y', order: 3 },
+            { type: 'bar', label: 'Upper–Lower Quartile',
+              data: rows.map(r => {
+                const lo = r.lower_quartile_rpsf, hi = r.upper_quartile_rpsf;
+                return (lo != null && hi != null) ? [Number(lo), Number(hi)] : null;
+              }),
+              backgroundColor: PDF_COLORS.cap_short, // navy #003DA5
+              borderColor: PDF_COLORS.cap_short, borderSkipped: false,
+              barPercentage: 0.22, categoryPercentage: 0.9,
+              yAxisID: 'y', order: 2 },
+            { type: 'line', label: 'Avg Renewal Rent CAGR',
+              data: rows.map(r => r.cagr_5yr),
+              borderColor: PDF_COLORS.cap_mid, // sky #62B5E5
+              backgroundColor: 'transparent', tension: 0.3,
+              pointRadius: 0, borderWidth: 2.5,
+              yAxisID: 'y1', order: 1 },
           ],
         },
-        options: commonOpts({
-          yAxisFormat: AXIS_FORMAT_CURRENCY,
-          yAxisRange:  { min: 0, max: 70 },  // gov rent PSF tops at ~$65
+        options: comboOpts({
+          yLeftFormat:  AXIS_FORMAT_CURRENCY,
+          yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+          yLeftRange:   { min: 0, max: 45 },
+          yRightRange:  { min: -0.04, max: 0.08 },
         }),
       };
     }

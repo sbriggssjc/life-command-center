@@ -1653,6 +1653,144 @@ ${markerSer(spec.rightCol, (spec.rightColor || '003DA5').replace('#',''), 1, 1, 
 </c:chartSpace>`;
 }
 
+/**
+ * R66m — Renewal Rent Growth combo (gov, deck p.32 "Renewal Rent and its
+ * Growth Rate Over Time"). Three groups sharing one category axis:
+ *   1. barChart  (left $ axis):  TTM avg renewal rent/SF — pale-blue bars
+ *   2. lineChart (left $ axis):  upper + lower quartile as marker-only series
+ *      joined by <c:hiLowLines> → the deck's dark-blue vertical quartile bars
+ *      with markers at top (upper Q) and bottom (lower Q)
+ *   3. lineChart (right % axis): Avg Renewal Rent CAGR — sky line
+ *
+ * spec: { tabName, title, catCol, dataStart, dataEnd, headerRow,
+ *         rentCol, upperCol, lowerCol, cagrCol,
+ *         leftRange, leftNumFmt, rightRange, rightNumFmt,
+ *         rentColor, quartileColor, cagrColor }
+ */
+function buildRenewalRentGrowthXml(spec) {
+  const sheet = escapeXml(spec.tabName);
+  const hdr = spec.headerRow || 4;
+  const rentColor     = (spec.rentColor     || 'BBDDF2').replace('#', '');
+  const quartileColor = (spec.quartileColor || '003DA5').replace('#', '');
+  const cagrColor     = (spec.cagrColor     || '62B5E5').replace('#', '');
+  const catRef = `'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}`;
+  const valRef = (col) => `'${sheet}'!$${col}$${spec.dataStart}:$${col}$${spec.dataEnd}`;
+  const txRef  = (col) => `'${sheet}'!$${col}$${hdr}`;
+
+  // Bar series — TTM renewal rent/SF (pale blue), left axis (2)
+  const rentBar = `        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:tx><c:strRef><c:f>${txRef(spec.rentCol)}</c:f></c:strRef></c:tx>
+          <c:spPr><a:solidFill><a:srgbClr val="${rentColor}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:invertIfNegative val="0"/>
+          <c:cat><c:numRef><c:f>${catRef}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>${valRef(spec.rentCol)}</c:f></c:numRef></c:val>
+        </c:ser>`;
+
+  // Quartile marker-only series (idx 1 = upper, idx 2 = lower), joined by
+  // hiLowLines into a vertical quartile bar.
+  const quartileSer = (col, idx) => `        <c:ser>
+          <c:idx val="${idx}"/>
+          <c:order val="${idx}"/>
+          <c:tx><c:strRef><c:f>${txRef(col)}</c:f></c:strRef></c:tx>
+          <c:spPr><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:marker>
+            <c:symbol val="dash"/>
+            <c:size val="7"/>
+            <c:spPr><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill></a:ln></c:spPr>
+          </c:marker>
+          <c:cat><c:numRef><c:f>${catRef}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>${valRef(col)}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+
+  // CAGR line (sky), right axis (3)
+  const cagrLine = `        <c:ser>
+          <c:idx val="3"/>
+          <c:order val="3"/>
+          <c:tx><c:strRef><c:f>${txRef(spec.cagrCol)}</c:f></c:strRef></c:tx>
+          <c:spPr><a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${cagrColor}"/></a:solidFill><a:round/></a:ln></c:spPr>
+          <c:marker><c:symbol val="none"/></c:marker>
+          <c:cat><c:numRef><c:f>${catRef}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>${valRef(spec.cagrCol)}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
+  <c:roundedCorners val="0"/>
+  <c:chart>
+    ${chartTitleXml(spec.title)}
+    <c:plotArea>
+      <c:layout/>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+        <c:varyColors val="0"/>
+${rentBar}
+        <c:gapWidth val="40"/>
+        <c:overlap val="-20"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:barChart>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${quartileSer(spec.upperCol, 1)}
+${quartileSer(spec.lowerCol, 2)}
+        <c:hiLowLines><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>
+        <c:marker val="1"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:lineChart>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${cagrLine}
+        <c:marker val="0"/>
+        <c:axId val="1"/>
+        <c:axId val="3"/>
+      </c:lineChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        ${catAxNumFmtFrag(spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT)}
+        ${CAT_AX_TICK_LBL_POS}
+        ${CAT_AX_HORIZONTAL_TXT}
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        ${valAxScalingFrag(spec.leftRange)}
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        ${MAJOR_GRIDLINES_FRAG}
+        ${valAxNumFmtFrag(spec.leftNumFmt)}
+        <c:crossAx val="1"/>
+      </c:valAx>
+      <c:valAx>
+        <c:axId val="3"/>
+        ${valAxScalingFrag(spec.rightRange)}
+        <c:delete val="0"/>
+        <c:axPos val="r"/>
+        ${valAxNumFmtFrag(spec.rightNumFmt)}
+        <c:crossAx val="1"/>
+        <c:crosses val="max"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend>
+      <c:legendPos val="b"/>
+      <c:overlay val="0"/>
+    </c:legend>
+    <c:plotVisOnly val="1"/>
+    <c:dispBlanksAs val="gap"/>
+  </c:chart>
+</c:chartSpace>`;
+}
+
 // ----------------------------------------------------------------------------
 // Drawing XML (anchors a chart to a cell range on its tab)
 // ----------------------------------------------------------------------------
@@ -1785,6 +1923,7 @@ export async function injectNativeCharts(buffer, injections) {
     if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
     if (spec.type === 'combo') return buildComboChartXml(spec);
     if (spec.type === 'bidask-dual') return buildBidAskDualAxisChartXml(spec);
+    if (spec.type === 'renewal-combo') return buildRenewalRentGrowthXml(spec);
     if (spec.type === 'area-combo') {
       // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
       return buildAreaComboChartXml(spec);
@@ -4028,15 +4167,46 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'renewal_rent_growth': {
-      // R33 Tier D simplified this from a 3-series combo to a single-
-      // series bar matching master Excel chart 14 ('Renewal Rent/SF').
-      // Sky bars, currency Y-axis. The quartile whisker + CAGR dots
-      // were moved to cpi_vs_renewal_cagr in R33 Tier D.
-      // R37 P2 — rent PSF $0-70 (renderer line ~1769)
-      return singleSeries('bar', 'avg_renewal_rent_psf', sky, {
-        yAxisRange: { min: 0, max: 70 },
-        valAxNumFmt: VAL_FMT_CURRENCY,
-      });
+      // R66m — rebuilt to the deck p.32 combo ("Renewal Rent and its Growth
+      // Rate Over Time"): pale-blue TTM rent/SF bars + dark-blue quartile
+      // hi-low verticals (upper/lower Q markers) on the left $ axis, and the
+      // Avg Renewal Rent CAGR as a sky line on the right % axis. Underlying
+      // view (cm_gov_renewal_rent_growth_m) now outlier-trims rent_psf to
+      // [$5,$100] so the TTM rent sits at a deck-consistent ~$30 (was inflating
+      // to $54+) and cagr_5yr reads ~1-3% (was 10.6%). Prior build was a single
+      // noisy quarterly-rent bar (spiked to $60).
+      const periodCol = findCol('period_end');
+      const rentCol   = findCol('ttm_avg_renewal_rent_psf');
+      const upperCol  = findCol('upper_quartile_rpsf');
+      const lowerCol  = findCol('lower_quartile_rpsf');
+      const cagrCol   = findCol('cagr_5yr');
+      if (!periodCol || !rentCol || !upperCol || !lowerCol || !cagrCol) {
+        // Fallback to the legacy single-bar if columns are missing.
+        return singleSeries('bar', 'avg_renewal_rent_psf', sky, {
+          yAxisRange: { min: 0, max: 70 },
+          valAxNumFmt: VAL_FMT_CURRENCY,
+        });
+      }
+      return {
+        tabName,
+        spec: {
+          type: 'renewal-combo',
+          tabName,
+          catCol: periodCol,
+          dataStart, dataEnd,
+          headerRow,
+          rentCol, upperCol, lowerCol, cagrCol,
+          title: 'Renewal Rent and its Growth Rate Over Time',
+          leftRange:   { min: 0, max: 45 },
+          leftNumFmt:  VAL_FMT_CURRENCY,
+          rightRange:  { min: -0.04, max: 0.08 },
+          rightNumFmt: VAL_FMT_PERCENT_1DP,
+          rentColor:     'BBDDF2',
+          quartileColor: '003DA5',
+          cagrColor:     '62B5E5',
+          anchor: standardAnchor,
+        },
+      };
     }
 
     // ────────────────────────────────────────────────────────────────
