@@ -4190,7 +4190,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const rentCol   = findCol('ttm_avg_renewal_rent_psf');
       const upperCol  = findCol('upper_quartile_rpsf');
       const lowerCol  = findCol('lower_quartile_rpsf');
-      const cagrCol   = findCol('cagr_5yr');
+      // Per-lease renewal CAGR (deck p.32) — replaces the market-average
+      // cagr_5yr line, which couldn't start before 2018. Falls back to
+      // cagr_5yr if an older data tab without the per-lease column is fed in.
+      const cagrCol   = findCol('cagr_per_lease') || findCol('cagr_5yr');
       if (!periodCol || !rentCol || !upperCol || !lowerCol || !cagrCol) {
         // Fallback to the legacy single-bar if columns are missing.
         return singleSeries('bar', 'avg_renewal_rent_psf', sky, {

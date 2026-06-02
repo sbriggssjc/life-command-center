@@ -672,13 +672,16 @@ const CHART_COLUMNS = {
     { key: 'ttm_avg_renewal_rent_psf', header: 'TTM Avg Renewal/SF', format: 'currency_per_sf', width: 20 },
     { key: 'upper_quartile_rpsf', header: 'Upper Quartile', format: 'currency_per_sf', width: 16 },
     { key: 'lower_quartile_rpsf', header: 'Lower Quartile', format: 'currency_per_sf', width: 16 },
-    { key: 'cagr_5yr', header: '5-Year CAGR', format: 'percent_one_decimal', width: 14 },
+    { key: 'cagr_per_lease', header: 'Renewal CAGR (per-lease)', format: 'percent_one_decimal', width: 22 },
+    { key: 'cagr_per_lease_uq', header: 'Renewal CAGR Upper Q', format: 'percent_one_decimal', width: 20 },
+    { key: 'cagr_per_lease_lq', header: 'Renewal CAGR Lower Q', format: 'percent_one_decimal', width: 20 },
+    { key: 'cagr_5yr', header: '5-Year CAGR (market avg)', format: 'percent_one_decimal', width: 20 },
     { key: 'renewal_count', header: 'Renewal Count', format: 'integer_count', width: 16 },
   ],
   cpi_vs_renewal_cagr: [
     { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
     { key: 'cpi_change', header: 'CPI YoY Change', format: 'percent_one_decimal', width: 17 },
-    { key: 'gsa_renewal_cagr', header: 'GSA Renewal 5yr CAGR', format: 'percent_one_decimal', width: 22 },
+    { key: 'gsa_renewal_cagr', header: 'GSA Renewal CAGR (per-lease)', format: 'percent_one_decimal', width: 26 },
   ],
   rent_heat_map: [
     { key: 'rank_by_rpsf', header: 'Rank', format: 'integer_count', width: 6 },
