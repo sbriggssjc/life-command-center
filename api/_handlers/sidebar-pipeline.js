@@ -541,7 +541,12 @@ function parsePercent(val) {
 function parseCapRateDecimal(val) {
   const num = parsePercent(val);
   if (num == null) return null;
-  return num > 1 ? num / 100 : num;
+  const dec = num > 1 ? num / 100 : num;
+  // Guard (2026-06-02): clamp to the sane CRE cap-rate band [0.005, 0.30].
+  // A leaked adjacent value (occupancy "85" → 0.85, LTV, a price/SF, etc.)
+  // would otherwise be stored as a bogus cap rate. Out-of-band → null.
+  if (dec < 0.005 || dec > 0.30) return null;
+  return dec;
 }
 
 /** Parse acres string: "0.54 AC" → 0.54 */

@@ -1007,9 +1007,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
 
       if (!data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
-        if (/[\d.]+%/.test(prev)) data.cap_rate = prev;
-        else if (/[\d.]+%/.test(next)) data.cap_rate = next;
-        else if (i < lines.length - 2 && /[\d.]+%/.test(lines[i + 2])) data.cap_rate = lines[i + 2];
+        // Guard (2026-06-02): only accept a nearby percent that's a plausible
+        // CRE cap rate in % units [2,15]. Without this, an adjacent occupancy %
+        // (95%), LTV (75%), or escalation (2%) could land in cap_rate — the same
+        // adjacent-cell leak class as the asking-price/SF fix above.
+        const plausibleCapPct = (s) => {
+          const m = String(s).match(/(\d+(?:\.\d+)?)\s*%/);
+          if (!m) return false;
+          const v = parseFloat(m[1]);
+          return Number.isFinite(v) && v >= 2 && v <= 15;
+        };
+        if (plausibleCapPct(prev)) data.cap_rate = prev;
+        else if (plausibleCapPct(next)) data.cap_rate = next;
+        else if (i < lines.length - 2 && plausibleCapPct(lines[i + 2])) data.cap_rate = lines[i + 2];
       }
 
       // Sale date: capture the MOST RECENT date seen (not first — oldest may appear first)
@@ -1328,12 +1338,17 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         if (next && next.length < 30) data.lease_expiration = next;
       }
 
+      // Guards (2026-06-02): magnitude-check the adjacent value so a total rent
+      // can't leak into rent_per_sf and a per-SF figure can't leak into
+      // annual_rent (same adjacent-cell leak class as the asking-price/SF fix).
       if (!data.rent_per_sf && /^rent\/?sf$/i.test(line)) {
-        if (next && /^\$?[\d,.]+/.test(next)) data.rent_per_sf = next;
+        const v = parseDollarAmount(next);
+        if (v != null && v >= 1 && v <= 500) data.rent_per_sf = next;   // $/SF band
       }
 
       if (!data.annual_rent && /^annual\s+rent$/i.test(line)) {
-        if (next && /^\$?[\d,.]+/.test(next)) data.annual_rent = next;
+        const v = parseDollarAmount(next);
+        if (v != null && v >= 1000) data.annual_rent = next;            // a total rent, not a per-SF value
       }
 
       // Tenant name — appears as a label/value pair on property detail pages
