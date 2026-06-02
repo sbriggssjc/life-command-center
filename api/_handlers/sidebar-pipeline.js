@@ -8937,6 +8937,25 @@ async function upsertDialysisListings(propertyId, metadata) {
     }
   }
 
+  // Round 77c (2026-06-02): reject implausibly-low asking prices. A real
+  // net-lease / CRE asset never lists below ~$50k; such values are parser leaks
+  // — RBA/SF (e.g. 9,972), price-per-SF ($1,410), historical easements
+  // ($18,500), or $1 placeholders — bleeding into the price field. Drop to null
+  // so the listing is created WITHOUT a bogus price (a price-less Active row via
+  // the /for-sale/ path below) instead of carrying garbage into the supply-side
+  // cap-rate / price metrics. Layout-independent backstop to the parser-side
+  // "Not Disclosed" guard in extension/content/costar.js.
+  const ASKING_PRICE_FLOOR = 50000;
+  if (parsedAskingPrice != null && parsedAskingPrice < ASKING_PRICE_FLOOR) {
+    console.warn('[upsertDialysisListings] Round 77c: dropping implausibly-low asking_price (likely SF/per-SF/easement leak)', {
+      propertyId,
+      rejected_asking_price: parsedAskingPrice,
+      raw_asking_price: metadata.asking_price,
+    });
+    parsedAskingPrice = null;
+    metadata.asking_price = null;
+  }
+
   if (!parsedAskingPrice && !currentListings.length && !onForSaleUrl) {
     console.log('[upsertDialysisListings] early-exit: no asking_price, no current sale, not a for-sale listing page', {
       propertyId,

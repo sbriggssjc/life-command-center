@@ -1067,12 +1067,26 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         // Bug 4302 S Main St (2026-05-21): stat card pinned
         // asking_price to "$1,410.35" because the old code took next
         // unconditionally when its numeric form was >= 1000.
+        // 2017 Quintard Ave (Anniston AL, 2026-06-02): a "Not Disclosed" Sale
+        // Price card sits directly above the SF/RBA card, so `prev` is the text
+        // "Not Disclosed" (no number) and the next-stat fallback below grabbed
+        // the adjacent RBA value (9,972) as the asking price. Guard: when the
+        // value cell is an explicit non-disclosure token, the price is absent —
+        // do NOT fall through to the neighbouring (size/date) stat. Also refuse
+        // a `next` value whose own card label (lines[i+2]) is a non-price stat.
+        const NON_DISCLOSED_RE = /^(not\s+disclosed|undisclosed|not\s+available|withheld|confidential|n\/?a|tbd|--+|—|call|inquire|upon\s+request)\b/i;
+        const NON_PRICE_STAT_LABEL = /\b(sf\s*rba|rba|sq\.?\s*ft|square\s*f(?:ee|oo)t|ac\s+lot|acres?|lot|on\s+market|days?|built|year\s+built|stories|units?|floors?|tenancy)\b/i;
+        const prevUndisclosed = NON_DISCLOSED_RE.test((prev || '').trim());
+        const nextCardLabel = i + 2 < lines.length ? (lines[i + 2] || '') : '';
+        const nextIsForeignStat = NON_PRICE_STAT_LABEL.test(nextCardLabel);
         const prevAmt = parseDollarAmount(prev);
         const nextAmt = parseDollarAmount(next);
         let chosen = null;
-        if (prevAmt && prevAmt >= 1000 && (nextAmt == null || prevAmt >= nextAmt)) {
+        if (prevUndisclosed) {
+          chosen = null;                       // price genuinely undisclosed
+        } else if (prevAmt && prevAmt >= 1000 && (nextAmt == null || prevAmt >= nextAmt)) {
           chosen = prev;
-        } else if (nextAmt && nextAmt >= 1000) {
+        } else if (nextAmt && nextAmt >= 1000 && !nextIsForeignStat) {
           chosen = next;
         }
         if (chosen) data.asking_price = chosen;
