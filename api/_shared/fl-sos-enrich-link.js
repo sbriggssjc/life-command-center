@@ -119,8 +119,13 @@ async function compareAndLink({ limit = 100, dryRun = false }) {
           // Confirm the coincidence survives normalization on the contact side too.
           const cn = normLoose(c.full_name), cc = normLoose(c.company_name);
           if (cn === k.val || cc === k.val) {
-            if (!hitsByContact.has(c.unified_id)) hitsByContact.set(c.unified_id, { contact: c, signals: new Set() });
-            hitsByContact.get(c.unified_id).signals.add(k.signal);
+            if (!hitsByContact.has(c.unified_id)) hitsByContact.set(c.unified_id, { contact: c, signals: new Set(), ownerEqCompany: false });
+            const hh = hitsByContact.get(c.unified_id);
+            hh.signals.add(k.signal);
+            // Entity-identity flag: the OWNER name itself equals this contact's
+            // COMPANY name (not just a shared person/agent name). That is the
+            // recorded owner *being* the CRM company — a strong link on its own.
+            if (k.signal === 'owner_name' && cc === k.val) hh.ownerEqCompany = true;
           }
         }
       }
@@ -128,10 +133,12 @@ async function compareAndLink({ limit = 100, dryRun = false }) {
       for (const [unifiedId, hit] of hitsByContact) {
         const signals = [...hit.signals];
         const signalCount = signals.length;
-        // STRONG = 2+ distinct signals coincide (e.g. agent AND owner-name, or
-        // officer AND agent). Single-signal = weak -> review. This is the
-        // precision gate: one shared word is a hint, two is a connection.
-        const strength = signalCount >= 2 ? 'strong' : 'weak';
+        // STRONG when EITHER: (a) 2+ distinct signals coincide (agent AND owner,
+        // officer AND agent, etc.), OR (b) the recorded owner name exactly equals
+        // the contact's company name (entity identity — the owner IS the CRM
+        // company, not just a shared person/agent name). Officer/agent-only,
+        // single-signal matches stay weak -> human review.
+        const strength = (signalCount >= 2 || hit.ownerEqCompany) ? 'strong' : 'weak';
         out.candidates++;
         if (dryRun) continue;
 
