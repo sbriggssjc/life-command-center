@@ -2285,9 +2285,32 @@ function buildChartConfig(chart, brand) {
     // ─────────────────────────────────────────────────────────────────
 
     case 'market_turnover': {
+      // R66s — gov turnover_rate is unreliable (active-universe built on ~11%
+      // listing coverage), so for gov plot the reliable Monthly Sales Rate
+      // (TTM sales / 12) instead. dia keeps the turnover_rate line.
+      const stripUniverse = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+      if (stripUniverse) {
+        const paceData = rows.map(r => {
+          const c = r.annual_sales_rate ?? r.ttm_sales_count;
+          return c == null ? null : Number(c) / 12;
+        });
+        return {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Monthly Sales Rate',
+              data: paceData,
+              backgroundColor: palette[0],
+              borderColor: palette[0],
+              borderRadius: 1,
+            }],
+          },
+          options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+        };
+      }
       // Single-line time series — turnover_rate (TTM sales / market universe).
-      // Y-axis range adapts: gov data lands 1-3%, dia 20-30%, so use
-      // auto-scaling with a friendly minimum.
+      // Y-axis range adapts: dia 20-30%, so use auto-scaling with a friendly minimum.
       const data = rows.map(r => Number(r.turnover_rate));
       const finiteData = data.filter(v => Number.isFinite(v));
       const dataMax = finiteData.length ? Math.max(...finiteData) : 0.05;

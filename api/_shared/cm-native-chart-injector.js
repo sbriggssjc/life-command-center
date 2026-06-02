@@ -2771,6 +2771,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // figures available. Front bar reads from the helper col.
       const pale = '#E0E8F4';
       const monthlyPaceCol = String.fromCharCode(65 + cols.length);
+      // R66s — gov-only strip. The gov active-universe / months-of-supply is
+      // built from listing-window data covering only ~11% of sales (the
+      // listing-history capture pass hit a data-availability ceiling), so the
+      // Active Listings bar and Months of Supply line are unreliable on the gov
+      // chart. Drop them for gov and keep only the reliable Monthly Sales Rate
+      // bar (TTM sales / 12) on a single axis. dia keeps the full 3-series combo
+      // (its active inventory has real coverage — ~700 active listings).
+      const stripUniverse = (vertical !== 'dialysis');
       return {
         tabName,
         spec: {
@@ -2779,18 +2787,21 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           barGrouping:     'clustered',
-          barOverlap:      100,  // front bar overlays back inventory bar at same x
+          barOverlap:      stripUniverse ? -20 : 100,  // front bar overlays back inventory bar at same x
+          sharedAxis:      stripUniverse,               // gov: single axis, no empty months-of-supply axis
           yLeftNumFmt:     VAL_FMT_INTEGER,
-          yLeftAxisTitle:  'Listings / monthly sales rate',
+          yLeftAxisTitle:  stripUniverse ? 'Monthly sales rate' : 'Listings / monthly sales rate',
           yRightNumFmt:    '#,##0.0" mo"',
-          yRightAxisTitle: 'Months of supply',
-          barSeries: [
+          yRightAxisTitle: stripUniverse ? undefined : 'Months of supply',
+          barSeries: stripUniverse ? [
+            { titleCol: monthlyPaceCol,   titleRow: headerRow, valCol: monthlyPaceCol,   color: navy },
+          ] : [
             // Back bar — total active inventory (pale sky)
             { titleCol: activeCol,        titleRow: headerRow, valCol: activeCol,        color: pale, borderColor: sky },
             // Front bar (R62) — monthly clear pace helper col, NOT annual rate
             { titleCol: monthlyPaceCol,   titleRow: headerRow, valCol: monthlyPaceCol,   color: navy },
           ],
-          lineSeries: [
+          lineSeries: stripUniverse ? [] : [
             { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C' },
           ],
           anchor: standardAnchor,
