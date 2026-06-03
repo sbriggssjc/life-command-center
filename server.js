@@ -34,6 +34,11 @@ import syncHandler from './api/sync.js';
 // count toward the 12-function cap; this is purely Railway routing.
 import capitalMarketsHandler from './api/capital-markets.js';
 import bridgesHandler from './api/bridges.js';
+// intake-share is the iOS Shortcut "Send to LCC" share-target (self-dispatching
+// POST/GET/PATCH). Vercel auto-routes it; on Railway it was unmounted and fell
+// through to the SPA shell, so the Shortcut got HTML back. No vercel.json change
+// needed (no friendly alias — clients hit /api/intake-share directly).
+import intakeShareHandler from './api/intake-share.js';
 
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -245,7 +250,7 @@ app.all('/api/sharepoint-extract',          (req, res) => { req.query._route = '
 app.all('/api/sharepoint-extract-callback', (req, res) => { req.query._route = 'sp_extract'; req.query.action = 'callback'; bridgesHandler(req, res); });
 app.all('/api/admin/bridges',               (req, res) => { req.query._route = 'admin';    bridgesHandler(req, res); });
 
-// ── Primary handler routes (11 canonical endpoints) ─────────────────────────
+// ── Primary handler routes (12 canonical endpoints) ─────────────────────────
 app.all('/api/actions', actionsHandler);
 app.all('/api/admin', adminHandler);
 app.all('/api/apply-change', applyChangeHandler);
@@ -255,6 +260,7 @@ app.all('/api/intake', intakeHandler);
 app.all('/api/operations', operationsHandler);
 app.all('/api/queue', queueHandler);
 app.all('/api/sync', syncHandler);
+app.all('/api/intake-share', intakeShareHandler);
 
 // ── Legal pages (required by Teams manifest) ──────────────────────────────
 // ── Health check — no auth, no DB, used by Railway deployment healthcheck ──
