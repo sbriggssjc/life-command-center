@@ -414,6 +414,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     Promise.allSettled([_udFetchProspectingFeed(6), _udFetchPriorityBand()]).then(function () {
       try { _udRenderProspectingFeed(); }
       catch (e) { console.warn('prospecting feed render failed', e); try { _udRenderNextActionBar(); } catch (_e) {} }
+      try { _udRenderNextStep(); } catch (_e) {}
     });
     // Enrich ownership ladder signals (confidence + divergence); re-render the
     // Ownership tab if it's the active one once they load.
@@ -422,6 +423,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         var _bodyEl = document.getElementById('detailBody');
         if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership & CRM') _bodyEl.innerHTML = _udRenderTab('Ownership & CRM');
       } catch (_e) {}
+      try { _udRenderNextStep(); } catch (_e) {}
     });
 
     // ── Dialysis Operations tab: auto-match CMS facility when rankings is empty ──
@@ -1414,6 +1416,8 @@ window._udCompletenessChipClick = _udCompletenessChipClick;
       if (rail) { rail.style.display = 'none'; rail.innerHTML = ''; }
       const nab = document.getElementById('detailNextActionBar');
       if (nab) { nab.style.display = 'none'; nab.innerHTML = ''; }
+      const nstep = document.getElementById('detailNextStep');
+      if (nstep) { nstep.style.display = 'none'; nstep.innerHTML = ''; }
       return origClose.apply(this, arguments);
     };
   }
@@ -5966,6 +5970,60 @@ async function _udFetchPriorityBand() {
   return _udCache.priorityBand;
 }
 
+// Per-property 'Next step' banner (self-propelling contract, Move 2, 2026-06-03).
+// Surfaces the SINGLE next action for THIS property at the top of the detail,
+// with a 4-node progress trail (Owner -> Link -> Lead -> Cadence). Computed from
+// the spine state already in _udCache; advances live as the user acts.
+function _udRenderNextStep() {
+  const bar = document.getElementById('detailNextStep');
+  if (!bar) return;
+  if (!_udCache) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const own = _udCache.ownership || {};
+  const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id || null;
+  const lk = _udCache.ownerLink || null;
+  const band = _udCache.priorityBand || null;
+  const recordedOwner = own.recorded_owner_canonical || own.recorded_owner || own.recorded_owner_id || null;
+  const trueResolved = own.true_owner_id || own.true_owner_canonical || own.true_owner || own.owner_entity_id || null;
+  const linkPending = !!(lk && lk.pending > 0 && !(lk.linked > 0));
+  const linked = !!(lk && lk.linked > 0);
+  const needsLead = !!(band && band.reason === 'open_bd_opportunity_needed') || !own.owner_entity_id;
+  // First unmet step in the spine = the single next action.
+  let step;
+  if (!recordedOwner) {
+    step = { label: 'Pull the recorded owner', sub: 'No deed owner on file yet.', cta: 'Resolve owner',
+      onclick: pid ? '_udBtnGuard(this,function(){_udResolveOwner(' + pid + ')})' : null };
+  } else if (linkPending) {
+    step = { label: 'Confirm the owner\u2192contact link', sub: 'A CRM match is waiting for review.', cta: 'Review link \u2192',
+      onclick: 'navTo(&quot;pageReviewConsole&quot;);setTimeout(renderSosLinkWorklist,400)' };
+  } else if (!trueResolved) {
+    step = { label: 'Resolve the true owner', sub: 'Recorded owner known; decision-maker not resolved.', cta: 'Open Ownership \u2192',
+      onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
+  } else if (needsLead) {
+    step = { label: 'Create the lead', sub: 'Owner resolved' + (linked ? ' & CRM-linked' : '') + '. Open a BD opportunity.', cta: 'Create lead',
+      onclick: '_udBtnGuard(this,_udCreateLeadFromProperty)' };
+  } else {
+    step = { label: 'Advance the outreach', sub: 'Lead is live. Put this owner on a touch cadence.', cta: 'Add to cadence',
+      onclick: '_udBtnGuard(this,_udAddToCadence)' };
+  }
+  // Progress trail node states (honest: unknown stays 'todo', not 'done').
+  const stOwner = trueResolved ? 'done' : (recordedOwner ? 'next' : 'todo');
+  const stLink = linked ? 'done' : (linkPending ? 'next' : (lk ? 'todo' : 'na'));
+  const stLead = (own.owner_entity_id && !needsLead) ? 'done' : 'todo';
+  const trail = [['Owner', stOwner], ['Link', stLink], ['Lead', stLead], ['Cadence', 'todo']];
+  let h = '<div class="dns-row">';
+  h += '<span class="dns-flag">\u25B6 Next step</span>';
+  h += '<div class="dns-text"><div class="dns-label">' + esc(step.label) + '</div><div class="dns-sub">' + esc(step.sub) + '</div></div>';
+  if (step.onclick) h += '<button type="button" class="dns-cta" onclick="event.stopPropagation();' + step.onclick + '">' + esc(step.cta) + '</button>';
+  h += '</div>';
+  const nodes = trail.filter(function (t) { return t[1] !== 'na'; }).map(function (t) {
+    return '<span class="dns-node dns-' + t[1] + '">' + (t[1] === 'done' ? '\u2713 ' : '') + esc(t[0]) + '</span>';
+  });
+  h += '<div class="dns-trail">' + nodes.join('<span class="dns-sep">\u203A</span>') + '</div>';
+  bar.innerHTML = h;
+  bar.style.display = '';
+}
+window._udRenderNextStep = _udRenderNextStep;
+
 function _udRenderProspectingFeed() {
   const bar = document.getElementById('detailNextActionBar');
   if (!bar) return;
@@ -6060,7 +6118,7 @@ async function _udCreateLeadFromProperty() {
   if (!pid) { showToast('No property id in context', 'error'); return; }
   try {
     const resp = await _udResolveEntityViaCreateLead();
-    if (resp && resp.ok) { showToast('Lead created' + (resp.bd_opportunity_id ? ' · BD opportunity opened' : ''), 'success'); }
+    if (resp && resp.ok) { showToast('Lead created' + (resp.bd_opportunity_id ? ' · BD opportunity opened' : ''), 'success'); try { _udRenderNextStep(); } catch (_e) {} }
     else { showToast('Create lead failed: ' + ((resp && resp.error) || 'unknown'), 'error'); }
   } catch (e) { showToast('Create lead error: ' + e.message, 'error'); }
 }
@@ -6086,7 +6144,7 @@ async function _udAddToCadence() {
   const body = { entity_id: entityId, property_id: pid, property_address: (_udCache.property && _udCache.property.address) || null, domain: db, phase: 'onboarding', priority_tier: 'B' };
   try {
     const resp = await _udApiPost('/api/operations?action=initiate_cadence', body);
-    if (resp && resp.ok) { showToast('Added to onboarding cadence', 'success'); }
+    if (resp && resp.ok) { showToast('Added to onboarding cadence', 'success'); try { _udRenderNextStep(); } catch (_e) {} }
     else { showToast('Add to cadence failed: ' + ((resp && resp.error) || 'unknown'), 'error'); }
   } catch (e) { showToast('Cadence error: ' + e.message, 'error'); }
 }

@@ -2051,6 +2051,21 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .rc-progress { font-size: 12px; font-weight: 700; color: var(--text2); margin: 0 0 12px; font-variant-numeric: tabular-nums; }
 .rc-progress span { color: var(--accent2); }
 
+/* Per-property "Next step" banner (Move 2) */
+.detail-next-step { margin: 0 0 4px; padding: 12px 16px; background: linear-gradient(180deg, rgba(0,61,165,0.06), rgba(0,61,165,0.02)); border: 1px solid var(--border); border-left: 4px solid var(--accent2); border-radius: 10px; }
+.dns-row { display: flex; align-items: center; gap: 12px; }
+.dns-flag { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; color: var(--accent2); white-space: nowrap; }
+.dns-text { flex: 1; min-width: 0; }
+.dns-label { font-size: 14px; font-weight: 700; color: var(--text); }
+.dns-sub { font-size: 12px; color: var(--text3); margin-top: 1px; }
+.dns-cta { padding: 8px 14px; background: var(--accent2); color: #fff; border: 1px solid var(--accent2); border-radius: 7px; font-weight: 700; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.dns-cta:hover { filter: brightness(1.08); }
+.dns-trail { display: flex; align-items: center; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
+.dns-node { font-size: 11px; font-weight: 600; color: var(--text3); }
+.dns-node.dns-done { color: var(--green); }
+.dns-node.dns-next { color: var(--accent2); font-weight: 800; }
+.dns-sep { color: var(--text3); opacity: 0.5; font-size: 11px; }
+
 /* Ops Health (2026-05-31) */
 .oh-intro { font-size: 13px; color: var(--text3); max-width: 720px; margin: 0 0 16px; line-height: 1.5; }
 .q-item.oh-red { border-left: 3px solid var(--red); }
