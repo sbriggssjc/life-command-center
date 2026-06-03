@@ -1872,6 +1872,12 @@ async function fetchCsvYear(year) {
   }
 }
 
+// Module-level last-good cache so a transient treasury.gov outage degrades
+// the rate widget to the last known value (stale: true) instead of erroring.
+// `latest` holds the most recent non-history payload; `history` is keyed by
+// the requested year span (e.g. "1", "5").
+let _treasuryCache = { latest: null, history: {} };
+
 async function handleTreasury(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
@@ -1879,6 +1885,19 @@ async function handleTreasury(req, res) {
   const wantHistory = req.query.history === 'true';
   const numYears = Math.min(parseInt(req.query.years, 10) || 1, 5);
   const currentYear = new Date().getFullYear();
+  const historyKey = String(numYears);
+
+  // Returns the last-good payload as a 200 with stale:true, or null if no
+  // cache exists yet for this request shape.
+  const serveStale = () => {
+    const cached = wantHistory ? _treasuryCache.history[historyKey] : _treasuryCache.latest;
+    if (!cached) return false;
+    const staleDate = wantHistory
+      ? (cached.history && cached.history.length ? cached.history[cached.history.length - 1].date : null)
+      : (cached.date || null);
+    res.status(200).json({ ...cached, stale: true, as_of: staleDate });
+    return true;
+  };
 
   try {
     if (wantHistory) {
@@ -1887,27 +1906,34 @@ async function handleTreasury(req, res) {
       let allEntries = (await Promise.all(years.map(fetchXmlYear))).flat();
       if (allEntries.length === 0) allEntries = (await Promise.all(years.map(fetchCsvYear))).flat();
       allEntries.sort((a, b) => a.date.localeCompare(b.date));
-      return res.status(200).json({ history: allEntries });
+      if (allEntries.length === 0 && serveStale()) return;
+      const payload = { history: allEntries };
+      _treasuryCache.history[historyKey] = payload;
+      return res.status(200).json(payload);
     }
 
     const entries = await fetchXmlYear(currentYear);
     if (entries.length > 0) {
       const latest = entries[entries.length - 1];
       const prev = entries.length > 1 ? entries[entries.length - 2] : null;
-      return res.status(200).json({
+      const payload = {
         date: latest.date, ten_yr: latest.ten_yr, thirty_yr: latest.thirty_yr,
         prev_date: prev ? prev.date : null, prev_ten_yr: prev ? prev.ten_yr : null,
-      });
+      };
+      _treasuryCache.latest = payload;
+      return res.status(200).json(payload);
     }
 
     const csvEntries = await fetchCsvYear(currentYear);
     if (csvEntries.length > 0) {
       const latest = csvEntries[csvEntries.length - 1];
       const prev = csvEntries.length > 1 ? csvEntries[csvEntries.length - 2] : null;
-      return res.status(200).json({
+      const payload = {
         date: latest.date, ten_yr: latest.ten_yr, thirty_yr: latest.thirty_yr,
         prev_date: prev ? prev.date : null, prev_ten_yr: prev ? prev.ten_yr : null,
-      });
+      };
+      _treasuryCache.latest = payload;
+      return res.status(200).json(payload);
     }
 
     const fiscalUrl = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/avg_interest_rates?sort=-record_date&page[size]=2&fields=record_date,avg_interest_rate_amt,security_desc&filter=security_desc:eq:Treasury Notes';
@@ -1918,17 +1944,22 @@ async function handleTreasury(req, res) {
       if (rows.length >= 1) {
         const latest = rows[0];
         const prev = rows.length > 1 ? rows[1] : null;
-        return res.status(200).json({
+        const payload = {
           date: latest.record_date, ten_yr: parseFloat(latest.avg_interest_rate_amt) || null,
           thirty_yr: null, prev_date: prev ? prev.record_date : null,
           prev_ten_yr: prev ? (parseFloat(prev.avg_interest_rate_amt) || null) : null,
-        });
+        };
+        _treasuryCache.latest = payload;
+        return res.status(200).json(payload);
       }
     }
 
+    // All upstream sources empty — degrade to last-good before erroring.
+    if (serveStale()) return;
     return res.status(500).json({ error: 'No data from any Treasury source' });
   } catch (e) {
     console.error('[diagnostics] Treasury rate fetch error:', e.message);
+    if (serveStale()) return;
     return res.status(500).json({ error: 'Treasury rate fetch failed' });
   }
 }
