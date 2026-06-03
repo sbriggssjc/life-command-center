@@ -6031,8 +6031,16 @@ function _udRenderNextStep() {
   // so the banner kept re-offering "Create the lead" on already-led properties.
   const oo = _udCache.ownerOpp || null;
   const hasOpenOpp = !!(oo && oo.open);
+  // Authoritative negative (E2E#6 follow-up, 2026-06-03): the priority-band check
+  // resolved an owner entity but found NO open opportunity (open === false). That
+  // means there genuinely is no lead yet, so re-offer "Create the lead" even
+  // though owner_entity_id is now populated from lookup_asset on load — otherwise
+  // the banner wrongly shows "Lead is live / Add to cadence".
+  const leadResolvedAbsent = !!(oo && oo.open === false);
   const needsLead = !hasOpenOpp
-    && (!!(band && band.reason === 'open_bd_opportunity_needed') || !own.owner_entity_id);
+    && (leadResolvedAbsent
+        || !!(band && band.reason === 'open_bd_opportunity_needed')
+        || !own.owner_entity_id);
   // Is the owner already on a cadence? Either the persisted check found one, we
   // just seeded one via create_lead (stashed in _udCache.cadence), or the
   // priority band is one of the cadence-driven bands (P0 developer-overdue, P6

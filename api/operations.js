@@ -59,7 +59,7 @@
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
-import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
@@ -602,6 +602,35 @@ async function domainInsert(domain, table, row) {
   }
 }
 
+// Read-only companion to domainInsert: GET against a domain REST collection.
+// `pathWithQuery` is the table + PostgREST query string (e.g.
+// 'prospect_leads?select=lead_id&...'). Soft-fails to {ok:false,data:null} so
+// callers can degrade gracefully.
+async function domainSelect(domain, pathWithQuery) {
+  const isGov = domain === 'gov' || domain === 'government';
+  const baseUrl = isGov ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = isGov ? govSupabaseKey() : diaSupabaseKey();
+  if (!baseUrl || !key) return { ok: false, status: 503, data: null };
+  try {
+    const resp = await fetch(baseUrl + '/rest/v1/' + pathWithQuery, {
+      method: 'GET',
+      headers: {
+        apikey: key,
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    const text = await resp.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (_e) { data = null; }
+    if (!resp.ok) return { ok: false, status: resp.status, data: null };
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err) {
+    return { ok: false, status: 500, data: null };
+  }
+}
+
 async function bridgeCreateLead(req, res, user, workspaceId) {
   const {
     domain, property_id, entity_id, owner_name, true_owner_name,
@@ -641,6 +670,13 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     }
     resolvedEntityId = link.entityId;
     createdEntity = !!link.createdEntity;
+  } else {
+    // entity_id supplied (the property detail resolved the asset entity and
+    // passed it). ensureEntityLink is skipped, so refresh the placeholder name
+    // here too — the resolved asset entity often still reads "property <uuid>".
+    // (E2E#6 follow-up, 2026-06-03)
+    try { await refreshPlaceholderEntityNameById(resolvedEntityId, workspaceId, ownerDisplay); }
+    catch (_e) { /* non-fatal: BD surfaces just keep the placeholder name */ }
   }
 
   // 2. Insert the domain lead row (prospect_leads on gov, marketing_leads on dia).
@@ -662,6 +698,9 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     leadTable = 'marketing_leads';
     leadRow = {
       source: leadSource,
+      // Stamp the property id so the lead-row idempotency guard has a stable
+      // key (marketing_leads has no property FK). (E2E#6 follow-up, 2026-06-03)
+      source_ref: String(property_id),
       lead_name: ownerDisplay,
       lead_company: owner_name || effectiveTrueOwner || null,
       property_address: property_address || label || null,
@@ -670,11 +709,39 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
       notes: notes || null,
     };
   }
-  const leadResult = await domainInsert(normDomain, leadTable, leadRow);
-  if (!leadResult.ok) {
-    return res.status(leadResult.status || 500).json({ error: leadResult.error, detail: leadResult.detail });
+
+  // Lead-row idempotency (E2E#6 follow-up, 2026-06-03): mirror the opportunity
+  // guard at the domain-lead level. A verified double-click previously produced
+  // ONE opportunity but TWO lead rows. Skip the insert when an OPEN lead for the
+  // same property + source already exists. Voided / closed leads do NOT block —
+  // re-creating after a void is the intended recovery path.
+  const TERMINAL_LEAD_STATUS = '(void,closed,dead,disqualified,lost)';
+  let leadId = null;
+  let existingLead = false;
+  let dup;
+  if (normDomain === 'gov') {
+    dup = await domainSelect('gov',
+      'prospect_leads?select=lead_id&matched_property_id=eq.' + encodeURIComponent(property_id)
+      + '&lead_source=eq.' + encodeURIComponent(leadSource)
+      + '&pipeline_status=not.in.' + TERMINAL_LEAD_STATUS + '&limit=1');
+  } else {
+    dup = await domainSelect('dia',
+      'marketing_leads?select=lead_id&source=eq.' + encodeURIComponent(leadSource)
+      + '&source_ref=eq.' + encodeURIComponent(String(property_id))
+      + '&status=not.in.' + TERMINAL_LEAD_STATUS + '&limit=1');
   }
-  const leadId = (leadResult.data && (leadResult.data.lead_id || leadResult.data.id)) || null;
+  if (dup && dup.ok && Array.isArray(dup.data) && dup.data[0]) {
+    leadId = dup.data[0].lead_id || dup.data[0].id || null;
+    existingLead = true;
+  }
+
+  if (!existingLead) {
+    const leadResult = await domainInsert(normDomain, leadTable, leadRow);
+    if (!leadResult.ok) {
+      return res.status(leadResult.status || 500).json({ error: leadResult.error, detail: leadResult.detail });
+    }
+    leadId = (leadResult.data && (leadResult.data.lead_id || leadResult.data.id)) || null;
+  }
 
   // 3. Open a BD opportunity on LCC (is_open is GENERATED — omit it).
   // Idempotency (Bug b, 2026-06-03): a second "Create lead" / "open opportunity"
