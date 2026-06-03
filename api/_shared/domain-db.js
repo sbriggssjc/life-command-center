@@ -15,16 +15,28 @@ const DOMAIN_CONFIG = {
   government: { urlEnv: 'GOV_SUPABASE_URL' },
 };
 
+// QA#9 (2026-06-03): callers split between long-form ('dialysis'/'government')
+// and short-form ('dia'/'gov') domain identifiers. domainSupabaseKey() already
+// accepts both, but DOMAIN_CONFIG was keyed only on the long form, so every
+// domainQuery('dia'|'gov', ...) call (e.g. the Review Console domCount helpers)
+// fell through to a 503 "database not configured". Normalize here so both forms
+// resolve identically.
+const DOMAIN_ALIASES = {
+  dia: 'dialysis', dialysis: 'dialysis',
+  gov: 'government', government: 'government',
+};
+
 /**
  * Check if a domain database is configured.
- * @param {'dialysis'|'government'} domain
+ * @param {'dia'|'dialysis'|'gov'|'government'} domain
  * @returns {{ url: string, key: string } | null}
  */
 export function getDomainCredentials(domain) {
-  const cfg = DOMAIN_CONFIG[domain];
+  const canonical = DOMAIN_ALIASES[domain];
+  const cfg = canonical ? DOMAIN_CONFIG[canonical] : null;
   if (!cfg) return null;
   const url = process.env[cfg.urlEnv];
-  const key = domainSupabaseKey(domain);
+  const key = domainSupabaseKey(canonical);
   if (!url || !key) return null;
   return { url, key };
 }
@@ -47,12 +59,27 @@ export async function domainQuery(domain, method, path, body, extraHeaders = {},
   }
 
   const url = `${creds.url}/rest/v1/${path}`;
+
+  // QA#9 (2026-06-03): merge the caller's Prefer header with our default
+  // instead of letting the spread clobber it. Callers that want a row count
+  // pass `Prefer: count=exact`; before this merge that dropped our default
+  // `return=representation` and — combined with no Content-Range parsing below
+  // — silently lost the count. PostgREST accepts a comma-separated Prefer list.
+  // We only inject the default `return=representation` when the caller didn't
+  // already specify a `return=` directive, so explicit `return=minimal` write
+  // callers aren't given a contradictory pair.
+  const { Prefer: callerPrefer, prefer: callerPreferLc, ...restHeaders } = extraHeaders || {};
+  const supplied = callerPrefer || callerPreferLc;
+  const preferTokens = [];
+  if (!supplied || !/\breturn=/.test(supplied)) preferTokens.push('return=representation');
+  if (supplied) preferTokens.push(supplied);
+
   const headers = {
     'apikey': creds.key,
     'Authorization': `Bearer ${creds.key}`,
     'Content-Type': 'application/json',
-    'Prefer': 'return=representation',
-    ...extraHeaders,
+    'Prefer': preferTokens.join(', '),
+    ...restHeaders,
   };
 
   const fetchOpts = { method, headers };
@@ -72,6 +99,18 @@ export async function domainQuery(domain, method, path, body, extraHeaders = {},
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+
+  // QA#9 (2026-06-03): parse PostgREST's Content-Range so callers that asked
+  // for `Prefer: count=exact` get the total back. Header looks like
+  // `0-0/1234` (or `*/0`); take the integer after the slash. Left undefined
+  // when no count was requested (header is `*/*` / absent), so non-count GETs
+  // are unaffected.
+  let count;
+  const contentRange = res.headers.get('content-range');
+  if (contentRange) {
+    const m = contentRange.match(/\/(\d+)\s*$/);
+    if (m) count = parseInt(m[1], 10);
+  }
 
   // Item #5 (audit/05-provenance-integrity, 2026-05-17): instrument every
   // non-2xx response from a domain DB WRITE (POST / PATCH / PUT / DELETE) so
@@ -96,5 +135,5 @@ export async function domainQuery(domain, method, path, body, extraHeaders = {},
     }).catch(() => { /* recording is best-effort */ });
   }
 
-  return { ok: res.ok, status: res.status, data };
+  return { ok: res.ok, status: res.status, data, count };
 }
