@@ -345,9 +345,13 @@ async function renderMyWork(page) {
   // list below so the Pipeline tab shows all items, not just the preview subset.
 
   const pageParam = page ? `&page=${page}&per_page=25` : '&limit=100';
-  const [qRes, cRes] = await Promise.all([
+  const [qRes, cRes, fRes] = await Promise.all([
     opsApi(`/api/queue?view=my_work${pageParam}`),
-    opsApi('/api/connectors?action=list')
+    opsApi('/api/connectors?action=list'),
+    // True flagged-email total for the empty-state hint — same source the Today
+    // "Flagged Emails" stat uses (data.total = accurate inbox count, not the
+    // per-page subset the server now excludes via item_type=neq.inbox). QA4.
+    opsApi('/api/sync?action=flagged_emails&limit=1')
   ]);
 
   if (!qRes.ok) {
@@ -369,6 +373,10 @@ async function renderMyWork(page) {
     item.source_type !== 'flagged_email' && item.item_type !== 'inbox'
   );
   window._opsMyWorkInboxDropped = inboxDropped;
+  // True flagged/inbox total (≈3,004) — the server now excludes inbox rows via
+  // item_type=neq.inbox so inboxDropped is ~0 per page; the honest hint count
+  // comes from the flagged_emails endpoint's data.total. QA4.
+  window._opsMyWorkFlaggedTotal = (fRes && fRes.ok && fRes.data && fRes.data.total) || 0;
   // Deduplicate remaining items by title + source_type + date composite key
   {
     const seen = new Set();
@@ -472,12 +480,15 @@ function renderMyWorkList(el, connectors) {
         );
       }
     } else {
-      // QA-09: surface the dropped inbox-triage count so the empty state
+      // QA-09 / QA4: surface the TRUE flagged/inbox total so the empty state
       // doesn't look like data is missing. "Open Activities: 0" on Home is
-      // the same definition — they don't include raw flagged emails.
-      const inboxDropped = window._opsMyWorkInboxDropped || 0;
-      const inboxHint = inboxDropped > 0
-        ? `${inboxDropped.toLocaleString()} flagged email${inboxDropped === 1 ? '' : 's'} sitting in Inbox — triage there to promote them into actions.`
+      // the same definition — they don't include raw flagged emails. The count
+      // comes from the flagged_emails endpoint (same source as the Today
+      // "Flagged Emails" stat, ≈3,004), not the per-page subset — the server
+      // now excludes inbox rows at the source so the dropped count is ~0.
+      const flaggedTotal = window._opsMyWorkFlaggedTotal || window._opsMyWorkInboxDropped || 0;
+      const inboxHint = flaggedTotal > 0
+        ? `${flaggedTotal.toLocaleString()} flagged email${flaggedTotal === 1 ? '' : 's'} waiting in Inbox — triage to promote them into actions.`
         : (connectors.length ? 'Sync your connectors or promote inbox items to populate your queue.' : 'Set up connectors to start receiving work items.');
       html += emptyStateHTML(
         '<path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/>',

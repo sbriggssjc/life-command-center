@@ -65,7 +65,12 @@ export default withErrorHandler(async function handler(req, res) {
 
   switch (view) {
     case 'my_work': {
-      let path = `v_my_work?workspace_id=eq.${workspaceId}&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
+      // Exclude inbox rows (email_om / flagged_email / sidebar_om / copilot* /
+      // new_contact_qualify) — they belong to the Inbox surface (v_inbox_triage),
+      // not My Work. item_type=neq.inbox covers every inbox source_type, so the
+      // count here is the true action-item total everywhere (matches the
+      // client-side QA-09 filter in ops.js renderMyWork). QA4.
+      let path = `v_my_work?workspace_id=eq.${workspaceId}&item_type=neq.inbox&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'sort_date.asc.nullslast' });
 
@@ -273,7 +278,10 @@ async function v2GetMyWork(req, user, workspaceId) {
   const { status, domain, priority } = req.query;
   const order = v2SortParam(req.query, 'due_date.asc.nullslast,created_at.desc');
 
-  let path = `v_my_work?workspace_id=eq.${workspaceId}&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
+  // Exclude inbox rows — see the v1 my_work case above. Keeps the v2
+  // pagination.total (the Today "View all N items" widget) honest: it now
+  // counts action items only, not the ~8.4k inbox rows. QA4.
+  let path = `v_my_work?workspace_id=eq.${workspaceId}&item_type=neq.inbox&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
 
   if (status) {
     if (status === 'overdue') {
