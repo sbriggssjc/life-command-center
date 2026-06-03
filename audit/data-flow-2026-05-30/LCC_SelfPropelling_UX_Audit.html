@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Self-Propelling UX Audit — 2026-06-03</title>
+<style>
+  :root{
+    --nmblue:#003DA5; --sky:#62B5E5; --ink:#191919; --paper:#ffffff;
+    --s1:#f6f8fb; --s2:#eef2f8; --border:#d8e0ec; --muted:#5b6677;
+    --green:#1a9e57; --amber:#c9821a; --red:#c0392b; --purple:#6c4bd1;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',Arial,sans-serif;color:var(--ink);background:var(--paper);line-height:1.5}
+  header{background:var(--nmblue);color:#fff;padding:28px 40px}
+  header h1{margin:0 0 4px;font-size:24px;font-weight:800;letter-spacing:.2px}
+  header .sub{opacity:.85;font-size:13px}
+  main{max-width:1060px;margin:0 auto;padding:32px 40px 80px}
+  h2{font-size:19px;margin:38px 0 6px;color:var(--nmblue);border-bottom:2px solid var(--s2);padding-bottom:6px}
+  h3{font-size:15px;margin:22px 0 6px}
+  p{margin:8px 0}
+  .lead{font-size:15px;color:var(--ink);background:var(--s1);border-left:4px solid var(--sky);padding:14px 18px;border-radius:0 8px 8px 0;margin:18px 0}
+  .pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:20px 0}
+  .pillar{border:1px solid var(--border);border-radius:12px;padding:18px;background:var(--paper)}
+  .pillar .tag{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--nmblue)}
+  .pillar h4{margin:6px 0 8px;font-size:16px}
+  .pillar .q{font-style:italic;color:var(--muted);font-size:13px;margin-bottom:8px}
+  .score{display:inline-block;font-weight:800;font-size:12px;padding:2px 9px;border-radius:999px;color:#fff}
+  .sc-red{background:var(--red)} .sc-amber{background:var(--amber)} .sc-green{background:var(--green)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{background:var(--s2);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  td code{background:var(--s2);padding:1px 5px;border-radius:4px;font-size:12px}
+  .gap{font-weight:700}
+  .moves{counter-reset:m}
+  .move{border:1px solid var(--border);border-left:5px solid var(--nmblue);border-radius:10px;padding:16px 18px;margin:14px 0;background:var(--paper)}
+  .move h4{margin:0 0 4px;font-size:15.5px}
+  .move .meta{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .move .meta b{color:var(--ink)}
+  .badge{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:5px;color:#fff;margin-right:6px}
+  .b-orient{background:var(--purple)} .b-direct{background:var(--sky);color:var(--ink)} .b-moment{background:var(--green)} .b-sub{background:var(--muted)}
+  .rec{background:#eef7f0;border:1px solid #bfe4cb;border-radius:8px;padding:12px 16px;margin:8px 0;font-size:13.5px}
+  ul{margin:6px 0 6px 0;padding-left:20px}
+  li{margin:3px 0}
+  .foot{margin-top:40px;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Life Command Center — Self-Propelling UX Audit</h1>
+  <div class="sub">Holistic re-audit · organizational layout + interaction · 2026-06-03</div>
+</header>
+<main>
+
+  <div class="lead">
+    <b>The north star:</b> the flow of data and prospecting should follow the way work actually moves, so the user always knows
+    <i>where they are</i>, <i>what to do next</i>, and every interaction <i>advances the ball forward</i> for that property or prospect —
+    the app should feel like it is self-propelling the work, always surfacing the next best action.
+  </div>
+
+  <p>That north star decomposes into three properties the app must have. This audit grades each, then ranks the moves that close the gaps.
+  The BD spine itself is now continuous (prior work); what remains is making the <i>whole app</i> behave the way the spine does.</p>
+
+  <div class="pillars">
+    <div class="pillar">
+      <div class="tag">Property A</div>
+      <h4>Orientation</h4>
+      <div class="q">"I know where I am and where to find what."</div>
+      <div><span class="score sc-amber">PARTIAL</span></div>
+      <p style="font-size:13px;margin-top:8px">Bottom nav covers the daily path, ops pages are clean — but the new front door is buried, and there are two ways to reach the same domain view that behave differently.</p>
+    </div>
+    <div class="pillar">
+      <div class="tag">Property B</div>
+      <h4>Direction</h4>
+      <div class="q">"I know the one thing to do next here."</div>
+      <div><span class="score sc-red">WEAK</span></div>
+      <p style="font-size:13px;margin-top:8px">No consistent next-best-action pattern. Queues don't highlight the top item. Property detail makes you hunt across tabs for the next step.</p>
+    </div>
+    <div class="pillar">
+      <div class="tag">Property C</div>
+      <h4>Momentum</h4>
+      <div class="q">"Acting moves me to the next thing."</div>
+      <div><span class="score sc-red">WEAK</span></div>
+      <p style="font-size:13px;margin-top:8px">Completing an item parks you. No auto-advance, no closure feedback, and reference surfaces (Contacts/Entities) offer no forward action at all.</p>
+    </div>
+  </div>
+
+  <h2>Property A — Orientation</h2>
+  <table>
+    <tr><th>Finding</th><th>Evidence</th><th>Hurts</th></tr>
+    <tr><td class="gap">Priority Queue (the BD front door) is buried in the "More" drawer</td><td>index.html drawer · only Today→link reaches it</td><td>The single "always work the top" surface isn't a primary destination</td></tr>
+    <tr><td class="gap">Domain duplication: bottom-nav Dialysis/Gov vs drawer "Business" behave differently</td><td><code>app.js</code> nav handler vs <code>navToFromMore('pageBiz')</code></td><td>Two doors to the same room; the drawer one doesn't lock the domain</td></tr>
+    <tr><td>Inbox vs Messages — both email, distinction not obvious from label</td><td>index.html nav (Inbox) + drawer (Messages)</td><td>Mild "which one?" friction</td></tr>
+    <tr><td>Inconsistent page headers (ops pages titled, dia/gov tabs often untitled)</td><td><code>.ops-header h2</code> present in ops.js, absent in dialysis.js/gov tabs</td><td>Lose "you are here" when switching domains</td></tr>
+  </table>
+
+  <h2>Property B — Direction</h2>
+  <table>
+    <tr><th>Finding</th><th>Evidence</th><th>Hurts</th></tr>
+    <tr><td class="gap">No "work the top of the list" affordance — queues rank but don't visually elevate item #1</td><td>Priority Queue, Research, My Work renderers</td><td>User faces a flat list of 25–100 and has no "start here"</td></tr>
+    <tr><td class="gap">Property detail doesn't surface "the next step for THIS property" up top</td><td><code>_udRenderProspectingFeed</code> shows top action but research items buried; spread across tabs</td><td>User hunts tabs to find what this property needs next</td></tr>
+    <tr><td class="gap">Every surface invents its own "primary action" signal (8+ button styles)</td><td><code>.act-btn.primary</code>, <code>.prospect-cta-primary</code>, <code>.nba-viewall</code>, inline buttons…</td><td>The eye can't learn "that's the next action" once and reuse it</td></tr>
+    <tr><td>Research queue: 5 equal-weight buttons per row, no priority shown</td><td><code>ops.js</code> renderResearchPage</td><td>Primary action (Complete) lost among tool buttons</td></tr>
+  </table>
+
+  <h2>Property C — Momentum</h2>
+  <table>
+    <tr><th>Finding</th><th>Evidence</th><th>Hurts</th></tr>
+    <tr><td class="gap">No auto-advance / closure after acting — Review Console, My Work, Research, Priority Queue all park you</td><td>resolve/complete handlers re-render in place, no "next item"</td><td>Each action ends in a stop instead of a hand-off to the next</td></tr>
+    <tr><td class="gap">Reference surfaces are passive — Contacts/Entities open a detail with no forward action</td><td>contacts-ui.js detail = messaging only; entity detail = display only</td><td>You can look but not "do the next thing" — flow dead-ends</td></tr>
+    <tr><td>After resolving a property's owner/link, nothing says what's left for it</td><td>ladder + feed don't show a progress/next-step state</td><td>No sense of "ball moved, here's the next push"</td></tr>
+    <tr><td>Card/row vocabulary sprawl (6+ patterns for "a clickable record")</td><td><code>.nba-row</code>/<code>.act-item</code>/<code>.prospect-row</code>/<code>.msg-item</code>/inline</td><td>Similar things behave/look differently, eroding learned momentum</td></tr>
+  </table>
+
+  <h2>The target: one "Next Best Action" contract every surface honors</h2>
+  <p>The fix isn't 30 bespoke tweaks — it's one repeated pattern. Every work surface and every property/prospect should obey the same contract, so the behavior becomes predictable and the app teaches itself:</p>
+  <ul>
+    <li><b>Lead with ONE action.</b> The single highest-value next step is visually primary (one shared button style), above everything else.</li>
+    <li><b>Show the priority.</b> The top item is visually elevated — "work this first" is never ambiguous.</li>
+    <li><b>Advance on completion.</b> Acting decrements the remaining count and routes/points to the next item — never a dead stop.</li>
+    <li><b>Every record offers a forward move.</b> Even reference surfaces give at least one "do the next thing" (open property / start outreach / create task).</li>
+    <li><b>Per-entity progress.</b> Each property/prospect shows where it is in the spine and the next push, updating as you act.</li>
+  </ul>
+
+  <h2>Ranked moves</h2>
+  <p>Ranked by impact on the north star (self-propulsion), smallest-first within tiers. Badges map each move to the property it strengthens.</p>
+
+  <div class="moves">
+    <div class="move">
+      <h4><span class="badge b-direct">Direction</span><span class="badge b-moment">Momentum</span>1 · The universal Next-Best-Action banner + auto-advance on queues</h4>
+      <div class="meta"><b>Surfaces:</b> Priority Queue, Review Console, Research, My Work · <b>Effort:</b> M</div>
+      <p>Elevate item #1 on every queue ("work this first" styling), and on completion decrement a visible remaining counter and advance to / highlight the next item. This single pattern is the heart of "self-propelling." Build once, apply to all four queues.</p>
+    </div>
+    <div class="move">
+      <h4><span class="badge b-direct">Direction</span>2 · Property "Next step for this property" banner</h4>
+      <div class="meta"><b>Surface:</b> property detail (top, above tabs) · <b>Effort:</b> S–M</div>
+      <p>A single resolved banner at the top of every property that names the one next action for it (resolve owner → confirm link → create lead → add cadence) and shows remaining steps — pulling from the data the ladder/feed already compute, but surfaced where the eye lands first and updating as you act.</p>
+    </div>
+    <div class="move">
+      <h4><span class="badge b-orient">Orientation</span>3 · Promote Priority Queue to a primary destination</h4>
+      <div class="meta"><b>Surface:</b> bottom nav / Today · <b>Effort:</b> S</div>
+      <p>The "always work the top" front door shouldn't live in the drawer. Make it a first-class entry (bottom-nav slot or the anchor of the Today landing) so the prioritized next action is one tap from anywhere.</p>
+    </div>
+    <div class="move">
+      <h4><span class="badge b-moment">Momentum</span>4 · Make reference surfaces active</h4>
+      <div class="meta"><b>Surfaces:</b> Contacts, Entities · <b>Effort:</b> M</div>
+      <p>Give every contact/entity at least one forward action — Open property, Start outreach / add to cadence, Create research task — so lookups become launch points instead of dead-ends.</p>
+    </div>
+    <div class="move">
+      <h4><span class="badge b-sub">Substrate</span><span class="badge b-direct">Direction</span>5 · Unify the action + card vocabulary</h4>
+      <div class="meta"><b>Surfaces:</b> global (styles.css + renderers) · <b>Effort:</b> M (incremental)</div>
+      <p>Collapse the 8+ primary-button variants into one <code>.btn-primary</code> and the 6+ row patterns into one <code>.card-row</code> with modifiers. This is what makes "the next action" recognizable everywhere — the substrate that lets moves 1–4 read consistently. Roll in incrementally as each surface is touched.</p>
+    </div>
+    <div class="move">
+      <h4><span class="badge b-orient">Orientation</span>6 · Resolve the IA confusions</h4>
+      <div class="meta"><b>Surfaces:</b> nav (Business/Dia/Gov, Inbox/Messages) · <b>Effort:</b> S</div>
+      <p>Make the drawer "Business" entry honor the domain (or retire it in favor of the Dia/Gov shortcuts), and disambiguate Inbox (triage) vs Messages (archive) by label. Removes the "two doors, different behavior" friction.</p>
+    </div>
+  </div>
+
+  <div class="rec">
+    <b>Recommended first move:</b> #1 (the Next-Best-Action banner + auto-advance). It delivers the most of the north star — "always prioritizing the next best action" and "self-propelling forward" — and once built, the pattern is reused by moves 2–4. Move 5 (the unified vocabulary) rides along incrementally as each surface is touched, so the app converges on coherence without a big-bang refactor.
+  </div>
+
+  <div class="foot">
+    Sources: three code/IA traces of the live LCC frontend (navigation &amp; IA; per-surface next-action; interaction &amp; visual consistency), 2026-06-03.
+    Grades are relative to the self-propelling north star, not absolute quality — the app is well-built; the gap is in flow continuity across surfaces.
+  </div>
+
+</main>
+</body>
+</html>
