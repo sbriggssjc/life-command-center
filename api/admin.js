@@ -21,7 +21,7 @@
 //   /api/merge-log-reconcile → /api/admin?_route=merge-log-reconcile  (Round 76ee Phase 2)
 // ============================================================================
 
-import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
+import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
@@ -1693,6 +1693,17 @@ async function handleConfig(req, res) {
 
 async function handleDiag(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+
+  // Auth-readiness probe — PUBLIC (no auth), read-only, no behavior change.
+  // Reports whether THIS request would survive flipping LCC_ENV=production
+  // ({ has_jwt, has_api_key, would_pass_in_production }). Reachable regardless
+  // of enforcement state so it can never itself contribute to a lockout — call
+  // it while still in DEV MODE to confirm the frontend is already sending
+  // X-LCC-Key before committing to the enforced flip:  /api/diag?kind=auth-ready
+  if (req.query.kind === 'auth-ready') {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json(authReadiness(req));
+  }
 
   const user = await authenticate(req, res);
   if (!user) return;

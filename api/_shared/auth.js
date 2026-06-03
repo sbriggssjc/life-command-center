@@ -30,6 +30,44 @@ const LCC_ENV          = process.env.LCC_ENV || 'development'; // 'production' |
 export const ROLES = ['owner', 'manager', 'operator', 'viewer'];
 const ROLE_LEVELS = { owner: 40, manager: 30, operator: 20, viewer: 10 };
 
+// ---- Lockout-prevention misconfig guard (Phase 6b) ----
+// When enforcement is ON (production/staging) the no-credential dev fallback in
+// authenticate() is disabled and every request must present a valid X-LCC-Key
+// or Supabase JWT. If NEITHER credential source is configured —
+//   * LCC_API_KEY empty  → the X-LCC-Key path can never validate, AND
+//   * OPS_SUPABASE_URL absent → verifySupabaseJwt() short-circuits to null, so
+//     the JWT path can never validate either
+// then EVERY request 401s with nothing it could possibly present. That is a
+// total sign-in lockout (same blast radius as the 2026-05 disk-full outage).
+// Surface it loudly at cold start instead of silently enforcing into a wall.
+export function detectAuthMisconfig(env = process.env) {
+  const lccEnv = env.LCC_ENV || 'development';
+  const enforcing = lccEnv === 'production' || lccEnv === 'staging';
+  const hasApiKey = !!env.LCC_API_KEY;
+  const hasJwtVerification = !!env.OPS_SUPABASE_URL;
+  return {
+    lccEnv,
+    enforcing,
+    hasApiKey,
+    hasJwtVerification,
+    // No credential source the frontend or an integration could ever satisfy.
+    misconfigured: enforcing && !hasApiKey && !hasJwtVerification,
+  };
+}
+
+// One-time loud warning at module load (cold start). Does NOT change behavior —
+// auth-config stays reachable so the frontend can always bootstrap its key.
+(function warnIfAuthMisconfigured() {
+  const m = detectAuthMisconfig();
+  if (m.misconfigured) {
+    console.error(
+      '[auth] MISCONFIG: enforcement on but no credential source — every request will 401. ' +
+      'Set LCC_API_KEY (X-LCC-Key path) or OPS_SUPABASE_URL (JWT path), ' +
+      'or unset LCC_ENV (back to development) to recover.'
+    );
+  }
+})();
+
 // ---- JWT verification via Supabase /auth/v1/user ----
 
 async function verifySupabaseJwt(jwt) {
@@ -104,6 +142,42 @@ function verifyApiKey(key) {
     mismatch |= key.charCodeAt(i) ^ LCC_API_KEY.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+// ---- Auth-readiness probe (read-only, no side effects) ----
+//
+// Reports, for the CURRENT request, whether it carries credentials that would
+// survive flipping LCC_ENV=production — WITHOUT changing behavior or calling out
+// to Supabase. Lets the operator confirm (while still in DEV MODE) that the
+// frontend interceptor is already attaching X-LCC-Key before committing to the
+// enforced flip.
+//
+// Note: the API-key path is validated synchronously (constant-time compare vs
+// LCC_API_KEY) so `api_key_valid` is authoritative. The JWT path only checks
+// header *presence* here — full verification requires an async Supabase round
+// trip — so `has_jwt` is a precondition signal, not a guarantee.
+export function authReadiness(req) {
+  const authHeader = (req.headers && req.headers['authorization']) || '';
+  const apiKey = (req.headers && req.headers['x-lcc-key']) || '';
+  const hasJwt = authHeader.startsWith('Bearer ') && authHeader.slice(7).length > 0;
+  const hasApiKey = !!apiKey;
+  const apiKeyValid = hasApiKey && verifyApiKey(apiKey);
+  const isCopilotPath = !!(req.query && req.query._copilot_path);
+  const lccEnv = LCC_ENV;
+  const enforcing = lccEnv === 'production' || lccEnv === 'staging';
+
+  return {
+    lcc_env: lccEnv,
+    enforcing,
+    has_jwt: hasJwt,
+    has_api_key: hasApiKey,
+    api_key_valid: apiKeyValid,
+    api_key_configured: !!LCC_API_KEY,
+    is_copilot_path: isCopilotPath,
+    // Under production/staging enforcement, only a valid API key, a Bearer JWT,
+    // or a Copilot passthrough survives. The dev fallback is gone.
+    would_pass_in_production: apiKeyValid || hasJwt || isCopilotPath,
+  };
 }
 
 // ---- Look up first owner user from ops DB (transitional single-user mode) ----
