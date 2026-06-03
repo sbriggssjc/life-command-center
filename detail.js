@@ -5987,6 +5987,14 @@ function _udRenderNextStep() {
   const linkPending = !!(lk && lk.pending > 0 && !(lk.linked > 0));
   const linked = !!(lk && lk.linked > 0);
   const needsLead = !!(band && band.reason === 'open_bd_opportunity_needed') || !own.owner_entity_id;
+  // Is the owner already on a cadence? Either we just seeded one via create_lead
+  // (stashed in _udCache.cadence), or the priority band is one of the cadence-
+  // driven bands (P0 developer-overdue, P6 onboarding-step-due, P7 steady-state)
+  // which only exist when a cadence row is due. (Nit 2)
+  const cad = _udCache.cadence || null;
+  const bandIsCadence = !!(band && ['P0', 'P6', 'P7'].indexOf(band.priority_band) !== -1);
+  const onCadence = !!(cad && cad.seeded) || bandIsCadence;
+  const cadenceNextTouch = (cad && cad.next_touch_due) || (band && band.next_touch_due) || null;
   // First unmet step in the spine = the single next action.
   let step;
   if (!recordedOwner) {
@@ -6001,7 +6009,13 @@ function _udRenderNextStep() {
   } else if (needsLead) {
     step = { label: 'Create the lead', sub: 'Owner resolved' + (linked ? ' & CRM-linked' : '') + '. Open a BD opportunity.', cta: 'Create lead',
       onclick: '_udBtnGuard(this,_udCreateLeadFromProperty)' };
+  } else if (onCadence) {
+    // Terminal state: cadence already seeded (auto-seeded on BD-opp creation).
+    // No redundant action — just show the next touch.
+    step = { label: 'On cadence ✓', sub: cadenceNextTouch ? ('Next touch ' + _fmtDate(cadenceNextTouch)) : 'Owner is on a touch cadence.',
+      cta: null, onclick: null };
   } else {
+    // Recovery path: lead exists but no cadence yet (entity without one).
     step = { label: 'Advance the outreach', sub: 'Lead is live. Put this owner on a touch cadence.', cta: 'Add to cadence',
       onclick: '_udBtnGuard(this,_udAddToCadence)' };
   }
@@ -6009,7 +6023,7 @@ function _udRenderNextStep() {
   const stOwner = trueResolved ? 'done' : (recordedOwner ? 'next' : 'todo');
   const stLink = linked ? 'done' : (linkPending ? 'next' : (lk ? 'todo' : 'na'));
   const stLead = (own.owner_entity_id && !needsLead) ? 'done' : 'todo';
-  const trail = [['Owner', stOwner], ['Link', stLink], ['Lead', stLead], ['Cadence', 'todo']];
+  const trail = [['Owner', stOwner], ['Link', stLink], ['Lead', stLead], ['Cadence', onCadence ? 'done' : 'todo']];
   let h = '<div class="dns-row">';
   h += '<span class="dns-flag">\u25B6 Next step</span>';
   h += '<div class="dns-text"><div class="dns-label">' + esc(step.label) + '</div><div class="dns-sub">' + esc(step.sub) + '</div></div>';
@@ -6107,6 +6121,14 @@ async function _udResolveEntityViaCreateLead() {
   if (resp && resp.ok && resp.entity_id) {
     _udCache.ownership = _udCache.ownership || {};
     _udCache.ownership.owner_entity_id = resp.entity_id;
+    // The BD opp auto-seeds an onboarding cadence; stash that so the next-step
+    // banner shows "On cadence ✓" instead of offering "Add to cadence" again
+    // (Nit 2). Clear the cached priority band — it was P0.5 (needs a lead) and
+    // is now stale; leaving it would re-trigger the "Create the lead" step.
+    if (resp.cadence_seeded) {
+      _udCache.cadence = { seeded: true, next_touch_due: resp.cadence_next_touch_due || null };
+      _udCache.priorityBand = null;
+    }
   }
   return resp || { ok: false, error: 'no response' };
 }

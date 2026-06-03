@@ -390,10 +390,16 @@ async function handlePriorityBand(req, res) {
     path = 'v_priority_queue_enriched?select=' + selectCols
          + '&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1';
   } else {
-    // source_domain on the view uses the long form ('dialysis'/'government').
-    const srcDomain = domain === 'gov' ? 'government' : domain === 'dia' ? 'dialysis' : domain;
+    // source_domain on the view is canonical short-form (dia/gov) as of E2E#5
+    // (2026-06-03). Accept the legacy long form too during the transition so a
+    // not-yet-migrated row still matches. (This was the third dia/gov alias bug:
+    // the old eq.<long-form> filter silently missed every short-form row — e.g.
+    // P5 dia 26502 / Palestra Properties returned no band.)
+    const srcForms = domain === 'gov' ? '(gov,government)'
+                   : domain === 'dia' ? '(dia,dialysis)'
+                   : '(' + domain + ')';
     path = 'v_priority_queue_enriched?select=' + selectCols
-         + '&source_domain=eq.' + pgFilterVal(srcDomain)
+         + '&source_domain=in.' + srcForms
          + '&source_property_id=eq.' + pgFilterVal(propertyId)
          + '&limit=1';
   }
