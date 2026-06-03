@@ -201,64 +201,156 @@ async function handleReviewCounts(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
 
-  // Helper: count rows in a view on a given db. Returns number or null.
-  const opsCount = async (path) => {
-    try { const r = await opsQuery('GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', undefined, { countMode: 'exact' }); return r.ok ? (r.count || 0) : null; }
-    catch (_e) { return null; }
+  // --------------------------------------------------------------------------
+  // Performance (Round 76qa.13, 2026-06-03). These are HEADLINE approximations
+  // ("~13k to review"), not exact band chips, so the count strategy differs
+  // from QA#3/QA#4 (which need exact small counts and must stay count=exact):
+  //   * Ops-local lanes (v_field_provenance_actionable ~3.6s, v_stale_identities,
+  //     v_unlinked_entities) are read from a pg_cron-refreshed cache table
+  //     (lcc_review_lane_counts). count=exact on the provenance view dominated
+  //     the endpoint, and count=estimated is unusable there (planner estimates
+  //     765 rows vs 13k actual). See the cache migration.
+  //   * Big domain tables with accurate planner stats (gov ownership_research_queue
+  //     ~738ms, dia v_next_best_research ~192ms) use count=estimated — a sub-ms
+  //     EXPLAIN estimate instead of a full scan.
+  //   * Small/cheap domain lanes keep count=exact (precise number, ~ms cost).
+  // Every lane is wrapped in a per-lane timeout so one slow/hung source resolves
+  // to null (+ a status marker) instead of blocking the whole batch.
+  // --------------------------------------------------------------------------
+
+  // Per-lane timeout. The internal fetch timeouts (8s ops / 30s domain) are too
+  // coarse to keep this endpoint under its sub-1s budget. Resolves to
+  // { value, status } where status is 'ok' | 'timeout' | 'error'.
+  const LANE_TIMEOUT_MS = 3500;
+  const withLaneTimeout = (p) => Promise.race([
+    Promise.resolve(p).then(
+      (value) => ({ value, status: 'ok' }),
+      ()      => ({ value: null, status: 'error' }),
+    ),
+    new Promise((resolve) =>
+      setTimeout(() => resolve({ value: null, status: 'timeout' }), LANE_TIMEOUT_MS)),
+  ]);
+
+  // Live count of a domain source. countMode 'exact' (default) for small/cheap
+  // lanes; 'estimated' for big tables with healthy stats.
+  // NOTE: the Prefer header MUST be domainQuery's 5th (extraHeaders) arg — the
+  // previous form passed it as the 4th (body) arg, which GET silently drops, so
+  // no count header was ever sent and every domain lane resolved to 0.
+  const domCount = async (dom, path, countMode = 'exact') => {
+    try {
+      const r = await domainQuery(dom, 'GET',
+        path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1',
+        undefined, { 'Prefer': `count=${countMode}` });
+      return r.ok && typeof r.count === 'number' ? r.count : null;
+    } catch (_e) { return null; }
   };
-  const domCount = async (dom, path) => {
-    try { const r = await domainQuery(dom, 'GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', { 'Prefer': 'count=exact' }); return r.ok ? (r.count || 0) : null; }
-    catch (_e) { return null; }
+  const opsCount = async (path, countMode = 'exact') => {
+    try {
+      const r = await opsQuery('GET',
+        path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1',
+        undefined, { countMode });
+      return r.ok && typeof r.count === 'number' ? r.count : null;
+    } catch (_e) { return null; }
   };
 
-  // Fire all lane sub-counts in parallel. Each is wrapped so one failure
-  // doesn't sink the batch.
+  // Read the cron-refreshed ops-local cache (sub-ms). Stale after 4 missed
+  // 5-minute refreshes.
+  const CACHE_STALE_MS = 20 * 60 * 1000;
+  const opsCache = {};
+  let opsCacheAt = null;
+  try {
+    const c = await withLaneTimeout(opsQuery('GET',
+      'lcc_review_lane_counts?select=lane_key,lane_count,computed_at',
+      undefined, { countMode: 'none' }));
+    if (c.status === 'ok' && c.value && c.value.ok && Array.isArray(c.value.data)) {
+      for (const row of c.value.data) {
+        opsCache[row.lane_key] = Number(row.lane_count);
+        if (!opsCacheAt || row.computed_at > opsCacheAt) opsCacheAt = row.computed_at;
+      }
+    }
+  } catch (_e) { /* fall through to live reads below */ }
+  const opsCacheStale = opsCacheAt
+    ? (Date.now() - new Date(opsCacheAt).getTime() > CACHE_STALE_MS) : true;
+
+  // An ops lane: prefer the cache; fall back to a live read (cold deploy before
+  // the first cron tick) so a lane is never silently zero.
+  const opsLane = (key, livePath) => {
+    if (typeof opsCache[key] === 'number') {
+      return Promise.resolve({ value: opsCache[key], status: opsCacheStale ? 'stale' : 'ok' });
+    }
+    return withLaneTimeout(opsCount(livePath));
+  };
+
+  // Fire all lane sub-counts in parallel; each resolves to { value, status }.
   const [
     provConflicts, staleIdentities, unlinkedEntities,
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
     govDupAddr, govPending, govSosLinks,
   ] = await Promise.all([
-    opsCount('v_field_provenance_actionable'),
-    opsCount('v_stale_identities'),
-    opsCount('v_unlinked_entities'),
-    domCount('dia', 'v_next_best_research'),
-    domCount('gov', 'ownership_research_queue'),
-    domCount('dia', 'llc_research_queue?status=eq.queued'),
-    domCount('gov', 'llc_research_queue?status=eq.queued'),
-    domCount('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
-    domCount('gov', 'pending_updates?status=eq.pending'),
-    domCount('gov', 'v_recorded_owner_link_review'),
+    opsLane('data_conflicts',    'v_field_provenance_actionable'),
+    opsLane('stale_identities',  'v_stale_identities'),
+    opsLane('unlinked_entities', 'v_unlinked_entities'),
+    withLaneTimeout(domCount('dia', 'v_next_best_research', 'estimated')),
+    withLaneTimeout(domCount('gov', 'ownership_research_queue', 'estimated')),
+    withLaneTimeout(domCount('dia', 'llc_research_queue?status=eq.queued')),
+    withLaneTimeout(domCount('gov', 'llc_research_queue?status=eq.queued')),
+    withLaneTimeout(domCount('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address')),
+    withLaneTimeout(domCount('gov', 'pending_updates?status=eq.pending')),
+    withLaneTimeout(domCount('gov', 'v_recorded_owner_link_review')),
   ]);
 
-  const sum = (...xs) => { const v = xs.filter(x => typeof x === 'number'); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
+  const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
+  const sum = (...rs) => {
+    const v = rs.map(val).filter((x) => typeof x === 'number');
+    return v.length ? v.reduce((a, b) => a + b, 0) : null;
+  };
+  // Worst status across a lane's contributing sources: timeout/error -> partial,
+  // a stale cache hit -> stale, otherwise ok.
+  const laneStatus = (...rs) => {
+    if (rs.some((r) => r && (r.status === 'timeout' || r.status === 'error'))) return 'partial';
+    if (rs.some((r) => r && r.status === 'stale')) return 'stale';
+    return 'ok';
+  };
 
   // Lanes mirror the audit's work-type spine. label/icon are UI hints; count
   // is the headline; href is the existing surface to deep-link into until each
-  // lane gets its own dedicated worker view.
+  // lane gets its own dedicated worker view. count_mode tells the UI whether a
+  // figure is exact, an estimate, or a cached (possibly stale) value.
   const lanes = [
     { key: 'ownership_research', label: 'Ownership & LLC research',
       count: sum(diaResearch, govOwnershipQueue, diaLlc, govLlc),
-      parts: { dia_next_best: diaResearch, gov_ownership_queue: govOwnershipQueue, dia_llc_queued: diaLlc, gov_llc_queued: govLlc },
+      parts: { dia_next_best: val(diaResearch), gov_ownership_queue: val(govOwnershipQueue), dia_llc_queued: val(diaLlc), gov_llc_queued: val(govLlc) },
+      count_mode: 'estimated', status: laneStatus(diaResearch, govOwnershipQueue, diaLlc, govLlc),
       href: 'pageResearch', tone: 'red' },
     { key: 'data_conflicts', label: 'Data conflicts & provenance',
-      count: sum(provConflicts), parts: { actionable: provConflicts },
+      count: sum(provConflicts), parts: { actionable: val(provConflicts) },
+      count_mode: 'cached', status: laneStatus(provConflicts),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'merges_dupes', label: 'Property merges & duplicates',
-      count: sum(govDupAddr), parts: { gov_dup_address: govDupAddr },
+      count: sum(govDupAddr), parts: { gov_dup_address: val(govDupAddr) },
+      count_mode: 'exact', status: laneStatus(govDupAddr),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'pending_updates', label: 'Pending updates (Gov)',
-      count: sum(govPending), parts: { pending: govPending },
+      count: sum(govPending), parts: { pending: val(govPending) },
+      count_mode: 'exact', status: laneStatus(govPending),
       href: 'pageResearch', tone: '' },
     { key: 'intake_identity', label: 'Intake & identity',
       count: sum(staleIdentities, unlinkedEntities),
-      parts: { stale_identities: staleIdentities, unlinked_entities: unlinkedEntities },
+      parts: { stale_identities: val(staleIdentities), unlinked_entities: val(unlinkedEntities) },
+      count_mode: 'cached', status: laneStatus(staleIdentities, unlinkedEntities),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'sos_owner_links', label: 'Owner-contact links to confirm',
-      count: sum(govSosLinks), parts: { fl_sos_weak_links: govSosLinks },
+      count: sum(govSosLinks), parts: { fl_sos_weak_links: val(govSosLinks) },
+      count_mode: 'exact', status: laneStatus(govSosLinks),
       href: 'pageDataQuality', tone: '' },
   ];
 
-  return res.status(200).json({ generated_at: new Date().toISOString(), lanes });
+  return res.status(200).json({
+    generated_at: new Date().toISOString(),
+    ops_cache_at: opsCacheAt,
+    degraded: lanes.some((l) => l.status === 'partial'),
+    lanes,
+  });
 }
 
 // ============================================================================
