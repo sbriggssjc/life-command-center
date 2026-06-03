@@ -1320,9 +1320,10 @@ async function renderPriorityQueuePage(band) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var perf = opsPerf('render:priority_queue');
   var qs = '/api/priority-queue?limit=150' + (band ? '&band=' + encodeURIComponent(band) : '');
   var res = await opsApi(qs);
-  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load the priority queue.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load the priority queue.<br><small>' + esc(res.error || '') + '</small></div>'; perf.end(); return; }
   var data = res.data || {};
   var items = Array.isArray(data.items) ? data.items : [];
   var counts = Array.isArray(data.counts) ? data.counts : [];
@@ -1337,7 +1338,7 @@ async function renderPriorityQueuePage(band) {
       + '<span class="pq-chip-dot" style="background:' + _pqBandColor(c.band) + '"></span>' + esc(c.band) + ' <b>' + c.n + '</b></button>';
   });
   html += '</div>';
-  if (!items.length) { html += '<div class="ops-empty">Nothing in this band. \u2713</div>'; el.innerHTML = html; return; }
+  if (!items.length) { html += '<div class="ops-empty">Nothing in this band. \u2713</div>'; el.innerHTML = html; perf.end(); return; }
   items.forEach(function (it, _ix) {
     var domShort = it.source_domain === 'government' ? 'gov' : it.source_domain === 'dialysis' ? 'dia' : (it.source_domain || '');
     var hasProp = it.source_property_id != null && domShort;
@@ -1373,6 +1374,7 @@ async function renderPriorityQueuePage(band) {
       + '</div></div>';
   });
   el.innerHTML = html;
+  perf.end();
 }
 window.renderPriorityQueuePage = renderPriorityQueuePage;
 

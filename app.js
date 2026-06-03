@@ -6310,7 +6310,10 @@ function renderHomeStats() {
   if (elAct) {
     if (canonicalCounts) {
       let actCount = canonicalCounts.open_actions || canonicalCounts.my_actions || 0;
-      // Detect stale materialized view: counts all zero but live data available
+      // Detect stale materialized view: counts all zero but live data available.
+      // liveTotal is the v2 my_work pagination total, which is now an EXACT
+      // count (countMode:'exact' post inbox-exclusion, api/queue.js v2GetMyWork),
+      // so promoting it here can no longer surface a bad planner estimate. QA4.
       if (!actCount) {
         const allZero = !canonicalCounts.my_actions && !canonicalCounts.open_actions &&
                         !canonicalCounts.completed_week && !canonicalCounts.overdue &&
@@ -6468,7 +6471,14 @@ function renderPriorityTasks() {
         </div>
       </div>`;
     }
-    const total = canonicalMyWork.pagination?.total || 0;
+    // Mirror the "Open Activities" stat in renderHomeStats (same expression)
+    // so the Today widget total and the stat are guaranteed to agree. Both
+    // prefer the exact MV-backed count; only fall back to pagination.total
+    // (now also exact post inbox-exclusion, so no longer a bad estimate) when
+    // canonicalCounts hasn't loaded yet. QA4 refinement.
+    const total = canonicalCounts
+      ? (canonicalCounts.open_actions || canonicalCounts.my_actions || 0)
+      : (canonicalMyWork.pagination?.total || 0);
     if (total > 5) {
       html += `<div class="widget-more" onclick="navTo('pageMyWork')">View all ${total} items</div>`;
     }
