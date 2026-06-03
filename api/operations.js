@@ -236,6 +236,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'save_ownership':     return await bridgeSaveOwnership(req, res, user, workspaceId);
       case 'create_lead':        return await bridgeCreateLead(req, res, user, workspaceId);
       case 'initiate_cadence':   return await bridgeInitiateCadence(req, res, user, workspaceId);
+      case 'open_opportunity':   return await bridgeOpenOpportunity(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
 
@@ -252,7 +253,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence'
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity'
         });
     }
   }
@@ -769,6 +770,40 @@ async function bridgeInitiateCadence(req, res, user, workspaceId) {
   });
 
   return res.status(201).json({ ok: true, cadence_id: cadence.id, next_touch_due: cadence.next_touch_due || null, is_new: !!state.is_new });
+}
+
+// ============================================================================
+// BRIDGE: Open a BD opportunity for an owner-level priority-queue row (QA#2)
+// ============================================================================
+//
+// The P0.5 band ("Needs a BD opportunity opened") is the top of the priority
+// queue but had no actionable control — every row showed an inert owner-level
+// badge. Each row carries entity_id; LCC Opps already has
+// public.lcc_open_prospect_opportunity() to spin up the bd_opportunity. This
+// makes the queue self-propelling: one click opens the opportunity and the row
+// advances.
+
+async function bridgeOpenOpportunity(req, res, user, workspaceId) {
+  const { entity_id, vertical } = req.body || {};
+
+  if (!entity_id) {
+    return res.status(400).json({ error: 'entity_id is required' });
+  }
+
+  const rpc = await opsQuery('POST', 'rpc/lcc_open_prospect_opportunity', {
+    p_entity_id: entity_id,
+    p_owner_user_id: user.id,
+    p_vertical: vertical || null,
+    p_source: 'priority_queue',
+  });
+  if (!rpc.ok) {
+    console.warn('[open_opportunity] rpc failed:', rpc.status, rpc.data);
+    return res.status(rpc.status || 500).json({ error: 'open_opportunity_failed', detail: rpc.data });
+  }
+
+  // The RPC returns the new (or existing) bd_opportunity uuid as a scalar.
+  const oppId = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+  return res.status(201).json({ ok: true, bd_opportunity_id: oppId || null });
 }
 
 // ============================================================================

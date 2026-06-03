@@ -1339,7 +1339,16 @@ async function renderPriorityQueuePage(band) {
     if (money) ctx.push(money + ' rent');
     if (it.is_cross_vertical) ctx.push('cross-vertical');
     var addr = hasProp ? (it.source_property_address || '') + (it.source_property_city ? ', ' + it.source_property_city : '') + (it.source_property_state ? ', ' + it.source_property_state : '') : '';
-    html += '<div class="' + _itemCls + '">' + _heroFlag
+    // data-q-id keys the self-propelling row-advance (entity_id is the natural
+    // PQ row key); reused by _opsAdvanceAfterComplete after open_opportunity.
+    var _qid = it.entity_id == null ? '' : String(it.entity_id);
+    // Owner-level rows have no property to open. If they carry an entity_id we
+    // can open a BD opportunity (QA#2); only fall back to the inert badge when
+    // there's genuinely no entity to act on.
+    var _ownerAction = (!hasProp && _qid)
+      ? '<button class="q-action primary" onclick="pqOpenOpportunity(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Open opportunity \u2192</button>'
+      : '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
+    html += '<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
       + '<div class="q-item-header">'
       + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
       + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
@@ -1349,12 +1358,37 @@ async function renderPriorityQueuePage(band) {
       + '<div class="q-actions">'
       + (hasProp
           ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(domShort) + '\', {property_id: ' + esc(String(it.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property \u2192</button>'
-          : '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>')
+          : _ownerAction)
       + '</div></div>';
   });
   el.innerHTML = html;
 }
 window.renderPriorityQueuePage = renderPriorityQueuePage;
+
+// QA#2 — open a BD opportunity for an owner-level priority-queue row, then
+// advance the row in place so the queue self-propels.
+async function pqOpenOpportunity(entityId, vertical, btn) {
+  if (!entityId) { showToast('No entity to open an opportunity for', 'error'); return; }
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+  try {
+    const res = await opsPost('/api/operations?action=open_opportunity', {
+      entity_id: entityId,
+      vertical: vertical || null,
+    });
+    if (res.ok && res.data && res.data.ok) {
+      showToast('Opportunity opened', 'success');
+      if (!_opsAdvanceAfterComplete(entityId)) renderPriorityQueuePage();
+    } else {
+      showToast(res.error || 'Could not open opportunity', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Open opportunity →'; }
+    }
+  } catch (err) {
+    showToast('Open opportunity error: ' + (err && err.message ? err.message : err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Open opportunity →'; }
+  }
+}
+window.pqOpenOpportunity = pqOpenOpportunity;
 
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');
