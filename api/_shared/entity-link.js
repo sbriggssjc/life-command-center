@@ -195,6 +195,49 @@ async function fetchEntityById(entityId, workspaceId) {
   return result.ok && result.data?.length ? result.data[0] : null;
 }
 
+// Synthetic placeholder name minted by upstream intake when a real owner name
+// wasn't known yet, e.g. "property 3fbb28bb-b50c-4b2e-8c4d-6e1280a3c987".
+const PLACEHOLDER_ENTITY_NAME_RE = /^property\s+[0-9a-f-]+$/i;
+
+export function isPlaceholderEntityName(name) {
+  return !!name && PLACEHOLDER_ENTITY_NAME_RE.test(String(name).trim());
+}
+
+// When an existing entity still carries the synthetic "property <uuid>"
+// placeholder name, adopt a real name so BD surfaces (priority queue, cadence
+// dashboard, opportunity cards) stop displaying a UUID. Conservative: only
+// rewrites a placeholder, and only when given a real (non-placeholder) name.
+// Returns the (possibly-updated) entity object. (E2E#6 follow-up, 2026-06-03)
+export async function refreshPlaceholderEntityName(entity, realName) {
+  if (!entity || !entity.id) return entity;
+  if (!isPlaceholderEntityName(entity.name)) return entity;
+  const clean = (realName == null) ? '' : String(realName).trim();
+  if (!clean || isPlaceholderEntityName(clean)) return entity;
+  const newCanonical = normalizeCanonicalName(clean) || entity.canonical_name || null;
+  const refreshed = await opsQuery('PATCH',
+    `entities?id=eq.${pgFilterVal(entity.id)}`,
+    { name: clean, canonical_name: newCanonical },
+    { 'Prefer': 'return=representation' }
+  );
+  if (refreshed.ok && Array.isArray(refreshed.data) && refreshed.data[0]) {
+    return refreshed.data[0];
+  }
+  // Soft-fall: reflect locally even if no representation came back.
+  return { ...entity, name: clean, canonical_name: newCanonical };
+}
+
+// Fetch-then-refresh variant for callers that only hold an entity id (e.g.
+// bridgeCreateLead when the property detail already resolved the asset entity
+// and passes entity_id directly, skipping ensureEntityLink).
+export async function refreshPlaceholderEntityNameById(entityId, workspaceId, realName) {
+  if (!entityId) return null;
+  const clean = (realName == null) ? '' : String(realName).trim();
+  if (!clean || isPlaceholderEntityName(clean)) return null;
+  const ent = await fetchEntityById(entityId, workspaceId);
+  if (!ent) return null;
+  return refreshPlaceholderEntityName(ent, clean);
+}
+
 export async function ensureEntityLink({
   workspaceId,
   userId,
@@ -266,6 +309,13 @@ export async function ensureEntityLink({
     }
     resolvedEntity = Array.isArray(created.data) ? created.data[0] : created.data;
     createdEntity = true;
+  }
+
+  // If we matched an EXISTING entity that still carries the synthetic
+  // "property <uuid>" placeholder name, adopt the real seed name so BD surfaces
+  // stop displaying a UUID. (E2E#6 follow-up, 2026-06-03)
+  if (!createdEntity && resolvedEntity && isPlaceholderEntityName(resolvedEntity.name)) {
+    resolvedEntity = await refreshPlaceholderEntityName(resolvedEntity, seedFields.name || candidateName);
   }
 
   if (externalId && sourceSystem && sourceType) {
