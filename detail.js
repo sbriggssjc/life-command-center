@@ -5846,7 +5846,8 @@ function _udOwnershipLadder(own, db) {
     // between enrichment and BD action.
     const _lk = _udCache.ownerLink;
     if (_lk && _lk.linked > 0) {
-      h += '<div style="margin-top:6px;font-size:11px;font-weight:600;color:var(--green)">\u2713 Linked to CRM contact' + (_lk.linked > 1 ? ' (' + _lk.linked + ')' : '') + '</div>';
+      h += '<div style="margin-top:6px;font-size:11px;font-weight:600;color:var(--green)">\u2713 Linked to CRM contact' + (_lk.linked > 1 ? ' (' + _lk.linked + ')' : '')
+        + (_lk.sf ? ' <a href="' + _SF_BASE + '/Account/' + esc(_lk.sf) + '/view" target="_blank" rel="noopener" style="color:#00a1e0;font-weight:600">view \u2192</a>' : '') + '</div>';
     } else if (_lk && _lk.pending > 0) {
       h += '<div style="margin-top:6px;font-size:11px;font-weight:600;color:var(--yellow);cursor:pointer" onclick="navTo(\'pageReviewConsole\');setTimeout(renderSosLinkWorklist,400)" title="Confirm in Review Console">\u29D6 ' + _lk.pending + ' contact link' + (_lk.pending > 1 ? 's' : '') + ' pending review \u2192</div>';
     }
@@ -5983,7 +5984,12 @@ function _udRenderProspectingFeed() {
     rows.push('<span class="prospect-band" style="background:' + bc.bg + '">' + esc(bc.label) + '</span>');
     rows.push('<div class="prospect-why"><b>Owner: ' + esc(band.owner_name || (_udCache.ownership && (_udCache.ownership.true_owner || _udCache.ownership.recorded_owner)) || '—') + '</b>'
       + '<div class="prospect-sub">' + why + (conf != null && !isNaN(conf) ? ' · role conf ' + Math.round(conf * 100) + '%' : '') + '</div></div>');
-    rows.push('<div class="prospect-actions"><button type="button" class="prospect-cta-primary" onclick="event.stopPropagation();_udBtnGuard(this,_udCreateLeadFromProperty)">Create lead</button>'
+    var _ol = _udCache && _udCache.ownerLink;
+    var _linkPending = _ol && (_ol.pending > 0) && !(_ol.linked > 0);
+    var _leadBtn = _linkPending
+      ? '<button type="button" class="prospect-cta" title="Confirm the owner\u2192contact link before creating a lead" onclick="event.stopPropagation();navTo(&quot;pageReviewConsole&quot;);setTimeout(renderSosLinkWorklist,400)">Confirm owner link first \u2192</button>'
+      : '<button type="button" class="prospect-cta-primary" onclick="event.stopPropagation();_udBtnGuard(this,_udCreateLeadFromProperty)">Create lead</button>';
+    rows.push('<div class="prospect-actions">' + _leadBtn
       + '<button type="button" class="prospect-cta" onclick="event.stopPropagation();_udBtnGuard(this,_udAddToCadence)">Add to cadence</button></div>');
     rows.push('</div>');
   }

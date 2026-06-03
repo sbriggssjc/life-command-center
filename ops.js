@@ -1205,8 +1205,9 @@ async function renderSosLinkWorklist() {
       + (it.contact_company ? ' \u00b7 ' + esc(it.contact_company) : '')
       + (it.registered_agent_name ? ' \u00b7 agent: ' + esc(it.registered_agent_name) : '')
       + (it.manager_name ? ' \u00b7 officer: ' + esc(it.manager_name) : '') + '</div>'
+      + (it.source_property_address ? '<div class="q-item-meta">Property: <b>' + esc(it.source_property_address) + '</b></div>' : '')
       + '<div class="q-actions">'
-      + '<button class="q-action primary" onclick="resolveOwnerLink(' + it.link_id + ', \'confirm\')">Confirm link</button>'
+      + '<button class="q-action primary" onclick="resolveOwnerLink(' + it.link_id + ', \'confirm\', ' + (it.source_property_id != null ? it.source_property_id : 'null') + ')">Confirm link</button>'
       + '<button class="q-action" onclick="resolveOwnerLink(' + it.link_id + ', \'reject\')">Reject</button>'
       + '</div></div>';
   });
@@ -1214,11 +1215,21 @@ async function renderSosLinkWorklist() {
 }
 window.renderSosLinkWorklist = renderSosLinkWorklist;
 
-async function resolveOwnerLink(linkId, decision) {
+async function resolveOwnerLink(linkId, decision, propId) {
   const res = await opsApi('/api/resolve-owner-link', { method: 'POST', body: JSON.stringify({ link_id: linkId, decision: decision }) });
   const row = document.getElementById('soslink-' + linkId);
   if (res.ok && res.data && res.data.ok) {
-    if (row) { row.style.opacity = '0.5'; row.querySelector('.q-actions').innerHTML = '<span class="q-badge">' + (decision === 'confirm' ? 'Confirmed \u2713' : 'Rejected') + '</span>'; }
+    // Carry-forward: after a confirm, the owner is now CRM-linked — offer a
+    // one-click hop to that property's Ownership & CRM tab to act on it
+    // (create lead / cadence) instead of stranding the user in the worklist.
+    const pid = (res.data && res.data.source_property_id != null) ? res.data.source_property_id : propId;
+    if (row) {
+      row.style.opacity = '0.5';
+      const fwd = (decision === 'confirm' && pid != null && typeof openUnifiedDetail === 'function')
+        ? '<button class="q-action primary" onclick="openUnifiedDetail(\'gov\', {property_id: ' + pid + '}, {}, \'Ownership &amp; CRM\')">Open property \u2192</button>'
+        : '';
+      row.querySelector('.q-actions').innerHTML = '<span class="q-badge">' + (decision === 'confirm' ? 'Confirmed \u2713' : 'Rejected') + '</span>' + fwd;
+    }
     if (typeof showToast === 'function') showToast(decision === 'confirm' ? 'Link confirmed' : 'Link rejected', 'success');
   } else {
     if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');

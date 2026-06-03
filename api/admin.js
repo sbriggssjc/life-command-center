@@ -3853,7 +3853,7 @@ async function handleResolveOwnerLink(req, res) {
   if (req.method === 'GET') {
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)));
     const r = await domainQuery('government', 'GET',
-      'v_recorded_owner_link_review?select=link_id,recorded_owner_name,owner_state,registered_agent_name,manager_name,match_signals,contact_name,contact_company,sf_account_id' +
+      'v_recorded_owner_link_review?select=link_id,recorded_owner_name,owner_state,registered_agent_name,manager_name,match_signals,contact_name,contact_company,sf_account_id,source_property_id,source_property_address' +
       '&order=created_at.asc&limit=' + limit);
     if (!r.ok) return res.status(502).json({ error: 'list_failed', detail: r.data });
     return res.status(200).json({ items: Array.isArray(r.data) ? r.data : [] });
@@ -3875,7 +3875,28 @@ async function handleResolveOwnerLink(req, res) {
       'recorded_owner_contact_links?link_id=eq.' + linkId,
       { link_status: newStatus, decided_by: actor, decided_at: new Date().toISOString() });
     if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
-    return res.status(200).json({ ok: true, link_id: linkId, link_status: newStatus, decided_by: actor });
+    // BD-flow confirm->act loop: hand back the SF account just linked and a
+    // representative property so the UI can refresh the badge and route the
+    // user forward. Best-effort — never fail the confirm on a lookup miss.
+    let sfAccountId = null, sourcePropertyId = null;
+    if (decision === 'confirm') {
+      try {
+        const lk = await domainQuery('government', 'GET',
+          'recorded_owner_contact_links?link_id=eq.' + linkId + '&select=sf_account_id,recorded_owner_id&limit=1');
+        const lkRow = (lk.ok && Array.isArray(lk.data)) ? lk.data[0] : null;
+        if (lkRow) {
+          sfAccountId = lkRow.sf_account_id || null;
+          if (lkRow.recorded_owner_id != null) {
+            const pr = await domainQuery('government', 'GET',
+              'properties?recorded_owner_id=eq.' + encodeURIComponent(lkRow.recorded_owner_id) + '&select=property_id&order=property_id.asc&limit=1');
+            const prRow = (pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null;
+            if (prRow) sourcePropertyId = prRow.property_id;
+          }
+        }
+      } catch (_e) { /* best-effort enrichment only */ }
+    }
+    return res.status(200).json({ ok: true, link_id: linkId, link_status: newStatus, decided_by: actor,
+      sf_account_id: sfAccountId, source_property_id: sourcePropertyId });
   } catch (err) {
     console.error('[resolve-owner-link]', err?.message || err);
     return res.status(500).json({ error: 'resolve_failed', message: err?.message });
