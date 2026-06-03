@@ -5802,6 +5802,18 @@ async function _udEnrichOwnershipSignals() {
         ? { kind: 'true', a: rec, b: tru } : null;
     }
   }
+  // Owner-contact link status (FL SOS engine). gov-side; keyed on recorded_owner_id.
+  if (db === 'gov' && own.recorded_owner_id && _udCache.ownerLink === undefined) {
+    try {
+      const res = await qFn('v_recorded_owner_link_status',
+        'recorded_owner_id,link_count,linked_count,pending_count,first_linked_sf_account_id', {
+          filter: 'recorded_owner_id=eq.' + encodeURIComponent(own.recorded_owner_id), limit: 1 });
+      const row = Array.isArray(res) ? res[0] : (res && res.data ? res.data[0] : null);
+      _udCache.ownerLink = row
+        ? { linked: Number(row.linked_count) || 0, pending: Number(row.pending_count) || 0, sf: row.first_linked_sf_account_id || null }
+        : null;
+    } catch (_e) { _udCache.ownerLink = null; }
+  }
   if (typeof _setUdCache === 'function') _setUdCache(_udCache);
 }
 
@@ -5828,6 +5840,16 @@ function _udOwnershipLadder(own, db) {
     if (filingState) llcBits.push('Filed: ' + esc(filingState));
     if (llcBits.length) h += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + llcBits.join(' · ') + '</div>';
     if (_sfAccId) h += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce →</a>';
+    // BD-flow signal (2026-05-31): surface the SOS owner-contact link status
+    // at the point of decision so the user knows if this owner is CRM-linked
+    // or has links waiting in the Review Console — the connective tissue
+    // between enrichment and BD action.
+    const _lk = _udCache.ownerLink;
+    if (_lk && _lk.linked > 0) {
+      h += '<div style="margin-top:6px;font-size:11px;font-weight:600;color:var(--green)">\u2713 Linked to CRM contact' + (_lk.linked > 1 ? ' (' + _lk.linked + ')' : '') + '</div>';
+    } else if (_lk && _lk.pending > 0) {
+      h += '<div style="margin-top:6px;font-size:11px;font-weight:600;color:var(--yellow);cursor:pointer" onclick="navTo(\'pageReviewConsole\');setTimeout(renderSosLinkWorklist,400)" title="Confirm in Review Console">\u29D6 ' + _lk.pending + ' contact link' + (_lk.pending > 1 ? 's' : '') + ' pending review \u2192</div>';
+    }
   } else {
     h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— not on file —</div>';
     h += '<div class="t-meta3">No recorded owner. Pull from county deed / CoStar / RCA.</div>';
