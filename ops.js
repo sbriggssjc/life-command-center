@@ -490,7 +490,11 @@ function renderMyWorkList(el, connectors) {
   } else if (!items.length) {
     html += '<div class="ops-empty">No items match this filter</div>';
   } else {
-    items.forEach(item => { html += queueItemHTML(item, 'my_work'); });
+    // Self-propelling contract: surface the most urgent item first and
+    // elevate it as 'do this first'. Completing it re-renders and re-elevates
+    // the next-most-urgent automatically (quickTransition reloads the page).
+    const _mwSorted = items.slice().sort(_myWorkUrgencyCmp);
+    _mwSorted.forEach(function (item, _ix) { html += queueItemHTML(item, 'my_work', { hero: _ix === 0 }); });
   }
 
   // Pagination controls (if using v2).
@@ -510,6 +514,14 @@ function renderMyWorkList(el, connectors) {
   el.innerHTML = html;
 }
 
+function _myWorkUrgencyCmp(a, b) {
+  var ao = isOverdue(a.due_date) ? 0 : 1, bo = isOverdue(b.due_date) ? 0 : 1;
+  if (ao !== bo) return ao - bo;
+  var pr = function (p) { return p === 'urgent' ? 0 : p === 'high' ? 1 : 2; };
+  var ap = pr(a.priority), bp = pr(b.priority);
+  if (ap !== bp) return ap - bp;
+  return String(a.due_date || '9999-12-31').localeCompare(String(b.due_date || '9999-12-31'));
+}
 function filterMyWork(items) {
   if (opsMyWorkFilter === 'all') return items;
   if (opsMyWorkFilter === 'overdue') return items.filter(i => isOverdue(i.due_date));
@@ -2140,11 +2152,18 @@ async function renderResearchPage(page = opsResearchPage) {
     : opsResearchFilter === 'active' ? opsResearchData.filter(r => ['queued', 'in_progress'].includes(r.status))
     : opsResearchData.filter(r => r.status === 'completed');
 
+  if (filtered.length) {
+    html += `<div class="rc-progress"><span>${filtered.length}</span> ${opsResearchFilter === 'completed' ? 'completed' : 'to work'}</div>`;
+  }
   if (!filtered.length) {
     html += '<div class="ops-empty">No research tasks match this filter</div>';
   } else {
-    filtered.forEach(item => {
-      html += `<div class="q-item">
+    filtered.forEach((item, _ix) => {
+      // Self-propelling contract: elevate the first actionable task. On
+      // Complete the page reloads and the next task re-elevates automatically.
+      const _isHero = _ix === 0 && item.status !== 'completed';
+      html += `<div class="q-item${_isHero ? ' pq-hero' : ''}">
+        ${_isHero ? '<div class="pq-hero-flag">\u25B6 Do this first</div>' : ''}
         <div class="q-item-header">
           <span class="q-item-title">${esc(item.title)}</span>
           <div class="q-item-badges">
@@ -3156,7 +3175,8 @@ function queueItemHTML(item, context, opts = {}) {
   const overdueCls = isOverdue(item.due_date) ? 'overdue' : '';
   const priCls = item.priority === 'urgent' ? 'urgent' : item.priority === 'high' ? 'high-pri' : '';
 
-  let html = `<div class="q-item ${overdueCls} ${priCls}">`;
+  let html = `<div class="q-item ${overdueCls} ${priCls}${opts.hero ? ' pq-hero' : ''}">`;
+  if (opts.hero) html += '<div class="pq-hero-flag">\u25B6 Do this first</div>';
   html += '<div class="q-item-header">';
   html += `<span class="q-item-title">${esc(item.title || 'Untitled')}</span>`;
   html += '<div class="q-item-badges">';
