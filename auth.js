@@ -386,6 +386,44 @@ const LCC_AUTH = (() => {
 (function() {
   const _originalFetch = window.fetch;
 
+  // QA#5 — transient 5xx retry: retry GET /api/ requests on 502/503/504 or a
+  // network throw (platform cold-start / concurrency transients on
+  // Railway/Vercel). Never retries non-GET so POST/PATCH are never doubled.
+  const RETRY_STATUSES = new Set([502, 503, 504]);
+  const RETRY_DELAYS = [250, 600]; // ms, ~jittered; up to 2 retries
+
+  function _resolveMethod(input, init) {
+    if (init && init.method) return String(init.method).toUpperCase();
+    if (input instanceof Request && input.method) return input.method.toUpperCase();
+    return 'GET'; // fetch default
+  }
+
+  // Dispatches through the original fetch with transient-5xx retry for GETs.
+  async function _dispatchWithRetry(input, init, isGetApi) {
+    if (!isGetApi) return _originalFetch.call(window, input, init);
+
+    let lastResp = null;
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+      try {
+        const resp = await _originalFetch.call(window, input, init);
+        if (!RETRY_STATUSES.has(resp.status) || attempt === RETRY_DELAYS.length) {
+          return resp;
+        }
+        lastResp = resp;
+      } catch (err) {
+        if (attempt === RETRY_DELAYS.length) throw err;
+      }
+      const base = RETRY_DELAYS[attempt];
+      const jitter = Math.floor(Math.random() * 100);
+      await new Promise((r) => setTimeout(r, base + jitter));
+    }
+    return lastResp; // retries exhausted — return last response seen
+  }
+
+  // QA#7 — coalesce in-flight identical GET /api/ requests so concurrent
+  // callers on page load share one network round-trip. Keyed by "METHOD url".
+  const _inflightGets = new Map();
+
   window.fetch = function(input, init) {
     // Determine the URL string
     const url = (input instanceof Request) ? input.url : String(input);
@@ -436,6 +474,26 @@ const LCC_AUTH = (() => {
       }
     }
 
-    return _originalFetch.call(window, input, init);
+    const method = _resolveMethod(input, init);
+    const isApi = url.startsWith('/api/') || url.startsWith(location.origin + '/api/');
+    const isGetApi = isApi && method === 'GET';
+
+    // Non-GET (or non-API) requests bypass coalescing entirely; GETs still
+    // get the retry wrapper via _dispatchWithRetry.
+    if (!isGetApi) {
+      return _dispatchWithRetry(input, init, false);
+    }
+
+    // Coalesce identical concurrent GETs. Each consumer gets its own clone of
+    // the shared Response so body streams aren't fought over.
+    const key = method + ' ' + url;
+    let shared = _inflightGets.get(key);
+    if (!shared) {
+      shared = _dispatchWithRetry(input, init, true).finally(() => {
+        _inflightGets.delete(key);
+      });
+      _inflightGets.set(key, shared);
+    }
+    return shared.then((resp) => resp.clone());
   };
 })();
