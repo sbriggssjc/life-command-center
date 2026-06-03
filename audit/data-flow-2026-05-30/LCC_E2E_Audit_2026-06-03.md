@@ -147,3 +147,58 @@ prompt, QA#8 enforcement decision, CI workflow decision.
 merge/deploy PRs #1020/#1021/#1023 (no file overlap between them — clean merges);
 then a final live confirmation pass. Standing decisions: QA#8 auth enforcement,
 CI workflow.
+
+
+## Addendum 4 — E2E#6 fixed (PR #1024, pending deploy + ordered migration)
+
+Final-sweep findings all addressed by Claude Code:
+- **(a) Targeting:** create-lead no longer anchors to the operator when
+  `true_owner_is_operator` — frontend sends `true_owner_name: null` + the flag;
+  `bridgeCreateLead` anchors entity/lead on the recorded owner (landlord). The
+  mis-anchored "Davita" artifact fully dispositioned (opp `closed_lost`, cadence
+  `dormant`, corrupt external_identity deleted, dia lead `void` + audit note —
+  voided rather than renamed so the fixed flow re-creates one clean lead).
+- **(b) Idempotence:** both `bridgeCreateLead` and `lcc_open_prospect_opportunity`
+  now reuse an existing OPEN prospect opp (`already_open: true`); RPC changed to
+  `RETURNS TABLE(opportunity_id, already_open)`.
+- **(c) Persisted banner state:** `lookup_asset` entity id captured into the
+  ownership cache on load; `handlePriorityBand` resolves open-opp + cadence state;
+  the banner renders "Lead is live" / "On cadence ✓" on fresh reopens.
+
+**⚠️ Deploy ordering:** code deploy FIRST, then apply LCC migration
+`20260603140000_…` (the RPC return-shape change breaks old code if applied
+early). Data-cleanup portions already applied live (idempotent).
+
+Post-deploy verification checklist: reopen dia 26502 → persisted banner state;
+dia create-lead anchors to landlord; double-click → one opportunity +
+`already_open`; only Rutherford & Strickland + Eagle River remain open.
+
+
+## Addendum 5 — E2E#6 deployed, migration applied (ordered), verified live
+
+Ordered sequence executed: code deploy → RPC migration applied to LCC Opps →
+live verification on Palestra (dia 26502):
+
+- **(a) Targeting ✓** — fresh create-lead anchors on the **landlord**:
+  `marketing_leads.lead_name = 'Palestra Properties'` (no Davita anywhere).
+- **(b) Idempotence ✓ (opportunities)** — deliberate double-click produced
+  exactly ONE open opportunity. (Known scope boundary observed: TWO lead rows —
+  the guard dedupes opportunities, not domain lead rows. Test duplicate voided
+  with audit note.)
+- **(c) Persistence ✓ (positive case)** — fresh reopen showed the persisted
+  state; `/api/priority-band` correctly returns `open_opportunity:false`,
+  `bd_opportunity_id:null` after the void.
+- Open opportunities now: Eagle River, Rutherford & Strickland, + the new
+  Palestra-anchored one. The voided Davita artifact stayed closed.
+
+### Three small residuals (one mini follow-up for the #1024 chat)
+1. **Banner negative case:** when the priority-band check says
+   `open_opportunity === false` (entity resolved, nothing open), the banner
+   still shows "Lead is live / Add to cadence" instead of re-offering
+   "Create the lead" — one condition in `_udRenderNextStep`'s `needsLead`.
+2. **Placeholder entity names:** ensureEntityLink matched an existing asset
+   entity named `property <uuid>`; it should refresh placeholder-pattern names
+   from the seeded owner name so BD surfaces read "Palestra Properties", not a UUID.
+3. **Lead-row dedupe:** create_lead should skip inserting a new domain lead row
+   when an open lead for the same property+source exists (mirror of the
+   opportunity guard).
