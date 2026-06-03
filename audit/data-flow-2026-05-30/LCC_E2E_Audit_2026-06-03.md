@@ -124,3 +124,26 @@ and banner cadence-awareness nits).
 
 Open items: E2E#4 intake-share mount (one-liner to the PR #1020 chat), E2E#5
 prompt, QA#8 enforcement decision, CI workflow decision.
+
+
+## Addendum 3 — E2E#5 + nits closed (PR #1023, verified live by Claude Code)
+
+- **Vertical canonicalization shipped at all three layers** — data migration
+  (`dialysis→dia`/`government→gov` across `bd_opportunities`, `touchpoint_cadence`,
+  `entities`, `lcc_entity_portfolio_facts`; `entities.domain='lcc'` correctly left
+  alone), writer CASE-maps (`lcc_open_prospect_opportunity`,
+  `lcc_seed_onboarding_cadence`), view-boundary re-normalization + orphan guard
+  (`entity_id IS NOT NULL AND vertical IS NOT NULL`), and a transition-tolerant
+  consumer filter in `handlePriorityBand` (`in.(dia,dialysis)`).
+- Live: `vertical` → only **dia 320 / gov 796**; zero long forms, zero NULLs;
+  the 6 orphan seed cadences soft-dispositioned to `phase='dormant'` + audit note
+  (re-seed naturally via the auto-seed trigger if ever worked); P5 dia 26502
+  (Palestra) now resolves its band.
+- Nits closed: queue-opened opportunities now `stage='identified'`; `create_lead`
+  returns `cadence_seeded`/`cadence_next_touch_due` and the next-step banner shows
+  **"On cadence ✓ — next touch <date>"** instead of a redundant Add-to-cadence.
+
+**Remaining open:** E2E#4 intake-share mount (one-liner to the PR #1020 chat);
+merge/deploy PRs #1020/#1021/#1023 (no file overlap between them — clean merges);
+then a final live confirmation pass. Standing decisions: QA#8 auth enforcement,
+CI workflow.
