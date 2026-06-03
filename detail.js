@@ -6027,12 +6027,15 @@ async function _udApiPost(path, body) {
   return data;
 }
 
-async function _udCreateLeadFromProperty() {
-  if (!_udCache) return;
+// Resolve/create the canonical owner entity by creating the lead, and stash
+// the returned entity_id back into the ownership cache so cadence (and any
+// other entity-scoped action) can chain off it without re-resolving.
+async function _udResolveEntityViaCreateLead() {
+  if (!_udCache) return { ok: false, error: 'no context' };
   const own = _udCache.ownership || {};
   const db = _udCache.db;
   const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
-  if (!pid) { showToast('No property id in context', 'error'); return; }
+  if (!pid) return { ok: false, error: 'No property id in context' };
   const body = {
     domain: db, property_id: pid, entity_id: own.owner_entity_id || null,
     owner_name: own.recorded_owner_canonical || own.recorded_owner || null,
@@ -6042,8 +6045,21 @@ async function _udCreateLeadFromProperty() {
     property_address: (_udCache.property && _udCache.property.address) || null,
     source: 'property_flow',
   };
+  const resp = await _udApiPost('/api/operations?action=create_lead', body);
+  if (resp && resp.ok && resp.entity_id) {
+    _udCache.ownership = _udCache.ownership || {};
+    _udCache.ownership.owner_entity_id = resp.entity_id;
+  }
+  return resp || { ok: false, error: 'no response' };
+}
+
+async function _udCreateLeadFromProperty() {
+  if (!_udCache) return;
+  const own = _udCache.ownership || {};
+  const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
+  if (!pid) { showToast('No property id in context', 'error'); return; }
   try {
-    const resp = await _udApiPost('/api/operations?action=create_lead', body);
+    const resp = await _udResolveEntityViaCreateLead();
     if (resp && resp.ok) { showToast('Lead created' + (resp.bd_opportunity_id ? ' · BD opportunity opened' : ''), 'success'); }
     else { showToast('Create lead failed: ' + ((resp && resp.error) || 'unknown'), 'error'); }
   } catch (e) { showToast('Create lead error: ' + e.message, 'error'); }
@@ -6053,9 +6069,20 @@ async function _udAddToCadence() {
   if (!_udCache) return;
   const own = _udCache.ownership || {};
   const db = _udCache.db;
-  const entityId = own.owner_entity_id || null;
+  let entityId = own.owner_entity_id || null;
   const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
-  if (!entityId) { showToast('Resolve the owner first (Create lead) so a cadence can be attached', 'info'); return; }
+  // Recovery (break #6): if the owner isn't resolved yet, create the lead
+  // first (which resolves/creates the canonical entity), then attach the
+  // cadence. No dead-end — one click does both.
+  if (!entityId) {
+    showToast('Creating lead to anchor the owner first…', 'info');
+    const lead = await _udResolveEntityViaCreateLead();
+    if (!lead || !lead.ok || !lead.entity_id) {
+      showToast('Could not resolve the owner: ' + ((lead && lead.error) || 'unknown'), 'error');
+      return;
+    }
+    entityId = lead.entity_id;
+  }
   const body = { entity_id: entityId, property_id: pid, property_address: (_udCache.property && _udCache.property.address) || null, domain: db, phase: 'onboarding', priority_tier: 'B' };
   try {
     const resp = await _udApiPost('/api/operations?action=initiate_cadence', body);
