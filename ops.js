@@ -1164,7 +1164,10 @@ async function renderReviewConsolePage() {
           .map(function (k) { return esc(k.replace(/_/g, ' ')) + ': ' + ln.parts[k].toLocaleString(); });
         parts = bits.join(' · ');
       }
-      html += '<button type="button" class="rc-lane ' + toneClass + '" onclick="navTo(\'' + esc(href) + '\')">'
+      const laneClick = (ln.key === 'sos_owner_links')
+        ? 'renderSosLinkWorklist()'
+        : "navTo('" + esc(href) + "')";
+      html += '<button type="button" class="rc-lane ' + toneClass + '" onclick="' + laneClick + '">'
             + '<div class="rc-lane-count">' + countStr + '</div>'
             + '<div class="rc-lane-label">' + esc(ln.label || ln.key || '') + '</div>'
             + (parts ? '<div class="rc-lane-parts">' + parts + '</div>' : '')
@@ -1178,6 +1181,50 @@ async function renderReviewConsolePage() {
   perf.end();
 }
 window.renderReviewConsolePage = renderReviewConsolePage;
+
+// ── SOS owner-contact link worklist (Review Console lane, 2026-05-31) ───────
+// Opens inline in the Review Console: lists weak FL SOS->contact links with
+// the evidence + Confirm/Reject buttons calling /api/resolve-owner-link.
+async function renderSosLinkWorklist() {
+  const el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const res = await opsApi('/api/resolve-owner-link?limit=100');
+  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load owner-contact links.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  let html = '<div class="ops-header"><h2>Owner-contact links to confirm</h2>'
+    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Review Console</button></div>';
+  html += '<div class="rc-intro">Weak (single-signal) links between SOS-enriched FL recorded owners and CRM contacts. Confirm to link into the contact structure, or reject. Strong (entity-identity) links were auto-applied.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No links awaiting review. \u2713</div>'; el.innerHTML = html; return; }
+  items.forEach(function (it) {
+    const sig = Array.isArray(it.match_signals) ? it.match_signals.join(', ') : '';
+    html += '<div class="q-item" id="soslink-' + it.link_id + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.recorded_owner_name || 'Owner') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(sig) + '</span></div></div>'
+      + '<div class="q-item-meta">Matched contact: <b>' + esc(it.contact_name || it.contact_company || '\u2014') + '</b>'
+      + (it.contact_company ? ' \u00b7 ' + esc(it.contact_company) : '')
+      + (it.registered_agent_name ? ' \u00b7 agent: ' + esc(it.registered_agent_name) : '')
+      + (it.manager_name ? ' \u00b7 officer: ' + esc(it.manager_name) : '') + '</div>'
+      + '<div class="q-actions">'
+      + '<button class="q-action primary" onclick="resolveOwnerLink(' + it.link_id + ', \'confirm\')">Confirm link</button>'
+      + '<button class="q-action" onclick="resolveOwnerLink(' + it.link_id + ', \'reject\')">Reject</button>'
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderSosLinkWorklist = renderSosLinkWorklist;
+
+async function resolveOwnerLink(linkId, decision) {
+  const res = await opsApi('/api/resolve-owner-link', { method: 'POST', body: JSON.stringify({ link_id: linkId, decision: decision }) });
+  const row = document.getElementById('soslink-' + linkId);
+  if (res.ok && res.data && res.data.ok) {
+    if (row) { row.style.opacity = '0.5'; row.querySelector('.q-actions').innerHTML = '<span class="q-badge">' + (decision === 'confirm' ? 'Confirmed \u2713' : 'Rejected') + '</span>'; }
+    if (typeof showToast === 'function') showToast(decision === 'confirm' ? 'Link confirmed' : 'Link rejected', 'success');
+  } else {
+    if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+window.resolveOwnerLink = resolveOwnerLink;
 
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');

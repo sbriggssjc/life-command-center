@@ -114,6 +114,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
+    case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -3833,6 +3834,51 @@ async function handleLlcResearchQueueList(req, res) {
   } catch (err) {
     console.error('[llc-research-queue]', err?.message || err);
     return res.status(500).json({ error: 'llc_research_queue_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
+// RESOLVE OWNER-CONTACT LINK (FL SOS engine review lane, 2026-05-31)
+// GET  /api/resolve-owner-link            -> list weak links awaiting review
+// POST /api/resolve-owner-link {link_id, decision:'confirm'|'reject'}
+//   confirm -> link_status='confirmed'; reject -> 'rejected'. Stamps decided_by/at.
+// Drives the Review Console "Owner-contact links to confirm" lane.
+// ============================================================================
+async function handleResolveOwnerLink(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const actor = user.email || user.display_name || user.id || 'reviewer';
+
+  // GET = list the weak/proposed links (the lane worklist).
+  if (req.method === 'GET') {
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)));
+    const r = await domainQuery('government', 'GET',
+      'v_recorded_owner_link_review?select=link_id,recorded_owner_name,owner_state,registered_agent_name,manager_name,match_signals,contact_name,contact_company,sf_account_id' +
+      '&order=created_at.asc&limit=' + limit);
+    if (!r.ok) return res.status(502).json({ error: 'list_failed', detail: r.data });
+    return res.status(200).json({ items: Array.isArray(r.data) ? r.data : [] });
+  }
+
+  if (req.method !== 'POST') return res.status(405).json({ error: 'GET or POST only' });
+
+  const body = req.body || {};
+  const linkId = Number(body.link_id);
+  const decision = String(body.decision || '').toLowerCase();
+  if (!Number.isFinite(linkId)) return res.status(400).json({ error: 'link_id (number) required' });
+  if (!['confirm', 'reject'].includes(decision)) {
+    return res.status(400).json({ error: "decision must be 'confirm' or 'reject'" });
+  }
+  const newStatus = decision === 'confirm' ? 'confirmed' : 'rejected';
+
+  try {
+    const r = await domainQuery('government', 'PATCH',
+      'recorded_owner_contact_links?link_id=eq.' + linkId,
+      { link_status: newStatus, decided_by: actor, decided_at: new Date().toISOString() });
+    if (!r.ok) return res.status(502).json({ error: 'update_failed', detail: r.data });
+    return res.status(200).json({ ok: true, link_id: linkId, link_status: newStatus, decided_by: actor });
+  } catch (err) {
+    console.error('[resolve-owner-link]', err?.message || err);
+    return res.status(500).json({ error: 'resolve_failed', message: err?.message });
   }
 }
 

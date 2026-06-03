@@ -40,6 +40,7 @@
     { "source": "/api/review-counts", "destination": "/api/admin?_route=review-counts" },
     { "source": "/api/ops-health", "destination": "/api/admin?_route=ops-health" },
     { "source": "/api/fl-sos-enrich-link", "destination": "/api/admin?_route=fl-sos-enrich-link" },
+    { "source": "/api/resolve-owner-link", "destination": "/api/admin?_route=resolve-owner-link" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
