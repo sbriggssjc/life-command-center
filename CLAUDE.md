@@ -10,7 +10,7 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 
 ## Rules
 
-0. LCC_API_KEY auth is production-ready (Phase 6b). Frontend auth.js auto-injects X-LCC-Key via global fetch interceptor. To enforce: set LCC_API_KEY + LCC_ENV=production in Vercel.
+0. LCC_API_KEY auth is production-ready (Phase 6b). Frontend auth.js auto-injects X-LCC-Key via global fetch interceptor. To enforce: set LCC_API_KEY + LCC_ENV=production in Vercel — **in that order**. Flipping LCC_ENV first (key empty, no OPS_SUPABASE_URL JWT path) 401s every request = total sign-in lockout. Verify readiness first via `GET /api/diag?kind=auth-ready` (`would_pass_in_production` must be true). Full rollout/rollback runbook + blast radius: `docs/AUTH_ENFORCEMENT_ROLLOUT.md`. A cold-start `console.error` guard in `auth.js` warns if enforcement is on with no credential source.
 1. NEVER create new .js files directly in /api/
 2. Add new endpoints as sub-routes (use ?action= or ?_route= query param patterns)
 3. New utility/handler code goes in /api/_shared/ or /api/_handlers/
