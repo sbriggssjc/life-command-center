@@ -100,3 +100,27 @@ one-line `server.js` mount. (No vercel.json rewrite needed — Vercel auto-route
 from create_lead — align in `lcc_open_prospect_opportunity`. (2) The next-step
 banner offers "Add to cadence" even when the create-lead trigger already seeded
 the cadence — banner should detect an existing cadence and show "On cadence ✓".
+
+
+## Addendum 2 — full loop matrix verified live (later 2026-06-03)
+
+All remaining loops exercised with REAL writes and verified in both DBs:
+
+| Loop | Result |
+|---|---|
+| Queue → open opportunity (gov) | 201 → opportunity + cadence persisted → entity left P0.5 (queue learned) |
+| Property → create lead (gov, real UI click) | `prospect_leads` row + opportunity (`identified`) + cadence + activity event + banner live-advanced |
+| Property → create lead (dia, real UI click) | `marketing_leads` row (DaVita Inc. / Palestra Properties) + banner live-advanced — **both domain write paths confirmed** |
+| Inbox → Promote (real UI click) | toast → item left inbox → **My Work 0→1** with the promoted action |
+| Copilot agent actions | `get_daily_briefing_snapshot` returns a real briefing; `generate_prospecting_brief` responds (graceful no-engagement case); `get_my_execution_queue` **already shows the just-promoted action** — the M365 agent sees the canonical queue live |
+
+**E2E#5 (NEW):** domain/vertical naming inconsistency across the BD engine —
+`vertical`/`source_domain` mix `dia|gov`, `dialysis|government`, and NULL across
+bands (P7 rows long-form, others short-form). `handlePriorityBand` filters
+long-form so short-form rows miss their band on the property detail. Third
+occurrence of the alias bug class. Fix prompt:
+`CLAUDECODE_PROMPT_E2E5_bd_engine_consistency.md` (also folds in the stage=null
+and banner cadence-awareness nits).
+
+Open items: E2E#4 intake-share mount (one-liner to the PR #1020 chat), E2E#5
+prompt, QA#8 enforcement decision, CI workflow decision.
