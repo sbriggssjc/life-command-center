@@ -71,3 +71,32 @@ connector-webhook subscription targets. See
 
 *Method: static handler→endpoint sweep (Explore agent) + live browser probes on the
 Railway deployment + pg_net/cron forensics on LCC Opps, 2026-06-03.*
+
+
+---
+
+## Addendum — live loop closure verified + E2E#3/#4 (later 2026-06-03)
+
+**E2E#3 (FOUND VIA LIVE CLICK, FIXED, VERIFIED):** "Open opportunity →" failed with
+`open_opportunity_failed`. Root cause: `touchpoint_cadence.owner_user_id` FK'd to
+`auth.users` while the app's owners live in `public.users` (the only such outlier
+FK) — the cadence-seed trigger rolled back every terminal BD action. `bd_opportunities`
+had **0 rows ever**. Fixed by re-pointing the FK to `public.users`
+(migration `20260603120000_lcc_touchpoint_cadence_owner_fk_public_users.sql`, PR #1021).
+
+**The full BD loop now closes in production (exercised for real):**
+- Queue path: `open_opportunity` on EAGLE RIVER INVESTORS – HAWAII → 201, opportunity
+  persisted, cadence auto-seeded, **entity instantly left P0.5** (the queue learns).
+- Property path (real UI click on GSA Lakeland #3841's banner): `create_lead` →
+  gov `prospect_leads` row + LCC opportunity (`identified`, origin `property_flow`)
+  + cadence seeded + "Lead created" activity event + **banner live-advanced**
+  (✓ Owner › ✓ Lead › Cadence).
+
+**E2E#4 (NEW):** `api/intake-share.js` (iOS Shortcut "Send to LCC" share target) is
+unmounted on Railway — confirmed live (returns SPA HTML). Same class as E2E#1/#2;
+one-line `server.js` mount. (No vercel.json rewrite needed — Vercel auto-routes it.)
+
+**Minor nits:** (1) queue-opened opportunities carry `stage=null` vs `'identified'`
+from create_lead — align in `lcc_open_prospect_opportunity`. (2) The next-step
+banner offers "Add to cadence" even when the create-lead trigger already seeded
+the cadence — banner should detect an existing cadence and show "On cadence ✓".
