@@ -71,6 +71,16 @@ export const GOV_READ_TABLES = new Set([
   'v_gap_agency_drift',
   'v_gap_orphan_sale_owner',
   'llc_research_queue',
+  // QA#9 (2026-06-03): Review Console lanes + property-detail ownership badges.
+  // These non-PII, read-only owner-research views were never allowlisted, so
+  // the client read path 403'd: the ownership_research / sos_owner_links lanes
+  // showed "—" and the detail panel's ownership-divergence + SOS-link-status
+  // badges silently failed. Same business-contact sensitivity class as the
+  // already-allowlisted recorded_owners / contacts (no emails/phones/SSNs).
+  'ownership_research_queue',
+  'v_recorded_owner_link_review',
+  'v_recorded_owner_link_status',
+  'v_recorded_vs_assessor_owner_divergence',
 ]);
 
 // Government Supabase — allowed tables for write (POST/PATCH)

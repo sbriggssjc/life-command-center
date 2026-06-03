@@ -60,6 +60,14 @@ const GOV_READ_TABLES = new Set([
   "v_data_health_sales", "v_data_health_ownership", "v_data_health_entities",
   "v_sales_completeness_summary", "v_sales_completeness",
   "v_data_health_trend", "v_sf_link_queue_summary", "v_sf_link_review_queue",
+  // QA#9 (2026-06-03): mirror of allowlist.js GOV_READ_TABLES. Non-PII,
+  // read-only owner-research views feeding the Review Console
+  // ownership_research / sos_owner_links lanes and the property-detail
+  // ownership-divergence + SOS-link-status badges (were silently 403'ing).
+  "ownership_research_queue",
+  "v_recorded_owner_link_review",
+  "v_recorded_owner_link_status",
+  "v_recorded_vs_assessor_owner_divergence",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
