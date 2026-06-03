@@ -2162,7 +2162,7 @@ async function renderResearchPage(page = opsResearchPage) {
       // Self-propelling contract: elevate the first actionable task. On
       // Complete the page reloads and the next task re-elevates automatically.
       const _isHero = _ix === 0 && item.status !== 'completed';
-      html += `<div class="q-item${_isHero ? ' pq-hero' : ''}">
+      html += `<div class="q-item${_isHero ? ' pq-hero' : ''}" data-q-id="${esc(String(item.id == null ? '' : item.id))}">
         ${_isHero ? '<div class="pq-hero-flag">\u25B6 Do this first</div>' : ''}
         <div class="q-item-header">
           <span class="q-item-title">${esc(item.title)}</span>
@@ -2220,9 +2220,13 @@ async function completeResearch(id) {
   const res = await opsPost('/api/workflows?action=research_followup', {
     research_task_id: id
   });
-  if (res.ok) showToast('Research completed', 'success');
-  else showToast(res.error || 'Failed', 'error');
-  refreshActiveOpsPage();
+  if (res.ok) {
+    showToast('Research completed', 'success');
+    if (!_opsAdvanceAfterComplete(id)) refreshActiveOpsPage();
+  } else {
+    showToast(res.error || 'Failed', 'error');
+    refreshActiveOpsPage();
+  }
 }
 
 async function createFollowup(id) {
@@ -3094,6 +3098,46 @@ async function retrySync(errorId) {
 // ============================================================================
 
 let _quickTransitioning = false;
+// Self-propelling: optimistic in-place advance after completing a queue item.
+// Removes the completed row, re-elevates the next as 'do this first', decrements
+// the remaining counter, and keeps the in-memory list consistent so a filter
+// re-render won't resurrect it. Returns false (caller falls back to a full
+// reload) when the row can't be located, so it degrades safely.
+function _opsAdvanceAfterComplete(itemId) {
+  try {
+    const active = document.querySelector('.page.active');
+    if (!active || itemId == null) return false;
+    let sel;
+    try { sel = '.q-item[data-q-id="' + CSS.escape(String(itemId)) + '"]'; }
+    catch (_e) { sel = '.q-item[data-q-id="' + String(itemId).replace(/"/g, '\\"') + '"]'; }
+    const row = active.querySelector(sel);
+    if (!row) return false;
+    const container = row.parentNode;
+    const wasHero = row.classList.contains('pq-hero');
+    try { if (typeof opsMyWorkData !== 'undefined' && Array.isArray(opsMyWorkData)) opsMyWorkData = opsMyWorkData.filter(function (i) { return String(i.id) !== String(itemId); }); } catch (_e) {}
+    try { if (typeof opsResearchData !== 'undefined' && Array.isArray(opsResearchData)) opsResearchData = opsResearchData.filter(function (i) { return String(i.id) !== String(itemId); }); } catch (_e) {}
+    row.style.transition = 'opacity .18s ease';
+    row.style.opacity = '0';
+    setTimeout(function () {
+      row.remove();
+      if (container) {
+        if (!container.querySelector('.q-item')) { refreshActiveOpsPage(); return; }
+        if (wasHero) {
+          const next = container.querySelector('.q-item');
+          if (next && !next.classList.contains('pq-hero')) {
+            next.classList.add('pq-hero');
+            if (!next.querySelector('.pq-hero-flag')) next.insertAdjacentHTML('afterbegin', '<div class="pq-hero-flag">\u25B6 Do this first</div>');
+          }
+        }
+      }
+      const prog = active.querySelector('.rc-progress span');
+      if (prog) { const n = parseInt(prog.textContent, 10); if (!isNaN(n)) prog.textContent = Math.max(0, n - 1); }
+    }, 180);
+    return true;
+  } catch (_e) { return false; }
+}
+window._opsAdvanceAfterComplete = _opsAdvanceAfterComplete;
+
 async function quickTransition(itemId, newStatus, itemType) {
   if (_quickTransitioning) return;
   _quickTransitioning = true;
@@ -3111,8 +3155,12 @@ async function quickTransition(itemId, newStatus, itemType) {
     const res = await opsPatch(path, { status: newStatus });
     if (res.ok) {
       showToast(statusLabels[newStatus] || `Status → ${newStatus}`, 'success');
-      const activePage = document.querySelector('.page.active');
-      if (activePage) handlePageLoad(activePage.id);
+      if (newStatus === 'completed' && _opsAdvanceAfterComplete(itemId)) {
+        // advanced in place — no reload flash
+      } else {
+        const activePage = document.querySelector('.page.active');
+        if (activePage) handlePageLoad(activePage.id);
+      }
     } else {
       showToast(res.error || 'Transition failed', 'error');
     }
@@ -3175,7 +3223,7 @@ function queueItemHTML(item, context, opts = {}) {
   const overdueCls = isOverdue(item.due_date) ? 'overdue' : '';
   const priCls = item.priority === 'urgent' ? 'urgent' : item.priority === 'high' ? 'high-pri' : '';
 
-  let html = `<div class="q-item ${overdueCls} ${priCls}${opts.hero ? ' pq-hero' : ''}">`;
+  let html = `<div class="q-item ${overdueCls} ${priCls}${opts.hero ? ' pq-hero' : ''}" data-q-id="${esc(String(item.id == null ? '' : item.id))}">`;
   if (opts.hero) html += '<div class="pq-hero-flag">\u25B6 Do this first</div>';
   html += '<div class="q-item-header">';
   html += `<span class="q-item-title">${esc(item.title || 'Untitled')}</span>`;
