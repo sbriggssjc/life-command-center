@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LCC Live QA Findings — 2026-06-03</title>
+<style>
+  :root{--nmblue:#003DA5;--sky:#62B5E5;--ink:#191919;--paper:#fff;--s1:#f6f8fb;--s2:#eef2f8;--border:#d8e0ec;--muted:#5b6677;--green:#1a9e57;--amber:#c9821a;--red:#c0392b;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',Arial,sans-serif;color:var(--ink);line-height:1.5;background:var(--paper)}
+  header{background:var(--nmblue);color:#fff;padding:26px 40px}
+  header h1{margin:0 0 4px;font-size:23px;font-weight:800}
+  header .sub{opacity:.85;font-size:13px}
+  main{max-width:1080px;margin:0 auto;padding:30px 40px 80px}
+  h2{font-size:18px;margin:34px 0 6px;color:var(--nmblue);border-bottom:2px solid var(--s2);padding-bottom:6px}
+  p{margin:8px 0}
+  .lead{background:var(--s1);border-left:4px solid var(--sky);padding:13px 17px;border-radius:0 8px 8px 0;margin:16px 0;font-size:14px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{background:var(--s2);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  code{background:var(--s2);padding:1px 5px;border-radius:4px;font-size:12px}
+  .sev{font-weight:800;font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:5px;color:#fff;white-space:nowrap}
+  .s-p0{background:var(--red)} .s-p1{background:var(--amber)} .s-p2{background:#7a8aa0} .s-ok{background:var(--green)}
+  .cat{font-weight:700}
+  .ok li{margin:4px 0}
+  ul{margin:6px 0;padding-left:20px}
+  .foot{margin-top:36px;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Life Command Center — Live QA Findings</h1>
+  <div class="sub">Hands-on walkthrough of the live app (Railway prod) · 2026-06-03 · logged in as Scott Briggs</div>
+</header>
+<main>
+
+  <div class="lead">
+    A hands-on pass through the running app — Today, Priority Queue, a property detail, Pipeline, Review Console, Contacts —
+    checking flow, data, connectivity, console/network errors, responsiveness, and layout. The self-propelling work (Moves 1–6)
+    is <b>confirmed working live</b>; the issues below are mostly pre-existing data/backend/coverage gaps the walkthrough surfaced,
+    plus a few new ones. Ranked by severity.
+  </div>
+
+  <h2>What's working well (verified live)</h2>
+  <ul class="ok">
+    <li><b>Per-property Next-step banner (Move 2)</b> renders at the top of the detail with the live trail — e.g. "▶ NEXT STEP · Create the lead · ✓ Owner › Lead › Cadence" on a GSA property.</li>
+    <li><b>Priority Queue front door (Move 3)</b> is the 2nd bottom-nav tab; the "▶ DO THIS FIRST" hero (Move 1) renders; property-bearing bands (P1/P2/P3/P5) route correctly via "Open property →" into the Ownership &amp; CRM tab.</li>
+    <li><b>Property detail</b> opens to lifecycle-ordered tabs (Move 1), with Completeness scoring, "Resolve Data Gaps", and the Ownership Assistant.</li>
+    <li><b>Today</b> NBA shows ranked items with band/domain/quality/value; Contacts loads (29,664) with filters; Inbox triage cards (Promote/Assign/Dismiss) present.</li>
+  </ul>
+
+  <h2>Critical &amp; high — fix now</h2>
+  <table>
+    <tr><th>#</th><th>Sev</th><th>Finding</th><th>Evidence (live)</th><th>Fix</th></tr>
+    <tr>
+      <td>1</td><td><span class="sev s-p0">P0 data</span></td>
+      <td class="cat">$950M dialysis "sales" corrupt the top of the Next Best Action list</td>
+      <td>NBA items #1–#4 are all "Sale 2023-09-12 missing owner backlink", DIA, each exactly <b>$950M</b> — implausible for dialysis (clinics sell ~$2–15M); four identical price/date = a bad import.</td>
+      <td>Audit <code>dia.sales_transactions</code> for the 2023-09-12 / $950M cluster; null/correct the bogus prices. They're polluting NBA ranking + cap-rate math.</td>
+    </tr>
+    <tr>
+      <td>2</td><td><span class="sev s-p1">P1 flow</span></td>
+      <td class="cat">Priority Queue's biggest band (P0.5, 485 items) is non-actionable</td>
+      <td>Every P0.5 row reads "Needs a BD opportunity opened" + "owner-level" with <b>no button</b>. The "DO THIS FIRST" hero is a P0.5 owner-level item — the front door's #1 item leads nowhere.</td>
+      <td>Give owner-level P0.5 rows a real action — "Open opportunity" / "Create lead" (they carry <code>entity_id</code>) — or route to the owner/entity. The front door must never open on a dead-end hero.</td>
+    </tr>
+    <tr>
+      <td>3</td><td><span class="sev s-p1">P1 data</span></td>
+      <td class="cat">Priority Queue band counts are truncated at 1000</td>
+      <td>Chips sum to exactly 1000 (485+74+30+62+14+60+275); P8 (≈89 in DB) is missing entirely, P7 shows 275 vs ~303. The counts query hits PostgREST's 1000-row ceiling.</td>
+      <td>Count server-side (a <code>count</code> aggregate / RPC or <code>Prefer: count=exact</code> head request per band) instead of fetching rows and tallying in JS.</td>
+    </tr>
+    <tr>
+      <td>4</td><td><span class="sev s-p1">P1 trust</span></td>
+      <td class="cat">Cross-surface count inconsistencies</td>
+      <td>Today My Work says "View all <b>8442</b> items" but Pipeline My Work shows "<b>0</b> items" (clicking the Today link lands on an empty queue). Flagged emails: Today <b>3,004</b> vs Pipeline hint "<b>25</b> flagged emails".</td>
+      <td>Make the Today widget count read the same filtered canonical queue as Pipeline (exclude inbox/flagged, same as QA-09). Reconcile the flagged-email count source.</td>
+    </tr>
+    <tr>
+      <td>5</td><td><span class="sev s-p1">P1 infra</span></td>
+      <td class="cat">Intermittent 503s on backend endpoints</td>
+      <td>On load: <code>/api/admin?_route=auth-config</code> → 503 (also a 200), <code>/api/treasury</code> + <code>/api/treasury?history=true</code> → 503. Treasury widget is flaky.</td>
+      <td>Check Railway function cold-start / upstream (FRED/treasury source) timeouts; add retry/backoff + cached last-good value so the widget degrades gracefully.</td>
+    </tr>
+  </table>
+
+  <h2>Medium — schedule next</h2>
+  <table>
+    <tr><th>#</th><th>Sev</th><th>Finding</th><th>Evidence (live)</th><th>Fix</th></tr>
+    <tr>
+      <td>6</td><td><span class="sev s-p2">P2 perf</span></td>
+      <td class="cat">Renderer intermittently freezes; heavy surfaces load slowly</td>
+      <td>Screenshot/CDP timed out 2–3× ("renderer may be frozen or unresponsive") around chip-filter + page switches. Review Console counts (13,220 / 19,604 / 19,143) load slowly behind an empty panel.</td>
+      <td>Profile the synchronous render paths; show a spinner while Review Console counts load; consider debouncing/yielding heavy list renders.</td>
+    </tr>
+    <tr>
+      <td>7</td><td><span class="sev s-p2">P2 perf</span></td>
+      <td class="cat">Redundant duplicate API calls on load</td>
+      <td><code>queue-v2?view=work_counts</code> fired <b>3×</b>; <code>auth-config</code>, <code>treasury</code>, <code>review-counts</code> each fired <b>2×</b> on a single page load.</td>
+      <td>De-dupe concurrent identical fetches (in-flight request cache / single loader); cuts load time + 503 exposure.</td>
+    </tr>
+    <tr>
+      <td>8</td><td><span class="sev s-p2">P2 prod</span></td>
+      <td class="cat">"DEV MODE" badge in production — auth not enforced</td>
+      <td>Header shows "DEV MODE" on the live Railway URL; per CLAUDE.md, enforcement needs <code>LCC_API_KEY</code> + <code>LCC_ENV=production</code>.</td>
+      <td>Confirm whether prod should enforce auth; if so set the env vars. If DEV MODE is intentional for now, note it explicitly so it isn't mistaken for a leak.</td>
+    </tr>
+    <tr>
+      <td>9</td><td><span class="sev s-p2">P2 cover</span></td>
+      <td class="cat">Two Review Console lanes show no count ("—")</td>
+      <td>"Ownership &amp; LLC research" and "Property merges &amp; duplicates" render a dash instead of a number (count not wired or genuinely 0).</td>
+      <td>Wire those lane counts (or label "0" explicitly). The dash reads as "broken" next to the populated lanes.</td>
+    </tr>
+    <tr>
+      <td>10</td><td><span class="sev s-p2">P2 layout</span></td>
+      <td class="cat">Detail panel tab bar overflows</td>
+      <td>The 6th tab ("Activity Log") is clipped at the panel's right edge with a scroll arrow on a standard-width window.</td>
+      <td>Let the tab bar wrap or shrink to fit, or widen the detail panel; the last lifecycle tab shouldn't be hidden.</td>
+    </tr>
+  </table>
+
+  <h2>Updated plan — recommended order</h2>
+  <p>The self-propelling pass (Moves 1–6) is done and verified live. This QA reframes the next block around <b>data integrity and backend reliability</b>, which now matter more than further UX polish — bad data ($950M sales) and dead-end queue rows undercut the self-propelling work that's otherwise landing well.</p>
+  <ul>
+    <li><b>Now (P0/P1):</b> #1 fix the $950M dialysis sales cluster → #2 make P0.5 rows actionable → #3 fix Priority Queue counts (server-side) → #4 reconcile Today vs Pipeline counts → #5 stabilize treasury/auth-config 503s.</li>
+    <li><b>Next (P2):</b> #7 de-dupe load fetches → #6 render perf + Review Console loading state → #9 wire the two empty lane counts → #8 decide DEV MODE/auth posture → #10 tab-bar overflow.</li>
+    <li><b>Deferred (unchanged):</b> Move 5 (button/card vocabulary), next-state SOS adapters (CA/TX).</li>
+  </ul>
+
+  <div class="foot">
+    Method: live walkthrough via browser automation on the Railway production deployment, 2026-06-03. Network/console captured via devtools; counts read from the live DOM and API responses. Findings cross-checked against the codebase where relevant.
+  </div>
+</main>
+</body>
+</html>
