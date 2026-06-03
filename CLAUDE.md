@@ -608,6 +608,21 @@ the underlying tables) to avoid loosening RLS on PII fields.
 6. **`lcc_entity_portfolio_facts.is_current`** is `GENERATED ALWAYS
    AS (ownership_end_date IS NULL) STORED` — same constraint.
 
+7. **`vertical` / `source_domain` are canonical short-form `dia`/`gov`**
+   (E2E#5, 2026-06-03 — third dia/gov alias bug after `getDomainCredentials`
+   and QA#9). Writers normalize on the way in: `bridgeCreateLead` writes
+   `normDomain`, `lcc_open_prospect_opportunity` and `lcc_seed_onboarding_cadence`
+   CASE-map `dialysis→dia`/`government→gov` (the cadence the auto-seed trigger
+   spawns inherits the canonical `bd_opportunities.vertical`).
+   `v_priority_queue_enriched` re-normalizes at the view boundary AND guards
+   `WHERE entity_id IS NOT NULL AND <normalized vertical> IS NOT NULL` so orphan
+   seed cadences (NULL domain, no portfolio/opp/contact) can't pollute the
+   bands. `entities.domain` also carries a legit third value `lcc` (LCC-internal
+   entities) — never remap that. Consumers filtering `source_domain` should
+   accept both forms during transition (`in.(dia,dialysis)`), as
+   `handlePriorityBand` now does. Migration:
+   `20260603130000_lcc_bd_vertical_domain_canonicalize.sql`.
+
 ### Quick-reference queries
 
 ```sql

@@ -683,9 +683,24 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     opened_at: new Date().toISOString(),
     metadata: { origin: 'property_flow', source_domain: normDomain, source_property_id: String(property_id), lead_id: leadId },
   });
+  let cadenceSeeded = false;
+  let cadenceNextTouchDue = null;
   if (oppResult.ok) {
     const opp = Array.isArray(oppResult.data) ? oppResult.data[0] : oppResult.data;
     bdOpportunityId = (opp && opp.id) || null;
+    // The bd_opportunity_auto_seed_cadence trigger fires synchronously on this
+    // INSERT, so by now the onboarding cadence exists. Read back its next touch
+    // so the property "Next step" banner can render "On cadence ✓ — next touch
+    // <date>" instead of redundantly offering "Add to cadence" (Nit 2).
+    cadenceSeeded = true;
+    try {
+      const cadR = await opsQuery('GET',
+        'touchpoint_cadence?select=next_touch_due&entity_id=eq.' + pgFilterVal(resolvedEntityId)
+        + '&order=updated_at.desc&limit=1');
+      if (cadR.ok && Array.isArray(cadR.data) && cadR.data[0]) {
+        cadenceNextTouchDue = cadR.data[0].next_touch_due || null;
+      }
+    } catch (_e) { /* non-fatal: banner falls back to a date-less "On cadence ✓" */ }
   } else {
     console.warn('[create_lead] bd_opportunity insert failed (non-fatal):', oppResult.data);
   }
@@ -723,6 +738,8 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     entity_id: resolvedEntityId,
     bd_opportunity_id: bdOpportunityId,
     created_entity: createdEntity,
+    cadence_seeded: cadenceSeeded,
+    cadence_next_touch_due: cadenceNextTouchDue,
   });
 }
 
