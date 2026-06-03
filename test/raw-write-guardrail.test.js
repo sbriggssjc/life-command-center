@@ -47,11 +47,26 @@ describe('raw write guardrail', () => {
       // add another, bump the cap here and document why.
       //
       // app.js: 3 legacy gov-query proxy blocks pending migration.
-      // gov.js: 2 gov-query proxy blocks (mass property update + cron triggers).
+      // gov.js: 4 gov-query proxy blocks, all proxy-mediated through
+      //   /api/gov-query (the same controlled boundary as the exempt
+      //   api/data-proxy.js) — NOT unguarded raw table writes:
+      //     1. _govOwnershipSweepCall — POST rpc/gov_auto_resolve_ownership
+      //        (server-side data-quality sweep, two-step preview/confirm)
+      //     2. _govIntelSweepCall — POST rpc/gov_auto_resolve_intel
+      //        (server-side data-quality sweep)
+      //     3. govPatch — generic PATCH helper (pending_updates review-queue
+      //        state, ownership_history/prospect_leads enrichment, property
+      //        financial overrides)
+      //     4. govRpc — generic POST dispatcher for server-side stored
+      //        procedures (gov_resolve_sale_link, gov_create_property_from_pending,
+      //        gov_resolve_portfolio_sale_link, etc.)
+      //   Two are pure server-side RPC sweeps; the other two are shared
+      //   helpers. When you intentionally add another, bump the cap here
+      //   and document why.
       // api/_handlers/contacts-handler.js: 2 govQuery PATCHes that auto-link
       //   newly-created or merged contacts to Salesforce sf_contact_id /
       //   sf_account_id (back-write from Power Automate matchback flow).
-      const PROXY_CAPS = { 'app.js': 3, 'gov.js': 2 };
+      const PROXY_CAPS = { 'app.js': 3, 'gov.js': 4 };
       const GOV_QUERY_CAPS = { 'api/_handlers/contacts-handler.js': 2 };
 
       if (relative === 'api/data-proxy.js' || relative === 'api/sync.js') {

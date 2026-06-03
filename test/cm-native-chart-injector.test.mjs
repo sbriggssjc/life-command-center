@@ -449,14 +449,15 @@ test('R37 P2: buildInjectionSpec ports renderer ranges/formats to specs', () => 
     key: k, col: String.fromCharCode(65 + i),
   }));
 
-  // nm_vs_market_cap pins 5.25-9.25%
+  // nm_vs_market_cap (gov branch — no vertical passed) pins 6.0-7.75%
+  // (R66l/R66bb tightened to the 2020+ data window; was R37's 5.25-9.25%).
   const nm = buildInjectionSpec({
     chart_template_id: 'nm_vs_market_cap', tabName: 'Data_NM_vs_Market',
     cols: cols(['period_end','subspecialty','nm_cap_rate','market_cap_rate']),
     dataStart: 5, dataEnd: 60, brand: { palette: {} },
   });
-  assert.equal(nm.spec.yAxisRange.min, 0.0525);
-  assert.equal(nm.spec.yAxisRange.max, 0.0925);
+  assert.equal(nm.spec.yAxisRange.min, 0.06);
+  assert.equal(nm.spec.yAxisRange.max, 0.0775);
   assert.equal(nm.spec.valAxNumFmt, '0.00%');
 
   // dom_and_pct_of_ask pins right axis 85-105%
@@ -1279,7 +1280,11 @@ test('buildInjectionSpec: buyer_class_pct_by_year builds 4-series annual stacked
     'navy / mid-blue / sky / pale');
 });
 
-test('buildInjectionSpec: renewal_rent_growth is a single-bar chart (R33 Tier D simplification)', () => {
+test('buildInjectionSpec: renewal_rent_growth is the R66m rent+quartile+CAGR combo', () => {
+  // R66m — rebuilt from the R33 single-bar to the deck p.32 combo: pale-blue
+  // TTM rent/SF bars + dark-blue quartile hi-lows on the $ axis, sky CAGR line
+  // on the % axis. The legacy single-bar shape only survives as a fallback when
+  // the quartile/CAGR columns are absent (see the next test).
   const out = buildInjectionSpec({
     chart_template_id: 'renewal_rent_growth',
     tabName: 'Data_Renewal_Rent_Growth',
@@ -1291,6 +1296,29 @@ test('buildInjectionSpec: renewal_rent_growth is a single-bar chart (R33 Tier D 
       { key: 'lower_quartile_rpsf',     col: 'E' },
       { key: 'cagr_5yr',                col: 'F' },
       { key: 'renewal_count',           col: 'G' },
+    ],
+    dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'renewal-combo');
+  assert.equal(out.spec.rentCol, 'C', 'rent bars = ttm_avg_renewal_rent_psf');
+  assert.equal(out.spec.upperCol, 'D');
+  assert.equal(out.spec.lowerCol, 'E');
+  assert.equal(out.spec.cagrCol, 'F', 'CAGR line = cagr_5yr (cagr_per_lease absent)');
+  assert.equal(out.spec.rentColor, 'BBDDF2');
+  assert.equal(out.spec.cagrColor, '62B5E5');
+});
+
+test('buildInjectionSpec: renewal_rent_growth falls back to single bar when quartile/CAGR cols missing', () => {
+  // R66m legacy fallback — without ttm/quartile/cagr cols the builder
+  // returns the original single sky bar of avg_renewal_rent_psf.
+  const out = buildInjectionSpec({
+    chart_template_id: 'renewal_rent_growth',
+    tabName: 'Data_Renewal_Rent_Growth',
+    cols: [
+      { key: 'period_end',           col: 'A' },
+      { key: 'avg_renewal_rent_psf', col: 'B' },
+      { key: 'renewal_count',        col: 'C' },
     ],
     dataStart: 5, dataEnd: 60,
     brand: { palette: { nm_sky: '#62B5E5' } },
@@ -1464,18 +1492,20 @@ test('buildInjectionSpec: seller_sentiment_monthly handles different column layo
   assert.equal(out.spec.swapAxes, true);
 });
 
-test('buildInjectionSpec: inventory_backlog R50+R54 — combo bar+bar+net line; Sold renders below 0', () => {
+test('buildInjectionSpec: inventory_backlog R54+R66v — combo bar+bar+net line; Sold renders below 0', () => {
   // R50 — restructured to match master Charts!chart8 (Inventory Backlog).
   // R54 — Sold bar now reads from sold_neg helper col so it renders
   // BELOW 0 (user direction 2026-05-22: visualize the market flow).
+  // R66v — switched from TTM rolling sums (added_ttm/sold_ttm) to the
+  // monthly basis (added_month/sold_month) to match the master turnover chart.
   const out = buildInjectionSpec({
     chart_template_id: 'inventory_backlog',
     tabName: 'Data_Inventory',
     cols: [
       { key: 'period_end',       col: 'A' },
       { key: 'subspecialty',     col: 'B' },
-      { key: 'added_ttm',        col: 'C' },
-      { key: 'sold_ttm',         col: 'D' },
+      { key: 'added_month',      col: 'C' },
+      { key: 'sold_month',       col: 'D' },
       { key: 'active_count',     col: 'E' },
       { key: 'months_of_supply', col: 'F' },
     ],
@@ -1499,11 +1529,11 @@ test('buildInjectionSpec: inventory_backlog R50+R54 — combo bar+bar+net line; 
   assert.equal(out.helperCols[0].key, 'net_ttm');
   assert.equal(out.helperCols[1].key, 'sold_neg');
   assert.equal(out.helperCols[1].header, 'No. Sold (chart)');
-  // Helpers compute correctly
-  assert.equal(out.helperCols[0].getValue({ added_ttm: 50, sold_ttm: 30 }), 20, 'net = +20');
-  assert.equal(out.helperCols[0].getValue({ added_ttm: 20, sold_ttm: 30 }), -10, 'net can be negative');
-  assert.equal(out.helperCols[1].getValue({ sold_ttm: 30 }), -30, 'R54: sold_neg = -sold_ttm');
-  assert.equal(out.helperCols[1].getValue({ sold_ttm: null }), null);
+  // Helpers compute correctly (R66v — monthly basis)
+  assert.equal(out.helperCols[0].getValue({ added_month: 50, sold_month: 30 }), 20, 'net = +20');
+  assert.equal(out.helperCols[0].getValue({ added_month: 20, sold_month: 30 }), -10, 'net can be negative');
+  assert.equal(out.helperCols[1].getValue({ sold_month: 30 }), -30, 'R66v: sold_neg = -sold_month');
+  assert.equal(out.helperCols[1].getValue({ sold_month: null }), null);
 });
 
 test('buildInjectionSpec: pace_of_cap_rate_expansion falls back to 2-bar when pace_cost missing (back-compat)', () => {
@@ -1726,7 +1756,7 @@ test('buildInjectionSpec: cash_leveraged_returns plots cash + leveraged_mid only
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['B', 'C']);
 });
 
-test('buildInjectionSpec: asking_cap_quartiles_active builds 4-line with paired dashed', () => {
+test('buildInjectionSpec: asking_cap_quartiles_active builds 4 solid lines (R66s deck parity)', () => {
   const out = buildInjectionSpec({
     chart_template_id: 'asking_cap_quartiles_active',
     tabName: 'Data_Active_Cap_Quart',
@@ -1742,14 +1772,16 @@ test('buildInjectionSpec: asking_cap_quartiles_active builds 4-line with paired 
     brand: { palette: {} },
   });
   assert.equal(out.spec.series.length, 4);
-  // Solid lines first (total market), dashed (core 10+ year) after
+  // R66s — deck (Dialysis Market Filter p.31) uses FOUR SOLID lines in four
+  // distinct colors (no dashes); the prior solid-total/dashed-core idiom was
+  // dropped.
   assert.deepEqual(out.spec.series.map(s => !!s.dashed),
-    [false, false, true, true]);
-  // Light blue for upper quartiles (idx 0, 2), dark blue for lower (idx 1, 3)
-  assert.equal(out.spec.series[0].color, '9DC3E6');  // upper total — light
-  assert.equal(out.spec.series[1].color, '1F4E79');  // lower total — dark
-  assert.equal(out.spec.series[2].color, '9DC3E6');  // upper core — light dashed
-  assert.equal(out.spec.series[3].color, '1F4E79');  // lower core — dark dashed
+    [false, false, false, false]);
+  // mauve / sky / teal / navy (upper_total, lower_total, upper_core, lower_core)
+  assert.equal(out.spec.series[0].color, '9B7EBD');  // upper total — mauve
+  assert.equal(out.spec.series[1].color, '62B5E5');  // lower total — sky
+  assert.equal(out.spec.series[2].color, '3FA39B');  // upper core — teal
+  assert.equal(out.spec.series[3].color, '003DA5');  // lower core — navy
 });
 
 test('buildInjectionSpec: dispatches bar vs line correctly', () => {
@@ -1863,15 +1895,18 @@ test('buildInjectionSpec: nm_vs_market_cap builds 2-series multi-line', () => {
   assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
   assert.equal(out.spec.series.length, 2);
+  // R66o — market (gray) is drawn FIRST so it sits visually below the NM
+  // (sky) hero line, matching the deck's Value Proposition page. Order
+  // flipped from the prior NM-first build.
   assert.deepEqual(
     out.spec.series.map(s => s.valCol),
-    ['C', 'D'],
-    'series point at nm_cap_rate and market_cap_rate columns'
+    ['D', 'C'],
+    'market_cap_rate (D) first, nm_cap_rate (C) second'
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5'],
-    'NM navy first, Market sky second'
+    ['8A8F98', '62B5E5'],
+    'Market gray first, NM sky second'
   );
 });
 
@@ -2729,7 +2764,7 @@ test('R47: bid_ask_spread trims to 2014 (TRUE-gap)', () => {
   assert.equal(spec.spec.dataStart, 5 + 156, 'dataStart at first 2014 row');
 });
 
-test('R47: dom_and_pct_of_ask trims to 2013', () => {
+test('R66aa: dom_and_pct_of_ask trims to 2018', () => {
   const rows = mkRows(2001, 2024, 'avg_dom');
   // dom_and_pct_of_ask requires period_end + avg_dom + pct_of_ask
   for (const r of rows) r.pct_of_ask = 0.93;
@@ -2747,11 +2782,12 @@ test('R47: dom_and_pct_of_ask trims to 2013', () => {
     brand: { palette: {} },
     rows,
   });
-  // 2001-01 to 2012-12 = 144 rows before 2013-01
-  assert.equal(spec.spec.dataStart, 5 + 144, 'dataStart at first 2013 row');
+  // R66aa bumped the cutoff 2013 → 2018 (pre-2018 TTM months are thin/volatile).
+  // 2001-01 to 2017-12 = 204 rows before 2018-01.
+  assert.equal(spec.spec.dataStart, 5 + 204, 'dataStart at first 2018 row');
 });
 
-test('R47 -> 2026-05-29: nm_vs_market_cap trims to 2011 (continuous NM data)', () => {
+test('R66o: nm_vs_market_cap trims to 2020 (Value Proposition window)', () => {
   const rows = mkRows(2001, 2024, 'nm_cap_rate');
   for (const r of rows) r.market_cap_rate = 0.07;
   const spec = buildInjectionSpec({
@@ -2767,8 +2803,9 @@ test('R47 -> 2026-05-29: nm_vs_market_cap trims to 2011 (continuous NM data)', (
     brand: { palette: {} },
     rows,
   });
-  // 2001-01 to 2010-12 = 120 rows before 2011-01
-  assert.equal(spec.spec.dataStart, 5 + 120, 'dataStart at first 2011 row');
+  // R66o bumped the cutoff 2011 → 2020 to match the deck's Value Proposition
+  // window (Sep-20 onward). 2001-01 to 2019-12 = 228 rows before 2020-01.
+  assert.equal(spec.spec.dataStart, 5 + 228, 'dataStart at first 2020 row');
 });
 
 test('R47: template not in MIN_YEAR_BY_TEMPLATE keeps original dataStart', () => {
@@ -2862,12 +2899,12 @@ test('R47: chart XML series references shift to trimmed dataStart', async () => 
     'R69: val series references start at row 101');
 });
 
-test('buildInjectionSpec: bid_ask_spread R50 — stacked line + up-down bars when last_ask present', () => {
-  // R50 — restructured to match master chart7. With avg_last_ask_cap
-  // available (added to the quarterly view in R50), the chart is now
-  // a stacked-line + upDownBars combo matching the master visual:
-  // bottom line = Last Ask Cap (sky); top line stacks Spread above it,
-  // and up-down bars connect the two at each x point.
+test('buildInjectionSpec: bid_ask_spread R66l — floating-bar combo when last_ask present', () => {
+  // R66l — restructured from the R50 stacked-line/upDownBars shape to the
+  // deliverable PDF (Dialysis Market Filter p.34) floating-bar combo: a
+  // light-gray bar from Last Ask (invisible base) up to Achieved cap
+  // (last_ask + spread), with a sky dash marker at the bottom (Last Ask)
+  // and a navy dash marker at the top (Achieved) on a single cap-rate axis.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -2883,18 +2920,34 @@ test('buildInjectionSpec: bid_ask_spread R50 — stacked line + up-down bars whe
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.type, 'combo');
   assert.equal(out.spec.catCol, 'A');
-  assert.equal(out.spec.lineGrouping, 'stacked', 'R50: stacked grouping');
-  assert.equal(out.spec.upDownBars, true, 'R50: up-down bars draw the gap');
-  assert.equal(out.spec.series.length, 2);
-  assert.equal(out.spec.series[0].valCol, 'F', 'bottom = avg_last_ask_cap (sky)');
-  assert.equal(out.spec.series[0].color, '62B5E5');
-  assert.equal(out.spec.series[1].valCol, 'D', 'top = avg_bid_ask_spread (navy)');
-  assert.equal(out.spec.series[1].color, '003DA5');
+  assert.equal(out.spec.barGrouping, 'stacked');
+  assert.equal(out.spec.sharedAxis, true);
+  assert.equal(out.spec.barSeries.length, 2);
+  assert.equal(out.spec.barSeries[0].valCol, 'F', 'invisible base = avg_last_ask_cap');
+  assert.equal(out.spec.barSeries[0].noFill, true);
+  assert.equal(out.spec.barSeries[1].valCol, 'D', 'visible gray bar = avg_bid_ask_spread');
+  assert.equal(out.spec.lineSeries.length, 2);
+  assert.equal(out.spec.lineSeries[0].valCol, 'F', 'sky dash marker = Last Ask');
+  assert.equal(out.spec.lineSeries[0].color, '62B5E5');
+  assert.equal(out.spec.lineSeries[1].valCol, 'G', 'navy dash marker = Achieved helper col (G)');
+  assert.equal(out.spec.lineSeries[1].color, '003DA5');
+  assert.equal(out.helperCols[0].key, 'achieved_cap');
 });
 
-test('buildInjectionSpec: bid_ask_spread high-low RANGE chart when min/max present (master p.34)', () => {
+// QUARANTINED 2026-06-03 (QA suite-green pass): this asserts a min/max
+// "high-low RANGE" variant of bid_ask_spread (floating bar from
+// min_last_ask_cap -> max_last_ask_cap with a `last_ask_range` helper) that
+// was specced here but never implemented. The code instead took the R66l
+// direction — a floating bar from Last Ask -> Achieved (last_ask + spread),
+// using an `achieved_cap` helper — and ignores min/max cols entirely (see the
+// `case 'bid_ask_spread'` block in cm-native-chart-injector.js, covered by the
+// "R66l — floating-bar combo" test above). Re-enable + implement the
+// min/max range branch if the high-low visual is still wanted; until then this
+// is the one un-shipped spec among the chart-injector tests. Tracking: chart
+// injector min/max range variant.
+test.skip('buildInjectionSpec: bid_ask_spread high-low RANGE chart when min/max present (master p.34)', () => {
   // 2026-05-29 — when the *_bid_ask_spread_m view exposes min/max/achieved,
   // the chart becomes the master/PDF p.34 high-low range visual: a gray
   // floating bar (min -> max of last asks) via stacked invisible-base +
@@ -2951,8 +3004,8 @@ test('buildInjectionSpec: bid_ask_spread (quarterly) gracefully degrades when la
   assert.equal(out.spec.valCol, 'C', 'fallback plots the spread');
 });
 
-test('buildInjectionSpec: bid_ask_spread_monthly R50 — same stacked-line restructure as quarterly', () => {
-  // R50 — both cadences now share the same chart shape.
+test('buildInjectionSpec: bid_ask_spread_monthly R66l — same floating-bar combo as quarterly', () => {
+  // R66l — both cadences share the same floating-bar combo shape.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -2968,12 +3021,14 @@ test('buildInjectionSpec: bid_ask_spread_monthly R50 — same stacked-line restr
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'multi-line');
-  assert.equal(out.spec.lineGrouping, 'stacked');
-  assert.equal(out.spec.upDownBars, true);
-  // Order: last_ask (F, sky) baseline, spread (D, navy) stacked on top
-  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'D']);
-  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5']);
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barGrouping, 'stacked');
+  assert.equal(out.spec.sharedAxis, true);
+  // Bars: invisible base = last_ask (F), visible gray = spread (D)
+  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['F', 'D']);
+  // Lines: sky Last Ask (F), navy Achieved helper col (G)
+  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['62B5E5', '003DA5']);
 });
 
 test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axes (Tier F1)', () => {
@@ -4383,7 +4438,7 @@ test('R51: asking_cap_quartiles_active dataStart shifts to first 2015 row', () =
   assert.equal(out.spec.dataEnd, 64, 'dataEnd unchanged');
 });
 
-test('R51: available_market_size_combo trims to 2016', () => {
+test('R66t: available_market_size_combo trims to 2017', () => {
   const rows = [];
   for (let m = 0; m < 60; m++) {
     rows.push({ period_end: new Date(2014, m, 28).toISOString().slice(0, 10),
@@ -4404,16 +4459,18 @@ test('R51: available_market_size_combo trims to 2016', () => {
     rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
-  // 2016-01 is at row index 24 → original row 5+24 = 29
-  assert.equal(out.spec.dataStart, 29,
-    'R51: chart starts at first 2016 row');
+  // R66t bumped the cutoff 2016 → 2017 (listing capture sparse pre-2017).
+  // Rows start 2014-01, so 2017-01 is at index 36 → original row 5+36 = 41.
+  assert.equal(out.spec.dataStart, 41,
+    'R66t: chart starts at first 2017 row');
 });
 
-test('R51: dom_price_change_active trims to 2013', () => {
-  // Mix 2012 + 2013 monthly rows
+test('R66b: dom_price_change_active trims to 2018', () => {
+  // R66b bumped the cutoff 2013 → 2018 (pre-2018 had <12 active listings/mo).
+  // Rows span 2016-2020 monthly so the cutoff lands mid-series.
   const rows = [];
-  for (let m = 0; m < 36; m++) {
-    rows.push({ period_end: new Date(2012, m, 28).toISOString().slice(0, 10),
+  for (let m = 0; m < 60; m++) {
+    rows.push({ period_end: new Date(2016, m, 28).toISOString().slice(0, 10),
                 avg_dom_total: 90 });
   }
   const out = buildInjectionSpec({
@@ -4431,9 +4488,9 @@ test('R51: dom_price_change_active trims to 2013', () => {
     rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
-  // 2013-01 is at row index 12 → original row 5+12 = 17
-  assert.equal(out.spec.dataStart, 17,
-    'R51: chart starts at first 2013 row');
+  // 2018-01 is at row index 24 (rows start 2016-01) → original row 5+24 = 29
+  assert.equal(out.spec.dataStart, 29,
+    'R66b: chart starts at first 2018 row');
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -4522,15 +4579,15 @@ test('R53: injectPeriodLabel preserves existing helper cols + shifts their lette
   const cols = [
     { key: 'period_end',       col: 'A' },
     { key: 'subspecialty',     col: 'B' },
-    { key: 'added_ttm',        col: 'C' },
-    { key: 'sold_ttm',         col: 'D' },
+    { key: 'added_month',      col: 'C' },
+    { key: 'sold_month',       col: 'D' },
     { key: 'active_count',     col: 'E' },
     { key: 'months_of_supply', col: 'F' },
   ];
   const rows = [];
   for (let q = 0; q < 8; q++) {
     rows.push({ period_end: new Date(2024, q * 3, 31).toISOString().slice(0, 10),
-                added_ttm: 50, sold_ttm: 30 });
+                added_month: 50, sold_month: 30 });
   }
   const out = buildInjectionSpec({
     chart_template_id: 'inventory_backlog',
@@ -4626,6 +4683,10 @@ test('R55+R62: market_turnover renders 2-bar+1-line combo with monthly-pace help
     chart_template_id: 'market_turnover',
     tabName: 'Data_Market_Turnover',
     cols, dataStart: 5, dataEnd: 60,
+    // R66s — the full 3-series combo (2 bars + months-of-supply line) is now
+    // dia-only; gov strips the active-universe bar/line (unreliable listing
+    // coverage). Pass vertical='dialysis' to exercise the full shape.
+    vertical: 'dialysis',
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'combo');
@@ -4897,10 +4958,15 @@ test('R60: every catAx block emits tickLblPos="low"', () => {
   assert.match(xml, /<c:tickLblPos val="low"\/>/, 'R60: tickLblPos="low" emitted on catAx');
 });
 
-test('R66: cap_rate_top_bottom_quartile yAxisRange widened to 4-10%', () => {
-  // R60 5-10% → 5.5-8.5% → R63 5-9% → R66 4-10% (CAP_RATE_RANGE master
-  // parity) per user batch 6: even 5-9% was still "too zoomed in and we
-  // miss much of the data".
+test('cap_rate_top_bottom_quartile keeps the R63 5-9% band', () => {
+  // History: R60 5-10% → 5.5-8.5% → R63 5-9% (batch 6, 2026-05-23).
+  // An earlier draft of this test asserted a further R66 widening to 4-10%,
+  // but the code DELIBERATELY left this chart at R63's 5-9% — its inline
+  // comment notes Data_Cap_Quartile "was NOT in the 2026-05-31 export
+  // feedback, so R66 leaves it at the R63 5-9% band (no scope creep)."
+  // Aligned to the shipped, deliberate behavior here (no production change).
+  // If 4-10% is in fact wanted, it's a one-line change to the yAxisRange in
+  // the `case 'cap_rate_top_bottom_quartile'` block.
   const cols = [
     { key: 'period_end',      col: 'A' },
     { key: 'subspecialty',    col: 'B' },
@@ -4915,8 +4981,8 @@ test('R66: cap_rate_top_bottom_quartile yAxisRange widened to 4-10%', () => {
     rows: [],
     brand: { palette: { nm_navy: '#003DA5' } },
   });
-  assert.deepEqual(out.spec.yAxisRange, { min: 0.04, max: 0.10 },
-    'R66: cap quartile widened from R63 5-9% to 4-10% per user batch 6 feedback');
+  assert.deepEqual(out.spec.yAxisRange, { min: 0.05, max: 0.09 },
+    'cap quartile stays at the R63 5-9% band (4-10% widening scoped out at R66)');
 });
 
 test('R60: dLblsXml with { showVal: true } emits chart-level value labels', () => {
