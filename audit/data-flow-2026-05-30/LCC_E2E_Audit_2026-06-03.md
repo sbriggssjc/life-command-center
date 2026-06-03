@@ -202,3 +202,46 @@ live verification on Palestra (dia 26502):
 3. **Lead-row dedupe:** create_lead should skip inserting a new domain lead row
    when an open lead for the same property+source exists (mirror of the
    opportunity guard).
+
+
+## Addendum 6 — E2E#6 residuals fixed (PR #1024 second commit, pending deploy)
+
+All three residuals addressed, code-only (no migration / no ordering constraint):
+1. Banner negative case — `needsLead` now includes `open_opportunity === false`
+   from the authoritative priority-band check.
+2. Placeholder entity names — `isPlaceholderEntityName` (`^property [0-9a-f-]+$`)
+   + refresh helpers; `ensureEntityLink` and `bridgeCreateLead`'s
+   entity_id-supplied path adopt the real owner name (soft-fail). The lingering
+   `9bde3355…` placeholder self-heals on the next create-lead.
+3. Lead-row idempotence — `bridgeCreateLead` checks for an existing open lead
+   (gov: matched_property_id+lead_source; dia: source+source_ref, with
+   `source_ref = property_id` now stamped) before inserting; voided/closed don't block.
+
+Post-deploy verification plan: negative-case banner on a no-opp property;
+`already_open` + name heal on Palestra (watch: heal must run BEFORE the
+already_open early-return); double-click → 1 opportunity AND 1 lead row.
+
+
+## Addendum 7 — PR #1024 residuals verified live; one new blocker found (E2E#7)
+
+Final verification of the three residual fixes (all deployed):
+- **Negative-case banner ✓** — gov 5450 (Bloomington) fresh open offers
+  "Create the lead" when `open_opportunity === false`.
+- **Lead-row idempotence ✓** — deliberate double-click on 5450 → exactly ONE new
+  `prospect_leads` row.
+- **`already_open` + name heal ✓** — one create-lead on Palestra reused the open
+  opportunity (still exactly 1) AND healed the entity name from
+  `property <uuid>` → **"Palestra Properties"**.
+
+**E2E#7a (NEW BLOCKER, root-caused in SQL):** the create-lead opportunity insert
+fails silently for any entity with a pre-existing cadence —
+`23505 uq_cadence_contact_property` raised inside `bd_opportunity_auto_seed_cadence`
+rolls back the opportunity. Verified: 5450's asset entity ("Acquest Development")
+carries a pre-seeded cadence → lead created, opportunity never lands. Blast
+radius: the ~305 pre-seeded cadence entities. Fix: trigger ON CONFLICT →
+reactivate-and-link the existing cadence. Prompt:
+`CLAUDECODE_PROMPT_E2E7_cadence_trigger_conflict.md` (also folds in two console
+bugs: dia `v_sf_activity_feed.sf_account_id` 400 on every detail load, and
+`renderRecentEmails` `jsStringArg` ReferenceError; plus design notes on
+org-vs-asset entity duality for cross-flow idempotence and legacy `source_ref`
+backfill).
