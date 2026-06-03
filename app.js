@@ -300,6 +300,12 @@ const SOS_URLS = {
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // Safe JSON for embedding in HTML onclick attributes — escapes <, >, &, ', "
 function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;').replace(/"/g,'&quot;'); }
+// Quote a string as a JS single-quoted literal for inline onclick handlers.
+// Mirror of ops.js::jsStringArg — defined here too because app.js loads BEFORE
+// ops.js (index.html), so renderRecentEmails() ran before the ops.js global
+// existed → "ReferenceError: jsStringArg is not defined" on every Today emails
+// widget render (E2E#6, 2026-06-03).
+function jsStringArg(s) { return `'${String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`; }
 
 // Normalize the return shape of diaQuery and govQuery. dia returns the bare
 // row array; gov returns {data, count}. detail.js / ops.js / dialysis.js /
