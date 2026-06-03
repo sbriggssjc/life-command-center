@@ -363,8 +363,10 @@ async function handlePriorityQueueList(req, res) {
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
 
-  // Per-band counts for the chip row (small projection over the full view).
-  const countsPath = 'v_priority_queue_enriched?select=priority_band&limit=5000';
+  // Per-band counts for the chip row. Read the pre-aggregated view so the
+  // 1000-row PostgREST cap can't truncate the tally (QA#3). The view collapses
+  // the queue to one row per band, so a plain select returns every band.
+  const countsPath = 'v_priority_queue_band_counts?select=priority_band,n';
 
   const [itemsR, countsR] = await Promise.all([
     opsQuery('GET', itemsPath),
@@ -381,7 +383,8 @@ async function handlePriorityQueueList(req, res) {
   if (countsR.ok && Array.isArray(countsR.data)) {
     for (const r of countsR.data) {
       const b = r.priority_band || '?';
-      countMap[b] = (countMap[b] || 0) + 1; total++;
+      const n = Number(r.n) || 0;
+      countMap[b] = n; total += n;
     }
   }
   // Stable doctrinal order for the chips.
