@@ -605,7 +605,7 @@ async function domainInsert(domain, table, row) {
 async function bridgeCreateLead(req, res, user, workspaceId) {
   const {
     domain, property_id, entity_id, owner_name, true_owner_name,
-    owner_role, label, property_address, notes, source,
+    true_owner_is_operator, owner_role, label, property_address, notes, source,
   } = req.body || {};
 
   if (!domain || (domain !== 'gov' && domain !== 'dia' && domain !== 'government' && domain !== 'dialysis')) {
@@ -617,7 +617,12 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
 
   const normDomain = (domain === 'government') ? 'gov' : (domain === 'dialysis') ? 'dia' : domain;
   const leadSource = source || 'property_flow';
-  const ownerDisplay = true_owner_name || owner_name || label || ('Property ' + property_id);
+  // BD outreach targets the landlord, never the tenant. When the caller flags
+  // the resolved "true owner" as the operator (dialysis operator-chain model),
+  // the true_owner is the tenant — anchor the entity/lead on the recorded owner
+  // instead. Belt-and-suspenders to the frontend null-ing it (Bug a, 2026-06-03).
+  const effectiveTrueOwner = true_owner_is_operator ? null : true_owner_name;
+  const ownerDisplay = effectiveTrueOwner || owner_name || label || ('Property ' + property_id);
 
   // 1. Resolve/create the canonical owner entity, anchored to the asset.
   let resolvedEntityId = entity_id || null;
@@ -647,7 +652,7 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
       matched_property_id: property_id,
       address: property_address || label || null,
       recorded_owner: owner_name || null,
-      true_owner: true_owner_name || null,
+      true_owner: effectiveTrueOwner || null,
       owner_type: owner_role || null,
       pipeline_status: 'new',
       research_status: 'pending',
@@ -658,7 +663,7 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     leadRow = {
       source: leadSource,
       lead_name: ownerDisplay,
-      lead_company: owner_name || true_owner_name || null,
+      lead_company: owner_name || effectiveTrueOwner || null,
       property_address: property_address || label || null,
       status: 'new',
       priority: 'normal',
@@ -672,26 +677,45 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
   const leadId = (leadResult.data && (leadResult.data.lead_id || leadResult.data.id)) || null;
 
   // 3. Open a BD opportunity on LCC (is_open is GENERATED — omit it).
+  // Idempotency (Bug b, 2026-06-03): a second "Create lead" / "open opportunity"
+  // click must NOT open a duplicate. If this entity already has an OPEN prospect
+  // opportunity, reuse it (and its already-seeded cadence) instead of inserting.
   let bdOpportunityId = null;
-  const oppResult = await opsQuery('POST', 'bd_opportunities', {
-    workspace_id: workspaceId,
-    entity_id: resolvedEntityId,
-    type: 'prospect',
-    stage: 'identified',
-    vertical: normDomain,
-    owner_user_id: user.id,
-    opened_at: new Date().toISOString(),
-    metadata: { origin: 'property_flow', source_domain: normDomain, source_property_id: String(property_id), lead_id: leadId },
-  });
+  let alreadyOpen = false;
   let cadenceSeeded = false;
   let cadenceNextTouchDue = null;
-  if (oppResult.ok) {
-    const opp = Array.isArray(oppResult.data) ? oppResult.data[0] : oppResult.data;
-    bdOpportunityId = (opp && opp.id) || null;
-    // The bd_opportunity_auto_seed_cadence trigger fires synchronously on this
-    // INSERT, so by now the onboarding cadence exists. Read back its next touch
-    // so the property "Next step" banner can render "On cadence ✓ — next touch
-    // <date>" instead of redundantly offering "Add to cadence" (Nit 2).
+
+  const existingOpp = await opsQuery('GET',
+    'bd_opportunities?select=id&entity_id=eq.' + pgFilterVal(resolvedEntityId)
+    + '&type=eq.prospect&is_open=is.true&order=opened_at.desc&limit=1');
+  if (existingOpp.ok && Array.isArray(existingOpp.data) && existingOpp.data[0]) {
+    bdOpportunityId = existingOpp.data[0].id;
+    alreadyOpen = true;
+  } else {
+    const oppResult = await opsQuery('POST', 'bd_opportunities', {
+      workspace_id: workspaceId,
+      entity_id: resolvedEntityId,
+      type: 'prospect',
+      stage: 'identified',
+      vertical: normDomain,
+      owner_user_id: user.id,
+      opened_at: new Date().toISOString(),
+      metadata: { origin: 'property_flow', source_domain: normDomain, source_property_id: String(property_id), lead_id: leadId },
+    });
+    if (oppResult.ok) {
+      const opp = Array.isArray(oppResult.data) ? oppResult.data[0] : oppResult.data;
+      bdOpportunityId = (opp && opp.id) || null;
+    } else {
+      console.warn('[create_lead] bd_opportunity insert failed (non-fatal):', oppResult.data);
+    }
+  }
+
+  if (bdOpportunityId) {
+    // The bd_opportunity_auto_seed_cadence trigger fires synchronously on INSERT,
+    // so a cadence exists (whether just-seeded or from the pre-existing opp). Read
+    // back its next touch so the property "Next step" banner can render
+    // "On cadence ✓ — next touch <date>" instead of redundantly offering
+    // "Add to cadence" (Nit 2).
     cadenceSeeded = true;
     try {
       const cadR = await opsQuery('GET',
@@ -701,8 +725,6 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
         cadenceNextTouchDue = cadR.data[0].next_touch_due || null;
       }
     } catch (_e) { /* non-fatal: banner falls back to a date-less "On cadence ✓" */ }
-  } else {
-    console.warn('[create_lead] bd_opportunity insert failed (non-fatal):', oppResult.data);
   }
 
   // 4. Canonical activity for the timeline.
@@ -737,6 +759,7 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     lead_id: leadId,
     entity_id: resolvedEntityId,
     bd_opportunity_id: bdOpportunityId,
+    already_open: alreadyOpen,
     created_entity: createdEntity,
     cadence_seeded: cadenceSeeded,
     cadence_next_touch_due: cadenceNextTouchDue,
@@ -818,9 +841,17 @@ async function bridgeOpenOpportunity(req, res, user, workspaceId) {
     return res.status(rpc.status || 500).json({ error: 'open_opportunity_failed', detail: rpc.data });
   }
 
-  // The RPC returns the new (or existing) bd_opportunity uuid as a scalar.
-  const oppId = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
-  return res.status(201).json({ ok: true, bd_opportunity_id: oppId || null });
+  // The RPC returns a single row {opportunity_id, already_open}: the existing
+  // open opportunity is reused when present (Bug b idempotency), else a new one
+  // is opened. PostgREST surfaces a RETURNS TABLE function as an array of rows.
+  const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+  const oppId = row ? (row.opportunity_id || null) : null;
+  const alreadyOpen = !!(row && row.already_open);
+  return res.status(alreadyOpen ? 200 : 201).json({
+    ok: true,
+    bd_opportunity_id: oppId,
+    already_open: alreadyOpen,
+  });
 }
 
 // ============================================================================

@@ -373,6 +373,15 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         const entRes = await _entityApiFetch('/api/entities?' + params.toString());
         const ent = entRes?.entity || null;
         entityMeta = ent?.metadata || null;
+        // Stash the resolved asset entity id onto the ownership cache so the
+        // "Next step" banner can render the PERSISTED lead/cadence state on a
+        // fresh re-open instead of re-offering "Create the lead" (Bug c,
+        // 2026-06-03). bridgeCreateLead anchors the BD opportunity to this same
+        // asset entity, so an open-opportunity / cadence check keyed on it
+        // reflects the truth across reopens.
+        if (ent && ent.id && ownership && !ownership.owner_entity_id) {
+          ownership.owner_entity_id = ent.id;
+        }
       }
     } catch (e) {
       console.warn('entity metadata lookup failed', e);
@@ -5963,9 +5972,38 @@ async function _udFetchPriorityBand() {
   try {
     const doFetch = (window.LCC_AUTH && window.LCC_AUTH.apiFetch) ? window.LCC_AUTH.apiFetch : fetch;
     const res = await doFetch('/api/priority-band?domain=' + encodeURIComponent(db) + '&property_id=' + encodeURIComponent(pid));
-    if (res && res.ok) { const data = await res.json(); _udCache.priorityBand = (data && data.priority_band) ? data : null; }
-    else { _udCache.priorityBand = null; }
+    if (res && res.ok) {
+      const data = await res.json();
+      _udCache.priorityBand = (data && data.priority_band) ? data : null;
+      // The priority-band endpoint also resolves the owner's open BD opportunity
+      // + cadence (keyed on the queue's entity_id). Trust it only when the
+      // backend actually resolved an owner entity (data.entity_id present) — a
+      // property with no queue row carries no entity, so the asset-entity
+      // fallback below must run instead. (Bug c, 2026-06-03)
+      if (data && data.entity_id && data.open_opportunity != null) {
+        _udCache.ownerOpp = { open: !!data.open_opportunity, cadence_next_touch_due: data.cadence_next_touch_due || null };
+      }
+    } else { _udCache.priorityBand = null; }
   } catch (_e) { _udCache.priorityBand = null; }
+  // Fallback: if the property's owner has dropped out of the priority queue
+  // (e.g. led but no longer due) the by-property band carries no opportunity
+  // signal. Resolve it directly from the asset entity id captured at load.
+  if (_udCache.ownerOpp === undefined) {
+    const own = _udCache.ownership || {};
+    const eid = own.owner_entity_id || null;
+    if (eid) {
+      try {
+        const doFetch2 = (window.LCC_AUTH && window.LCC_AUTH.apiFetch) ? window.LCC_AUTH.apiFetch : fetch;
+        const r2 = await doFetch2('/api/priority-band?entity_id=' + encodeURIComponent(eid));
+        if (r2 && r2.ok) {
+          const d2 = await r2.json();
+          if (d2 && d2.open_opportunity != null) {
+            _udCache.ownerOpp = { open: !!d2.open_opportunity, cadence_next_touch_due: d2.cadence_next_touch_due || null };
+          } else { _udCache.ownerOpp = null; }
+        } else { _udCache.ownerOpp = null; }
+      } catch (_e) { _udCache.ownerOpp = null; }
+    } else { _udCache.ownerOpp = null; }
+  }
   if (typeof _setUdCache === 'function') _setUdCache(_udCache);
   return _udCache.priorityBand;
 }
@@ -5986,15 +6024,23 @@ function _udRenderNextStep() {
   const trueResolved = own.true_owner_id || own.true_owner_canonical || own.true_owner || own.owner_entity_id || null;
   const linkPending = !!(lk && lk.pending > 0 && !(lk.linked > 0));
   const linked = !!(lk && lk.linked > 0);
-  const needsLead = !!(band && band.reason === 'open_bd_opportunity_needed') || !own.owner_entity_id;
-  // Is the owner already on a cadence? Either we just seeded one via create_lead
-  // (stashed in _udCache.cadence), or the priority band is one of the cadence-
-  // driven bands (P0 developer-overdue, P6 onboarding-step-due, P7 steady-state)
-  // which only exist when a cadence row is due. (Nit 2)
+  // Persisted lead/cadence truth for this owner entity (Bug c, 2026-06-03):
+  // an open BD opportunity / cadence resolved from LCC on load. This survives
+  // reopens — the priority band alone went stale (P0.5 "needs a lead") once the
+  // lead was created, and the domain ownership row never carried owner_entity_id,
+  // so the banner kept re-offering "Create the lead" on already-led properties.
+  const oo = _udCache.ownerOpp || null;
+  const hasOpenOpp = !!(oo && oo.open);
+  const needsLead = !hasOpenOpp
+    && (!!(band && band.reason === 'open_bd_opportunity_needed') || !own.owner_entity_id);
+  // Is the owner already on a cadence? Either the persisted check found one, we
+  // just seeded one via create_lead (stashed in _udCache.cadence), or the
+  // priority band is one of the cadence-driven bands (P0 developer-overdue, P6
+  // onboarding-step-due, P7 steady-state) which only exist when a cadence is due.
   const cad = _udCache.cadence || null;
   const bandIsCadence = !!(band && ['P0', 'P6', 'P7'].indexOf(band.priority_band) !== -1);
-  const onCadence = !!(cad && cad.seeded) || bandIsCadence;
-  const cadenceNextTouch = (cad && cad.next_touch_due) || (band && band.next_touch_due) || null;
+  const onCadence = !!(oo && oo.cadence_next_touch_due) || !!(cad && cad.seeded) || bandIsCadence;
+  const cadenceNextTouch = (oo && oo.cadence_next_touch_due) || (cad && cad.next_touch_due) || (band && band.next_touch_due) || null;
   // First unmet step in the spine = the single next action.
   let step;
   if (!recordedOwner) {
@@ -6022,7 +6068,7 @@ function _udRenderNextStep() {
   // Progress trail node states (honest: unknown stays 'todo', not 'done').
   const stOwner = trueResolved ? 'done' : (recordedOwner ? 'next' : 'todo');
   const stLink = linked ? 'done' : (linkPending ? 'next' : (lk ? 'todo' : 'na'));
-  const stLead = (own.owner_entity_id && !needsLead) ? 'done' : 'todo';
+  const stLead = (hasOpenOpp || (own.owner_entity_id && !needsLead)) ? 'done' : 'todo';
   const trail = [['Owner', stOwner], ['Link', stLink], ['Lead', stLead], ['Cadence', onCadence ? 'done' : 'todo']];
   let h = '<div class="dns-row">';
   h += '<span class="dns-flag">\u25B6 Next step</span>';
@@ -6108,10 +6154,18 @@ async function _udResolveEntityViaCreateLead() {
   const db = _udCache.db;
   const pid = (_udCache.ids && _udCache.ids.property_id) || own.property_id;
   if (!pid) return { ok: false, error: 'No property id in context' };
+  // BD outreach targets the landlord, never the tenant. When the dialysis
+  // "true owner" resolves to the OPERATOR (operator-chain model — flagged on
+  // the ownership cache by true_owner_is_operator), do NOT pass it as the
+  // owner anchor: send true_owner_name=null and surface the flag so
+  // bridgeCreateLead anchors on the recorded owner (the landlord) instead.
+  // (Bug a, 2026-06-03 — prop 26502 was anchoring to DaVita, the operator.)
+  const trueIsOperator = !!own.true_owner_is_operator;
   const body = {
     domain: db, property_id: pid, entity_id: own.owner_entity_id || null,
     owner_name: own.recorded_owner_canonical || own.recorded_owner || null,
-    true_owner_name: own.true_owner_canonical || own.true_owner || null,
+    true_owner_name: trueIsOperator ? null : (own.true_owner_canonical || own.true_owner || null),
+    true_owner_is_operator: trueIsOperator,
     owner_role: own.owner_type || null,
     label: (_udCache.property && _udCache.property.address) || (_udCache.fallback && _udCache.fallback.address) || null,
     property_address: (_udCache.property && _udCache.property.address) || null,
@@ -6121,6 +6175,11 @@ async function _udResolveEntityViaCreateLead() {
   if (resp && resp.ok && resp.entity_id) {
     _udCache.ownership = _udCache.ownership || {};
     _udCache.ownership.owner_entity_id = resp.entity_id;
+    // Record the persisted open-opportunity truth so the banner advances live
+    // and survives a reopen without re-offering "Create the lead" (Bug c). The
+    // bridge is idempotent (Bug b): a repeat click returns already_open=true on
+    // the existing opportunity rather than duplicating it.
+    _udCache.ownerOpp = { open: true, cadence_next_touch_due: resp.cadence_next_touch_due || null };
     // The BD opp auto-seeds an onboarding cadence; stash that so the next-step
     // banner shows "On cadence ✓" instead of offering "Add to cadence" again
     // (Nit 2). Clear the cached priority band — it was P0.5 (needs a lead) and
@@ -6140,7 +6199,13 @@ async function _udCreateLeadFromProperty() {
   if (!pid) { showToast('No property id in context', 'error'); return; }
   try {
     const resp = await _udResolveEntityViaCreateLead();
-    if (resp && resp.ok) { showToast('Lead created' + (resp.bd_opportunity_id ? ' · BD opportunity opened' : ''), 'success'); try { _udRenderNextStep(); } catch (_e) {} }
+    if (resp && resp.ok) {
+      const msg = resp.already_open
+        ? 'Lead already live · BD opportunity already open'
+        : 'Lead created' + (resp.bd_opportunity_id ? ' · BD opportunity opened' : '');
+      showToast(msg, 'success');
+      try { _udRenderNextStep(); } catch (_e) {}
+    }
     else { showToast('Create lead failed: ' + ((resp && resp.error) || 'unknown'), 'error'); }
   } catch (e) { showToast('Create lead error: ' + e.message, 'error'); }
 }
