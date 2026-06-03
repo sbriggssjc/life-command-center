@@ -1196,9 +1196,10 @@ async function renderSosLinkWorklist() {
     + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Review Console</button></div>';
   html += '<div class="rc-intro">Weak (single-signal) links between SOS-enriched FL recorded owners and CRM contacts. Confirm to link into the contact structure, or reject. Strong (entity-identity) links were auto-applied.</div>';
   if (!items.length) { html += '<div class="ops-empty">No links awaiting review. \u2713</div>'; el.innerHTML = html; return; }
-  items.forEach(function (it) {
+  html += '<div class="rc-progress"><span id="soslinkRemaining">' + items.length + '</span> to confirm</div>';
+  items.forEach(function (it, _ix) {
     const sig = Array.isArray(it.match_signals) ? it.match_signals.join(', ') : '';
-    html += '<div class="q-item" id="soslink-' + it.link_id + '">'
+    html += '<div class="q-item' + (_ix === 0 ? ' pq-next' : '') + '" id="soslink-' + it.link_id + '">'
       + '<div class="q-item-header"><span class="q-item-title">' + esc(it.recorded_owner_name || 'Owner') + '</span>'
       + '<div class="q-item-badges"><span class="q-badge">' + esc(sig) + '</span></div></div>'
       + '<div class="q-item-meta">Matched contact: <b>' + esc(it.contact_name || it.contact_company || '\u2014') + '</b>'
@@ -1231,8 +1232,29 @@ async function resolveOwnerLink(linkId, decision, propId) {
       row.querySelector('.q-actions').innerHTML = '<span class="q-badge">' + (decision === 'confirm' ? 'Confirmed \u2713' : 'Rejected') + '</span>' + fwd;
     }
     if (typeof showToast === 'function') showToast(decision === 'confirm' ? 'Link confirmed' : 'Link rejected', 'success');
+    // Self-propelling contract: mark done, decrement the remaining counter, and
+    // advance focus to the next pending link so the work pulls itself forward.
+    if (row) row.classList.add('resolved');
+    _sosAdvanceToNext();
   } else {
     if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+function _sosAdvanceToNext() {
+  var scope = document.getElementById('reviewConsoleContent');
+  if (!scope) return;
+  var pending = scope.querySelectorAll('.q-item[id^="soslink-"]:not(.resolved)');
+  var remEl = document.getElementById('soslinkRemaining');
+  if (remEl) remEl.textContent = pending.length;
+  scope.querySelectorAll('.q-item.pq-next').forEach(function (n) { n.classList.remove('pq-next'); });
+  if (pending.length) {
+    var next = pending[0];
+    next.classList.add('pq-next');
+    next.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else {
+    var prog = scope.querySelector('.rc-progress');
+    if (prog) prog.innerHTML = 'All links reviewed \u2713';
+    if (typeof showToast === 'function') showToast('All owner-contact links reviewed \u2713', 'success');
   }
 }
 window.resolveOwnerLink = resolveOwnerLink;
@@ -1293,16 +1315,19 @@ async function renderPriorityQueuePage(band) {
   });
   html += '</div>';
   if (!items.length) { html += '<div class="ops-empty">Nothing in this band. \u2713</div>'; el.innerHTML = html; return; }
-  items.forEach(function (it) {
+  items.forEach(function (it, _ix) {
     var domShort = it.source_domain === 'government' ? 'gov' : it.source_domain === 'dialysis' ? 'dia' : (it.source_domain || '');
     var hasProp = it.source_property_id != null && domShort;
+    // Self-propelling contract: elevate the single top item as 'do this first'.
+    var _itemCls = 'q-item' + (_ix === 0 ? ' pq-hero' : '');
+    var _heroFlag = _ix === 0 ? '<div class="pq-hero-flag">\u25B6 Do this first</div>' : '';
     var ctx = [];
     if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + (Number(it.total_property_count) === 1 ? ' property' : ' properties'));
     var money = _pqMoney(it.current_annual_rent_total);
     if (money) ctx.push(money + ' rent');
     if (it.is_cross_vertical) ctx.push('cross-vertical');
     var addr = hasProp ? (it.source_property_address || '') + (it.source_property_city ? ', ' + it.source_property_city : '') + (it.source_property_state ? ', ' + it.source_property_state : '') : '';
-    html += '<div class="q-item">'
+    html += '<div class="' + _itemCls + '">' + _heroFlag
       + '<div class="q-item-header">'
       + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
       + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
