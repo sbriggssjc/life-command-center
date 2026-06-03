@@ -13,8 +13,9 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-// ── Import all 9 API handlers (Phase 4b consolidated) ──────────────────────
+// ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
+// (capital-markets + bridges imported just below — Round 76fb)
 import actionsHandler from './api/actions.js';
 import adminHandler from './api/admin.js';
 import applyChangeHandler from './api/apply-change.js';
@@ -24,6 +25,15 @@ import intakeHandler from './api/intake.js';
 import operationsHandler from './api/operations.js';
 import queueHandler from './api/queue.js';
 import syncHandler from './api/sync.js';
+
+// ── Two more existing Vercel functions that were never mounted on Railway ───
+// (Round 76fb) — without these, /api/capital-markets and the /api/bridges
+// family fell through to the SPA catch-all and returned index.html (200),
+// breaking the Capital Markets dashboard/exports/RCA import and the
+// Microsoft/Salesforce connector webhooks. Both .js files already exist and
+// count toward the 12-function cap; this is purely Railway routing.
+import capitalMarketsHandler from './api/capital-markets.js';
+import bridgesHandler from './api/bridges.js';
 
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -215,7 +225,27 @@ for (const surface of copilotSurfaces) {
   });
 }
 
-// ── Primary handler routes (9 canonical endpoints) ──────────────────────────
+// capital-markets — single function, handles its own ?action= dispatch.
+// No vercel.json rewrites (clients hit /api/capital-markets directly), so the
+// only thing needed on Railway is the bare route.
+app.all('/api/capital-markets', capitalMarketsHandler);
+
+// bridges — _route-dispatched. Mirror the vercel.json friendly aliases exactly
+// (they are the source of truth for the _route/_source mapping) so Railway and
+// Vercel behave identically.
+app.all('/api/bridges', bridgesHandler);
+app.all('/api/enrichment-worker',           (req, res) => { req.query._route = 'worker';   bridgesHandler(req, res); });
+app.all('/api/salesforce-changes',          (req, res) => { req.query._route = 'ingest'; req.query._source = 'salesforce'; bridgesHandler(req, res); });
+app.all('/api/sharepoint-changes',          (req, res) => { req.query._route = 'ingest'; req.query._source = 'sharepoint'; bridgesHandler(req, res); });
+app.all('/api/outlook-changes',             (req, res) => { req.query._route = 'ingest'; req.query._source = 'outlook';    bridgesHandler(req, res); });
+app.all('/api/calendar-changes',            (req, res) => { req.query._route = 'ingest'; req.query._source = 'calendar';   bridgesHandler(req, res); });
+app.all('/api/sf-write',                    (req, res) => { req.query._route = 'write';    bridgesHandler(req, res); });
+app.all('/api/cadence-tick',                (req, res) => { req.query._route = 'cadence';  bridgesHandler(req, res); });
+app.all('/api/sharepoint-extract',          (req, res) => { req.query._route = 'sp_extract'; bridgesHandler(req, res); });
+app.all('/api/sharepoint-extract-callback', (req, res) => { req.query._route = 'sp_extract'; req.query.action = 'callback'; bridgesHandler(req, res); });
+app.all('/api/admin/bridges',               (req, res) => { req.query._route = 'admin';    bridgesHandler(req, res); });
+
+// ── Primary handler routes (11 canonical endpoints) ─────────────────────────
 app.all('/api/actions', actionsHandler);
 app.all('/api/admin', adminHandler);
 app.all('/api/apply-change', applyChangeHandler);
