@@ -1237,6 +1237,88 @@ async function resolveOwnerLink(linkId, decision, propId) {
 }
 window.resolveOwnerLink = resolveOwnerLink;
 
+// ── Priority Queue (BD front door, 2026-06-03) ─────────────────────────────
+// The 'start here' worklist. Renders the doctrinal priority bands from
+// v_priority_queue_enriched, most-urgent first, each row routing into the
+// BD spine (property -> owner -> link -> lead -> cadence).
+function _pqBandColor(band) {
+  var b = String(band || '').toUpperCase();
+  if (b === 'P0') return '#7A1020';
+  if (b === 'P0.5') return 'var(--red)';
+  if (b === 'P1') return 'var(--yellow)';
+  if (b === 'P2' || b === 'P3') return 'var(--purple)';
+  if (b === 'P5') return 'var(--accent2)';
+  if (b === 'P8') return 'var(--green)';
+  return 'var(--text3)';
+}
+function _pqReason(reason) {
+  var r = String(reason || '');
+  var m = r.match(/^agency_active_solicitations:(\d+)$/);
+  if (m) return m[1] + ' active agency solicitation' + (m[1] === '1' ? '' : 's');
+  var map = {
+    lease_expiry_24mo: 'Lease expires within 24 months',
+    open_bd_opportunity_needed: 'Needs a BD opportunity opened',
+    onboarding_cadence_due: 'Onboarding touch due',
+    steady_state_touch_due: 'Steady-state touch due',
+    recent_acquisition_streak: 'Active acquirer (recent buying streak)',
+    aging_building: 'Aging building (replacement candidate)'
+  };
+  if (map[r]) return map[r];
+  return r ? r.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }) : 'BD priority';
+}
+function _pqMoney(v) {
+  var n = Number(v);
+  if (!isFinite(n) || n <= 0) return null;
+  return '$' + Math.round(n).toLocaleString('en-US');
+}
+async function renderPriorityQueuePage(band) {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var qs = '/api/priority-queue?limit=150' + (band ? '&band=' + encodeURIComponent(band) : '');
+  var res = await opsApi(qs);
+  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load the priority queue.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  var data = res.data || {};
+  var items = Array.isArray(data.items) ? data.items : [];
+  var counts = Array.isArray(data.counts) ? data.counts : [];
+  var total = data.total || 0;
+  var html = '<div class="ops-header"><h2>Priority Queue</h2></div>';
+  html += '<div class="rc-intro">Start here. Your highest-leverage BD targets, most urgent band first. Each row routes straight to the property so you can resolve the owner, confirm the CRM link, and open a lead.</div>';
+  // Band filter chips.
+  html += '<div class="pq-chips">';
+  html += '<button class="pq-chip' + (!band ? ' active' : '') + '" onclick="renderPriorityQueuePage()">All <b>' + total + '</b></button>';
+  counts.forEach(function (c) {
+    html += '<button class="pq-chip' + (band === c.band ? ' active' : '') + '" onclick="renderPriorityQueuePage(\'' + esc(c.band) + '\')">'
+      + '<span class="pq-chip-dot" style="background:' + _pqBandColor(c.band) + '"></span>' + esc(c.band) + ' <b>' + c.n + '</b></button>';
+  });
+  html += '</div>';
+  if (!items.length) { html += '<div class="ops-empty">Nothing in this band. \u2713</div>'; el.innerHTML = html; return; }
+  items.forEach(function (it) {
+    var domShort = it.source_domain === 'government' ? 'gov' : it.source_domain === 'dialysis' ? 'dia' : (it.source_domain || '');
+    var hasProp = it.source_property_id != null && domShort;
+    var ctx = [];
+    if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + (Number(it.total_property_count) === 1 ? ' property' : ' properties'));
+    var money = _pqMoney(it.current_annual_rent_total);
+    if (money) ctx.push(money + ' rent');
+    if (it.is_cross_vertical) ctx.push('cross-vertical');
+    var addr = hasProp ? (it.source_property_address || '') + (it.source_property_city ? ', ' + it.source_property_city : '') + (it.source_property_state ? ', ' + it.source_property_state : '') : '';
+    html += '<div class="q-item">'
+      + '<div class="q-item-header">'
+      + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
+      + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(_pqReason(it.reason)) + '</span></div></div>'
+      + (ctx.length ? '<div class="q-item-meta">' + esc(ctx.join(' \u00b7 ')) + '</div>' : '')
+      + (addr ? '<div class="q-item-meta">' + esc(addr) + '</div>' : '')
+      + '<div class="q-actions">'
+      + (hasProp
+          ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(domShort) + '\', {property_id: ' + esc(String(it.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property \u2192</button>'
+          : '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>')
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderPriorityQueuePage = renderPriorityQueuePage;
+
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');
   if (!el) return;

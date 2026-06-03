@@ -75,6 +75,7 @@ app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-clea
 app.all('/api/consolidate-property', (req, res) => { req.query._route = 'consolidate-property'; adminHandler(req, res); });
 app.all('/api/geocode-tick', (req, res) => { req.query._route = 'geocode-tick'; adminHandler(req, res); });
 app.all('/api/priority-band', (req, res) => { req.query._route = 'priority-band'; adminHandler(req, res); });
+app.all('/api/priority-queue', (req, res) => { req.query._route = 'priority-queue'; adminHandler(req, res); });
 app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'; adminHandler(req, res); });
 app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });

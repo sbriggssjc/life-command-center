@@ -111,6 +111,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-lease-tenant-drift': return handleResolveLeaseTenantDrift(req, res);
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     case 'priority-band':              return handlePriorityBand(req, res);
+    case 'priority-queue':             return handlePriorityQueueList(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
@@ -328,6 +329,68 @@ async function handlePriorityBand(req, res) {
     entity_id: row.entity_id || null,
     source_property_address: row.source_property_address || null,
   });
+}
+
+// ============================================================================
+// PRIORITY QUEUE LIST (BD front door, 2026-06-03)
+// GET /api/priority-queue?band=<P1|P0.5|...>&limit=<n>&offset=<n>
+//   The 'start here' worklist: the doctrinal priority bands from
+//   v_priority_queue_enriched, ordered most-urgent first. Returns per-band
+//   counts (for the filter chips) + a page of enriched rows carrying the
+//   property reference so each row routes straight into the BD spine.
+// ============================================================================
+async function handlePriorityQueueList(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const band = req.query.band ? String(req.query.band) : null;
+  const limit = Math.min(300, Math.max(1, parseInt(req.query.limit || '150', 10)));
+  const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
+
+  const selectCols = [
+    'entity_id', 'name', 'vertical', 'priority_band', 'reason', 'days_overdue',
+    'next_touch_due', 'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
+    'total_property_count', 'current_property_count', 'current_annual_rent_total', 'avg_cap_rate',
+    'source_domain', 'source_property_id', 'source_property_address',
+    'source_property_city', 'source_property_state', 'source_property_lease_expiration',
+    'source_property_firm_term_remaining',
+  ].join(',');
+
+  // Items page: most-urgent band first, then most-overdue within band.
+  let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
+    + '&order=priority_band.asc,days_overdue.desc.nullslast'
+    + '&limit=' + limit + '&offset=' + offset;
+  if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
+
+  // Per-band counts for the chip row (small projection over the full view).
+  const countsPath = 'v_priority_queue_enriched?select=priority_band&limit=5000';
+
+  const [itemsR, countsR] = await Promise.all([
+    opsQuery('GET', itemsPath),
+    opsQuery('GET', countsPath),
+  ]);
+  if (!itemsR.ok) {
+    console.warn('[priority-queue] items query failed:', itemsR.status, itemsR.data);
+    return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
+  }
+  const items = Array.isArray(itemsR.data) ? itemsR.data : [];
+
+  const countMap = {};
+  let total = 0;
+  if (countsR.ok && Array.isArray(countsR.data)) {
+    for (const r of countsR.data) {
+      const b = r.priority_band || '?';
+      countMap[b] = (countMap[b] || 0) + 1; total++;
+    }
+  }
+  // Stable doctrinal order for the chips.
+  const BAND_ORDER = ['P0','P0.5','P1','P2','P3','P4','P5','P6','P7','P8'];
+  const counts = Object.keys(countMap)
+    .sort((a, b) => (BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b)))
+    .map(b => ({ band: b, n: countMap[b] }));
+
+  return res.status(200).json({ counts, total, band: band || null, items });
 }
 
 // ============================================================================

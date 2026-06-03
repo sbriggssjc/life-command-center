@@ -1003,6 +1003,7 @@ function handlePageLoad(pageId) {
     case 'pageInbox': if (typeof renderInboxTriage === 'function') renderInboxTriage(); break;
     case 'pageEntities': if (typeof renderEntitiesPage === 'function') renderEntitiesPage(); break;
     case 'pageReviewConsole': if (typeof renderReviewConsolePage === 'function') renderReviewConsolePage(); break;
+    case 'pagePriorityQueue': if (typeof renderPriorityQueuePage === 'function') renderPriorityQueuePage(); break;
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
     case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
     case 'pageOpsHealth': if (typeof renderOpsHealthPage === 'function') renderOpsHealthPage(); break;
