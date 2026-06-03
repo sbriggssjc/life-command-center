@@ -74,9 +74,12 @@ export default withErrorHandler(async function handler(req, res) {
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'sort_date.asc.nullslast' });
 
-      // countMode='estimated' for parity with v2 — pagination meta only needs
-      // an approximate total; skips the second COUNT(*) on the union view.
-      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
+      // countMode='exact': the inbox exclusion above removed the dominant cost
+      // (the ~8.4k inbox rows), so the action-items-only, user-scoped set is now
+      // tiny and an exact COUNT(*) is cheap. The Today widget total must be
+      // accurate — an estimated planner count returns garbage (e.g. 1001) that
+      // disagrees with the exact MV-backed "Open Activities" stat. QA4. (v2 parity below.)
+      const result = await opsQuery('GET', path, undefined, { countMode: 'exact' });
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'my_work' });
     }
 
@@ -294,10 +297,13 @@ async function v2GetMyWork(req, user, workspaceId) {
   if (priority) path += `&priority=eq.${pgFilterVal(priority)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
-  // count=estimated: pagination meta only needs an approximate total. Skips
-  // the second COUNT(*) trip on the v_my_work UNION (action_items + inbox +
-  // research_tasks joined to entities/users), which was the dominant cost.
-  const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
+  // count=exact: the inbox exclusion (item_type=neq.inbox) above removed the
+  // dominant cost — the ~8.4k inbox rows of the v_my_work UNION. The remaining
+  // action-items-only, user-scoped set is tiny, so an exact COUNT(*) is now
+  // affordable. It must be exact: the Today "View all N items" widget reads
+  // this pagination.total and has to agree with the exact MV-backed
+  // "Open Activities" stat (an estimated planner count returns garbage). QA4.
+  const result = await opsQuery('GET', path, undefined, { countMode: 'exact' });
   return { view: 'my_work', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
 }
 
