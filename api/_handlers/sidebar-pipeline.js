@@ -477,6 +477,50 @@ const MORTGAGE_DEED_TYPES = /^(mortgage|deed\s+of\s+trust|assignment\s+of|subord
 // Must be filtered from ownership_history to prevent false owner records.
 const LENDER_PATTERN = /\b(bank|bancorp|bankcentre|bancshares|credit\s*union|mortgage\s*co|lending|savings\s*(and|&)?\s*loan|financial\s*services|capital\s*one|wells\s*fargo|chase\s*manhattan|citibank|us\s*bank|jpmorgan|bmo\s*harris|pnc\s*bank|td\s*bank|fifth\s*third|truist|regions\s*bank|citizens\s*bank|key\s*bank|comerica|zions|m\s*&?\s*t\s*bank|first\s*national\s*bank|umpqua|glacier|webster\s*bank|midwest\s*bankcentre|fannie\s*mae|freddie\s*mac|fhlmc|fnma|ginnie\s*mae)\b/i;
 
+// ── Sale-price bleed defense (QA1, 2026-06-03) ──────────────────────────────
+// CoStar portfolio captures stamp a deal's AGGREGATE sale price onto every
+// constituent property as that property's per-property sold_price, with no
+// per-property allocation — producing implausible per-property prices that
+// pollute Next Best Action value and cap-rate math. The reliable auto-null
+// signature: the SAME sold_price on the SAME sale_date already exists on a
+// DIFFERENT property_id (a genuine single-property sale never shares an
+// identical price+date with another property). Magnitude alone is only a soft
+// flag — large government buildings are legitimately expensive — so an
+// over-ceiling price is flagged for human review but NOT auto-nulled; only the
+// duplicate price+date signature nulls the price. Mirrors the isJunkTenant()
+// style: thresholds live here as named constants.
+export const SALE_PRICE_BLEED_CEILING = {
+  dialysis:    50000000,   // $50M — a single dialysis/medical asset rarely exceeds this
+  government: 250000000,   // $250M — DC trophy federal buildings can be legitimately large
+};
+
+// Probe sales_transactions for the bleed signature. Returns
+// { isAggregate, overCeiling }. isAggregate ⇒ a sale row on ANOTHER property
+// already carries this exact sold_price + sale_date (portfolio aggregate bled
+// through). overCeiling ⇒ price exceeds the per-domain magnitude soft-guard.
+// Note: the FIRST property of a brand-new portfolio capture has no sibling yet,
+// so it isn't caught until a second arrives; the SQL backfill handles already-
+// landed clusters and a later re-capture of the first property self-heals it.
+export async function detectSalePriceBleed(domain, propertyId, soldPrice, datePart) {
+  const out = { isAggregate: false, overCeiling: false };
+  if (soldPrice == null || !Number.isFinite(soldPrice) || soldPrice <= 0) return out;
+
+  const ceiling = SALE_PRICE_BLEED_CEILING[domain] ?? SALE_PRICE_BLEED_CEILING.government;
+  out.overCeiling = soldPrice > ceiling;
+
+  if (!datePart) return out;
+  const dup = await domainQuery(domain, 'GET',
+    `sales_transactions?sold_price=eq.${soldPrice}` +
+    `&sale_date=eq.${encodeURIComponent(datePart)}` +
+    `&property_id=neq.${propertyId}` +
+    `&select=sale_id&limit=1`
+  ).catch(() => ({ ok: false, data: [] }));
+  if (dup.ok && Array.isArray(dup.data) && dup.data.length > 0) {
+    out.isAggregate = true;
+  }
+  return out;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -4590,6 +4634,22 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // a $45.75M acquisition that happened on the same property a few
     // days apart into one row.
     const datePart = saleDate.split('T')[0]; // YYYY-MM-DD
+
+    // QA1 (2026-06-03): refuse to store a portfolio AGGREGATE as a per-property
+    // price. `saleBleed.isAggregate` ⇒ this exact price+date already exists on
+    // another property → null the price + flag out of market metrics.
+    // `saleBleed.overCeiling` ⇒ implausibly large → flag for human review only
+    // (never auto-null on magnitude alone). soldPrice itself is left intact for
+    // matching/broker logic; only the WRITTEN value (writeSoldPrice) changes.
+    const saleBleed = await detectSalePriceBleed(domain, propertyId, soldPrice, datePart);
+    const writeSoldPrice = saleBleed.isAggregate ? null : soldPrice;
+    const saleBleedExclude = saleBleed.isAggregate || saleBleed.overCeiling;
+    if (saleBleed.isAggregate) {
+      console.log(`[sale-price-bleed] property=${propertyId} price=${soldPrice} date=${datePart} — portfolio aggregate detected (duplicate price+date on another property); nulling per-property price`);
+    } else if (saleBleed.overCeiling) {
+      console.log(`[sale-price-bleed] property=${propertyId} price=${soldPrice} date=${datePart} — over per-domain ceiling; flagged for human review (price retained)`);
+    }
+
     const saleD = new Date(datePart);
     const lo = new Date(saleD); lo.setDate(lo.getDate() - 14);
     const hi = new Date(saleD); hi.setDate(hi.getDate() + 14);
@@ -4764,10 +4824,17 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           state:            entity.state   || null,
           agency:           primaryTenant  || null,
           government_type:  metadata.government_type || null,
-          // Compute sold_price_psf when both price and SF are known
-          sold_price_psf:   (soldPrice && parsedSF && parsedSF > 0)
-                            ? Math.round(soldPrice / parsedSF * 100) / 100
+          // Compute sold_price_psf when both price and SF are known.
+          // QA1: a nulled portfolio-aggregate price yields no per-SF figure.
+          sold_price_psf:   (writeSoldPrice && parsedSF && parsedSF > 0)
+                            ? Math.round(writeSoldPrice / parsedSF * 100) / 100
                             : null,
+          // QA1: record the bleed/oversize reason (gov has no notes column).
+          ...(saleBleedExclude ? {
+            sales_exclusion_reason: saleBleed.isAggregate
+              ? `[portfolio-aggregate] per-property price ${soldPrice} on ${datePart} matched another property's sale; nulled — not a valid single-property sale price`
+              : `[oversized-sale-review] sold_price ${soldPrice} exceeds the $${SALE_PRICE_BLEED_CEILING.government.toLocaleString()} gov ceiling; flagged for human review (price retained)`,
+          } : {}),
           // Financing details from deed entry.
           // C9 Phase 2 (2026-05-27): dropped the `|| sale.deed_type` fallback
           // — it leaked the deed type ("Quit Claim Deed", "Special Warranty
@@ -4810,7 +4877,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const saleData = stripNulls({
       property_id: propertyId,
       sale_date:   datePart,
-      sold_price:  soldPrice,
+      // QA1: writeSoldPrice is null for a detected portfolio aggregate.
+      sold_price:  writeSoldPrice,
       ...domainSaleFields,
       listing_broker: listingBroker?.name || null,
       // Only include recorded_date and notes for dialysis — gov
@@ -4823,6 +4891,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           sale.transaction_type ? `Type: ${sale.transaction_type}` : null,
           sale.document_number ? `Doc#: ${sale.document_number}` : null,
           sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
+          // QA1: record the bleed/oversize reason inline in dia notes.
+          saleBleed.isAggregate
+            ? `[portfolio-aggregate] per-property price ${soldPrice} on ${datePart} matched another property's sale; nulled — not a valid single-property sale price`
+            : (saleBleed.overCeiling
+              ? `[oversized-sale-review] sold_price ${soldPrice} exceeds the $${SALE_PRICE_BLEED_CEILING.dialysis.toLocaleString()} dia ceiling; flagged for human review (price retained)`
+              : null),
           saleNotesRaw ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
         ].filter(Boolean).join('; ') || null,
         sale_notes_raw: saleNotesRaw,
@@ -4831,9 +4905,19 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       } : {}),
     });
     if (transaction_type !== null) saleData.transaction_type = transaction_type;
-    // Always write exclude flag since false is a valid value that should persist
-    saleData.exclude_from_market_metrics = exclude_from_market_metrics ?? false;
+    // Always write exclude flag since false is a valid value that should persist.
+    // QA1: a portfolio-aggregate or over-ceiling row is forced out of metrics.
+    saleData.exclude_from_market_metrics =
+      saleBleedExclude ? true : (exclude_from_market_metrics ?? false);
     saleData.data_source                = 'costar_sidebar';
+
+    // QA1: re-apply the explicit null after stripNulls so a PATCH actively
+    // clears any previously-stored aggregate price (stripNulls drops nulls,
+    // which would otherwise leave a stale bled value on the existing row).
+    if (saleBleed.isAggregate) {
+      saleData.sold_price = null;
+      if (domain === 'government') saleData.sold_price_psf = null;
+    }
 
     // C9 Phase 2 (2026-05-27): backstop the sale row through the ingest
     // contract. Soft enforcement — log + sanitize, never block the write
