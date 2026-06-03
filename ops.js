@@ -1390,7 +1390,7 @@ async function pqOpenOpportunity(entityId, vertical, btn) {
       vertical: vertical || null,
     });
     if (res.ok && res.data && res.data.ok) {
-      showToast('Opportunity opened', 'success');
+      showToast(res.data.already_open ? 'Opportunity already open' : 'Opportunity opened', 'success');
       if (!_opsAdvanceAfterComplete(entityId)) renderPriorityQueuePage();
     } else {
       showToast(res.error || 'Could not open opportunity', 'error');

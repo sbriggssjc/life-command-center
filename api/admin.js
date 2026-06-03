@@ -411,7 +411,29 @@ async function handlePriorityBand(req, res) {
     return res.status(200).json({ priority_band: null });
   }
   const row = Array.isArray(r.data) ? r.data[0] : (r.data || null);
-  if (!row) return res.status(200).json({ priority_band: null });
+
+  // Persisted lead/cadence truth for the property's owner entity (Bug c,
+  // 2026-06-03). Resolve the open prospect opportunity + cadence keyed on the
+  // entity — either the one passed in, or the one the queue resolved for this
+  // property. This lets the property "Next step" banner render the real state
+  // ("Lead is live" / "On cadence ✓") on a fresh reopen instead of stale-
+  // banding back to "Create the lead". Falls back to null on any soft failure.
+  const effectiveEntityId = entityId || (row && row.entity_id) || null;
+  const oppState = effectiveEntityId
+    ? await resolveOwnerOppState(effectiveEntityId)
+    : { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
+
+  if (!row) {
+    // No queue row: still surface the opportunity/cadence truth (the owner may
+    // be led but no longer "due", so they've dropped out of the band view).
+    return res.status(200).json({
+      priority_band: null,
+      entity_id: effectiveEntityId,
+      open_opportunity: oppState.open_opportunity,
+      bd_opportunity_id: oppState.bd_opportunity_id,
+      cadence_next_touch_due: oppState.cadence_next_touch_due,
+    });
+  }
 
   // Normalize owner name + numeric confidence for the UI.
   return res.status(200).json({
@@ -426,7 +448,36 @@ async function handlePriorityBand(req, res) {
     days_overdue: row.days_overdue != null ? Number(row.days_overdue) : null,
     entity_id: row.entity_id || null,
     source_property_address: row.source_property_address || null,
+    open_opportunity: oppState.open_opportunity,
+    bd_opportunity_id: oppState.bd_opportunity_id,
+    cadence_next_touch_due: oppState.cadence_next_touch_due,
   });
+}
+
+// Resolve an owner entity's persisted BD state: is there an OPEN prospect
+// opportunity, and what is the latest cadence next-touch date. Two cheap reads
+// against LCC Opps; soft-fails to "no opportunity" so the banner degrades
+// gracefully. (Bug c, 2026-06-03)
+async function resolveOwnerOppState(entityId) {
+  const out = { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
+  try {
+    const oppR = await opsQuery('GET',
+      'bd_opportunities?select=id&entity_id=eq.' + pgFilterVal(entityId)
+      + '&type=eq.prospect&is_open=is.true&order=opened_at.desc&limit=1');
+    if (oppR.ok && Array.isArray(oppR.data) && oppR.data[0]) {
+      out.open_opportunity = true;
+      out.bd_opportunity_id = oppR.data[0].id || null;
+    }
+  } catch (_e) { /* soft-fail */ }
+  try {
+    const cadR = await opsQuery('GET',
+      'touchpoint_cadence?select=next_touch_due&entity_id=eq.' + pgFilterVal(entityId)
+      + '&order=updated_at.desc&limit=1');
+    if (cadR.ok && Array.isArray(cadR.data) && cadR.data[0]) {
+      out.cadence_next_touch_due = cadR.data[0].next_touch_due || null;
+    }
+  } catch (_e) { /* soft-fail */ }
+  return out;
 }
 
 // ============================================================================
