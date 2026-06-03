@@ -498,9 +498,14 @@ function buildContactOverview() {
     h += '</div></div>';
   }
 
-  // Quick actions
+  // Quick actions — advance the ball: outreach, log the touch, jump to CRM.
   h += '<div class="detail-actions">';
   h += `<button class="btn-submit" onclick="switchContactDetailTab('messages')">Send Message</button>`;
+  if (c.sf_contact_id) {
+    h += `<button class="btn-cancel" onclick="_cuiLogTouch()">Log a touch</button>`;
+    const _sfb = (typeof _SF_BASE !== 'undefined') ? _SF_BASE : 'https://northmarqcapital.lightning.force.com/lightning/r';
+    h += `<a class="btn-cancel" href="${_sfb}/Contact/${esc(c.sf_contact_id)}/view" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">View in Salesforce \u2192</a>`;
+  }
   const toggleClass = c.contact_class === 'business' ? 'personal' : 'business';
   h += `<button class="btn-cancel" onclick="classifyContactAction(decodeURIComponent('${encodeURIComponent(c.unified_id)}'), '${toggleClass}')">Move to ${toggleClass}</button>`;
   h += '</div>';
@@ -524,6 +529,15 @@ function sourceLabel(system) {
   const map = { salesforce: 'SF', outlook: 'OL', calendar: 'Cal', webex: 'WX', teams: 'TM', icloud: 'iC', gov_db: 'Gov', dia_db: 'Dia' };
   return map[system] || system;
 }
+
+// ---- Log a touch (advance-the-ball forward action) ----
+function _cuiLogTouch() {
+  const c = _cui.selectedContact;
+  if (!c || !c.sf_contact_id) { if (typeof showToast === 'function') showToast('No Salesforce contact linked', 'error'); return; }
+  if (typeof openLogCall === 'function') openLogCall({ name: c.full_name, sf_contact_id: c.sf_contact_id });
+  else if (typeof showToast === 'function') showToast('Activity logging is unavailable here', 'error');
+}
+window._cuiLogTouch = _cuiLogTouch;
 
 // ---- Classify contact ----
 async function classifyContactAction(id, newClass) {
