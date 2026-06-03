@@ -623,6 +623,25 @@ the underlying tables) to avoid loosening RLS on PII fields.
    `handlePriorityBand` now does. Migration:
    `20260603130000_lcc_bd_vertical_domain_canonicalize.sql`.
 
+8. **`lcc_seed_onboarding_cadence` must ON CONFLICT on the unique INDEX,
+   not a constraint** (E2E#6 blocker, 2026-06-03). The seed's idempotency
+   probe keys on `(entity_id, bd_opportunity_id)`, but `touchpoint_cadence`'s
+   real uniqueness is the **unique INDEX** `uq_cadence_contact_property` on
+   `(COALESCE(entity_id,zero), COALESCE(property_id,zero), COALESCE(sf_contact_id,''))`.
+   Any entity carrying one of the ~305 pre-seeded BD-engine cadence rows
+   (property/sf NULL, different/NULL `bd_opportunity_id`) was invisible to the
+   probe but collided on the index → the seed `INSERT` raised `23505` → the
+   `AFTER INSERT` `bd_opportunity_auto_seed_cadence` trigger aborted the parent
+   `bd_opportunities` INSERT, so create_lead/open_opportunity silently produced
+   no opportunity for a wide class of entities. Fix: the seed INSERT now carries
+   `ON CONFLICT (<the index expression>) DO UPDATE` that reactivate-and-links
+   the pre-existing row to the new opportunity (set `bd_opportunity_id`, revive
+   `phase='onboarding'`, reset touch, `next_touch_due=now()`). Because it's a
+   `CREATE UNIQUE INDEX` (not a table constraint), you MUST use the
+   index-inference / expression form — `ON CONFLICT ON CONSTRAINT
+   uq_cadence_contact_property` errors `42704`. Migration:
+   `20260603150000_lcc_seed_cadence_on_conflict_link.sql`.
+
 ### Quick-reference queries
 
 ```sql

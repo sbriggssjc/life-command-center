@@ -758,7 +758,28 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
   if (existingOpp.ok && Array.isArray(existingOpp.data) && existingOpp.data[0]) {
     bdOpportunityId = existingOpp.data[0].id;
     alreadyOpen = true;
-  } else {
+  }
+  // Cross-flow / re-resolved-entity dedupe (design note 1, 2026-06-03): the
+  // property flow anchors on the ASSET entity (lookup_asset) while other paths
+  // may resolve a different entity for the same building. The entity-keyed
+  // guard above misses those, so also reuse an OPEN prospect opp previously
+  // opened for this exact property+vertical (stamped in metadata). Forward-safe:
+  // only ADDS a reuse path, never creates a duplicate. (Full org-vs-asset
+  // entity unification — having the queue's open_opportunity stamp
+  // source_property_id, or property-flow prefer the queue's owner entity — is
+  // deferred; see PR notes.)
+  if (!bdOpportunityId) {
+    const existingByProp = await opsQuery('GET',
+      'bd_opportunities?select=id&type=eq.prospect&is_open=is.true'
+      + '&metadata->>source_property_id=eq.' + encodeURIComponent(String(property_id))
+      + '&metadata->>source_domain=eq.' + encodeURIComponent(normDomain)
+      + '&order=opened_at.desc&limit=1');
+    if (existingByProp.ok && Array.isArray(existingByProp.data) && existingByProp.data[0]) {
+      bdOpportunityId = existingByProp.data[0].id;
+      alreadyOpen = true;
+    }
+  }
+  if (!bdOpportunityId) {
     const oppResult = await opsQuery('POST', 'bd_opportunities', {
       workspace_id: workspaceId,
       entity_id: resolvedEntityId,
