@@ -144,3 +144,33 @@ folded into the prompt). All three drains specced in
 `upsertDomainProperty` + `runDownstreamPipeline`; auto-create flag-gated
 `INTAKE_AUTOCREATE`, default off; soft-disposition doctrine — status+reason,
 never delete).
+
+## Addendum 4 — F4/F8 shipped (PR #1044, pending deploy)
+
+Claude Code delivered all three drains on `claude/cool-darwin-17Aa5`:
+- **Create-from-intake**: `api/_handlers/intake-create-property.js`, route
+  `POST /api/intake?_route=create-property`, race-guard rematch first, creates
+  via exported `upsertDomainProperty` tagged `om_intake` (gov `data_source` /
+  dia `source` — confirmed live), provenance conf 0.6, then full
+  `runDownstreamPipeline`. One property per address on multi-address OMs.
+  UI "Create property →" in inbox triage. AUTO mode `INTAKE_AUTOCREATE=1`
+  (default OFF, cap 10/tick) in the rematch worker.
+- **Auto-disposition**: `api/_shared/intake-classify.js` single source of truth
+  (promoter now imports it); extractor routes non-deal →
+  `discarded`/`non_deal_no_address`; backfill rides the existing intake-rematch
+  cron (new disposition pass) — **no migration, no ordering hazard**.
+- **F8 OCR rescue**: 0-char PDFs → bytes to OpenAI Responses API document block
+  (`invokeVisionExtractionAI`, gpt-4o), gated on `OPENAI_API_KEY` + byte cap;
+  unrescued flagged `ocr_needed` (checked BEFORE non-deal discard), triage badge
+  + "Re-extract (OCR)" button + `ocr-reextract` route.
+
+Pre-flight validation (read-only vs live): 613 has-address / 333 full-signature
+/ 38 zero-text / **1,940 would-disposition** — matches forensics; Fresenius
+Independence MO OM confirmed → rescue path, not discard. 18 new tests; suite
+471/0. **Deploy note: confirm `OPENAI_API_KEY` is set in the RAILWAY env**
+(CLAUDE.md only documents it for Vercel) or the OCR fallback silently idles.
+
+Post-deploy checklist: dry-run GET intake-rematch → `dispositioned_non_deal`/
+`flagged_ocr_needed` counts → POST drain → live Create-property on a
+full-signature item (property+listing+provenance in domain DB) → OCR re-extract
+the Fresenius intake → `INTAKE_AUTOCREATE` stays off until manual mode watched.
