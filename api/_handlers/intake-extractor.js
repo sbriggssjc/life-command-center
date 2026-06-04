@@ -17,9 +17,10 @@
 
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
-import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI } from '../_shared/ai.js';
+import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI, invokeVisionExtractionAI } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
+import { isNonDealSnapshot } from '../_shared/intake-classify.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { createRequire } from 'module';
@@ -368,6 +369,55 @@ Look for keywords like "repair", "replace", "maintain", "responsible" near "roof
 If the document is an OM, these may appear in the lease abstract section.
 If not determinable, use null.`;
 
+  // F8 (2026-06-04): zero-text PDF → vision/OCR fallback. pdf-parse returns 0
+  // chars on scanned/image-based PDFs (no pdf_parse_error), so the text-in-
+  // prompt path below would extract all-nulls and park a real OM as a silent
+  // review row. Instead, send the PDF bytes to the Responses API as a document
+  // block (gpt-4o reads them natively). Gated on OPENAI_API_KEY + a byte cap so
+  // a huge scan doesn't blow the function budget. On success we return the OCR
+  // extraction directly; on miss we fall through and the all-null result is
+  // flagged extraction_quality='ocr_needed' by the caller.
+  globalThis.__lastPdfParseInfo.ocr_attempted = false;
+  globalThis.__lastPdfParseInfo.ocr_ok = false;
+  if (isPdf && !pdfText && !pdfExtractError && base64Data) {
+    const approxBytes = Math.ceil(base64Data.length * 3 / 4);
+    const OCR_MAX_BYTES = Number(process.env.INTAKE_OCR_MAX_BYTES || 12_000_000); // ~12 MB
+    if (approxBytes <= OCR_MAX_BYTES) {
+      globalThis.__lastPdfParseInfo.ocr_attempted = true;
+      try {
+        const ocr = await invokeVisionExtractionAI({
+          prompt, base64: base64Data, mediaType, filename: 'document.pdf',
+        });
+        if (ocr.ok) {
+          const ocrText =
+            ocr.data?.response ||
+            ocr.data?.content ||
+            (typeof ocr.data === 'string' ? ocr.data : '') ||
+            '';
+          const parsedOcr = parseExtractionJson(ocrText);
+          if (parsedOcr) {
+            globalThis.__lastPdfParseInfo.ocr_ok = true;
+            globalThis.__lastAiCallInfo = {
+              tried: [{ stage: 'ocr_vision', provider: 'openai', status: ocr.status }],
+              fell_back: true,
+              fellBackFrom: 'pdf_zero_text',
+              final_provider: 'openai',
+              final_model: ocr.data?.model || null,
+              exhausted: false,
+            };
+            return parsedOcr;
+          }
+        } else {
+          console.warn('[intake-extractor] OCR vision fallback non-ok:', ocr.status);
+        }
+      } catch (err) {
+        console.warn('[intake-extractor] OCR vision fallback threw (non-fatal):', err?.message);
+      }
+    } else {
+      console.warn(`[intake-extractor] zero-text PDF over OCR cap (${approxBytes} > ${OCR_MAX_BYTES}); flagging ocr_needed`);
+    }
+  }
+
   // Text-in-prompt extraction routed through the multi-model fallback chain.
   // Primary attempt → invokeChatProvider (typically Claude via edge fn).
   // On 429 / 5xx → fall back through the AI_EXTRACTION_FALLBACK_CHAIN env
@@ -408,21 +458,8 @@ If not determinable, use null.`;
     );
   }
 
-  // Strategy 1: markdown fenced block (```json ... ``` or ``` ... ```)
-  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  if (fenceMatch) {
-    try { return JSON.parse(fenceMatch[1]); } catch (e) {
-      console.warn('[intake-extractor] fenced-JSON parse failed:', e.message);
-    }
-  }
-
-  // Strategy 2: greediest outer object match
-  const braceMatch = text.match(/\{[\s\S]*\}/);
-  if (braceMatch) {
-    try { return JSON.parse(braceMatch[0]); } catch (e) {
-      console.warn('[intake-extractor] brace-JSON parse failed:', e.message);
-    }
-  }
+  const parsed = parseExtractionJson(text);
+  if (parsed) return parsed;
 
   // If we're here, no JSON was found. Throw with a rich diagnostic so the
   // per-artifact diagnostics log shows WHAT the model actually returned.
@@ -430,6 +467,31 @@ If not determinable, use null.`;
   throw new Error(
     `No JSON found in AI response. Text preview (first 600 chars): "${preview}"`
   );
+}
+
+/**
+ * Pull a JSON object out of an AI response string. Tries a markdown fenced
+ * block first, then the greediest outer-brace match. Returns the parsed
+ * object, or null when nothing parseable was found (caller decides whether
+ * that's fatal). Shared by the text-extraction and OCR-vision paths.
+ */
+function parseExtractionJson(text) {
+  if (!text || typeof text !== 'string') return null;
+  // Strategy 1: markdown fenced block (```json ... ``` or ``` ... ```)
+  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (fenceMatch) {
+    try { return JSON.parse(fenceMatch[1]); } catch (e) {
+      console.warn('[intake-extractor] fenced-JSON parse failed:', e.message);
+    }
+  }
+  // Strategy 2: greediest outer object match
+  const braceMatch = text.match(/\{[\s\S]*\}/);
+  if (braceMatch) {
+    try { return JSON.parse(braceMatch[0]); } catch (e) {
+      console.warn('[intake-extractor] brace-JSON parse failed:', e.message);
+    }
+  }
+  return null;
 }
 
 // ============================================================================
@@ -631,6 +693,9 @@ export async function processIntakeExtraction(intakeId, context = {}) {
         diag.pdf_pages = globalThis.__lastPdfParseInfo.pages;
         diag.pdf_text_len = globalThis.__lastPdfParseInfo.textLen;
         diag.pdf_parse_error = globalThis.__lastPdfParseInfo.error;
+        // F8: surface the OCR-vision fallback outcome for zero-text PDFs.
+        diag.ocr_attempted = globalThis.__lastPdfParseInfo.ocr_attempted || false;
+        diag.ocr_ok = globalThis.__lastPdfParseInfo.ocr_ok || false;
       }
       // Surface multi-model fallback info — lets the SQL audit see when
       // primary 429s pushed extraction onto the OpenAI backup pool.
@@ -683,39 +748,83 @@ export async function processIntakeExtraction(intakeId, context = {}) {
     ? (currentItem.data[0].raw_payload || {})
     : {};
 
+  // 6a. Disposition (2026-06-04): choose the intake's status from the merged
+  //     snapshot + per-artifact diagnostics.
+  //       - null snapshot  → 'failed' (existing behavior)
+  //       - zero-text PDF the OCR path couldn't rescue → stays
+  //         'review_required' but flagged extraction_quality='ocr_needed', so
+  //         the OM-named scans stop hiding among newsletters (F8).
+  //       - non-deal (no address/price/cap, non-listing doctype) → 'discarded'
+  //         with a machine reason, draining the no-address newsletter pile that
+  //         drowns real items. Soft disposition: status + reason, never delete;
+  //         reversible by re-running extraction.
+  //       - everything else → 'review_required'.
+  const ocrNeeded = perArtifactDiagnostics.some(d =>
+    (String(d.mime_type || '').toLowerCase() === 'application/pdf'
+      || /\.pdf$/i.test(d.file_name || ''))
+    && d.pdf_text_len === 0 && !d.pdf_parse_error && !d.ocr_ok
+  );
+  const nonDeal = !ocrNeeded && isNonDealSnapshot(mergedSnapshot);
+
+  const chosenStatus = !mergedSnapshot ? 'failed'
+                     : nonDeal         ? 'discarded'
+                     :                   'review_required';
+
+  const patchPayload = {
+    ...currentPayload,
+    extraction_result: mergedSnapshot
+      ? {
+          document_type: mergedSnapshot.document_type,
+          address: mergedSnapshot.address,
+          // Persist the multi-property address array when present so the
+          // review UI / forensics see every property a portfolio OM covers.
+          addresses: Array.isArray(mergedSnapshot.addresses) ? mergedSnapshot.addresses : null,
+          // city/state were extracted (the AI schema requests them) and
+          // exist on mergedSnapshot, but were historically dropped from
+          // the persisted summary — leaving every review row city=NULL and
+          // blinding the review UI + match forensics. Persist them.
+          city: mergedSnapshot.city ?? null,
+          state: mergedSnapshot.state ?? null,
+          tenant_name: mergedSnapshot.tenant_name,
+          asking_price: mergedSnapshot.asking_price,
+          cap_rate: mergedSnapshot.cap_rate,
+          extracted_at: new Date().toISOString(),
+          artifact_count: documentArtifacts.length,
+          extraction_count: extractions.length
+        }
+      : { error: 'No valid extractions', extracted_at: new Date().toISOString() }
+  };
+  if (ocrNeeded) patchPayload.extraction_quality = 'ocr_needed';
+  if (nonDeal)   patchPayload.discard_reason     = 'non_deal_no_address';
+
   await opsQuery('PATCH',
     `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
-    {
-      status: mergedSnapshot ? 'review_required' : 'failed',
-      raw_payload: {
-        ...currentPayload,
-        extraction_result: mergedSnapshot
-          ? {
-              document_type: mergedSnapshot.document_type,
-              address: mergedSnapshot.address,
-              // Persist the multi-property address array when present so the
-              // review UI / forensics see every property a portfolio OM covers.
-              addresses: Array.isArray(mergedSnapshot.addresses) ? mergedSnapshot.addresses : null,
-              // city/state were extracted (the AI schema requests them) and
-              // exist on mergedSnapshot, but were historically dropped from
-              // the persisted summary — leaving every review row city=NULL and
-              // blinding the review UI + match forensics. Persist them.
-              city: mergedSnapshot.city ?? null,
-              state: mergedSnapshot.state ?? null,
-              tenant_name: mergedSnapshot.tenant_name,
-              asking_price: mergedSnapshot.asking_price,
-              cap_rate: mergedSnapshot.cap_rate,
-              extracted_at: new Date().toISOString(),
-              artifact_count: documentArtifacts.length,
-              extraction_count: extractions.length
-            }
-          : { error: 'No valid extractions', extracted_at: new Date().toISOString() }
-      },
-      updated_at: new Date().toISOString()
-    }
+    { status: chosenStatus, raw_payload: patchPayload, updated_at: new Date().toISOString() }
   );
 
-  console.log(`[intake-extractor] Done: intake_id=${intakeId}, extractions=${extractions.length}/${documentArtifacts.length}`);
+  console.log(`[intake-extractor] Done: intake_id=${intakeId}, status=${chosenStatus}` +
+    `${ocrNeeded ? ' (ocr_needed)' : ''}${nonDeal ? ' (non_deal discarded)' : ''}, ` +
+    `extractions=${extractions.length}/${documentArtifacts.length}`);
+
+  // Non-deal items are dispositioned to 'discarded' and skip the downstream
+  // pipeline: the matcher's writeMatchResult only knows 'matched' vs
+  // 'review_required' and would flip the status straight back, undoing the
+  // disposition. They carry no address/tenant so they could never match anyway.
+  if (nonDeal) {
+    await markInboxDisposition(intakeId, { status: 'dismissed' }).catch(() => {});
+    return {
+      ok: true,
+      extraction_snapshot: mergedSnapshot,
+      disposition: 'discarded',
+      discard_reason: 'non_deal_no_address',
+    };
+  }
+
+  // Zero-text PDFs stay in review but get a badge on the bridged inbox row so
+  // the OM-named scans are visible, not buried.
+  if (ocrNeeded) {
+    await markInboxDisposition(intakeId, { metadata: { extraction_quality: 'ocr_needed' } }).catch(() => {});
+  }
 
   // Hand off to the downstream pipeline (matcher → promoter → Teams alert).
   // Extracted into its own helper so /api/intake-extract retries (and the
@@ -730,6 +839,43 @@ export async function processIntakeExtraction(intakeId, context = {}) {
     seedData:          currentPayload?.seed_data || null,
   });
   return downstream;
+}
+
+/**
+ * Best-effort: surface an intake's disposition on its inbox_items row(s) so the
+ * triage view reflects it. inbox_items.id == staged_intake_items.intake_id by
+ * pipeline contract; the email channel also creates a separate flagged_email
+ * row linked via metadata.bridged_to_intake_id. `status` is a flat PATCH;
+ * `metadata` is read-merged (PostgREST can't deep-merge jsonb in one shot).
+ */
+async function markInboxDisposition(intakeId, { status, metadata } = {}) {
+  if (status) {
+    await opsQuery('PATCH',
+      `inbox_items?id=eq.${encodeURIComponent(intakeId)}`, { status }
+    ).catch(() => {});
+    await opsQuery('PATCH',
+      `inbox_items?metadata->>bridged_to_intake_id=eq.${encodeURIComponent(intakeId)}&source_type=eq.flagged_email`,
+      { status }
+    ).catch(() => {});
+  }
+  if (metadata && typeof metadata === 'object') {
+    for (const filter of [
+      `inbox_items?id=eq.${encodeURIComponent(intakeId)}&select=id,metadata`,
+      `inbox_items?metadata->>bridged_to_intake_id=eq.${encodeURIComponent(intakeId)}&source_type=eq.flagged_email&select=id,metadata`,
+    ]) {
+      try {
+        const cur = await opsQuery('GET', filter);
+        if (cur.ok && Array.isArray(cur.data)) {
+          for (const row of cur.data) {
+            await opsQuery('PATCH',
+              `inbox_items?id=eq.${encodeURIComponent(row.id)}`,
+              { metadata: { ...(row.metadata || {}), ...metadata } }
+            ).catch(() => {});
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+  }
 }
 
 // ============================================================================
@@ -1065,6 +1211,13 @@ export async function handleExtractRoute(req, res) {
     return res.status(400).json({ error: 'intake_id is required' });
   }
 
+  // force_reextract bypasses the cached-extraction short-circuit so the full
+  // AI pass (incl. the zero-text-PDF OCR fallback) re-runs. Used by the
+  // ocr-reextract route to rescue scanned OMs that parked as ocr_needed.
+  const forceReextract = req.query.force_reextract === '1'
+    || req.query.force_reextract === 'true'
+    || req.body?.force_reextract === true;
+
   // AI provider key checks are handled by invokeChatProvider — a missing key
   // returns { ok: false, status: 503 } which processIntakeExtraction surfaces
   // per-artifact.  No pre-flight env check required.
@@ -1074,6 +1227,7 @@ export async function handleExtractRoute(req, res) {
     const result = await processIntakeExtraction(intakeId, {
       workspaceId,
       actorId: user.id,
+      forceReextract,
     });
     return res.status(result.ok ? 200 : 500).json(result);
   } catch (err) {

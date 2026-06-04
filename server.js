@@ -171,6 +171,8 @@ app.all('/api/intake-summary', (req, res) => { req.query._route = 'summary'; int
 app.all('/api/intake-extract', (req, res) => { req.query._route = 'extract'; intakeHandler(req, res); });
 app.all('/api/intake-queue', (req, res) => { req.query._route = 'queue'; intakeHandler(req, res); });
 app.all('/api/intake-promote', (req, res) => { req.query._route = 'promote'; intakeHandler(req, res); });
+app.all('/api/intake-create-property', (req, res) => { req.query._route = 'create-property'; intakeHandler(req, res); });
+app.all('/api/intake-ocr-reextract', (req, res) => { req.query._route = 'ocr-reextract'; intakeHandler(req, res); });
 app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; intakeHandler(req, res); });
 app.all('/api/intake-pdf', (req, res) => { req.query._route = 'ingest_pdf'; intakeHandler(req, res); });
 

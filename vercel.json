@@ -100,6 +100,8 @@
     { "source": "/api/intake-extract", "destination": "/api/intake?_route=extract" },
     { "source": "/api/intake-queue", "destination": "/api/intake?_route=queue" },
     { "source": "/api/intake-promote", "destination": "/api/intake?_route=promote" },
+    { "source": "/api/intake-create-property", "destination": "/api/intake?_route=create-property" },
+    { "source": "/api/intake-ocr-reextract", "destination": "/api/intake?_route=ocr-reextract" },
     { "source": "/api/intake-discard", "destination": "/api/intake?_route=discard" },
     { "source": "/api/intake-pdf", "destination": "/api/intake?_route=ingest_pdf" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },

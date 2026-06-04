@@ -27,6 +27,7 @@ import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
+import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
 import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.js';
 import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
@@ -106,6 +107,10 @@ export default withErrorHandler(async function handler(req, res) {
       return handleIntakeQueue(req, res);
     case 'promote':
       return handleIntakePromote(req, res);
+    case 'create-property':
+      return handleIntakeCreateProperty(req, res);
+    case 'ocr-reextract':
+      return handleOcrReextract(req, res);
     case 'discard':
       return handleIntakeDiscard(req, res);
     case 'copilot-action':
@@ -124,7 +129,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action, parse-om, ingest_pdf, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, feedback, accuracy'
       });
   }
 });
@@ -1795,6 +1800,65 @@ async function handleIntakeDiscard(req, res) {
   );
 
   return res.status(200).json({ ok: true, intake_id, status: 'discarded' });
+}
+
+// ============================================================================
+// CREATE-FROM-INTAKE  (2026-06-04)
+// POST /api/intake?_route=create-property  { intake_id }
+//
+// For a review_required intake with a clean extracted address that the matcher
+// can't link to any existing property (a genuinely-new property), create the
+// property in the routed domain and run the FULL existing promotion path. See
+// api/_handlers/intake-create-property.js for the workflow.
+// ============================================================================
+async function handleIntakeCreateProperty(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  if (!requireRole(user, 'operator', workspaceId)) {
+    return res.status(403).json({ error: 'Operator role required' });
+  }
+
+  const { intake_id } = req.body || {};
+  if (!intake_id) return res.status(400).json({ error: 'intake_id required' });
+
+  try {
+    const result = await createPropertyFromIntake(intake_id, {
+      workspaceId,
+      actorId: user.id || user.user_id || null,
+      trigger: 'manual',
+    });
+    return res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    console.error('[intake-create-property] failed:', err?.message);
+    return res.status(500).json({ ok: false, error: err?.message });
+  }
+}
+
+// ============================================================================
+// OCR RE-EXTRACT  (F8, 2026-06-04)
+// POST /api/intake?_route=ocr-reextract  { intake_id }
+//
+// Forces a full re-extraction (bypasses the cached-extraction short-circuit)
+// so a zero-text PDF parked as extraction_quality='ocr_needed' re-runs through
+// the vision/OCR fallback in callAiExtraction. Thin wrapper over the extract
+// route with force_reextract set.
+// ============================================================================
+async function handleOcrReextract(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+  req.query.force_reextract = '1';
+  return handleExtractRoute(req, res);
 }
 
 // ============================================================================
