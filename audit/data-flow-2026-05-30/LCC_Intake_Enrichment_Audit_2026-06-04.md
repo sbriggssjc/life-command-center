@@ -174,3 +174,34 @@ Post-deploy checklist: dry-run GET intake-rematch → `dispositioned_non_deal`/
 `flagged_ocr_needed` counts → POST drain → live Create-property on a
 full-signature item (property+listing+provenance in domain DB) → OCR re-extract
 the Fresenius intake → `INTAKE_AUTOCREATE` stays off until manual mode watched.
+
+## Addendum 5 — F4 LIVE VERIFIED + F4B follow-ups (2026-06-04 evening)
+
+All three drains verified live with real writes:
+- **Create-from-intake works**: FMC Buckeye AZ intake (`8622b5e3…`) → dia prop
+  **44309** created ("815 S. Watson Rd / Buckeye AZ / src=om_intake"), matcher
+  re-found it at 0.97, LCC entity linked, owner resolution ran. Race guard
+  verified: second call `created: []`, no dupe.
+- **OCR rescue is a complete win**: the zero-text scanned Fresenius
+  Independence MO OM → vision re-extract returned the FULL deal (1135 North
+  Claremont Ave, Independence MO 64054, $1.122M @ 7.75 cap, NOI 86,955, lease
+  terms, M&M broker) → **matched existing dia prop 26913 → promotion_ok →
+  finalized**. `OPENAI_API_KEY` confirmed present on Railway.
+- **Disposition drains**: 646 non-deal items moved to
+  `discarded/non_deal_no_address` in the first hour; 11 `ocr_needed` flags
+  raised. Pile: **2,900 (morning) → 1,942** and falling; matched 321 → 633.
+
+Live test exposed four follow-ups (specced in
+`CLAUDECODE_PROMPT_F4B_promotion_hardening.md`):
+1. **Cap-rate double conversion** — extractor emits BOTH 0.055 (decimal) and
+   7.75 (percent); promoter blindly ÷100 → 0.0006 → listing 23514. Needs
+   form-detection heuristic, promoter-wide.
+2. **Array-valued snapshot fields crash scalar writers** — multi-tenant/broker
+   OMs now emit arrays; broker_contact / property_financials / unified_contact
+   all failed `.trim is not a function`; listing text column got raw JSON.
+3. **Normalizer gaps** — number-words ("Eight Mile"↔"8 Mile" → would have
+   duped existing prop 26639) + hyphenated ranges ("2064 - 2066 Atlantic Ave"
+   ↔ existing 22041) + missing-directional tolerance. dia already holds dupes
+   from this class (26481/2079983).
+4. **Re-promote route 500s** on JSON body — inbox "Re-promote ↻" may be
+   silently broken; check payload shape.
