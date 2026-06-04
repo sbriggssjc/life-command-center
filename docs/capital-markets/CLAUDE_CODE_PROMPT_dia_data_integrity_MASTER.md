@@ -54,6 +54,84 @@ Tasks:
 5. VALIDATE: post-fix SUM(rent_at_sale)/SUM(sold_price) ~= avg cap (~6.8%), with a
    per-rent_source reconciliation table.
 
+--------------------------------------------------------------------------------
+PHASE 1 — STATUS UPDATE & REFINED SCOPE  (2026-06-04, measured from the R66x
+cap-rate-by-lease-term reconciliation; supersedes the stale "rent is ~half"
+framing above, which dates to the 2026-06-01 audit. Anchored to Phase 1 -- this
+is the SAME work, re-measured, not a new phase.)
+--------------------------------------------------------------------------------
+WHAT CHANGED SINCE 2026-06-01. The crude symptom that opened Phase 1 -- pooled
+SUM(rent_at_sale)/SUM(sold_price) = 3.6% vs avg cap 6.8% (rent looked half-scale)
+-- is LARGELY RESOLVED for sales that actually carry a rent_at_sale. Re-measured
+2026-06-04 over dia market sales (Investment/Resale, in-band cap_rate_final) with
+rent_at_sale > 0, split by the INDEPENDENT (non-rent) cap source:
+    cap_rate_source   n     SUM(rent)/SUM(price)   avg cap   ratio   median r
+    broker_stated     320   6.29%                  6.59%     0.954   1.000
+    source_reported   269   6.57%                  6.61%     0.995   1.000
+    (noi_derived      269   6.58%                  6.76%     0.974   1.000  <- r=1 by
+                                                          construction; ignore as evidence)
+  Where rent EXISTS it reconciles to the reported caps (r near 1, only ~7 of 589
+  reported-source rows with r < 0.7). So "rent is the wrong scale/monthly/per-SF"
+  is no longer the dominant defect. Do NOT spend the bulk of Phase 1 re-scaling
+  rent; verify the residual ~7 low-r rows, then move on.
+
+THE ACTUAL REMAINING GAP IS COVERAGE, NOT SCALE.
+  - 1,194 of 2,709 dia market sales (44%) carry rent_at_sale > 0; 56% have none.
+  - In the <=5yr-remaining cohort (the one furthest from the deck): 300 sales,
+    only 151 (50%) have rent, 204 have any cap_rate_final.
+  - The "broker stabilized cap understates short-term going-in yield" hypothesis
+    is NOT the main driver: of 42 <=5 broker_stated sales WITH rent, only 4 have
+    in-place rent/price exceeding the broker cap by >75 bps. Where we have rent on
+    a short deal, it ~ the broker cap.
+  => The reason the unified by-term cohorts (R66x) read below the deck on the
+     short end (Dec-2025 <=5 = 7.45% vs deck 8.29%) is that the high-going-in-yield
+     short deals are the ones MISSING a rent/cap, so they never enter cap_rate_final
+     and the cohort is built from the lower-yield deals that do. This is a data-
+     SOURCING problem (OM / CoStar / CMS rent capture), not an arithmetic one.
+
+REFINED PHASE-1 TASKS (do in this order):
+  1. RESIDUAL SCALE CHECK (small). Inspect the ~7 reported-source rows with
+     r < 0.7 and the ~56 whole-population outliers (r outside [0.4,1.1]); fix or
+     null individually, recording provenance. This closes the original symptom.
+  2. RENT COVERAGE (the main lever). Trace why 56% of market sales (50% of <=5)
+     lack rent_at_sale. For each writer (OM-intake extractor, CoStar sidebar,
+     CMS/CSV, manual), quantify how many sales it touches vs how many it leaves
+     rent NULL, and backfill rent_at_sale (ANNUAL in-place NOI) wherever a
+     defensible source exists -- lease annual_rent at sale date, OM NOI, CMBS
+     loan NOI -- recording rent_source + provenance, never clobbering manual.
+     Target: lift market-sale rent coverage from 44% toward the reported-cap
+     coverage (~55%) and <=5 coverage from 50% toward parity, so noi_derived
+     becomes available on the short, high-yield deals.
+  3. SEMANTICS GUARD (small but important). Confirm backfilled rent is the
+     IN-PLACE contractual NOI the deck/master-workbook uses (SOLD CAP = RENT /
+     PRICE), NOT a stabilized/forward figure. Where a verified noi_derived going-in
+     cap on a SHORT deal materially exceeds a stabilized broker_stated cap, that is
+     the deck's number -- consider letting noi_derived win for <=5 once rent is
+     trustworthy (a ladder tweak in dia_derive_cap_of_record, NOT a per-chart
+     COALESCE). The R66x tier-4 already admits stored calculated_cap_rate as a
+     last-resort noi_derived candidate; this step is about PROMOTING a verified
+     noi_derived cap above a stabilized broker cap for short remaining term only.
+  4. RE-RUN THE HARNESS. R66x already wired the measurement: cm_dialysis_sold_cap
+     _by_term_dot is the canonical cohort series and master_m / cap_by_term_m/_q
+     all read it. After each coverage increment, re-query the four cohorts at the
+     labelled dates and compare to the deck (no code changes needed to measure).
+
+HONEST-ACCEPTANCE (deck targets at the labelled dates -- same format as R66x):
+  SUCCESS = the unified by-term cohorts reach the deck within ~15-20 bps at
+  Dec-2025 AND the 2019/2022 labelled points, fanning ~140 bps with <=5 highest:
+       period      12+    8-12   6-8    <=5
+       deck p.22   6.89   6.84   7.28   8.29     (Dec-2025 TTM)
+       deck note   5.84    --     --    9.46     (2019 labelled: 12+ / <=5 peak)
+       deck note   5.08    --     --    6.06     (2022 labelled: 12+ / <=5 trough)
+  R66x BASELINE to beat (single broker-of-record, pre-Phase-1 coverage work):
+       Dec-2025    6.80   6.60   6.88   7.45     (fan ~65 bps; 12+ on deck, short low)
+  A cohort/date that still cannot reach the deck after coverage work must be
+  reported with the evidence (which deals are missing/excluded and why) rather
+  than fudged -- e.g. 2026-06-04 measurement shows the 2019 <=5 = 9.46% peak is
+  NOT present in our data under ANY cap field (2019 <=5 n=31, avg calc 7.76 /
+  final 6.84, single-deal max 11.58), so that specific labelled extreme is the
+  likely "documented unreachable" outcome unless new 2019 short-deal rent lands.
+
 ================================================================================
 PHASE 2 — available_listings price/cap capture (last_cap_rate + initial_price)
 ================================================================================
