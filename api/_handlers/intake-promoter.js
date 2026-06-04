@@ -797,8 +797,17 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     }
   }
 
+  // R66x.2 Step 1 (OM/CMBS NOI capture): land the OM's stated in-place NOI as a
+  // dia property_financials row so the cap-rate NOI-provenance ladder
+  // (resolveCapRateProvenance, tier 2) can point at it on future sale captures.
+  // Runs regardless of whether any property field was patched above.
+  const omNoi = snapshot.noi != null ? Number(snapshot.noi) : null;
+  const financials = (Number.isFinite(omNoi) && omNoi > 0)
+    ? await landOmNoiAsPropertyFinancials(Number(propertyId), snapshot, omNoi)
+    : null;
+
   if (!Object.keys(patch).length) {
-    return { ok: true, skipped: 'all_fields_already_populated_or_curated', current_values: current };
+    return { ok: true, skipped: 'all_fields_already_populated_or_curated', current_values: current, financials };
   }
 
   const patchRes = await domainQuery(
@@ -808,8 +817,63 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     patch
   );
   return patchRes.ok
-    ? { ok: true, patched_fields: Object.keys(patch), patch }
-    : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+    ? { ok: true, patched_fields: Object.keys(patch), patch, financials }
+    : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data, financials };
+}
+
+// R66x.2 Step 1 — write the OM's stated in-place NOI to dia property_financials
+// (PK `id`, unique on property_id+fiscal_year+source) so the NOI-provenance ladder
+// can resolve om_actual for this property. OM NOI is the marketed in-place figure
+// (operator's contractual net rent on a dialysis NNN), not a lender pro-forma ->
+// is_actual=true. NOT gated on track_cmbs_snapshots; OM NOI should always land.
+// Idempotent upsert; only fills/refreshes the OM-sourced row, never CoStar's.
+async function landOmNoiAsPropertyFinancials(propertyId, snapshot, omNoi) {
+  const source = 'om_intake';
+  const fiscalYear = omFiscalYear(snapshot);
+  const grossIncome = snapshot.annual_rent != null && Number.isFinite(Number(snapshot.annual_rent))
+    ? Number(snapshot.annual_rent) : null;
+  try {
+    const lookup = await domainQuery('dialysis', 'GET',
+      `property_financials?property_id=eq.${propertyId}` +
+      `&fiscal_year=eq.${fiscalYear}&source=eq.${encodeURIComponent(source)}&select=id&limit=1`);
+    if (lookup.ok && lookup.data?.[0]?.id) {
+      const id = lookup.data[0].id;
+      const patch = { noi: omNoi };
+      if (grossIncome != null) patch.gross_income = grossIncome;
+      const r = await domainQuery('dialysis', 'PATCH', `property_financials?id=eq.${id}`, patch);
+      return r.ok ? { ok: true, action: 'updated', id, fiscal_year: fiscalYear }
+                  : { ok: false, status: r.status, detail: r.data };
+    }
+    const payload = {
+      property_id: propertyId, fiscal_year: fiscalYear, source,
+      is_actual: true, noi: omNoi, gross_income: grossIncome,
+      source_url: snapshot.source_url || null,
+    };
+    const ins = await domainQuery('dialysis', 'POST', 'property_financials', payload);
+    if (ins.ok) {
+      const row = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+      return { ok: true, action: 'inserted', id: row?.id ?? null, fiscal_year: fiscalYear };
+    }
+    return { ok: false, status: ins.status, detail: ins.data };
+  } catch (err) {
+    console.warn('[landOmNoiAsPropertyFinancials] failed (non-blocking):', err?.message || err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
+// Best-effort fiscal year for an OM-sourced NOI: prefer an explicit financials/
+// sale date on the snapshot, else the current year. Range-guarded.
+function omFiscalYear(snapshot) {
+  const cand = snapshot.financials_as_of || snapshot.noi_as_of || snapshot.sale_date
+    || snapshot.as_of_date || null;
+  if (cand) {
+    const d = new Date(cand);
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      if (y >= 1990 && y <= new Date().getFullYear() + 1) return y;
+    }
+  }
+  return new Date().getFullYear();
 }
 
 async function promotePropertyFinancials(domain, propertyId, snapshot) {
