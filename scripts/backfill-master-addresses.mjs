@@ -36,6 +36,21 @@
  *      equal new_state. If not, it's a BUG SIGNAL, not a write: skip BUG_STATE_MISMATCH.
  *   6. NO CHANGE — if USPS-normalized (address, city) already agree, skip NO_CHANGE.
  *
+ * PRECISION GUARDS — never let the master make a dia address LESS precise:
+ *   7. MASTER_LESS_PRECISE_SUITE — dia carries a unit/suite (STE/BLDG/APT/...)
+ *      the master row lacks -> skip (don't drop the unit).
+ *   8. MASTER_LESS_PRECISE_CITY — the city change reduces precision. The CMS
+ *      clinic link (medicare_clinics, joined on property_id) is the independent
+ *      referee for ambiguous city corrections:
+ *        - master un-truncates (new city char-starts-with old)   -> ALLOW
+ *        - master truncates (old char-starts-with new)           -> SKIP
+ *        - CMS clinic city == master city                        -> ALLOW (corroborated)
+ *        - CMS clinic city == dia city                           -> SKIP (master coarsens/wrong)
+ *        - no CMS referee / agrees with neither                  -> SKIP (don't guess)
+ *      In practice the SKIPs also catch (sale_date,sold_price) mis-resolutions to
+ *      a DIFFERENT building (both street AND city differ, CMS backs dia) — the
+ *      referee prevents corrupting a correct dia record, it doesn't lose a fix.
+ *
  * A surviving candidate becomes a WRITE: address/city/state <- master, lat/lng
  * NULLed (so the lcc-geocode-backfill cron re-geocodes), address provenance tagged
  * 'master_curated'. zip is NOT touched (master has none).
@@ -103,6 +118,24 @@ const normCap = v => { if (v == null || v === '') return null; let c = Number(v)
 const priceKey = (d, p) => `${String(d).slice(0, 10)}|${Math.round(Number(p))}`;
 const CURATED = /master_curated|manual|curated/i;
 
+// ---- precision guards -------------------------------------------------------
+// Unit/suite designator present in a USPS-normalized address (SUITE/UNIT/#/...
+// already mapped to STE by normAddr).
+const UNIT_RE = /\b(STE|BLDG|APT|FL|RM|DEPT)\b|#/;
+const hasUnit = a => UNIT_RE.test(a);
+// City precision verdict — the CMS clinic link is the independent referee for
+// ambiguous city corrections (metro-coarsening vs genuine fix). cmsSet = the
+// linked medicare_clinics cities (normalized). Char-prefix handles the 76gn.c
+// truncation class (master un-truncates -> more precise).
+function cityVerdict(oC, nC, cmsSet) {
+  if (oC === nC) return 'SAME';
+  if (nC.startsWith(oC)) return 'ALLOW_UNTRUNCATE';   // master longer -> more precise
+  if (oC.startsWith(nC)) return 'SKIP_TRUNCATE';      // master shorter -> less precise
+  if (cmsSet.has(nC)) return 'ALLOW_CMS';             // referee corroborates master
+  if (cmsSet.has(oC)) return 'SKIP_CMS_BACKS_DIA';    // referee backs dia -> master coarsens/wrong
+  return 'SKIP_CITY_UNVERIFIED';                       // no referee -> don't guess
+}
+
 async function rest(method, path, body) {
   const r = await fetch(`${URL}/rest/v1/${path}`, {
     method, headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
@@ -127,11 +160,13 @@ async function fetchProps(ids) {
   const out = []; const CH = 200;
   for (let i = 0; i < ids.length; i += CH) {
     const chunk = ids.slice(i, i + CH).join(',');
-    const q = `properties?select=property_id,address,city,state,zip_code,latitude,longitude,source&property_id=in.(${chunk})`;
+    // embed the CMS clinic link (medicare_clinics.property_id -> properties) for the city referee
+    const q = `properties?select=property_id,address,city,state,zip_code,latitude,longitude,source,medicare_clinics(city)&property_id=in.(${chunk})`;
     const r = await fetch(`${URL}/rest/v1/${q}`, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } });
     if (!r.ok) throw new Error(`props fetch ${r.status} ${await r.text()}`);
     const rows = await r.json();
-    out.push(...rows.map(p => ({ ...p, has_lat: p.latitude != null })));
+    out.push(...rows.map(p => ({ ...p, has_lat: p.latitude != null,
+      clinic_cities: (p.medicare_clinics || []).map(c => c.city).filter(Boolean) })));
   }
   return out;
 }
@@ -196,11 +231,23 @@ async function fetchProps(ids) {
     if (oS && c.m.nstate && oS !== c.m.nstate) { skips.push({ property_id: pid, reason: 'BUG_STATE_MISMATCH', detail: `${p.state} -> ${c.m.state}`, sale_ids: list.map(x => x.sale_id) }); continue; }
     // no-change
     if (oA === c.m.naddr && oC === c.m.ncity) { skips.push({ property_id: pid, reason: 'NO_CHANGE' }); continue; }
+    // PRECISION GUARD 1 — never let the master drop a unit/suite the dia row carries.
+    if (hasUnit(oA) && !hasUnit(c.m.naddr)) {
+      skips.push({ property_id: pid, reason: 'MASTER_LESS_PRECISE_SUITE', detail: `${p.address}  ->  ${c.m.addr}`, sale_ids: list.map(x => x.sale_id) }); continue;
+    }
+    // PRECISION GUARD 2 — city: skip metro-coarsening / unverified city changes,
+    // using the CMS clinic link as the referee for ambiguous ones.
+    const cms = new Set((p.clinic_cities || []).map(x => normCity(x)));
+    const cv = cityVerdict(oC, c.m.ncity, cms);
+    if (cv.startsWith('SKIP')) {
+      skips.push({ property_id: pid, reason: 'MASTER_LESS_PRECISE_CITY', detail: `${cv}: ${p.city} -> ${c.m.city}`, clinic_cities: [...cms], sale_ids: list.map(x => x.sale_id) }); continue;
+    }
     writes.push({
       property_id: pid,
       old_address: p.address, new_address: c.m.addr,
       old_city: p.city, new_city: c.m.city,
       old_state: p.state, new_state: c.m.state,
+      city_verdict: cv, clinic_cities: [...cms],
       master_cap_pct: Number((c.m.cap * 100).toFixed(3)),
       fingerprint_source: c.fp_source, fingerprint_bp_delta: c.fp_bp,
       calc_cap_delta_bp: c.calc_delta_bp,
