@@ -34,6 +34,7 @@ import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
 import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
 import { stageOmIntake } from './_shared/intake-om-pipeline.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { firstOf, joinedOf } from './_shared/intake-classify.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -1434,9 +1435,13 @@ async function handleIntakePromote(req, res) {
     state: extraction.state || null,
     zip_code: extraction.zip_code || null,
     property_type: extraction.property_type || null,
-    tenant_name: extraction.tenant_name || null,
-    tenant_guarantor: extraction.tenant_guarantor || null,
-    primary_tenant: extraction.tenant_name || null,
+    // Multi-tenant / multi-broker OMs emit ARRAY-valued fields. The sidebar
+    // pipeline (processSidebarExtraction) and its writers expect scalars/
+    // joined strings — coerce here so the re-promote path doesn't crash with
+    // "(...).trim is not a function" (Round 77f, defect 4).
+    tenant_name: firstOf(extraction.tenant_name) || null,
+    tenant_guarantor: firstOf(extraction.tenant_guarantor) || null,
+    primary_tenant: firstOf(extraction.tenant_name) || null,
     square_footage: extraction.building_sf || null,
     lot_sf: extraction.lot_sf || null,
     year_built: extraction.year_built || null,
@@ -1457,9 +1462,10 @@ async function handleIntakePromote(req, res) {
     structure_responsibility: extraction.structure_responsibility || null,
     parking_responsibility: extraction.parking_responsibility || null,
     document_type: extraction.document_type || null,
-    listing_broker: extraction.listing_broker || null,
-    listing_broker_email: extraction.listing_broker_email || null,
-    listing_firm: extraction.listing_firm || null,
+    listing_broker: joinedOf(extraction.listing_broker) || null,
+    listing_broker_email: joinedOf(extraction.listing_broker_email) || null,
+    listing_firm: joinedOf(extraction.listing_firm) || null,
+    seller_name: firstOf(extraction.seller_name) || null,
     contacts: [],
     _intake_promoted: true,
     _intake_id: intake_id,
@@ -1522,18 +1528,33 @@ async function handleIntakePromote(req, res) {
     }
   }
 
-  // Build contacts array from extraction for sidebar pipeline
-  if (extraction.listing_broker) {
-    metadata.contacts.push({
-      name: extraction.listing_broker,
-      email: extraction.listing_broker_email || null,
-      company: extraction.listing_firm || null,
-      role: 'listing_broker',
-    });
+  // Build contacts array from extraction for sidebar pipeline. Multi-broker
+  // OMs give array-valued names/emails — split into one contact per broker
+  // (paired by index when counts line up), mirroring the promoter's
+  // splitBrokerPairs. metadata.listing_* above are already joined strings.
+  {
+    const brokerNames  = String(joinedOf(extraction.listing_broker) || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const brokerEmails = String(joinedOf(extraction.listing_broker_email) || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const firmJoined   = joinedOf(extraction.listing_firm) || null;
+    if (brokerNames.length > 1 && brokerNames.length === brokerEmails.length) {
+      brokerNames.forEach((n, i) => metadata.contacts.push({
+        name: n, email: brokerEmails[i] || null, company: firmJoined, role: 'listing_broker',
+      }));
+    } else if (brokerNames.length || brokerEmails.length) {
+      metadata.contacts.push({
+        name: brokerNames.join(', ') || null,
+        email: brokerEmails.join(', ') || null,
+        company: firmJoined,
+        role: 'listing_broker',
+      });
+    }
   }
-  if (extraction.seller_name) {
+  const sellerName = firstOf(extraction.seller_name);
+  if (sellerName) {
     metadata.contacts.push({
-      name: extraction.seller_name,
+      name: sellerName,
       role: 'true_seller_contact',
     });
   }

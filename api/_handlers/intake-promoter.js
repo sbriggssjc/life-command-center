@@ -46,7 +46,14 @@ import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
-import { LISTING_DOCUMENT_TYPES, normalizeDocType, snapshotLooksLikeListing } from '../_shared/intake-classify.js';
+import {
+  LISTING_DOCUMENT_TYPES,
+  normalizeDocType,
+  snapshotLooksLikeListing,
+  normalizeCapRate,
+  firstOf,
+  joinedOf,
+} from '../_shared/intake-classify.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -159,14 +166,18 @@ async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {
 
 function buildGovListingRow(intakeId, snapshot, match, artifact) {
   const state = normalizeState(snapshot.state);
-  const brokerEmail = (snapshot.listing_broker_email || '').toLowerCase();
-  const firm        = (snapshot.listing_firm || '').toLowerCase();
-  const isNorthmarq = brokerEmail.endsWith('@northmarq.com') || firm.includes('northmarq');
+  // Multi-broker OMs make these ARRAY-valued — coerce to a human-joined string
+  // before any scalar string op or text-column write (Round 77f).
+  const brokerJoined = joinedOf(snapshot.listing_broker);
+  const brokerEmailJoined = joinedOf(snapshot.listing_broker_email);
+  const firmJoined = joinedOf(snapshot.listing_firm);
+  const brokerEmail = String(brokerEmailJoined || '').toLowerCase();
+  const firm        = String(firmJoined || '').toLowerCase();
+  const isNorthmarq = brokerEmail.includes('@northmarq.com') || firm.includes('northmarq');
 
-  // gov stores cap rate as decimal (0.0644 = 6.44%); extractor emits percentage.
-  const capRateDecimal = snapshot.cap_rate != null
-    ? Number(snapshot.cap_rate) / 100
-    : null;
+  // gov stores cap rate as decimal (0.0644 = 6.44%). The extractor emits BOTH
+  // decimal (0.055) and percent (7.75) — normalizeCapRate detects which.
+  const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
 
   // Round 76u (2026-04-27): infer OM date from lease metadata when the OM
   // doesn't have its own date. close_listing_on_sale uses listing_date <=
@@ -208,12 +219,12 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     asking_price_psf:   (snapshot.asking_price && snapshot.building_sf)
                           ? Math.round((snapshot.asking_price / snapshot.building_sf) * 100) / 100
                           : snapshot.price_per_sf || null,
-    tenant_agency:      snapshot.tenant_name || null,
+    tenant_agency:      firstOf(snapshot.tenant_name) || null,
     annual_rent:        snapshot.annual_rent || null,
     lease_expiration:   snapshot.lease_expiration || null,
-    listing_broker:     snapshot.listing_broker || null,
-    listing_firm:       snapshot.listing_firm || null,
-    broker_email:       snapshot.listing_broker_email || null,
+    listing_broker:     brokerJoined || null,
+    listing_firm:       firmJoined || null,
+    broker_email:       brokerEmailJoined || null,
     is_northmarq:       isNorthmarq,
     listing_status:     'active',
     listing_date:       listingDate,
@@ -233,9 +244,13 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
 // Cap rate stored as decimal (0.0918) per chk_*_cap_rate_range check
 // constraints (valid range 0.005–0.30).
 function buildDiaListingRow(intakeId, snapshot, match, artifact) {
-  const capRateDecimal = snapshot.cap_rate != null
-    ? Number(snapshot.cap_rate) / 100
-    : null;
+  // Extractor emits decimal (0.055) OR percent (7.75); detect, don't assume.
+  const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
+  // If a cap rate was present but normalized to null (implausible either way),
+  // preserve the raw value in notes rather than silently dropping it.
+  const rawCapNote = (snapshot.cap_rate != null && capRateDecimal == null)
+    ? ` (raw cap_rate "${String(snapshot.cap_rate).slice(0, 40)}" unparseable, dropped)`
+    : '';
 
   // Round 76u (2026-04-27): infer OM date from lease metadata. Same as gov.
   // Round 77d (2026-06-02): unknown inference now falls back to the snapshot's
@@ -277,8 +292,8 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
 
   return {
     property_id:        Number(match.property_id),
-    listing_broker:     snapshot.listing_broker || null,
-    broker_email:       snapshot.listing_broker_email || null,
+    listing_broker:     joinedOf(snapshot.listing_broker) || null,
+    broker_email:       joinedOf(snapshot.listing_broker_email) || null,
     initial_price:      snapshot.asking_price || null,
     last_price:         snapshot.asking_price || null,
     price_per_sf:       pricePerSf,
@@ -288,10 +303,10 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     listing_date:       listingDate,
     last_seen:          new Date().toISOString().slice(0, 10),
     is_active:          true,
-    seller_name:        snapshot.seller_name || null,
+    seller_name:        firstOf(snapshot.seller_name) || null,
     listing_url:        listingUrl,
     url:                listingUrl,
-    notes:              `Staged from LCC OM intake ${intakeId}`,
+    notes:              `Staged from LCC OM intake ${intakeId}${rawCapNote}`,
     intake_artifact_path: artifact?.storage_path || null,
     intake_artifact_type: snapshot.document_type || null,
   };
@@ -475,8 +490,11 @@ function splitBrokerPairs(rawName, rawEmail) {
 }
 
 async function promoteBrokerContact(domain, snapshot, match) {
-  const brokerName  = (snapshot.listing_broker || '').trim();
-  const brokerEmail = (snapshot.listing_broker_email || '').trim();
+  // Multi-broker OMs make these ARRAY-valued. Join to the comma form the
+  // splitBrokerPairs splitter expects so each broker becomes its own contact
+  // (Round 77f). recurse-per-pair handles the rest.
+  const brokerName  = String(joinedOf(snapshot.listing_broker) || '').trim();
+  const brokerEmail = String(joinedOf(snapshot.listing_broker_email) || '').trim();
   if (!brokerName && !brokerEmail) {
     return { ok: false, skipped: 'no_broker_info' };
   }
@@ -550,13 +568,14 @@ async function promoteBrokerContact(domain, snapshot, match) {
   // Name-focused: a junk/federal NAME is nulled (the row falls back to email
   // / 'Unknown Broker'); we never drop a contact that still has a usable
   // email. Only skip when there's neither a usable name nor an email.
+  const brokerFirm = joinedOf(snapshot.listing_firm) || null;
   let effectiveBrokerName = brokerName;
   {
     const { errors: contactErrors } = validateContactIngest({
       domain,
       name: brokerName || null,
       email: brokerEmail || null,
-      company: snapshot.listing_firm || null,
+      company: brokerFirm,
       role: 'broker',
       data_source: 'lcc_intake_om',
     });
@@ -577,7 +596,7 @@ async function promoteBrokerContact(domain, snapshot, match) {
     ? {
         name:            effectiveBrokerName || brokerEmail || 'Unknown Broker',
         email:           brokerEmail || null,
-        company:         snapshot.listing_firm || null,
+        company:         brokerFirm,
         title:           'Listing Broker',
         contact_type:    'broker',
         data_source:     'lcc_intake_om',
@@ -586,7 +605,7 @@ async function promoteBrokerContact(domain, snapshot, match) {
     : {
         contact_name:    effectiveBrokerName || brokerEmail || 'Unknown Broker',
         contact_email:   brokerEmail || null,
-        company:         snapshot.listing_firm || null,
+        company:         brokerFirm,
         title:           'Listing Broker',
         role:            'broker',
         property_id:     propertyId,
@@ -639,7 +658,9 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
   // surfaced 35389 (Vital Smiles) and 35380 (DB Biologics) with tenant=NULL
   // despite their OMs clearly stating the tenant — promoteDiaPropertyFromOm
   // never patched the column.
-  const tenantStr = canonicalizeTenant((snapshot.tenant_name || snapshot.primary_tenant || '').trim());
+  // tenant_name may be ARRAY-valued (multi-tenant OM) — first-as-primary.
+  const tenantRaw = firstOf(snapshot.tenant_name) || firstOf(snapshot.primary_tenant) || '';
+  const tenantStr = canonicalizeTenant(String(tenantRaw).trim());
   if ((current.tenant == null || current.tenant === '') && tenantStr.length >= 2 && tenantStr.length < 200) {
     patch.tenant = tenantStr;
   }
@@ -922,22 +943,23 @@ async function promoteProspectLead(domain, propertyId, snapshot, match, listingI
   // ("U S A" / "Government" — CoStar personal-property bleed-through, Round
   // 76ek.i) before they land as the prospect's owner. NULL rather than write
   // a known-bad owner name.
-  const rawOwner = snapshot.seller_name || snapshot.owner_name || null;
+  const rawOwner = firstOf(snapshot.seller_name) || firstOf(snapshot.owner_name) || null;
   const ownerName = rawOwner && !isFederalOwnerAntiPattern(rawOwner) ? rawOwner : null;
 
   const fields = {
-    tenant_agency:        snapshot.tenant_agency || snapshot.tenant_name || null,
+    tenant_agency:        firstOf(snapshot.tenant_agency) || firstOf(snapshot.tenant_name) || null,
     agency_full_name:     snapshot.agency_full_name || null,
     government_type:      snapshot.government_type || 'federal',
     source_listing_id:    listingId || null,
     listing_status:       'active',
     listing_date:         snapshot.listing_date || today,
-    listing_broker_name:  snapshot.listing_broker || null,
-    listing_broker_firm:  snapshot.listing_firm || null,
-    listing_broker_email: snapshot.listing_broker_email || null,
-    listing_broker_phone: snapshot.listing_broker_phone || null,
+    listing_broker_name:  joinedOf(snapshot.listing_broker) || null,
+    listing_broker_firm:  joinedOf(snapshot.listing_firm) || null,
+    listing_broker_email: joinedOf(snapshot.listing_broker_email) || null,
+    listing_broker_phone: joinedOf(snapshot.listing_broker_phone) || null,
     asking_price:         snapshot.asking_price || null,
-    asking_cap_rate:      snapshot.cap_rate || null,
+    // Extractor emits decimal OR percent — normalize to DB-ready decimal.
+    asking_cap_rate:      normalizeCapRate(snapshot.cap_rate),
     year_built:           snapshot.year_built ? parseInt(snapshot.year_built, 10) : null,
     land_acres:           snapshot.land_acres || (snapshot.lot_sf ? Math.round((Number(snapshot.lot_sf) / 43560) * 100) / 100 : null),
     rba:                  snapshot.building_sf ? parseInt(snapshot.building_sf, 10) : null,
@@ -1047,8 +1069,8 @@ async function promoteDiaLeaseFromOm(propertyId, snapshot) {
     property_id:               Number(propertyId),
     // Canonicalize brand variants (DaVita Inc. / DAVITA / Davita Healthcare
     // Partners → DaVita Kidney Care). See _shared/tenant-canonical.js.
-    tenant:                    canonicalizeTenant(snapshot.tenant_name) || null,
-    guarantor:                 snapshot.tenant_guarantor || null,
+    tenant:                    canonicalizeTenant(firstOf(snapshot.tenant_name)) || null,
+    guarantor:                 firstOf(snapshot.tenant_guarantor) || null,
     lease_start:               commencement,
     lease_expiration:          expiration,
     expense_structure:         snapshot.expense_structure || null,
@@ -1291,8 +1313,10 @@ async function promoteLeaseExpenses(domain, propertyId, snapshot) {
 // check-then-insert-or-patch pattern.
 
 async function promoteUnifiedContact(domain, snapshot, domainContactId) {
-  const email = (snapshot.listing_broker_email || '').trim();
-  const name  = (snapshot.listing_broker || '').trim();
+  // Array-valued for multi-broker OMs — take the primary (first) broker for
+  // the unified-contact row (Round 77f).
+  const email = String(firstOf(snapshot.listing_broker_email) || '').trim();
+  const name  = String(firstOf(snapshot.listing_broker) || '').trim();
   if (!email) {
     return { ok: false, skipped: 'no_email_no_unified_contact' };
   }
@@ -1339,7 +1363,7 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
       first_name:    firstName,
       last_name:     lastName,
       email,
-      company_name:  snapshot.listing_firm || null,
+      company_name:  joinedOf(snapshot.listing_firm) || null,
       title:         'Listing Broker',
       contact_type:  'broker',
       [linkCol]:     domainContactId || null,
@@ -1432,9 +1456,10 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
 
 async function checkBrokerMergeCandidates(unifiedId, snapshot) {
   if (!unifiedId) return { ok: false, skipped: 'no_unified_id' };
-  const fullName = (snapshot.listing_broker || '').trim();
-  const email    = (snapshot.listing_broker_email || '').trim().toLowerCase();
-  const company  = (snapshot.listing_firm || '').trim();
+  // Primary broker only (array-valued for multi-broker OMs — Round 77f).
+  const fullName = String(firstOf(snapshot.listing_broker) || '').trim();
+  const email    = String(firstOf(snapshot.listing_broker_email) || '').trim().toLowerCase();
+  const company  = String(joinedOf(snapshot.listing_firm) || '').trim();
 
   if (!fullName && !email) {
     return { ok: false, skipped: 'insufficient_signals' };
@@ -1557,7 +1582,7 @@ async function resolveOwnerLinksDia(match, snapshot) {
   const prop = propRes.data[0];
 
   // Owner-name signal: same priority as gov.
-  let ownerName = (snapshot?.seller_name || '').trim()
+  let ownerName = String(firstOf(snapshot?.seller_name) || '').trim()
                || (prop.assessed_owner || '').trim();
   if (!ownerName && typeof prop.notes === 'string') {
     const m = prop.notes.match(/(?:Lessor|Owner|Seller)\s*:\s*([^\n,;]+)/i);
@@ -1733,7 +1758,7 @@ async function resolveOwnerLinks(match, snapshot) {
   // Signal for resolution: prefer snapshot.seller_name (OM said so), then
   // property.assessed_owner (public records), then parse property.notes
   // ("GSA Lessor: X"). Normalize to a single best-guess name.
-  let ownerName = (snapshot?.seller_name || '').trim()
+  let ownerName = String(firstOf(snapshot?.seller_name) || '').trim()
                || (prop.assessed_owner || '').trim();
   if (!ownerName && typeof prop.notes === 'string') {
     const m = prop.notes.match(/(?:GSA\s+Lessor|Lessor|Owner)\s*:\s*([^\n,;]+)/i);
@@ -1979,8 +2004,8 @@ async function promoteLccEntity(workspaceId, actorId, snapshot, match) {
       state:    normalizeState(snapshot.state) || null,
       zip:      snapshot.zip_code || null,
       asset_type: snapshot.property_type || null,
-      description: snapshot.tenant_name
-        ? `${snapshot.tenant_name}${snapshot.listing_firm ? ` — listed by ${snapshot.listing_firm}` : ''}`
+      description: firstOf(snapshot.tenant_name)
+        ? `${firstOf(snapshot.tenant_name)}${joinedOf(snapshot.listing_firm) ? ` — listed by ${joinedOf(snapshot.listing_firm)}` : ''}`
         : null,
       domain: match.domain,
     },
@@ -2024,8 +2049,10 @@ async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, ma
     : snapshot?.document_type === 'flyer'              ? 'Broker Flyer'
     : snapshot?.document_type === 'marketing_brochure' ? 'Marketing Brochure'
     : 'Listing document';
-  const brokerPart = snapshot?.listing_broker
-    ? ` from ${snapshot.listing_broker}${snapshot.listing_firm ? ' (' + snapshot.listing_firm + ')' : ''}`
+  const brokerJoined = joinedOf(snapshot?.listing_broker);
+  const firmJoined   = joinedOf(snapshot?.listing_firm);
+  const brokerPart = brokerJoined
+    ? ` from ${brokerJoined}${firmJoined ? ' (' + firmJoined + ')' : ''}`
     : '';
   const addressPart = snapshot?.address ? ` for ${snapshot.address}` : '';
 
@@ -2058,9 +2085,9 @@ async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, ma
       match_property_id: match.property_id || null,
       match_confidence:  match.confidence || null,
       listing_id:        listingResult?.listing_id || null,
-      listing_firm:      snapshot?.listing_firm || null,
-      listing_broker:    snapshot?.listing_broker || null,
-      broker_email:      snapshot?.listing_broker_email || null,
+      listing_firm:      joinedOf(snapshot?.listing_firm) || null,
+      listing_broker:    joinedOf(snapshot?.listing_broker) || null,
+      broker_email:      joinedOf(snapshot?.listing_broker_email) || null,
     },
     occurred_at: new Date().toISOString(),
   };
@@ -2371,7 +2398,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     contactResult?.ok && contactResult.contact_id
   ) {
     const allContactIds = [contactResult.contact_id, ...(contactResult.additional_contact_ids || [])];
-    const pairs = splitBrokerPairs(snapshot.listing_broker || '', snapshot.listing_broker_email || '');
+    const pairs = splitBrokerPairs(joinedOf(snapshot.listing_broker) || '', joinedOf(snapshot.listing_broker_email) || '');
 
     let primaryBrokerId = null;
     try {
@@ -2410,7 +2437,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
             {
               broker_name:     pair.name || pair.email || 'Unknown Broker',
               email:           pair.email || null,
-              company:         snapshot.listing_firm || null,
+              company:         joinedOf(snapshot.listing_firm) || null,
               contact_id:      linkedContactId,
               normalized_name: (pair.name || '').toLowerCase().trim() || null,
             },
@@ -2461,7 +2488,9 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     //    call has to mirror them or v_field_provenance_unranked surfaces
     //    writes against columns that don't exist on the target table.
     if (listingResult?.ok && listingResult.listing_id) {
-      const capRateDecimal = snapshot.cap_rate != null ? snapshot.cap_rate / 100 : null;
+      // Mirror the actual writer: normalized decimal cap rate + coerced
+      // array-valued broker/seller fields (Round 77f).
+      const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
       const askPpsf = (snapshot.asking_price && snapshot.building_sf)
         ? Math.round((snapshot.asking_price / snapshot.building_sf) * 100) / 100
         : (snapshot.price_per_sf ?? null);
@@ -2471,8 +2500,8 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
             asking_price:     snapshot.asking_price ?? null,
             asking_cap_rate:  capRateDecimal,
             asking_price_psf: askPpsf,
-            listing_broker:   snapshot.listing_broker || null,
-            broker_email:     snapshot.listing_broker_email || null,
+            listing_broker:   joinedOf(snapshot.listing_broker) || null,
+            broker_email:     joinedOf(snapshot.listing_broker_email) || null,
             listing_date:     snapshot.listing_date ?? null,
           }
         : {
@@ -2480,10 +2509,10 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
             last_price:       snapshot.asking_price ?? null,
             current_cap_rate: capRateDecimal,
             initial_cap_rate: capRateDecimal,
-            listing_broker:   snapshot.listing_broker || null,
-            broker_email:     snapshot.listing_broker_email || null,
+            listing_broker:   joinedOf(snapshot.listing_broker) || null,
+            broker_email:     joinedOf(snapshot.listing_broker_email) || null,
             price_per_sf:     snapshot.price_per_sf ?? null,
-            seller_name:      snapshot.seller_name || null,
+            seller_name:      firstOf(snapshot.seller_name) || null,
           };
 
       await recordOmFieldsProvenance(
@@ -2500,15 +2529,15 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     if (contactResult?.ok && contactResult.contact_id) {
       const contactValues = match.domain === 'government'
         ? {
-            email:    snapshot.listing_broker_email || null,
-            name:     snapshot.listing_broker || null,
-            company:  snapshot.listing_firm || null,
+            email:    joinedOf(snapshot.listing_broker_email) || null,
+            name:     joinedOf(snapshot.listing_broker) || null,
+            company:  joinedOf(snapshot.listing_firm) || null,
             title:    'Listing Broker',
           }
         : {
-            contact_email: snapshot.listing_broker_email || null,
-            contact_name:  snapshot.listing_broker || null,
-            company:       snapshot.listing_firm || null,
+            contact_email: joinedOf(snapshot.listing_broker_email) || null,
+            contact_name:  joinedOf(snapshot.listing_broker) || null,
+            company:       joinedOf(snapshot.listing_firm) || null,
             title:         'Listing Broker',
             role:          'broker',
           };
@@ -2531,7 +2560,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       const propValues = {};
       for (const f of propPatched) {
         if (f === 'year_built')              propValues.year_built          = snapshot.year_built;
-        else if (f === 'tenant')             propValues.tenant              = snapshot.tenant_name || snapshot.primary_tenant || null;
+        else if (f === 'tenant')             propValues.tenant              = firstOf(snapshot.tenant_name) || firstOf(snapshot.primary_tenant) || null;
         else if (f === 'lot_sf')             propValues.lot_sf              = snapshot.lot_sf;
         else if (f === 'parcel_number')      propValues.parcel_number       = snapshot.parcel_number;
         else if (f === 'building_size')      propValues.building_size       = snapshot.building_sf;
@@ -2582,8 +2611,8 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
         { targetDatabase: 'dia_db', targetTable: 'dia.leases', recordPk: diaLeaseResult.lease_id,
           intakeId, workspaceId: context.workspaceId, actorId: context.actorId },
         {
-          tenant:                  snapshot.tenant_name || null,
-          guarantor:               snapshot.tenant_guarantor || null,
+          tenant:                  firstOf(snapshot.tenant_name) || null,
+          guarantor:               firstOf(snapshot.tenant_guarantor) || null,
           lease_start:             snapshot.lease_commencement || null,
           lease_expiration:        snapshot.lease_expiration || null,
           expense_structure:       snapshot.expense_structure || null,
@@ -2682,8 +2711,8 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     domain:                match.domain,
     match:                 { property_id: match.property_id, reason: match.reason, lcc_entity_id: match.lcc_entity_id || null },
     snapshot:              { address: snapshot?.address, city: snapshot?.city, state: snapshot?.state,
-                             tenant_agency: snapshot?.tenant_agency || snapshot?.tenant_name,
-                             listing_broker: snapshot?.listing_broker, asking_price: snapshot?.asking_price },
+                             tenant_agency: firstOf(snapshot?.tenant_agency) || firstOf(snapshot?.tenant_name),
+                             listing_broker: joinedOf(snapshot?.listing_broker), asking_price: snapshot?.asking_price },
     listing:               listingResult,
     broker_contact:        contactResult,
     property_financials:   financialsResult,
@@ -2767,7 +2796,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
           state:      snapshot.state,
           domain:     match.domain,
           asset_type: snapshot.asset_type || snapshot.property_type || null,
-          email:      snapshot.listing_broker_email || null,
+          email:      firstOf(snapshot.listing_broker_email) || null,
           metadata: {
             domain_property_id: match.property_id,
             domain_listing_id:  _newListingId,

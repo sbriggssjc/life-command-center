@@ -61,6 +61,20 @@ const SUFFIX_MAP = {
   route: 'rte', rte: 'rte',
 };
 
+// Number-word → digit folding (Round 77f, 2026-06-04). US street names spell
+// numbers both ways: OM "27150 Eight Mile Road" vs dia "27150 W 8 Mile Rd".
+// Folding the cardinal/ordinal words to their digit form lets the two sides
+// produce the same canonical key. Cardinals one–twenty cover essentially all
+// numbered US streets; ordinals first–tenth cover "1st St" / "First Street".
+const NUMBER_WORD_MAP = {
+  one: '1', two: '2', three: '3', four: '4', five: '5',
+  six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
+  eleven: '11', twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15',
+  sixteen: '16', seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20',
+  first: '1st', second: '2nd', third: '3rd', fourth: '4th', fifth: '5th',
+  sixth: '6th', seventh: '7th', eighth: '8th', ninth: '9th', tenth: '10th',
+};
+
 // Unit / suite / floor designators stripped before tokenization. These carry
 // no value for property identity and frequently differ between the OM and the
 // canonical record. Run while punctuation (esp. '#') is still present.
@@ -91,6 +105,12 @@ export function normalizeStreetAddress(addr) {
   //    do. Keeping only the street portion gives a fair comparison.
   s = s.split(',')[0];
 
+  // 1b. Collapse a leading street-number RANGE to its first number (Round 77f,
+  //     2026-06-04). OM "2064 - 2066 Atlantic Ave" ↔ dia "2064 Atlantic Ave":
+  //     the range refers to the same building, so the first number is the
+  //     canonical key. Runs while the hyphen/en-dash is still present.
+  s = s.replace(/^(\s*\d+)\s*[-–—]\s*\d+\b/, '$1');
+
   // 2. Strip unit/suite/floor designators while '#' is still present.
   s = s.replace(UNIT_KEYWORD_RE, ' ')
        .replace(ORDINAL_FLOOR_RE, ' ')
@@ -100,8 +120,11 @@ export function normalizeStreetAddress(addr) {
   s = s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   if (!s) return '';
 
-  // 4. Token-by-token canonicalization of directionals + suffixes.
+  // 4. Token-by-token canonicalization of directionals + suffixes + number
+  //    words. Number-word folding runs first so "eight" → "8" before the
+  //    suffix/directional checks (none of which it can collide with).
   const tokens = s.split(/\s+/).map((tok) => {
+    if (Object.prototype.hasOwnProperty.call(NUMBER_WORD_MAP, tok)) return NUMBER_WORD_MAP[tok];
     if (Object.prototype.hasOwnProperty.call(DIRECTIONAL_MAP, tok)) return DIRECTIONAL_MAP[tok];
     if (Object.prototype.hasOwnProperty.call(SUFFIX_MAP, tok)) return SUFFIX_MAP[tok];
     return tok;
