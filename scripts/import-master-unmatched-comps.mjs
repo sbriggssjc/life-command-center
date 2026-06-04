@@ -21,8 +21,22 @@
  *   2. geocode-proximity: haversine < --dedup-meters (default 80m) to an existing
  *      GEOCODED property sharing the same leading street number.
  * A row that matches an existing property is NOT given a stub — its sale is
- * attached to the existing property_id instead (or skipped if that exact sale
- * already exists). Reuses the Round 76gn geocoding infra (Census -> Google).
+ * attached to the existing property_id instead. Reuses the Round 76gn geocoding
+ * infra (Census -> Google).
+ *
+ * Beyond property-dedup, four SALE-level guards (sampling showed ~88% of master
+ * rows already exist; 48.5% of the rest were cross-property dups):
+ *   SALE_EXISTS   — a same-property sale within +/-90d AND +/-3% price (master vs
+ *                   CoStar date/price drift) -> already in DB, skip.
+ *   DUP_REVIEW    — a same-state sale within +/-90d/+/-3% on a DIFFERENT property
+ *                   -> the same transaction on another property record = a
+ *                   property-MERGE candidate. Emits matched sale_id/property_id;
+ *                   NOT inserted (twins are not; the merge lead is the value).
+ *   INTRA_DUP     — identical (state,date,price,ADDRESS) input rows -> keep first.
+ *   PORTFOLIO_SKIP— >=2 input rows sharing an identical price within +/-2 days =
+ *                   one aggregate price split across properties -> excluded
+ *                   (importing each as a full-price sale would multi-count).
+ * Only ATTACH_EXISTING + NEW_PROPERTY are written on --commit.
  *
  * ── JUNK FILTER ───────────────────────────────────────────────────────────────
  * A 419-row hand-maintained sheet has a few non-importable rows. We reject a row
@@ -212,30 +226,75 @@ function normCap(v) {
   }
   console.log(`[import] ${existing.length} existing properties loaded`);
 
+  // Load all market sales once for CROSS-PROPERTY dedup: a tolerant date+price
+  // match on a DIFFERENT same-state property is a cross-property duplicate (same
+  // transaction recorded against another property record) -> a property-MERGE
+  // candidate, not a new sale. (Sampling n=264: 48.5% of ATTACH candidates had
+  // exactly this.) Reuses the property->state map.
+  const propState = new Map(existing.map(e => [e.property_id, e.state]));
+  const sales = [];
+  for (let off = 0; ; off += 1000) {
+    const page = await rest('GET',
+      `sales_transactions?select=sale_id,property_id,sale_date,sold_price&sold_price=gt.0&order=sale_id&limit=1000&offset=${off}`);
+    if (!page.length) break;
+    for (const s of page) sales.push({
+      sale_id: s.sale_id, property_id: s.property_id, state: propState.get(s.property_id) || null,
+      t: s.sale_date ? new Date(s.sale_date).getTime() : null, price: Number(s.sold_price),
+    });
+    if (page.length < 1000) break;
+  }
+  console.log(`[import] ${sales.length} existing sales loaded (cross-property dedup)`);
+
+  // ── Input-side pre-pass (no DB) ──────────────────────────────────────────────
+  const DAY = 86400000;
+  // (2) intra-master exact duplicates: identical (state, date, price, ADDRESS) ->
+  // keep first. The address is REQUIRED in the key — without it, a portfolio sale
+  // (N distinct properties sharing one aggregate price+date) would be wrongly
+  // collapsed to a single property. Same-price/different-address is handled by the
+  // portfolio guard below, not here.
+  const exactSeen = new Map();
+  for (const [i, r] of rows.entries()) {
+    if (!(Number(r.sold_price) > 0) || !r.sale_date) continue;
+    const key = `${String(r.state || '').toUpperCase().trim()}|${String(r.sale_date).slice(0, 10)}|${Math.round(Number(r.sold_price))}|${normAddr(r.address)}`;
+    if (exactSeen.has(key)) { r._skip = 'INTRA_DUP'; r._dupOf = exactSeen.get(key); }
+    else exactSeen.set(key, i);
+  }
+  // (3) portfolio allocations: >=2 rows sharing an IDENTICAL price within +/-2 days
+  // are an aggregate price split across properties -> exclude (importing each as a
+  // full-price sale multi-counts). Distinct per-property prices don't group here.
+  const byPrice = new Map();
+  for (const [i, r] of rows.entries()) {
+    if (r._skip || !(Number(r.sold_price) > 0) || !r.sale_date) continue;
+    const p = Math.round(Number(r.sold_price));
+    if (!byPrice.has(p)) byPrice.set(p, []);
+    byPrice.get(p).push({ i, t: new Date(r.sale_date).getTime() });
+  }
+  for (const arr of byPrice.values()) {
+    if (arr.length < 2) continue;
+    arr.sort((a, b) => a.t - b.t);
+    let cluster = [arr[0]];
+    const flush = () => { if (cluster.length >= 2) for (const c of cluster) { rows[c.i]._skip = 'PORTFOLIO'; rows[c.i]._portfolioN = cluster.length; } };
+    for (let k = 1; k < arr.length; k++) {
+      if (Math.abs(arr[k].t - cluster[cluster.length - 1].t) <= 2 * DAY) cluster.push(arr[k]);
+      else { flush(); cluster = [arr[k]]; }
+    }
+    flush();
+  }
+
   const plan = [];
-  const counts = { junk: 0, deduped: 0, sale_exists: 0, new_property: 0, attach_existing: 0, geocode_miss: 0 };
+  const counts = { junk: 0, intra_dup: 0, portfolio_skip: 0, sale_exists: 0, dup_review: 0, attach_existing: 0, new_property: 0, geocode_miss: 0 };
 
   for (const [i, raw] of rows.entries()) {
     const row = { ...raw, state: String(raw.state || '').toUpperCase().trim() };
     const junk = junkReason(row);
     if (junk) { counts.junk++; plan.push({ i, address: row.address, decision: 'JUNK', reason: junk }); continue; }
+    if (raw._skip === 'INTRA_DUP') { counts.intra_dup++; plan.push({ i, address: row.address, decision: 'INTRA_DUP', dup_of_row: raw._dupOf }); continue; }
+    if (raw._skip === 'PORTFOLIO') { counts.portfolio_skip++; plan.push({ i, address: row.address, decision: 'PORTFOLIO_SKIP', price: Number(row.sold_price), group_size: raw._portfolioN }); continue; }
 
     const nAddr = normAddr(row.address), num = leadingNumber(row.address);
-    const geo = await geocode(row);
-    await sleep(60);
-    if (!geo) counts.geocode_miss++;
-
-    // dedup: normalized-address exact (same state) OR proximity + same street number
-    let match = existing.find(e => e.state === row.state && e.norm === nAddr);
-    if (!match && geo) {
-      match = existing.find(e =>
-        e.lat != null && e.lng != null && e.num === num &&
-        haversineM(geo.lat, geo.lng, e.lat, e.lng) <= DEDUP_M);
-    }
-
     const cap = normCap(row.sold_cap);
     const saleRow = {
-      property_id: match ? match.property_id : null, // filled after stub insert
+      property_id: null,
       sale_date: new Date(row.sale_date).toISOString().slice(0, 10),
       sold_price: Number(row.sold_price),
       cap_rate: cap, stated_cap_rate: cap, cap_rate_final: cap,
@@ -247,28 +306,43 @@ function normCap(v) {
       notes: `master_xlsx_backfill_r2${row.tenant ? ' tenant=' + row.tenant : ''}`,
     };
 
+    // property match: normalized-address exact (same state) OR geocode proximity.
+    // Geocode only on a norm miss (bounds geocoding to the long tail).
+    let match = existing.find(e => e.state === row.state && e.norm === nAddr);
+    let geo = null;
+    if (!match) {
+      geo = await geocode(row); await sleep(60);
+      if (!geo) counts.geocode_miss++;
+      else match = existing.find(e =>
+        e.lat != null && e.lng != null && e.num === num &&
+        haversineM(geo.lat, geo.lng, e.lat, e.lng) <= DEDUP_M);
+    }
+    if (match) saleRow.property_id = match.property_id;
+
+    // Tolerant sale dedup: any same-state sale within +/-90d AND +/-3% price.
+    const tT = new Date(saleRow.sale_date).getTime();
+    const tol = 0.03 * saleRow.sold_price;
+    const twins = sales.filter(s => s.state === row.state && s.t != null &&
+      Math.abs(s.t - tT) <= 90 * DAY && s.price > 0 && Math.abs(s.price - saleRow.sold_price) <= tol);
+    const samePropTwin = match ? twins.find(s => s.property_id === match.property_id) : null;
+    if (samePropTwin) { counts.sale_exists++; plan.push({ i, address: row.address, decision: 'SALE_EXISTS', property_id: match.property_id, sale_id: samePropTwin.sale_id }); continue; }
+    const crossPropTwin = twins.find(s => !match || s.property_id !== match.property_id);
+    if (crossPropTwin) {
+      counts.dup_review++;
+      plan.push({ i, address: row.address, state: row.state, decision: 'DUP_REVIEW',
+        matched_sale_id: crossPropTwin.sale_id, matched_property_id: crossPropTwin.property_id,
+        candidate_property_id: match ? match.property_id : null }); // merge lead — NOT inserted
+      continue;
+    }
+
     if (match) {
-      // Tolerant same-transaction dedup: a sale on the SAME property within
-      // +/-90 days AND +/-3% price is the SAME deal (master vs CoStar date/price
-      // drift), not a new sale. (Exact date + $1k was far too strict —
-      // independent tolerant-match sampling (n=203) showed ~88% of master rows
-      // already have their sale in the DB at this tolerance; the strict matcher
-      // mislabeled ~600 of them ATTACH_EXISTING, which would insert duplicates.)
-      const d = new Date(saleRow.sale_date);
-      const lo = new Date(d); lo.setDate(lo.getDate() - 90);
-      const hi = new Date(d); hi.setDate(hi.getDate() + 90);
-      const tol = 0.03 * saleRow.sold_price;
-      const near = await rest('GET',
-        `sales_transactions?select=sale_id,sale_date,sold_price&property_id=eq.${match.property_id}` +
-        `&sale_date=gte.${lo.toISOString().slice(0, 10)}&sale_date=lte.${hi.toISOString().slice(0, 10)}&limit=50`);
-      const twin = near.find(s => {
-        const p = Number(s.sold_price);
-        return p > 0 && Math.abs(p - saleRow.sold_price) <= tol;
-      });
-      if (twin) { counts.sale_exists++; plan.push({ i, address: row.address, decision: 'SALE_EXISTS', property_id: match.property_id, sale_id: twin.sale_id }); continue; }
       counts.attach_existing++;
-      plan.push({ i, address: row.address, decision: 'ATTACH_EXISTING', property_id: match.property_id, cap, geocode: geo?.src || 'miss' });
-      if (COMMIT) await rest('POST', 'sales_transactions', saleRow);
+      plan.push({ i, address: row.address, decision: 'ATTACH_EXISTING', property_id: match.property_id, cap, geocode: geo?.src || 'norm' });
+      if (COMMIT) {
+        const ins = await rest('POST', 'sales_transactions', saleRow);
+        const r = Array.isArray(ins) ? ins[0] : ins;
+        if (r?.sale_id) sales.push({ sale_id: r.sale_id, property_id: match.property_id, state: row.state, t: tT, price: saleRow.sold_price });
+      }
       continue;
     }
 
@@ -284,17 +358,23 @@ function normCap(v) {
       });
       const newId = stub[0].property_id;
       existing.push({ property_id: newId, state: row.state, norm: nAddr, num, lat: geo?.lat ?? null, lng: geo?.lng ?? null });
-      await rest('POST', 'sales_transactions', { ...saleRow, property_id: newId });
+      const ins = await rest('POST', 'sales_transactions', { ...saleRow, property_id: newId });
+      const r = Array.isArray(ins) ? ins[0] : ins;
+      if (r?.sale_id) sales.push({ sale_id: r.sale_id, property_id: newId, state: row.state, t: tT, price: saleRow.sold_price });
     }
   }
 
   console.log('\n[import] PLAN SUMMARY');
   console.table(counts);
-  console.log(`  JUNK rejected ......... ${counts.junk}`);
-  console.log(`  deduped: SALE_EXISTS .. ${counts.sale_exists}`);
-  console.log(`  deduped: ATTACH_EXIST . ${counts.attach_existing}  (sale added to an existing property, no stub)`);
-  console.log(`  NEW_PROPERTY stub ..... ${counts.new_property}`);
-  console.log(`  geocode misses ........ ${counts.geocode_miss}  (still imported, lat/lng null)`);
+  console.log(`  JUNK rejected ............ ${counts.junk}`);
+  console.log(`  INTRA_DUP (input dups) ... ${counts.intra_dup}`);
+  console.log(`  PORTFOLIO_SKIP ........... ${counts.portfolio_skip}  (>=2 rows, identical price within +/-2d)`);
+  console.log(`  SALE_EXISTS (same prop) .. ${counts.sale_exists}`);
+  console.log(`  DUP_REVIEW (cross-prop) .. ${counts.dup_review}  (merge candidates; NOT inserted — see plan)`);
+  console.log(`  ATTACH_EXISTING (insert) . ${counts.attach_existing}`);
+  console.log(`  NEW_PROPERTY (stub+insert) ${counts.new_property}`);
+  console.log(`  => GENUINE INSERTS ....... ${counts.attach_existing + counts.new_property}`);
+  console.log(`  geocode misses ........... ${counts.geocode_miss}  (norm-miss rows only; imported with lat/lng null)`);
   console.log(COMMIT ? '\n[import] COMMITTED.' : '\n[import] DRY RUN — no writes. Re-run with --commit to apply.');
   if (PLAN_OUT) { writeFileSync(PLAN_OUT, JSON.stringify(plan, null, 2)); console.log(`[import] per-row plan -> ${PLAN_OUT}`); }
 })().catch(e => { console.error('[import] FATAL', e); process.exit(1); });
