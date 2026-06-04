@@ -1,0 +1,6583 @@
+{
+  "summary": {
+    "generated_at": "2026-06-04T16:57:02.316Z",
+    "mode": "offline",
+    "committed": false,
+    "master_linked_sales": 926,
+    "candidate_props": 563,
+    "writes": 181,
+    "skips_by_reason": {
+      "AMBIGUOUS": 11,
+      "FINGERPRINT_FAIL": 14,
+      "NO_CAP_FINGERPRINT": 159,
+      "NO_MASTER_ROW": 67,
+      "NO_CHANGE": 370,
+      "CONFLICTING_MASTERS": 12
+    }
+  },
+  "writes": [
+    {
+      "property_id": 30680,
+      "old_address": "1450 Kooser Rd",
+      "new_address": "1221 S Capitol Ave",
+      "old_city": "San Jose",
+      "new_city": "San Jose",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.103,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.29,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2017-10-20",
+      "master_sold_price": 11228831,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6375
+      ]
+    },
+    {
+      "property_id": 35855,
+      "old_address": "2650 Miracle Mile",
+      "new_address": "2650 Miracle Mile",
+      "old_city": "Bullhead Ci",
+      "new_city": "Bullhead City",
+      "old_state": "AZ",
+      "new_state": "AZ",
+      "master_cap_pct": 8.4,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2010-08-11",
+      "master_sold_price": 4062646,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13630
+      ]
+    },
+    {
+      "property_id": 28502,
+      "old_address": "100 Community Dr Ste 106",
+      "new_address": "100 Community Dr",
+      "old_city": "Tobyhanna",
+      "new_city": "Tobyhanna",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 9.649,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.15,
+      "calc_cap_delta_bp": 122.15,
+      "master_sale_date": "2018-05-04",
+      "master_sold_price": 750000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13826
+      ]
+    },
+    {
+      "property_id": 29168,
+      "old_address": "1720 E Hwy 97",
+      "new_address": "1720 Hwy 97 E",
+      "old_city": "Jourdanton",
+      "new_city": "Jourdanton",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 10,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 20,
+      "master_sale_date": "2015-03-02",
+      "master_sold_price": 1540000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13681,
+        14003,
+        14063
+      ]
+    },
+    {
+      "property_id": 29148,
+      "old_address": "160 Jack Burton Rd",
+      "new_address": "160 Jack Burton Dr",
+      "old_city": "Cleburne",
+      "new_city": "Cleburne",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 8.361,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.1,
+      "calc_cap_delta_bp": 0.1,
+      "master_sale_date": "2016-11-17",
+      "master_sold_price": 1579000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        13780
+      ]
+    },
+    {
+      "property_id": 26753,
+      "old_address": "2660 S Broadway Ste A",
+      "new_address": "2660 S Broadway",
+      "old_city": "Rochester",
+      "new_city": "Rochester",
+      "old_state": "MN",
+      "new_state": "MN",
+      "master_cap_pct": 8.5,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 85,
+      "master_sale_date": "2025-07-31",
+      "master_sold_price": 2681705,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14418
+      ]
+    },
+    {
+      "property_id": 28471,
+      "old_address": "2154-58 Stenton Ave",
+      "new_address": "2154 Stenton Ave",
+      "old_city": "Philadelphia",
+      "new_city": "Philadelphia",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 7.927,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.32,
+      "calc_cap_delta_bp": 0.32,
+      "master_sale_date": "2021-12-30",
+      "master_sold_price": 4100000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14493
+      ]
+    },
+    {
+      "property_id": 28862,
+      "old_address": "3313 Se 6th Ave",
+      "new_address": "3313 6th Ave SE",
+      "old_city": "Aberdeen",
+      "new_city": "Aberdeen",
+      "old_state": "SD",
+      "new_state": "SD",
+      "master_cap_pct": 6,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 28,
+      "master_sale_date": "2022-04-04",
+      "master_sold_price": 2000000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14483
+      ]
+    },
+    {
+      "property_id": 28024,
+      "old_address": "1721 Tennessee Ave.",
+      "new_address": "1721-1737 Tennessee Ave",
+      "old_city": "Cincinnati",
+      "new_city": "Cincinnati",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 7.37,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2023-01-26",
+      "master_sold_price": 3885000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14455
+      ]
+    },
+    {
+      "property_id": 28435,
+      "old_address": "168 S. Sargent Stanley Hoffman Blvd",
+      "new_address": "168 Sargeant Stanley Hoffman Blvd",
+      "old_city": "Lehighton",
+      "new_city": "Lehighton",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 7.59,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2019-01-04",
+      "master_sold_price": 785000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14565,
+        14616
+      ]
+    },
+    {
+      "property_id": 29924,
+      "old_address": "2438 N. Ponderosa Dr, Suite C-101",
+      "new_address": "2438 N Ponderosa Dr",
+      "old_city": "Camarillo",
+      "new_city": "Camarillo",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6.124,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.42,
+      "calc_cap_delta_bp": 90.58,
+      "master_sale_date": "2024-01-09",
+      "master_sold_price": 1063001,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14437
+      ]
+    },
+    {
+      "property_id": 28924,
+      "old_address": "380 North Dupree St",
+      "new_address": "380 N Dupree Ave",
+      "old_city": "Brownsville",
+      "new_city": "Brownsville",
+      "old_state": "TN",
+      "new_state": "TN",
+      "master_cap_pct": 7.619,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.11,
+      "calc_cap_delta_bp": 192.11,
+      "master_sale_date": "2018-02-27",
+      "master_sold_price": 1465111,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14581
+      ]
+    },
+    {
+      "property_id": 30177,
+      "old_address": "11515 Market St",
+      "new_address": "11515 Market St",
+      "old_city": "Jacinto City",
+      "new_city": "Houston",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 9.548,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.16,
+      "calc_cap_delta_bp": 9.16,
+      "master_sale_date": "2020-10-02",
+      "master_sold_price": 1375000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14524
+      ]
+    },
+    {
+      "property_id": 35250,
+      "old_address": "8602 East 63rd St",
+      "new_address": "8602-8608 E 63rd St",
+      "old_city": "Kansas City",
+      "new_city": "Kansas City",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 6.5,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2023-02-20",
+      "master_sold_price": 3400000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14453
+      ]
+    },
+    {
+      "property_id": 26093,
+      "old_address": "24660 Plaza Dr",
+      "new_address": "1919 N Foster Dr",
+      "old_city": "Plaquemine",
+      "new_city": "Baton Rouge",
+      "old_state": "LA",
+      "new_state": "LA",
+      "master_cap_pct": 5.919,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.09,
+      "calc_cap_delta_bp": 36.09,
+      "master_sale_date": "2022-09-02",
+      "master_sold_price": 1430000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14462
+      ]
+    },
+    {
+      "property_id": 28353,
+      "old_address": "2014 City Line Rd, Suite 102",
+      "new_address": "2014 City Line Rd",
+      "old_city": "Bethlehem",
+      "new_city": "Bethlehem",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 8.1,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2015-12-01",
+      "master_sold_price": 4415658,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13693
+      ]
+    },
+    {
+      "property_id": 28451,
+      "old_address": "525 East West St",
+      "new_address": "525 West St",
+      "old_city": "Wind Gap",
+      "new_city": "Wind Gap",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 8.604,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.43,
+      "calc_cap_delta_bp": 40.57,
+      "master_sale_date": "2020-05-31",
+      "master_sold_price": 815000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14537,
+        14652
+      ]
+    },
+    {
+      "property_id": 22890,
+      "old_address": "8259 Clarcona Ocoee Rd",
+      "new_address": "8259 Clarcona Ocoee Rd",
+      "old_city": "Clarcona",
+      "new_city": "Orlando",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2023-10-05",
+      "master_sold_price": 3910287,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14439
+      ]
+    },
+    {
+      "property_id": 37320,
+      "old_address": "3710 Fm 1889",
+      "new_address": "3710 FM 1889",
+      "old_city": "Robstown",
+      "new_city": "Corpus Christi",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 5.55,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2020-09-25",
+      "master_sold_price": 4265184,
+      "has_lat_will_null": false,
+      "source_sales": [
+        14525
+      ]
+    },
+    {
+      "property_id": 27968,
+      "old_address": "9200 Staples Dr, Ste A",
+      "new_address": "9200 Staples Drive",
+      "old_city": "Streetsboro",
+      "new_city": "Streetsboro",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 8.989,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.14,
+      "calc_cap_delta_bp": 93.14,
+      "master_sale_date": "2019-11-18",
+      "master_sold_price": 1200000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14550
+      ]
+    },
+    {
+      "property_id": 24272,
+      "old_address": "1620 W. Yosemite Ave",
+      "new_address": "2077 W Yosemite Ave",
+      "old_city": "Manteca",
+      "new_city": "Manteca",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.337,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.29,
+      "calc_cap_delta_bp": 0.29,
+      "master_sale_date": "2024-03-04",
+      "master_sold_price": 6100000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        516
+      ]
+    },
+    {
+      "property_id": 30182,
+      "old_address": "6107 Fm 2100",
+      "new_address": "6107 N FM 2100",
+      "old_city": "Crosby",
+      "new_city": "Crosby",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 8.509,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.08,
+      "calc_cap_delta_bp": 0.08,
+      "master_sale_date": "2022-03-21",
+      "master_sold_price": 1516000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14486
+      ]
+    },
+    {
+      "property_id": 29272,
+      "old_address": "2915 Saulsbury",
+      "new_address": "2915 Saulsbury Dr",
+      "old_city": "Temple",
+      "new_city": "Temple",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 8.31,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2013-08-30",
+      "master_sold_price": 1525000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14665
+      ]
+    },
+    {
+      "property_id": 39668,
+      "old_address": "1880 East U.S. Highway 36",
+      "new_address": "1880 E US Highway 36",
+      "old_city": "Urbana",
+      "new_city": "Urbana",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 8.757,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.32,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2020-02-27",
+      "master_sold_price": 925000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        14545
+      ]
+    },
+    {
+      "property_id": 2998521,
+      "old_address": "3730 Dryden Rd And 3723 Gulfway Dr",
+      "new_address": "739 E 20th St",
+      "old_city": "Port Arthur",
+      "new_city": "Houston",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 6.7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2014-12-22",
+      "master_sold_price": 3886196,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14648
+      ]
+    },
+    {
+      "property_id": 28258,
+      "old_address": "9521 N Owasso E. Expressway",
+      "new_address": "9521 N. Owasso E Exp.",
+      "old_city": "Owasso",
+      "new_city": "Owasso",
+      "old_state": "OK",
+      "new_state": "OK",
+      "master_cap_pct": 7.4,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 110,
+      "master_sale_date": "2012-08-09",
+      "master_sold_price": 2174000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14670
+      ]
+    },
+    {
+      "property_id": 28055,
+      "old_address": "4155 Kelnor Dr",
+      "new_address": "4155-4163 Kelnor Dr",
+      "old_city": "Grove City",
+      "new_city": "Grove City",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 8.202,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.16,
+      "calc_cap_delta_bp": 283.16,
+      "master_sale_date": "2018-08-13",
+      "master_sold_price": 1525000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14574
+      ]
+    },
+    {
+      "property_id": 29102,
+      "old_address": "7515 Barlite Blvd",
+      "new_address": "7515-7519 Barlite Blvd",
+      "old_city": "San Antonio",
+      "new_city": "San Antonio",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 6.818,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.2,
+      "calc_cap_delta_bp": 86.2,
+      "master_sale_date": "2011-11-01",
+      "master_sold_price": 2950000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14673
+      ]
+    },
+    {
+      "property_id": 29194,
+      "old_address": "233 Interstate 45 North",
+      "new_address": "233 I-45",
+      "old_city": "Conroe",
+      "new_city": "Conroe",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7.45,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2006-06-13",
+      "master_sold_price": 2200000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14684
+      ]
+    },
+    {
+      "property_id": 2167872,
+      "old_address": "1032 Bateman Dr",
+      "new_address": "2494 Second St",
+      "old_city": "Social Circle",
+      "new_city": "Macon",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 7.181,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.06,
+      "calc_cap_delta_bp": 0.06,
+      "master_sale_date": "2018-06-13",
+      "master_sold_price": 1615806,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14575
+      ]
+    },
+    {
+      "property_id": 24142,
+      "old_address": "125 E. Arbor Vitae",
+      "new_address": "125 E Arbor Vitae St",
+      "old_city": "Inglewood",
+      "new_city": "Inglewood",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.897,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.26,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2016-11-03",
+      "master_sold_price": 3761000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14611
+      ]
+    },
+    {
+      "property_id": 30393,
+      "old_address": "3812 E Belknap",
+      "new_address": "3812 E Belknap St",
+      "old_city": "Fort Worth",
+      "new_city": "Forth Worth",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 11.3,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2009-07-31",
+      "master_sold_price": 900000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14675
+      ]
+    },
+    {
+      "property_id": 23007,
+      "old_address": "800 Rose St, Mn-109",
+      "new_address": "1101 Winchester Rd",
+      "old_city": "Lexington",
+      "new_city": "Lexington",
+      "old_state": "KY",
+      "new_state": "KY",
+      "master_cap_pct": 9.541,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.08,
+      "calc_cap_delta_bp": 0.08,
+      "master_sale_date": "2012-05-30",
+      "master_sold_price": 1850000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13642,
+        937
+      ]
+    },
+    {
+      "property_id": 29167,
+      "old_address": "910 Utah",
+      "new_address": "910 S Utah St, B",
+      "old_city": "Weslaco",
+      "new_city": "Weslaco",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 5.92,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 156,
+      "master_sale_date": "2023-04-21",
+      "master_sold_price": 2027027,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14450
+      ]
+    },
+    {
+      "property_id": 28226,
+      "old_address": "310 S Highland Ave",
+      "new_address": "310 S Highland Ave",
+      "old_city": "Midwest City",
+      "new_city": "Oklahoma City",
+      "old_state": "OK",
+      "new_state": "OK",
+      "master_cap_pct": 6.91,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 85,
+      "master_sale_date": "2021-11-03",
+      "master_sold_price": 1650000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14498,
+        14623
+      ]
+    },
+    {
+      "property_id": 26643,
+      "old_address": "975 E Townsend Rd",
+      "new_address": "975 E Townsend Rd.",
+      "old_city": "Saint Johns",
+      "new_city": "St Johns",
+      "old_state": "MI",
+      "new_state": "MI",
+      "master_cap_pct": 6.8,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 49,
+      "master_sale_date": "2021-08-27",
+      "master_sold_price": 2025000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14500
+      ]
+    },
+    {
+      "property_id": 26913,
+      "old_address": "1135 S. Claremont",
+      "new_address": "1135 S Claremont Ave",
+      "old_city": "Independence",
+      "new_city": "Independence",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 7.369,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.1,
+      "calc_cap_delta_bp": 0.1,
+      "master_sale_date": "2020-11-09",
+      "master_sold_price": 1180000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14521
+      ]
+    },
+    {
+      "property_id": 39596,
+      "old_address": "213 Sterling Farm Drive",
+      "new_address": "213-221 Sterling Farm Dr",
+      "old_city": "Jackson",
+      "new_city": "Jackson",
+      "old_state": "TN",
+      "new_state": "TN",
+      "master_cap_pct": 7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 506,
+      "master_sale_date": "2020-10-20",
+      "master_sold_price": 6100000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14523,
+        14602
+      ]
+    },
+    {
+      "property_id": 29624,
+      "old_address": "6600 West Rio Grande",
+      "new_address": "6600 W Rio Grande Ave",
+      "old_city": "Kennewick",
+      "new_city": "Kennewick",
+      "old_state": "WA",
+      "new_state": "WA",
+      "master_cap_pct": 5.245,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.51,
+      "calc_cap_delta_bp": 0.51,
+      "master_sale_date": "2020-09-21",
+      "master_sold_price": 6676923,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14527
+      ]
+    },
+    {
+      "property_id": 28986,
+      "old_address": "2909 E Magnolia Ave",
+      "new_address": "2519 E Magnolia Ave",
+      "old_city": "Knoxville",
+      "new_city": "Knoxville",
+      "old_state": "TN",
+      "new_state": "TN",
+      "master_cap_pct": 7.19,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.01,
+      "calc_cap_delta_bp": 161.99,
+      "master_sale_date": "2015-01-13",
+      "master_sold_price": 2160928,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14645
+      ]
+    },
+    {
+      "property_id": 27704,
+      "old_address": "704 S Dickerson St",
+      "new_address": "4770 Shallotte Ave",
+      "old_city": "Burgaw",
+      "new_city": "Shallotte",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 9.848,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.21,
+      "calc_cap_delta_bp": 102.21,
+      "master_sale_date": "2009-05-29",
+      "master_sold_price": 1260000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14676
+      ]
+    },
+    {
+      "property_id": 37622,
+      "old_address": "465 Shawnee Ln",
+      "new_address": "465 N Shawnee Ln",
+      "old_city": "Chillicothe",
+      "new_city": "Chillicothe",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 7.7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2024-09-03",
+      "master_sold_price": 1250000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        8171
+      ]
+    },
+    {
+      "property_id": 1820496,
+      "old_address": "1321 N Rd St",
+      "new_address": "101 Davita Ln",
+      "old_city": "Elizabeth City",
+      "new_city": "Elizabeth City",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 5.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 57,
+      "master_sale_date": "2017-03-17",
+      "master_sold_price": 3850000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5299,
+        5532
+      ]
+    },
+    {
+      "property_id": 25436,
+      "old_address": "Route 2 Box 99a",
+      "new_address": "112 Sullivan Dr",
+      "old_city": "Rushville",
+      "new_city": "Rushville",
+      "old_state": "IL",
+      "new_state": "IL",
+      "master_cap_pct": 6.539,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.06,
+      "calc_cap_delta_bp": 54.06,
+      "master_sale_date": "2022-06-17",
+      "master_sold_price": 1110000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        806
+      ]
+    },
+    {
+      "property_id": 28250,
+      "old_address": "1059 Se 82nd",
+      "new_address": "1059 SE 82nd St",
+      "old_city": "Oklahoma City",
+      "new_city": "Oklahoma City",
+      "old_state": "OK",
+      "new_state": "OK",
+      "master_cap_pct": 8.543,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.29,
+      "calc_cap_delta_bp": 70.71,
+      "master_sale_date": "2020-08-28",
+      "master_sold_price": 1665000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13996,
+        14015,
+        13776,
+        13623
+      ]
+    },
+    {
+      "property_id": 29286,
+      "old_address": "423 Old Austin Hwy",
+      "new_address": "805-815 N Beckley Ave",
+      "old_city": "Bastrop",
+      "new_city": "Dallas",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7.877,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.28,
+      "calc_cap_delta_bp": 183.28,
+      "master_sale_date": "2020-03-27",
+      "master_sold_price": 2164475,
+      "has_lat_will_null": false,
+      "source_sales": [
+        14540
+      ]
+    },
+    {
+      "property_id": 30019,
+      "old_address": "2517 Jensen Ave",
+      "new_address": "2517 Jensen Ave, Bldg B",
+      "old_city": "Sanger",
+      "new_city": "Sanger",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 8.756,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.36,
+      "calc_cap_delta_bp": 0.36,
+      "master_sale_date": "2010-01-19",
+      "master_sold_price": 2100000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13624
+      ]
+    },
+    {
+      "property_id": 30179,
+      "old_address": "6010 Forest Park, Suite 100",
+      "new_address": "6010 Forest Park Rd",
+      "old_city": "Dallas",
+      "new_city": "Dallas",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 13.43,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2019-05-01",
+      "master_sold_price": 5300000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13881
+      ]
+    },
+    {
+      "property_id": 22612,
+      "old_address": "9266 Us Hwy 301",
+      "new_address": "9272 S US Highway 301",
+      "old_city": "Kenly",
+      "new_city": "Kenly",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 6.08,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2020-06-22",
+      "master_sold_price": 3379885,
+      "has_lat_will_null": true,
+      "source_sales": [
+        110
+      ]
+    },
+    {
+      "property_id": 24625,
+      "old_address": "4401 Hollywood Blvd",
+      "new_address": "2655 Hollywood Blvd",
+      "old_city": "Hollywood",
+      "new_city": "Hollywood",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.197,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.25,
+      "calc_cap_delta_bp": 124.25,
+      "master_sale_date": "2021-08-30",
+      "master_sold_price": 2146250,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14045,
+        572
+      ]
+    },
+    {
+      "property_id": 28141,
+      "old_address": "4110 Salem Ave",
+      "new_address": "4100 Salem Ave",
+      "old_city": "Trotwood",
+      "new_city": "Trotwood",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 7.763,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.34,
+      "calc_cap_delta_bp": 0.34,
+      "master_sale_date": "2018-03-22",
+      "master_sold_price": 1813700,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13822,
+        6357
+      ]
+    },
+    {
+      "property_id": 23451,
+      "old_address": "7316 West Cheyenne Ave",
+      "new_address": "1750 E Desert Inn Rd",
+      "old_city": "Las Vegas",
+      "new_city": "Las Vegas",
+      "old_state": "NV",
+      "new_state": "NV",
+      "master_cap_pct": 6.745,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.47,
+      "calc_cap_delta_bp": 190.53,
+      "master_sale_date": "2021-08-26",
+      "master_sold_price": 3799020,
+      "has_lat_will_null": true,
+      "source_sales": [
+        293
+      ]
+    },
+    {
+      "property_id": 29729,
+      "old_address": "1215 Maplewood Ave",
+      "new_address": "1215 Maplewood Ave",
+      "old_city": "Ronceverte",
+      "new_city": "Lewisburg",
+      "old_state": "WV",
+      "new_state": "WV",
+      "master_cap_pct": 5.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 154,
+      "master_sale_date": "2022-06-08",
+      "master_sold_price": 1611000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14101
+      ]
+    },
+    {
+      "property_id": 35331,
+      "old_address": "1151 Warwick Way",
+      "new_address": "1151 Warwick Way",
+      "old_city": "Mount Pleasant",
+      "new_city": "Racine",
+      "old_state": "WI",
+      "new_state": "WI",
+      "master_cap_pct": 8.503,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.31,
+      "calc_cap_delta_bp": 16.69,
+      "master_sale_date": "2023-05-18",
+      "master_sold_price": 3425000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14148
+      ]
+    },
+    {
+      "property_id": 24662,
+      "old_address": "1680 Osceola Elementary Rd Suite B",
+      "new_address": "1680 Osceola Elementary Rd",
+      "old_city": "Saint Augustine",
+      "new_city": "Saint Augustine",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 6.621,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.09,
+      "calc_cap_delta_bp": 0.09,
+      "master_sale_date": "2024-04-04",
+      "master_sold_price": 2310849,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14182
+      ]
+    },
+    {
+      "property_id": 26729,
+      "old_address": "1559 7th St W",
+      "new_address": "1559 7th St W",
+      "old_city": "Saint Paul",
+      "new_city": "St Paul",
+      "old_state": "MN",
+      "new_state": "MN",
+      "master_cap_pct": 7.912,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.17,
+      "calc_cap_delta_bp": 18.17,
+      "master_sale_date": "2025-08-15",
+      "master_sold_price": 2050000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14228
+      ]
+    },
+    {
+      "property_id": 22903,
+      "old_address": "4601 Medical Center Dr Ste G",
+      "new_address": "4717 Medical Center Dr",
+      "old_city": "Mckinney",
+      "new_city": "McKinney",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7.15,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 92,
+      "master_sale_date": "2014-02-27",
+      "master_sold_price": 1987500,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6366
+      ]
+    },
+    {
+      "property_id": 25452,
+      "old_address": "8109 South Western Ave",
+      "new_address": "8111 S Western Ave",
+      "old_city": "Chicago",
+      "new_city": "Chicago",
+      "old_state": "IL",
+      "new_state": "IL",
+      "master_cap_pct": 8.223,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.26,
+      "calc_cap_delta_bp": 122.74,
+      "master_sale_date": "2010-02-01",
+      "master_sold_price": 1725000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        809
+      ]
+    },
+    {
+      "property_id": 1380698,
+      "old_address": "1301 W Moreno St",
+      "new_address": "1301-1307 W Moreno St",
+      "old_city": "Pensacola",
+      "new_city": "Pensacola",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.501,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.08,
+      "calc_cap_delta_bp": 71.92,
+      "master_sale_date": "2014-07-03",
+      "master_sold_price": 4690000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14657
+      ]
+    },
+    {
+      "property_id": 29886,
+      "old_address": "4510 Ohara Ave Suite B",
+      "new_address": "4510 O'Hara Blvd",
+      "old_city": "Brentwood",
+      "new_city": "Brentwood",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 7.268,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.19,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2025-12-17",
+      "master_sold_price": 4680000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14244
+      ]
+    },
+    {
+      "property_id": 26169,
+      "old_address": "3030 N Arnoult Rd, Ste A",
+      "new_address": "3030 N Arnoult",
+      "old_city": "Metairie",
+      "new_city": "Metairie",
+      "old_state": "LA",
+      "new_state": "LA",
+      "master_cap_pct": 8.4,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2012-05-01",
+      "master_sold_price": 3739000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        991
+      ]
+    },
+    {
+      "property_id": 38047,
+      "old_address": "1021 W E St",
+      "new_address": "1021 Court St",
+      "old_city": "Belleville",
+      "new_city": "Pekin",
+      "old_state": "IL",
+      "new_state": "IL",
+      "master_cap_pct": 6.659,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.06,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2022-12-15",
+      "master_sold_price": 1850000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14130
+      ]
+    },
+    {
+      "property_id": 28120,
+      "old_address": "6901 Glenn Hwy Suite A",
+      "new_address": "6901 Glenn Hwy",
+      "old_city": "Cambridge",
+      "new_city": "Cambridge",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 6.225,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.5,
+      "calc_cap_delta_bp": 0.5,
+      "master_sale_date": "2021-10-15",
+      "master_sold_price": 2200000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14057
+      ]
+    },
+    {
+      "property_id": 1878400,
+      "old_address": "510 N Macarthur Ave",
+      "new_address": "504-510 N MacArthur Ave",
+      "old_city": "Panama City",
+      "new_city": "Panama City",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 8.9,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 43,
+      "master_sale_date": "2017-07-14",
+      "master_sold_price": 3105000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        619
+      ]
+    },
+    {
+      "property_id": 25891,
+      "old_address": "501 Oaks St",
+      "new_address": "501 Oak St",
+      "old_city": "Leavenworth",
+      "new_city": "Leavenworth",
+      "old_state": "KS",
+      "new_state": "KS",
+      "master_cap_pct": 9.61,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.04,
+      "calc_cap_delta_bp": 322.04,
+      "master_sale_date": "2020-07-16",
+      "master_sold_price": 935000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        913
+      ]
+    },
+    {
+      "property_id": 26187,
+      "old_address": "959 Behrman Hgwy",
+      "new_address": "959 Behrman Hwy",
+      "old_city": "Gretna",
+      "new_city": "Gretna",
+      "old_state": "LA",
+      "new_state": "LA",
+      "master_cap_pct": 6.5,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 22,
+      "master_sale_date": "2015-06-09",
+      "master_sold_price": 3456892,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13686,
+        13811
+      ]
+    },
+    {
+      "property_id": 37636,
+      "old_address": "215-225 S Allison Ave",
+      "new_address": "215 S Allison Ave",
+      "old_city": "Xenia",
+      "new_city": "Xenia",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 7.206,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.39,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2022-08-30",
+      "master_sold_price": 1795000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        8351
+      ]
+    },
+    {
+      "property_id": 25018,
+      "old_address": "1250 Northmeadow Pkwy",
+      "new_address": "1260 Upper Hembree Road",
+      "old_city": "Roswell",
+      "new_city": "Roswell",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 5.428,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.2,
+      "calc_cap_delta_bp": 81.2,
+      "master_sale_date": "2018-10-30",
+      "master_sold_price": 1700000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        672
+      ]
+    },
+    {
+      "property_id": 25889,
+      "old_address": "701 W. Central",
+      "new_address": "9341 E 21st St",
+      "old_city": "Wichita",
+      "new_city": "Wichita",
+      "old_state": "KS",
+      "new_state": "KS",
+      "master_cap_pct": 5.395,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.5,
+      "calc_cap_delta_bp": 0.5,
+      "master_sale_date": "2018-05-18",
+      "master_sold_price": 4100100,
+      "has_lat_will_null": true,
+      "source_sales": [
+        911
+      ]
+    },
+    {
+      "property_id": 30088,
+      "old_address": "1290 Tully Rd Suite 80",
+      "new_address": "1290 Tully Rd, Bldg 7",
+      "old_city": "San Jose",
+      "new_city": "San Jose",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.347,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.33,
+      "calc_cap_delta_bp": 255.67,
+      "master_sale_date": "2016-08-26",
+      "master_sold_price": 7500000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13772
+      ]
+    },
+    {
+      "property_id": 27691,
+      "old_address": "5815 Us 301 Hwy",
+      "new_address": "5815 U S Hwy 301 S",
+      "old_city": "Four Oaks",
+      "new_city": "Four Oaks",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 6.994,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.43,
+      "calc_cap_delta_bp": 0.43,
+      "master_sale_date": "2020-05-29",
+      "master_sold_price": 2020000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1240
+      ]
+    },
+    {
+      "property_id": 27815,
+      "old_address": "11001 Ingleside Pl",
+      "new_address": "3943 New Bern Ave",
+      "old_city": "Raleigh",
+      "new_city": "Raleigh",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 7.466,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.37,
+      "calc_cap_delta_bp": 122.37,
+      "master_sale_date": "2020-03-20",
+      "master_sold_price": 2400000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        1226
+      ]
+    },
+    {
+      "property_id": 24628,
+      "old_address": "2611 Poinsettia Ave",
+      "new_address": "2611 N Dixie Hwy",
+      "old_city": "West Palm Beach",
+      "new_city": "West Palm Beach",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.981,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.13,
+      "calc_cap_delta_bp": 0.13,
+      "master_sale_date": "2021-05-24",
+      "master_sold_price": 1825000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        557
+      ]
+    },
+    {
+      "property_id": 26111,
+      "old_address": "1333 O'Neal Ln",
+      "new_address": "7707 Howell Blvd",
+      "old_city": "Baton Rouge",
+      "new_city": "Baton Rouge",
+      "old_state": "LA",
+      "new_state": "LA",
+      "master_cap_pct": 7.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 832,
+      "master_sale_date": "2015-05-18",
+      "master_sold_price": 1875000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6319
+      ]
+    },
+    {
+      "property_id": 24762,
+      "old_address": "1299 East Commercial Blvd #100",
+      "new_address": "1299 E Commercial Blvd",
+      "old_city": "Oakland Park",
+      "new_city": "Oakland Park",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 7.749,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.12,
+      "calc_cap_delta_bp": 121.88,
+      "master_sale_date": "2022-02-16",
+      "master_sold_price": 4000000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        588
+      ]
+    },
+    {
+      "property_id": 35489,
+      "old_address": "2349 Us Hwy 74 E",
+      "new_address": "2349 US Hwy 74 W",
+      "old_city": "Wadesboro",
+      "new_city": "Wadesboro",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 8.87,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 651,
+      "master_sale_date": "2010-07-13",
+      "master_sold_price": 1625000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6410,
+        7033
+      ]
+    },
+    {
+      "property_id": 28808,
+      "old_address": "112 Weathersbee St",
+      "new_address": "112 Weathersby St",
+      "old_city": "Ridgeland",
+      "new_city": "Ridgeland",
+      "old_state": "SC",
+      "new_state": "SC",
+      "master_cap_pct": 9.23,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 15,
+      "master_sale_date": "2013-09-27",
+      "master_sold_price": 640000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6382
+      ]
+    },
+    {
+      "property_id": 25740,
+      "old_address": "1619 W. Mcclain Ave",
+      "new_address": "130 Westavia Blvd",
+      "old_city": "Scottsburg",
+      "new_city": "Scottsburg",
+      "old_state": "IN",
+      "new_state": "IN",
+      "master_cap_pct": 9.694,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.41,
+      "calc_cap_delta_bp": 38.41,
+      "master_sale_date": "2018-10-04",
+      "master_sold_price": 1475000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        13848,
+        878
+      ]
+    },
+    {
+      "property_id": 26502,
+      "old_address": "4145 Cass Ave",
+      "new_address": "4145 Cass",
+      "old_city": "Detroit",
+      "new_city": "Detroit",
+      "old_state": "MI",
+      "new_state": "MI",
+      "master_cap_pct": 8.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 108,
+      "master_sale_date": "2015-01-29",
+      "master_sold_price": 2225000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1038
+      ]
+    },
+    {
+      "property_id": 24933,
+      "old_address": "1002 Cypress Pkwy",
+      "new_address": "1000-1018 Cypress Pkwy",
+      "old_city": "Poinciana",
+      "new_city": "Poinciana",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 7.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 215,
+      "master_sale_date": "2011-05-01",
+      "master_sold_price": 1472800,
+      "has_lat_will_null": true,
+      "source_sales": [
+        640
+      ]
+    },
+    {
+      "property_id": 24222,
+      "old_address": "78-030 Wildcat Dr",
+      "new_address": "41501 Corporate Way",
+      "old_city": "Palm Desert",
+      "new_city": "Palm Desert",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.609,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.12,
+      "calc_cap_delta_bp": 58.12,
+      "master_sale_date": "2021-04-30",
+      "master_sold_price": 3050000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        506
+      ]
+    },
+    {
+      "property_id": 23586,
+      "old_address": "4616 Bishop St",
+      "new_address": "4622 S Bishop",
+      "old_city": "Chicago",
+      "new_city": "Chicago",
+      "old_state": "IL",
+      "new_state": "IL",
+      "master_cap_pct": 6.099,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.06,
+      "calc_cap_delta_bp": 0.06,
+      "master_sale_date": "2017-12-15",
+      "master_sold_price": 5209500,
+      "has_lat_will_null": true,
+      "source_sales": [
+        327
+      ]
+    },
+    {
+      "property_id": 24834,
+      "old_address": "118 West Main",
+      "new_address": "118 W Main Street",
+      "old_city": "Perry",
+      "new_city": "Perry",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 8.08,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 157,
+      "master_sale_date": "2020-02-18",
+      "master_sold_price": 1058000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        613
+      ]
+    },
+    {
+      "property_id": 24103,
+      "old_address": "360 Camp Rd",
+      "new_address": "404 Camp Road",
+      "old_city": "Pocahontas",
+      "new_city": "Pocahontas",
+      "old_state": "AR",
+      "new_state": "AR",
+      "master_cap_pct": 6.749,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.14,
+      "calc_cap_delta_bp": 41.14,
+      "master_sale_date": "2018-12-07",
+      "master_sold_price": 1284000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        486
+      ]
+    },
+    {
+      "property_id": 27357,
+      "old_address": "2550 S Telshor Blvd",
+      "new_address": "2550 Telshor Boulevard",
+      "old_city": "Las Cruces",
+      "new_city": "Las Cruces",
+      "old_state": "NM",
+      "new_state": "NM",
+      "master_cap_pct": 6.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2013-11-13",
+      "master_sold_price": 2302044,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1209
+      ]
+    },
+    {
+      "property_id": 2114530,
+      "old_address": "5636 E Skelly Dr",
+      "new_address": "2800 Skelly Drive",
+      "old_city": "Tulsa",
+      "new_city": "Tulsa",
+      "old_state": "OK",
+      "new_state": "OK",
+      "master_cap_pct": 5.77,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.04,
+      "calc_cap_delta_bp": 405.96,
+      "master_sale_date": "2019-02-01",
+      "master_sold_price": 6300000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5076
+      ]
+    },
+    {
+      "property_id": 23569,
+      "old_address": "4805 Lawrenceville Hwy Nw",
+      "new_address": "4465 Stone Mountain Hwy",
+      "old_city": "Lilburn",
+      "new_city": "Lilburn",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 5.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.04,
+      "calc_cap_delta_bp": 0.04,
+      "master_sale_date": "2018-02-02",
+      "master_sold_price": 5365000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        321
+      ]
+    },
+    {
+      "property_id": 23551,
+      "old_address": "2860 S. Us Hwy 83",
+      "new_address": "2860 US HWY 83 South",
+      "old_city": "Zapata",
+      "new_city": "Zapata",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 6.18,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 5,
+      "master_sale_date": "2018-08-17",
+      "master_sold_price": 3045534,
+      "has_lat_will_null": false,
+      "source_sales": [
+        314
+      ]
+    },
+    {
+      "property_id": 2431511,
+      "old_address": "400 N 3rd St",
+      "new_address": "301 Callowhill St",
+      "old_city": "Philadelphia",
+      "new_city": "Philadelphia",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 5.306,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.41,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2020-05-29",
+      "master_sold_price": 4250000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6148
+      ]
+    },
+    {
+      "property_id": 28384,
+      "old_address": "8001 Lansdowne Ave",
+      "new_address": "8001 Lansdowne Ave",
+      "old_city": "Upper Darby",
+      "new_city": "Philadelphia",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 4.769,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.11,
+      "calc_cap_delta_bp": 9.11,
+      "master_sale_date": "2022-08-16",
+      "master_sold_price": 5294832,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14111
+      ]
+    },
+    {
+      "property_id": 29448,
+      "old_address": "340 Anderson Hollow Rd",
+      "new_address": "340 Anderson Rd NE",
+      "old_city": "Norton",
+      "new_city": "Norton",
+      "old_state": "VA",
+      "new_state": "VA",
+      "master_cap_pct": 20.259,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.14,
+      "calc_cap_delta_bp": 0.14,
+      "master_sale_date": "2023-08-11",
+      "master_sold_price": 945000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14157
+      ]
+    },
+    {
+      "property_id": 24975,
+      "old_address": "1757 Candler Rd Se",
+      "new_address": "1757 Candler Rd",
+      "old_city": "Decatur",
+      "new_city": "Decatur",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 8.345,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.46,
+      "calc_cap_delta_bp": 257.46,
+      "master_sale_date": "2025-03-26",
+      "master_sold_price": 1725000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14207
+      ]
+    },
+    {
+      "property_id": 25174,
+      "old_address": "1016 Claxton Dairy Rd Ste 1a",
+      "new_address": "1016 Claxton Dairy Rd",
+      "old_city": "Dublin",
+      "new_city": "Dublin",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 8.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 88,
+      "master_sale_date": "2025-05-07",
+      "master_sold_price": 815000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14210
+      ]
+    },
+    {
+      "property_id": 24244,
+      "old_address": "404 North Wiget Ln",
+      "new_address": "400 N Wiget Ln",
+      "old_city": "Walnut Creek",
+      "new_city": "Walnut Creek",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 89,
+      "master_sale_date": "2017-07-07",
+      "master_sold_price": 7577610,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5261
+      ]
+    },
+    {
+      "property_id": 25359,
+      "old_address": "4861 West Cal Sag Rd",
+      "new_address": "4850 Midlothian Turnpike",
+      "old_city": "Crestwood",
+      "new_city": "Crestwood",
+      "old_state": "IL",
+      "new_state": "IL",
+      "master_cap_pct": 5.366,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.41,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2022-08-24",
+      "master_sold_price": 5940000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        788
+      ]
+    },
+    {
+      "property_id": 2075912,
+      "old_address": "802-806 Jules St",
+      "new_address": "802-806 Jules St",
+      "old_city": "St Joseph",
+      "new_city": "Saint Joseph",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 5.5,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2017-10-31",
+      "master_sold_price": 2909091,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13810
+      ]
+    },
+    {
+      "property_id": 25766,
+      "old_address": "418 6th Ave",
+      "new_address": "1705 E Industrial Dr",
+      "old_city": "Terre Haute",
+      "new_city": "Terre Haute",
+      "old_state": "IN",
+      "new_state": "IN",
+      "master_cap_pct": 6.5,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2015-01-01",
+      "master_sold_price": 5032000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        889
+      ]
+    },
+    {
+      "property_id": 25095,
+      "old_address": "1000 Telfair St",
+      "new_address": "1002 Telfair St",
+      "old_city": "Augusta",
+      "new_city": "Augusta",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 7.878,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.17,
+      "calc_cap_delta_bp": 0.17,
+      "master_sale_date": "2018-04-30",
+      "master_sold_price": 1778750,
+      "has_lat_will_null": true,
+      "source_sales": [
+        697
+      ]
+    },
+    {
+      "property_id": 22667,
+      "old_address": "32 Steubenville Pike",
+      "new_address": "32 Steubenville Pike",
+      "old_city": "Paris",
+      "new_city": "Burgettstown",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 5.733,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.26,
+      "calc_cap_delta_bp": 16.74,
+      "master_sale_date": "2021-03-29",
+      "master_sold_price": 2021485,
+      "has_lat_will_null": true,
+      "source_sales": [
+        8859
+      ]
+    },
+    {
+      "property_id": 26952,
+      "old_address": "1425 Hampton Ave",
+      "new_address": "1425 Hampton Ave",
+      "old_city": "Saint Louis",
+      "new_city": "St. Louis",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 9,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 59,
+      "master_sale_date": "2016-05-02",
+      "master_sold_price": 775000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13760
+      ]
+    },
+    {
+      "property_id": 30400,
+      "old_address": "5729 Bryant Irvin Rd",
+      "new_address": "5729 Bryant-Irvin Rd",
+      "old_city": "Fort Worth",
+      "new_city": "Fort Worth",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7.021,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.06,
+      "calc_cap_delta_bp": 0.06,
+      "master_sale_date": "2024-07-01",
+      "master_sold_price": 3170651,
+      "has_lat_will_null": true,
+      "source_sales": [
+        8874
+      ]
+    },
+    {
+      "property_id": 39631,
+      "old_address": "1840 Canyon Crest Drive",
+      "new_address": "1840 Canyon Crest",
+      "old_city": "Twin Falls",
+      "new_city": "Twin Falls",
+      "old_state": "ID",
+      "new_state": "ID",
+      "master_cap_pct": 7.888,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.2,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2007-09-14",
+      "master_sold_price": 1694420,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13617
+      ]
+    },
+    {
+      "property_id": 2216261,
+      "old_address": "627 W Ave Q",
+      "new_address": "38910 Trade Center Dr",
+      "old_city": "Palmdale",
+      "new_city": "Palmdale",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6.696,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.35,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2016-10-19",
+      "master_sold_price": 2860000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5342,
+        13903
+      ]
+    },
+    {
+      "property_id": 27284,
+      "old_address": "1689 Delsea Dr",
+      "new_address": "1689 Delsea Dr",
+      "old_city": "Deptford",
+      "new_city": "Woodbury",
+      "old_state": "NJ",
+      "new_state": "NJ",
+      "master_cap_pct": 6.321,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.15,
+      "calc_cap_delta_bp": 91.85,
+      "master_sale_date": "2014-07-24",
+      "master_sold_price": 4975000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        13667
+      ]
+    },
+    {
+      "property_id": 31525,
+      "old_address": "928932 Furman Dr",
+      "new_address": "928-932 Furman Dr",
+      "old_city": "Waupaca",
+      "new_city": "Waupaca",
+      "old_state": "WI",
+      "new_state": "WI",
+      "master_cap_pct": 7.06,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 34,
+      "master_sale_date": "2016-05-20",
+      "master_sold_price": 1385000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        13762
+      ]
+    },
+    {
+      "property_id": 28139,
+      "old_address": "3812 Center Rd, Suite 101",
+      "new_address": "3812 Center Rd",
+      "old_city": "Brunswick",
+      "new_city": "Brunswick",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 7.05,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 108,
+      "master_sale_date": "2016-06-08",
+      "master_sold_price": 3958656,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13764
+      ]
+    },
+    {
+      "property_id": 25934,
+      "old_address": "401 W. Whitmer St.",
+      "new_address": "401 Whitmer St",
+      "old_city": "Central City",
+      "new_city": "Central City",
+      "old_state": "KY",
+      "new_state": "KY",
+      "master_cap_pct": 7.748,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.19,
+      "calc_cap_delta_bp": 0.19,
+      "master_sale_date": "2016-05-12",
+      "master_sold_price": 3000000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        13761
+      ]
+    },
+    {
+      "property_id": 29836,
+      "old_address": "3636 E Melby St",
+      "new_address": "3636 Melby St",
+      "old_city": "Lake Hallie",
+      "new_city": "Eau Claire",
+      "old_state": "WI",
+      "new_state": "WI",
+      "master_cap_pct": 7.19,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.01,
+      "calc_cap_delta_bp": 44.99,
+      "master_sale_date": "2016-08-10",
+      "master_sold_price": 925000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13770
+      ]
+    },
+    {
+      "property_id": 27212,
+      "old_address": "2180 Bradley Ave",
+      "new_address": "2180 Bradley Ave",
+      "old_city": "Neptune",
+      "new_city": "Neptune City",
+      "old_state": "NJ",
+      "new_state": "NJ",
+      "master_cap_pct": 6,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2016-06-29",
+      "master_sold_price": 2166190,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13767
+      ]
+    },
+    {
+      "property_id": 28385,
+      "old_address": "207 West Laurel Ave",
+      "new_address": "248 Elm Drive",
+      "old_city": "New Castle",
+      "new_city": "Waynesburg",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 6.872,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.18,
+      "calc_cap_delta_bp": 0.18,
+      "master_sale_date": "2016-11-14",
+      "master_sold_price": 1074345,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13779,
+        14009
+      ]
+    },
+    {
+      "property_id": 25201,
+      "old_address": "195 Parkwood Cir",
+      "new_address": "130 Parkwood Cir",
+      "old_city": "Carrollton",
+      "new_city": "Carrollton",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 6.1,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 92,
+      "master_sale_date": "2019-03-08",
+      "master_sold_price": 2333525,
+      "has_lat_will_null": true,
+      "source_sales": [
+        171
+      ]
+    },
+    {
+      "property_id": 28832,
+      "old_address": "140 Highland Center Dr",
+      "new_address": "140 Highland Center Dr",
+      "old_city": "Pontiac",
+      "new_city": "Columbia",
+      "old_state": "SC",
+      "new_state": "SC",
+      "master_cap_pct": 6.202,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.16,
+      "calc_cap_delta_bp": 50.84,
+      "master_sale_date": "2017-06-15",
+      "master_sold_price": 3775000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13801
+      ]
+    },
+    {
+      "property_id": 29842,
+      "old_address": "2840 Index Rd",
+      "new_address": "2840 Index Rd",
+      "old_city": "Madison",
+      "new_city": "Fitchburg",
+      "old_state": "WI",
+      "new_state": "WI",
+      "master_cap_pct": 7.172,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.19,
+      "calc_cap_delta_bp": 66.81,
+      "master_sale_date": "2019-03-01",
+      "master_sold_price": 5125000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13873
+      ]
+    },
+    {
+      "property_id": 29613,
+      "old_address": "6825 Burden Blvd Ste A",
+      "new_address": "6825 Burden Blvd",
+      "old_city": "Pasco",
+      "new_city": "Pasco",
+      "old_state": "WA",
+      "new_state": "WA",
+      "master_cap_pct": 6.369,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.07,
+      "calc_cap_delta_bp": 0.07,
+      "master_sale_date": "2019-07-02",
+      "master_sold_price": 2922000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13892
+      ]
+    },
+    {
+      "property_id": 29451,
+      "old_address": "1922 Tappahannock Blvd",
+      "new_address": "838 Ole Turnpike Dr",
+      "old_city": "Tappahannock",
+      "new_city": "Bedford",
+      "old_state": "VA",
+      "new_state": "VA",
+      "master_cap_pct": 6.9,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 24,
+      "master_sale_date": "2019-10-15",
+      "master_sold_price": 1400000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13905
+      ]
+    },
+    {
+      "property_id": 29674,
+      "old_address": "300 N Colorado Ave",
+      "new_address": "300 Colorado Ave",
+      "old_city": "East Wenatchee",
+      "new_city": "East Wenatchee",
+      "old_state": "WA",
+      "new_state": "WA",
+      "master_cap_pct": 5.9,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2020-09-30",
+      "master_sold_price": 2881356,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14001
+      ]
+    },
+    {
+      "property_id": 26299,
+      "old_address": "19851 Observation Dr",
+      "new_address": "20111 Century Blvd",
+      "old_city": "Germantown",
+      "new_city": "Germantown",
+      "old_state": "MD",
+      "new_state": "MD",
+      "master_cap_pct": 8,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2024-07-24",
+      "master_sold_price": 4375000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1007
+      ]
+    },
+    {
+      "property_id": 30403,
+      "old_address": "10708 Victoria Ash Dr",
+      "new_address": "10708 Victoria Ash Dr",
+      "old_city": "Fort Worth",
+      "new_city": "Keller",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 140,
+      "master_sale_date": "2021-09-03",
+      "master_sold_price": 3548929,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14048
+      ]
+    },
+    {
+      "property_id": 31898,
+      "old_address": "582 Pole Line Rd E",
+      "new_address": "582 Pole Line Rd",
+      "old_city": "Twin Falls",
+      "new_city": "Twin Falls",
+      "old_state": "ID",
+      "new_state": "ID",
+      "master_cap_pct": 6.56,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 48,
+      "master_sale_date": "2022-09-16",
+      "master_sold_price": 4125000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14116,
+        8229
+      ]
+    },
+    {
+      "property_id": 30077,
+      "old_address": "725 Ridder Park Dr., Ste 50",
+      "new_address": "725 Ridder Park Dr",
+      "old_city": "San Jose",
+      "new_city": "San Jose",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6.46,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 81,
+      "master_sale_date": "2021-11-15",
+      "master_sold_price": 13800000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14062
+      ]
+    },
+    {
+      "property_id": 22882,
+      "old_address": "14434 Sherman Way",
+      "new_address": "14434 Sherman Way",
+      "old_city": "Van Nuys",
+      "new_city": "Los Angeles",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.944,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.41,
+      "calc_cap_delta_bp": 61.59,
+      "master_sale_date": "2025-05-27",
+      "master_sold_price": 11385000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14212
+      ]
+    },
+    {
+      "property_id": 35419,
+      "old_address": "5502 Medical Park Way Drive",
+      "new_address": "5502 Medical Park Way",
+      "old_city": "Texarkana",
+      "new_city": "Texarkana",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7.501,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.11,
+      "calc_cap_delta_bp": 145.89,
+      "master_sale_date": "2025-09-29",
+      "master_sold_price": 2678000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14235
+      ]
+    },
+    {
+      "property_id": 25761,
+      "old_address": "700 Willow St Suite 102",
+      "new_address": "300 N 1st St",
+      "old_city": "Vincennes",
+      "new_city": "Vincennes",
+      "old_state": "IN",
+      "new_state": "IN",
+      "master_cap_pct": 6.15,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 6,
+      "master_sale_date": "2016-01-28",
+      "master_sold_price": 3795447,
+      "has_lat_will_null": true,
+      "source_sales": [
+        893
+      ]
+    },
+    {
+      "property_id": 27839,
+      "old_address": "1899 Tate Blvd Se",
+      "new_address": "1900 3rd Avenue Lane",
+      "old_city": "Hickory",
+      "new_city": "Hickory",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 5.8,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2019-04-15",
+      "master_sold_price": 2954058,
+      "has_lat_will_null": true,
+      "source_sales": [
+        224
+      ]
+    },
+    {
+      "property_id": 25866,
+      "old_address": "2053 E Mary St",
+      "new_address": "2051 E Mary St",
+      "old_city": "Garden City",
+      "new_city": "Garden City",
+      "old_state": "KS",
+      "new_state": "KS",
+      "master_cap_pct": 6,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 491,
+      "master_sale_date": "2021-08-26",
+      "master_sold_price": 4013750,
+      "has_lat_will_null": true,
+      "source_sales": [
+        210,
+        209
+      ]
+    },
+    {
+      "property_id": 27006,
+      "old_address": "803 W Broadway St",
+      "new_address": "801 W Broadway St",
+      "old_city": "West Plains",
+      "new_city": "West Plains",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 6.868,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.17,
+      "calc_cap_delta_bp": 86.17,
+      "master_sale_date": "2014-07-21",
+      "master_sold_price": 4300000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1152
+      ]
+    },
+    {
+      "property_id": 23502,
+      "old_address": "1459 Fort Campbell Blvd",
+      "new_address": "3071 Clay Lewis Rd",
+      "old_city": "Clarksville",
+      "new_city": "Clarksville",
+      "old_state": "TN",
+      "new_state": "TN",
+      "master_cap_pct": 7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 29,
+      "master_sale_date": "2015-01-06",
+      "master_sold_price": 1267000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6353,
+        14139
+      ]
+    },
+    {
+      "property_id": 31275,
+      "old_address": "13031305 Lincoln Way",
+      "new_address": "1303-1305 Lincoln Way",
+      "old_city": "Mckeesport",
+      "new_city": "McKeesport",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 8.617,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.33,
+      "calc_cap_delta_bp": 0.33,
+      "master_sale_date": "2015-06-02",
+      "master_sold_price": 1350000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        13685
+      ]
+    },
+    {
+      "property_id": 26481,
+      "old_address": "28425 W 8 Mile Rd",
+      "new_address": "28425 8 Mile Rd",
+      "old_city": "Livonia",
+      "new_city": "Livonia",
+      "old_state": "MI",
+      "new_state": "MI",
+      "master_cap_pct": 8.136,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.38,
+      "calc_cap_delta_bp": 0.38,
+      "master_sale_date": "2018-12-10",
+      "master_sold_price": 2450000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1025
+      ]
+    },
+    {
+      "property_id": 22398,
+      "old_address": "27401 Cashford Cir",
+      "new_address": "27800 Summergate Blvd",
+      "old_city": "Wesley Chapel",
+      "new_city": "Wesley Chapel",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.25,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2022-09-23",
+      "master_sold_price": 11955162,
+      "has_lat_will_null": true,
+      "source_sales": [
+        61
+      ]
+    },
+    {
+      "property_id": 22641,
+      "old_address": null,
+      "new_address": "4909 Route 873",
+      "old_city": "Schnecksvil",
+      "new_city": "Schnecksville",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 6.5,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 26,
+      "master_sale_date": "2021-01-29",
+      "master_sold_price": 3519046,
+      "has_lat_will_null": false,
+      "source_sales": [
+        118
+      ]
+    },
+    {
+      "property_id": 27327,
+      "old_address": "2800 Palmilla Rd",
+      "new_address": "2800 Palmilla Road NW",
+      "old_city": "Los Lunas",
+      "new_city": "Los Lunas",
+      "old_state": "NM",
+      "new_state": "NM",
+      "master_cap_pct": 5.85,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2019-07-10",
+      "master_sold_price": 2834222,
+      "has_lat_will_null": false,
+      "source_sales": [
+        1207
+      ]
+    },
+    {
+      "property_id": 25683,
+      "old_address": "9223 Taft St",
+      "new_address": "9223 S Taft St",
+      "old_city": "Merrillville",
+      "new_city": "Merrillville",
+      "old_state": "IN",
+      "new_state": "IN",
+      "master_cap_pct": 7.44,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2017-08-14",
+      "master_sold_price": 1990000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        861
+      ]
+    },
+    {
+      "property_id": 3090283,
+      "old_address": "109 S 15th St",
+      "new_address": "1441 Ct",
+      "old_city": "Tacoma",
+      "new_city": "Tacoma",
+      "old_state": "WA",
+      "new_state": "WA",
+      "master_cap_pct": 5.04,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2021-09-14",
+      "master_sold_price": 9800000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5541
+      ]
+    },
+    {
+      "property_id": 25065,
+      "old_address": "D/B/A Perry Dialysis Center",
+      "new_address": "1014 Keith Drive",
+      "old_city": "Perry",
+      "new_city": "Perry",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 5.398,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.18,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2021-03-18",
+      "master_sold_price": 2336874,
+      "has_lat_will_null": false,
+      "source_sales": [
+        688
+      ]
+    },
+    {
+      "property_id": 24821,
+      "old_address": "501 6th Ave S",
+      "new_address": "1117 Arlington Ave N",
+      "old_city": "Saint Petersburg",
+      "new_city": "Saint Petersburg",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 7.042,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.2,
+      "calc_cap_delta_bp": 0.2,
+      "master_sale_date": "2020-05-05",
+      "master_sold_price": 1700000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        612
+      ]
+    },
+    {
+      "property_id": 24209,
+      "old_address": "4632 West Century Blvd.",
+      "new_address": "1416 Centinela Ave",
+      "old_city": "Inglewood",
+      "new_city": "Inglewood",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6.833,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.33,
+      "calc_cap_delta_bp": 0.33,
+      "master_sale_date": "2023-02-10",
+      "master_sold_price": 2225000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        502
+      ]
+    },
+    {
+      "property_id": 22149,
+      "old_address": "5420 W Lowell",
+      "new_address": "5240 W Lowell Ave",
+      "old_city": "Spokane",
+      "new_city": "Spokane",
+      "old_state": "WA",
+      "new_state": "WA",
+      "master_cap_pct": 6.083,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.3,
+      "calc_cap_delta_bp": 0.3,
+      "master_sale_date": "2022-01-21",
+      "master_sold_price": 2300000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        18
+      ]
+    },
+    {
+      "property_id": 26116,
+      "old_address": "10000 Industrial Rd",
+      "new_address": "10000 Industrial Dr",
+      "old_city": "Minden",
+      "new_city": "Minden",
+      "old_state": "LA",
+      "new_state": "LA",
+      "master_cap_pct": 7.01,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.01,
+      "calc_cap_delta_bp": 0.01,
+      "master_sale_date": "2021-07-22",
+      "master_sold_price": 1710625,
+      "has_lat_will_null": true,
+      "source_sales": [
+        976
+      ]
+    },
+    {
+      "property_id": 24817,
+      "old_address": "12674 Telecom Dr",
+      "new_address": "12662-12666 Telecom Dr",
+      "old_city": "Tampa",
+      "new_city": "Tampa",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 6.55,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2016-08-15",
+      "master_sold_price": 6750000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        610
+      ]
+    },
+    {
+      "property_id": 24800,
+      "old_address": "11306 53rd St",
+      "new_address": "11306 N 53rd St",
+      "old_city": "Temple Terrace",
+      "new_city": "Temple Terrace",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 7.742,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.19,
+      "calc_cap_delta_bp": 57.81,
+      "master_sale_date": "2011-01-01",
+      "master_sold_price": 1615000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        602
+      ]
+    },
+    {
+      "property_id": 22265,
+      "old_address": "221 Fm 3009",
+      "new_address": "1787 FM 3009",
+      "old_city": "Schertz",
+      "new_city": "Schertz",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 5.725,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.48,
+      "calc_cap_delta_bp": 13.52,
+      "master_sale_date": "2020-05-22",
+      "master_sold_price": 4900000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        2405
+      ]
+    },
+    {
+      "property_id": 25772,
+      "old_address": "3727 N Frontage Rd",
+      "new_address": "3727 Frontage Rd",
+      "old_city": "Michigan City",
+      "new_city": "Michigan City",
+      "old_state": "IN",
+      "new_state": "IN",
+      "master_cap_pct": 7.882,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.2,
+      "calc_cap_delta_bp": 0.2,
+      "master_sale_date": "2015-04-29",
+      "master_sold_price": 2250000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        892
+      ]
+    },
+    {
+      "property_id": 24174,
+      "old_address": "2066 North Fremont Blvd",
+      "new_address": "2066 Fremont St",
+      "old_city": "Monterey",
+      "new_city": "Monterey",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6.501,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.13,
+      "calc_cap_delta_bp": 0.13,
+      "master_sale_date": "2021-08-04",
+      "master_sold_price": 4042000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        496
+      ]
+    },
+    {
+      "property_id": 25896,
+      "old_address": "250 W. Red Powell Dr",
+      "new_address": "712 N Klein Ct",
+      "old_city": "Derby",
+      "new_city": "Derby",
+      "old_state": "KS",
+      "new_state": "KS",
+      "master_cap_pct": 7.2,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 50,
+      "master_sale_date": "2017-04-12",
+      "master_sold_price": 1585000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        914
+      ]
+    },
+    {
+      "property_id": 24493,
+      "old_address": "561 25 Rd Ste D",
+      "new_address": "561 25 Rd",
+      "old_city": "Grand Junction",
+      "new_city": "Grand Junction",
+      "old_state": "CO",
+      "new_state": "CO",
+      "master_cap_pct": 7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2022-12-02",
+      "master_sold_price": 5260700,
+      "has_lat_will_null": true,
+      "source_sales": [
+        542
+      ]
+    },
+    {
+      "property_id": 25000,
+      "old_address": "14 Roving Rd Se",
+      "new_address": "14 Roving Road",
+      "old_city": "Cartersville",
+      "new_city": "Cartersville",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 7.367,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.26,
+      "calc_cap_delta_bp": 0.26,
+      "master_sale_date": "2020-06-08",
+      "master_sold_price": 2036000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13986
+      ]
+    },
+    {
+      "property_id": 28285,
+      "old_address": "201 Sw \"L\" St",
+      "new_address": "201 SW L St",
+      "old_city": "Grants Pass",
+      "new_city": "Grants Pass",
+      "old_state": "OR",
+      "new_state": "OR",
+      "master_cap_pct": 8.02,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2021-03-18",
+      "master_sold_price": 1450000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14017
+      ]
+    },
+    {
+      "property_id": 920111,
+      "old_address": "1202 Central Texas Expwy",
+      "new_address": "1202 Central Texas Expy",
+      "old_city": "Lampasas",
+      "new_city": "Lampasas",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 10.28,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.04,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2011-11-21",
+      "master_sold_price": 1020000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5901
+      ]
+    },
+    {
+      "property_id": 22629,
+      "old_address": "202 East Blue Starr Dr",
+      "new_address": "215 S Brady St",
+      "old_city": "Claremore",
+      "new_city": "Claremore",
+      "old_state": "OK",
+      "new_state": "OK",
+      "master_cap_pct": 6.15,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 12,
+      "master_sale_date": "2020-01-16",
+      "master_sold_price": 3084000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        114
+      ]
+    },
+    {
+      "property_id": 30222,
+      "old_address": "11255 Graland Rd.",
+      "new_address": "7610 Miltary Pky.",
+      "old_city": "Dallas",
+      "new_city": "Dallas",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 9.989,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.14,
+      "calc_cap_delta_bp": 139.14,
+      "master_sale_date": "2013-02-28",
+      "master_sold_price": 1762000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6419
+      ]
+    },
+    {
+      "property_id": 22419,
+      "old_address": "4625 Center St",
+      "new_address": "1533 Holly Rd",
+      "old_city": "Deer Park",
+      "new_city": "Corpus Christi",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 6.393,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.26,
+      "calc_cap_delta_bp": 134.26,
+      "master_sale_date": "2021-12-13",
+      "master_sold_price": 4800000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14070,
+        13845
+      ]
+    },
+    {
+      "property_id": 22755,
+      "old_address": "6222 Harney Rd",
+      "new_address": "6220 Harney Road",
+      "old_city": "Tampa",
+      "new_city": "Tampa",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.501,
+      "fingerprint_source": "calculated_cap_rate",
+      "fingerprint_bp_delta": 0.06,
+      "calc_cap_delta_bp": 0.06,
+      "master_sale_date": "2021-02-25",
+      "master_sold_price": 4675844,
+      "has_lat_will_null": true,
+      "source_sales": [
+        155
+      ]
+    },
+    {
+      "property_id": 28829,
+      "old_address": "615 West Wesmark Blvd",
+      "new_address": "526 Broad St",
+      "old_city": "Sumter",
+      "new_city": "Sumter",
+      "old_state": "SC",
+      "new_state": "SC",
+      "master_cap_pct": 6.6,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.01,
+      "calc_cap_delta_bp": 10.99,
+      "master_sale_date": "2019-04-04",
+      "master_sold_price": 993600,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6451
+      ]
+    },
+    {
+      "property_id": 22702,
+      "old_address": "Paso Robles Blvd & N. Palm Ave",
+      "new_address": "400 Palm Ave",
+      "old_city": "Wasco",
+      "new_city": "Wasco",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.673,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.27,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2018-03-08",
+      "master_sold_price": 4836990,
+      "has_lat_will_null": false,
+      "source_sales": [
+        134
+      ]
+    },
+    {
+      "property_id": 25401,
+      "old_address": "1090 W Mckinley",
+      "new_address": "1090 W McKinley Ave",
+      "old_city": "Decatur",
+      "new_city": "Decatur",
+      "old_state": "IL",
+      "new_state": "IL",
+      "master_cap_pct": 6.148,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.15,
+      "calc_cap_delta_bp": 51.15,
+      "master_sale_date": "2021-01-07",
+      "master_sold_price": 3100000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        798
+      ]
+    },
+    {
+      "property_id": 26824,
+      "old_address": "1325 Ms-4",
+      "new_address": "1325 Highway 4 East",
+      "old_city": "Holly Springs",
+      "new_city": "Holly Springs (Mount Pleasant)",
+      "old_state": "MS",
+      "new_state": "MS",
+      "master_cap_pct": 5.757,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.3,
+      "calc_cap_delta_bp": 66.3,
+      "master_sale_date": "2018-11-05",
+      "master_sold_price": 1605000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        1112
+      ]
+    },
+    {
+      "property_id": 26896,
+      "old_address": "1702 E. 10th St",
+      "new_address": "1503 E 10th St",
+      "old_city": "Rolla",
+      "new_city": "Rolla",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 5.851,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.05,
+      "calc_cap_delta_bp": 844.95,
+      "master_sale_date": "2021-07-09",
+      "master_sold_price": 3473000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        1127
+      ]
+    },
+    {
+      "property_id": 26750,
+      "old_address": "396 Schilling Dr S",
+      "new_address": "396 S Schilling Dr S",
+      "old_city": "Dundas",
+      "new_city": "Dundas",
+      "old_state": "MN",
+      "new_state": "MN",
+      "master_cap_pct": 7.7,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2018-11-28",
+      "master_sold_price": 1410000,
+      "has_lat_will_null": false,
+      "source_sales": [
+        1093
+      ]
+    },
+    {
+      "property_id": 23648,
+      "old_address": "96 June Dr",
+      "new_address": "94-96 June Drive",
+      "old_city": "Roaring Spring",
+      "new_city": "Roaring Spring",
+      "old_state": "PA",
+      "new_state": "PA",
+      "master_cap_pct": 9.771,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.15,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2018-09-27",
+      "master_sold_price": 1840000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        342
+      ]
+    },
+    {
+      "property_id": 28714,
+      "old_address": "131 Whispering Winds Dr",
+      "new_address": "131 Whispering Winds",
+      "old_city": "Lexington",
+      "new_city": "Lexington",
+      "old_state": "SC",
+      "new_state": "SC",
+      "master_cap_pct": 6.3,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2018-10-19",
+      "master_sold_price": 3009804,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13853
+      ]
+    },
+    {
+      "property_id": 30117,
+      "old_address": "4207 Bangs Ave, Suite 100",
+      "new_address": "4207 Bangs Ave",
+      "old_city": "Modesto",
+      "new_city": "Modesto",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6.399,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.1,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2019-07-16",
+      "master_sold_price": 3900000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13894
+      ]
+    },
+    {
+      "property_id": 29535,
+      "old_address": "10718 Ballantraye Dr",
+      "new_address": "10718 Ballantraye Rd",
+      "old_city": "Fredericksburg",
+      "new_city": "Fredericksburg",
+      "old_state": "VA",
+      "new_state": "VA",
+      "master_cap_pct": 6.07,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2023-01-13",
+      "master_sold_price": 425000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14137
+      ]
+    },
+    {
+      "property_id": 36941,
+      "old_address": "2082 Otay Lakes Road, Suite",
+      "new_address": "2082 Otay Lakes Rd, A1",
+      "old_city": "Chula Vista",
+      "new_city": "Chula Vista",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.676,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.35,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2023-09-28",
+      "master_sold_price": 1575000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14163
+      ]
+    },
+    {
+      "property_id": 26895,
+      "old_address": "272 Mayfair Dr",
+      "new_address": "13015 New Halls Ferry Rd",
+      "old_city": "Florissant",
+      "new_city": "Florissant",
+      "old_state": "MO",
+      "new_state": "MO",
+      "master_cap_pct": 5.25,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2021-06-30",
+      "master_sold_price": 4380952,
+      "has_lat_will_null": false,
+      "source_sales": [
+        1126
+      ]
+    },
+    {
+      "property_id": 22800,
+      "old_address": "6700 Randolph Blvd Ste 101",
+      "new_address": "6700 Randolph Blvd",
+      "old_city": "Live Oak",
+      "new_city": "San Antonio",
+      "old_state": "TX",
+      "new_state": "TX",
+      "master_cap_pct": 7.468,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.19,
+      "calc_cap_delta_bp": 92.81,
+      "master_sale_date": "2024-10-07",
+      "master_sold_price": 2900000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14194
+      ]
+    },
+    {
+      "property_id": 22849,
+      "old_address": "5311 Clyde Park Ave Sw",
+      "new_address": "5331 Clyde Park Ave",
+      "old_city": "Wyoming",
+      "new_city": "Grand Rapids",
+      "old_state": "MI",
+      "new_state": "MI",
+      "master_cap_pct": 8.193,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.32,
+      "calc_cap_delta_bp": 0.32,
+      "master_sale_date": "2019-04-10",
+      "master_sold_price": 2065000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        180
+      ]
+    },
+    {
+      "property_id": 28874,
+      "old_address": "46 Harts Bridge Rd",
+      "new_address": "46 Harts Bridge Rd W",
+      "old_city": "Jackson",
+      "new_city": "Jackson",
+      "old_state": "TN",
+      "new_state": "TN",
+      "master_cap_pct": 7.803,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.3,
+      "calc_cap_delta_bp": 81.7,
+      "master_sale_date": "2015-09-17",
+      "master_sold_price": 1486824,
+      "has_lat_will_null": true,
+      "source_sales": [
+        13689
+      ]
+    },
+    {
+      "property_id": 24240,
+      "old_address": "861-877 S. Atlantic Blvd",
+      "new_address": "883 S Atlantic Blvd",
+      "old_city": "Monterey Park",
+      "new_city": "Monterey Park",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 8.315,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.49,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2024-05-31",
+      "master_sold_price": 11126000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        511
+      ]
+    },
+    {
+      "property_id": 22721,
+      "old_address": "7700 Imperial Hwy Suite R",
+      "new_address": "9041 Imperial Hwy",
+      "old_city": "Downey",
+      "new_city": "Downey",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 5.171,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.05,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2018-11-13",
+      "master_sold_price": 10560500,
+      "has_lat_will_null": true,
+      "source_sales": [
+        144
+      ]
+    },
+    {
+      "property_id": 33472,
+      "old_address": "2145 Mesquite Ave",
+      "new_address": "2150 Mesquite Ave",
+      "old_city": "Lake Havasu City",
+      "new_city": "Lake Havasu City",
+      "old_state": "AZ",
+      "new_state": "AZ",
+      "master_cap_pct": 6.56,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 0,
+      "master_sale_date": "2014-05-12",
+      "master_sold_price": 2940000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        449
+      ]
+    },
+    {
+      "property_id": 27694,
+      "old_address": "2321 W Morehead St",
+      "new_address": "2303 W Morehead St",
+      "old_city": "Charlotte",
+      "new_city": "Charlotte",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 6.75,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 88,
+      "master_sale_date": "2017-12-22",
+      "master_sold_price": 6111000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1242
+      ]
+    },
+    {
+      "property_id": 27887,
+      "old_address": "1505 South Hawkins Ave",
+      "new_address": "73 Massillon Rd",
+      "old_city": "Akron",
+      "new_city": "Akron",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 9.41,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 349,
+      "master_sale_date": "2014-03-31",
+      "master_sold_price": 1900000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        6321
+      ]
+    },
+    {
+      "property_id": 26853,
+      "old_address": "1000 Lakeland Square",
+      "new_address": "1010 Lakeland Sq Ext",
+      "old_city": "Flowood",
+      "new_city": "Flowood",
+      "old_state": "MS",
+      "new_state": "MS",
+      "master_cap_pct": 6.709,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.13,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2023-02-20",
+      "master_sold_price": 5650000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1121
+      ]
+    },
+    {
+      "property_id": 23281,
+      "old_address": "412 West El Camino Real",
+      "new_address": "412 El Camino Real",
+      "old_city": "Mountain View",
+      "new_city": "Mountain View",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 6,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0,
+      "calc_cap_delta_bp": 301,
+      "master_sale_date": "2017-05-09",
+      "master_sold_price": 4989000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        241
+      ]
+    },
+    {
+      "property_id": 24360,
+      "old_address": "351 E. Birch St",
+      "new_address": "351 Birch St",
+      "old_city": "Calexico",
+      "new_city": "Calexico",
+      "old_state": "CA",
+      "new_state": "CA",
+      "master_cap_pct": 7.108,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.19,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2013-08-16",
+      "master_sold_price": 3170320,
+      "has_lat_will_null": false,
+      "source_sales": [
+        527
+      ]
+    },
+    {
+      "property_id": 25205,
+      "old_address": "2400 Bellevue Rd, Ste 29 A",
+      "new_address": "2400 Bellevue Rd",
+      "old_city": "Dublin",
+      "new_city": "Dublin",
+      "old_state": "GA",
+      "new_state": "GA",
+      "master_cap_pct": 7.858,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.16,
+      "calc_cap_delta_bp": 0.16,
+      "master_sale_date": "2025-02-05",
+      "master_sold_price": 1850000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        14205
+      ]
+    },
+    {
+      "property_id": 22615,
+      "old_address": "403 E. Broadway St.",
+      "new_address": "413 E Broadway St",
+      "old_city": "Toledo",
+      "new_city": "Toledo",
+      "old_state": "OH",
+      "new_state": "OH",
+      "master_cap_pct": 6.201,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.09,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2020-01-30",
+      "master_sold_price": 1554000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        111
+      ]
+    },
+    {
+      "property_id": 26540,
+      "old_address": "35 Michigan St Ne Mc 83",
+      "new_address": "1230 Ekhart St NE",
+      "old_city": "Grand Rapids",
+      "new_city": "Grand Rapids",
+      "old_state": "MI",
+      "new_state": "MI",
+      "master_cap_pct": 8.747,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.31,
+      "calc_cap_delta_bp": 17.31,
+      "master_sale_date": "2011-05-06",
+      "master_sold_price": 1675000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        1050
+      ]
+    },
+    {
+      "property_id": 23727,
+      "old_address": "7326 Broad St",
+      "new_address": "7318 Broad St",
+      "old_city": "Brooksville",
+      "new_city": "Brooksville",
+      "old_state": "FL",
+      "new_state": "FL",
+      "master_cap_pct": 5.921,
+      "fingerprint_source": "cap_rate",
+      "fingerprint_bp_delta": 0.08,
+      "calc_cap_delta_bp": 40.92,
+      "master_sale_date": "2025-12-03",
+      "master_sold_price": 1275000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        7959
+      ]
+    },
+    {
+      "property_id": 1917176,
+      "old_address": "1230 Magnolia Village Way",
+      "new_address": "1220 Magnolia Village Way",
+      "old_city": "Leland",
+      "new_city": "Leland",
+      "old_state": "NC",
+      "new_state": "NC",
+      "master_cap_pct": 5.646,
+      "fingerprint_source": "stated_cap_rate",
+      "fingerprint_bp_delta": 0.37,
+      "calc_cap_delta_bp": null,
+      "master_sale_date": "2018-02-20",
+      "master_sold_price": 2970000,
+      "has_lat_will_null": true,
+      "source_sales": [
+        5195
+      ]
+    }
+  ],
+  "skips": [
+    {
+      "property_id": 2075912,
+      "sale_id": 5135,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2018-07-24|2665000"
+    },
+    {
+      "property_id": 30182,
+      "sale_id": 6427,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 58.59bp via calculated_cap_rate (master 10.706%)"
+    },
+    {
+      "property_id": 23535,
+      "sale_id": 14411,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35542,
+      "sale_id": 14412,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35541,
+      "sale_id": 14414,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29763,
+      "sale_id": 14415,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2025-09-29|2103900"
+    },
+    {
+      "property_id": 25076,
+      "sale_id": 14470,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 3525879,
+      "sale_id": 14528,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44278,
+      "sale_id": 14442,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26547,
+      "sale_id": 14494,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 22516,
+      "sale_id": 14551,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 37762,
+      "sale_id": 8860,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2010-06-30|2472000"
+    },
+    {
+      "property_id": 37744,
+      "sale_id": 8842,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-10-09|885000"
+    },
+    {
+      "property_id": 29347,
+      "sale_id": 14541,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32115,
+      "sale_id": 14566,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30503,
+      "sale_id": 14600,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 37821,
+      "sale_id": 14435,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 23947,
+      "sale_id": 14445,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27956,
+      "sale_id": 14626,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28936,
+      "sale_id": 11279,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2008-10-01|2900000"
+    },
+    {
+      "property_id": 27700,
+      "sale_id": 14425,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29654,
+      "sale_id": 14436,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32808,
+      "sale_id": 14552,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27906,
+      "sale_id": 14625,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30274,
+      "sale_id": 14678,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25379,
+      "sale_id": 14689,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44282,
+      "sale_id": 14488,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44289,
+      "sale_id": 14558,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24809,
+      "sale_id": 14465,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28799,
+      "sale_id": 14427,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24809,
+      "sale_id": 14466,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32325,
+      "sale_id": 14438,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 36310,
+      "sale_id": 14478,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29460,
+      "sale_id": 14501,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44278,
+      "sale_id": 14428,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 22288,
+      "sale_id": 5879,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2012-09-10|1862000"
+    },
+    {
+      "property_id": 27998,
+      "sale_id": 6390,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2015-08-17|1270000"
+    },
+    {
+      "property_id": 37641,
+      "sale_id": 14434,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28905,
+      "sale_id": 14458,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30182,
+      "sale_id": 14492,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 31017,
+      "sale_id": 14449,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 2057612,
+      "sale_id": 14490,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27906,
+      "sale_id": 14607,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27956,
+      "sale_id": 14639,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29687,
+      "sale_id": 14549,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29641,
+      "sale_id": 14688,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28839,
+      "sale_id": 14633,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25431,
+      "sale_id": 14644,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29729,
+      "sale_id": 14655,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25562,
+      "sale_id": 14559,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44287,
+      "sale_id": 14546,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26712,
+      "sale_id": 14583,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27782,
+      "sale_id": 14596,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44293,
+      "sale_id": 14630,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27906,
+      "sale_id": 14640,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30505,
+      "sale_id": 14548,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26547,
+      "sale_id": 14661,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35071,
+      "sale_id": 13634,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29070,
+      "sale_id": 14674,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 31017,
+      "sale_id": 14588,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28810,
+      "sale_id": 14668,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44296,
+      "sale_id": 14643,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35942,
+      "sale_id": 14667,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24299,
+      "sale_id": 14690,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 44277,
+      "sale_id": 14424,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 31444,
+      "sale_id": 14451,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30366,
+      "sale_id": 13641,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35522,
+      "sale_id": 8055,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 140bp via calculated_cap_rate (master 9.720%)"
+    },
+    {
+      "property_id": 27842,
+      "sale_id": 13691,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25753,
+      "sale_id": 885,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2023-01-27|4481300"
+    },
+    {
+      "property_id": 29451,
+      "sale_id": 14126,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26493,
+      "sale_id": 1035,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2022-01-01|2099000"
+    },
+    {
+      "property_id": 26093,
+      "sale_id": 5777,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2015-01-29|1056285"
+    },
+    {
+      "property_id": 39987,
+      "sale_id": 11723,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2024-12-01|5111000"
+    },
+    {
+      "property_id": 23849,
+      "sale_id": 13678,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 36358,
+      "sale_id": 9711,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2023-05-01|3176000"
+    },
+    {
+      "property_id": 35489,
+      "sale_id": 9494,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-05-01|2290000"
+    },
+    {
+      "property_id": 23013,
+      "sale_id": 213,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2019-05-30|5442000"
+    },
+    {
+      "property_id": 25765,
+      "sale_id": 177,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 37bp via calculated_cap_rate (master 6.000%)"
+    },
+    {
+      "property_id": 27683,
+      "sale_id": 10783,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-01-01|3400000"
+    },
+    {
+      "property_id": 29107,
+      "sale_id": 6200,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-01-06|3688000"
+    },
+    {
+      "property_id": 2167872,
+      "sale_id": 14687,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27704,
+      "sale_id": 1247,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 36bp via cap_rate (master 8.510%)"
+    },
+    {
+      "property_id": 23676,
+      "sale_id": 352,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2018-01-09|3689000"
+    },
+    {
+      "property_id": 27800,
+      "sale_id": 14083,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 3909447,
+      "sale_id": 13821,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 42.6bp via stated_cap_rate (master 7.176%)"
+    },
+    {
+      "property_id": 27789,
+      "sale_id": 14046,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28883,
+      "sale_id": 14044,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28893,
+      "sale_id": 13997,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28936,
+      "sale_id": 11277,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2022-11-01|4520000"
+    },
+    {
+      "property_id": 29834,
+      "sale_id": 13670,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30856,
+      "sale_id": 14000,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2020-09-29|5335403"
+    },
+    {
+      "property_id": 1065323,
+      "sale_id": 13907,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30400,
+      "sale_id": 6159,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-05-05|3357000"
+    },
+    {
+      "property_id": 31919,
+      "sale_id": 6369,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 96bp via stated_cap_rate (master 6.810%)"
+    },
+    {
+      "property_id": 22419,
+      "sale_id": 5478,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2022-01-21|4687085"
+    },
+    {
+      "property_id": 24582,
+      "sale_id": 14096,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29729,
+      "sale_id": 6334,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2010-03-08|2010000"
+    },
+    {
+      "property_id": 2695413,
+      "sale_id": 14197,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 2695263,
+      "sale_id": 14198,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35346,
+      "sale_id": 13788,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28432,
+      "sale_id": 14216,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2025-06-27|3650000"
+    },
+    {
+      "property_id": 26754,
+      "sale_id": 14245,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 39903,
+      "sale_id": 9809,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-12-01|3350000"
+    },
+    {
+      "property_id": 35407,
+      "sale_id": 6782,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-05-23|2799650"
+    },
+    {
+      "property_id": 25341,
+      "sale_id": 10393,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-08-01|4960000"
+    },
+    {
+      "property_id": 39101,
+      "sale_id": 14246,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 23289,
+      "sale_id": 5726,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 53.14bp via cap_rate (master 4.659%)"
+    },
+    {
+      "property_id": 39910,
+      "sale_id": 6016,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2024-10-02|2206435"
+    },
+    {
+      "property_id": 39308,
+      "sale_id": 14247,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 2490151,
+      "sale_id": 10314,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2017-01-01|5879685"
+    },
+    {
+      "property_id": 31907,
+      "sale_id": 5970,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-05-01|2539000"
+    },
+    {
+      "property_id": 1765405,
+      "sale_id": 9120,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-11-01|2100000"
+    },
+    {
+      "property_id": 25379,
+      "sale_id": 88,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2017-12-28|3583644"
+    },
+    {
+      "property_id": 25333,
+      "sale_id": 8371,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 152bp via stated_cap_rate (master 7.940%)"
+    },
+    {
+      "property_id": 28837,
+      "sale_id": 13787,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28778,
+      "sale_id": 13796,
+      "reason": "AMBIGUOUS",
+      "detail": "3 master rows / 3 distinct addrs @ 2017-04-26|3876000"
+    },
+    {
+      "property_id": 31102,
+      "sale_id": 13795,
+      "reason": "AMBIGUOUS",
+      "detail": "3 master rows / 3 distinct addrs @ 2017-04-26|3876000"
+    },
+    {
+      "property_id": 22203,
+      "sale_id": 27,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28275,
+      "sale_id": 6428,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-04-19|1600000"
+    },
+    {
+      "property_id": 3776967,
+      "sale_id": 9723,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2023-04-01|3750000"
+    },
+    {
+      "property_id": 23289,
+      "sale_id": 13874,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25071,
+      "sale_id": 690,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26691,
+      "sale_id": 13913,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 22883,
+      "sale_id": 5722,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-08-11|6669000"
+    },
+    {
+      "property_id": 28986,
+      "sale_id": 5128,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-07-30|2263567"
+    },
+    {
+      "property_id": 29950,
+      "sale_id": 5115,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-08-31|4166400"
+    },
+    {
+      "property_id": 22793,
+      "sale_id": 168,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-04-21|4455000"
+    },
+    {
+      "property_id": 3119737,
+      "sale_id": 5540,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-09-15|3393168"
+    },
+    {
+      "property_id": 29436,
+      "sale_id": 14024,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 31439,
+      "sale_id": 12522,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2015-01-01|3036521"
+    },
+    {
+      "property_id": 38775,
+      "sale_id": 14020,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24407,
+      "sale_id": 14032,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25148,
+      "sale_id": 5721,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-08-14|3287900"
+    },
+    {
+      "property_id": 28352,
+      "sale_id": 11348,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-02-01|3900000"
+    },
+    {
+      "property_id": 28353,
+      "sale_id": 14058,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28937,
+      "sale_id": 14066,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 30.15bp via stated_cap_rate (master 5.998%)"
+    },
+    {
+      "property_id": 29959,
+      "sale_id": 14158,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28761,
+      "sale_id": 14217,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2025-06-27|3650000"
+    },
+    {
+      "property_id": 37728,
+      "sale_id": 8827,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-07-20|3790757"
+    },
+    {
+      "property_id": 28984,
+      "sale_id": 14221,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 23371,
+      "sale_id": 14222,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 39875,
+      "sale_id": 14241,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27024,
+      "sale_id": 5886,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2012-03-31|1662500"
+    },
+    {
+      "property_id": 24538,
+      "sale_id": 13633,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25753,
+      "sale_id": 13645,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29037,
+      "sale_id": 13652,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24287,
+      "sale_id": 521,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2019-09-25|3850000"
+    },
+    {
+      "property_id": 28588,
+      "sale_id": 13659,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29109,
+      "sale_id": 8043,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-10-27|3705625"
+    },
+    {
+      "property_id": 23313,
+      "sale_id": 13771,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 6bp via cap_rate (master 5.850%)"
+    },
+    {
+      "property_id": 25292,
+      "sale_id": 13768,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2016-07-20|2195000"
+    },
+    {
+      "property_id": 28780,
+      "sale_id": 13797,
+      "reason": "AMBIGUOUS",
+      "detail": "3 master rows / 3 distinct addrs @ 2017-04-26|3876000"
+    },
+    {
+      "property_id": 30574,
+      "sale_id": 13676,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29353,
+      "sale_id": 8271,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2019-06-19|3000000"
+    },
+    {
+      "property_id": 30609,
+      "sale_id": 13679,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 39964,
+      "sale_id": 10847,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-12-01|2950000"
+    },
+    {
+      "property_id": 29836,
+      "sale_id": 13915,
+      "reason": "AMBIGUOUS",
+      "detail": "2 master rows / 2 distinct addrs @ 2020-01-15|875000"
+    },
+    {
+      "property_id": 37753,
+      "sale_id": 10387,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-09-01|3106000"
+    },
+    {
+      "property_id": 25191,
+      "sale_id": 734,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2010-05-31|2314060"
+    },
+    {
+      "property_id": 22781,
+      "sale_id": 161,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-12-14|3571428"
+    },
+    {
+      "property_id": 24966,
+      "sale_id": 13607,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30177,
+      "sale_id": 13608,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30738,
+      "sale_id": 13609,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30936,
+      "sale_id": 13613,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30241,
+      "sale_id": 13610,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25431,
+      "sale_id": 822,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 120bp via calculated_cap_rate (master 7.500%)"
+    },
+    {
+      "property_id": 38165,
+      "sale_id": 13619,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35071,
+      "sale_id": 13620,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30280,
+      "sale_id": 13621,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 39106,
+      "sale_id": 13640,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26049,
+      "sale_id": 962,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27704,
+      "sale_id": 1249,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 120.77bp via stated_cap_rate (master 9.172%)"
+    },
+    {
+      "property_id": 22264,
+      "sale_id": 32,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2024-10-30|2800000"
+    },
+    {
+      "property_id": 38178,
+      "sale_id": 13755,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29483,
+      "sale_id": 13758,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 23936,
+      "sale_id": 453,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2010-04-23|2396200"
+    },
+    {
+      "property_id": 39331,
+      "sale_id": 13765,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 2216277,
+      "sale_id": 13789,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 1380698,
+      "sale_id": 9170,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-05-01|4123890"
+    },
+    {
+      "property_id": 797829,
+      "sale_id": 8853,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2009-04-30|2709479"
+    },
+    {
+      "property_id": 24325,
+      "sale_id": 5926,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-06-27|5500000"
+    },
+    {
+      "property_id": 31154,
+      "sale_id": 13837,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 31134,
+      "sale_id": 13838,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30829,
+      "sale_id": 13843,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 2445681,
+      "sale_id": 6022,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2024-07-08|4600000"
+    },
+    {
+      "property_id": 30815,
+      "sale_id": 13865,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35231,
+      "sale_id": 6591,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2023-01-31|6805000"
+    },
+    {
+      "property_id": 28711,
+      "sale_id": 13886,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24698,
+      "sale_id": 575,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 55.93bp via stated_cap_rate (master 6.251%)"
+    },
+    {
+      "property_id": 24310,
+      "sale_id": 5470,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2022-02-14|5454000"
+    },
+    {
+      "property_id": 23673,
+      "sale_id": 350,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-01-06|6250000"
+    },
+    {
+      "property_id": 39974,
+      "sale_id": 11054,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-06-01|4009058"
+    },
+    {
+      "property_id": 2456269,
+      "sale_id": 13992,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24960,
+      "sale_id": 5161,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-05-09|8700000"
+    },
+    {
+      "property_id": 30010,
+      "sale_id": 14033,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28329,
+      "sale_id": 14056,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30574,
+      "sale_id": 5998,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2024-12-19|3014406"
+    },
+    {
+      "property_id": 30589,
+      "sale_id": 14087,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30689,
+      "sale_id": 14099,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28216,
+      "sale_id": 14107,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 33972,
+      "sale_id": 14109,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 38438,
+      "sale_id": 14142,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28975,
+      "sale_id": 14121,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 3525853,
+      "sale_id": 14118,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 39227,
+      "sale_id": 14122,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29048,
+      "sale_id": 14123,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27772,
+      "sale_id": 14124,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 31312,
+      "sale_id": 14125,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30963,
+      "sale_id": 14127,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 39331,
+      "sale_id": 14128,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30761,
+      "sale_id": 14132,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28917,
+      "sale_id": 14133,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28399,
+      "sale_id": 14159,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32351,
+      "sale_id": 14160,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29439,
+      "sale_id": 14166,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29719,
+      "sale_id": 14167,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 36723,
+      "sale_id": 14168,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29542,
+      "sale_id": 14169,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29425,
+      "sale_id": 14173,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28281,
+      "sale_id": 14174,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32316,
+      "sale_id": 14177,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 30473,
+      "sale_id": 14178,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 35071,
+      "sale_id": 14181,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29478,
+      "sale_id": 14189,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32129,
+      "sale_id": 14211,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 27700,
+      "sale_id": 14223,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24705,
+      "sale_id": 14224,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26053,
+      "sale_id": 14225,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 37908,
+      "sale_id": 14232,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26486,
+      "sale_id": 14234,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28718,
+      "sale_id": 5670,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 25934,
+      "sale_id": 5235,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2017-10-16|3719000"
+    },
+    {
+      "property_id": 2321547,
+      "sale_id": 5601,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-04-26|4900000"
+    },
+    {
+      "property_id": 25726,
+      "sale_id": 868,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 29452,
+      "sale_id": 14248,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 28588,
+      "sale_id": 6067,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2023-09-12|2835102"
+    },
+    {
+      "property_id": 35346,
+      "sale_id": 11250,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2020-05-01|4132505"
+    },
+    {
+      "property_id": 25000,
+      "sale_id": 667,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-07-27|2036000"
+    },
+    {
+      "property_id": 4076579,
+      "sale_id": 6036,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2024-04-01|5340000"
+    },
+    {
+      "property_id": 3334561,
+      "sale_id": 10072,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2022-03-01|1800000"
+    },
+    {
+      "property_id": 29579,
+      "sale_id": 13665,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 26172,
+      "sale_id": 993,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2021-09-02|2933333"
+    },
+    {
+      "property_id": 2167872,
+      "sale_id": 5039,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 32178,
+      "sale_id": 14209,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 2998521,
+      "sale_id": 5572,
+      "reason": "FINGERPRINT_FAIL",
+      "detail": "min 60bp via stated_cap_rate (master 6.850%)"
+    },
+    {
+      "property_id": 22784,
+      "sale_id": 163,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2018-05-16|3169000"
+    },
+    {
+      "property_id": 30602,
+      "sale_id": 14029,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 24257,
+      "sale_id": 72,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 23879,
+      "sale_id": 431,
+      "reason": "NO_CAP_FINGERPRINT",
+      "detail": "master sold_cap null"
+    },
+    {
+      "property_id": 37468,
+      "sale_id": 8010,
+      "reason": "NO_MASTER_ROW",
+      "detail": "2025-01-14|1250000"
+    },
+    {
+      "property_id": 29312,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28552,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28728,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28784,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28889,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29984,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30752,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30639,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30668,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35924,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36202,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36764,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28768,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35543,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39186,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 32159,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36624,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38499,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25541,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36333,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28991,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31414,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31281,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29578,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23483,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22676,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35474,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29078,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44275,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31158,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28196,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30909,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24653,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31480,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23005,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29117,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 147670,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31911,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25216,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25354,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30224,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23688,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1858531,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31345,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44283,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29937,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28012,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26109,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26818,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29641,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30922,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 3115869,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38472,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24767,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30735,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31146,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23647,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1756808,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29834,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31243,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2841239,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28359,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25637,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38523,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23425,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2003054,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2062982,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30390,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28244,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25203,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27921,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35540,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36689,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24897,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30516,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22331,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28241,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25921,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27116,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37641,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28493,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27830,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27788,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30631,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31338,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31152,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35290,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29125,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 3525879,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2509667,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26493,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25509,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39120,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 32210,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44280,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27975,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28934,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "2225 UNION AVE|MEMPHIS|TN  ||  2225 UNION|MEMPHIS|TN",
+      "sale_ids": [
+        14515,
+        13636
+      ]
+    },
+    {
+      "property_id": 23175,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36073,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38386,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25511,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30725,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24734,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25023,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 33706,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28629,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26539,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44299,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27787,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "1620 WILLIANSBORO ST|OXFORD|NC  ||  1620 WILLIAMSBORO ST|OXFORD|NC",
+      "sale_ids": [
+        14671,
+        14141
+      ]
+    },
+    {
+      "property_id": 3525903,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "700 W LEA BLVD STE G2|WILMINGTON|DE  ||  9115 ANTIQUE ALY|BRIDGEVILLE|DE",
+      "sale_ids": [
+        14513,
+        13829,
+        13754,
+        13890
+      ]
+    },
+    {
+      "property_id": 29011,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29832,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "930-932 FURMAN DR|WAUPACA|WI  ||  930 FURMAN DR|WAUPACA|WI",
+      "sale_ids": [
+        14508,
+        14073
+      ]
+    },
+    {
+      "property_id": 27998,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30377,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25396,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37740,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2057612,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29096,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44284,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25044,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27722,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26930,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25348,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24030,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28450,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 3525845,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44300,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44290,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26600,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44288,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22633,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24954,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31242,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28254,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39276,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25292,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39987,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30191,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28964,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44297,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38909,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23854,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39239,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28040,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25119,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28045,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29645,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23859,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22894,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "2443 MONARCH|LAREDO|TX  ||  2443 MONARCH DR|LAREDO|TX  ||  10502 SANDIA DR|LAREDO|TX",
+      "sale_ids": [
+        14597,
+        13835,
+        196
+      ]
+    },
+    {
+      "property_id": 31909,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30383,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27897,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44294,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24809,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28352,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 3415703,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28133,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29215,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25471,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "3401 W 111TH ST|CHICAGO|IL  ||  3402 W 111TH ST|CHICAGO|IL",
+      "sale_ids": [
+        14647,
+        812
+      ]
+    },
+    {
+      "property_id": 36318,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44295,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24966,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29802,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36358,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39989,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44298,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44276,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44279,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39922,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44281,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "400 MCCLANAHAN ST|ROANOKE|VA  ||  400 MCCLANAHAN|ROANOKE|VA",
+      "sale_ids": [
+        14459,
+        14557
+      ]
+    },
+    {
+      "property_id": 35942,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29114,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2776951,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36229,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31439,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44285,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36504,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25349,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44291,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39057,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 44292,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29353,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29687,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29717,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30082,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30318,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30571,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24320,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "10700 MACARTHUR BLVD - PART OF A PORTFOLIO|OAKLAND|CA  ||  3814 MACARTHUR BLVD|OAKLAND|CA",
+      "sale_ids": [
+        524,
+        43
+      ]
+    },
+    {
+      "property_id": 31355,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31372,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37762,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2790239,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 3408323,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25944,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26147,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27829,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28388,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28526,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28717,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28755,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28763,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28899,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28928,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28966,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29043,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35740,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29073,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29456,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29463,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30777,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35365,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29841,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "425 M-B LN|CHILTON|WI  ||  425 MB LN|CHILTON|WI",
+      "sale_ids": [
+        14076,
+        13877,
+        13990
+      ]
+    },
+    {
+      "property_id": 30637,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30599,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30647,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30681,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30782,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30949,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31077,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31103,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 33691,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31445,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36314,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36815,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39099,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39777,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1756809,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1841327,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2052184,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30495,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2076820,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28842,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25210,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27819,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29481,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31857,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 798948,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36911,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1065323,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30103,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35837,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "11100 SHADOW CREEK PKWY|PEARLAND|TX  ||  11600 BROADWAY ST|PEARLAND|TX",
+      "sale_ids": [
+        24,
+        6431
+      ]
+    },
+    {
+      "property_id": 22180,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2216299,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35817,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28127,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31169,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26220,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39190,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30930,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22361,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "5942 RUGBY AVE|HUNTINGTON PARK|CA  ||  5932 RUGBY AVE|HUNTINGTON PARK|CA",
+      "sale_ids": [
+        14061,
+        6440,
+        13628,
+        13766
+      ]
+    },
+    {
+      "property_id": 27545,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37873,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30459,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29708,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24881,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28702,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1806668,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28788,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26546,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28213,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29121,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25844,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27487,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28979,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29335,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29557,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28119,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36657,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27916,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27985,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27610,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24971,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35612,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25953,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22446,
+      "reason": "CONFLICTING_MASTERS",
+      "detail": "2955 N CORRAL HOLLOW RD|TRACY|CA  ||  425 W BEVERLY PL|TRACY|CA",
+      "sale_ids": [
+        71,
+        526
+      ]
+    },
+    {
+      "property_id": 24784,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28703,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25730,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27778,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27983,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22095,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29724,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26527,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37738,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37756,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27008,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28723,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28982,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23289,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23632,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27923,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29795,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26124,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24980,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27885,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 32124,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24596,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24698,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27914,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30137,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2296305,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30405,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29459,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25678,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27730,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23775,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24693,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26632,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28309,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25059,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25862,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29090,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29069,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31377,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28782,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36048,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24060,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27703,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22660,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31881,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28722,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30548,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30830,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25129,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 33976,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30801,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 32158,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30587,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24257,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26017,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27954,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28157,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28328,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22620,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27125,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35573,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23861,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28992,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31096,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22264,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22790,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27782,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 27460,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30744,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28843,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31280,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 39123,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31460,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23343,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37949,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38795,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23523,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29066,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29547,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22542,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28767,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28757,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 32298,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31508,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37673,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22983,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2292315,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25858,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28419,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37732,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31075,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29084,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1384677,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38971,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 36185,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 31198,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38014,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38227,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22523,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29824,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23405,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26584,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 23862,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28955,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 2314735,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29769,
+      "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 1986391,
+      "reason": "NO_CHANGE"
+    }
+  ]
+}
