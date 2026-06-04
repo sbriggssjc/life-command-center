@@ -323,11 +323,13 @@ For monetary values, return numbers only (no $ or commas).
 For percentages, return decimals (7.5% → 7.5).
 For dates, return YYYY-MM-DD format.
 "address" MUST be the SUBJECT PROPERTY's street address. Do NOT return the listing broker's, marketing firm's, or contact-block address (often in the header/footer or a "For more information contact …" section). If only a contact/brokerage address is present and no subject-property address, return null for "address".
+If the document markets MULTIPLE properties (a portfolio OM), return EVERY subject-property street address as a JSON array of strings in "addresses", and put the first/primary one in "address". For a single-property document, leave "addresses" null. Never pack multiple addresses into the single "address" string.
 
 ${documentBody}
 {
   "document_type": "om|rent_roll|lease_abstract|flyer|marketing_brochure|price_change|broker_email|market_update|email_update|comp|unknown",
   "address": null,
+  "addresses": null,
   "city": null,
   "state": null,
   "zip_code": null,
@@ -691,6 +693,15 @@ export async function processIntakeExtraction(intakeId, context = {}) {
           ? {
               document_type: mergedSnapshot.document_type,
               address: mergedSnapshot.address,
+              // Persist the multi-property address array when present so the
+              // review UI / forensics see every property a portfolio OM covers.
+              addresses: Array.isArray(mergedSnapshot.addresses) ? mergedSnapshot.addresses : null,
+              // city/state were extracted (the AI schema requests them) and
+              // exist on mergedSnapshot, but were historically dropped from
+              // the persisted summary — leaving every review row city=NULL and
+              // blinding the review UI + match forensics. Persist them.
+              city: mergedSnapshot.city ?? null,
+              state: mergedSnapshot.state ?? null,
               tenant_name: mergedSnapshot.tenant_name,
               asking_price: mergedSnapshot.asking_price,
               cap_rate: mergedSnapshot.cap_rate,
@@ -729,7 +740,7 @@ export async function processIntakeExtraction(intakeId, context = {}) {
 // which is why this path is safe to retry after the 7s Copilot race killed
 // downstream work on the first attempt.
 // ============================================================================
-async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
+export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   const resolvedWorkspaceId = ctx.workspaceId || null;
   const resolvedActorId     = ctx.actorId     || null;
 
