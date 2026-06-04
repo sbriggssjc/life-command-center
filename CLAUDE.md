@@ -2,6 +2,22 @@
 
 > **CRITICAL: Read .github/AI_INSTRUCTIONS.md before modifying any files in /api/.**
 
+## ⚠️ PRODUCTION RUNS ON RAILWAY, NOT VERCEL (confirmed 2026-06-04)
+
+The live app is the **Railway Express server**: `server.js` mounts the /api/*
+handlers directly (e.g. `app.all('/api/capital-markets', capitalMarketsHandler)`);
+build config in `nixpacks.toml` + `railway.json` (healthcheck `/health`).
+`vercel.json` is LEGACY for the live app. Practical consequences:
+
+- **JS/code changes ship via a Railway redeploy of merged `main`** — telling the
+  user to "deploy to Vercel" does nothing for the live export path. (This caused
+  a full day of stale Capital-Markets exports on 2026-06-03/04: views were fixed
+  live, but Railway served an old JS build with since-removed master_m mappers.)
+- **Supabase view/migration changes are live immediately** — the CM export reads
+  views per request (`no-store`), no deploy needed for data-layer fixes.
+- The Vercel sections below (12-function limit, vercel.json rewrites) are kept
+  for the legacy config; don't let them imply Vercel is the deploy target.
+
 ## Vercel Hobby Plan Constraint
 
 HARD LIMIT: 12 serverless functions max (12 .js files in /api/).
