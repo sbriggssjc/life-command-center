@@ -43,6 +43,12 @@ export interface ParseResult {
   http_status: number;
   parser: string;         // 'crexi' | 'costar' | 'loopnet' | 'generic'
   notes: string;
+  // Round 68-A (Task 1) — marketing-start date recovered from a page marker
+  // ("Listed on" / "Date on Market" / "Days on Market" / JSON-LD datePosted).
+  // The worker uses this to re-date a listing_date that was defaulted to a
+  // capture date, but ONLY with this receipt (never a guess).
+  listed_on?: string | null;        // ISO yyyy-mm-dd
+  listed_on_marker?: string | null; // the label/fragment that yielded it
 }
 
 interface FetchResponse {
@@ -123,6 +129,87 @@ const BOT_BLOCK_FRAGMENTS = [
   "checking your browser",
   "cf-browser-verification",
 ];
+
+// ── Round 68-A — marketing-start-date extraction (Task 1) ────────────────────
+//
+// Recover the date a listing first hit the market from the page, so the worker
+// can correct a listing_date that was defaulted to a capture/import date. We
+// only ever return an explicit calendar date (a receipt) or a date computed
+// from an explicit "N days on market" count — never an inference.
+
+const MONTHS: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+
+const MARKETING_START_LABELS = [
+  "date on market",
+  "on market date",
+  "listed on",
+  "listed date",
+  "date listed",
+];
+
+function toISO(y: number, m: number, d: number): string | null {
+  if (!(y >= 2005 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// Accepts "3/14/2025", "03-14-2025", "Mar 14, 2025", "March 14 2025".
+function parseDateToken(token: string): string | null {
+  const t = token.trim().toLowerCase();
+  let m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) return toISO(Number(m[3]), Number(m[1]), Number(m[2]));
+  m = t.match(/^([a-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (m) {
+    const mon = MONTHS[m[1].slice(0, 3)];
+    if (mon) return toISO(Number(m[3]), mon, Number(m[2]));
+  }
+  return null;
+}
+
+// Returns the recovered marketing-start date + the marker that produced it.
+// `nowMs` is injected so "N days on market" is deterministic/testable.
+export function extractMarketingStartDate(
+  html: string,
+  nowMs: number = Date.now(),
+): { date: string; marker: string } | null {
+  const h = lowerSnippet(html);
+
+  // 1. JSON-LD datePosted — the most reliable, structured signal.
+  const jsonLd = h.match(/"dateposted"\s*:\s*"(\d{4})-(\d{2})-(\d{2})/);
+  if (jsonLd) {
+    const iso = toISO(Number(jsonLd[1]), Number(jsonLd[2]), Number(jsonLd[3]));
+    if (iso) return { date: iso, marker: "jsonld:datePosted" };
+  }
+
+  // 2. Labelled calendar date: "Date on Market: 3/14/2025", "Listed on Mar 14, 2025".
+  for (const label of MARKETING_START_LABELS) {
+    const re = new RegExp(
+      label.replace(/ /g, "\\s+") +
+        "\\s*[:\\-]?\\s*([a-z]{3,9}\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{4})",
+    );
+    const mm = h.match(re);
+    if (mm) {
+      const iso = parseDateToken(mm[1]);
+      if (iso) return { date: iso, marker: `${label}:${mm[1].trim()}` };
+    }
+  }
+
+  // 3. "N days on market" / "N days on the market" — subtract from today.
+  const dom = h.match(/(\d{1,4})\s+days?\s+on\s+(?:the\s+)?market/);
+  if (dom) {
+    const n = Number(dom[1]);
+    if (n >= 1 && n <= 3650) {
+      const d = new Date(nowMs - n * 86_400_000);
+      const iso = toISO(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+      if (iso) return { date: iso, marker: `days-on-market:${n}` };
+    }
+  }
+  return null;
+}
 
 function lowerSnippet(html: string, max = 200_000): string {
   // Most off-market banners render in the first ~50KB of the document.
@@ -333,7 +420,17 @@ export function parseListing(
   } catch {
     host = "";
   }
-  return selectParser(host)(html, finalUrl, status);
+  const result = selectParser(host)(html, finalUrl, status);
+  // Attach a marketing-start receipt when the page (2xx/3xx) exposes one. We
+  // skip it on error/bot-block responses — there's no trustworthy body there.
+  if (status >= 200 && status < 400) {
+    const start = extractMarketingStartDate(html);
+    if (start) {
+      result.listed_on = start.date;
+      result.listed_on_marker = start.marker;
+    }
+  }
+  return result;
 }
 
 export const _internals = {

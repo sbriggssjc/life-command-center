@@ -9151,6 +9151,15 @@ async function upsertDialysisListings(propertyId, metadata) {
   const { listing_date: derivedListingDate, source: listingDateSource } =
     deriveListingDate(metadata);
 
+  // Round 68-A (Task 1): persist WHERE the date came from so the 2025-hole
+  // class never silently re-forms. CoStar's "Date on Market" -> 'costar_date_on_
+  // market'; a DOM-subtracted date -> 'costar_days_on_market'; a bare capture
+  // date stays NULL (origin = capture, unknown true marketing start).
+  const listingDateSourceTag =
+    listingDateSource === 'on_market_date' ? 'costar_date_on_market' :
+    listingDateSource === 'days_on_market' ? 'costar_days_on_market' :
+    null;
+
   const record = stripNulls({
     property_id: propertyIdInt,
     initial_price: insertAskingSuppressed ? null : newInsertAsking,
@@ -9158,6 +9167,7 @@ async function upsertDialysisListings(propertyId, metadata) {
     current_cap_rate: listingCapRate,
     cap_rate: listingCapRate,
     listing_date: derivedListingDate,
+    listing_date_source: listingDateSourceTag,
     status: 'Active',
     is_active: true,
     seller_name: cleanSalesPartyValue(sellerContact?.name),
