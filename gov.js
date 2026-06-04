@@ -323,6 +323,9 @@ async function loadGovData() {
   govData.frppRecords = [];
   govData.countyAuth = [];
   govData.loans = [];
+  // R4-C §5 loading honesty: distinguish "Phase-2 data not loaded yet" from a
+  // genuine zero so the overview can skeleton instead of painting literal 0s.
+  govData._phase2Loaded = false;
   govData.researchOutcomes = [];
 
   showToast('Loading government data...', 'info');
@@ -470,6 +473,7 @@ async function _loadGovPhase2(startTime) {
     govData.loans = loansRes.data || [];
     govData.countyAuth = countyAuthRes || [];
     govData.salesComps = salesCompsRes || [];
+    govData._phase2Loaded = true;  // R4-C §5: Phase-2 arrays are now real
 
     var _totalSec = ((Date.now() - startTime) / 1000).toFixed(1);
     console.debug('GOV PHASE 2 LOADED (' + _totalSec + 's total):', {
@@ -4918,11 +4922,16 @@ function renderGovOverview() {
 
   html += govSectionHeader('Ownership Intelligence', '🔍', 'ownership');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Ownership Changes', value: fmtN(totalOwnershipChanges), sub: 'transfers tracked', color: 'blue', tab: 'ownership' });
-  html += govCard({ title: 'Confirmed Sales', value: fmtN(withSalePrice.length), sub: '$' + fmtN(Math.round(confirmedValue / 1e6)) + 'M total value', color: 'green', tab: 'ownership' });
-  html += govCard({ title: 'Avg Sale Cap Rate', value: avgOwnershipCap, sub: fmtN(ownershipCaps.length) + ' with cap data', color: 'cyan', tab: 'ownership' });
-  html += govCard({ title: 'Needs Research', value: fmtN(needsResearch), sub: 'pending investigation', color: 'yellow', tab: 'research' });
-  html += govCard({ title: 'Research Coverage', value: totalOwnershipChanges > 0 ? ((totalOwnershipChanges - needsResearch) / totalOwnershipChanges * 100).toFixed(1) + '%' : '—', sub: 'changes researched', color: 'purple', tab: 'research' });
+  // R4-C §5: while Phase-2 ownership data is still loading, show an honest
+  // skeleton ('…') rather than computed zeros the user can't tell from real
+  // data. Once loaded (or genuinely empty after load), show the real figures.
+  const _ownLoading = !govData._phase2Loaded && totalOwnershipChanges === 0;
+  const _sk = '…';
+  html += govCard({ title: 'Ownership Changes', value: _ownLoading ? _sk : fmtN(totalOwnershipChanges), sub: _ownLoading ? 'loading…' : 'transfers tracked', color: 'blue', tab: 'ownership' });
+  html += govCard({ title: 'Confirmed Sales', value: _ownLoading ? _sk : fmtN(withSalePrice.length), sub: _ownLoading ? 'loading…' : '$' + fmtN(Math.round(confirmedValue / 1e6)) + 'M total value', color: 'green', tab: 'ownership' });
+  html += govCard({ title: 'Avg Sale Cap Rate', value: _ownLoading ? _sk : avgOwnershipCap, sub: _ownLoading ? 'loading…' : fmtN(ownershipCaps.length) + ' with cap data', color: 'cyan', tab: 'ownership' });
+  html += govCard({ title: 'Needs Research', value: _ownLoading ? _sk : fmtN(needsResearch), sub: _ownLoading ? 'loading…' : 'pending investigation', color: 'yellow', tab: 'research' });
+  html += govCard({ title: 'Research Coverage', value: _ownLoading ? _sk : (totalOwnershipChanges > 0 ? ((totalOwnershipChanges - needsResearch) / totalOwnershipChanges * 100).toFixed(1) + '%' : '—'), sub: _ownLoading ? 'loading…' : 'changes researched', color: 'purple', tab: 'research' });
   html += '</div>';
 
   // ═══════════════════════════════════════════════
