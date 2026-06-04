@@ -3,28 +3,32 @@
 Addresses Scott's notes D2/D5/D6/D7/D8/D9/D11. **Gate state: plan artifacts +
 code pushed; nothing that changes chart output or writes rows has been applied.**
 
+> **Plan v2** (2026-06-04): Scott's v1 review split the synth set into a **LINK
+> class** (link the real listing, don't double-count) + a reduced **SYNTH class**.
+> See `R68A_SYNTHESIS_PLAN.md`.
+
 ## What's applied to prod (gate-enablement only, non-destructive)
 
-- `20260605_cm_round68a_listing_provenance_columns.sql` — adds nullable
-  `data_source` + `listing_date_source` to `available_listings` (no rewrite).
-- `20260605_cm_round68a_synthesis_helper_views.sql` — read-only helper views
-  `v_round68a_synth_candidates` / `v_round68a_dom_rule` so the plan is verifiable
-  with one SELECT. Verified: 1,608 candidates (1,319 year_median / 289 pooled),
-  79 land in 2025.
-
-## Held for the go (post-verification execution)
-
-- `20260605_cm_round68a_synthetic_listing_views.sql` — chart include/exclude
-  rules. Authored output-neutral (a no-op until synthetic rows land); the
-  active-listings rewrite was syntax/signature-validated in a rolled-back
-  transaction. **Apply after the matrix is verified.**
+- `20260605_cm_round68a_listing_provenance_columns.sql` — nullable `data_source`
+  + `listing_date_source` on `available_listings` (no rewrite).
+- `20260605_cm_round68a_synthesis_helper_views.sql` + `..._v2.sql` — read-only
+  helper views `v_round68a_synth_candidates` (1,207), `v_round68a_link_candidates`
+  (212), `v_round68a_dom_rule`. Verified: split reconciles (1,608 = 401 LINK +
+  1,207 SYNTH), overlap 0, 2025 synth 76.
 - `20260605_cm_round68a_dia_listing_date_correction_rpc.sql` — Task 1 receipt-
   gated re-date RPC.
-- `scripts/round68a-synthesize-listings.mjs --commit` — the ~1,608-row bulk
-  insert (workstation, service key). Dry-run first.
-- Availability-checker redeploy (`parsers.ts` + `index.ts`) and the sidebar
-  Date-on-Market capture (`api/_handlers/sidebar-pipeline.js`) — go-forward
-  Task 1 capture.
+
+## Held for the go (execution)
+
+- `20260605_cm_round68a_synthetic_listing_views.sql` — chart include/exclude
+  rules. Output-neutral until rows land (the active-listings rewrite was
+  syntax/signature-validated in a rolled-back transaction). Apply alongside the
+  bulk write.
+- `scripts/round68a-link-listings.mjs --commit` — 212 LINK updates (real dates).
+- `scripts/round68a-synthesize-listings.mjs --commit` — 1,207-row SYNTH insert.
+  Both dry-run first, from the workstation (service key).
+- Availability-checker redeploy (`parsers.ts` + `index.ts`) + sidebar
+  Date-on-Market capture (`api/_handlers/sidebar-pipeline.js`) — go-forward Task 1.
 
 ## Documents
 
@@ -45,7 +49,8 @@ code pushed; nothing that changes chart output or writes rows has been applied.*
   unlinked sold deals lift 2025 added-to-market from 20 → 99 and erase the
   pre-2016 active-universe cliff. Synthetic rows are excluded from every
   price/DOM/cap chart.
-- **Task 3:** re-test the 10+ gated views after Tasks 1+2 land; widen to
-  rolling-3-month pooling only where a period has real deals but fails the gate;
-  ship the before/after coverage table. (Runs post-backfill — gaps that remain
-  genuine will be documented, not fabricated.)
+- **Task 3 (decided):** rolling-3-month pooling on the **10+ series only**; the
+  all-cohort series stays single-month gated (it has the n, and pooling would
+  smooth the headline away from the master's behavior). Label the 10+ series
+  "3-mo pooled" in the chart note. Runs post-backfill (needs the rows present);
+  ship the before/after coverage table; genuine gaps documented, not fabricated.

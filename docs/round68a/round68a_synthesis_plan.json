@@ -1,34 +1,73 @@
 {
   "round": "68-A",
-  "task": "Task 2 — synthesize listing history from unlinked sold deals",
-  "source": "live Dialysis_DB (zqzrriwuavgrquhisnoa) dry-run, 2026-06-04",
-  "note": "Precomputed snapshot for the verification gate. scripts/round68a-synthesize-listings.mjs regenerates this live from v_round68a_synth_candidates before --commit.",
-  "totals": {
-    "synthesizable_candidates": 1608,
-    "derivation_class_counts": { "year_median": 1319, "pooled_median": 289 },
-    "derivation_classes": {
-      "year_median": "sale-year linked-cohort median (years with n>=15 and median in [45,365])",
-      "pooled_median": "pooled all-years median = 179d (thin years 2012-2014, 2016, and 2026's distorted 792d/n=10)"
-    },
-    "verified_against_live_db": "v_round68a_synth_candidates returned 1608 (1319 year_median / 289 pooled_median), synth_2025=79 — 2026-06-04"
+  "task": "Task 2 — LINK + SYNTH (plan v2, post-verification split)",
+  "source": "live Dialysis_DB (zqzrriwuavgrquhisnoa), 2026-06-04",
+  "note": "Plan v2. v1 review found a LINK class (sales whose property already has a real prior listing) hiding in the synth set — synthesizing those double-counts. Split into LINK (link the real listing) + SYNTH (price-less rows). Scripts regenerate live from v_round68a_link_candidates / v_round68a_synth_candidates.",
+  "split": {
+    "total_unlinked_universe": 1608,
+    "link_class_total": 401,
+    "link_class_actual_links": 212,
+    "link_class_covered_only_no_op": 189,
+    "synth_class": 1207,
+    "reconciles": "401 + 1207 = 1608; of the 401, 212 link, 189 are already covered by a sibling-linked real listing (no row touched)."
   },
-  "gap_funnel": {
-    "u0_all_unlinked_sales": 3058,
-    "u1_has_sale_date": 3058,
-    "u2_2013plus": 2678,
-    "u3_sold_price_gt_0": 2308,
-    "u4_not_excluded_from_market_metrics": 1608,
-    "u5_has_property_id": 1608,
-    "filtered_out": {
-      "pre_2013_sales": 380,
-      "sold_price_null_or_zero": 370,
-      "exclude_from_market_metrics": 700
+  "link_plan": {
+    "total_links": 212,
+    "distinct_listings": 212,
+    "gap_days": { "min": 7, "median": 173, "avg": 211, "max": 848 },
+    "links_by_sale_year": {
+      "2013": 4, "2015": 5, "2016": 12, "2017": 10, "2018": 25, "2019": 28,
+      "2020": 27, "2021": 40, "2022": 14, "2023": 19, "2024": 15, "2025": 12, "2026": 1
+    },
+    "action": "UPDATE available_listings SET sale_transaction_id=sale_id, status='sold', is_active=false (guarded sale_transaction_id IS NULL); off_market_date/sold_date set to sale_date ONLY where NULL; listing_date untouched (real date).",
+    "receipt_sale_266": {
+      "sale_id": 266, "property_id": 23350, "sale_date": "2017-12-15",
+      "finding": "property has real listing 9507 (2017-08-22, 115d prior) already linked to sibling sale 265; sale 266 itself unlinked. v1 synthesized it (double-count); v2 puts it in the LINK class (covered_only — excluded from synth, no new link)."
+    },
+    "sample_12": [
+      {"listing_id": 9121, "sale_id": 14411, "listing_date": "2024-02-06", "sale_date": "2026-01-05", "gap_days": 699},
+      {"listing_id": 9063, "sale_id": 14386, "listing_date": "2024-09-25", "sale_date": "2025-12-01", "gap_days": 432},
+      {"listing_id": 11881, "sale_id": 14413, "listing_date": "2025-09-22", "sale_date": "2025-10-21", "gap_days": 29},
+      {"listing_id": 11915, "sale_id": 14228, "listing_date": "2024-05-03", "sale_date": "2025-08-15", "gap_days": 469},
+      {"listing_id": 9673, "sale_id": 8867, "listing_date": "2023-11-15", "sale_date": "2025-06-23", "gap_days": 586},
+      {"listing_id": 9098, "sale_id": 14215, "listing_date": "2024-10-09", "sale_date": "2025-06-16", "gap_days": 250},
+      {"listing_id": 9722, "sale_id": 14212, "listing_date": "2024-10-10", "sale_date": "2025-05-27", "gap_days": 229},
+      {"listing_id": 9176, "sale_id": 8268, "listing_date": "2024-06-06", "sale_date": "2025-05-05", "gap_days": 333},
+      {"listing_id": 9231, "sale_id": 9167, "listing_date": "2024-06-18", "sale_date": "2025-05-01", "gap_days": 317},
+      {"listing_id": 8831, "sale_id": 14208, "listing_date": "2024-02-07", "sale_date": "2025-04-23", "gap_days": 441},
+      {"listing_id": 8766, "sale_id": 14207, "listing_date": "2024-12-17", "sale_date": "2025-03-26", "gap_days": 99},
+      {"listing_id": 9505, "sale_id": 9207, "listing_date": "2024-12-09", "sale_date": "2025-03-01", "gap_days": 82}
+    ]
+  },
+  "synth_plan": {
+    "synthesizable_candidates": 1207,
+    "derivation_class_counts": { "year_median": 951, "pooled_median": 256 },
+    "verified_against_live_db": "v_round68a_synth_candidates=1207 (951 year_median / 256 pooled), synth_2025=76, overlap with link class=0 — 2026-06-04",
+    "per_year_synthetic": {
+      "2012": 28, "2013": 45, "2014": 90, "2015": 97, "2016": 85, "2017": 90,
+      "2018": 120, "2019": 83, "2020": 114, "2021": 113, "2022": 97, "2023": 68,
+      "2024": 101, "2025": 76, "2026": 0
     }
   },
+  "recovery_table_v2": [
+    {"year": 2013, "current_listings": 18,  "synthetic_add": 45,  "combined": 63},
+    {"year": 2014, "current_listings": 24,  "synthetic_add": 90,  "combined": 114},
+    {"year": 2015, "current_listings": 40,  "synthetic_add": 97,  "combined": 137},
+    {"year": 2016, "current_listings": 56,  "synthetic_add": 85,  "combined": 141},
+    {"year": 2017, "current_listings": 145, "synthetic_add": 90,  "combined": 235},
+    {"year": 2018, "current_listings": 185, "synthetic_add": 120, "combined": 305},
+    {"year": 2019, "current_listings": 203, "synthetic_add": 83,  "combined": 286},
+    {"year": 2020, "current_listings": 155, "synthetic_add": 114, "combined": 269},
+    {"year": 2021, "current_listings": 149, "synthetic_add": 113, "combined": 262},
+    {"year": 2022, "current_listings": 113, "synthetic_add": 97,  "combined": 210},
+    {"year": 2023, "current_listings": 147, "synthetic_add": 68,  "combined": 215},
+    {"year": 2024, "current_listings": 139, "synthetic_add": 101, "combined": 240},
+    {"year": 2025, "current_listings": 20,  "synthetic_add": 76,  "combined": 96},
+    {"year": 2026, "current_listings": 144, "synthetic_add": 0,   "combined": 144}
+  ],
+  "recovery_note": "current_listings already includes the 401 real LINK-class listings (counted by their real listing_date), so the recovery is current + reduced synth. 2025: 20 -> 96 combined, in-band.",
   "dom_rule": [
-    {"sale_year": 2014, "linked_n": 7,  "median_dom": 99,  "uses": "pooled_median(179)"},
     {"sale_year": 2015, "linked_n": 19, "median_dom": 129, "uses": "year_median(129)"},
-    {"sale_year": 2016, "linked_n": 12, "median_dom": 115, "uses": "pooled_median(179)"},
     {"sale_year": 2017, "linked_n": 59, "median_dom": 141, "uses": "year_median(141)"},
     {"sale_year": 2018, "linked_n": 88, "median_dom": 171, "uses": "year_median(171)"},
     {"sale_year": 2019, "linked_n": 86, "median_dom": 213, "uses": "year_median(213)"},
@@ -38,51 +77,12 @@
     {"sale_year": 2023, "linked_n": 44, "median_dom": 208, "uses": "year_median(208)"},
     {"sale_year": 2024, "linked_n": 38, "median_dom": 216, "uses": "year_median(216)"},
     {"sale_year": 2025, "linked_n": 26, "median_dom": 267, "uses": "year_median(267)"},
-    {"sale_year": 2026, "linked_n": 10, "median_dom": 792, "uses": "pooled_median(179)"}
+    {"sale_year": 2026, "linked_n": 10, "median_dom": 792, "uses": "pooled_median(179) — 2026 outlier rejected"},
+    {"thin_years_pooled": [2012, 2013, 2014, 2016], "pooled_median": 179}
   ],
-  "per_year_synthetic": [
-    {"year": 2012, "n": 29}, {"year": 2013, "n": 49}, {"year": 2014, "n": 98},
-    {"year": 2015, "n": 116}, {"year": 2016, "n": 105}, {"year": 2017, "n": 133},
-    {"year": 2018, "n": 184}, {"year": 2019, "n": 136}, {"year": 2020, "n": 183},
-    {"year": 2021, "n": 156}, {"year": 2022, "n": 125}, {"year": 2023, "n": 90},
-    {"year": 2024, "n": 125}, {"year": 2025, "n": 79}, {"year": 2026, "n": 0}
-  ],
-  "recovery_table": [
-    {"year": 2013, "current_listings": 18,  "synthetic_add": 49,  "combined": 67},
-    {"year": 2014, "current_listings": 24,  "synthetic_add": 98,  "combined": 122},
-    {"year": 2015, "current_listings": 40,  "synthetic_add": 116, "combined": 156},
-    {"year": 2016, "current_listings": 56,  "synthetic_add": 105, "combined": 161},
-    {"year": 2017, "current_listings": 145, "synthetic_add": 133, "combined": 278},
-    {"year": 2018, "current_listings": 185, "synthetic_add": 184, "combined": 369},
-    {"year": 2019, "current_listings": 203, "synthetic_add": 136, "combined": 339},
-    {"year": 2020, "current_listings": 155, "synthetic_add": 183, "combined": 338},
-    {"year": 2021, "current_listings": 149, "synthetic_add": 156, "combined": 305},
-    {"year": 2022, "current_listings": 113, "synthetic_add": 125, "combined": 238},
-    {"year": 2023, "current_listings": 147, "synthetic_add": 90,  "combined": 237},
-    {"year": 2024, "current_listings": 139, "synthetic_add": 125, "combined": 264},
-    {"year": 2025, "current_listings": 20,  "synthetic_add": 79,  "combined": 99},
-    {"year": 2026, "current_listings": 144, "synthetic_add": 0,   "combined": 144}
-  ],
-  "sample_20_most_recent": [
-    {"sale_id": 14249, "property_id": 37852, "sale_date": "2026-05-22", "sold_price": 2722500, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-11-24"},
-    {"sale_id": 13255, "property_id": 32485, "sale_date": "2026-05-07", "sold_price": 5244000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-11-09"},
-    {"sale_id": 9004,  "property_id": 37788, "sale_date": "2026-05-07", "sold_price": 3800000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-11-09"},
-    {"sale_id": 13267, "property_id": 30181, "sale_date": "2026-04-24", "sold_price": 1379875, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-27"},
-    {"sale_id": 14268, "property_id": 25334, "sale_date": "2026-04-23", "sold_price": 1207269, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-26"},
-    {"sale_id": 14315, "property_id": 26914, "sale_date": "2026-04-22", "sold_price": 870000,  "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-25"},
-    {"sale_id": 8008,  "property_id": 37467, "sale_date": "2026-04-07", "sold_price": 3313000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-10"},
-    {"sale_id": 14274, "property_id": 27782, "sale_date": "2026-04-02", "sold_price": 3000000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-05"},
-    {"sale_id": 12090, "property_id": 35356, "sale_date": "2026-04-01", "sold_price": 2600000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-04"},
-    {"sale_id": 8009,  "property_id": 37468, "sale_date": "2026-04-01", "sold_price": 1231890, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-04"},
-    {"sale_id": 7995,  "property_id": 37461, "sale_date": "2026-03-31", "sold_price": 1598730, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-03"},
-    {"sale_id": 8134,  "property_id": 37513, "sale_date": "2026-03-31", "sold_price": 2858780, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-03"},
-    {"sale_id": 14287, "property_id": 44175, "sale_date": "2026-03-31", "sold_price": 2858780, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-03"},
-    {"sale_id": 8012,  "property_id": 37469, "sale_date": "2026-03-30", "sold_price": 130000,  "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-02"},
-    {"sale_id": 14306, "property_id": 29586, "sale_date": "2026-03-26", "sold_price": 6050000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-28"},
-    {"sale_id": 13294, "property_id": 23356, "sale_date": "2026-03-13", "sold_price": 4476111, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-15"},
-    {"sale_id": 7993,  "property_id": 35760, "sale_date": "2026-03-05", "sold_price": 4045000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-07"},
-    {"sale_id": 9031,  "property_id": 23423, "sale_date": "2026-03-01", "sold_price": 3728888, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-03"},
-    {"sale_id": 9034,  "property_id": 24030, "sale_date": "2026-03-01", "sold_price": 3622050, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-03"},
-    {"sale_id": 9022,  "property_id": 3051253, "sale_date": "2026-03-01", "sold_price": 8525000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-03"}
-  ]
+  "gap_funnel": {
+    "u0_all_unlinked_sales": 3058, "u2_2013plus": 2678, "u3_sold_price_gt_0": 2308,
+    "u4_not_excluded": 1608, "then_link_class_removed": 401, "synth_class": 1207,
+    "filtered_out_pre_split": { "pre_2013_sales": 380, "sold_price_null_or_zero": 370, "exclude_from_market_metrics": 700 }
+  }
 }
