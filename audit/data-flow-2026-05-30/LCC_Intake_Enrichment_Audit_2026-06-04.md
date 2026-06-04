@@ -205,3 +205,25 @@ Live test exposed four follow-ups (specced in
    from this class (26481/2079983).
 4. **Re-promote route 500s** on JSON body — inbox "Re-promote ↻" may be
    silently broken; check payload shape.
+
+## Addendum 6 — F4B shipped (PR #1045, pending deploy)
+
+All four fixed on `claude/wizardly-hamilton-hTwsh`:
+- `normalizeCapRate(v)` shared helper (>1.5 → ÷100; 0.005–0.30 → pass-through;
+  else null with raw kept in notes) applied to every promoter cap-rate write
+  (gov+dia listings, prospect_leads, provenance mirror). Extractor prompt nudged
+  to decimal form.
+- `firstOf()`/`joinedOf()` coercion swept across promoter, create-property,
+  extractor: contact-per-broker, tenant first-as-primary, text columns get
+  human-joined strings never raw JSON.
+- Normalizer: number-words (cardinals 1–20, ordinals 1st–10th) + leading
+  range collapse ("2064 - 2066"→"2064"); missing-directional ambiguity already
+  rejected by the unique-hit guard. Real pairs unit-tested.
+- Re-promote 500 root-caused to the SAME array crash (defect 2) inside the
+  re-promote forwarding path — coerced + multi-broker split there too.
+
+Tests 502/0. No migrations. Post-deploy checks: (1) re-promote Buckeye
+`8622b5e3…` → listing `current_cap_rate=0.055` + 3 broker contacts; (2) inbox
+Re-promote button no longer 500s; (3) next rematch tick matches `cd2172dd…`
+(Eight Mile → dia 26639) and `34133e33…` (Atlantic Ave → dia 22041) with NO new
+property created. THEN `INTAKE_AUTOCREATE` can be considered.
