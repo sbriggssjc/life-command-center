@@ -30,6 +30,7 @@
     { "source": "/api/auto-scrape-listings", "destination": "/api/admin?_route=auto-scrape-listings" },
     { "source": "/api/resolve-listing-confirmation", "destination": "/api/admin?_route=resolve-listing-confirmation" },
     { "source": "/api/llc-research-tick", "destination": "/api/admin?_route=llc-research-tick" },
+    { "source": "/api/intake-rematch", "destination": "/api/admin?_route=intake-rematch" },
     { "source": "/api/llc-research-queue", "destination": "/api/admin?_route=llc-research-queue" },
     { "source": "/api/resolve-llc-research", "destination": "/api/admin?_route=resolve-llc-research" },
     { "source": "/api/sf-link-tick", "destination": "/api/admin?_route=sf-link-tick" },

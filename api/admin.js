@@ -30,6 +30,7 @@ import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured } from './_shared/salesforce.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
+import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
 // Default flag values — safe defaults for gradual rollout
@@ -97,6 +98,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
+    case 'intake-rematch':         return handleIntakeRematch(req, res);
     case 'sf-link-tick':            return handleSfLinkTick(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
@@ -3542,6 +3544,196 @@ async function handleLlcResearchTick(req, res) {
     }
 
     result.by_domain[dom] = summary;
+  }
+
+  return res.status(200).json(result);
+}
+
+// ============================================================================
+// INTAKE-REMATCH (2026-06-04)
+// ============================================================================
+//
+// GET/POST /api/intake-rematch?limit=100&workspace_id=<uuid>
+//   Retro-processes the review_required intake "purgatory pile". A 2026-06-04
+//   forensic found the bulk of review_required OM intakes with an extracted
+//   address were unmatched purely on street normalization (N vs North, Ave vs
+//   Avenue) — the property already existed. With the matcher's canonical
+//   normalization + multi-address split + cross-domain fallback now in place,
+//   this worker re-runs the improved match over the backlog and, on a hit,
+//   re-runs the EXISTING promotion path (runDownstreamPipeline) so the intake
+//   advances to matched/finalized exactly as a fresh intake would.
+//
+//   GET  = dry-run (counts only, no writes, no status changes).
+//   POST = drain  (re-match + promote, batch-limited, idempotent).
+//
+//   Idempotent: matched rows leave the review_required set; rows that stay
+//   unmatched are stamped raw_payload.rematch.last_at and skipped for
+//   REMATCH_COOLDOWN_HOURS (default 168h) so the cron doesn't re-grind the
+//   same misses every tick. Promotion itself is idempotent (upsert keyed on
+//   source_listing_ref = intake_id).
+//
+//   Mirrors the llc-research-tick worker pattern (GET dry-run / POST drain,
+//   time-budgeted, batch-limited). Scheduled by pg_cron every 30 min.
+// ============================================================================
+async function handleIntakeRematch(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '100', 10)));
+  const dryRun = req.method === 'GET';
+  const cooldownHours = Math.max(0, parseInt(process.env.REMATCH_COOLDOWN_HOURS || '168', 10));
+  const cooldownCut = new Date(Date.now() - cooldownHours * 3600 * 1000).toISOString();
+  const workspaceId = req.query.workspace_id
+    || req.headers['x-lcc-workspace']
+    || process.env.LCC_DEFAULT_WORKSPACE_ID
+    || null;
+
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: 0,
+    eligible: 0,
+    rematched: 0,
+    newly_matched: 0,
+    promoted: 0,
+    still_unmatched: 0,
+    skipped_no_address: 0,
+    skipped_cooldown: 0,
+    errored: 0,
+    items: [],
+  };
+
+  // Pull a generous candidate window — we filter out cooldown'd + no-address
+  // rows in JS, so fetch more than `limit` to keep each tick productive.
+  const fetchLimit = Math.min(1000, limit * 4);
+  const listRes = await opsQuery('GET',
+    `staged_intake_items?status=eq.review_required` +
+    `&select=intake_id,workspace_id,raw_payload,created_at` +
+    `&order=created_at.asc&limit=${fetchLimit}`
+  );
+  if (!listRes.ok) {
+    return res.status(502).json({ error: 'list_failed', detail: listRes.data });
+  }
+  const rows = Array.isArray(listRes.data) ? listRes.data : [];
+  result.scanned = rows.length;
+
+  // Time budget so we never strand a half-processed batch (Vercel/Railway wall).
+  const tickDeadline = Date.now() + parseInt(process.env.REMATCH_TICK_BUDGET_MS || '22000', 10);
+
+  let processed = 0;
+  for (const row of rows) {
+    if (processed >= limit) break;
+    if (Date.now() > tickDeadline) { result.budget_stopped = true; break; }
+
+    const intakeId = row.intake_id;
+    const payload = row.raw_payload || {};
+    const ext = payload.extraction_result || {};
+    // Eligible = has an extracted address (single or multi).
+    const hasAddress = !!(ext.address || (Array.isArray(ext.addresses) && ext.addresses.length));
+    if (!hasAddress) { result.skipped_no_address += 1; continue; }
+
+    // Cooldown: skip rows we already re-matched recently and that stayed unmatched.
+    const lastAt = payload.rematch?.last_at || null;
+    if (lastAt && lastAt > cooldownCut) { result.skipped_cooldown += 1; continue; }
+
+    result.eligible += 1;
+    if (dryRun) {
+      if (result.items.length < 50) {
+        result.items.push({
+          intake_id: intakeId,
+          address: ext.address || (Array.isArray(ext.addresses) ? ext.addresses[0] : null),
+          city: ext.city || null,
+          state: ext.state || null,
+          tenant: ext.tenant_name || null,
+        });
+      }
+      continue;
+    }
+
+    processed += 1;
+    const item = { intake_id: intakeId };
+    try {
+      // Fetch the FULL extraction snapshot (carries city/state/addresses[] etc.)
+      // — the persisted summary is a trimmed view.
+      const exRes = await opsQuery('GET',
+        `staged_intake_extractions?intake_id=eq.${encodeURIComponent(intakeId)}` +
+        `&select=extraction_snapshot&order=created_at.desc&limit=1`
+      );
+      const snapshot = (exRes.ok && Array.isArray(exRes.data) && exRes.data.length)
+        ? exRes.data[0].extraction_snapshot
+        : null;
+      if (!snapshot || typeof snapshot !== 'object') {
+        // No stored snapshot — fall back to the trimmed summary so the matcher
+        // still has address/city/state/tenant to work with.
+        item.outcome = 'no_snapshot_used_summary';
+      }
+      const effectiveSnapshot = (snapshot && typeof snapshot === 'object')
+        ? snapshot
+        : {
+            address: ext.address || null,
+            addresses: Array.isArray(ext.addresses) ? ext.addresses : null,
+            city: ext.city || null,
+            state: ext.state || null,
+            tenant_name: ext.tenant_name || null,
+            document_type: ext.document_type || null,
+          };
+
+      // Re-run the EXACT downstream pipeline a fresh intake uses: improved
+      // matcher → promoter → inbox link → status advance. Reusing the
+      // pipeline's own function keeps promotion behavior identical.
+      const downstream = await runDownstreamPipeline(intakeId, effectiveSnapshot, {
+        workspaceId: row.workspace_id || workspaceId,
+        actorId: user.id,
+        seedData: payload.seed_data || null,
+      });
+
+      result.rematched += 1;
+      const mr = downstream?.match_result || null;
+      const matched = mr?.status === 'matched' && mr?.property_id != null;
+      item.match_status = mr?.status || 'unknown';
+      item.domain = mr?.domain || null;
+      item.property_id = mr?.property_id != null ? String(mr.property_id) : null;
+      item.reason = mr?.reason || null;
+      if (mr?.matched_count != null) item.matched_count = mr.matched_count;
+
+      if (matched) {
+        result.newly_matched += 1;
+        if (downstream?.promotion_result?.ok) result.promoted += 1;
+        item.promotion_ok = downstream?.promotion_result?.ok ?? null;
+      } else {
+        result.still_unmatched += 1;
+      }
+
+      // Stamp the cooldown marker so a still-unmatched row drops out of the
+      // working set for REMATCH_COOLDOWN_HOURS. (Matched rows already left
+      // review_required via the matcher's status patch.)
+      try {
+        const cur = await opsQuery('GET',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}&select=raw_payload&limit=1`
+        );
+        const curPayload = cur.ok && cur.data?.length ? (cur.data[0].raw_payload || {}) : payload;
+        await opsQuery('PATCH',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+          {
+            raw_payload: {
+              ...curPayload,
+              rematch: {
+                last_at: new Date().toISOString(),
+                outcome: matched ? 'matched' : 'unmatched',
+                attempts: (curPayload.rematch?.attempts || 0) + 1,
+              },
+            },
+          }
+        );
+      } catch (_e) { /* stamp is best-effort */ }
+    } catch (err) {
+      result.errored += 1;
+      item.error = String(err?.message || err).slice(0, 300);
+    }
+    if (result.items.length < 100) result.items.push(item);
   }
 
   return res.status(200).json(result);

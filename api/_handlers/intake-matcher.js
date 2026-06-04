@@ -21,8 +21,23 @@
 import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { normalizeAddress, stripDirectional, normalizeState } from '../_shared/entity-link.js';
+import {
+  normalizeStreetAddress,
+  stripDirectionalTokens,
+  leadingStreetNumber,
+  splitMultiAddress,
+} from '../_shared/normalize-street-address.js';
 
-const DIALYSIS_KEYWORDS = /davita|fresenius|dialysis|kidney|renal/i;
+// Dialysis-operator detection for domain routing. Extends the original
+// davita/fresenius/dialysis/kidney/renal set with legal-entity names that
+// don't carry an obvious dialysis keyword — most importantly
+// "Bio-Medical Applications of <State>", which is Fresenius's lessee entity.
+// A 2026-06-04 forensic found "Fresenius - Jacksonville" OMs (tenant
+// "Bio-Medical Applications of Florida") routed to government and parked
+// unmatched because the dialysis tenant wasn't recognized. Also covers
+// Satellite Healthcare, DCI, and nephrology operators.
+const DIALYSIS_KEYWORDS =
+  /davita|fresenius|dialysis|kidney|renal|nephrolog|bio[-\s]?medical\s+applications|satellite\s+health|\bdci\b|total\s+renal/i;
 
 // ============================================================================
 // LEVENSHTEIN DISTANCE — for fuzzy address matching
@@ -59,6 +74,111 @@ function fuzzyConfidence(distance) {
   if (distance <= 1) return 0.95;
   if (distance === 2) return 0.90;
   return 0.80;
+}
+
+// ============================================================================
+// CANONICAL STREET-ADDRESS MATCH (2026-06-04)
+// ============================================================================
+// The original tiers compared the OM's one-way-normalized address against the
+// raw DB column with ilike, which silently failed whenever the two sides spelled
+// a directional or suffix differently ("198 N Springfield Ave" vs the canonical
+// "198 North Springfield Avenue"). This tier normalizes BOTH sides to the same
+// canonical key via normalizeStreetAddress() and compares for equality, so
+// N↔North and Ave↔Avenue line up. Candidates are narrowed to the same state and
+// leading house number so the JS-side comparison stays cheap.
+
+/**
+ * Pick a single canonical hit from a candidate list. Tries exact normalized
+ * equality first; falls back to directional-stripped equality. When more than
+ * one candidate matches and a city is available, narrows by city to break the
+ * multi-city street collision. Returns { hit, reason, confidence } or null when
+ * no UNIQUE hit can be established (ambiguity → no match, let looser tiers try).
+ */
+function pickCanonicalHit(candidates, address, city) {
+  const normQuery = normalizeStreetAddress(address);
+  if (!normQuery) return null;
+  const cands = (candidates || []).filter((c) => c && c.address);
+  if (!cands.length) return null;
+
+  const cityLc = city ? String(city).trim().toLowerCase() : '';
+  const narrowByCity = (rows) => {
+    if (rows.length <= 1 || !cityLc) return rows;
+    const narrowed = rows.filter((c) => String(c.city || '').trim().toLowerCase() === cityLc);
+    return narrowed.length ? narrowed : rows;
+  };
+
+  // 1. Exact normalized equality.
+  let hits = narrowByCity(cands.filter((c) => normalizeStreetAddress(c.address) === normQuery));
+  if (hits.length === 1) {
+    return { hit: hits[0], reason: 'canonical_address', confidence: 0.97 };
+  }
+
+  // 2. Directional-stripped equality (OM omits a directional the record has,
+  //    or vice versa). Only accept a UNIQUE hit.
+  const normNoDir = stripDirectionalTokens(normQuery);
+  if (normNoDir) {
+    let ndHits = narrowByCity(
+      cands.filter((c) => stripDirectionalTokens(normalizeStreetAddress(c.address)) === normNoDir)
+    );
+    if (ndHits.length === 1) {
+      return { hit: ndHits[0], reason: 'canonical_address_no_directional', confidence: 0.93 };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Canonical address match against a domain's properties table.
+ * Narrows candidates by state + leading house number, then normalized compare.
+ */
+async function canonicalDomainMatch(domain, address, state, city) {
+  if (!address || !state) return null;
+  const baseCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+  const cols = baseCols.includes(',city') || baseCols.endsWith('city') ? baseCols : `${baseCols},city`;
+  const filters = [`state=eq.${encodeURIComponent(state)}`];
+  const num = leadingStreetNumber(address);
+  if (num) filters.push(`address=ilike.${encodeURIComponent(num + '%')}`);
+  filters.push(`select=${cols}`, 'limit=200');
+
+  const result = await domainQuery(domain, 'GET', `properties?${filters.join('&')}`);
+  if (!result.ok || !Array.isArray(result.data) || !result.data.length) return null;
+
+  const picked = pickCanonicalHit(result.data, address, city);
+  if (!picked) return null;
+  return {
+    status: 'matched',
+    reason: picked.reason,
+    confidence: picked.confidence,
+    property_id: picked.hit.property_id,
+    domain,
+    candidates: [picked.hit],
+  };
+}
+
+/**
+ * Canonical address match against the LCC-native entities table.
+ */
+async function canonicalLccMatch(address, state, city) {
+  if (!address || !state) return null;
+  const filters = [`entity_type=eq.asset`, `state=eq.${encodeURIComponent(state)}`];
+  const num = leadingStreetNumber(address);
+  if (num) filters.push(`address=ilike.${encodeURIComponent(num + '%')}`);
+  filters.push(`select=id,address,city,state,metadata`, 'limit=200');
+
+  const result = await opsQuery('GET', `entities?${filters.join('&')}`);
+  if (!result.ok || !Array.isArray(result.data) || !result.data.length) return null;
+
+  const picked = pickCanonicalHit(result.data, address, city);
+  if (!picked) return null;
+  return {
+    status: 'matched',
+    reason: `${picked.reason}_lcc`,
+    confidence: picked.confidence,
+    property_id: picked.hit.id,
+    domain: 'lcc',
+    candidates: [picked.hit],
+  };
 }
 
 // ============================================================================
@@ -218,6 +338,15 @@ async function matchAgainstDomain(domain, address, state, city, tenant) {
   const norm    = address ? normalizeAddress(address) : '';
   const noDir   = norm     ? stripDirectional(norm)   : '';
 
+  // 0. Canonical normalized-equality match. Handles N↔North, Ave↔Avenue,
+  //    Blvd↔Boulevard, unit/suite stripping — the class of mismatch that
+  //    left the bulk of the review_required pile unmatched. Highest-quality
+  //    tier, so it runs first.
+  if (address && state) {
+    const canon = await canonicalDomainMatch(domain, address, state, city);
+    if (canon) return canon;
+  }
+
   // 1. Exact address + state
   if (address && state) {
     const exact = await exactAddressMatch(domain, address, state);
@@ -348,10 +477,14 @@ async function lccFuzzyAddressMatch(normalizedAddr, state) {
   return null;
 }
 
-async function matchAgainstLcc(address, state) {
+async function matchAgainstLcc(address, state, city) {
   if (!address || !state) return null;
   const norm  = normalizeAddress(address);
   const noDir = stripDirectional(norm);
+
+  // 0. Canonical normalized-equality match (N↔North, Ave↔Avenue, units).
+  const canon = await canonicalLccMatch(address, state, city);
+  if (canon) return canon;
 
   // 1. Exact
   const exact = await lccExactAddressMatch(address, state);
@@ -391,27 +524,58 @@ async function matchAgainstLcc(address, state) {
  * @returns {{ status: string, confidence: number, property_id: string|null, domain?: string }}
  */
 export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
-  const address = extractionSnapshot.address;
   // AI extractors commonly emit "Ohio" while domain DBs and LCC entities
   // store "OH". Normalize at the top so every downstream filter uses the
   // canonical 2-letter code.
-  const state   = normalizeState(extractionSnapshot.state);
-  const city    = extractionSnapshot.city;
-  const tenant  = extractionSnapshot.tenant_name;
+  const state = normalizeState(extractionSnapshot.state);
+  const city  = extractionSnapshot.city;
 
-  if (!address && !tenant) {
+  // Multi-property OMs dump every address into one field — as a JSON-array
+  // string, a real array, or a pipe/semicolon join. Split before matching so
+  // each property gets its own match pass instead of guaranteeing unmatched.
+  // Prefer a structured `addresses[]`/`tenant_names[]` array when the extractor
+  // emitted one; fall back to the single `address`/`tenant_name` fields.
+  const pairs = splitMultiAddress(
+    extractionSnapshot.addresses ?? extractionSnapshot.address,
+    extractionSnapshot.tenant_names ?? extractionSnapshot.tenant_name
+  );
+
+  const anyAddress = pairs.some((p) => p.address);
+  const anyTenant  = pairs.some((p) => p.tenant) || extractionSnapshot.tenant_name;
+  if (!anyAddress && !anyTenant) {
     const noData = { status: 'no_data', confidence: 0, property_id: null };
     await writeMatchResult(intakeId, noData);
     return noData;
   }
 
+  // Multi-address intake: match each, attach to the first matched property,
+  // record the rest in the intake for review (promoter is single-attach).
+  if (pairs.length > 1) {
+    return await matchMultiAddress(intakeId, pairs, state, city, extractionSnapshot);
+  }
+
+  const address = pairs[0].address;
+  const tenant  = pairs[0].tenant || extractionSnapshot.tenant_name;
+  const { match: resolved, primaryDomain } = await resolveAddressMatch({ address, state, city, tenant });
+  const match = resolved || { status: 'unmatched', confidence: 0, property_id: null, domain: primaryDomain };
+
+  await writeMatchResult(intakeId, match);
+  return match;
+}
+
+/**
+ * Resolve a single address+tenant against LCC entities, the tenant-implied
+ * primary domain, then the other domain (cross-domain fallback). Returns
+ * { match, primaryDomain } where match is null when nothing matched.
+ * Pure resolution — does NOT write the result.
+ */
+async function resolveAddressMatch({ address, state, city, tenant }) {
   // 0. LCC-native entity lookup. The sidebar/CoStar pipeline often has
   //    already populated `entities` for this property — check there first
-  //    so intake links to the same record the sidebar uses, regardless of
-  //    whether the property also lives in a domain-specific DB.
-  let match = address ? await matchAgainstLcc(address, state) : null;
+  //    so intake links to the same record the sidebar uses.
+  let match = address ? await matchAgainstLcc(address, state, city) : null;
 
-  // 1. Determine primary domain — try dialysis first if tenant looks like dialysis
+  // 1. Determine primary domain — try dialysis first if tenant looks dialysis.
   const isDialysis = tenant && DIALYSIS_KEYWORDS.test(tenant);
   const primaryDomain = isDialysis ? 'dialysis' : 'government';
   const secondaryDomain = primaryDomain === 'dialysis' ? 'government' : 'dialysis';
@@ -421,7 +585,9 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
     match = await matchAgainstDomain(primaryDomain, address, state, city, tenant);
   }
 
-  // 3. Fallback: try the other domain
+  // 3. Cross-domain fallback — try the other domain before parking in review.
+  //    Records which domain matched via the match object's `domain` field and
+  //    a `_cross_domain` reason suffix.
   if (!match) {
     const crossMatch = await matchAgainstDomain(secondaryDomain, address, state, city, tenant);
     if (crossMatch) {
@@ -431,12 +597,62 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
     }
   }
 
-  if (!match) {
-    match = { status: 'unmatched', confidence: 0, property_id: null, domain: primaryDomain };
+  return { match, primaryDomain };
+}
+
+/**
+ * Match a multi-property intake. Runs resolveAddressMatch per address, attaches
+ * the intake to the FIRST matched property (the promoter is single-attach), and
+ * records every per-address result in match_result so the review UI can see the
+ * other properties an OM covers. matched_count > 1 signals a portfolio OM.
+ */
+async function matchMultiAddress(intakeId, pairs, state, city, snapshot) {
+  const perAddress = [];
+  for (const p of pairs) {
+    if (!p.address) continue;
+    const tenant = p.tenant || snapshot.tenant_name;
+    const { match } = await resolveAddressMatch({ address: p.address, state, city, tenant });
+    perAddress.push({
+      address:     p.address,
+      tenant:      tenant || null,
+      status:      match ? match.status : 'unmatched',
+      domain:      match?.domain ?? null,
+      property_id: match?.property_id != null ? String(match.property_id) : null,
+      confidence:  match?.confidence ?? 0,
+      reason:      match?.reason || 'unmatched',
+    });
   }
 
-  await writeMatchResult(intakeId, match);
-  return match;
+  const matchedOnes = perAddress.filter((r) => r.status === 'matched' && r.property_id != null);
+  const primary = matchedOnes[0] || null;
+
+  const aggregate = primary
+    ? {
+        status:             'matched',
+        reason:             `${primary.reason}_multi`,
+        confidence:         primary.confidence,
+        property_id:        primary.property_id,
+        domain:             primary.domain,
+        multi_address:      true,
+        address_count:      perAddress.length,
+        matched_count:      matchedOnes.length,
+        all_addresses:      perAddress,
+        additional_matches: matchedOnes.slice(1),
+      }
+    : {
+        status:        'unmatched',
+        reason:        'multi_address_no_match',
+        confidence:    0,
+        property_id:   null,
+        domain:        null,
+        multi_address: true,
+        address_count: perAddress.length,
+        matched_count: 0,
+        all_addresses: perAddress,
+      };
+
+  await writeMatchResult(intakeId, aggregate);
+  return aggregate;
 }
 
 /**
