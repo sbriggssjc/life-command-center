@@ -76,3 +76,30 @@ property+listing. Review purgatory grows ~142/week with no drain.
    creation from an unmatched-but-valid extraction, so the residual pile drains.
 3. **F5/F6** — next-state SOS adapters (already on the future-todo) and a small
    share-inbox review surface.
+
+
+## Addendum — F1-F3/F7 shipped (PR #1043, pending deploy + ordered cron)
+
+Claude Code delivered the full matcher pass:
+- `normalizeStreetAddress()` (new shared helper) — root cause confirmed: the
+  pre-existing `normalizeAddress()` collapsed suffixes one-way and never handled
+  directionals, which is exactly why the three layup pairs missed. New canonical
+  tier narrows by state + house number, equality on normalized keys, city
+  disambiguation.
+- `splitMultiAddress()` (JSON-array strings, arrays, pipe/semicolon; parallel
+  tenant pairing); extractor schema now emits `addresses[]` for portfolio OMs.
+- Operator-keyword domain routing (incl. Bio-Medical Applications) + cross-domain
+  fallback through the canonical tier.
+- city/state persisted in the summary (was 0% before).
+- `?_route=intake-rematch` worker (dry-run GET / drain POST, batch + cooldown,
+  reuses `runDownstreamPipeline` so promotion is byte-identical) + pg_cron every
+  30 min.
+
+**Pre-verified recovery (SQL replication of the new normalizer): ≥334 of 440
+dialysis-tenant review items (76%) auto-recover** — conservative lower bound;
+gov subset + fuzzy/tenant/LCC tiers add more. 23 unit tests green incl. the
+three real OM↔DB pairs.
+
+**Deploy ordering:** merge → Railway redeploy (route live) → THEN cron migration
+`20260604120000_lcc_intake_rematch_cron.sql` on LCC Opps. Post-deploy: dry-run,
+drain, report actual `newly_matched`/`promoted` counts.
