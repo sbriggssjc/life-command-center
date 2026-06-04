@@ -4571,6 +4571,37 @@ function renderGovOverview() {
   const avgFirmTerm = useMV ? (mv.avg_firm_term ? Number(mv.avg_firm_term).toFixed(1) : '—') : (withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—');
   const withTermCount = useMV ? (mv.properties_with_term || withTerm.length) : withTerm.length;
 
+  // ── Lease-expiration risk by ACTUAL lease_expiration date (R4-B forensic) ──
+  // firm_term_remaining clamps to 0 once the FIRM term elapses, so seasoned
+  // leases (a 5yr firm term inside a 15yr lease) pile into the 0-1yr firm
+  // bucket even though the lease itself runs years more. "Lease expiration
+  // risk" must be measured off lease_expiration, not firm_term_remaining.
+  // Prefer the MV's server-side aggregate; fall back to a client-side pass over
+  // the full (paginated) portfolio when the MV isn't loaded.
+  const _msYr = 365.25 * 24 * 3600 * 1000;
+  const _leaseExpYrs = (p) => {
+    if (!p || !p.lease_expiration) return null;
+    const d = new Date(p.lease_expiration);
+    if (isNaN(d.getTime())) return null;
+    return (d.getTime() - Date.now()) / _msYr;
+  };
+  const _withLeaseExp = portfolio.filter(p => _leaseExpYrs(p) !== null);
+  const leaseExpiredCount   = mv ? (mv.lease_expired_count || 0)  : _withLeaseExp.filter(p => _leaseExpYrs(p) < 0).length;
+  const leaseExpiredStale   = mv ? (mv.lease_expired_stale || 0)  : _withLeaseExp.filter(p => _leaseExpYrs(p) < -1).length;
+  const expLease6mo  = mv ? (mv.exp_lease_lt_6mo  || 0) : _withLeaseExp.filter(p => { const y=_leaseExpYrs(p); return y>=0 && y<0.5; }).length;
+  const expLease1yr  = mv ? (mv.exp_lease_lt_1yr  || 0) : _withLeaseExp.filter(p => { const y=_leaseExpYrs(p); return y>=0 && y<1; }).length;
+  const expLease2_5  = mv ? (mv.exp_lease_2_5yr   || 0) : _withLeaseExp.filter(p => { const y=_leaseExpYrs(p); return y>=2 && y<5; }).length;
+  const expLease5plus= mv ? (mv.exp_lease_5plus   || 0) : _withLeaseExp.filter(p => _leaseExpYrs(p) >= 5).length;
+  const withLeaseExpCount = mv ? (mv.properties_with_lease_exp || _withLeaseExp.length) : _withLeaseExp.length;
+  const leaseExpDistribution = (mv && mv.lease_distribution_by_expiry) ? mv.lease_distribution_by_expiry : (_withLeaseExp.length ? [
+    { label: 'Expired / holdover', count: leaseExpiredCount, color: '#ef4444' },
+    { label: '< 6 months', count: expLease6mo, color: '#f87171' },
+    { label: '6 – 12 months', count: expLease1yr - expLease6mo, color: '#fb923c' },
+    { label: '1 – 2 years', count: _withLeaseExp.filter(p => { const y=_leaseExpYrs(p); return y>=1 && y<2; }).length, color: '#fbbf24' },
+    { label: '2 – 5 years', count: expLease2_5, color: '#34d399' },
+    { label: '5+ years', count: expLease5plus, color: '#60a5fa' },
+  ] : null);
+
   // Agency breakdown (top 10 by count) — only available with full data
   const agencyMap = {};
   let unknownAgencyStats = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
@@ -4588,7 +4619,12 @@ function renderGovOverview() {
       // into the Unknown bucket instead so the chart stays focused on
       // real federal/state/local government tenants.
       let a;
-      if (p.agency_canonical) {
+      // R4-B: USPS facility "* SERVICES DIVISION" names (POTOMAC / METROPOLITAN
+      // / TRIANGLE / DC SERVICES DIVISION) are vendor/division labels, not
+      // leasing agencies — keep them out of the agency rollup.
+      if (p.agency && /SERVICES DIVISION$/i.test(p.agency.trim())) {
+        a = 'Unknown';
+      } else if (p.agency_canonical) {
         a = p.agency_canonical;                             // canonical federal agency
       } else if (p.agency && _govIsPrivateFederalNamedEntity(p.agency)) {
         a = 'Unknown';                                      // QA-28: private "Federal" name → Unknown
@@ -4766,30 +4802,25 @@ function renderGovOverview() {
   // SECTION 2: LEASE EXPIRATION RISK
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Lease Expiration Risk', '⏰', 'pipeline');
+  // Risk denominator is properties with a known lease_expiration date.
+  const _expPct = (n) => withLeaseExpCount > 0 ? (n / withLeaseExpCount * 100).toFixed(1) + '% of dated leases' : '';
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Expiring < 1 Year', value: fmtN(expiring1yr), sub: withTermCount > 0 ? (expiring1yr/withTermCount*100).toFixed(1) + '% of portfolio' : '', color: 'red', tab: 'pipeline' });
-  html += govCard({ title: 'Expiring < 2 Years', value: fmtN(expiring2yr), sub: withTermCount > 0 ? (expiring2yr/withTermCount*100).toFixed(1) + '% of portfolio' : '', color: 'orange', tab: 'pipeline' });
-  html += govCard({ title: '2–5 Year Term', value: fmtN(expiring5yr), sub: 'mid-range leases', color: 'yellow', tab: 'search' });
-  html += govCard({ title: '5+ Year Term', value: fmtN(longTerm), sub: 'long-term secured', color: 'green', tab: 'search' });
-  html += govCard({ title: 'Avg Firm Term', value: avgFirmTerm + ' yrs', sub: fmtN(withTermCount) + ' with term data', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Expiring < 6 Months', value: fmtN(expLease6mo), sub: _expPct(expLease6mo), color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Expiring < 1 Year', value: fmtN(expLease1yr), sub: _expPct(expLease1yr), color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: 'Expired / Holdover', value: fmtN(leaseExpiredCount), sub: fmtN(leaseExpiredStale) + ' expired >1yr (stale)', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: '2–5 Year Term', value: fmtN(expLease2_5), sub: 'mid-range leases', color: 'yellow', tab: 'search' });
+  html += govCard({ title: '5+ Year Term', value: fmtN(expLease5plus), sub: 'long-term secured', color: 'green', tab: 'search' });
   html += '</div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin-top:6px">Bucketed by actual <b>lease_expiration</b> date over ' + fmtN(withLeaseExpCount) + ' dated leases. Avg firm term ' + avgFirmTerm + ' yrs.</div>';
 
-  // Expiration timeline bar (requires full portfolio data or MV expiration JSON)
-  if (withTermCount > 0 && !useMV) {
+  // Expiration timeline bar — from MV server-side aggregate (or full portfolio)
+  if (leaseExpDistribution && leaseExpDistribution.length) {
     html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lease Expiration Distribution</div>';
-    const buckets = [
-      { label: 'Expired / < 0 yrs', count: withTerm.filter(p => p.firm_term_remaining < 0).length, color: '#ef4444' },
-      { label: '0 – 1 years', count: withTerm.filter(p => p.firm_term_remaining >= 0 && p.firm_term_remaining <= 1).length, color: '#f87171' },
-      { label: '1 – 2 years', count: withTerm.filter(p => p.firm_term_remaining > 1 && p.firm_term_remaining <= 2).length, color: '#fb923c' },
-      { label: '2 – 3 years', count: withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 3).length, color: '#fbbf24' },
-      { label: '3 – 5 years', count: withTerm.filter(p => p.firm_term_remaining > 3 && p.firm_term_remaining <= 5).length, color: '#34d399' },
-      { label: '5 – 10 years', count: withTerm.filter(p => p.firm_term_remaining > 5 && p.firm_term_remaining <= 10).length, color: '#22d3ee' },
-      { label: '10+ years', count: withTerm.filter(p => p.firm_term_remaining > 10).length, color: '#60a5fa' },
-    ];
-    const maxBucket = Math.max(...buckets.map(b => b.count));
+    const buckets = leaseExpDistribution.map(b => ({ label: b.label, count: Number(b.count) || 0, color: b.color }));
+    const maxBucket = Math.max(1, ...buckets.map(b => b.count));
     html += inlineBar(buckets.map(b => ({
-      label: b.label, value: b.count, display: fmtN(b.count), barColor: b.color, labelWidth: 100, valueWidth: 40
+      label: b.label, value: b.count, display: fmtN(b.count), barColor: b.color, labelWidth: 110, valueWidth: 40
     })), maxBucket);
     html += '</div>';
   }
@@ -4897,20 +4928,27 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   // SECTION 6: PROSPECT PIPELINE
   // ═══════════════════════════════════════════════
-  const hotLeads = leads.filter(l => l.lead_temperature === 'hot').length;
-  const warmLeads = leads.filter(l => l.lead_temperature === 'warm').length;
-  const pipelineValue = leads.reduce((s, l) => s + (l.estimated_value || 0), 0);
+  // R4-B: totals/averages come from the server-side MV aggregate over ALL
+  // leads, never from the page-limited (top-1,000-by-priority) `leads` array.
+  // The capped array is high-value-biased, so avg-over-1000 was ~$28M/lead;
+  // the true avg over the full book is ~$5-8M.
+  const totalLeadsCount  = mv ? (mv.total_leads || leads.length) : leads.length;
+  const hotLeads  = mv ? (mv.hot_leads  != null ? mv.hot_leads  : leads.filter(l => l.lead_temperature === 'hot').length)  : leads.filter(l => l.lead_temperature === 'hot').length;
+  const warmLeads = mv ? (mv.warm_leads != null ? mv.warm_leads : leads.filter(l => l.lead_temperature === 'warm').length) : leads.filter(l => l.lead_temperature === 'warm').length;
+  const pipelineValue   = mv ? Number(mv.pipeline_value_total || 0) : leads.reduce((s, l) => s + (l.estimated_value || 0), 0);
+  const leadsWithValue  = mv ? (mv.leads_with_value || 0) : leads.filter(l => l.estimated_value > 0).length;
+  // Avg over leads that actually carry an estimated value (avoids /total dilution).
+  const avgLeadValue    = mv ? Number(mv.avg_lead_value || 0) : (leadsWithValue > 0 ? leads.reduce((s,l)=>s+(l.estimated_value||0),0)/leadsWithValue : 0);
 
   html += govSectionHeader('Prospect Pipeline', '🎯', 'pipeline');
   html += '<div class="gov-grid gov-grid-5">';
-  const leadsAtCap = leads.length >= 1000;
-  const capSuffix = leadsAtCap ? '+' : '';
-  html += govCard({ title: 'Total Leads', value: fmtN(leads.length) + capSuffix, sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
-  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads) + capSuffix, sub: 'high priority', color: 'red', tab: 'pipeline' });
-  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads) + capSuffix, sub: 'active prospects', color: 'orange', tab: 'pipeline' });
-  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M' + capSuffix, sub: 'estimated total', color: 'green', tab: 'pipeline' });
-  const avgLeadValue = leads.length > 0 ? pipelineValue / leads.length : 0;
-  html += govCard({ title: 'Avg Lead Value', value: avgLeadValue > 0 ? '$' + fmtN(Math.round(avgLeadValue / 1000)) + 'K' : '—', sub: 'per prospect', color: 'purple', tab: 'pipeline' });
+  const _capped = !mv && leads.length >= 1000;          // only "+" when we truly only saw a page
+  const capSuffix = _capped ? '+' : '';
+  html += govCard({ title: 'Total Leads', value: fmtN(totalLeadsCount) + capSuffix, sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
+  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads), sub: 'high priority', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads), sub: 'active prospects', color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M', sub: fmtN(leadsWithValue) + ' valued leads', color: 'green', tab: 'pipeline' });
+  html += govCard({ title: 'Avg Lead Value', value: avgLeadValue > 0 ? '$' + fmtN(Math.round(avgLeadValue / 1000)) + 'K' : '—', sub: 'per valued prospect', color: 'purple', tab: 'pipeline' });
   html += '</div>';
 
   // Pipeline by agency
@@ -4998,19 +5036,27 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   // SECTION 11: GSA LEASE INTEL
   // ═══════════════════════════════════════════════
-  const gsaEventsYTD = gsaEvents.filter(e => e.event_date && new Date(e.event_date) >= yearStart).length;
+  // R4-B: GSA/FRPP headline totals come from the server-side MV. gsa_lease_events
+  // (261K rows), gsa_snapshots (1.2M) and frpp_records (22K) are all loaded
+  // page-capped (500/500/5000), so the old gsaEvents/gsaSnapshots/frpp arrays
+  // are NOT the totals. GSA rent = sum over current gsa_leases (not the 1.2M
+  // monthly snapshot rows, which would massively overcount).
+  const gsaEventsYTD = mv ? (mv.gsa_events_ytd || 0) : gsaEvents.filter(e => e.event_date && new Date(e.event_date) >= yearStart).length;
+  const gsaEventsTotal = mv ? (mv.gsa_events_total || 0) : gsaEvents.length;
   const gsaEventTypes = {};
   gsaEvents.forEach(e => { gsaEventTypes[e.event_type] = (gsaEventTypes[e.event_type] || 0) + 1; });
-  const totalGsaRent = gsaSnapshots.reduce((s, s2) => s + (s2.annual_rent || 0), 0);
-  const frppTotalSF = frpp.reduce((s, r) => s + (r.square_feet || 0), 0);
-  const frppTotalRent = frpp.reduce((s, r) => s + (r.annual_rent_to_lessor || 0), 0);
-  const frppAgencies = new Set(frpp.map(r => r.using_agency).filter(Boolean)).size;
+  const totalGsaRent = mv ? Number(mv.gsa_current_annual_rent || 0) : gsaSnapshots.reduce((s, s2) => s + (s2.annual_rent || 0), 0);
+  const gsaLeasesTracked = mv ? (mv.gsa_leases_tracked || gsaSnapshots.length) : gsaSnapshots.length;
+  const frppCountTotal = mv ? (mv.frpp_total || govData.frppCount || frpp.length) : (govData.frppCount || frpp.length);
+  const frppTotalSF = mv ? Number(mv.frpp_total_sf || 0) : frpp.reduce((s, r) => s + (r.square_feet || 0), 0);
+  const frppTotalRent = mv ? Number(mv.frpp_total_rent || 0) : frpp.reduce((s, r) => s + (r.annual_rent_to_lessor || 0), 0);
+  const frppAgencies = mv ? (mv.frpp_distinct_agencies || 0) : new Set(frpp.map(r => r.using_agency).filter(Boolean)).size;
 
   html += govSectionHeader('GSA Lease Intelligence', '📋', 'search');
   html += '<div class="gov-grid gov-grid-4">';
-  html += govCard({ title: 'GSA Events YTD', value: fmtN(gsaEventsYTD), sub: now.getFullYear() + ' lease events', color: 'blue' });
-  html += govCard({ title: 'GSA Total Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaSnapshots.length) + ' leases tracked', color: 'green' });
-  html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(govData.frppCount || frpp.length) + ' federal properties', color: 'cyan' });
+  html += govCard({ title: 'GSA Events YTD', value: fmtN(gsaEventsYTD), sub: now.getFullYear() + ' of ' + fmtN(gsaEventsTotal) + ' tracked', color: 'blue' });
+  html += govCard({ title: 'GSA Total Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaLeasesTracked) + ' leases tracked', color: 'green' });
+  html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(frppCountTotal) + ' federal properties', color: 'cyan' });
   html += govCard({ title: 'FRPP Agencies', value: fmtN(frppAgencies), sub: '$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent', color: 'purple' });
   html += '</div>';
 
@@ -5054,11 +5100,20 @@ function renderGovSalesMetrics() {
     return `<div class="gov-info-card"${clickAttr}><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div><div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}</div>`;
   }
 
+  // R4-B: headline counts/volumes come from the server-side MV (full
+  // sales_transactions table), never from the loaded comps array (`sales` is
+  // value-sorted and may be a partial/first page — the old code labeled its
+  // .length as the database total). Cap-rate quartiles stay row-level (the MV
+  // can't express percentiles cheaply) and are explicitly a sample of loaded
+  // comps.
+  const mv = (typeof govOverviewStats !== 'undefined') ? govOverviewStats : null;
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
   const ttmWithPrice = ttmSales.filter(r => (r.sold_price || r.sale_price) > 0);
-  const ttmVolume = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
+  const ttmVolumeLoaded = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
+  const ttmVolume = mv ? Number(mv.sales_ttm_volume || ttmVolumeLoaded) : ttmVolumeLoaded;
+  const ttmCount = mv ? (mv.sales_ttm_count != null ? mv.sales_ttm_count : ttmSales.length) : ttmSales.length;
   // Normalize mixed cap rate formats (0.07 decimal vs 7.15 percentage) to decimal
   const validCaps = ttmSales.map(r => { const v = parseFloat(r.sold_cap_rate || r.cap_rate); return v > 0 ? (v < 1 ? v : v / 100) : null; }).filter(v => v && v > 0.01 && v < 0.25).sort((a,b) => a - b);
   const avgCap = validCaps.length > 0 ? (validCaps.reduce((s,v) => s+v, 0) / validCaps.length * 100).toFixed(2) + '%' : '—';
@@ -5066,20 +5121,24 @@ function renderGovSalesMetrics() {
   const q3 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.75)] * 100).toFixed(2) + '%' : '—';
 
   let h = '<div class="gov-grid gov-grid-5">';
-  h += card({ title: 'TTM Volume', value: '$' + fmtN(Math.round(ttmVolume / 1e6)) + 'M', sub: fmtN(ttmWithPrice.length) + ' priced transactions', color: 'green', tab: 'sales' });
-  h += card({ title: 'TTM Transactions', value: fmtN(ttmSales.length), sub: 'trailing 12 months', color: 'blue', tab: 'sales' });
-  h += card({ title: 'Avg Cap Rate', value: avgCap, sub: fmtN(validCaps.length) + ' with cap data', color: 'cyan', tab: 'sales' });
-  h += card({ title: 'Lower Quartile', value: q1, sub: '25th percentile', color: 'purple', tab: 'sales' });
-  h += card({ title: 'Upper Quartile', value: q3, sub: '75th percentile', color: 'yellow', tab: 'sales' });
+  h += card({ title: 'TTM Volume', value: '$' + fmtN(Math.round(ttmVolume / 1e6)) + 'M', sub: 'trailing 12 months', color: 'green', tab: 'sales' });
+  h += card({ title: 'TTM Transactions', value: fmtN(ttmCount), sub: 'trailing 12 months', color: 'blue', tab: 'sales' });
+  h += card({ title: 'Avg Cap Rate', value: avgCap, sub: fmtN(validCaps.length) + ' loaded comps', color: 'cyan', tab: 'sales' });
+  h += card({ title: 'Lower Quartile', value: q1, sub: '25th pctile (sample)', color: 'purple', tab: 'sales' });
+  h += card({ title: 'Upper Quartile', value: q3, sub: '75th pctile (sample)', color: 'yellow', tab: 'sales' });
   h += '</div>';
 
-  // All-time
-  const allWithPrice = sales.filter(r => (r.sold_price || r.sale_price) > 0);
-  const totalVolume = allWithPrice.reduce((s,r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
+  // All-time — server-side totals from the MV (fall back to loaded array)
+  const allWithPriceLoaded = sales.filter(r => (r.sold_price || r.sale_price) > 0);
+  const totalVolumeLoaded = allWithPriceLoaded.reduce((s,r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
+  const allComps   = mv ? (mv.total_sales || sales.length) : sales.length;
+  const pricedCnt  = mv ? (mv.sales_priced_count || allWithPriceLoaded.length) : allWithPriceLoaded.length;
+  const totalVolume = mv ? Number(mv.sales_total_volume || totalVolumeLoaded) : totalVolumeLoaded;
+  const avgSale    = mv ? Number(mv.sales_avg_price || 0) : (allWithPriceLoaded.length > 0 ? totalVolumeLoaded / allWithPriceLoaded.length : 0);
   h += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
-  h += card({ title: 'All-Time Comps', value: fmtN(sales.length), sub: 'total in database', color: 'blue', tab: 'sales' });
-  h += card({ title: 'All-Time Volume', value: '$' + fmtN(Math.round(totalVolume / 1e6)) + 'M', sub: fmtN(allWithPrice.length) + ' priced sales', color: 'green', tab: 'sales' });
-  h += card({ title: 'Avg Sale Price', value: allWithPrice.length > 0 ? '$' + fmtN(Math.round(totalVolume / allWithPrice.length)) : '—', sub: 'across all comps', color: 'purple', tab: 'sales' });
+  h += card({ title: 'All-Time Comps', value: fmtN(allComps), sub: 'total in database', color: 'blue', tab: 'sales' });
+  h += card({ title: 'All-Time Volume', value: '$' + fmtN(Math.round(totalVolume / 1e6)) + 'M', sub: fmtN(pricedCnt) + ' priced sales', color: 'green', tab: 'sales' });
+  h += card({ title: 'Avg Sale Price', value: avgSale > 0 ? '$' + fmtN(Math.round(avgSale)) : '—', sub: 'priced comps', color: 'purple', tab: 'sales' });
   h += '</div>';
   return h;
 }
@@ -5184,13 +5243,18 @@ function renderGovPipeline() {
     seenIds.add(key);
     return true;
   });
-  const totalLeads = dedupedLeads.length;
-  const atCap = govData.leads.length >= 1000;
-  const hotCount = dedupedLeads.filter(l => l.lead_temperature === 'hot').length;
-  const warmCount = dedupedLeads.filter(l => l.lead_temperature === 'warm').length;
-  const coolCount = totalLeads - hotCount - warmCount;
+  // R4-B: headline KPIs come from the server-side MV (true totals over the full
+  // prospect_leads table). dedupedLeads stays the working set for the table /
+  // charts below, but it's the top-1,000-by-priority page — its .length and
+  // value-sum are NOT the pipeline totals.
+  const _ovMv = (typeof govOverviewStats !== 'undefined') ? govOverviewStats : null;
+  const totalLeads = _ovMv ? (_ovMv.total_leads || dedupedLeads.length) : dedupedLeads.length;
+  const atCap = !_ovMv && govData.leads.length >= 1000;   // only a "+" when we truly only have a page
+  const hotCount = _ovMv ? (_ovMv.hot_leads != null ? _ovMv.hot_leads : dedupedLeads.filter(l => l.lead_temperature === 'hot').length) : dedupedLeads.filter(l => l.lead_temperature === 'hot').length;
+  const warmCount = _ovMv ? (_ovMv.warm_leads != null ? _ovMv.warm_leads : dedupedLeads.filter(l => l.lead_temperature === 'warm').length) : dedupedLeads.filter(l => l.lead_temperature === 'warm').length;
+  const coolCount = _ovMv ? Math.max(0, (_ovMv.total_leads || 0) - hotCount - warmCount) : (dedupedLeads.length - dedupedLeads.filter(l => l.lead_temperature === 'hot').length - dedupedLeads.filter(l => l.lead_temperature === 'warm').length);
 
-  const pipelineValue = dedupedLeads.reduce((sum, l) => sum + (l.estimated_value || 0), 0);
+  const pipelineValue = _ovMv ? Number(_ovMv.pipeline_value_total || 0) : dedupedLeads.reduce((sum, l) => sum + (l.estimated_value || 0), 0);
 
   // Leads by source
   const bySource = {};

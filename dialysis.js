@@ -1217,43 +1217,19 @@ function renderDiaOverview() {
     _diaFinancialEstimatesLoading = true;
     (async () => {
       try {
-        // Load latest primary estimates (highest-confidence per clinic)
-        // QA-16 (2026-05-18): pull estimate_id so we can keyset-paginate
-        // instead of OFFSET-paginating. With 36,538 rows of is_latest, the
-        // old OFFSET=30000 page took 1.4s on the database alone — adding
-        // PostgREST + Edge Function overhead per request, the last few
-        // pages routinely tripped statement_timeout (57014). Keyset
-        // pagination is O(1) per page regardless of position.
-        const selectCols = 'estimate_id,medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score';
-        const PAGE = 1000;
-        let all = [], lastSeenId = '';
-        let safety = 0; // hard cap, just in case
-        while (safety++ < 100) {
-          // Keyset filter: estimate_id > lastSeenId (works because estimate_id
-          // is the PK and the order by estimate_id below is stable).
-          // Edge Function applyFilter supports "&"-joined filter expressions
-          // via the multi-part form, but for simplicity we keep is_latest in
-          // `filter` and pass the keyset bound as `filter2`.
-          const params = {
-            filter: 'is_latest=eq.true',
-            order: 'estimate_id.asc',
-            limit: PAGE,
-            count: 'false',
-          };
-          if (lastSeenId) params.filter2 = 'estimate_id=gt.' + encodeURIComponent(lastSeenId);
-          const batch = await diaQuery('clinic_financial_estimates', selectCols, params);
-          if (!batch || !batch.length) break;
-          all = all.concat(batch);
-          if (batch.length < PAGE) break;
-          lastSeenId = batch[batch.length - 1].estimate_id;
-          if (!lastSeenId) break; // defensive: shouldn't happen with order=estimate_id.asc
-        }
-        diaFinancialEstimates = all;
-        // Debug source breakdown
-        const srcDebug = {};
-        all.forEach(e => { const s = e.estimate_source || '?'; srcDebug[s] = (srcDebug[s]||0)+1; });
-        console.debug('Financial estimates loaded:', all.length, 'rows. By source:', JSON.stringify(srcDebug));
-      } catch(e) { console.warn('Financial estimates load failed:', e.message); diaFinancialEstimates = []; }
+        // R4-B: read the server-side summary (v_clinic_financial_overview, ONE
+        // row) instead of paging ~36K is_latest estimate rows client-side. The
+        // old keyset loop made 37 round trips through the edge function and
+        // routinely never finished inside a session ("Loading full patient
+        // data..." forever). The view pre-aggregates best-per-clinic exactly
+        // like the renderer did.
+        const rows = await diaQuery('v_clinic_financial_overview', '*', { limit: 1, count: 'false' });
+        diaFinancialEstimates = (rows && rows[0]) ? rows[0] : { _empty: true };
+      } catch(e) {
+        console.warn('Financial estimates summary load failed:', e.message);
+        // Fail visibly, not an eternal spinner.
+        diaFinancialEstimates = { _error: e.message || 'load failed' };
+      }
       _diaFinancialEstimatesLoading = false;
       const finEl = document.getElementById('diaOverviewFinancials');
       if (finEl) finEl.innerHTML = renderFinancialMetricsInner();
@@ -1560,15 +1536,24 @@ function renderDiaOverview() {
     _diaLlcQueueLoading = true;
     (async () => {
       try {
-        const resp = await fetch('/api/llc-research-queue?domain=dialysis&limit=25');
-        const j = resp.ok ? await resp.json() : {};
+        // R4-B: bare fetch had no timeout — a hanging endpoint spun the widget
+        // forever. Abort after 20s so it fails visibly instead.
+        const _ctrl = new AbortController();
+        const _to = setTimeout(() => _ctrl.abort(), 20000);
+        let resp;
+        try {
+          resp = await fetch('/api/llc-research-queue?domain=dialysis&limit=25', { signal: _ctrl.signal });
+        } finally { clearTimeout(_to); }
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const j = await resp.json();
         window._llcQueueItems = (j && j.items) || [];
         window._llcQueueTotal = (j && (j.total != null ? j.total : (j.items ? j.items.length : 0))) || 0;
         renderDiaLlcQueue();
       } catch (err) {
-        console.warn('llc queue load failed:', err.message);
+        const msg = err.name === 'AbortError' ? 'request timed out' : (err.message || 'load failed');
+        console.warn('llc queue load failed:', msg);
         const wrap = document.getElementById('diaLlcQueue');
-        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">LLC research queue unavailable</div>';
+        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">LLC research queue unavailable — ' + esc(msg) + '</div>';
       }
       _diaLlcQueueLoading = false;
       window._diaLlcQueueRendered = true;
@@ -2255,82 +2240,53 @@ function renderFinancialMetricsInner() {
   if (!diaFinancialEstimates) {
     return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading financial estimates...</div></div></div>';
   }
-  const est = diaFinancialEstimates;
-  if (est.length === 0) {
+  // R4-B: consume the single-row server-side summary (v_clinic_financial_overview).
+  const s = diaFinancialEstimates;
+  if (s._error) {
+    return '<div class="dia-info-card" style="text-align:center;padding:18px;color:var(--red,#ef4444)">Financial estimates unavailable — ' + esc(String(s._error)) + '</div>';
+  }
+  if (s._empty || !s.clinics_estimated) {
     return '<div class="dia-info-card" style="text-align:center;padding:18px;color:var(--text2)">No financial estimates available</div>';
   }
 
-  // Prefer highest-confidence per clinic (group by medicare_id, pick highest confidence)
-  const byClinic = {};
-  est.forEach(e => {
-    const id = e.medicare_id;
-    if (!byClinic[id] || (e.confidence_score || 0) > (byClinic[id].confidence_score || 0)) {
-      byClinic[id] = e;
-    }
-  });
-  // QA-29 (2026-05-18): filter out estimates for medicare_ids that no
-  // longer exist in CMS inventory. The dia DB has 9,273 distinct
-  // medicare_ids in clinic_financial_estimates but only 8,535 active
-  // clinics in medicare_clinics - 762 of those estimates are for
-  // clinics that have since been removed from CMS inventory. Without
-  // this filter the "X of Y clinics" subtext would show 9,273/8,535 =
-  // 108.6% which is nonsensical. We use the inventory-changes feed
-  // (already loaded by loadDiaData) as the source of currently-tracked
-  // clinic IDs; if not loaded yet, the original Object.values(byClinic)
-  // is used so the card still renders.
-  const _currentClinicIds = (typeof diaData !== 'undefined' && Array.isArray(diaData.inventoryChanges))
-    ? new Set(diaData.inventoryChanges.map(c => c.clinic_id).filter(Boolean))
-    : null;
-  const allEstimatedRows = Object.values(byClinic);
-  const best = _currentClinicIds && _currentClinicIds.size > 0
-    ? allEstimatedRows.filter(e => _currentClinicIds.has(e.medicare_id))
-    : allEstimatedRows;
-  const withRev = best.filter(e => e.estimated_annual_revenue > 0);
-  const withProfit = best.filter(e => e.estimated_annual_profit > 0);
-  // estimated_ebitda is NULL in clinic_financial_estimates; v_cms_data maps
-  // estimated_operating_profit → estimated_ebitda, so use that as fallback
-  const ebitdaVal = e => parseFloat(e.estimated_ebitda || e.estimated_operating_profit || 0);
-  const withEbitda = best.filter(e => ebitdaVal(e) > 0);
-
-  const totalRev = withRev.reduce((s, e) => s + parseFloat(e.estimated_annual_revenue), 0);
-  const avgRev = withRev.length > 0 ? totalRev / withRev.length : 0;
-  const totalProfit = withProfit.reduce((s, e) => s + parseFloat(e.estimated_annual_profit), 0);
-  const avgProfit = withProfit.length > 0 ? totalProfit / withProfit.length : 0;
-  const avgEbitda = withEbitda.length > 0 ? withEbitda.reduce((s, e) => s + ebitdaVal(e), 0) / withEbitda.length : 0;
+  const clinicsEstimated = Number(s.clinics_estimated) || 0;
+  const withRev = Number(s.with_revenue) || 0;
+  const withProfit = Number(s.with_profit) || 0;
+  const withEbitda = Number(s.with_ebitda) || 0;
+  const totalRev = Number(s.total_revenue) || 0;
+  const avgRev = Number(s.avg_revenue) || 0;
+  const avgProfit = Number(s.avg_profit) || 0;
+  const avgEbitda = Number(s.avg_ebitda) || 0;
   const avgMargin = avgRev > 0 ? (avgProfit / avgRev * 100).toFixed(1) : '—';
 
-  // By source breakdown
-  const sources = {};
-  est.forEach(e => {
-    const src = e.estimate_source || 'unknown';
-    if (!sources[src]) sources[src] = 0;
-    sources[src]++;
-  });
-
-  const totalClinicUniverse = typeof diaData !== 'undefined' && diaData.freshness?.total_clinics > 0
-    ? diaData.freshness.total_clinics : 0;
-  const coveragePct = best.length > 0 && totalClinicUniverse > 0
-    ? (best.length / totalClinicUniverse * 100).toFixed(1) : '—';
+  // Prefer the universe from the freshness feed; fall back to the view's count.
+  const totalClinicUniverse = (typeof diaData !== 'undefined' && diaData.freshness?.total_clinics > 0)
+    ? diaData.freshness.total_clinics : (Number(s.total_clinic_universe) || 0);
+  const coveragePct = clinicsEstimated > 0 && totalClinicUniverse > 0
+    ? (clinicsEstimated / totalClinicUniverse * 100).toFixed(1) : '—';
   const coverageSub = totalClinicUniverse > 0
-    ? fmtN(best.length) + ' of ' + fmtN(totalClinicUniverse) + ' clinics (' + coveragePct + '%)'
-    : fmtN(best.length) + ' clinics estimated';
+    ? fmtN(clinicsEstimated) + ' of ' + fmtN(totalClinicUniverse) + ' clinics (' + coveragePct + '%)'
+    : fmtN(clinicsEstimated) + ' clinics estimated';
 
   let h = '<div class="dia-grid dia-grid-5">';
-  h += infoCard({ title: 'Clinics Estimated', value: fmtN(best.length), sub: coverageSub, color: 'blue', tab: 'search' });
-  h += infoCard({ title: 'Avg Revenue / Clinic', value: '$' + fmtN(Math.round(avgRev / 1000)) + 'K', sub: fmtN(withRev.length) + ' with revenue data', color: 'green', tab: 'search' });
+  h += infoCard({ title: 'Clinics Estimated', value: fmtN(clinicsEstimated), sub: coverageSub, color: 'blue', tab: 'search' });
+  h += infoCard({ title: 'Avg Revenue / Clinic', value: '$' + fmtN(Math.round(avgRev / 1000)) + 'K', sub: fmtN(withRev) + ' with revenue data', color: 'green', tab: 'search' });
   h += infoCard({ title: 'Avg Profit / Clinic', value: '$' + fmtN(Math.round(avgProfit / 1000)) + 'K', sub: avgMargin + '% avg margin', color: 'cyan', tab: 'search' });
-  h += infoCard({ title: 'Avg EBITDA', value: '$' + fmtN(Math.round(avgEbitda / 1000)) + 'K', sub: fmtN(withEbitda.length) + ' with EBITDA', color: 'purple', tab: 'search' });
-  h += infoCard({ title: 'Industry Revenue', value: '$' + fmtN(Math.round(totalRev / 1e9)) + 'B', sub: 'est. across ' + fmtN(withRev.length) + ' clinics', color: 'yellow', tab: 'search' });
+  h += infoCard({ title: 'Avg EBITDA', value: '$' + fmtN(Math.round(avgEbitda / 1000)) + 'K', sub: fmtN(withEbitda) + ' with EBITDA', color: 'purple', tab: 'search' });
+  h += infoCard({ title: 'Industry Revenue', value: '$' + fmtN(Math.round(totalRev / 1e9)) + 'B', sub: 'est. across ' + fmtN(withRev) + ' clinics', color: 'yellow', tab: 'search' });
   h += '</div>';
 
-  // Source breakdown row
-  h += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
-  const srcLabels = { ttm_reported: 'TTM Reported', cms_patient_count: 'CMS Patient Count', google_hours: 'Google Hours', cms_chair_count: 'CMS Chair Count', '10k_filing': '10-K Filing' };
-  const srcColors = { ttm_reported: 'green', cms_patient_count: 'blue', google_hours: 'cyan', cms_chair_count: 'yellow', '10k_filing': 'orange' };
-  Object.entries(sources).forEach(([src, cnt]) => {
-    h += infoCard({ title: srcLabels[src] || src, value: fmtN(cnt), sub: 'estimates', color: srcColors[src] || 'blue' });
-  });
-  h += '</div>';
+  // Source breakdown row (from the view's jsonb source_breakdown)
+  const sources = (s.source_breakdown && typeof s.source_breakdown === 'object') ? s.source_breakdown : {};
+  if (Object.keys(sources).length) {
+    h += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
+    const srcLabels = { ttm_reported: 'TTM Reported', cms_patient_count: 'CMS Patient Count', google_hours: 'Google Hours', cms_chair_count: 'CMS Chair Count', '10k_filing': '10-K Filing' };
+    const srcColors = { ttm_reported: 'green', cms_patient_count: 'blue', google_hours: 'cyan', cms_chair_count: 'yellow', '10k_filing': 'orange' };
+    Object.entries(sources).forEach(([src, cnt]) => {
+      h += infoCard({ title: srcLabels[src] || src, value: fmtN(Number(cnt) || 0), sub: 'estimates', color: srcColors[src] || 'blue' });
+    });
+    h += '</div>';
+  }
   return h;
 }
 
