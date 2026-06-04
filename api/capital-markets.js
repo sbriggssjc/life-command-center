@@ -836,17 +836,41 @@ async function exportWorkbook(req, res) {
       `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}`,
       `${view_name}?select=*`,
     ];
-    let lastResult = null;
-    for (const p of tries) {
-      try {
-        const result = await exec(p);
-        if (result.ok) return result;
-        lastResult = result;
-      } catch (e) {
-        lastResult = { ok: false, status: 0, data: { error: String(e) } };
+    // Run the full fallback ladder once.
+    const runLadder = async () => {
+      let lastResult = null;
+      for (const p of tries) {
+        try {
+          const result = await exec(p);
+          if (result.ok) return result;
+          lastResult = result;
+        } catch (e) {
+          lastResult = { ok: false, status: 0, data: { error: String(e) } };
+        }
+      }
+      return lastResult || { ok: false, status: 0, data: [] };
+    };
+    // Round 68-E (G8): the renewal_rent_growth empty-tab incident (2026-06-04)
+    // was a TRANSIENT fetch failure on a cold dyno — the view was live with 158
+    // rows and every prior export had data. A single retry pass after a short
+    // backoff absorbs that class of cold-start blip before we surface it.
+    let result = await runLadder();
+    if (result.ok === false) {
+      await new Promise((r) => setTimeout(r, 400));
+      const retry = await runLadder();
+      if (retry.ok !== false) {
+        result = retry;
+      } else {
+        console.error(
+          `[fetchView] ${view_name} failed after retry ` +
+          `(vertical=${vertical}, subspecialty=${subspecialty}, ` +
+          `status=${retry.status || 'n/a'}): ${JSON.stringify(retry.data)?.slice(0, 200)} ` +
+          `— tab will be marked FETCH FAILED, re-export needed.`
+        );
+        result = retry;
       }
     }
-    return lastResult || { ok: false, status: 0, data: [] };
+    return result;
   };
 
   const chartFetches = realTemplates.map(async (tmpl) => {
@@ -876,6 +900,11 @@ async function exportWorkbook(req, res) {
           tmpl,
           as_of
         ),
+        // Round 68-E (G8): distinguish a real fetch failure (after the
+        // fetchView retry pass) from a legitimately empty view, so the tab
+        // writer can stamp "FETCH FAILED — re-export" instead of a silent
+        // 0-row tab that looks like a data gap.
+        fetch_failed: result.ok === false,
       };
     } catch (e) {
       return {
@@ -886,6 +915,7 @@ async function exportWorkbook(req, res) {
         vertical,
         view_name,
         rows: [],
+        fetch_failed: true,
       };
     }
   });

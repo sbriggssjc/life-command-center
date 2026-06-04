@@ -1335,8 +1335,17 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     sheet.getCell(`A${subRow}`).value = `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
     sheet.getCell(`A${subRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
 
-    sheet.getCell(`A${metaRow}`).value = `${(chart.rows || []).length} rows · view=${chart.view_name || ''}`;
-    sheet.getCell(`A${metaRow}`).font = { name: fonts.body_family, size: 9, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+    // Round 68-E (G8): a real fetch failure (after fetchView's retry pass) is
+    // surfaced loudly so a transient cold-dyno blip can't masquerade as a
+    // legitimate empty view (the renewal_rent_growth empty-tab incident).
+    if (chart.fetch_failed) {
+      sheet.getCell(`A${metaRow}`).value =
+        `⚠ FETCH FAILED — re-export · view=${chart.view_name || ''}`;
+      sheet.getCell(`A${metaRow}`).font = { name: fonts.body_family, size: 9, bold: true, color: { argb: 'FFC00000' } };
+    } else {
+      sheet.getCell(`A${metaRow}`).value = `${(chart.rows || []).length} rows · view=${chart.view_name || ''}`;
+      sheet.getCell(`A${metaRow}`).font = { name: fonts.body_family, size: 9, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+    }
 
     // Round 3d — Inline summary block. Renders metric × period averages
     // between the meta row and the data header. Skipped when no summary
