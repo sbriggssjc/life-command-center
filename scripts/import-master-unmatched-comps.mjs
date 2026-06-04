@@ -188,8 +188,12 @@ function normCap(v) {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 (async function main() {
-  const rows = JSON.parse(readFileSync(INPUT, 'utf8'));
-  if (!Array.isArray(rows)) { console.error('FATAL: --input must be a JSON array'); process.exit(1); }
+  // Accept either a bare JSON array OR a wrapper object { ..., rows: [...] }
+  // (the master export ships as {source, extracted, note, rows:[...]}).
+  const parsed = JSON.parse(readFileSync(INPUT, 'utf8'));
+  const rows = Array.isArray(parsed) ? parsed
+    : (Array.isArray(parsed?.rows) ? parsed.rows : null);
+  if (!rows) { console.error('FATAL: --input must be a JSON array or an object with a "rows" array'); process.exit(1); }
   console.log(`[import] ${rows.length} master rows | mode=${COMMIT ? 'COMMIT' : 'DRY-RUN'} | dedup=${DEDUP_M}m | google=${GOOGLE_KEY ? 'on' : 'off'}`);
 
   // Load existing dia.properties once (id, normalized addr, state, lat, lng).
