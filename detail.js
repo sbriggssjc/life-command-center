@@ -362,6 +362,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // These supplement v_lease_detail on the Lease tab when no executed lease
     // document is on file. Best-effort only — never blocks the detail render.
     let entityMeta = null;
+    // R4-A: stash the resolved LCC asset entity id so the "Data Resolution
+    // Status" badge renders "LCC Entity Registered" (green). Before this, the
+    // badge only read entityMeta.entity_id/id (rarely present in metadata), so
+    // a correctly-linked om_intake property showed "LCC Entity Not Registered".
+    let resolvedLccEntityId = null;
     try {
       const lookupAddr = (synthProperty && synthProperty.address) || fallback.address;
       const lookupState = (synthProperty && synthProperty.state) || fallback.state;
@@ -373,6 +378,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         const entRes = await _entityApiFetch('/api/entities?' + params.toString());
         const ent = entRes?.entity || null;
         entityMeta = ent?.metadata || null;
+        if (ent && ent.id) resolvedLccEntityId = ent.id;
         // Stash the resolved asset entity id onto the ownership cache so the
         // "Next step" banner can render the PERSISTED lead/cadence state on a
         // fresh re-open instead of re-offering "Create the lead" (Bug c,
@@ -412,7 +418,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         })
       : synthProperty;
 
-    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, completeness: completenessRow, nextAction: nextActionRow, _fallbackOnly: allEmpty });
+    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, lccEntityId: resolvedLccEntityId, completeness: completenessRow, nextAction: nextActionRow, _fallbackOnly: allEmpty });
     // Render the data completeness rail at the top of the detail panel.
     // Best-effort: never throws upward (Item #6 Phase A, 2026-05-17).
     try { _udRenderCompletenessRail(); } catch (e) { console.warn('completeness rail render failed', e); }
@@ -9804,7 +9810,7 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
         outcome,
         domain: _udCache?.db || null,
         external_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null,
-        source_system: _udCache?.db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+        source_system: _udCache?.db === 'gov' ? 'gov' : 'dia',
         sf_contact_id: sfContactId,
         sf_company_id: sfCompanyId,
         activity_date: actDate
@@ -10610,7 +10616,7 @@ async function _udSaveOwnership(options = {}) {
       canonicalBridge('save_ownership', {
         domain: 'government',
         external_id: String(propertyId),
-        source_system: 'gov_supabase',
+        source_system: 'gov',
         source_type: 'asset',
         user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
         owner_name: recordedOwner,
@@ -10627,7 +10633,7 @@ async function _udSaveOwnership(options = {}) {
       // Ensure canonical entity link exists for this gov property
       canonicalBridge('update_entity', {
         external_id: String(propertyId),
-        source_system: 'gov_supabase',
+        source_system: 'gov',
         source_type: 'asset',
         fields: {
           name: _udCache.property?.address || _udCache.property?.page_title || `Property ${propertyId}`,
@@ -10813,7 +10819,7 @@ async function _udSaveOwnership(options = {}) {
     canonicalBridge('save_ownership', {
       domain: 'dialysis',
       external_id: String(propertyId),
-      source_system: 'dia_supabase',
+      source_system: 'dia',
       source_type: 'asset',
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       owner_name: recordedOwner,
@@ -10998,7 +11004,7 @@ async function _intelSavePriorSale(options = {}) {
     canonicalBridge('log_activity', {
       title: 'Prior sale recorded',
       domain: db === 'gov' ? 'government' : 'dialysis',
-      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      source_system: db === 'gov' ? 'gov' : 'dia',
       external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
@@ -11069,7 +11075,7 @@ async function _intelSaveLoan(options = {}) {
     canonicalBridge('log_activity', {
       title: 'Loan recorded',
       domain: db === 'gov' ? 'government' : 'dialysis',
-      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      source_system: db === 'gov' ? 'gov' : 'dia',
       external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
@@ -11228,7 +11234,7 @@ async function _intelSaveCashFlow(options = {}) {
     canonicalBridge('log_activity', {
       title: 'Cash flow estimate saved',
       domain: db === 'gov' ? 'government' : 'dialysis',
-      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      source_system: db === 'gov' ? 'gov' : 'dia',
       external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
@@ -11291,7 +11297,7 @@ async function _intelSaveNotes(options = {}) {
     canonicalBridge('log_activity', {
       title: 'Research notes updated',
       domain: db === 'gov' ? 'government' : 'dialysis',
-      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      source_system: db === 'gov' ? 'gov' : 'dia',
       external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,

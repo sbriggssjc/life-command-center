@@ -19,7 +19,7 @@
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
-import { normalizeAddress, stripListingStatusPrefix } from '../_shared/entity-link.js';
+import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
@@ -1120,11 +1120,19 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         return res.status(400).json({ error: 'entity_id, source_system, source_type, and external_id are required' });
       }
 
+      // R4-A: canonicalize before writing so manual/API links can't introduce
+      // a deprecated domain-DB spelling (dia_db/gov_supabase/…).
+      const canonSystem = canonicalIdentitySystem(source_system);
+      let canonType = source_type;
+      if (CANONICAL_DOMAIN_SYSTEMS.includes(canonSystem)) {
+        canonType = canonicalDomainSourceType(source_type) || source_type;
+      }
+
       const result = await opsQuery('POST', 'external_identities', {
         workspace_id: workspaceId,
         entity_id,
-        source_system,
-        source_type,
+        source_system: canonSystem,
+        source_type: canonType,
         external_id,
         external_url: external_url || null,
         metadata: metadata || {},

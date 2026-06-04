@@ -281,11 +281,12 @@ const TOOL_HANDLERS = {
 
       // Identify linked external records
       const extIds = entity.external_identities || [];
+      // R4-A: canonical 'gov'/'dia'; accept deprecated spellings during transition.
       const govIds = extIds.filter(
-        (x) => x.source_system === "gov_db" || x.source_system === "government"
+        (x) => ["gov", "gov_db", "gov_supabase", "government"].includes(x.source_system)
       );
       const diaIds = extIds.filter(
-        (x) => x.source_system === "dia_db" || x.source_system === "dialysis"
+        (x) => ["dia", "dia_db", "dia_supabase", "dialysis"].includes(x.source_system)
       );
 
       // Parallel fetches

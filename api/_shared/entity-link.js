@@ -147,6 +147,93 @@ export function normalizeState(state) {
   return STATE_NAME_TO_CODE[key] || raw.toUpperCase();
 }
 
+// ===========================================================================
+// external_identities canonicalization (R4-A, 2026-06-04)
+// ---------------------------------------------------------------------------
+// The domain backends MUST be addressed with a single canonical source_system
+// spelling. Historically four spellings leaked in (dia_db / dia_supabase /
+// gov_db / gov_supabase) plus the long forms (dialysis/government), which
+// fragmented the entity graph: the same dia/gov property could end up with
+// two external_identities rows under two spellings pointing at two entities,
+// and the unified detail page (which resolves the property-anchor entity via
+// the canonical `(dia|gov, asset, <property_id>)` convention) fell through to
+// "(Unknown)" / "LCC Entity Not Registered". See CLAUDE.md
+// "external_identities canonicalization".
+//
+// Canonical scheme:
+//   - source_system: 'dia' | 'gov'  (for the two domain DBs)
+//   - source_type for the property-anchor entity: 'asset'
+//     ('property'/'clinic'/'facility' are synonyms — collapsed to 'asset')
+//   - source_type for an owner entity: 'true_owner'  (external_id = true_owner id)
+//   - external_id for an asset: the domain `properties.property_id`
+//
+// Vendor / channel systems (salesforce, costar, rca, crexi, loopnet, outlook,
+// email_intake, …) are NOT domain DBs and pass through unchanged.
+// ===========================================================================
+export const CANONICAL_DOMAIN_SYSTEMS = ['dia', 'gov'];
+
+/**
+ * Normalize an external_identities source_system to its canonical form.
+ * dia_db|dia_supabase|dialysis → 'dia'; gov_db|gov_supabase|government → 'gov'.
+ * Every other value (vendor/channel system) is lower-cased + trimmed and
+ * returned unchanged. This is the single choke point — route every
+ * external_identities writer through it so a 6th spelling can never appear.
+ */
+export function canonicalIdentitySystem(system) {
+  const s = String(system || '').trim().toLowerCase();
+  if (s === 'dia' || s === 'dia_db' || s === 'dia_supabase' || s === 'dialysis') return 'dia';
+  if (s === 'gov' || s === 'gov_db' || s === 'gov_supabase' || s === 'government') return 'gov';
+  return s;
+}
+
+// Property-anchor source_type synonyms — all collapse to the canonical 'asset'
+// for domain-DB identities (entity_type is 'asset', and the detail page /
+// property-handler query entity_type=eq.asset).
+const DOMAIN_ASSET_SOURCE_TYPES = new Set(['property', 'asset', 'clinic', 'facility']);
+
+/**
+ * Canonical source_type for a DOMAIN-DB identity. Collapses the property-anchor
+ * synonyms to 'asset'; leaves 'true_owner' (and anything else) untouched.
+ * Only meaningful when the source_system is a canonical domain system — callers
+ * gate on CANONICAL_DOMAIN_SYSTEMS so vendor 'property' rows (costar/rca/crexi
+ * listing ids) are never rewritten.
+ */
+export function canonicalDomainSourceType(type) {
+  const t = String(type || '').trim().toLowerCase();
+  return DOMAIN_ASSET_SOURCE_TYPES.has(t) ? 'asset' : (type || null);
+}
+
+// ---------------------------------------------------------------------------
+// Junk entity-name guard (R4-A, 2026-06-04)
+// ---------------------------------------------------------------------------
+// Narrow guard for the ENTITY creation/sync boundary. Unlike the sidebar's
+// isJunkContactName (which rejects firm-suffix names and so can't run on
+// organization entities), this must NOT reject legitimate names like
+// "Acme Holdings LLC". It only catches structural garbage a real entity name
+// never contains: embedded phone numbers, emails, phone-type labels, and
+// CoStar "Buyer/Seller Contacts" panel-header bleed-through.
+// Example caught (Priority Queue P0.5, 2026-06-04):
+//   "Seller ContactsCraig Burrows(916) 768-5544 (p)"
+const ENTITY_JUNK_PATTERNS = [
+  /\(\d{3}\)\s*\d{3}[-.\s]?\d{4}/,                       // (916) 768-5544
+  /\b\d{3}[-.]\d{3}[-.]\d{4}\b/,                         // 916-768-5544 / 916.768.5544
+  /\b(?:buyer|seller)\s*contacts?\b/i,                   // Buyer Contacts / Seller Contact(s)
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/,      // embedded email
+  /\(\s*[pcmf]\s*\)/i,                                   // (p)/(c)/(m)/(f) phone-type label
+];
+
+/**
+ * True when an entity name is structurally junk (phone/email/contacts-header
+ * bleed-through) and should not be minted as a canonical entity. Conservative:
+ * returns false for ordinary org/person/asset names.
+ */
+export function isJunkEntityName(name) {
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  return ENTITY_JUNK_PATTERNS.some((re) => re.test(trimmed));
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
@@ -254,6 +341,15 @@ export async function ensureEntityLink({
   let createdEntity = false;
   let createdIdentity = false;
 
+  // R4-A: canonicalize the source_system/source_type at the single choke point
+  // so no caller can write a deprecated domain-DB spelling (dia_db/gov_supabase
+  // …) and fragment the entity graph. Vendor systems pass through unchanged.
+  sourceSystem = canonicalIdentitySystem(sourceSystem);
+  if (CANONICAL_DOMAIN_SYSTEMS.includes(sourceSystem)) {
+    const ct = canonicalDomainSourceType(sourceType);
+    if (ct) sourceType = ct;
+  }
+
   if (entityId) {
     resolvedEntity = await fetchEntityById(entityId, workspaceId);
   }
@@ -290,6 +386,19 @@ export async function ensureEntityLink({
   }
 
   if (!resolvedEntity) {
+    // R4-A: junk-name guard at the creation boundary. Don't mint a canonical
+    // entity from CoStar panel-header / phone / email garbage. Asset names are
+    // addresses and never trip this; contact/owner garbage does.
+    if (isJunkEntityName(candidateName)) {
+      console.warn(`[ensureEntityLink] rejected junk entity name: "${String(candidateName).slice(0, 60)}"`);
+      return {
+        ok: false,
+        skipped: 'junk_entity_name',
+        junk: true,
+        candidateName,
+      };
+    }
+
     const createPayload = {
       workspace_id: workspaceId,
       created_by: userId || null,

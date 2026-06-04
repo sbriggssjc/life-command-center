@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem } from '../_shared/entity-link.js';
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
@@ -2584,12 +2584,13 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
   // external_identities row. Without this, an asset entity created by
   // CoStar sidebar is orphaned — it has external_identities{source_system:
   // 'costar'} but no pointer back to the actual gov/dia property_id. That
-  // broke the LCC-bridge unwrap in intake-promoter (relied on source_system
-  // IN ('gov_db','dia_db')) and left 172 assets unlinked in the last 14
-  // days. Idempotent upsert keyed on (workspace_id, source_system,
-  // source_type, external_id); safe to re-run.
+  // broke the LCC-bridge unwrap in intake-promoter. Idempotent upsert keyed
+  // on (workspace_id, source_system, source_type, external_id); safe to re-run.
+  // R4-A (2026-06-04): canonical source_system 'dia'/'gov' + source_type
+  // 'asset' (was 'dia_db'/'gov_db' + 'property') so the property-anchor entity
+  // resolves under one spelling and the detail page stops fragmenting.
   if (propertyId && entity?.id && entity?.workspace_id) {
-    const sourceSystem = domain === 'government' ? 'gov_db' : 'dia_db';
+    const sourceSystem = canonicalIdentitySystem(domain);
     try {
       const nowIso = new Date().toISOString();
       await opsQuery('POST',
@@ -2598,7 +2599,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
           workspace_id: entity.workspace_id,
           entity_id:    entity.id,
           source_system: sourceSystem,
-          source_type:  'property',
+          source_type:  'asset',
           external_id:  String(propertyId),
           metadata:     { synced_via: 'sidebar-pipeline.propagateToDomainDbDirect' },
           last_synced_at: nowIso,

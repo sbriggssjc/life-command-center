@@ -753,3 +753,74 @@ back to `storage_path`).
   deploy** — the endpoint 404s until `admin.js` ships, so don't apply the
   cron migration ahead of the Vercel deploy. Verify post-deploy with a GET
   dry-run before relying on the cron.
+
+## external_identities canonicalization (R4-A, 2026-06-04)
+
+`public.external_identities` (LCC Opps) had **five** source_system spellings
+and two source_type conventions for the **same two concepts**, fragmenting the
+entity graph (4th dia/gov alias-class bug, worst form). The canonical scheme —
+now the single source of truth — is:
+
+| concept | source_system | source_type | external_id |
+|---|---|---|---|
+| domain property-anchor entity (the "asset") | `dia` / `gov` | `asset` | domain `properties.property_id` |
+| domain owner entity | `dia` / `gov` | `true_owner` | `true_owner` id (UUID = entity id) |
+| vendor / channel rows | `costar` / `rca` / `crexi` / `loopnet` / `salesforce` / `email_intake` … | as-is | vendor id |
+
+- **`asset` and `property` mean the same thing for domain rows** — collapsed to
+  `asset` (matches `entities.entity_type='asset'` and the
+  `20260603140000` create-lead cleanup convention). `clinic`/`facility` are
+  also synonyms → `asset`. Vendor `property` rows (costar/rca/crexi listing
+  ids) are **left as `property`** — they are not domain rows.
+- Deprecated spellings now banned: `dia_db`, `dia_supabase`, `dialysis`,
+  `gov_db`, `gov_supabase`, `government`.
+- **`email_intake` is NOT a domain DB** — its `external_id` is a
+  `staged_intake_items.intake_id` (UUID), not a domain property id (verified:
+  231/231 UUIDs). It is a distinct intake-channel identity and is left as-is.
+
+### The one choke point
+
+Every `external_identities` writer routes its `source_system`/`source_type`
+through **`canonicalIdentitySystem()` + `canonicalDomainSourceType()`** in
+`api/_shared/entity-link.js`. `ensureEntityLink` calls them on every write, and
+the three direct-`POST` paths (`sidebar-pipeline.js` domain bridge,
+`domains.js` connector sync, `entities-handler.js` `?action=link`) call
+`canonicalIdentitySystem()` explicitly. The BD owner-sync SQL function
+`lcc_finalize_classified_owners()` writes the canonical `v_domain` (`dia`/`gov`)
+directly (was `v_domain || '_supabase'`). **Add a 6th spelling nowhere else —
+funnel through the helper.**
+
+A `CHECK (source_system IN (canonical + vendor allow-list))` constraint
+(`chk_external_identities_source_system`) enforces this at the DB. ⚠️ It lives
+in migration `20260604121000` and **must be applied only AFTER the Railway
+redeploy** of the canonical JS writers — the currently-deployed writers still
+emit `dia_db`/`gov_db`, so applying it early would 500 every CoStar capture /
+intake promotion. Same deploy-ordering rule as always: constraint after writer
+deploy.
+
+### Junk entity-name guard
+
+`isJunkEntityName()` (entity-link.js) rejects structural garbage at the entity
+creation/sync boundary — embedded phone numbers, emails, `(p)/(c)/(m)/(f)`
+phone-type labels, and CoStar "Buyer/Seller Contacts" panel-header
+bleed-through (e.g. P0.5's `Seller ContactsCraig Burrows(916) 768-5544 (p)`).
+Unlike the sidebar's `isJunkContactName`, it does **not** reject firm-suffix
+names, so it is safe to run on `organization` entities. `ensureEntityLink`
+returns `{ok:false, skipped:'junk_entity_name'}` instead of minting the entity;
+`lcc_finalize_classified_owners()` filters the same patterns in SQL. Existing
+junk entities were soft-flagged (`entities.metadata.junk_name_flagged=true`),
+never hard-deleted.
+
+### Migrations / one-time normalization (applied live to LCC Opps 2026-06-04)
+
+- `20260604120000_lcc_external_identities_canonicalize.sql` — dedup (keep
+  oldest per canonical key), collapse `property→asset` (2,521 rows), normalize
+  source_system (6,900 rows; 2 collisions removed), soft-flag junk entities
+  (41). Idempotent.
+- `20260604120500_lcc_finalize_classified_owners_canonical.sql` — writer fix +
+  junk filter on the BD owner-sync function (safe to apply anytime).
+- `20260604121000_lcc_external_identities_source_system_check.sql` — CHECK
+  constraint, **deferred to post-Railway-deploy**.
+
+Audit: `SELECT source_system, source_type, count(*) FROM external_identities
+GROUP BY 1,2` should show only canonical (`dia`/`gov`) + vendor systems.

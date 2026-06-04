@@ -4996,8 +4996,9 @@ async function assemblePropertyPacket(entityId, workspaceId) {
 
   // Query domain DBs for lease data via linked source IDs
   let leaseData = null;
-  const govIdentity = identities.find(i => i.source_system === 'gov_db' || i.source_system === 'government');
-  const diaIdentity = identities.find(i => i.source_system === 'dia_db' || i.source_system === 'dialysis');
+  // R4-A: canonical 'gov'/'dia'; accept deprecated spellings during transition.
+  const govIdentity = identities.find(i => ['gov','gov_db','gov_supabase','government'].includes(i.source_system));
+  const diaIdentity = identities.find(i => ['dia','dia_db','dia_supabase','dialysis'].includes(i.source_system));
 
   const ctxGovKey = govSupabaseKey();
   const ctxDiaKey = diaSupabaseKey();
