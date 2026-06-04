@@ -1,17 +1,19 @@
 {
   "summary": {
-    "generated_at": "2026-06-04T16:57:02.316Z",
+    "generated_at": "2026-06-04T17:17:25.873Z",
     "mode": "offline",
     "committed": false,
     "master_linked_sales": 926,
     "candidate_props": 563,
-    "writes": 181,
+    "writes": 133,
     "skips_by_reason": {
       "AMBIGUOUS": 11,
       "FINGERPRINT_FAIL": 14,
       "NO_CAP_FINGERPRINT": 159,
       "NO_MASTER_ROW": 67,
       "NO_CHANGE": 370,
+      "MASTER_LESS_PRECISE_SUITE": 23,
+      "MASTER_LESS_PRECISE_CITY": 25,
       "CONFLICTING_MASTERS": 12
     }
   },
@@ -24,6 +26,10 @@
       "new_city": "San Jose",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SAN JOSE"
+      ],
       "master_cap_pct": 5.103,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.29,
@@ -43,6 +49,10 @@
       "new_city": "Bullhead City",
       "old_state": "AZ",
       "new_state": "AZ",
+      "city_verdict": "ALLOW_UNTRUNCATE",
+      "clinic_cities": [
+        "BULLHEAD CITY"
+      ],
       "master_cap_pct": 8.4,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -55,25 +65,6 @@
       ]
     },
     {
-      "property_id": 28502,
-      "old_address": "100 Community Dr Ste 106",
-      "new_address": "100 Community Dr",
-      "old_city": "Tobyhanna",
-      "new_city": "Tobyhanna",
-      "old_state": "PA",
-      "new_state": "PA",
-      "master_cap_pct": 9.649,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.15,
-      "calc_cap_delta_bp": 122.15,
-      "master_sale_date": "2018-05-04",
-      "master_sold_price": 750000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13826
-      ]
-    },
-    {
       "property_id": 29168,
       "old_address": "1720 E Hwy 97",
       "new_address": "1720 Hwy 97 E",
@@ -81,6 +72,10 @@
       "new_city": "Jourdanton",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "JOURDANTON"
+      ],
       "master_cap_pct": 10,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -102,6 +97,10 @@
       "new_city": "Cleburne",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CLEBURNE"
+      ],
       "master_cap_pct": 8.361,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.1,
@@ -114,25 +113,6 @@
       ]
     },
     {
-      "property_id": 26753,
-      "old_address": "2660 S Broadway Ste A",
-      "new_address": "2660 S Broadway",
-      "old_city": "Rochester",
-      "new_city": "Rochester",
-      "old_state": "MN",
-      "new_state": "MN",
-      "master_cap_pct": 8.5,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 85,
-      "master_sale_date": "2025-07-31",
-      "master_sold_price": 2681705,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14418
-      ]
-    },
-    {
       "property_id": 28471,
       "old_address": "2154-58 Stenton Ave",
       "new_address": "2154 Stenton Ave",
@@ -140,6 +120,10 @@
       "new_city": "Philadelphia",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "PHILADELPHIA"
+      ],
       "master_cap_pct": 7.927,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.32,
@@ -159,6 +143,10 @@
       "new_city": "Aberdeen",
       "old_state": "SD",
       "new_state": "SD",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "ABERDEEN"
+      ],
       "master_cap_pct": 6,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -178,6 +166,10 @@
       "new_city": "Cincinnati",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CINCINNATI"
+      ],
       "master_cap_pct": 7.37,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -197,6 +189,10 @@
       "new_city": "Lehighton",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LEHIGHTON"
+      ],
       "master_cap_pct": 7.59,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -210,25 +206,6 @@
       ]
     },
     {
-      "property_id": 29924,
-      "old_address": "2438 N. Ponderosa Dr, Suite C-101",
-      "new_address": "2438 N Ponderosa Dr",
-      "old_city": "Camarillo",
-      "new_city": "Camarillo",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 6.124,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.42,
-      "calc_cap_delta_bp": 90.58,
-      "master_sale_date": "2024-01-09",
-      "master_sold_price": 1063001,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14437
-      ]
-    },
-    {
       "property_id": 28924,
       "old_address": "380 North Dupree St",
       "new_address": "380 N Dupree Ave",
@@ -236,6 +213,8 @@
       "new_city": "Brownsville",
       "old_state": "TN",
       "new_state": "TN",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.619,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.11,
@@ -255,6 +234,10 @@
       "new_city": "Houston",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "ALLOW_CMS",
+      "clinic_cities": [
+        "HOUSTON"
+      ],
       "master_cap_pct": 9.548,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.16,
@@ -274,6 +257,8 @@
       "new_city": "Kansas City",
       "old_state": "MO",
       "new_state": "MO",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 6.5,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -286,44 +271,6 @@
       ]
     },
     {
-      "property_id": 26093,
-      "old_address": "24660 Plaza Dr",
-      "new_address": "1919 N Foster Dr",
-      "old_city": "Plaquemine",
-      "new_city": "Baton Rouge",
-      "old_state": "LA",
-      "new_state": "LA",
-      "master_cap_pct": 5.919,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.09,
-      "calc_cap_delta_bp": 36.09,
-      "master_sale_date": "2022-09-02",
-      "master_sold_price": 1430000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14462
-      ]
-    },
-    {
-      "property_id": 28353,
-      "old_address": "2014 City Line Rd, Suite 102",
-      "new_address": "2014 City Line Rd",
-      "old_city": "Bethlehem",
-      "new_city": "Bethlehem",
-      "old_state": "PA",
-      "new_state": "PA",
-      "master_cap_pct": 8.1,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 0,
-      "master_sale_date": "2015-12-01",
-      "master_sold_price": 4415658,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13693
-      ]
-    },
-    {
       "property_id": 28451,
       "old_address": "525 East West St",
       "new_address": "525 West St",
@@ -331,6 +278,10 @@
       "new_city": "Wind Gap",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WIND GAP"
+      ],
       "master_cap_pct": 8.604,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.43,
@@ -351,6 +302,10 @@
       "new_city": "Orlando",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "ALLOW_CMS",
+      "clinic_cities": [
+        "ORLANDO"
+      ],
       "master_cap_pct": 5.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -363,44 +318,6 @@
       ]
     },
     {
-      "property_id": 37320,
-      "old_address": "3710 Fm 1889",
-      "new_address": "3710 FM 1889",
-      "old_city": "Robstown",
-      "new_city": "Corpus Christi",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 5.55,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 0,
-      "master_sale_date": "2020-09-25",
-      "master_sold_price": 4265184,
-      "has_lat_will_null": false,
-      "source_sales": [
-        14525
-      ]
-    },
-    {
-      "property_id": 27968,
-      "old_address": "9200 Staples Dr, Ste A",
-      "new_address": "9200 Staples Drive",
-      "old_city": "Streetsboro",
-      "new_city": "Streetsboro",
-      "old_state": "OH",
-      "new_state": "OH",
-      "master_cap_pct": 8.989,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.14,
-      "calc_cap_delta_bp": 93.14,
-      "master_sale_date": "2019-11-18",
-      "master_sold_price": 1200000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14550
-      ]
-    },
-    {
       "property_id": 24272,
       "old_address": "1620 W. Yosemite Ave",
       "new_address": "2077 W Yosemite Ave",
@@ -408,6 +325,10 @@
       "new_city": "Manteca",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MANTECA"
+      ],
       "master_cap_pct": 5.337,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.29,
@@ -427,6 +348,10 @@
       "new_city": "Crosby",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CROSBY"
+      ],
       "master_cap_pct": 8.509,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.08,
@@ -446,6 +371,10 @@
       "new_city": "Temple",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TEMPLE"
+      ],
       "master_cap_pct": 8.31,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -465,6 +394,8 @@
       "new_city": "Urbana",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 8.757,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.32,
@@ -477,25 +408,6 @@
       ]
     },
     {
-      "property_id": 2998521,
-      "old_address": "3730 Dryden Rd And 3723 Gulfway Dr",
-      "new_address": "739 E 20th St",
-      "old_city": "Port Arthur",
-      "new_city": "Houston",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 6.7,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2014-12-22",
-      "master_sold_price": 3886196,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14648
-      ]
-    },
-    {
       "property_id": 28258,
       "old_address": "9521 N Owasso E. Expressway",
       "new_address": "9521 N. Owasso E Exp.",
@@ -503,6 +415,10 @@
       "new_city": "Owasso",
       "old_state": "OK",
       "new_state": "OK",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "OWASSO"
+      ],
       "master_cap_pct": 7.4,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -522,6 +438,10 @@
       "new_city": "Grove City",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "GROVE CITY"
+      ],
       "master_cap_pct": 8.202,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.16,
@@ -541,6 +461,10 @@
       "new_city": "San Antonio",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SAN ANTONIO"
+      ],
       "master_cap_pct": 6.818,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.2,
@@ -560,6 +484,10 @@
       "new_city": "Conroe",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CONROE"
+      ],
       "master_cap_pct": 7.45,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -572,25 +500,6 @@
       ]
     },
     {
-      "property_id": 2167872,
-      "old_address": "1032 Bateman Dr",
-      "new_address": "2494 Second St",
-      "old_city": "Social Circle",
-      "new_city": "Macon",
-      "old_state": "GA",
-      "new_state": "GA",
-      "master_cap_pct": 7.181,
-      "fingerprint_source": "calculated_cap_rate",
-      "fingerprint_bp_delta": 0.06,
-      "calc_cap_delta_bp": 0.06,
-      "master_sale_date": "2018-06-13",
-      "master_sold_price": 1615806,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14575
-      ]
-    },
-    {
       "property_id": 24142,
       "old_address": "125 E. Arbor Vitae",
       "new_address": "125 E Arbor Vitae St",
@@ -598,6 +507,10 @@
       "new_city": "Inglewood",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "INGLEWOOD"
+      ],
       "master_cap_pct": 5.897,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.26,
@@ -610,25 +523,6 @@
       ]
     },
     {
-      "property_id": 30393,
-      "old_address": "3812 E Belknap",
-      "new_address": "3812 E Belknap St",
-      "old_city": "Fort Worth",
-      "new_city": "Forth Worth",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 11.3,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2009-07-31",
-      "master_sold_price": 900000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14675
-      ]
-    },
-    {
       "property_id": 23007,
       "old_address": "800 Rose St, Mn-109",
       "new_address": "1101 Winchester Rd",
@@ -636,6 +530,10 @@
       "new_city": "Lexington",
       "old_state": "KY",
       "new_state": "KY",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LEXINGTON"
+      ],
       "master_cap_pct": 9.541,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.08,
@@ -656,6 +554,10 @@
       "new_city": "Weslaco",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WESLACO"
+      ],
       "master_cap_pct": 5.92,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -668,45 +570,6 @@
       ]
     },
     {
-      "property_id": 28226,
-      "old_address": "310 S Highland Ave",
-      "new_address": "310 S Highland Ave",
-      "old_city": "Midwest City",
-      "new_city": "Oklahoma City",
-      "old_state": "OK",
-      "new_state": "OK",
-      "master_cap_pct": 6.91,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 85,
-      "master_sale_date": "2021-11-03",
-      "master_sold_price": 1650000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14498,
-        14623
-      ]
-    },
-    {
-      "property_id": 26643,
-      "old_address": "975 E Townsend Rd",
-      "new_address": "975 E Townsend Rd.",
-      "old_city": "Saint Johns",
-      "new_city": "St Johns",
-      "old_state": "MI",
-      "new_state": "MI",
-      "master_cap_pct": 6.8,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 49,
-      "master_sale_date": "2021-08-27",
-      "master_sold_price": 2025000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14500
-      ]
-    },
-    {
       "property_id": 26913,
       "old_address": "1135 S. Claremont",
       "new_address": "1135 S Claremont Ave",
@@ -714,6 +577,10 @@
       "new_city": "Independence",
       "old_state": "MO",
       "new_state": "MO",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "INDEPENDENCE"
+      ],
       "master_cap_pct": 7.369,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.1,
@@ -733,6 +600,8 @@
       "new_city": "Jackson",
       "old_state": "TN",
       "new_state": "TN",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -753,6 +622,10 @@
       "new_city": "Kennewick",
       "old_state": "WA",
       "new_state": "WA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "KENNEWICK"
+      ],
       "master_cap_pct": 5.245,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.51,
@@ -772,6 +645,10 @@
       "new_city": "Knoxville",
       "old_state": "TN",
       "new_state": "TN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "KNOXVILLE"
+      ],
       "master_cap_pct": 7.19,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.01,
@@ -784,25 +661,6 @@
       ]
     },
     {
-      "property_id": 27704,
-      "old_address": "704 S Dickerson St",
-      "new_address": "4770 Shallotte Ave",
-      "old_city": "Burgaw",
-      "new_city": "Shallotte",
-      "old_state": "NC",
-      "new_state": "NC",
-      "master_cap_pct": 9.848,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.21,
-      "calc_cap_delta_bp": 102.21,
-      "master_sale_date": "2009-05-29",
-      "master_sold_price": 1260000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14676
-      ]
-    },
-    {
       "property_id": 37622,
       "old_address": "465 Shawnee Ln",
       "new_address": "465 N Shawnee Ln",
@@ -810,6 +668,8 @@
       "new_city": "Chillicothe",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.7,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -829,6 +689,8 @@
       "new_city": "Elizabeth City",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -849,6 +711,10 @@
       "new_city": "Rushville",
       "old_state": "IL",
       "new_state": "IL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "RUSHVILLE"
+      ],
       "master_cap_pct": 6.539,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.06,
@@ -868,6 +734,10 @@
       "new_city": "Oklahoma City",
       "old_state": "OK",
       "new_state": "OK",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "OKLAHOMA CITY"
+      ],
       "master_cap_pct": 8.543,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.29,
@@ -883,25 +753,6 @@
       ]
     },
     {
-      "property_id": 29286,
-      "old_address": "423 Old Austin Hwy",
-      "new_address": "805-815 N Beckley Ave",
-      "old_city": "Bastrop",
-      "new_city": "Dallas",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 7.877,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.28,
-      "calc_cap_delta_bp": 183.28,
-      "master_sale_date": "2020-03-27",
-      "master_sold_price": 2164475,
-      "has_lat_will_null": false,
-      "source_sales": [
-        14540
-      ]
-    },
-    {
       "property_id": 30019,
       "old_address": "2517 Jensen Ave",
       "new_address": "2517 Jensen Ave, Bldg B",
@@ -909,6 +760,10 @@
       "new_city": "Sanger",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SANGER"
+      ],
       "master_cap_pct": 8.756,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.36,
@@ -921,25 +776,6 @@
       ]
     },
     {
-      "property_id": 30179,
-      "old_address": "6010 Forest Park, Suite 100",
-      "new_address": "6010 Forest Park Rd",
-      "old_city": "Dallas",
-      "new_city": "Dallas",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 13.43,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 0,
-      "master_sale_date": "2019-05-01",
-      "master_sold_price": 5300000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13881
-      ]
-    },
-    {
       "property_id": 22612,
       "old_address": "9266 Us Hwy 301",
       "new_address": "9272 S US Highway 301",
@@ -947,6 +783,10 @@
       "new_city": "Kenly",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "KENLY"
+      ],
       "master_cap_pct": 6.08,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -966,6 +806,10 @@
       "new_city": "Hollywood",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "HOLLYWOOD"
+      ],
       "master_cap_pct": 5.197,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.25,
@@ -986,6 +830,10 @@
       "new_city": "Trotwood",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TROTWOOD"
+      ],
       "master_cap_pct": 7.763,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.34,
@@ -1006,6 +854,10 @@
       "new_city": "Las Vegas",
       "old_state": "NV",
       "new_state": "NV",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LAS VEGAS"
+      ],
       "master_cap_pct": 6.745,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.47,
@@ -1018,101 +870,6 @@
       ]
     },
     {
-      "property_id": 29729,
-      "old_address": "1215 Maplewood Ave",
-      "new_address": "1215 Maplewood Ave",
-      "old_city": "Ronceverte",
-      "new_city": "Lewisburg",
-      "old_state": "WV",
-      "new_state": "WV",
-      "master_cap_pct": 5.75,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 154,
-      "master_sale_date": "2022-06-08",
-      "master_sold_price": 1611000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14101
-      ]
-    },
-    {
-      "property_id": 35331,
-      "old_address": "1151 Warwick Way",
-      "new_address": "1151 Warwick Way",
-      "old_city": "Mount Pleasant",
-      "new_city": "Racine",
-      "old_state": "WI",
-      "new_state": "WI",
-      "master_cap_pct": 8.503,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.31,
-      "calc_cap_delta_bp": 16.69,
-      "master_sale_date": "2023-05-18",
-      "master_sold_price": 3425000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14148
-      ]
-    },
-    {
-      "property_id": 24662,
-      "old_address": "1680 Osceola Elementary Rd Suite B",
-      "new_address": "1680 Osceola Elementary Rd",
-      "old_city": "Saint Augustine",
-      "new_city": "Saint Augustine",
-      "old_state": "FL",
-      "new_state": "FL",
-      "master_cap_pct": 6.621,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.09,
-      "calc_cap_delta_bp": 0.09,
-      "master_sale_date": "2024-04-04",
-      "master_sold_price": 2310849,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14182
-      ]
-    },
-    {
-      "property_id": 26729,
-      "old_address": "1559 7th St W",
-      "new_address": "1559 7th St W",
-      "old_city": "Saint Paul",
-      "new_city": "St Paul",
-      "old_state": "MN",
-      "new_state": "MN",
-      "master_cap_pct": 7.912,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.17,
-      "calc_cap_delta_bp": 18.17,
-      "master_sale_date": "2025-08-15",
-      "master_sold_price": 2050000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14228
-      ]
-    },
-    {
-      "property_id": 22903,
-      "old_address": "4601 Medical Center Dr Ste G",
-      "new_address": "4717 Medical Center Dr",
-      "old_city": "Mckinney",
-      "new_city": "McKinney",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 7.15,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 92,
-      "master_sale_date": "2014-02-27",
-      "master_sold_price": 1987500,
-      "has_lat_will_null": true,
-      "source_sales": [
-        6366
-      ]
-    },
-    {
       "property_id": 25452,
       "old_address": "8109 South Western Ave",
       "new_address": "8111 S Western Ave",
@@ -1120,6 +877,10 @@
       "new_city": "Chicago",
       "old_state": "IL",
       "new_state": "IL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CHICAGO"
+      ],
       "master_cap_pct": 8.223,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.26,
@@ -1139,6 +900,10 @@
       "new_city": "Pensacola",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "PENSACOLA"
+      ],
       "master_cap_pct": 5.501,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.08,
@@ -1151,82 +916,6 @@
       ]
     },
     {
-      "property_id": 29886,
-      "old_address": "4510 Ohara Ave Suite B",
-      "new_address": "4510 O'Hara Blvd",
-      "old_city": "Brentwood",
-      "new_city": "Brentwood",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 7.268,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.19,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2025-12-17",
-      "master_sold_price": 4680000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14244
-      ]
-    },
-    {
-      "property_id": 26169,
-      "old_address": "3030 N Arnoult Rd, Ste A",
-      "new_address": "3030 N Arnoult",
-      "old_city": "Metairie",
-      "new_city": "Metairie",
-      "old_state": "LA",
-      "new_state": "LA",
-      "master_cap_pct": 8.4,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 0,
-      "master_sale_date": "2012-05-01",
-      "master_sold_price": 3739000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        991
-      ]
-    },
-    {
-      "property_id": 38047,
-      "old_address": "1021 W E St",
-      "new_address": "1021 Court St",
-      "old_city": "Belleville",
-      "new_city": "Pekin",
-      "old_state": "IL",
-      "new_state": "IL",
-      "master_cap_pct": 6.659,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.06,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2022-12-15",
-      "master_sold_price": 1850000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14130
-      ]
-    },
-    {
-      "property_id": 28120,
-      "old_address": "6901 Glenn Hwy Suite A",
-      "new_address": "6901 Glenn Hwy",
-      "old_city": "Cambridge",
-      "new_city": "Cambridge",
-      "old_state": "OH",
-      "new_state": "OH",
-      "master_cap_pct": 6.225,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.5,
-      "calc_cap_delta_bp": 0.5,
-      "master_sale_date": "2021-10-15",
-      "master_sold_price": 2200000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14057
-      ]
-    },
-    {
       "property_id": 1878400,
       "old_address": "510 N Macarthur Ave",
       "new_address": "504-510 N MacArthur Ave",
@@ -1234,6 +923,8 @@
       "new_city": "Panama City",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 8.9,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1253,6 +944,8 @@
       "new_city": "Leavenworth",
       "old_state": "KS",
       "new_state": "KS",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 9.61,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.04,
@@ -1272,6 +965,10 @@
       "new_city": "Gretna",
       "old_state": "LA",
       "new_state": "LA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "GRETNA"
+      ],
       "master_cap_pct": 6.5,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1292,6 +989,8 @@
       "new_city": "Xenia",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.206,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.39,
@@ -1311,6 +1010,10 @@
       "new_city": "Roswell",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "ROSWELL"
+      ],
       "master_cap_pct": 5.428,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.2,
@@ -1330,6 +1033,8 @@
       "new_city": "Wichita",
       "old_state": "KS",
       "new_state": "KS",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.395,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.5,
@@ -1349,6 +1054,8 @@
       "new_city": "San Jose",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.347,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.33,
@@ -1368,6 +1075,10 @@
       "new_city": "Four Oaks",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "FOUR OAKS"
+      ],
       "master_cap_pct": 6.994,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.43,
@@ -1387,6 +1098,10 @@
       "new_city": "Raleigh",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "RALEIGH"
+      ],
       "master_cap_pct": 7.466,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.37,
@@ -1406,6 +1121,10 @@
       "new_city": "West Palm Beach",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WEST PALM BEACH"
+      ],
       "master_cap_pct": 5.981,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.13,
@@ -1425,6 +1144,10 @@
       "new_city": "Baton Rouge",
       "old_state": "LA",
       "new_state": "LA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "BATON ROUGE"
+      ],
       "master_cap_pct": 7.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1437,25 +1160,6 @@
       ]
     },
     {
-      "property_id": 24762,
-      "old_address": "1299 East Commercial Blvd #100",
-      "new_address": "1299 E Commercial Blvd",
-      "old_city": "Oakland Park",
-      "new_city": "Oakland Park",
-      "old_state": "FL",
-      "new_state": "FL",
-      "master_cap_pct": 7.749,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.12,
-      "calc_cap_delta_bp": 121.88,
-      "master_sale_date": "2022-02-16",
-      "master_sold_price": 4000000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        588
-      ]
-    },
-    {
       "property_id": 35489,
       "old_address": "2349 Us Hwy 74 E",
       "new_address": "2349 US Hwy 74 W",
@@ -1463,6 +1167,10 @@
       "new_city": "Wadesboro",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WADESBORO"
+      ],
       "master_cap_pct": 8.87,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1483,6 +1191,8 @@
       "new_city": "Ridgeland",
       "old_state": "SC",
       "new_state": "SC",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 9.23,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1502,6 +1212,10 @@
       "new_city": "Scottsburg",
       "old_state": "IN",
       "new_state": "IN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SCOTTSBURG"
+      ],
       "master_cap_pct": 9.694,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.41,
@@ -1522,6 +1236,8 @@
       "new_city": "Detroit",
       "old_state": "MI",
       "new_state": "MI",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 8.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1541,6 +1257,10 @@
       "new_city": "Poinciana",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "KISSIMMEE"
+      ],
       "master_cap_pct": 7.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1560,6 +1280,10 @@
       "new_city": "Palm Desert",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "PALM DESERT"
+      ],
       "master_cap_pct": 5.609,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.12,
@@ -1579,6 +1303,10 @@
       "new_city": "Chicago",
       "old_state": "IL",
       "new_state": "IL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CHICAGO"
+      ],
       "master_cap_pct": 6.099,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.06,
@@ -1598,6 +1326,10 @@
       "new_city": "Perry",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "PERRY"
+      ],
       "master_cap_pct": 8.08,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1617,6 +1349,10 @@
       "new_city": "Pocahontas",
       "old_state": "AR",
       "new_state": "AR",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "POCAHONTAS"
+      ],
       "master_cap_pct": 6.749,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.14,
@@ -1636,6 +1372,8 @@
       "new_city": "Las Cruces",
       "old_state": "NM",
       "new_state": "NM",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 6.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1655,6 +1393,10 @@
       "new_city": "Tulsa",
       "old_state": "OK",
       "new_state": "OK",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TULSA"
+      ],
       "master_cap_pct": 5.77,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.04,
@@ -1674,6 +1416,10 @@
       "new_city": "Lilburn",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LILBURN"
+      ],
       "master_cap_pct": 5.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.04,
@@ -1693,6 +1439,10 @@
       "new_city": "Zapata",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "ZAPATA"
+      ],
       "master_cap_pct": 6.18,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1712,6 +1462,10 @@
       "new_city": "Philadelphia",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "PHILADELPHIA"
+      ],
       "master_cap_pct": 5.306,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.41,
@@ -1724,25 +1478,6 @@
       ]
     },
     {
-      "property_id": 28384,
-      "old_address": "8001 Lansdowne Ave",
-      "new_address": "8001 Lansdowne Ave",
-      "old_city": "Upper Darby",
-      "new_city": "Philadelphia",
-      "old_state": "PA",
-      "new_state": "PA",
-      "master_cap_pct": 4.769,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.11,
-      "calc_cap_delta_bp": 9.11,
-      "master_sale_date": "2022-08-16",
-      "master_sold_price": 5294832,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14111
-      ]
-    },
-    {
       "property_id": 29448,
       "old_address": "340 Anderson Hollow Rd",
       "new_address": "340 Anderson Rd NE",
@@ -1750,6 +1485,10 @@
       "new_city": "Norton",
       "old_state": "VA",
       "new_state": "VA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "NORTON"
+      ],
       "master_cap_pct": 20.259,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.14,
@@ -1769,6 +1508,10 @@
       "new_city": "Decatur",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "DECATUR"
+      ],
       "master_cap_pct": 8.345,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.46,
@@ -1781,25 +1524,6 @@
       ]
     },
     {
-      "property_id": 25174,
-      "old_address": "1016 Claxton Dairy Rd Ste 1a",
-      "new_address": "1016 Claxton Dairy Rd",
-      "old_city": "Dublin",
-      "new_city": "Dublin",
-      "old_state": "GA",
-      "new_state": "GA",
-      "master_cap_pct": 8.75,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 88,
-      "master_sale_date": "2025-05-07",
-      "master_sold_price": 815000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14210
-      ]
-    },
-    {
       "property_id": 24244,
       "old_address": "404 North Wiget Ln",
       "new_address": "400 N Wiget Ln",
@@ -1807,6 +1531,10 @@
       "new_city": "Walnut Creek",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WALNUT CREEK"
+      ],
       "master_cap_pct": 6,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1826,6 +1554,8 @@
       "new_city": "Crestwood",
       "old_state": "IL",
       "new_state": "IL",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.366,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.41,
@@ -1838,25 +1568,6 @@
       ]
     },
     {
-      "property_id": 2075912,
-      "old_address": "802-806 Jules St",
-      "new_address": "802-806 Jules St",
-      "old_city": "St Joseph",
-      "new_city": "Saint Joseph",
-      "old_state": "MO",
-      "new_state": "MO",
-      "master_cap_pct": 5.5,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 0,
-      "master_sale_date": "2017-10-31",
-      "master_sold_price": 2909091,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13810
-      ]
-    },
-    {
       "property_id": 25766,
       "old_address": "418 6th Ave",
       "new_address": "1705 E Industrial Dr",
@@ -1864,6 +1575,8 @@
       "new_city": "Terre Haute",
       "old_state": "IN",
       "new_state": "IN",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 6.5,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -1883,6 +1596,10 @@
       "new_city": "Augusta",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "AUGUSTA"
+      ],
       "master_cap_pct": 7.878,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.17,
@@ -1895,44 +1612,6 @@
       ]
     },
     {
-      "property_id": 22667,
-      "old_address": "32 Steubenville Pike",
-      "new_address": "32 Steubenville Pike",
-      "old_city": "Paris",
-      "new_city": "Burgettstown",
-      "old_state": "PA",
-      "new_state": "PA",
-      "master_cap_pct": 5.733,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.26,
-      "calc_cap_delta_bp": 16.74,
-      "master_sale_date": "2021-03-29",
-      "master_sold_price": 2021485,
-      "has_lat_will_null": true,
-      "source_sales": [
-        8859
-      ]
-    },
-    {
-      "property_id": 26952,
-      "old_address": "1425 Hampton Ave",
-      "new_address": "1425 Hampton Ave",
-      "old_city": "Saint Louis",
-      "new_city": "St. Louis",
-      "old_state": "MO",
-      "new_state": "MO",
-      "master_cap_pct": 9,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 59,
-      "master_sale_date": "2016-05-02",
-      "master_sold_price": 775000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13760
-      ]
-    },
-    {
       "property_id": 30400,
       "old_address": "5729 Bryant Irvin Rd",
       "new_address": "5729 Bryant-Irvin Rd",
@@ -1940,6 +1619,10 @@
       "new_city": "Fort Worth",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "FORT WORTH"
+      ],
       "master_cap_pct": 7.021,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.06,
@@ -1959,6 +1642,8 @@
       "new_city": "Twin Falls",
       "old_state": "ID",
       "new_state": "ID",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.888,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.2,
@@ -1978,6 +1663,8 @@
       "new_city": "Palmdale",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 6.696,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.35,
@@ -1991,25 +1678,6 @@
       ]
     },
     {
-      "property_id": 27284,
-      "old_address": "1689 Delsea Dr",
-      "new_address": "1689 Delsea Dr",
-      "old_city": "Deptford",
-      "new_city": "Woodbury",
-      "old_state": "NJ",
-      "new_state": "NJ",
-      "master_cap_pct": 6.321,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.15,
-      "calc_cap_delta_bp": 91.85,
-      "master_sale_date": "2014-07-24",
-      "master_sold_price": 4975000,
-      "has_lat_will_null": false,
-      "source_sales": [
-        13667
-      ]
-    },
-    {
       "property_id": 31525,
       "old_address": "928932 Furman Dr",
       "new_address": "928-932 Furman Dr",
@@ -2017,6 +1685,8 @@
       "new_city": "Waupaca",
       "old_state": "WI",
       "new_state": "WI",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.06,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2029,25 +1699,6 @@
       ]
     },
     {
-      "property_id": 28139,
-      "old_address": "3812 Center Rd, Suite 101",
-      "new_address": "3812 Center Rd",
-      "old_city": "Brunswick",
-      "new_city": "Brunswick",
-      "old_state": "OH",
-      "new_state": "OH",
-      "master_cap_pct": 7.05,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 108,
-      "master_sale_date": "2016-06-08",
-      "master_sold_price": 3958656,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13764
-      ]
-    },
-    {
       "property_id": 25934,
       "old_address": "401 W. Whitmer St.",
       "new_address": "401 Whitmer St",
@@ -2055,6 +1706,10 @@
       "new_city": "Central City",
       "old_state": "KY",
       "new_state": "KY",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CENTRAL CITY"
+      ],
       "master_cap_pct": 7.748,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.19,
@@ -2067,25 +1722,6 @@
       ]
     },
     {
-      "property_id": 29836,
-      "old_address": "3636 E Melby St",
-      "new_address": "3636 Melby St",
-      "old_city": "Lake Hallie",
-      "new_city": "Eau Claire",
-      "old_state": "WI",
-      "new_state": "WI",
-      "master_cap_pct": 7.19,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.01,
-      "calc_cap_delta_bp": 44.99,
-      "master_sale_date": "2016-08-10",
-      "master_sold_price": 925000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13770
-      ]
-    },
-    {
       "property_id": 27212,
       "old_address": "2180 Bradley Ave",
       "new_address": "2180 Bradley Ave",
@@ -2093,6 +1729,10 @@
       "new_city": "Neptune City",
       "old_state": "NJ",
       "new_state": "NJ",
+      "city_verdict": "ALLOW_UNTRUNCATE",
+      "clinic_cities": [
+        "NEPTUNE"
+      ],
       "master_cap_pct": 6,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2105,26 +1745,6 @@
       ]
     },
     {
-      "property_id": 28385,
-      "old_address": "207 West Laurel Ave",
-      "new_address": "248 Elm Drive",
-      "old_city": "New Castle",
-      "new_city": "Waynesburg",
-      "old_state": "PA",
-      "new_state": "PA",
-      "master_cap_pct": 6.872,
-      "fingerprint_source": "calculated_cap_rate",
-      "fingerprint_bp_delta": 0.18,
-      "calc_cap_delta_bp": 0.18,
-      "master_sale_date": "2016-11-14",
-      "master_sold_price": 1074345,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13779,
-        14009
-      ]
-    },
-    {
       "property_id": 25201,
       "old_address": "195 Parkwood Cir",
       "new_address": "130 Parkwood Cir",
@@ -2132,6 +1752,10 @@
       "new_city": "Carrollton",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CARROLLTON"
+      ],
       "master_cap_pct": 6.1,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2151,6 +1775,10 @@
       "new_city": "Columbia",
       "old_state": "SC",
       "new_state": "SC",
+      "city_verdict": "ALLOW_CMS",
+      "clinic_cities": [
+        "COLUMBIA"
+      ],
       "master_cap_pct": 6.202,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.16,
@@ -2170,6 +1798,10 @@
       "new_city": "Fitchburg",
       "old_state": "WI",
       "new_state": "WI",
+      "city_verdict": "ALLOW_CMS",
+      "clinic_cities": [
+        "FITCHBURG"
+      ],
       "master_cap_pct": 7.172,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.19,
@@ -2182,44 +1814,6 @@
       ]
     },
     {
-      "property_id": 29613,
-      "old_address": "6825 Burden Blvd Ste A",
-      "new_address": "6825 Burden Blvd",
-      "old_city": "Pasco",
-      "new_city": "Pasco",
-      "old_state": "WA",
-      "new_state": "WA",
-      "master_cap_pct": 6.369,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.07,
-      "calc_cap_delta_bp": 0.07,
-      "master_sale_date": "2019-07-02",
-      "master_sold_price": 2922000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13892
-      ]
-    },
-    {
-      "property_id": 29451,
-      "old_address": "1922 Tappahannock Blvd",
-      "new_address": "838 Ole Turnpike Dr",
-      "old_city": "Tappahannock",
-      "new_city": "Bedford",
-      "old_state": "VA",
-      "new_state": "VA",
-      "master_cap_pct": 6.9,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 24,
-      "master_sale_date": "2019-10-15",
-      "master_sold_price": 1400000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13905
-      ]
-    },
-    {
       "property_id": 29674,
       "old_address": "300 N Colorado Ave",
       "new_address": "300 Colorado Ave",
@@ -2227,6 +1821,10 @@
       "new_city": "East Wenatchee",
       "old_state": "WA",
       "new_state": "WA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "EAST WENATCHEE"
+      ],
       "master_cap_pct": 5.9,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2246,6 +1844,8 @@
       "new_city": "Germantown",
       "old_state": "MD",
       "new_state": "MD",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 8,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2258,25 +1858,6 @@
       ]
     },
     {
-      "property_id": 30403,
-      "old_address": "10708 Victoria Ash Dr",
-      "new_address": "10708 Victoria Ash Dr",
-      "old_city": "Fort Worth",
-      "new_city": "Keller",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 7,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 140,
-      "master_sale_date": "2021-09-03",
-      "master_sold_price": 3548929,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14048
-      ]
-    },
-    {
       "property_id": 31898,
       "old_address": "582 Pole Line Rd E",
       "new_address": "582 Pole Line Rd",
@@ -2284,6 +1865,10 @@
       "new_city": "Twin Falls",
       "old_state": "ID",
       "new_state": "ID",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TWIN FALLS"
+      ],
       "master_cap_pct": 6.56,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2297,44 +1882,6 @@
       ]
     },
     {
-      "property_id": 30077,
-      "old_address": "725 Ridder Park Dr., Ste 50",
-      "new_address": "725 Ridder Park Dr",
-      "old_city": "San Jose",
-      "new_city": "San Jose",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 6.46,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 81,
-      "master_sale_date": "2021-11-15",
-      "master_sold_price": 13800000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14062
-      ]
-    },
-    {
-      "property_id": 22882,
-      "old_address": "14434 Sherman Way",
-      "new_address": "14434 Sherman Way",
-      "old_city": "Van Nuys",
-      "new_city": "Los Angeles",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 5.944,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.41,
-      "calc_cap_delta_bp": 61.59,
-      "master_sale_date": "2025-05-27",
-      "master_sold_price": 11385000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14212
-      ]
-    },
-    {
       "property_id": 35419,
       "old_address": "5502 Medical Park Way Drive",
       "new_address": "5502 Medical Park Way",
@@ -2342,6 +1889,8 @@
       "new_city": "Texarkana",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.501,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.11,
@@ -2354,25 +1903,6 @@
       ]
     },
     {
-      "property_id": 25761,
-      "old_address": "700 Willow St Suite 102",
-      "new_address": "300 N 1st St",
-      "old_city": "Vincennes",
-      "new_city": "Vincennes",
-      "old_state": "IN",
-      "new_state": "IN",
-      "master_cap_pct": 6.15,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": 6,
-      "master_sale_date": "2016-01-28",
-      "master_sold_price": 3795447,
-      "has_lat_will_null": true,
-      "source_sales": [
-        893
-      ]
-    },
-    {
       "property_id": 27839,
       "old_address": "1899 Tate Blvd Se",
       "new_address": "1900 3rd Avenue Lane",
@@ -2380,6 +1910,10 @@
       "new_city": "Hickory",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "HICKORY"
+      ],
       "master_cap_pct": 5.8,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2399,6 +1933,10 @@
       "new_city": "Garden City",
       "old_state": "KS",
       "new_state": "KS",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "GARDEN CITY"
+      ],
       "master_cap_pct": 6,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2419,6 +1957,10 @@
       "new_city": "West Plains",
       "old_state": "MO",
       "new_state": "MO",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WEST PLAINS"
+      ],
       "master_cap_pct": 6.868,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.17,
@@ -2438,6 +1980,10 @@
       "new_city": "Clarksville",
       "old_state": "TN",
       "new_state": "TN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CLARKSVILLE"
+      ],
       "master_cap_pct": 7,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2458,6 +2004,10 @@
       "new_city": "McKeesport",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WHITE OAK"
+      ],
       "master_cap_pct": 8.617,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.33,
@@ -2477,6 +2027,8 @@
       "new_city": "Livonia",
       "old_state": "MI",
       "new_state": "MI",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 8.136,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.38,
@@ -2496,6 +2048,8 @@
       "new_city": "Wesley Chapel",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.25,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2515,6 +2069,10 @@
       "new_city": "Schnecksville",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "ALLOW_UNTRUNCATE",
+      "clinic_cities": [
+        "SCHNECKSVILLE"
+      ],
       "master_cap_pct": 6.5,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2534,6 +2092,10 @@
       "new_city": "Los Lunas",
       "old_state": "NM",
       "new_state": "NM",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LOS LUNAS"
+      ],
       "master_cap_pct": 5.85,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2553,6 +2115,10 @@
       "new_city": "Merrillville",
       "old_state": "IN",
       "new_state": "IN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MERRILLVILLE"
+      ],
       "master_cap_pct": 7.44,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2572,6 +2138,8 @@
       "new_city": "Tacoma",
       "old_state": "WA",
       "new_state": "WA",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.04,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2591,6 +2159,11 @@
       "new_city": "Perry",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MACON",
+        "PERRY"
+      ],
       "master_cap_pct": 5.398,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.18,
@@ -2610,6 +2183,10 @@
       "new_city": "Saint Petersburg",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SAINT PETERSBURG"
+      ],
       "master_cap_pct": 7.042,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.2,
@@ -2629,6 +2206,10 @@
       "new_city": "Inglewood",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "INGLEWOOD"
+      ],
       "master_cap_pct": 6.833,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.33,
@@ -2648,6 +2229,10 @@
       "new_city": "Spokane",
       "old_state": "WA",
       "new_state": "WA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SPOKANE"
+      ],
       "master_cap_pct": 6.083,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.3,
@@ -2667,6 +2252,10 @@
       "new_city": "Minden",
       "old_state": "LA",
       "new_state": "LA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MINDEN"
+      ],
       "master_cap_pct": 7.01,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.01,
@@ -2686,6 +2275,10 @@
       "new_city": "Tampa",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TAMPA"
+      ],
       "master_cap_pct": 6.55,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2705,6 +2298,10 @@
       "new_city": "Temple Terrace",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TEMPLE TERRACE"
+      ],
       "master_cap_pct": 7.742,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.19,
@@ -2724,6 +2321,8 @@
       "new_city": "Schertz",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 5.725,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.48,
@@ -2743,6 +2342,10 @@
       "new_city": "Michigan City",
       "old_state": "IN",
       "new_state": "IN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MICHIGAN CITY"
+      ],
       "master_cap_pct": 7.882,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.2,
@@ -2762,6 +2365,10 @@
       "new_city": "Monterey",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MONTEREY"
+      ],
       "master_cap_pct": 6.501,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.13,
@@ -2781,6 +2388,8 @@
       "new_city": "Derby",
       "old_state": "KS",
       "new_state": "KS",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 7.2,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2793,25 +2402,6 @@
       ]
     },
     {
-      "property_id": 24493,
-      "old_address": "561 25 Rd Ste D",
-      "new_address": "561 25 Rd",
-      "old_city": "Grand Junction",
-      "new_city": "Grand Junction",
-      "old_state": "CO",
-      "new_state": "CO",
-      "master_cap_pct": 7,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2022-12-02",
-      "master_sold_price": 5260700,
-      "has_lat_will_null": true,
-      "source_sales": [
-        542
-      ]
-    },
-    {
       "property_id": 25000,
       "old_address": "14 Roving Rd Se",
       "new_address": "14 Roving Road",
@@ -2819,6 +2409,10 @@
       "new_city": "Cartersville",
       "old_state": "GA",
       "new_state": "GA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CARTERSVILLE"
+      ],
       "master_cap_pct": 7.367,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.26,
@@ -2838,6 +2432,10 @@
       "new_city": "Grants Pass",
       "old_state": "OR",
       "new_state": "OR",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "GRANTS PASS"
+      ],
       "master_cap_pct": 8.02,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2857,6 +2455,10 @@
       "new_city": "Lampasas",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LAMPASAS"
+      ],
       "master_cap_pct": 10.28,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.04,
@@ -2876,6 +2478,10 @@
       "new_city": "Claremore",
       "old_state": "OK",
       "new_state": "OK",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CLAREMORE"
+      ],
       "master_cap_pct": 6.15,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -2895,6 +2501,10 @@
       "new_city": "Dallas",
       "old_state": "TX",
       "new_state": "TX",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "DALLAS"
+      ],
       "master_cap_pct": 9.989,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.14,
@@ -2907,26 +2517,6 @@
       ]
     },
     {
-      "property_id": 22419,
-      "old_address": "4625 Center St",
-      "new_address": "1533 Holly Rd",
-      "old_city": "Deer Park",
-      "new_city": "Corpus Christi",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 6.393,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.26,
-      "calc_cap_delta_bp": 134.26,
-      "master_sale_date": "2021-12-13",
-      "master_sold_price": 4800000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14070,
-        13845
-      ]
-    },
-    {
       "property_id": 22755,
       "old_address": "6222 Harney Rd",
       "new_address": "6220 Harney Road",
@@ -2934,6 +2524,10 @@
       "new_city": "Tampa",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TAMPA"
+      ],
       "master_cap_pct": 5.501,
       "fingerprint_source": "calculated_cap_rate",
       "fingerprint_bp_delta": 0.06,
@@ -2953,6 +2547,10 @@
       "new_city": "Sumter",
       "old_state": "SC",
       "new_state": "SC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "SUMTER"
+      ],
       "master_cap_pct": 6.6,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.01,
@@ -2972,6 +2570,10 @@
       "new_city": "Wasco",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "WASCO"
+      ],
       "master_cap_pct": 5.673,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.27,
@@ -2991,6 +2593,10 @@
       "new_city": "Decatur",
       "old_state": "IL",
       "new_state": "IL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "DECATUR"
+      ],
       "master_cap_pct": 6.148,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.15,
@@ -3010,6 +2616,10 @@
       "new_city": "Holly Springs (Mount Pleasant)",
       "old_state": "MS",
       "new_state": "MS",
+      "city_verdict": "ALLOW_UNTRUNCATE",
+      "clinic_cities": [
+        "HOLLY SPRINGS"
+      ],
       "master_cap_pct": 5.757,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.3,
@@ -3029,6 +2639,10 @@
       "new_city": "Rolla",
       "old_state": "MO",
       "new_state": "MO",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "ROLLA"
+      ],
       "master_cap_pct": 5.851,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.05,
@@ -3048,6 +2662,10 @@
       "new_city": "Dundas",
       "old_state": "MN",
       "new_state": "MN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "DUNDAS"
+      ],
       "master_cap_pct": 7.7,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3067,6 +2685,8 @@
       "new_city": "Roaring Spring",
       "old_state": "PA",
       "new_state": "PA",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 9.771,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.15,
@@ -3086,6 +2706,10 @@
       "new_city": "Lexington",
       "old_state": "SC",
       "new_state": "SC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LEXINGTON"
+      ],
       "master_cap_pct": 6.3,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3098,25 +2722,6 @@
       ]
     },
     {
-      "property_id": 30117,
-      "old_address": "4207 Bangs Ave, Suite 100",
-      "new_address": "4207 Bangs Ave",
-      "old_city": "Modesto",
-      "new_city": "Modesto",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 6.399,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.1,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2019-07-16",
-      "master_sold_price": 3900000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        13894
-      ]
-    },
-    {
       "property_id": 29535,
       "old_address": "10718 Ballantraye Dr",
       "new_address": "10718 Ballantraye Rd",
@@ -3124,6 +2729,10 @@
       "new_city": "Fredericksburg",
       "old_state": "VA",
       "new_state": "VA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "FREDERICKSBURG"
+      ],
       "master_cap_pct": 6.07,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3136,25 +2745,6 @@
       ]
     },
     {
-      "property_id": 36941,
-      "old_address": "2082 Otay Lakes Road, Suite",
-      "new_address": "2082 Otay Lakes Rd, A1",
-      "old_city": "Chula Vista",
-      "new_city": "Chula Vista",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 5.676,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.35,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2023-09-28",
-      "master_sold_price": 1575000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14163
-      ]
-    },
-    {
       "property_id": 26895,
       "old_address": "272 Mayfair Dr",
       "new_address": "13015 New Halls Ferry Rd",
@@ -3162,6 +2752,10 @@
       "new_city": "Florissant",
       "old_state": "MO",
       "new_state": "MO",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "FLORISSANT"
+      ],
       "master_cap_pct": 5.25,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3174,44 +2768,6 @@
       ]
     },
     {
-      "property_id": 22800,
-      "old_address": "6700 Randolph Blvd Ste 101",
-      "new_address": "6700 Randolph Blvd",
-      "old_city": "Live Oak",
-      "new_city": "San Antonio",
-      "old_state": "TX",
-      "new_state": "TX",
-      "master_cap_pct": 7.468,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.19,
-      "calc_cap_delta_bp": 92.81,
-      "master_sale_date": "2024-10-07",
-      "master_sold_price": 2900000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14194
-      ]
-    },
-    {
-      "property_id": 22849,
-      "old_address": "5311 Clyde Park Ave Sw",
-      "new_address": "5331 Clyde Park Ave",
-      "old_city": "Wyoming",
-      "new_city": "Grand Rapids",
-      "old_state": "MI",
-      "new_state": "MI",
-      "master_cap_pct": 8.193,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.32,
-      "calc_cap_delta_bp": 0.32,
-      "master_sale_date": "2019-04-10",
-      "master_sold_price": 2065000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        180
-      ]
-    },
-    {
       "property_id": 28874,
       "old_address": "46 Harts Bridge Rd",
       "new_address": "46 Harts Bridge Rd W",
@@ -3219,6 +2775,10 @@
       "new_city": "Jackson",
       "old_state": "TN",
       "new_state": "TN",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "JACKSON"
+      ],
       "master_cap_pct": 7.803,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.3,
@@ -3238,6 +2798,10 @@
       "new_city": "Monterey Park",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "MONTEREY PARK"
+      ],
       "master_cap_pct": 8.315,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.49,
@@ -3250,25 +2814,6 @@
       ]
     },
     {
-      "property_id": 22721,
-      "old_address": "7700 Imperial Hwy Suite R",
-      "new_address": "9041 Imperial Hwy",
-      "old_city": "Downey",
-      "new_city": "Downey",
-      "old_state": "CA",
-      "new_state": "CA",
-      "master_cap_pct": 5.171,
-      "fingerprint_source": "cap_rate",
-      "fingerprint_bp_delta": 0.05,
-      "calc_cap_delta_bp": null,
-      "master_sale_date": "2018-11-13",
-      "master_sold_price": 10560500,
-      "has_lat_will_null": true,
-      "source_sales": [
-        144
-      ]
-    },
-    {
       "property_id": 33472,
       "old_address": "2145 Mesquite Ave",
       "new_address": "2150 Mesquite Ave",
@@ -3276,6 +2821,10 @@
       "new_city": "Lake Havasu City",
       "old_state": "AZ",
       "new_state": "AZ",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LAKE HAVASU CITY"
+      ],
       "master_cap_pct": 6.56,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3295,6 +2844,10 @@
       "new_city": "Charlotte",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CHARLOTTE"
+      ],
       "master_cap_pct": 6.75,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3314,6 +2867,10 @@
       "new_city": "Akron",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "AKRON"
+      ],
       "master_cap_pct": 9.41,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3333,6 +2890,10 @@
       "new_city": "Flowood",
       "old_state": "MS",
       "new_state": "MS",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "FLOWOOD"
+      ],
       "master_cap_pct": 6.709,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.13,
@@ -3352,6 +2913,8 @@
       "new_city": "Mountain View",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 6,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0,
@@ -3371,6 +2934,10 @@
       "new_city": "Calexico",
       "old_state": "CA",
       "new_state": "CA",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "CALEXICO"
+      ],
       "master_cap_pct": 7.108,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.19,
@@ -3383,25 +2950,6 @@
       ]
     },
     {
-      "property_id": 25205,
-      "old_address": "2400 Bellevue Rd, Ste 29 A",
-      "new_address": "2400 Bellevue Rd",
-      "old_city": "Dublin",
-      "new_city": "Dublin",
-      "old_state": "GA",
-      "new_state": "GA",
-      "master_cap_pct": 7.858,
-      "fingerprint_source": "stated_cap_rate",
-      "fingerprint_bp_delta": 0.16,
-      "calc_cap_delta_bp": 0.16,
-      "master_sale_date": "2025-02-05",
-      "master_sold_price": 1850000,
-      "has_lat_will_null": true,
-      "source_sales": [
-        14205
-      ]
-    },
-    {
       "property_id": 22615,
       "old_address": "403 E. Broadway St.",
       "new_address": "413 E Broadway St",
@@ -3409,6 +2957,10 @@
       "new_city": "Toledo",
       "old_state": "OH",
       "new_state": "OH",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "TOLEDO"
+      ],
       "master_cap_pct": 6.201,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.09,
@@ -3428,6 +2980,8 @@
       "new_city": "Grand Rapids",
       "old_state": "MI",
       "new_state": "MI",
+      "city_verdict": "SAME",
+      "clinic_cities": [],
       "master_cap_pct": 8.747,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.31,
@@ -3447,6 +3001,10 @@
       "new_city": "Brooksville",
       "old_state": "FL",
       "new_state": "FL",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "BROOKSVILLE"
+      ],
       "master_cap_pct": 5.921,
       "fingerprint_source": "cap_rate",
       "fingerprint_bp_delta": 0.08,
@@ -3466,6 +3024,10 @@
       "new_city": "Leland",
       "old_state": "NC",
       "new_state": "NC",
+      "city_verdict": "SAME",
+      "clinic_cities": [
+        "LELAND"
+      ],
       "master_cap_pct": 5.646,
       "fingerprint_source": "stated_cap_rate",
       "fingerprint_bp_delta": 0.37,
@@ -5034,6 +4596,14 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 28502,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "100 Community Dr Ste 106  ->  100 Community Dr",
+      "sale_ids": [
+        13826
+      ]
+    },
+    {
       "property_id": 28768,
       "reason": "NO_CHANGE"
     },
@@ -5092,6 +4662,14 @@
     {
       "property_id": 35474,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26753,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "2660 S Broadway Ste A  ->  2660 S Broadway",
+      "sale_ids": [
+        14418
+      ]
     },
     {
       "property_id": 29078,
@@ -5278,6 +4856,14 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 29924,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "2438 N. Ponderosa Dr, Suite C-101  ->  2438 N Ponderosa Dr",
+      "sale_ids": [
+        14437
+      ]
+    },
+    {
       "property_id": 24897,
       "reason": "NO_CHANGE"
     },
@@ -5358,6 +4944,25 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 26093,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Plaquemine -> Baton Rouge",
+      "clinic_cities": [
+        "PLAQUEMINE"
+      ],
+      "sale_ids": [
+        14462
+      ]
+    },
+    {
+      "property_id": 28353,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "2014 City Line Rd, Suite 102  ->  2014 City Line Rd",
+      "sale_ids": [
+        13693
+      ]
+    },
+    {
       "property_id": 32210,
       "reason": "NO_CHANGE"
     },
@@ -5397,6 +5002,25 @@
     {
       "property_id": 30725,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 37320,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Robstown -> Corpus Christi",
+      "clinic_cities": [
+        "ROBSTOWN"
+      ],
+      "sale_ids": [
+        14525
+      ]
+    },
+    {
+      "property_id": 27968,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "9200 Staples Dr, Ste A  ->  9200 Staples Drive",
+      "sale_ids": [
+        14550
+      ]
     },
     {
       "property_id": 24734,
@@ -5520,6 +5144,15 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 2998521,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Port Arthur -> Houston",
+      "clinic_cities": [],
+      "sale_ids": [
+        14648
+      ]
+    },
+    {
       "property_id": 26600,
       "reason": "NO_CHANGE"
     },
@@ -5610,6 +5243,15 @@
       ]
     },
     {
+      "property_id": 2167872,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Social Circle -> Macon",
+      "clinic_cities": [],
+      "sale_ids": [
+        14575
+      ]
+    },
+    {
       "property_id": 31909,
       "reason": "NO_CHANGE"
     },
@@ -5640,6 +5282,17 @@
     {
       "property_id": 28133,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30393,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Fort Worth -> Forth Worth",
+      "clinic_cities": [
+        "FORT WORTH"
+      ],
+      "sale_ids": [
+        14675
+      ]
     },
     {
       "property_id": 29215,
@@ -5704,6 +5357,29 @@
       ]
     },
     {
+      "property_id": 28226,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Midwest City -> Oklahoma City",
+      "clinic_cities": [
+        "MIDWEST CITY"
+      ],
+      "sale_ids": [
+        14498,
+        14623
+      ]
+    },
+    {
+      "property_id": 26643,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Saint Johns -> St Johns",
+      "clinic_cities": [
+        "SAINT JOHNS"
+      ],
+      "sale_ids": [
+        14500
+      ]
+    },
+    {
       "property_id": 35942,
       "reason": "NO_CHANGE"
     },
@@ -5752,6 +5428,28 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 27704,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Burgaw -> Shallotte",
+      "clinic_cities": [
+        "BURGAW"
+      ],
+      "sale_ids": [
+        14676
+      ]
+    },
+    {
+      "property_id": 29286,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Bastrop -> Dallas",
+      "clinic_cities": [
+        "BASTROP"
+      ],
+      "sale_ids": [
+        14540
+      ]
+    },
+    {
       "property_id": 29687,
       "reason": "NO_CHANGE"
     },
@@ -5766,6 +5464,14 @@
     {
       "property_id": 30318,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30179,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "6010 Forest Park, Suite 100  ->  6010 Forest Park Rd",
+      "sale_ids": [
+        13881
+      ]
     },
     {
       "property_id": 30571,
@@ -5873,6 +5579,15 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 29729,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Ronceverte -> Lewisburg",
+      "clinic_cities": [],
+      "sale_ids": [
+        14101
+      ]
+    },
+    {
       "property_id": 29841,
       "reason": "CONFLICTING_MASTERS",
       "detail": "425 M-B LN|CHILTON|WI  ||  425 MB LN|CHILTON|WI",
@@ -5921,6 +5636,23 @@
     {
       "property_id": 31445,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 35331,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Mount Pleasant -> Racine",
+      "clinic_cities": [],
+      "sale_ids": [
+        14148
+      ]
+    },
+    {
+      "property_id": 24662,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "1680 Osceola Elementary Rd Suite B  ->  1680 Osceola Elementary Rd",
+      "sale_ids": [
+        14182
+      ]
     },
     {
       "property_id": 36314,
@@ -5979,6 +5711,17 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 26729,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Saint Paul -> St Paul",
+      "clinic_cities": [
+        "SAINT PAUL"
+      ],
+      "sale_ids": [
+        14228
+      ]
+    },
+    {
       "property_id": 798948,
       "reason": "NO_CHANGE"
     },
@@ -6004,6 +5747,14 @@
       ]
     },
     {
+      "property_id": 22903,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "4601 Medical Center Dr Ste G  ->  4717 Medical Center Dr",
+      "sale_ids": [
+        6366
+      ]
+    },
+    {
       "property_id": 22180,
       "reason": "NO_CHANGE"
     },
@@ -6014,6 +5765,22 @@
     {
       "property_id": 35817,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29886,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "4510 Ohara Ave Suite B  ->  4510 O'Hara Blvd",
+      "sale_ids": [
+        14244
+      ]
+    },
+    {
+      "property_id": 26169,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "3030 N Arnoult Rd, Ste A  ->  3030 N Arnoult",
+      "sale_ids": [
+        991
+      ]
     },
     {
       "property_id": 28127,
@@ -6030,6 +5797,15 @@
     {
       "property_id": 39190,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 38047,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Belleville -> Pekin",
+      "clinic_cities": [],
+      "sale_ids": [
+        14130
+      ]
     },
     {
       "property_id": 30930,
@@ -6049,6 +5825,14 @@
     {
       "property_id": 27545,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28120,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "6901 Glenn Hwy Suite A  ->  6901 Glenn Hwy",
+      "sale_ids": [
+        14057
+      ]
     },
     {
       "property_id": 37873,
@@ -6073,6 +5857,14 @@
     {
       "property_id": 1806668,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 24762,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "1299 East Commercial Blvd #100  ->  1299 E Commercial Blvd",
+      "sale_ids": [
+        588
+      ]
     },
     {
       "property_id": 28788,
@@ -6156,6 +5948,15 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 28384,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Upper Darby -> Philadelphia",
+      "clinic_cities": [],
+      "sale_ids": [
+        14111
+      ]
+    },
+    {
       "property_id": 28703,
       "reason": "NO_CHANGE"
     },
@@ -6172,6 +5973,23 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 25174,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "1016 Claxton Dairy Rd Ste 1a  ->  1016 Claxton Dairy Rd",
+      "sale_ids": [
+        14210
+      ]
+    },
+    {
+      "property_id": 2075912,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: St Joseph -> Saint Joseph",
+      "clinic_cities": [],
+      "sale_ids": [
+        13810
+      ]
+    },
+    {
       "property_id": 22095,
       "reason": "NO_CHANGE"
     },
@@ -6184,12 +6002,34 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 22667,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Paris -> Burgettstown",
+      "clinic_cities": [
+        "PARIS"
+      ],
+      "sale_ids": [
+        8859
+      ]
+    },
+    {
       "property_id": 37738,
       "reason": "NO_CHANGE"
     },
     {
       "property_id": 37756,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 26952,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Saint Louis -> St. Louis",
+      "clinic_cities": [
+        "SAINT LOUIS"
+      ],
+      "sale_ids": [
+        13760
+      ]
     },
     {
       "property_id": 27008,
@@ -6244,6 +6084,17 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 27284,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Deptford -> Woodbury",
+      "clinic_cities": [
+        "DEPTFORD"
+      ],
+      "sale_ids": [
+        13667
+      ]
+    },
+    {
       "property_id": 27914,
       "reason": "NO_CHANGE"
     },
@@ -6260,8 +6111,39 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 28139,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "3812 Center Rd, Suite 101  ->  3812 Center Rd",
+      "sale_ids": [
+        13764
+      ]
+    },
+    {
+      "property_id": 29836,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Lake Hallie -> Eau Claire",
+      "clinic_cities": [
+        "LAKE HALLIE"
+      ],
+      "sale_ids": [
+        13770
+      ]
+    },
+    {
       "property_id": 29459,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 28385,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: New Castle -> Waynesburg",
+      "clinic_cities": [
+        "NEW CASTLE"
+      ],
+      "sale_ids": [
+        13779,
+        14009
+      ]
     },
     {
       "property_id": 25678,
@@ -6300,12 +6182,31 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 29613,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "6825 Burden Blvd Ste A  ->  6825 Burden Blvd",
+      "sale_ids": [
+        13892
+      ]
+    },
+    {
       "property_id": 29069,
       "reason": "NO_CHANGE"
     },
     {
       "property_id": 31377,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 29451,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Tappahannock -> Bedford",
+      "clinic_cities": [
+        "TAPPAHANNOCK"
+      ],
+      "sale_ids": [
+        13905
+      ]
     },
     {
       "property_id": 28782,
@@ -6356,8 +6257,25 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 30403,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Fort Worth -> Keller",
+      "clinic_cities": [],
+      "sale_ids": [
+        14048
+      ]
+    },
+    {
       "property_id": 32158,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 30077,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "725 Ridder Park Dr., Ste 50  ->  725 Ridder Park Dr",
+      "sale_ids": [
+        14062
+      ]
     },
     {
       "property_id": 30587,
@@ -6388,6 +6306,17 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 22882,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Van Nuys -> Los Angeles",
+      "clinic_cities": [
+        "VAN NUYS"
+      ],
+      "sale_ids": [
+        14212
+      ]
+    },
+    {
       "property_id": 27125,
       "reason": "NO_CHANGE"
     },
@@ -6398,6 +6327,14 @@
     {
       "property_id": 23861,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25761,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "700 Willow St Suite 102  ->  300 N 1st St",
+      "sale_ids": [
+        893
+      ]
     },
     {
       "property_id": 28992,
@@ -6428,6 +6365,14 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 24493,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "561 25 Rd Ste D  ->  561 25 Rd",
+      "sale_ids": [
+        542
+      ]
+    },
+    {
       "property_id": 28843,
       "reason": "NO_CHANGE"
     },
@@ -6450,6 +6395,18 @@
     {
       "property_id": 37949,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22419,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CMS_BACKS_DIA: Deer Park -> Corpus Christi",
+      "clinic_cities": [
+        "DEER PARK"
+      ],
+      "sale_ids": [
+        14070,
+        13845
+      ]
     },
     {
       "property_id": 38795,
@@ -6492,6 +6449,14 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 30117,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "4207 Bangs Ave, Suite 100  ->  4207 Bangs Ave",
+      "sale_ids": [
+        13894
+      ]
+    },
+    {
       "property_id": 22983,
       "reason": "NO_CHANGE"
     },
@@ -6528,8 +6493,24 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 36941,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "2082 Otay Lakes Road, Suite  ->  2082 Otay Lakes Rd, A1",
+      "sale_ids": [
+        14163
+      ]
+    },
+    {
       "property_id": 36185,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22800,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "6700 Randolph Blvd Ste 101  ->  6700 Randolph Blvd",
+      "sale_ids": [
+        14194
+      ]
     },
     {
       "property_id": 31198,
@@ -6546,6 +6527,15 @@
     {
       "property_id": 22523,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 22849,
+      "reason": "MASTER_LESS_PRECISE_CITY",
+      "detail": "SKIP_CITY_UNVERIFIED: Wyoming -> Grand Rapids",
+      "clinic_cities": [],
+      "sale_ids": [
+        180
+      ]
     },
     {
       "property_id": 29824,
@@ -6568,8 +6558,24 @@
       "reason": "NO_CHANGE"
     },
     {
+      "property_id": 22721,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "7700 Imperial Hwy Suite R  ->  9041 Imperial Hwy",
+      "sale_ids": [
+        144
+      ]
+    },
+    {
       "property_id": 2314735,
       "reason": "NO_CHANGE"
+    },
+    {
+      "property_id": 25205,
+      "reason": "MASTER_LESS_PRECISE_SUITE",
+      "detail": "2400 Bellevue Rd, Ste 29 A  ->  2400 Bellevue Rd",
+      "sale_ids": [
+        14205
+      ]
     },
     {
       "property_id": 29769,
