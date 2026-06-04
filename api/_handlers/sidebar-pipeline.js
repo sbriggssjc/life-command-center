@@ -4460,8 +4460,9 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
 // level of their cap-rate denominator, and lets a UI show "this 7.2% cap was
 // audited against the Q4-2023 CMBS servicer report" instead of just "7.2%".
 //
-// Restricted to gov-domain sales per user spec — dia cap rates come from
-// net rent (NNN structure) and don't have an NOI source to point at.
+// R66x.2: enabled for gov AND dia. dia NNN cap rates are net-rent-derived, but
+// OMs (and occasionally CMBS) DO carry an in-place NOI worth pointing at; for dia
+// we record only the NOI lineage and leave cap_rate_quality (its suspect flag) alone.
 //
 // Lookup order:
 //   1. Loan snapshot for any loan on this property, as_of_date in the
@@ -4475,7 +4476,14 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
 // no sale date). Failures are swallowed and the write proceeds without
 // the new provenance fields — they're additive, never blocking.
 async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
-  if (domain !== 'government') return {};
+  // R66x.2 (OM/CMBS NOI wiring): enabled for gov AND dia. gov stores the NOI-trust
+  // tier in cap_rate_quality; dia OVERLOADS cap_rate_quality for its suspect/
+  // implausible flag, so for dia we record ONLY the NOI lineage
+  // (cap_rate_noi_source_table/_id) and never write cap_rate_quality (which would
+  // clobber the suspect flag). The lineage table name implies the tier on dia
+  // (loan_snapshots=cmbs_audited, property_financials=om_actual).
+  if (domain !== 'government' && domain !== 'dialysis') return {};
+  const stampQuality = (domain === 'government');
 
   const hasCapRate =
     sale.cap_rate != null
@@ -4515,7 +4523,7 @@ async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
           return {
             cap_rate_noi_source_table: 'loan_snapshots',
             cap_rate_noi_source_id:    snapsRes.data[0].snapshot_id,
-            cap_rate_quality:          'cmbs_audited',
+            ...(stampQuality ? { cap_rate_quality: 'cmbs_audited' } : {}),
           };
         }
       }
@@ -4534,7 +4542,7 @@ async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
       return {
         cap_rate_noi_source_table: 'property_financials',
         cap_rate_noi_source_id:    finRes.data[0][finPkCol],
-        cap_rate_quality:          'om_actual',
+        ...(stampQuality ? { cap_rate_quality: 'om_actual' } : {}),
       };
     }
   } catch (err) {
@@ -4545,12 +4553,14 @@ async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
   // ── Tier 3: OM/CoStar-derived NOI (pro-forma quality)
   // We don't have a stable record_id to point at — these come from
   // metadata.noi which is a transient capture artifact. Set quality only.
-  if (metadata?._intake_promoted || metadata?.noi) {
+  // Tiers 3-4 set only cap_rate_quality (no record to point at). On dia that
+  // column is the suspect flag, so dia returns {} here rather than clobber it.
+  if (stampQuality && (metadata?._intake_promoted || metadata?.noi)) {
     return { cap_rate_quality: 'om_pro_forma' };
   }
 
-  // ── Tier 4: no NOI source identified — market-implied
-  return { cap_rate_quality: 'market_implied' };
+  // ── Tier 4: no NOI source identified — market-implied (gov only)
+  return stampQuality ? { cap_rate_quality: 'market_implied' } : {};
 }
 
 /**
