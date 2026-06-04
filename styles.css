@@ -2052,6 +2052,8 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .pq-hero { border: 1px solid var(--accent2); border-left: 4px solid var(--accent2); background: linear-gradient(180deg, rgba(0,61,165,0.05), transparent); box-shadow: 0 1px 6px rgba(0,61,165,0.08); }
 .pq-hero-flag { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; color: var(--accent2); margin-bottom: 6px; }
 .pq-next { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
+.pq-bulkbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; padding: 10px 14px; border: 1px dashed var(--border); border-radius: 8px; background: var(--s1); }
+.pq-bulkbar-label { font-size: 13px; color: var(--text2); }
 .rc-progress { font-size: 12px; font-weight: 700; color: var(--text2); margin: 0 0 12px; font-variant-numeric: tabular-nums; }
 .rc-progress span { color: var(--accent2); }
 

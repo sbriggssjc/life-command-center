@@ -488,6 +488,37 @@ async function resolveOwnerOppState(entityId) {
   return out;
 }
 
+// Batch-resolve open-prospect-opportunity state for a page of priority-queue
+// rows (R4-C §2 state-aware CTA). One cheap read per ~80 entities lets the
+// front-end pick the right CTA per row (Open opportunity / Log touch / View
+// opportunity) instead of always showing "Open opportunity →". Soft-fails to
+// leaving open_opportunity undefined so the UI falls back to band inference.
+async function attachPqOppState(items) {
+  const ids = Array.from(new Set(
+    (Array.isArray(items) ? items : [])
+      .map(it => it && it.entity_id)
+      .filter(Boolean)
+      .map(String)
+  ));
+  if (!ids.length) return;
+  const openSet = new Set();
+  for (let i = 0; i < ids.length; i += 80) {
+    const chunk = ids.slice(i, i + 80);
+    // UUIDs are safe inside an unquoted PostgREST in.() list.
+    const inList = 'in.(' + chunk.join(',') + ')';
+    try {
+      const r = await opsQuery('GET',
+        'bd_opportunities?select=entity_id&type=eq.prospect&is_open=is.true&entity_id=' + inList);
+      if (r.ok && Array.isArray(r.data)) {
+        for (const row of r.data) if (row && row.entity_id) openSet.add(String(row.entity_id));
+      }
+    } catch (_e) { /* soft-fail: leave this chunk unresolved */ }
+  }
+  for (const it of items) {
+    if (it && it.entity_id) it.open_opportunity = openSet.has(String(it.entity_id));
+  }
+}
+
 // ============================================================================
 // PRIORITY QUEUE LIST (BD front door, 2026-06-03)
 // GET /api/priority-queue?band=<P1|P0.5|...>&limit=<n>&offset=<n>
@@ -514,9 +545,12 @@ async function handlePriorityQueueList(req, res) {
     'source_property_firm_term_remaining',
   ].join(',');
 
-  // Items page: most-urgent band first, then most-overdue within band.
+  // Items page: most-urgent band first, then most-overdue within band, then
+  // by portfolio value so the rows worth the most rank above no-value rows
+  // (R4-C §2: P0.5 had 488 identical rows with no-value items sorting above
+  // $385K-rent ones). current_annual_rent_total breaks the within-band tie.
   let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
-    + '&order=priority_band.asc,days_overdue.desc.nullslast'
+    + '&order=priority_band.asc,days_overdue.desc.nullslast,current_annual_rent_total.desc.nullslast'
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
 
@@ -534,6 +568,9 @@ async function handlePriorityQueueList(req, res) {
     return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
   }
   const items = Array.isArray(itemsR.data) ? itemsR.data : [];
+
+  // Attach persisted open-opportunity truth so the CTA can be state-aware.
+  await attachPqOppState(items);
 
   const countMap = {};
   let total = 0;

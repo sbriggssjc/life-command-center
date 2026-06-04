@@ -1374,16 +1374,50 @@ function _pqReason(reason) {
   var r = String(reason || '');
   var m = r.match(/^agency_active_solicitations:(\d+)$/);
   if (m) return m[1] + ' active agency solicitation' + (m[1] === '1' ? '' : 's');
+  // P6 onboarding steps arrive as onboarding_step_due_<N> — keep them plain.
+  var ob = r.match(/^onboarding_step_due_?(\d+)?$/);
+  if (ob) return 'Onboarding touch overdue' + (ob[1] ? ' (step ' + ob[1] + ')' : '');
+  // Plain-language map — no doctrine jargon ("Developer Overdue") leaking to
+  // the operator (R4-C §2).
   var map = {
+    developer_overdue: 'Onboarding touch overdue (developer)',
     lease_expiry_24mo: 'Lease expires within 24 months',
     open_bd_opportunity_needed: 'Needs a BD opportunity opened',
     onboarding_cadence_due: 'Onboarding touch due',
+    onboarding_step_due: 'Onboarding touch overdue',
+    steady_state_cadence_due: 'Steady-state touch overdue',
     steady_state_touch_due: 'Steady-state touch due',
     recent_acquisition_streak: 'Active acquirer (recent buying streak)',
     aging_building: 'Aging building (replacement candidate)'
   };
   if (map[r]) return map[r];
   return r ? r.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }) : 'BD priority';
+}
+// State-aware CTA resolution (R4-C §2). Returns one of:
+//   'open_opp'  — no open opportunity yet → "Open opportunity →"
+//   'log_touch' — open opportunity + a cadence touch due/overdue → "Log touch →"
+//   'view_opp'  — open opportunity, nothing due → "View opportunity →"
+// Uses the open_opportunity flag the list now attaches; falls back to band/
+// cadence inference when the flag is absent (older payloads / soft-fail).
+function _pqCtaState(it) {
+  var band = String(it.priority_band || '').toUpperCase();
+  var reason = String(it.reason || '');
+  var hasOpp = (it.open_opportunity === true);
+  var oppResolved = (typeof it.open_opportunity === 'boolean');
+  var dueNow = false;
+  if (it.next_touch_due) { try { dueNow = new Date(it.next_touch_due).getTime() <= Date.now(); } catch (_e) {} }
+  // P0.5 doctrine: explicitly needs an opportunity opened.
+  if (band === 'P0.5' || reason === 'open_bd_opportunity_needed') return 'open_opp';
+  // Bands that by definition carry an open opp + an overdue cadence touch.
+  if (band === 'P0' || band === 'P6' || band === 'P7') return 'log_touch';
+  if (oppResolved) {
+    if (!hasOpp) return 'open_opp';
+    return dueNow ? 'log_touch' : 'view_opp';
+  }
+  // Unresolved payload: infer from the cadence signal.
+  if (dueNow) return 'log_touch';
+  if (it.next_touch_due) return 'view_opp';
+  return 'open_opp';
 }
 function _pqMoney(v) {
   var n = Number(v);
@@ -1393,6 +1427,7 @@ function _pqMoney(v) {
 async function renderPriorityQueuePage(band) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
+  window._pqCurrentBand = band || null;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   var perf = opsPerf('render:priority_queue');
   var qs = '/api/priority-queue?limit=150' + (band ? '&band=' + encodeURIComponent(band) : '');
@@ -1413,6 +1448,10 @@ async function renderPriorityQueuePage(band) {
   });
   html += '</div>';
   if (!items.length) { html += '<div class="ops-empty">Nothing in this band. \u2713</div>'; el.innerHTML = html; perf.end(); return; }
+  // Collect entities still needing an opportunity opened, for the bulk
+  // "Open top N" action (R4-C \u00A72). Reset per render.
+  var _openOppCandidates = [];
+  var _rowsHtml = '';
   items.forEach(function (it, _ix) {
     var domShort = it.source_domain === 'government' ? 'gov' : it.source_domain === 'dialysis' ? 'dia' : (it.source_domain || '');
     var hasProp = it.source_property_id != null && domShort;
@@ -1428,13 +1467,23 @@ async function renderPriorityQueuePage(band) {
     // data-q-id keys the self-propelling row-advance (entity_id is the natural
     // PQ row key); reused by _opsAdvanceAfterComplete after open_opportunity.
     var _qid = it.entity_id == null ? '' : String(it.entity_id);
-    // Owner-level rows have no property to open. If they carry an entity_id we
-    // can open a BD opportunity (QA#2); only fall back to the inert badge when
-    // there's genuinely no entity to act on.
-    var _ownerAction = (!hasProp && _qid)
-      ? '<button class="q-action primary" onclick="pqOpenOpportunity(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Open opportunity \u2192</button>'
-      : '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
-    html += '<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
+    // State-aware CTA (R4-C \u00A72): the action reflects the row's CURRENT state
+    // instead of always offering "Open opportunity". Owner-level rows (no
+    // property to open) act directly on the entity; property rows route to the
+    // detail banner, which is itself state-aware.
+    var _state = _qid ? _pqCtaState(it) : null;
+    var _ownerAction;
+    if (!_qid) {
+      _ownerAction = '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
+    } else if (_state === 'log_touch') {
+      _ownerAction = '<button class="q-action primary" onclick="pqLogTouch(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Log touch \u2192</button>';
+    } else if (_state === 'view_opp') {
+      _ownerAction = '<button class="q-action" onclick="pqLogTouch(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">View opportunity \u2192</button>';
+    } else {
+      _openOppCandidates.push({ id: _qid, vertical: it.vertical || '' });
+      _ownerAction = '<button class="q-action primary" onclick="pqOpenOpportunity(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Open opportunity \u2192</button>';
+    }
+    _rowsHtml += '<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
       + '<div class="q-item-header">'
       + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
       + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
@@ -1447,10 +1496,68 @@ async function renderPriorityQueuePage(band) {
           : _ownerAction)
       + '</div></div>';
   });
+  // Bulk "Open top N" action (R4-C §2): when a band (esp. P0.5) holds many rows
+  // that all just need an opportunity opened, let the operator clear the top
+  // slice in one idempotent click instead of 488 individual ones.
+  window._pqOpenOppCandidates = _openOppCandidates;
+  if (_openOppCandidates.length > 1) {
+    var _bulkN = Math.min(20, _openOppCandidates.length);
+    html += '<div class="pq-bulkbar">'
+      + '<span class="pq-bulkbar-label">' + _openOppCandidates.length + ' rows just need an opportunity opened.</span> '
+      + '<button class="q-action primary" onclick="pqOpenTopN(' + _bulkN + ')">⚡ Open top ' + _bulkN + ' opportunities</button>'
+      + '</div>';
+  }
+  html += _rowsHtml;
   el.innerHTML = html;
   perf.end();
 }
 window.renderPriorityQueuePage = renderPriorityQueuePage;
+
+// Bulk-open the top N owner opportunities still needing one (R4-C §2). Reuses
+// the idempotent open_opportunity path, so re-clicks and overlaps are safe.
+async function pqOpenTopN(n) {
+  var list = (window._pqOpenOppCandidates || []).slice(0, Math.max(1, n || 10));
+  if (!list.length) { showToast('No opportunities to open', 'info'); return; }
+  showToast('Opening ' + list.length + ' opportunities…', 'info');
+  var opened = 0, already = 0, failed = 0;
+  for (var i = 0; i < list.length; i++) {
+    try {
+      var res = await opsPost('/api/operations?action=open_opportunity', { entity_id: list[i].id, vertical: list[i].vertical || null });
+      if (res.ok && res.data && res.data.ok) { if (res.data.already_open) already++; else opened++; }
+      else failed++;
+    } catch (_e) { failed++; }
+  }
+  showToast('Opened ' + opened + (already ? ' · ' + already + ' already open' : '') + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+  renderPriorityQueuePage(window._pqCurrentBand || undefined);
+}
+window.pqOpenTopN = pqOpenTopN;
+
+// Log a cadence touch for an owner-level priority-queue row, then advance the
+// row in place so the queue self-propels (R4-C §2 state-aware CTA). Used by the
+// "Log touch →" / "View opportunity →" CTAs (open opp + cadence present).
+async function pqLogTouch(entityId, vertical, btn) {
+  if (!entityId) { showToast('No entity to log a touch for', 'error'); return; }
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Logging…'; }
+  try {
+    const res = await opsPost('/api/operations?action=advance_cadence', {
+      entity_id: entityId,
+      type: 'touch',
+      outcome: 'logged_from_priority_queue',
+    });
+    if (res.ok && res.data && (res.data.ok || res.data.cadence_id || res.data.next_touch_due)) {
+      showToast('Touch logged', 'success');
+      if (!_opsAdvanceAfterComplete(entityId)) renderPriorityQueuePage(window._pqCurrentBand || undefined);
+    } else {
+      showToast((res.data && res.data.error) || res.error || 'Could not log touch', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Log touch →'; }
+    }
+  } catch (err) {
+    showToast('Log touch error: ' + (err && err.message ? err.message : err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Log touch →'; }
+  }
+}
+window.pqLogTouch = pqLogTouch;
 
 // QA#2 — open a BD opportunity for an owner-level priority-queue row, then
 // advance the row in place so the queue self-propels.
