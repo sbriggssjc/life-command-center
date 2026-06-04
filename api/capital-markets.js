@@ -546,8 +546,16 @@ function timeAxisColumnFor(template) {
  * read these already-clamped rows, so the clamp cascades to combo/summary
  * tabs for free.
  */
+// R68-E (G3): per-chart lower bound on the time axis. cpi_vs_renewal_cagr's
+// per-lease GSA renewal CAGR series only starts 2013-02; the CPI-only early
+// years (2001-2011) add nothing but axis clutter, so crop the x-axis to
+// 2012-01. period_end is ISO 'YYYY-MM-DD' (text-comparable).
+const CHART_MIN_PERIOD = {
+  cpi_vs_renewal_cagr: '2012-01-01',
+};
+
 function clampRowsToAsOf(rows, template, asOf) {
-  if (!asOf || !Array.isArray(rows) || rows.length === 0) return rows;
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
   const shape = String(template?.data_shape || '').toLowerCase();
   const isTimeSeries =
     shape.startsWith('time_series') ||
@@ -556,13 +564,22 @@ function clampRowsToAsOf(rows, template, asOf) {
     shape.includes('yearly');
   if (!isTimeSeries) return rows;
   const col = timeAxisColumnFor(template); // 'year' | 'period_end'
+  // R68-E (G3): apply the per-chart lower bound (data-side x-axis crop).
+  const minPeriod = CHART_MIN_PERIOD[template?.chart_template_id];
+  let out = rows;
+  if (minPeriod && col === 'period_end') {
+    out = out.filter(
+      (r) => r?.period_end == null || String(r.period_end).slice(0, 10) >= minPeriod
+    );
+  }
+  if (!asOf) return out;
   if (col === 'year') {
     const maxYear = new Date(asOf).getUTCFullYear();
-    return rows.filter((r) => r?.year == null || Number(r.year) <= maxYear);
+    return out.filter((r) => r?.year == null || Number(r.year) <= maxYear);
   }
   // period_end is an ISO date string; YYYY-MM-DD compares correctly as text.
   const cap = String(asOf).slice(0, 10);
-  return rows.filter(
+  return out.filter(
     (r) => r?.period_end == null || String(r.period_end).slice(0, 10) <= cap
   );
 }
