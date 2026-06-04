@@ -245,3 +245,38 @@ bugs: dia `v_sf_activity_feed.sf_account_id` 400 on every detail load, and
 `renderRecentEmails` `jsStringArg` ReferenceError; plus design notes on
 org-vs-asset entity duality for cross-flow idempotence and legacy `source_ref`
 backfill).
+
+
+## Addendum 8 — FINAL: E2E#7 verified live; audit closed
+
+- **Console clean** on a fresh full load + dia Activity Log tab: the
+  `v_sf_activity_feed` 400 and the `jsStringArg` crash are both gone.
+- **Trigger fix verified** via the exact probe insert on the failing entity
+  (Acquest, pre-seeded cadence): opportunity insert succeeds; the existing
+  cadence reactivates-and-links (`phase=onboarding`, `bd_opportunity_id` set).
+- **Terminal banner state**: Bloomington (gov 5450) on a cold open renders
+  **"On cadence ✓ — Next touch Jun 3, 2026 · ✓ Owner › ✓ Lead › ✓ Cadence"** —
+  the full spine completion detected purely from persisted state, with no action
+  re-offered. The self-propelling contract's end state works.
+
+### Audit closed. Final tally for 2026-06-03:
+- **QA cycle:** 12 findings → fixed → verified live.
+- **E2E cycle:** 7 finding clusters → fixed → verified live (Railway mounts incl.
+  Capital Markets/bridges/intake-share; cadence owner FK; dia/gov
+  canonicalization + orphan guard; targeting/idempotence/persisted state;
+  cadence-trigger conflict; 2 console bugs).
+- The BD spine closes end-to-end on both domains with correct landlord
+  targeting, idempotent writes, persisted UI state, a queue that learns from
+  actions, and the M365/Copilot surface reading live canonical state.
+
+### Deliberately deferred (documented, not forgotten):
+- Org-vs-asset entity unification for cross-flow dedupe (architectural; interim
+  `source_property_id` dedupe shipped).
+- Legacy dia `source_ref` backfill (3 rows; wrong-key risk > benefit).
+- QA#8 auth enforcement flip (Scott's env-var decision; guard + readiness probe live).
+- CI workflow for `npm test` (recommended; Scott's call).
+- Next-state SOS adapters (CA/TX) — future-todo doc.
+
+CLAUDE.md has been accumulating the session's engineering lessons (canonical
+dia/gov forms, the unique-INDEX ON CONFLICT gotcha, the seed-probe collision) —
+future sessions inherit them.
