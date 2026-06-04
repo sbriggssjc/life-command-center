@@ -30,6 +30,7 @@ import { runDownstreamPipeline } from './intake-extractor.js';
 import { upsertDomainProperty } from './sidebar-pipeline.js';
 import { normalizeState } from '../_shared/entity-link.js';
 import { splitMultiAddress } from '../_shared/normalize-street-address.js';
+import { firstOf } from '../_shared/intake-classify.js';
 
 // Modest confidence: AI-extracted from an OM, no county-records confirmation.
 const OM_CREATE_CONFIDENCE = 0.6;
@@ -146,7 +147,7 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
   // 4. Create a property per address using the existing sidebar writer.
   const state = normalizeState(snapshot.state);
   for (const pair of pairs) {
-    const tenant = pair.tenant || snapshot.tenant_name || null;
+    const tenant = pair.tenant || firstOf(snapshot.tenant_name) || null;
     const domain = pickDomainForTenant(tenant);
     const entity = {
       address: pair.address,

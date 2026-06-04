@@ -138,6 +138,93 @@ export function isNonDealSnapshot(snapshot) {
   return true;
 }
 
+// ── Cap-rate normalization (Round 77f, 2026-06-04) ───────────────────────
+// The extractor emits cap rates in BOTH forms depending on the AI/prompt:
+//   - decimal fraction  : 0.055  (5.5%)        — already DB-ready
+//   - whole-number pct   : 7.75   (7.75%)       — needs ÷100
+// The promoter previously assumed percent form and unconditionally divided by
+// 100, so a decimal-form 0.055 became 0.00055 and blew the
+// chk_*_cap_rate_decimal_range check ([0.005, 0.30]) — killing the listing
+// INSERT (Buckeye AZ, listing 23514, 2026-06-04). Detect, don't assume.
+//
+// Returns a DB-ready DECIMAL cap rate, or null when the value is implausible
+// either way (callers keep the raw value in notes/metadata rather than failing
+// the row). Plausible decimal band mirrors the DB check: [0.005, 0.30].
+//
+//   v > 1.5            → treat as percent, ÷100, accept only if result in band
+//   0.005 ≤ v ≤ 0.30   → already decimal, pass through
+//   0.30 < v ≤ 1.5     → ambiguous/implausible → null
+//   v < 0.005          → implausible (e.g. a double-divided 0.00055) → null
+export function normalizeCapRate(v) {
+  if (v == null) return null;
+  let n;
+  if (typeof v === 'number') {
+    n = v;
+  } else {
+    // Strip $, %, commas, whitespace — keep digits, dot, minus.
+    const cleaned = String(v).replace(/[^0-9.\-]/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.') return null;
+    n = Number(cleaned);
+  }
+  if (!Number.isFinite(n) || n <= 0) return null;
+
+  if (n > 1.5) {
+    const dec = n / 100;
+    return dec >= 0.005 && dec <= 0.30 ? round6(dec) : null;
+  }
+  if (n >= 0.005 && n <= 0.30) return round6(n);
+  return null;
+}
+
+function round6(x) {
+  return Math.round(x * 1e6) / 1e6;
+}
+
+// ── Array-valued snapshot field coercion (Round 77f, 2026-06-04) ──────────
+// The F1/F2 work made tenant_name, listing_broker, listing_broker_email,
+// seller_name (etc.) legitimately ARRAY-valued for multi-tenant / multi-broker
+// OMs. Scalar consumers (`(snapshot.foo || '').trim()`, text-column writes)
+// then crash with "(...).trim is not a function" or stuff a raw JSON array
+// (["Jay","Tom"]) into a text column. These helpers coerce at the call site:
+//   - firstOf(v)        → first non-empty element when array (or array-shaped
+//                         JSON string), else the scalar. "first-as-primary".
+//   - joinedOf(v, sep)  → human-joined string ("Jay Patel, Thomas Ladt") when
+//                         array/array-string, else the scalar. For text columns
+//                         and for feeding the broker comma-splitter — never raw
+//                         JSON.
+
+function parseArrayShape(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (s.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed;
+      } catch { /* not JSON — treat as scalar */ }
+    }
+  }
+  return null;
+}
+
+export function firstOf(v) {
+  if (v == null) return v;
+  const arr = parseArrayShape(v);
+  if (arr == null) return v; // scalar — pass through unchanged
+  const first = arr.find((x) => x != null && String(x).trim() !== '');
+  return first == null ? null : first;
+}
+
+export function joinedOf(v, sep = ', ') {
+  if (v == null) return v;
+  const arr = parseArrayShape(v);
+  if (arr == null) return v; // scalar — pass through unchanged
+  return arr
+    .map((x) => (x == null ? '' : String(x).trim()))
+    .filter(Boolean)
+    .join(sep);
+}
+
 /**
  * Full deal signature: address + tenant + asking_price. Gate for the guarded
  * AUTO create-from-intake mode (the manual route is less strict — an operator
