@@ -64,6 +64,65 @@ describe('normalizeStreetAddress', () => {
     assert.equal(normalizeStreetAddress(undefined), '');
     assert.equal(normalizeStreetAddress(''), '');
   });
+
+  // ── Round 77f: number-word folding + hyphenated ranges ──────────────────
+  describe('number-word folding (Round 77f)', () => {
+    it('folds cardinal number-words to digits', () => {
+      assert.equal(normalizeStreetAddress('27150 Eight Mile Road'), '27150 8 mile rd');
+      assert.equal(normalizeStreetAddress('100 Five Points Blvd'), '100 5 points blvd');
+      assert.equal(normalizeStreetAddress('200 Twenty Grand Ave'), '200 20 grand ave');
+    });
+
+    it('folds ordinal number-words to ordinal digit form', () => {
+      assert.equal(normalizeStreetAddress('44 First Street'), '44 1st st');
+      assert.equal(normalizeStreetAddress('44 1st St'), '44 1st st');
+      assert.equal(normalizeStreetAddress('88 Tenth Avenue'), '88 10th ave');
+    });
+
+    // The real pair from the 2026-06-04 live test: OM "27150 Eight Mile Road"
+    // ↔ dia 26639 "27150 W 8 Mile Rd". Equal only after directional-strip.
+    it('OM "27150 Eight Mile Road" matches dia "27150 W 8 Mile Rd" (missing-directional)', () => {
+      const om = normalizeStreetAddress('27150 Eight Mile Road');
+      const db = normalizeStreetAddress('27150 W 8 Mile Rd');
+      assert.equal(om, '27150 8 mile rd');
+      // OM lacks the directional the DB has — directional-strip both sides.
+      assert.equal(stripDirectionalTokens(om), stripDirectionalTokens(db));
+    });
+
+    // The Livonia data-note dupe pair from the same forensic.
+    it('"28425 8 Mile Rd" === "28425 Eight Mile Rd"', () => {
+      assert.equal(
+        normalizeStreetAddress('28425 8 Mile Rd'),
+        normalizeStreetAddress('28425 Eight Mile Rd')
+      );
+    });
+  });
+
+  describe('hyphenated street-number ranges (Round 77f)', () => {
+    // OM "2064 - 2066 Atlantic Ave" ↔ dia 22041 "2064 Atlantic Ave" (Brooklyn).
+    it('collapses a leading range to its first number', () => {
+      assert.equal(normalizeStreetAddress('2064 - 2066 Atlantic Ave'), '2064 atlantic ave');
+      assert.equal(
+        normalizeStreetAddress('2064 - 2066 Atlantic Ave'),
+        normalizeStreetAddress('2064 Atlantic Ave')
+      );
+    });
+
+    it('handles en-dash and no-space range forms', () => {
+      assert.equal(normalizeStreetAddress('2064–2066 Atlantic Ave'), '2064 atlantic ave');
+      assert.equal(normalizeStreetAddress('2064-2066 Atlantic Ave'), '2064 atlantic ave');
+    });
+
+    it('leadingStreetNumber returns the first number of a range', () => {
+      assert.equal(leadingStreetNumber('2064 - 2066 Atlantic Ave'), '2064');
+      assert.equal(leadingStreetNumber('2064-2066 Atlantic Ave'), '2064');
+    });
+
+    it('does not collapse a non-leading hyphen (e.g. a hyphenated street name)', () => {
+      // "100 Winston-Salem Rd" — the hyphen is in the name, not a number range.
+      assert.equal(normalizeStreetAddress('100 Winston-Salem Rd'), '100 winston salem rd');
+    });
+  });
 });
 
 describe('stripDirectionalTokens', () => {

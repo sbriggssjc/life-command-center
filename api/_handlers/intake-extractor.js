@@ -20,7 +20,7 @@ import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI, invokeVisionExtractionAI } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
-import { isNonDealSnapshot } from '../_shared/intake-classify.js';
+import { isNonDealSnapshot, normalizeCapRate, firstOf } from '../_shared/intake-classify.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { createRequire } from 'module';
@@ -322,6 +322,7 @@ Return ONLY a JSON object — no markdown, no explanation, no preamble.
 For any field not present in the document, use null.
 For monetary values, return numbers only (no $ or commas).
 For percentages, return decimals (7.5% → 7.5).
+EXCEPTION — "cap_rate": return a DECIMAL FRACTION, not a whole-number percent (6.5% → 0.065, 7.75% → 0.0775).
 For dates, return YYYY-MM-DD format.
 "address" MUST be the SUBJECT PROPERTY's street address. Do NOT return the listing broker's, marketing firm's, or contact-block address (often in the header/footer or a "For more information contact …" section). If only a contact/brokerage address is present and no subject-property address, return null for "address".
 If the document markets MULTIPLE properties (a portfolio OM), return EVERY subject-property street address as a JSON array of strings in "addresses", and put the first/primary one in "address". For a single-property document, leave "addresses" null. Never pack multiple addresses into the single "address" string.
@@ -1047,9 +1048,17 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
         .filter(Boolean).join(', ');
       facts.push(['Property', loc]);
     }
-    if (mergedSnapshot.tenant_name)  facts.push(['Tenant',       mergedSnapshot.tenant_name]);
+    if (mergedSnapshot.tenant_name)  facts.push(['Tenant',       firstOf(mergedSnapshot.tenant_name)]);
     if (mergedSnapshot.asking_price) facts.push(['Asking price', `$${Number(mergedSnapshot.asking_price).toLocaleString()}`]);
-    if (mergedSnapshot.cap_rate)     facts.push(['Cap rate',     `${mergedSnapshot.cap_rate}%`]);
+    if (mergedSnapshot.cap_rate) {
+      // Snapshot cap_rate may be decimal (0.0775) or percent (7.75); render as
+      // a percent regardless via the shared normalizer (→ decimal → ×100).
+      const capDec = normalizeCapRate(mergedSnapshot.cap_rate);
+      const capDisplay = capDec != null
+        ? `${Math.round(capDec * 10000) / 100}%`
+        : `${mergedSnapshot.cap_rate}`;
+      facts.push(['Cap rate', capDisplay]);
+    }
     if (mergedSnapshot.noi)          facts.push(['NOI',          `$${Number(mergedSnapshot.noi).toLocaleString()}`]);
     if (matchResult?.status === 'matched') {
       facts.push(['Matched',        `${matchResult.domain} / ${matchResult.reason} (${matchResult.confidence})`]);
