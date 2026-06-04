@@ -1,0 +1,3297 @@
+[
+  {
+    "sale_id": 14244,
+    "action": "ADJUDICATE",
+    "cap": 0.07268,
+    "term": 4.126
+  },
+  {
+    "action": "MERGE",
+    "keep": 29886,
+    "drop": 35526
+  },
+  {
+    "action": "MERGE",
+    "keep": 21869,
+    "drop": 33740
+  },
+  {
+    "sale_id": 7959,
+    "action": "ADJUDICATE",
+    "cap": 0.05921,
+    "term": 5.5753
+  },
+  {
+    "action": "MERGE",
+    "keep": 39875,
+    "drop": 28179
+  },
+  {
+    "sale_id": 8043,
+    "action": "ADJUDICATE",
+    "cap": 0.06984,
+    "term": 9.6027
+  },
+  {
+    "action": "MERGE",
+    "keep": 29109,
+    "drop": 37480
+  },
+  {
+    "sale_id": 14235,
+    "action": "ADJUDICATE",
+    "cap": 0.07501,
+    "term": 5.5041
+  },
+  {
+    "action": "MERGE",
+    "keep": 35419,
+    "drop": 29092
+  },
+  {
+    "sale_id": 14228,
+    "action": "ADJUDICATE",
+    "cap": 0.07912,
+    "term": 3.3808
+  },
+  {
+    "action": "MERGE",
+    "keep": 26729,
+    "drop": 39663
+  },
+  {
+    "action": "MERGE",
+    "keep": 26029,
+    "drop": 37482
+  },
+  {
+    "action": "MERGE",
+    "keep": 37483,
+    "drop": 26153
+  },
+  {
+    "sale_id": 14226,
+    "action": "ADJUDICATE",
+    "cap": 0.06,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 31198,
+    "drop": 28084
+  },
+  {
+    "sale_id": 8117,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 1.1781
+  },
+  {
+    "action": "MERGE",
+    "keep": 28226,
+    "drop": 31239
+  },
+  {
+    "sale_id": 7862,
+    "action": "ADJUDICATE",
+    "cap": 0.07611,
+    "term": 8.3068
+  },
+  {
+    "action": "MERGE",
+    "keep": 29456,
+    "drop": 37734
+  },
+  {
+    "action": "MERGE",
+    "keep": 35813,
+    "drop": 27693
+  },
+  {
+    "sale_id": 14214,
+    "action": "ADJUDICATE",
+    "cap": 0.0615,
+    "term": 9.8411
+  },
+  {
+    "sale_id": 9170,
+    "action": "ADJUDICATE",
+    "cap": 0.07441,
+    "term": 3.1452
+  },
+  {
+    "action": "MERGE",
+    "keep": 1380698,
+    "drop": 24622
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 24622,
+    "matched": 1380698,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(24622) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5998,
+    "action": "ADJUDICATE",
+    "cap": 0.08705,
+    "term": 8.6986
+  },
+  {
+    "action": "MERGE",
+    "keep": 30574,
+    "drop": 25003
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 25003,
+    "matched": 30574,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(25003) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 14205,
+    "action": "ADJUDICATE",
+    "cap": 0.07858,
+    "term": 5.737
+  },
+  {
+    "action": "MERGE",
+    "keep": 25205,
+    "drop": 24973
+  },
+  {
+    "sale_id": 32,
+    "action": "ADJUDICATE",
+    "cap": 0.06722,
+    "term": 10.7479
+  },
+  {
+    "action": "MERGE",
+    "keep": 22264,
+    "drop": 32560
+  },
+  {
+    "sale_id": 5994,
+    "action": "ADJUDICATE",
+    "cap": 0.05532,
+    "term": 1.863
+  },
+  {
+    "action": "MERGE",
+    "keep": 24881,
+    "drop": 24668
+  },
+  {
+    "sale_id": 11723,
+    "action": "ADJUDICATE",
+    "cap": 0.06571,
+    "term": 5.6329
+  },
+  {
+    "action": "MERGE",
+    "keep": 39987,
+    "drop": 27850
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27850,
+    "matched": 39987,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27850) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 8010,
+    "action": "ADJUDICATE",
+    "cap": 0.09664,
+    "term": 2.3123
+  },
+  {
+    "action": "MERGE",
+    "keep": 22449,
+    "drop": 32273
+  },
+  {
+    "sale_id": 6016,
+    "action": "ADJUDICATE",
+    "cap": 0.0775,
+    "term": 3.0767
+  },
+  {
+    "action": "MERGE",
+    "keep": 39910,
+    "drop": 23300
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 23300,
+    "matched": 39910,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(23300) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 8171,
+    "action": "ADJUDICATE",
+    "cap": 0.077,
+    "term": 4.7918
+  },
+  {
+    "action": "MERGE",
+    "keep": 37622,
+    "drop": 28020
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 28020,
+    "matched": 37622,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(28020) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 1007,
+    "action": "ADJUDICATE",
+    "cap": 0.08,
+    "term": 4.4411
+  },
+  {
+    "action": "MERGE",
+    "keep": 26299,
+    "drop": 32166
+  },
+  {
+    "sale_id": 6022,
+    "action": "ADJUDICATE",
+    "cap": 0.05958,
+    "term": 10.5534
+  },
+  {
+    "action": "MERGE",
+    "keep": 2445681,
+    "drop": 32561
+  },
+  {
+    "sale_id": 8874,
+    "action": "ADJUDICATE",
+    "cap": 0.07021,
+    "term": 4.9178
+  },
+  {
+    "action": "MERGE",
+    "keep": 30400,
+    "drop": 37776
+  },
+  {
+    "sale_id": 511,
+    "action": "ADJUDICATE",
+    "cap": 0.08315,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 24240,
+    "drop": 32174
+  },
+  {
+    "sale_id": 14182,
+    "action": "ADJUDICATE",
+    "cap": 0.06621,
+    "term": 2.6575
+  },
+  {
+    "action": "MERGE",
+    "keep": 24662,
+    "drop": 36303
+  },
+  {
+    "sale_id": 6036,
+    "action": "ADJUDICATE",
+    "cap": 0.06154,
+    "term": 14.6027
+  },
+  {
+    "action": "MERGE",
+    "keep": 4076579,
+    "drop": 30850
+  },
+  {
+    "action": "MERGE",
+    "keep": 24582,
+    "drop": 32302
+  },
+  {
+    "sale_id": 516,
+    "action": "ADJUDICATE",
+    "cap": 0.05337,
+    "term": 14.6685
+  },
+  {
+    "action": "MERGE",
+    "keep": 24272,
+    "drop": 37437
+  },
+  {
+    "sale_id": 9544,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 7.3534
+  },
+  {
+    "action": "MERGE",
+    "keep": 23773,
+    "drop": 33725
+  },
+  {
+    "action": "MERGE",
+    "keep": 23753,
+    "drop": 33673
+  },
+  {
+    "action": "MERGE",
+    "keep": 22744,
+    "drop": 33023
+  },
+  {
+    "action": "MERGE",
+    "keep": 24995,
+    "drop": 38100
+  },
+  {
+    "action": "MERGE",
+    "keep": 24757,
+    "drop": 22236
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22236,
+    "matched": 24757,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(22236) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 14163,
+    "action": "ADJUDICATE",
+    "cap": 0.05677,
+    "term": 9.5945
+  },
+  {
+    "sale_id": 27,
+    "action": "ADJUDICATE",
+    "cap": 0.06176,
+    "term": 2.6356
+  },
+  {
+    "action": "MERGE",
+    "keep": 22203,
+    "drop": 1763511
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1763511,
+    "matched": 22203,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1763511) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 29,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 14.9233
+  },
+  {
+    "action": "MERGE",
+    "keep": 22235,
+    "drop": 33494
+  },
+  {
+    "sale_id": 6067,
+    "action": "ADJUDICATE",
+    "cap": 0.06606,
+    "term": 7.9644
+  },
+  {
+    "action": "MERGE",
+    "keep": 28588,
+    "drop": 28427
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 28427,
+    "matched": 28588,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(28427) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 9558,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 5.2932
+  },
+  {
+    "action": "MERGE",
+    "keep": 25356,
+    "drop": 39919
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 25356,
+    "matched": 39919,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(39919) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 9711,
+    "action": "ADJUDICATE",
+    "cap": 0.06221,
+    "term": 9.3205
+  },
+  {
+    "action": "MERGE",
+    "keep": 36358,
+    "drop": 39924
+  },
+  {
+    "action": "MERGE",
+    "keep": 2364969,
+    "drop": 26503
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 2364969,
+    "matched": 26503,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26503) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 9723,
+    "action": "ADJUDICATE",
+    "cap": 0.0715,
+    "term": 3.0767
+  },
+  {
+    "action": "MERGE",
+    "keep": 3776967,
+    "drop": 25339
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 25339,
+    "matched": 3776967,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(25339) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "action": "MERGE",
+    "keep": 25390,
+    "drop": 36099
+  },
+  {
+    "sale_id": 6591,
+    "action": "ADJUDICATE",
+    "cap": 0.05181,
+    "term": 5.0712
+  },
+  {
+    "action": "MERGE",
+    "keep": 35231,
+    "drop": 30140
+  },
+  {
+    "sale_id": 885,
+    "action": "ADJUDICATE",
+    "cap": 0.0748,
+    "term": 6.7726
+  },
+  {
+    "action": "MERGE",
+    "keep": 25753,
+    "drop": 35390
+  },
+  {
+    "sale_id": 1121,
+    "action": "ADJUDICATE",
+    "cap": 0.06709,
+    "term": 9.9534
+  },
+  {
+    "action": "MERGE",
+    "keep": 26853,
+    "drop": 36500
+  },
+  {
+    "action": "MERGE",
+    "keep": 26070,
+    "drop": 36206
+  },
+  {
+    "sale_id": 502,
+    "action": "ADJUDICATE",
+    "cap": 0.06833,
+    "term": 2.137
+  },
+  {
+    "action": "MERGE",
+    "keep": 24209,
+    "drop": 35949
+  },
+  {
+    "sale_id": 595,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 3.0274
+  },
+  {
+    "action": "MERGE",
+    "keep": 25121,
+    "drop": 35069
+  },
+  {
+    "action": "MERGE",
+    "keep": 30963,
+    "drop": 30962
+  },
+  {
+    "sale_id": 542,
+    "action": "ADJUDICATE",
+    "cap": 0.07,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 24493,
+    "drop": 24469
+  },
+  {
+    "sale_id": 878,
+    "action": "ADJUDICATE",
+    "cap": 0.07605,
+    "term": 6.1452
+  },
+  {
+    "action": "MERGE",
+    "keep": 25740,
+    "drop": 36167
+  },
+  {
+    "sale_id": 11277,
+    "action": "ADJUDICATE",
+    "cap": 0.05628,
+    "term": 2.3041
+  },
+  {
+    "action": "MERGE",
+    "keep": 24054,
+    "drop": 38692
+  },
+  {
+    "action": "MERGE",
+    "keep": 29451,
+    "drop": 29465
+  },
+  {
+    "action": "MERGE",
+    "keep": 3525903,
+    "drop": 30731
+  },
+  {
+    "sale_id": 61,
+    "action": "ADJUDICATE",
+    "cap": 0.0525,
+    "term": null
+  },
+  {
+    "sale_id": 5007,
+    "action": "ADJUDICATE",
+    "cap": 0.06286,
+    "term": 5.9452
+  },
+  {
+    "action": "MERGE",
+    "keep": 29335,
+    "drop": 29071
+  },
+  {
+    "sale_id": 14116,
+    "action": "ADJUDICATE",
+    "cap": 0.0656,
+    "term": 6.5589
+  },
+  {
+    "action": "MERGE",
+    "keep": 31898,
+    "drop": 30847
+  },
+  {
+    "sale_id": 8351,
+    "action": "ADJUDICATE",
+    "cap": 0.07206,
+    "term": 6.0329
+  },
+  {
+    "action": "MERGE",
+    "keep": 37636,
+    "drop": 35557
+  },
+  {
+    "sale_id": 788,
+    "action": "ADJUDICATE",
+    "cap": 0.05366,
+    "term": 10.8575
+  },
+  {
+    "action": "MERGE",
+    "keep": 25359,
+    "drop": 1888276
+  },
+  {
+    "sale_id": 87,
+    "action": "ADJUDICATE",
+    "cap": 0.05585,
+    "term": 11.2767
+  },
+  {
+    "action": "MERGE",
+    "keep": 1986391,
+    "drop": 22503
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1986391,
+    "matched": 22503,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(22503) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5033,
+    "action": "ADJUDICATE",
+    "cap": 0.0622,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 3456679,
+    "drop": 26195
+  },
+  {
+    "sale_id": 806,
+    "action": "ADJUDICATE",
+    "cap": 0.06539,
+    "term": 5.4575
+  },
+  {
+    "sale_id": 209,
+    "action": "ADJUDICATE",
+    "cap": 0.05853,
+    "term": 9.2904
+  },
+  {
+    "action": "MERGE",
+    "keep": 25866,
+    "drop": 38928
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 38928,
+    "matched": 25866,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(38928) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 9586,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 4.9644
+  },
+  {
+    "action": "MERGE",
+    "keep": 29286,
+    "drop": 30248
+  },
+  {
+    "action": "MERGE",
+    "keep": 31907,
+    "drop": 38375
+  },
+  {
+    "sale_id": 5470,
+    "action": "ADJUDICATE",
+    "cap": 0.0625,
+    "term": 9.389
+  },
+  {
+    "action": "MERGE",
+    "keep": 24310,
+    "drop": 31914
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 31914,
+    "matched": 24310,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(31914) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 588,
+    "action": "ADJUDICATE",
+    "cap": 0.07749,
+    "term": 7.2055
+  },
+  {
+    "action": "MERGE",
+    "keep": 24762,
+    "drop": 3787255
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 3787255,
+    "matched": 24762,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(3787255) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 10210,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 10.0603
+  },
+  {
+    "action": "MERGE",
+    "keep": 30230,
+    "drop": 39933
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 39933,
+    "matched": 30230,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(39933) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 14070,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 9.3616
+  },
+  {
+    "action": "MERGE",
+    "keep": 22419,
+    "drop": 3230009
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22419,
+    "matched": 3230009,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(3230009) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 18,
+    "action": "ADJUDICATE",
+    "cap": 0.06083,
+    "term": 13.9671
+  },
+  {
+    "action": "MERGE",
+    "keep": 22149,
+    "drop": 38461
+  },
+  {
+    "sale_id": 524,
+    "action": "ADJUDICATE",
+    "cap": 0.074,
+    "term": null
+  },
+  {
+    "sale_id": 10072,
+    "action": "ADJUDICATE",
+    "cap": 0.07074,
+    "term": 5.3205
+  },
+  {
+    "action": "MERGE",
+    "keep": 3334561,
+    "drop": 36222
+  },
+  {
+    "sale_id": 524,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 6.9288
+  },
+  {
+    "sale_id": 9809,
+    "action": "ADJUDICATE",
+    "cap": 0.05934,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 39903,
+    "drop": 3615005
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 3615005,
+    "matched": 39903,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(3615005) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5478,
+    "action": "ADJUDICATE",
+    "cap": 0.06393,
+    "term": 6.4685
+  },
+  {
+    "action": "MERGE",
+    "keep": 22419,
+    "drop": 30294
+  },
+  {
+    "sale_id": 1035,
+    "action": "ADJUDICATE",
+    "cap": 0.05929,
+    "term": 9.4822
+  },
+  {
+    "action": "MERGE",
+    "keep": 26493,
+    "drop": 26482
+  },
+  {
+    "sale_id": 14066,
+    "action": "ADJUDICATE",
+    "cap": 0.06299,
+    "term": 3.411
+  },
+  {
+    "action": "MERGE",
+    "keep": 28937,
+    "drop": 28939
+  },
+  {
+    "sale_id": 5540,
+    "action": "ADJUDICATE",
+    "cap": 0.065,
+    "term": 8.1726
+  },
+  {
+    "action": "MERGE",
+    "keep": 3119737,
+    "drop": 30444
+  },
+  {
+    "sale_id": 14063,
+    "action": "ADJUDICATE",
+    "cap": 0.0653,
+    "term": 5.2082
+  },
+  {
+    "action": "MERGE",
+    "keep": 29168,
+    "drop": 31922
+  },
+  {
+    "sale_id": 5532,
+    "action": "ADJUDICATE",
+    "cap": 0.05411,
+    "term": 9.737
+  },
+  {
+    "action": "MERGE",
+    "keep": 1820496,
+    "drop": 27848
+  },
+  {
+    "sale_id": 5572,
+    "action": "ADJUDICATE",
+    "cap": 0.0625,
+    "term": 8.3014
+  },
+  {
+    "action": "MERGE",
+    "keep": 2998521,
+    "drop": 30464
+  },
+  {
+    "sale_id": 5541,
+    "action": "ADJUDICATE",
+    "cap": 0.0504,
+    "term": 11.2192
+  },
+  {
+    "sale_id": 10387,
+    "action": "ADJUDICATE",
+    "cap": 0.06601,
+    "term": 5.8247
+  },
+  {
+    "action": "MERGE",
+    "keep": 37753,
+    "drop": 26074
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 26074,
+    "matched": 37753,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26074) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 10393,
+    "action": "ADJUDICATE",
+    "cap": 0.05008,
+    "term": 8.4986
+  },
+  {
+    "sale_id": 210,
+    "action": "ADJUDICATE",
+    "cap": 0.06,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 25866,
+    "drop": 38928
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 38928,
+    "matched": 25866,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(38928) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 293,
+    "action": "ADJUDICATE",
+    "cap": 0.06745,
+    "term": 6.6
+  },
+  {
+    "action": "MERGE",
+    "keep": 23451,
+    "drop": 36542
+  },
+  {
+    "action": "MERGE",
+    "keep": 24028,
+    "drop": 23575
+  },
+  {
+    "action": "MERGE",
+    "keep": 23926,
+    "drop": 24024
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 24024,
+    "matched": 23926,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"23502\",\"details\":\"Failing row contains (2722, null, 2021-08-23, 8336231.00, 0.02290000000000000000, null, null, null, null, null, null, ownership_history, null, null, 506, 2026-04-16 20:58:48.057643+00, 2026-06-04 15:03:08.672567+00).\",\"hint\":null,\"message\":\"null value in column \\\"property_id\\\" of relation \\\"property_sale_events\\\" violates not-null constraint\"}"
+  },
+  {
+    "sale_id": 496,
+    "action": "ADJUDICATE",
+    "cap": 0.06501,
+    "term": 2.8219
+  },
+  {
+    "action": "MERGE",
+    "keep": 24174,
+    "drop": 32384
+  },
+  {
+    "sale_id": 976,
+    "action": "ADJUDICATE",
+    "cap": 0.0701,
+    "term": 5.3616
+  },
+  {
+    "action": "MERGE",
+    "keep": 26116,
+    "drop": 26051
+  },
+  {
+    "sale_id": 8827,
+    "action": "ADJUDICATE",
+    "cap": 0.05343,
+    "term": 14.6
+  },
+  {
+    "sale_id": 1127,
+    "action": "ADJUDICATE",
+    "cap": 0.05851,
+    "term": 11.2356
+  },
+  {
+    "action": "MERGE",
+    "keep": 26896,
+    "drop": 38273
+  },
+  {
+    "sale_id": 1126,
+    "action": "ADJUDICATE",
+    "cap": 0.0525,
+    "term": 14.2603
+  },
+  {
+    "action": "MERGE",
+    "keep": 26895,
+    "drop": 38230
+  },
+  {
+    "sale_id": 168,
+    "action": "ADJUDICATE",
+    "cap": 0.0685,
+    "term": 10.0055
+  },
+  {
+    "action": "MERGE",
+    "keep": 22793,
+    "drop": 31424
+  },
+  {
+    "sale_id": 993,
+    "action": "ADJUDICATE",
+    "cap": 0.05741,
+    "term": 14.4877
+  },
+  {
+    "action": "MERGE",
+    "keep": 26172,
+    "drop": 38941
+  },
+  {
+    "sale_id": 688,
+    "action": "ADJUDICATE",
+    "cap": 0.0908,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 25065,
+    "drop": 23565
+  },
+  {
+    "sale_id": 557,
+    "action": "ADJUDICATE",
+    "cap": 0.05981,
+    "term": 5.937
+  },
+  {
+    "sale_id": 575,
+    "action": "ADJUDICATE",
+    "cap": 0.06812,
+    "term": 4.9699
+  },
+  {
+    "action": "MERGE",
+    "keep": 24698,
+    "drop": 1763511
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1763511,
+    "matched": 24698,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1763511) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 962,
+    "action": "ADJUDICATE",
+    "cap": 0.0525,
+    "term": 16.7589
+  },
+  {
+    "action": "MERGE",
+    "keep": 26049,
+    "drop": 32250
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 32250,
+    "matched": 26049,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(32250) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 506,
+    "action": "ADJUDICATE",
+    "cap": 0.05609,
+    "term": 6.5041
+  },
+  {
+    "action": "MERGE",
+    "keep": 24222,
+    "drop": 38703
+  },
+  {
+    "sale_id": 5601,
+    "action": "ADJUDICATE",
+    "cap": 0.05945,
+    "term": 6.0904
+  },
+  {
+    "action": "MERGE",
+    "keep": 2321547,
+    "drop": 1880180
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1880180,
+    "matched": 2321547,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1880180) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "action": "MERGE",
+    "keep": 23879,
+    "drop": 32360
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 32360,
+    "matched": 23879,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(32360) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 431,
+    "action": "ADJUDICATE",
+    "cap": 0.066,
+    "term": 8.537
+  },
+  {
+    "action": "MERGE",
+    "keep": 23879,
+    "drop": 33738
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 33738,
+    "matched": 23879,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(33738) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6428,
+    "action": "ADJUDICATE",
+    "cap": 0.05294,
+    "term": 16.7973
+  },
+  {
+    "action": "MERGE",
+    "keep": 28275,
+    "drop": 28225
+  },
+  {
+    "sale_id": 8859,
+    "action": "ADJUDICATE",
+    "cap": 0.05733,
+    "term": 14.5151
+  },
+  {
+    "action": "MERGE",
+    "keep": 22667,
+    "drop": 37761
+  },
+  {
+    "sale_id": 1,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 14.7123
+  },
+  {
+    "sale_id": 688,
+    "action": "ADJUDICATE",
+    "cap": 0.05398,
+    "term": 14.6274
+  },
+  {
+    "action": "MERGE",
+    "keep": 25065,
+    "drop": 38051
+  },
+  {
+    "sale_id": 985,
+    "action": "ADJUDICATE",
+    "cap": 0.09703,
+    "term": 3.3425
+  },
+  {
+    "action": "MERGE",
+    "keep": 26109,
+    "drop": 26148
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 26109,
+    "matched": 26148,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26148) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 155,
+    "action": "ADJUDICATE",
+    "cap": 0.05501,
+    "term": 7.9808
+  },
+  {
+    "action": "MERGE",
+    "keep": 22755,
+    "drop": 37889
+  },
+  {
+    "sale_id": 5670,
+    "action": "ADJUDICATE",
+    "cap": 0.07062,
+    "term": 7.2932
+  },
+  {
+    "action": "MERGE",
+    "keep": 28718,
+    "drop": 28746
+  },
+  {
+    "sale_id": 118,
+    "action": "ADJUDICATE",
+    "cap": 0.065,
+    "term": 13.1753
+  },
+  {
+    "action": "MERGE",
+    "keep": 22641,
+    "drop": 31938
+  },
+  {
+    "sale_id": 14010,
+    "action": "ADJUDICATE",
+    "cap": 0.07404,
+    "term": 4.863
+  },
+  {
+    "action": "MERGE",
+    "keep": 25858,
+    "drop": 37726
+  },
+  {
+    "sale_id": 798,
+    "action": "ADJUDICATE",
+    "cap": 0.06148,
+    "term": 10.9014
+  },
+  {
+    "action": "MERGE",
+    "keep": 25401,
+    "drop": 25419
+  },
+  {
+    "sale_id": 10783,
+    "action": "ADJUDICATE",
+    "cap": 0.05606,
+    "term": 14.6822
+  },
+  {
+    "action": "MERGE",
+    "keep": 27683,
+    "drop": 22085
+  },
+  {
+    "sale_id": 96,
+    "action": "ADJUDICATE",
+    "cap": 0.07323,
+    "term": 6.5342
+  },
+  {
+    "action": "MERGE",
+    "keep": 22523,
+    "drop": 26074
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 26074,
+    "matched": 22523,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26074) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 10847,
+    "action": "ADJUDICATE",
+    "cap": 0.057,
+    "term": 13.9616
+  },
+  {
+    "action": "MERGE",
+    "keep": 39964,
+    "drop": 31516
+  },
+  {
+    "action": "MERGE",
+    "keep": 26537,
+    "drop": 26577
+  },
+  {
+    "action": "MERGE",
+    "keep": 25205,
+    "drop": 24973
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 24973,
+    "matched": 25205,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 24973 not found in properties\"}"
+  },
+  {
+    "action": "MERGE",
+    "keep": 28798,
+    "drop": 28799
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 28799,
+    "matched": 28798,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(28799) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 166,
+    "action": "ADJUDICATE",
+    "cap": 0.0641,
+    "term": 6.326
+  },
+  {
+    "action": "MERGE",
+    "keep": 22790,
+    "drop": 31922
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 31922,
+    "matched": 22790,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 31922 not found in properties\"}"
+  },
+  {
+    "sale_id": 8842,
+    "action": "ADJUDICATE",
+    "cap": 0.09254,
+    "term": 4.4877
+  },
+  {
+    "action": "MERGE",
+    "keep": 37744,
+    "drop": 31513
+  },
+  {
+    "sale_id": 14001,
+    "action": "ADJUDICATE",
+    "cap": 0.059,
+    "term": 9.5041
+  },
+  {
+    "action": "MERGE",
+    "keep": 29674,
+    "drop": 36877
+  },
+  {
+    "sale_id": 5722,
+    "action": "ADJUDICATE",
+    "cap": 0.0575,
+    "term": 10.7644
+  },
+  {
+    "sale_id": 5721,
+    "action": "ADJUDICATE",
+    "cap": 0.0565,
+    "term": 14.011
+  },
+  {
+    "action": "MERGE",
+    "keep": 25148,
+    "drop": 22813
+  },
+  {
+    "sale_id": 913,
+    "action": "ADJUDICATE",
+    "cap": 0.0961,
+    "term": 1.3507
+  },
+  {
+    "sale_id": 5726,
+    "action": "ADJUDICATE",
+    "cap": 0.0519,
+    "term": 10.1123
+  },
+  {
+    "sale_id": 110,
+    "action": "ADJUDICATE",
+    "cap": 0.0608,
+    "term": 14.2466
+  },
+  {
+    "action": "MERGE",
+    "keep": 22612,
+    "drop": 31930
+  },
+  {
+    "sale_id": 11250,
+    "action": "ADJUDICATE",
+    "cap": 0.06703,
+    "term": 11.5397
+  },
+  {
+    "action": "MERGE",
+    "keep": 35346,
+    "drop": 23552
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 23552,
+    "matched": 35346,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(23552) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 690,
+    "action": "ADJUDICATE",
+    "cap": 0.07367,
+    "term": null
+  },
+  {
+    "sale_id": 1240,
+    "action": "ADJUDICATE",
+    "cap": 0.06994,
+    "term": 0.5918
+  },
+  {
+    "action": "MERGE",
+    "keep": 27691,
+    "drop": 2461249
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 2461249,
+    "matched": 27691,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(2461249) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 9494,
+    "action": "ADJUDICATE",
+    "cap": 0.07912,
+    "term": 2.0877
+  },
+  {
+    "action": "MERGE",
+    "keep": 35489,
+    "drop": 27813
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27813,
+    "matched": 35489,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27813) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6148,
+    "action": "ADJUDICATE",
+    "cap": 0.05306,
+    "term": 3.3397
+  },
+  {
+    "sale_id": 2405,
+    "action": "ADJUDICATE",
+    "cap": 0.05725,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 22265,
+    "drop": 32561
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 32561,
+    "matched": 22265,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 32561 not found in properties\"}"
+  },
+  {
+    "sale_id": 612,
+    "action": "ADJUDICATE",
+    "cap": 0.07042,
+    "term": 5.6603
+  },
+  {
+    "action": "MERGE",
+    "keep": 24821,
+    "drop": 30488
+  },
+  {
+    "sale_id": 11348,
+    "action": "ADJUDICATE",
+    "cap": 0.06,
+    "term": 11.6247
+  },
+  {
+    "action": "MERGE",
+    "keep": 28352,
+    "drop": 28360
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 28352,
+    "matched": 28360,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(28360) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6159,
+    "action": "ADJUDICATE",
+    "cap": 0.06032,
+    "term": 2.5973
+  },
+  {
+    "action": "MERGE",
+    "keep": 30400,
+    "drop": 30300
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 30300,
+    "matched": 30400,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(30300) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 1226,
+    "action": "ADJUDICATE",
+    "cap": 0.07466,
+    "term": 4.8712
+  },
+  {
+    "action": "MERGE",
+    "keep": 27815,
+    "drop": 35593
+  },
+  {
+    "sale_id": 43,
+    "action": "ADJUDICATE",
+    "cap": 0.04766,
+    "term": 14.3014
+  },
+  {
+    "action": "MERGE",
+    "keep": 24320,
+    "drop": 22320
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22320,
+    "matched": 24320,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(22320) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 613,
+    "action": "ADJUDICATE",
+    "cap": 0.0808,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 24834,
+    "drop": 26949
+  },
+  {
+    "sale_id": 111,
+    "action": "ADJUDICATE",
+    "cap": 0.06201,
+    "term": 13.8438
+  },
+  {
+    "action": "MERGE",
+    "keep": 22615,
+    "drop": 38423
+  },
+  {
+    "sale_id": 572,
+    "action": "ADJUDICATE",
+    "cap": 0.06501,
+    "term": 9.263
+  },
+  {
+    "action": "MERGE",
+    "keep": 24625,
+    "drop": 37933
+  },
+  {
+    "sale_id": 71,
+    "action": "ADJUDICATE",
+    "cap": 0.05745,
+    "term": 12.9479
+  },
+  {
+    "action": "MERGE",
+    "keep": 22446,
+    "drop": 32754
+  },
+  {
+    "sale_id": 114,
+    "action": "ADJUDICATE",
+    "cap": 0.0615,
+    "term": 13.5452
+  },
+  {
+    "action": "MERGE",
+    "keep": 22629,
+    "drop": 37665
+  },
+  {
+    "sale_id": 6200,
+    "action": "ADJUDICATE",
+    "cap": 0.068,
+    "term": 7.8192
+  },
+  {
+    "action": "MERGE",
+    "keep": 29107,
+    "drop": 94970
+  },
+  {
+    "sale_id": 350,
+    "action": "ADJUDICATE",
+    "cap": 0.05672,
+    "term": 12.9918
+  },
+  {
+    "action": "MERGE",
+    "keep": 23673,
+    "drop": 37328
+  },
+  {
+    "action": "MERGE",
+    "keep": 24649,
+    "drop": 36298
+  },
+  {
+    "sale_id": 196,
+    "action": "ADJUDICATE",
+    "cap": 0.0625,
+    "term": 8.0301
+  },
+  {
+    "action": "MERGE",
+    "keep": 22894,
+    "drop": 37675
+  },
+  {
+    "sale_id": 526,
+    "action": "ADJUDICATE",
+    "cap": 0.08167,
+    "term": 1.5014
+  },
+  {
+    "action": "MERGE",
+    "keep": 22446,
+    "drop": 24346
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22446,
+    "matched": 24346,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(24346) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 521,
+    "action": "ADJUDICATE",
+    "cap": 0.06399,
+    "term": 5.7123
+  },
+  {
+    "action": "MERGE",
+    "keep": 24287,
+    "drop": 30116
+  },
+  {
+    "sale_id": 1207,
+    "action": "ADJUDICATE",
+    "cap": 0.0585,
+    "term": 14.4877
+  },
+  {
+    "action": "MERGE",
+    "keep": 27327,
+    "drop": 40001
+  },
+  {
+    "sale_id": 5039,
+    "action": "ADJUDICATE",
+    "cap": 0.065,
+    "term": 8.8384
+  },
+  {
+    "action": "MERGE",
+    "keep": 2167872,
+    "drop": 30828
+  },
+  {
+    "sale_id": 224,
+    "action": "ADJUDICATE",
+    "cap": 0.05727,
+    "term": 11.8548
+  },
+  {
+    "action": "MERGE",
+    "keep": 27839,
+    "drop": 40082
+  },
+  {
+    "sale_id": 213,
+    "action": "ADJUDICATE",
+    "cap": 0.0589,
+    "term": 13.4329
+  },
+  {
+    "sale_id": 8271,
+    "action": "ADJUDICATE",
+    "cap": 0.061,
+    "term": 8.4712
+  },
+  {
+    "action": "MERGE",
+    "keep": 29353,
+    "drop": 29348
+  },
+  {
+    "sale_id": 72,
+    "action": "ADJUDICATE",
+    "cap": 0.0666,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 24257,
+    "drop": 22447
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 24257,
+    "matched": 22447,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(22447) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 13881,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 1
+  },
+  {
+    "action": "MERGE",
+    "keep": 30179,
+    "drop": 2140657
+  },
+  {
+    "sale_id": 159,
+    "action": "ADJUDICATE",
+    "cap": 0.06148,
+    "term": 13.4411
+  },
+  {
+    "action": "MERGE",
+    "keep": 22264,
+    "drop": 22776
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22264,
+    "matched": 22776,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(22776) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 180,
+    "action": "ADJUDICATE",
+    "cap": 0.08193,
+    "term": 10.3151
+  },
+  {
+    "sale_id": 6451,
+    "action": "ADJUDICATE",
+    "cap": 0.066,
+    "term": 10.2192
+  },
+  {
+    "action": "MERGE",
+    "keep": 28829,
+    "drop": 37305
+  },
+  {
+    "action": "MERGE",
+    "keep": 29460,
+    "drop": 35348
+  },
+  {
+    "sale_id": 171,
+    "action": "ADJUDICATE",
+    "cap": 0.061,
+    "term": 14.4932
+  },
+  {
+    "action": "MERGE",
+    "keep": 25201,
+    "drop": 37449
+  },
+  {
+    "sale_id": 5076,
+    "action": "ADJUDICATE",
+    "cap": 0.0577,
+    "term": 13.9233
+  },
+  {
+    "action": "MERGE",
+    "keep": 2114530,
+    "drop": 39087
+  },
+  {
+    "sale_id": 161,
+    "action": "ADJUDICATE",
+    "cap": 0.0615,
+    "term": 13.9233
+  },
+  {
+    "action": "MERGE",
+    "keep": 22781,
+    "drop": 38591
+  },
+  {
+    "sale_id": 8229,
+    "action": "ADJUDICATE",
+    "cap": 0.065,
+    "term": 10.6795
+  },
+  {
+    "action": "MERGE",
+    "keep": 31898,
+    "drop": 30847
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 30847,
+    "matched": 31898,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 30847 not found in properties\"}"
+  },
+  {
+    "sale_id": 1025,
+    "action": "ADJUDICATE",
+    "cap": 0.08136,
+    "term": 8.2247
+  },
+  {
+    "action": "MERGE",
+    "keep": 26481,
+    "drop": 32361
+  },
+  {
+    "sale_id": 486,
+    "action": "ADJUDICATE",
+    "cap": 0.06749,
+    "term": 11.7397
+  },
+  {
+    "action": "MERGE",
+    "keep": 24103,
+    "drop": 35925
+  },
+  {
+    "sale_id": 1093,
+    "action": "ADJUDICATE",
+    "cap": 0.077,
+    "term": 6.9288
+  },
+  {
+    "sale_id": 144,
+    "action": "ADJUDICATE",
+    "cap": 0.05171,
+    "term": 15.0164
+  },
+  {
+    "action": "MERGE",
+    "keep": 22721,
+    "drop": 35940
+  },
+  {
+    "sale_id": 1112,
+    "action": "ADJUDICATE",
+    "cap": 0.05757,
+    "term": 19.1671
+  },
+  {
+    "action": "MERGE",
+    "keep": 26824,
+    "drop": 32354
+  },
+  {
+    "sale_id": 672,
+    "action": "ADJUDICATE",
+    "cap": 0.05428,
+    "term": 2.4219
+  },
+  {
+    "action": "MERGE",
+    "keep": 25018,
+    "drop": 35551
+  },
+  {
+    "sale_id": 342,
+    "action": "ADJUDICATE",
+    "cap": 0.09771,
+    "term": 9.0137
+  },
+  {
+    "action": "MERGE",
+    "keep": 23648,
+    "drop": 38471
+  },
+  {
+    "sale_id": 314,
+    "action": "ADJUDICATE",
+    "cap": 0.0618,
+    "term": 14.3836
+  },
+  {
+    "action": "MERGE",
+    "keep": 23551,
+    "drop": 35601
+  },
+  {
+    "sale_id": 13845,
+    "action": "ADJUDICATE",
+    "cap": 0.05764,
+    "term": 9.8164
+  },
+  {
+    "action": "MERGE",
+    "keep": 3230009,
+    "drop": 30294
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 30294,
+    "matched": 3230009,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 30294 not found in properties\"}"
+  },
+  {
+    "sale_id": 667,
+    "action": "ADJUDICATE",
+    "cap": 0.075,
+    "term": 4.8493
+  },
+  {
+    "sale_id": 5135,
+    "action": "ADJUDICATE",
+    "cap": 0.06004,
+    "term": 13.7808
+  },
+  {
+    "action": "MERGE",
+    "keep": 2075912,
+    "drop": 31058
+  },
+  {
+    "sale_id": 177,
+    "action": "ADJUDICATE",
+    "cap": 0.0695,
+    "term": 12.7863
+  },
+  {
+    "action": "MERGE",
+    "keep": 25765,
+    "drop": 2076940
+  },
+  {
+    "sale_id": 5128,
+    "action": "ADJUDICATE",
+    "cap": 0.072,
+    "term": 7.5479
+  },
+  {
+    "action": "MERGE",
+    "keep": 28986,
+    "drop": 39242
+  },
+  {
+    "sale_id": 281,
+    "action": "ADJUDICATE",
+    "cap": 0.05661,
+    "term": 15.5205
+  },
+  {
+    "sale_id": 5115,
+    "action": "ADJUDICATE",
+    "cap": 0.053,
+    "term": 9.5342
+  },
+  {
+    "sale_id": 11054,
+    "action": "ADJUDICATE",
+    "cap": 0.05457,
+    "term": 14.137
+  },
+  {
+    "action": "MERGE",
+    "keep": 39974,
+    "drop": 40201
+  },
+  {
+    "sale_id": 911,
+    "action": "ADJUDICATE",
+    "cap": 0.05395,
+    "term": 19.6356
+  },
+  {
+    "action": "MERGE",
+    "keep": 25889,
+    "drop": 1955418
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1955418,
+    "matched": 25889,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1955418) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5161,
+    "action": "ADJUDICATE",
+    "cap": 0.071,
+    "term": 11.1534
+  },
+  {
+    "action": "MERGE",
+    "keep": 24960,
+    "drop": 2051464
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 24960,
+    "matched": 2051464,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(2051464) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 13821,
+    "action": "ADJUDICATE",
+    "cap": 0.0675,
+    "term": 11.9151
+  },
+  {
+    "action": "MERGE",
+    "keep": 3909447,
+    "drop": 25695
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 3909447,
+    "matched": 25695,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(25695) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 697,
+    "action": "ADJUDICATE",
+    "cap": 0.07878,
+    "term": 7.6767
+  },
+  {
+    "action": "MERGE",
+    "keep": 25095,
+    "drop": 35777
+  },
+  {
+    "sale_id": 163,
+    "action": "ADJUDICATE",
+    "cap": 0.06494,
+    "term": 6.589
+  },
+  {
+    "action": "MERGE",
+    "keep": 22784,
+    "drop": 29310
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 29310,
+    "matched": 22784,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(29310) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 812,
+    "action": "ADJUDICATE",
+    "cap": 0.0764,
+    "term": null
+  },
+  {
+    "sale_id": 1218,
+    "action": "ADJUDICATE",
+    "cap": 0.071,
+    "term": 6.4493
+  },
+  {
+    "action": "MERGE",
+    "keep": 27460,
+    "drop": 27496
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27496,
+    "matched": 27460,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27496) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 134,
+    "action": "ADJUDICATE",
+    "cap": 0.05673,
+    "term": 14.6603
+  },
+  {
+    "action": "MERGE",
+    "keep": 22702,
+    "drop": 33007
+  },
+  {
+    "sale_id": 5195,
+    "action": "ADJUDICATE",
+    "cap": 0.05646,
+    "term": 14.789
+  },
+  {
+    "action": "MERGE",
+    "keep": 1917176,
+    "drop": 36636
+  },
+  {
+    "sale_id": 352,
+    "action": "ADJUDICATE",
+    "cap": 0.07,
+    "term": 9.9068
+  },
+  {
+    "sale_id": 321,
+    "action": "ADJUDICATE",
+    "cap": 0.0575,
+    "term": 14.7534
+  },
+  {
+    "action": "MERGE",
+    "keep": 23569,
+    "drop": 38790
+  },
+  {
+    "action": "MERGE",
+    "keep": 25379,
+    "drop": 39958
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 39958,
+    "matched": 25379,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(39958) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 1242,
+    "action": "ADJUDICATE",
+    "cap": 0.0675,
+    "term": 8.526
+  },
+  {
+    "sale_id": 327,
+    "action": "ADJUDICATE",
+    "cap": 0.06099,
+    "term": 13.8521
+  },
+  {
+    "action": "MERGE",
+    "keep": 23586,
+    "drop": 38783
+  },
+  {
+    "sale_id": 937,
+    "action": "ADJUDICATE",
+    "cap": 0.07279,
+    "term": 4.526
+  },
+  {
+    "action": "MERGE",
+    "keep": 23007,
+    "drop": 37724
+  },
+  {
+    "sale_id": 13810,
+    "action": "ADJUDICATE",
+    "cap": 0.055,
+    "term": 14.5096
+  },
+  {
+    "action": "MERGE",
+    "keep": 2075912,
+    "drop": 31058
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 31058,
+    "matched": 2075912,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 31058 not found in properties\"}"
+  },
+  {
+    "sale_id": 5235,
+    "action": "ADJUDICATE",
+    "cap": 0.06099,
+    "term": 13.3589
+  },
+  {
+    "action": "MERGE",
+    "keep": 25934,
+    "drop": 40238
+  },
+  {
+    "sale_id": 6375,
+    "action": "ADJUDICATE",
+    "cap": 0.05103,
+    "term": 14.9671
+  },
+  {
+    "action": "MERGE",
+    "keep": 30680,
+    "drop": 39880
+  },
+  {
+    "sale_id": 88,
+    "action": "ADJUDICATE",
+    "cap": 0.05903,
+    "term": 14.6795
+  },
+  {
+    "sale_id": 7033,
+    "action": "ADJUDICATE",
+    "cap": 0.0869,
+    "term": 4.8301
+  },
+  {
+    "action": "MERGE",
+    "keep": 35489,
+    "drop": 27813
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27813,
+    "matched": 35489,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27813) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 861,
+    "action": "ADJUDICATE",
+    "cap": 0.0744,
+    "term": 7.3863
+  },
+  {
+    "action": "MERGE",
+    "keep": 25683,
+    "drop": 32213
+  },
+  {
+    "sale_id": 619,
+    "action": "ADJUDICATE",
+    "cap": 0.089,
+    "term": null
+  },
+  {
+    "sale_id": 5261,
+    "action": "ADJUDICATE",
+    "cap": 0.06,
+    "term": 9.4932
+  },
+  {
+    "action": "MERGE",
+    "keep": 24244,
+    "drop": 39820
+  },
+  {
+    "sale_id": 241,
+    "action": "ADJUDICATE",
+    "cap": 0.06,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 23281,
+    "drop": 1843045
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1843045,
+    "matched": 23281,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1843045) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 914,
+    "action": "ADJUDICATE",
+    "cap": 0.072,
+    "term": 6.7233
+  },
+  {
+    "action": "MERGE",
+    "keep": 25896,
+    "drop": 3719807
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 3719807,
+    "matched": 25896,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(3719807) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5299,
+    "action": "ADJUDICATE",
+    "cap": 0.0575,
+    "term": 14.2986
+  },
+  {
+    "action": "MERGE",
+    "keep": 1820496,
+    "drop": 27848
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27848,
+    "matched": 1820496,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 27848 not found in properties\"}"
+  },
+  {
+    "sale_id": 13779,
+    "action": "ADJUDICATE",
+    "cap": 0.0999,
+    "term": 7.7534
+  },
+  {
+    "action": "MERGE",
+    "keep": 28385,
+    "drop": 28454
+  },
+  {
+    "sale_id": 10314,
+    "action": "ADJUDICATE",
+    "cap": 0.057,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 2490151,
+    "drop": 30759
+  },
+  {
+    "action": "MERGE",
+    "keep": 23552,
+    "drop": 35729
+  },
+  {
+    "sale_id": 8371,
+    "action": "ADJUDICATE",
+    "cap": 0.06422,
+    "term": 15.0411
+  },
+  {
+    "action": "MERGE",
+    "keep": 25333,
+    "drop": 25419
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 25419,
+    "matched": 25333,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 25419 not found in properties\"}"
+  },
+  {
+    "sale_id": 13780,
+    "action": "ADJUDICATE",
+    "cap": 0.08361,
+    "term": 12.6247
+  },
+  {
+    "action": "MERGE",
+    "keep": 29148,
+    "drop": 31931
+  },
+  {
+    "sale_id": 950,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 14.0493
+  },
+  {
+    "action": "MERGE",
+    "keep": 26018,
+    "drop": 26022
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 26022,
+    "matched": 26018,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26022) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5342,
+    "action": "ADJUDICATE",
+    "cap": 0.06696,
+    "term": 10.1205
+  },
+  {
+    "action": "MERGE",
+    "keep": 2216261,
+    "drop": 32248
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 32248,
+    "matched": 2216261,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(32248) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 610,
+    "action": "ADJUDICATE",
+    "cap": 0.0655,
+    "term": 14.8
+  },
+  {
+    "sale_id": 13770,
+    "action": "ADJUDICATE",
+    "cap": 0.0719,
+    "term": 8.811
+  },
+  {
+    "action": "MERGE",
+    "keep": 29836,
+    "drop": 23265
+  },
+  {
+    "sale_id": 13771,
+    "action": "ADJUDICATE",
+    "cap": 0.05911,
+    "term": 12.4356
+  },
+  {
+    "action": "MERGE",
+    "keep": 23313,
+    "drop": 29100
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 29100,
+    "matched": 23313,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(29100) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 1214,
+    "action": "ADJUDICATE",
+    "cap": 0.06012,
+    "term": 7.874
+  },
+  {
+    "action": "MERGE",
+    "keep": 35817,
+    "drop": 27414
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 35817,
+    "matched": 27414,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27414) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 1247,
+    "action": "ADJUDICATE",
+    "cap": 0.0815,
+    "term": 2.1671
+  },
+  {
+    "action": "MERGE",
+    "keep": 27704,
+    "drop": 27725
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27725,
+    "matched": 27704,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27725) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 13762,
+    "action": "ADJUDICATE",
+    "cap": 0.0706,
+    "term": 9.6986
+  },
+  {
+    "sale_id": 13761,
+    "action": "ADJUDICATE",
+    "cap": 0.07748,
+    "term": 14.8082
+  },
+  {
+    "action": "MERGE",
+    "keep": 25934,
+    "drop": 40238
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 40238,
+    "matched": 25934,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 40238 not found in properties\"}"
+  },
+  {
+    "sale_id": 893,
+    "action": "ADJUDICATE",
+    "cap": 0.0615,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 25761,
+    "drop": 1582526
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1582526,
+    "matched": 25761,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1582526) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 727,
+    "action": "ADJUDICATE",
+    "cap": 0.0975,
+    "term": 3.5014
+  },
+  {
+    "action": "MERGE",
+    "keep": 2216299,
+    "drop": 25010
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 2216299,
+    "matched": 25010,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(25010) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6431,
+    "action": "ADJUDICATE",
+    "cap": 0.0587,
+    "term": 14.7808
+  },
+  {
+    "action": "MERGE",
+    "keep": 35837,
+    "drop": 23664
+  },
+  {
+    "sale_id": 13689,
+    "action": "ADJUDICATE",
+    "cap": 0.07803,
+    "term": 5.789
+  },
+  {
+    "action": "MERGE",
+    "keep": 27139,
+    "drop": 2216137
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 2216137,
+    "matched": 27139,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(2216137) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6390,
+    "action": "ADJUDICATE",
+    "cap": 0.08819,
+    "term": 6.7507
+  },
+  {
+    "action": "MERGE",
+    "keep": 27998,
+    "drop": 27997
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27998,
+    "matched": 27997,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27997) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6354,
+    "action": "ADJUDICATE",
+    "cap": 0.04923,
+    "term": 14.0932
+  },
+  {
+    "action": "MERGE",
+    "keep": 23523,
+    "drop": 31861
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 23523,
+    "matched": 31861,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(31861) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 13685,
+    "action": "ADJUDICATE",
+    "cap": 0.08617,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 31275,
+    "drop": 28514
+  },
+  {
+    "sale_id": 562,
+    "action": "ADJUDICATE",
+    "cap": 0.1101,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 22180,
+    "drop": 24660
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22180,
+    "matched": 24660,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(24660) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6319,
+    "action": "ADJUDICATE",
+    "cap": 0.0775,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 26111,
+    "drop": 26166
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 26166,
+    "matched": 26111,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"23502\",\"details\":\"Failing row contains (339, null, 2015-05-18, 1875000.00, 0.0993, null, null, null, null, null, null, sales_transactions, Office - Sub/medical property, 990, null, 2026-04-16 20:58:48.057643+00, 2026-06-04 15:03:44.83973+00).\",\"hint\":null,\"message\":\"null value in column \\\"property_id\\\" of relation \\\"property_sale_events\\\" violates not-null constraint\"}"
+  },
+  {
+    "sale_id": 892,
+    "action": "ADJUDICATE",
+    "cap": 0.07882,
+    "term": 16.0137
+  },
+  {
+    "action": "MERGE",
+    "keep": 25772,
+    "drop": 2076940
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 2076940,
+    "matched": 25772,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 2076940 not found in properties\"}"
+  },
+  {
+    "sale_id": 5777,
+    "action": "ADJUDICATE",
+    "cap": 0.075,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 26093,
+    "drop": 26060
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 26060,
+    "matched": 26093,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26060) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 5759,
+    "action": "ADJUDICATE",
+    "cap": 0.08114,
+    "term": 4.7397
+  },
+  {
+    "action": "MERGE",
+    "keep": 28991,
+    "drop": 1513563
+  },
+  {
+    "sale_id": 13681,
+    "action": "ADJUDICATE",
+    "cap": 0.1,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 29168,
+    "drop": 31922
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 31922,
+    "matched": 29168,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 31922 not found in properties\"}"
+  },
+  {
+    "sale_id": 1038,
+    "action": "ADJUDICATE",
+    "cap": 0.0875,
+    "term": 3.4192
+  },
+  {
+    "action": "MERGE",
+    "keep": 26502,
+    "drop": 1464319
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1464319,
+    "matched": 26502,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(1464319) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6353,
+    "action": "ADJUDICATE",
+    "cap": 0.07,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 23502,
+    "drop": 28988
+  },
+  {
+    "sale_id": 889,
+    "action": "ADJUDICATE",
+    "cap": 0.065,
+    "term": 14.589
+  },
+  {
+    "action": "MERGE",
+    "keep": 25766,
+    "drop": 38897
+  },
+  {
+    "sale_id": 6337,
+    "action": "ADJUDICATE",
+    "cap": 0.08,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 28992,
+    "drop": 23541
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 28992,
+    "matched": 23541,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(23541) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 12522,
+    "action": "ADJUDICATE",
+    "cap": 0.0675,
+    "term": 14.5315
+  },
+  {
+    "action": "MERGE",
+    "keep": 31439,
+    "drop": 30444
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 30444,
+    "matched": 31439,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 30444 not found in properties\"}"
+  },
+  {
+    "sale_id": 24,
+    "action": "ADJUDICATE",
+    "cap": 0.06,
+    "term": null
+  },
+  {
+    "sale_id": 1152,
+    "action": "ADJUDICATE",
+    "cap": 0.06868,
+    "term": 15.0384
+  },
+  {
+    "action": "MERGE",
+    "keep": 27006,
+    "drop": 3005557
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 3005557,
+    "matched": 27006,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(3005557) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "action": "MERGE",
+    "keep": 35289,
+    "drop": 27901
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27901,
+    "matched": 35289,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27901) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 449,
+    "action": "ADJUDICATE",
+    "cap": 0.0656,
+    "term": 14.7315
+  },
+  {
+    "action": "MERGE",
+    "keep": 33472,
+    "drop": 38689
+  },
+  {
+    "sale_id": 6369,
+    "action": "ADJUDICATE",
+    "cap": 0.07767,
+    "term": 5.6849
+  },
+  {
+    "action": "MERGE",
+    "keep": 31919,
+    "drop": 30488
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 30488,
+    "matched": 31919,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 30488 not found in properties\"}"
+  },
+  {
+    "sale_id": 6321,
+    "action": "ADJUDICATE",
+    "cap": 0.0941,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 27887,
+    "drop": 27966
+  },
+  {
+    "sale_id": 6366,
+    "action": "ADJUDICATE",
+    "cap": 0.0715,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 22903,
+    "drop": 30334
+  },
+  {
+    "sale_id": 512,
+    "action": "ADJUDICATE",
+    "cap": 0.0964,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 1384677,
+    "drop": 24245
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 1384677,
+    "matched": 24245,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(24245) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6357,
+    "action": "ADJUDICATE",
+    "cap": 0.07072,
+    "term": 14.4411
+  },
+  {
+    "action": "MERGE",
+    "keep": 28141,
+    "drop": 36667
+  },
+  {
+    "sale_id": 1209,
+    "action": "ADJUDICATE",
+    "cap": 0.0675,
+    "term": null
+  },
+  {
+    "sale_id": 6382,
+    "action": "ADJUDICATE",
+    "cap": 0.0923,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 28808,
+    "drop": 32170
+  },
+  {
+    "sale_id": 527,
+    "action": "ADJUDICATE",
+    "cap": 0.07108,
+    "term": 14.7973
+  },
+  {
+    "action": "MERGE",
+    "keep": 28071,
+    "drop": 31201
+  },
+  {
+    "sale_id": 6419,
+    "action": "ADJUDICATE",
+    "cap": 0.09989,
+    "term": 5.9288
+  },
+  {
+    "action": "MERGE",
+    "keep": 30222,
+    "drop": 29176
+  },
+  {
+    "action": "MERGE",
+    "keep": 26544,
+    "drop": 30978
+  },
+  {
+    "sale_id": 8837,
+    "action": "ADJUDICATE",
+    "cap": 0.07353,
+    "term": 11.7534
+  },
+  {
+    "action": "MERGE",
+    "keep": 37738,
+    "drop": 37664
+  },
+  {
+    "sale_id": 5879,
+    "action": "ADJUDICATE",
+    "cap": 0.075,
+    "term": 15.0438
+  },
+  {
+    "action": "MERGE",
+    "keep": 22288,
+    "drop": 26734
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 22288,
+    "matched": 26734,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(26734) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6427,
+    "action": "ADJUDICATE",
+    "cap": 0.09824,
+    "term": 6.2849
+  },
+  {
+    "action": "MERGE",
+    "keep": 30182,
+    "drop": 808262
+  },
+  {
+    "sale_id": 991,
+    "action": "ADJUDICATE",
+    "cap": 0.084,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 26169,
+    "drop": 26186
+  },
+  {
+    "sale_id": 5886,
+    "action": "ADJUDICATE",
+    "cap": 0.07917,
+    "term": 11.5671
+  },
+  {
+    "action": "MERGE",
+    "keep": 27024,
+    "drop": 26986
+  },
+  {
+    "sale_id": 868,
+    "action": "ADJUDICATE",
+    "cap": 0.0775,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 25726,
+    "drop": 30897
+  },
+  {
+    "action": "MERGE",
+    "keep": 28905,
+    "drop": 37310
+  },
+  {
+    "sale_id": 5901,
+    "action": "ADJUDICATE",
+    "cap": 0.1028,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 920111,
+    "drop": 30234
+  },
+  {
+    "sale_id": 1213,
+    "action": "ADJUDICATE",
+    "cap": 0.07735,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 27610,
+    "drop": 27401
+  },
+  {
+    "sale_id": 822,
+    "action": "ADJUDICATE",
+    "cap": 0.095,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 25431,
+    "drop": 25369
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 25431,
+    "matched": 25369,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(25369) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 1050,
+    "action": "ADJUDICATE",
+    "cap": 0.08747,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 26540,
+    "drop": 36434
+  },
+  {
+    "sale_id": 640,
+    "action": "ADJUDICATE",
+    "cap": 0.0775,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 24933,
+    "drop": 37850
+  },
+  {
+    "sale_id": 8826,
+    "action": "ADJUDICATE",
+    "cap": 0.09004,
+    "term": 9.7616
+  },
+  {
+    "action": "MERGE",
+    "keep": 25858,
+    "drop": 37726
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 25858,
+    "matched": 37726,
+    "error": "POST rpc/dia_merge_property -> 400 {\"code\":\"P0001\",\"details\":null,\"hint\":null,\"message\":\"dia_merge_property: drop_id 37726 not found in properties\"}"
+  },
+  {
+    "sale_id": 602,
+    "action": "ADJUDICATE",
+    "cap": 0.07742,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 24800,
+    "drop": 36313
+  },
+  {
+    "sale_id": 6440,
+    "action": "ADJUDICATE",
+    "cap": 0.07584,
+    "term": 10.9425
+  },
+  {
+    "sale_id": 734,
+    "action": "ADJUDICATE",
+    "cap": 0.085,
+    "term": 10.6082
+  },
+  {
+    "action": "MERGE",
+    "keep": 25191,
+    "drop": 32265
+  },
+  {
+    "sale_id": 453,
+    "action": "ADJUDICATE",
+    "cap": 0.08254,
+    "term": 14.5534
+  },
+  {
+    "action": "MERGE",
+    "keep": 23936,
+    "drop": 33482
+  },
+  {
+    "sale_id": 6410,
+    "action": "ADJUDICATE",
+    "cap": 0.0887,
+    "term": 6.9699
+  },
+  {
+    "action": "MERGE",
+    "keep": 27813,
+    "drop": 27706
+  },
+  {
+    "sale_id": 8860,
+    "action": "ADJUDICATE",
+    "cap": 0.0812,
+    "term": 8.4849
+  },
+  {
+    "action": "MERGE",
+    "keep": 37762,
+    "drop": 29104
+  },
+  {
+    "sale_id": 6334,
+    "action": "ADJUDICATE",
+    "cap": 0.08485,
+    "term": 14.3425
+  },
+  {
+    "action": "MERGE",
+    "keep": 29729,
+    "drop": 29707
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 29729,
+    "matched": 29707,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(29707) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 809,
+    "action": "ADJUDICATE",
+    "cap": 0.08223,
+    "term": null
+  },
+  {
+    "action": "MERGE",
+    "keep": 25452,
+    "drop": 2075380
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 2075380,
+    "matched": 25452,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(2075380) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 8853,
+    "action": "ADJUDICATE",
+    "cap": 0.08613,
+    "term": 11.7726
+  },
+  {
+    "action": "MERGE",
+    "keep": 797829,
+    "drop": 28321
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 797829,
+    "matched": 28321,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(28321) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 6430,
+    "action": "ADJUDICATE",
+    "cap": 0.07755,
+    "term": 11.4493
+  },
+  {
+    "action": "MERGE",
+    "keep": 35612,
+    "drop": 31387
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 35612,
+    "matched": 31387,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(31387) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 11279,
+    "action": "ADJUDICATE",
+    "cap": 0.0725,
+    "term": 11.3589
+  },
+  {
+    "sale_id": 8851,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 9.5014
+  },
+  {
+    "action": "MERGE",
+    "keep": 37741,
+    "drop": 28548
+  },
+  {
+    "sale_id": 1249,
+    "action": "ADJUDICATE",
+    "cap": 0.10384,
+    "term": 10.1014
+  },
+  {
+    "action": "MERGE",
+    "keep": 27704,
+    "drop": 27725
+  },
+  {
+    "action": "MERGE_FAILED",
+    "candidate": 27725,
+    "matched": 27704,
+    "error": "POST rpc/dia_merge_property -> 409 {\"code\":\"23503\",\"details\":\"Key (property_id)=(27725) is still referenced from table \\\"ownership_history\\\".\",\"hint\":null,\"message\":\"update or delete on table \\\"properties\\\" violates foreign key constraint \\\"ownership_history_property_id_fkey\\\" on table \\\"ownership_history\\\"\"}"
+  },
+  {
+    "sale_id": 8854,
+    "action": "ADJUDICATE",
+    "cap": 0.05848,
+    "term": 11.3945
+  },
+  {
+    "action": "MERGE",
+    "keep": 37756,
+    "drop": 26728
+  },
+  {
+    "sale_id": 6423,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 7.7452
+  },
+  {
+    "action": "MERGE",
+    "keep": 22627,
+    "drop": 28243
+  },
+  {
+    "action": "MERGE",
+    "keep": 24166,
+    "drop": 39552
+  },
+  {
+    "sale_id": 13608,
+    "action": "ADJUDICATE",
+    "cap": null,
+    "term": 15.1068
+  },
+  {
+    "action": "MERGE",
+    "keep": 30177,
+    "drop": 36954
+  }
+]
