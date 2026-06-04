@@ -513,6 +513,77 @@ async function recordProvenance(
   }
 }
 
+// ── Listing-date correction (Round 68-A, Task 1) ─────────────────────────────
+//
+// When the page exposed a marketing-start marker (parsed.listed_on) that
+// materially predates the stored listing_date, ask the domain DB to re-date the
+// row WITH that receipt. dia only — gov listing_date has separate semantics and
+// no correction RPC. Best-effort: a failure here never blocks the status write.
+async function maybeCorrectListingDate(
+  cfg: DomainConfig,
+  row: ListingRow,
+  parsed: ParseResult,
+): Promise<{ attempted: boolean; action?: string; error?: string }> {
+  if (cfg.domain !== "dia") return { attempted: false };
+  const recovered = parsed.listed_on;
+  if (!recovered) return { attempted: false };
+
+  // Cheap client-side pre-filter so we don't bother the RPC on no-op cases;
+  // the RPC re-checks the >30d rule authoritatively.
+  if (row.listing_date) {
+    const stored = Date.parse(row.listing_date);
+    const found = Date.parse(recovered);
+    if (Number.isFinite(stored) && Number.isFinite(found) &&
+        found >= stored - 30 * 86_400_000) {
+      return { attempted: false };
+    }
+  }
+
+  const rpc = await pgRpc(cfg.url, cfg.key, "dia_record_listing_date_correction", {
+    p_listing_id: Number(row.listing_id),
+    p_new_date: recovered,
+    p_source_url: pickUrl(row, cfg),
+    p_marker: parsed.listed_on_marker ?? null,
+  });
+  if (!rpc.ok) {
+    return { attempted: true, error: `rpc http ${rpc.status}: ${rpc.raw.slice(0, 160)}` };
+  }
+  let action: string | undefined;
+  try {
+    const parsedResp = JSON.parse(rpc.raw);
+    action = parsedResp?.action || (Array.isArray(parsedResp) ? parsedResp[0]?.action : undefined);
+  } catch {
+    action = undefined;
+  }
+  // Record provenance for the listing_date field only when we actually moved it.
+  if (action === "corrected" && OPS_URL && OPS_KEY) {
+    try {
+      await fetch(`${OPS_URL}/rest/v1/rpc/lcc_merge_field`, {
+        method: "POST",
+        headers: {
+          apikey: OPS_KEY, Authorization: `Bearer ${OPS_KEY}`,
+          "Content-Type": "application/json", Prefer: "return=minimal",
+        },
+        body: JSON.stringify({
+          p_workspace_id: null,
+          p_target_database: "dia",
+          p_target_table: "dia.available_listings",
+          p_record_pk: String(row.listing_id),
+          p_field_name: "listing_date",
+          p_value: recovered,
+          p_source: "availability_scraper",
+          p_source_run_id: `availability-checker-${new Date().toISOString().slice(0, 10)}`,
+          p_confidence: 0.7,
+          p_recorded_by: null,
+        }),
+      });
+    } catch {
+      // provenance is best-effort — the correction already landed.
+    }
+  }
+  return { attempted: true, action };
+}
+
 // ── Per-listing pipeline ───────────────────────────────────────────────────
 
 interface ListingDecision {
@@ -526,6 +597,7 @@ interface ListingDecision {
     off_market_reason: string | null;
   };
   provenance?: { ok: boolean; error?: string };
+  listing_date_correction?: { attempted: boolean; action?: string; error?: string };
   classification:
     | "off_market"
     | "off_market_sold_hint"
@@ -693,6 +765,9 @@ async function processListing(
 
   const prov = await recordProvenance(cfg, row.listing_id, urlStatus);
 
+  // Round 68-A (Task 1): re-date with a page-marker receipt, if we found one.
+  const listingDateCorrection = await maybeCorrectListingDate(cfg, row, parsed);
+
   return {
     listing_id: row.listing_id,
     url,
@@ -704,6 +779,7 @@ async function processListing(
       off_market_reason: offMarketReason,
     },
     provenance: prov,
+    listing_date_correction: listingDateCorrection,
     classification,
     notes: parsed.notes,
   };
@@ -941,6 +1017,8 @@ Deno.serve(async (req: Request) => {
         parser: d.parser,
         http_status: d.parse?.http_status,
         matched: d.parse?.matched,
+        listed_on: d.parse?.listed_on,
+        listing_date_correction: d.listing_date_correction,
         written: d.written,
         provenance_ok: d.provenance?.ok,
         provenance_error: d.provenance?.error,

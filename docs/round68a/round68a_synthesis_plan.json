@@ -1,0 +1,88 @@
+{
+  "round": "68-A",
+  "task": "Task 2 — synthesize listing history from unlinked sold deals",
+  "source": "live Dialysis_DB (zqzrriwuavgrquhisnoa) dry-run, 2026-06-04",
+  "note": "Precomputed snapshot for the verification gate. scripts/round68a-synthesize-listings.mjs regenerates this live from v_round68a_synth_candidates before --commit.",
+  "totals": {
+    "synthesizable_candidates": 1608,
+    "derivation_class_counts": { "year_median": 1319, "pooled_median": 289 },
+    "derivation_classes": {
+      "year_median": "sale-year linked-cohort median (years with n>=15 and median in [45,365])",
+      "pooled_median": "pooled all-years median = 179d (thin years 2012-2014, 2016, and 2026's distorted 792d/n=10)"
+    },
+    "verified_against_live_db": "v_round68a_synth_candidates returned 1608 (1319 year_median / 289 pooled_median), synth_2025=79 — 2026-06-04"
+  },
+  "gap_funnel": {
+    "u0_all_unlinked_sales": 3058,
+    "u1_has_sale_date": 3058,
+    "u2_2013plus": 2678,
+    "u3_sold_price_gt_0": 2308,
+    "u4_not_excluded_from_market_metrics": 1608,
+    "u5_has_property_id": 1608,
+    "filtered_out": {
+      "pre_2013_sales": 380,
+      "sold_price_null_or_zero": 370,
+      "exclude_from_market_metrics": 700
+    }
+  },
+  "dom_rule": [
+    {"sale_year": 2014, "linked_n": 7,  "median_dom": 99,  "uses": "pooled_median(179)"},
+    {"sale_year": 2015, "linked_n": 19, "median_dom": 129, "uses": "year_median(129)"},
+    {"sale_year": 2016, "linked_n": 12, "median_dom": 115, "uses": "pooled_median(179)"},
+    {"sale_year": 2017, "linked_n": 59, "median_dom": 141, "uses": "year_median(141)"},
+    {"sale_year": 2018, "linked_n": 88, "median_dom": 171, "uses": "year_median(171)"},
+    {"sale_year": 2019, "linked_n": 86, "median_dom": 213, "uses": "year_median(213)"},
+    {"sale_year": 2020, "linked_n": 89, "median_dom": 170, "uses": "year_median(170)"},
+    {"sale_year": 2021, "linked_n": 96, "median_dom": 168, "uses": "year_median(168)"},
+    {"sale_year": 2022, "linked_n": 84, "median_dom": 190, "uses": "year_median(190)"},
+    {"sale_year": 2023, "linked_n": 44, "median_dom": 208, "uses": "year_median(208)"},
+    {"sale_year": 2024, "linked_n": 38, "median_dom": 216, "uses": "year_median(216)"},
+    {"sale_year": 2025, "linked_n": 26, "median_dom": 267, "uses": "year_median(267)"},
+    {"sale_year": 2026, "linked_n": 10, "median_dom": 792, "uses": "pooled_median(179)"}
+  ],
+  "per_year_synthetic": [
+    {"year": 2012, "n": 29}, {"year": 2013, "n": 49}, {"year": 2014, "n": 98},
+    {"year": 2015, "n": 116}, {"year": 2016, "n": 105}, {"year": 2017, "n": 133},
+    {"year": 2018, "n": 184}, {"year": 2019, "n": 136}, {"year": 2020, "n": 183},
+    {"year": 2021, "n": 156}, {"year": 2022, "n": 125}, {"year": 2023, "n": 90},
+    {"year": 2024, "n": 125}, {"year": 2025, "n": 79}, {"year": 2026, "n": 0}
+  ],
+  "recovery_table": [
+    {"year": 2013, "current_listings": 18,  "synthetic_add": 49,  "combined": 67},
+    {"year": 2014, "current_listings": 24,  "synthetic_add": 98,  "combined": 122},
+    {"year": 2015, "current_listings": 40,  "synthetic_add": 116, "combined": 156},
+    {"year": 2016, "current_listings": 56,  "synthetic_add": 105, "combined": 161},
+    {"year": 2017, "current_listings": 145, "synthetic_add": 133, "combined": 278},
+    {"year": 2018, "current_listings": 185, "synthetic_add": 184, "combined": 369},
+    {"year": 2019, "current_listings": 203, "synthetic_add": 136, "combined": 339},
+    {"year": 2020, "current_listings": 155, "synthetic_add": 183, "combined": 338},
+    {"year": 2021, "current_listings": 149, "synthetic_add": 156, "combined": 305},
+    {"year": 2022, "current_listings": 113, "synthetic_add": 125, "combined": 238},
+    {"year": 2023, "current_listings": 147, "synthetic_add": 90,  "combined": 237},
+    {"year": 2024, "current_listings": 139, "synthetic_add": 125, "combined": 264},
+    {"year": 2025, "current_listings": 20,  "synthetic_add": 79,  "combined": 99},
+    {"year": 2026, "current_listings": 144, "synthetic_add": 0,   "combined": 144}
+  ],
+  "sample_20_most_recent": [
+    {"sale_id": 14249, "property_id": 37852, "sale_date": "2026-05-22", "sold_price": 2722500, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-11-24"},
+    {"sale_id": 13255, "property_id": 32485, "sale_date": "2026-05-07", "sold_price": 5244000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-11-09"},
+    {"sale_id": 9004,  "property_id": 37788, "sale_date": "2026-05-07", "sold_price": 3800000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-11-09"},
+    {"sale_id": 13267, "property_id": 30181, "sale_date": "2026-04-24", "sold_price": 1379875, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-27"},
+    {"sale_id": 14268, "property_id": 25334, "sale_date": "2026-04-23", "sold_price": 1207269, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-26"},
+    {"sale_id": 14315, "property_id": 26914, "sale_date": "2026-04-22", "sold_price": 870000,  "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-25"},
+    {"sale_id": 8008,  "property_id": 37467, "sale_date": "2026-04-07", "sold_price": 3313000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-10"},
+    {"sale_id": 14274, "property_id": 27782, "sale_date": "2026-04-02", "sold_price": 3000000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-05"},
+    {"sale_id": 12090, "property_id": 35356, "sale_date": "2026-04-01", "sold_price": 2600000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-04"},
+    {"sale_id": 8009,  "property_id": 37468, "sale_date": "2026-04-01", "sold_price": 1231890, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-04"},
+    {"sale_id": 7995,  "property_id": 37461, "sale_date": "2026-03-31", "sold_price": 1598730, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-03"},
+    {"sale_id": 8134,  "property_id": 37513, "sale_date": "2026-03-31", "sold_price": 2858780, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-03"},
+    {"sale_id": 14287, "property_id": 44175, "sale_date": "2026-03-31", "sold_price": 2858780, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-03"},
+    {"sale_id": 8012,  "property_id": 37469, "sale_date": "2026-03-30", "sold_price": 130000,  "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-10-02"},
+    {"sale_id": 14306, "property_id": 29586, "sale_date": "2026-03-26", "sold_price": 6050000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-28"},
+    {"sale_id": 13294, "property_id": 23356, "sale_date": "2026-03-13", "sold_price": 4476111, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-15"},
+    {"sale_id": 7993,  "property_id": 35760, "sale_date": "2026-03-05", "sold_price": 4045000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-07"},
+    {"sale_id": 9031,  "property_id": 23423, "sale_date": "2026-03-01", "sold_price": 3728888, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-03"},
+    {"sale_id": 9034,  "property_id": 24030, "sale_date": "2026-03-01", "sold_price": 3622050, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-03"},
+    {"sale_id": 9022,  "property_id": 3051253, "sale_date": "2026-03-01", "sold_price": 8525000, "sale_year": 2026, "dom_used": 179, "dom_class": "pooled_median", "synth_listing_date": "2025-09-03"}
+  ]
+}
