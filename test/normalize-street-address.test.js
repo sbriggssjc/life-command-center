@@ -145,6 +145,12 @@ describe('splitMultiAddress', () => {
     assert.equal(out.length, 1);
   });
 
+  it('does not split "address; Suite N" (second part is a unit, not a street)', () => {
+    const out = splitMultiAddress('198 Main St; Suite 4', null);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].address, '198 Main St; Suite 4');
+  });
+
   it('handles null address field gracefully', () => {
     const out = splitMultiAddress(null, 'Tenant X');
     assert.equal(out.length, 1);

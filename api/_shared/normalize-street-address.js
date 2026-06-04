@@ -225,10 +225,11 @@ function coerceToList(field, requireDigit) {
     const parts = raw.split(/[|;]/).map((p) => p.trim()).filter(Boolean);
     if (parts.length >= 2) {
       if (!requireDigit) return parts;
-      const withDigits = parts.filter((p) => /\d/.test(p));
-      // Only treat as a genuine multi-address split when most parts look like
-      // addresses (carry a street number).
-      if (withDigits.length >= 2) return parts;
+      // Only treat as a genuine multi-address split when ≥2 parts look like
+      // street addresses — i.e. START with a house number. This rejects
+      // "198 Main St; Suite 4" (the second part is a unit, not an address).
+      const streetLike = parts.filter((p) => /^\s*\d/.test(p));
+      if (streetLike.length >= 2) return parts;
     }
   }
 
