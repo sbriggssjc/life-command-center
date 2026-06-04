@@ -67,3 +67,45 @@ dropped), which both starves <=5 of its high-cap deals and flattens the spread.
   missing and why) — but the strong prior is that the data is present and the
   current cap-field / bucketing choice is the issue.
 ```
+
+---
+
+## FINAL RESOLUTION — cohort definition of record (2026-06-04, Scott's call)
+
+The exploration above ran to ground over the Round 66x / 66x.2 data-integrity
+arc. The chart does **not** need to numerically reproduce the deck, because the
+two answer different questions. Decision: **the broad universe ships.** Keep the
+full-market cohorts (`cm_dialysis_sold_cap_by_term_dot` and the `_m`/`_q`
+consumers that read it) exactly as they are.
+
+### The two series are different populations — both correct
+- **Our chart = the full market universe.** Every dia sale we can cap- and
+  term-resolve, reconciled **deal-by-deal against the firm's curated comp
+  workbook wherever the two overlap** (cap-fingerprint verified to ≤5bp — the
+  same identity test that drove the Round 66x.2 cap/term adjudication and the
+  master-address backfill). Where the master is authoritative we adopt its
+  cap/term/address; where it is silent the market deal still counts.
+- **The deck = the firm's curated comps only.** A deliberately narrower set,
+  and it **includes >12% prints that our market view excludes by policy**
+  (`dia_flag_suspect_cap_rate`, threshold 0.12 → `exclude_from_market_metrics`).
+
+### Why the residual gap is expected, not a defect
+The 2019 `≤5` cohort is the sharpest example. The deck's `≤5` is curated-only and
+keeps high-cap credit-impaired prints we suppress. The **23.93% Midwest City
+deal (sale_id 8117) alone is ≈ 50 bps of the 2019 `≤5` gap.** The rest is the
+universe difference (our cohort blends curated deals with non-curated market
+deals at lower caps). Neither side is wrong — they are the market vs. the curated
+book. This is documented end-to-end in the Round 66x.2 migration headers
+(`20260712_cm_round66x2_step3_r2_term_backfill_from_master.sql` carries the
+honest 2019 finding).
+
+### Reproducibility of the deck
+The deck remains **fully reproducible from the master workbook** on demand
+(`scripts/master_sales_comps_full.json` + the deck cohort definition). We do not
+need to bend the live chart to it. When a curated-only cut is wanted, build it
+from the master; the live cap-of-record ladder (`dia_derive_cap_of_record` →
+`cap_rate_final`) continues to serve the market view.
+
+**Net:** chart = market (reconciled against curated where they meet); deck =
+curated (incl. policy-excluded >12% prints). One cap-of-record (`cap_rate_final`)
+feeds every consumer view; no per-view cap logic. Arc closed.
