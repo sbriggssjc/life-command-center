@@ -755,8 +755,9 @@ async function renderInboxTriage() {
         ${checkFlag('bulk_operations_enabled') ? `
         <button class="q-action" onclick="bulkTriageInbox('triaged')" title="Mark as triaged">Triage</button>
         <button class="q-action primary" onclick="bulkPromoteInbox()" title="Promote selected to shared actions">Promote</button>
+        ` : ''}
         <button class="q-action danger" onclick="bulkTriageInbox('dismissed')" title="Dismiss selected">Dismiss</button>
-        ` : '<span style="font-size:11px;color:var(--text3)">Bulk ops disabled</span>'}
+        ${opsInboxFilter !== 'new' ? `<button class="q-action" onclick="bulkTriageInbox('archived')" title="Archive selected">Archive</button>` : ''}
       </div>
     </div>`;
   }
@@ -813,6 +814,44 @@ function opsInboxSetFilter() {
   renderInboxTriage();
 }
 
+function _intakeDomShort(d) {
+  d = String(d || '').toLowerCase();
+  return d === 'government' ? 'gov' : d === 'dialysis' ? 'dia' : d;
+}
+// Render the pipeline verdict for an inbox row from its joined intake outcome
+// (R4-C §1). Three classes: processed (matched/finalized), review
+// (review_required/failed), archived (discarded non-deal). Each carries the
+// REAL next action for that state instead of a generic Triage/Promote.
+function _intakeVerdictBanner(item) {
+  var io = item.intake_outcome;
+  if (!io) return '';
+  var enc = encodeURIComponent(io.intake_id);
+  var viewBtn = '<button class="q-link" onclick="event.stopPropagation();(window.openIntakeFromInbox?window.openIntakeFromInbox(decodeURIComponent(\'' + enc + '\')):(location.hash=\'#intake/\'+decodeURIComponent(\'' + enc + '\')))" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">View extraction →</button>';
+  if (io.verdict === 'processed') {
+    var dom = _intakeDomShort(io.matched_domain);
+    var propLink = '';
+    if ((dom === 'dia' || dom === 'gov') && io.matched_property_id != null) {
+      propLink = ' — <button class="q-link" onclick="event.stopPropagation();openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(io.matched_property_id)) + '}, {}, \'Ownership &amp; CRM\')" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">matched to ' + esc(dom) + ' property #' + esc(String(io.matched_property_id)) + ' →</button>';
+    }
+    return '<div class="inbox-verdict ok">✓ Processed — the intake pipeline handled this' + propLink + ' · ' + viewBtn + '</div>';
+  }
+  if (io.verdict === 'review') {
+    var actions = '';
+    if (item.metadata && item.metadata.extraction_quality === 'ocr_needed') {
+      actions += '<button class="q-link" title="Re-extract via vision/OCR" onclick="event.stopPropagation();ocrReextractIntake(decodeURIComponent(\'' + enc + '\'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-right:8px">Re-extract (OCR) ↻</button>';
+    }
+    if (!item.entity_id) {
+      actions += '<button class="q-link" title="Create a new property from this extraction and promote" onclick="event.stopPropagation();createPropertyFromIntakeUI(decodeURIComponent(\'' + enc + '\'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-right:8px">Create property →</button>';
+    }
+    actions += viewBtn;
+    return '<div class="inbox-verdict warn">⚠ Needs review · ' + actions + '</div>';
+  }
+  if (io.verdict === 'archived') {
+    return '<div class="inbox-verdict muted">Auto-archived: not a deal doc · ' + viewBtn + '</div>';
+  }
+  return '<div class="inbox-verdict muted">⏳ In intake pipeline (' + esc(io.status || '') + ') · ' + viewBtn + '</div>';
+}
+
 function inboxItemHTML(item, idx) {
   const overdue = item.status === 'new' && item.created_at && (Date.now() - new Date(item.created_at).getTime()) > 86400000 * 2;
   let html = `<div class="q-item ${overdue ? 'overdue' : ''}" data-inbox-id="${esc(item.id)}">`;
@@ -860,8 +899,14 @@ function inboxItemHTML(item, idx) {
   // bridge so triage doesn't have to leave the inbox to know what got
   // matched/promoted. Reads metadata.bridged_to_intake_id (set by
   // handleOutlookMessage after stageOmIntake completes).
-  const bridgedIntakeId = item?.metadata?.bridged_to_intake_id || null;
-  if (bridgedIntakeId) {
+  // R4-C §1: when the API joined this row to its intake outcome, show the
+  // pipeline verdict + the real next action for that state. Fall back to the
+  // legacy bridge affordances only when the join didn't resolve.
+  const io = item.intake_outcome || null;
+  const bridgedIntakeId = io ? io.intake_id : (item?.metadata?.bridged_to_intake_id || null);
+  if (io) {
+    html += _intakeVerdictBanner(item);
+  } else if (bridgedIntakeId) {
     const intakeShort = String(bridgedIntakeId).slice(0, 8);
     // Zero-text PDF (scanned OM) badge (F8, 2026-06-04) — set on the inbox row
     // metadata when extraction parked the artifact as ocr_needed. Surfaces the
@@ -893,14 +938,30 @@ function inboxItemHTML(item, idx) {
     html += `</div>`;
   }
 
-  // Normalized quick actions
+  // Normalized quick actions — outcome-aware (R4-C §1). Processed/archived rows
+  // don't re-offer Triage/Promote (the pipeline already acted); OM-sourced rows
+  // route Promote to the OM re-promotion path instead of the generic
+  // shared-action promotion.
   html += '<div class="q-actions">';
-  if (item.status === 'new') {
-    html += `<button class="q-action" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Triage</button>`;
+  const _encId = encodeURIComponent(item.id);
+  const _assignBtn = `<button class="q-action" onclick="quickReassign(decodeURIComponent('${_encId}'),'inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
+  const _dismissBtn = `<button class="q-action danger" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${_encId}'))">Dismiss</button>`;
+  const _isOmSource = item.source_type === 'email_om' || item.source_type === 'copilot_chat_om';
+  if (io && io.verdict === 'processed') {
+    html += _assignBtn + _dismissBtn;
+  } else if (io && io.verdict === 'archived') {
+    html += _dismissBtn;
+  } else {
+    if (item.status === 'new') {
+      html += `<button class="q-action" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${_encId}'))">Triage</button>`;
+    }
+    if (io && _isOmSource) {
+      html += `<button class="q-action primary" title="Re-run OM promotion from the extraction" onclick="event.stopPropagation();repromoteIntake(decodeURIComponent('${encodeURIComponent(io.intake_id)}'), this)">Promote (OM) ↻</button>`;
+    } else {
+      html += `<button class="q-action primary" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${_encId}'))">Promote</button>`;
+    }
+    html += _assignBtn + _dismissBtn;
   }
-  html += `<button class="q-action primary" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Promote</button>`;
-  html += `<button class="q-action" onclick="quickReassign(decodeURIComponent('${encodeURIComponent(item.id)}'),'inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
-  html += `<button class="q-action danger" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -929,7 +990,7 @@ function updateTriageCount() {
 async function bulkTriageInbox(status, btn) {
   if (!opsInboxSelected.size) { showToast('Select items first', 'error'); return; }
   const ids = Array.from(opsInboxSelected);
-  const statusLabel = status === 'dismissed' ? 'Dismissing' : 'Triaging';
+  const statusLabel = status === 'dismissed' ? 'Dismissing' : status === 'archived' ? 'Archiving' : 'Triaging';
   // Disable all bulk action buttons during operation
   const bulkBtns = document.querySelectorAll('[onclick*="bulkTriageInbox"], [onclick*="bulkPromoteInbox"]');
   bulkBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
