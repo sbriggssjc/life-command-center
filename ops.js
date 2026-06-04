@@ -755,8 +755,9 @@ async function renderInboxTriage() {
         ${checkFlag('bulk_operations_enabled') ? `
         <button class="q-action" onclick="bulkTriageInbox('triaged')" title="Mark as triaged">Triage</button>
         <button class="q-action primary" onclick="bulkPromoteInbox()" title="Promote selected to shared actions">Promote</button>
+        ` : ''}
         <button class="q-action danger" onclick="bulkTriageInbox('dismissed')" title="Dismiss selected">Dismiss</button>
-        ` : '<span style="font-size:11px;color:var(--text3)">Bulk ops disabled</span>'}
+        ${opsInboxFilter !== 'new' ? `<button class="q-action" onclick="bulkTriageInbox('archived')" title="Archive selected">Archive</button>` : ''}
       </div>
     </div>`;
   }
@@ -813,6 +814,44 @@ function opsInboxSetFilter() {
   renderInboxTriage();
 }
 
+function _intakeDomShort(d) {
+  d = String(d || '').toLowerCase();
+  return d === 'government' ? 'gov' : d === 'dialysis' ? 'dia' : d;
+}
+// Render the pipeline verdict for an inbox row from its joined intake outcome
+// (R4-C §1). Three classes: processed (matched/finalized), review
+// (review_required/failed), archived (discarded non-deal). Each carries the
+// REAL next action for that state instead of a generic Triage/Promote.
+function _intakeVerdictBanner(item) {
+  var io = item.intake_outcome;
+  if (!io) return '';
+  var enc = encodeURIComponent(io.intake_id);
+  var viewBtn = '<button class="q-link" onclick="event.stopPropagation();(window.openIntakeFromInbox?window.openIntakeFromInbox(decodeURIComponent(\'' + enc + '\')):(location.hash=\'#intake/\'+decodeURIComponent(\'' + enc + '\')))" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">View extraction →</button>';
+  if (io.verdict === 'processed') {
+    var dom = _intakeDomShort(io.matched_domain);
+    var propLink = '';
+    if ((dom === 'dia' || dom === 'gov') && io.matched_property_id != null) {
+      propLink = ' — <button class="q-link" onclick="event.stopPropagation();openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(io.matched_property_id)) + '}, {}, \'Ownership &amp; CRM\')" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">matched to ' + esc(dom) + ' property #' + esc(String(io.matched_property_id)) + ' →</button>';
+    }
+    return '<div class="inbox-verdict ok">✓ Processed — the intake pipeline handled this' + propLink + ' · ' + viewBtn + '</div>';
+  }
+  if (io.verdict === 'review') {
+    var actions = '';
+    if (item.metadata && item.metadata.extraction_quality === 'ocr_needed') {
+      actions += '<button class="q-link" title="Re-extract via vision/OCR" onclick="event.stopPropagation();ocrReextractIntake(decodeURIComponent(\'' + enc + '\'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-right:8px">Re-extract (OCR) ↻</button>';
+    }
+    if (!item.entity_id) {
+      actions += '<button class="q-link" title="Create a new property from this extraction and promote" onclick="event.stopPropagation();createPropertyFromIntakeUI(decodeURIComponent(\'' + enc + '\'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-right:8px">Create property →</button>';
+    }
+    actions += viewBtn;
+    return '<div class="inbox-verdict warn">⚠ Needs review · ' + actions + '</div>';
+  }
+  if (io.verdict === 'archived') {
+    return '<div class="inbox-verdict muted">Auto-archived: not a deal doc · ' + viewBtn + '</div>';
+  }
+  return '<div class="inbox-verdict muted">⏳ In intake pipeline (' + esc(io.status || '') + ') · ' + viewBtn + '</div>';
+}
+
 function inboxItemHTML(item, idx) {
   const overdue = item.status === 'new' && item.created_at && (Date.now() - new Date(item.created_at).getTime()) > 86400000 * 2;
   let html = `<div class="q-item ${overdue ? 'overdue' : ''}" data-inbox-id="${esc(item.id)}">`;
@@ -860,8 +899,14 @@ function inboxItemHTML(item, idx) {
   // bridge so triage doesn't have to leave the inbox to know what got
   // matched/promoted. Reads metadata.bridged_to_intake_id (set by
   // handleOutlookMessage after stageOmIntake completes).
-  const bridgedIntakeId = item?.metadata?.bridged_to_intake_id || null;
-  if (bridgedIntakeId) {
+  // R4-C §1: when the API joined this row to its intake outcome, show the
+  // pipeline verdict + the real next action for that state. Fall back to the
+  // legacy bridge affordances only when the join didn't resolve.
+  const io = item.intake_outcome || null;
+  const bridgedIntakeId = io ? io.intake_id : (item?.metadata?.bridged_to_intake_id || null);
+  if (io) {
+    html += _intakeVerdictBanner(item);
+  } else if (bridgedIntakeId) {
     const intakeShort = String(bridgedIntakeId).slice(0, 8);
     // Zero-text PDF (scanned OM) badge (F8, 2026-06-04) — set on the inbox row
     // metadata when extraction parked the artifact as ocr_needed. Surfaces the
@@ -893,14 +938,30 @@ function inboxItemHTML(item, idx) {
     html += `</div>`;
   }
 
-  // Normalized quick actions
+  // Normalized quick actions — outcome-aware (R4-C §1). Processed/archived rows
+  // don't re-offer Triage/Promote (the pipeline already acted); OM-sourced rows
+  // route Promote to the OM re-promotion path instead of the generic
+  // shared-action promotion.
   html += '<div class="q-actions">';
-  if (item.status === 'new') {
-    html += `<button class="q-action" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Triage</button>`;
+  const _encId = encodeURIComponent(item.id);
+  const _assignBtn = `<button class="q-action" onclick="quickReassign(decodeURIComponent('${_encId}'),'inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
+  const _dismissBtn = `<button class="q-action danger" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${_encId}'))">Dismiss</button>`;
+  const _isOmSource = item.source_type === 'email_om' || item.source_type === 'copilot_chat_om';
+  if (io && io.verdict === 'processed') {
+    html += _assignBtn + _dismissBtn;
+  } else if (io && io.verdict === 'archived') {
+    html += _dismissBtn;
+  } else {
+    if (item.status === 'new') {
+      html += `<button class="q-action" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${_encId}'))">Triage</button>`;
+    }
+    if (io && _isOmSource) {
+      html += `<button class="q-action primary" title="Re-run OM promotion from the extraction" onclick="event.stopPropagation();repromoteIntake(decodeURIComponent('${encodeURIComponent(io.intake_id)}'), this)">Promote (OM) ↻</button>`;
+    } else {
+      html += `<button class="q-action primary" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${_encId}'))">Promote</button>`;
+    }
+    html += _assignBtn + _dismissBtn;
   }
-  html += `<button class="q-action primary" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Promote</button>`;
-  html += `<button class="q-action" onclick="quickReassign(decodeURIComponent('${encodeURIComponent(item.id)}'),'inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
-  html += `<button class="q-action danger" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -929,7 +990,7 @@ function updateTriageCount() {
 async function bulkTriageInbox(status, btn) {
   if (!opsInboxSelected.size) { showToast('Select items first', 'error'); return; }
   const ids = Array.from(opsInboxSelected);
-  const statusLabel = status === 'dismissed' ? 'Dismissing' : 'Triaging';
+  const statusLabel = status === 'dismissed' ? 'Dismissing' : status === 'archived' ? 'Archiving' : 'Triaging';
   // Disable all bulk action buttons during operation
   const bulkBtns = document.querySelectorAll('[onclick*="bulkTriageInbox"], [onclick*="bulkPromoteInbox"]');
   bulkBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
@@ -1374,16 +1435,50 @@ function _pqReason(reason) {
   var r = String(reason || '');
   var m = r.match(/^agency_active_solicitations:(\d+)$/);
   if (m) return m[1] + ' active agency solicitation' + (m[1] === '1' ? '' : 's');
+  // P6 onboarding steps arrive as onboarding_step_due_<N> — keep them plain.
+  var ob = r.match(/^onboarding_step_due_?(\d+)?$/);
+  if (ob) return 'Onboarding touch overdue' + (ob[1] ? ' (step ' + ob[1] + ')' : '');
+  // Plain-language map — no doctrine jargon ("Developer Overdue") leaking to
+  // the operator (R4-C §2).
   var map = {
+    developer_overdue: 'Onboarding touch overdue (developer)',
     lease_expiry_24mo: 'Lease expires within 24 months',
     open_bd_opportunity_needed: 'Needs a BD opportunity opened',
     onboarding_cadence_due: 'Onboarding touch due',
+    onboarding_step_due: 'Onboarding touch overdue',
+    steady_state_cadence_due: 'Steady-state touch overdue',
     steady_state_touch_due: 'Steady-state touch due',
     recent_acquisition_streak: 'Active acquirer (recent buying streak)',
     aging_building: 'Aging building (replacement candidate)'
   };
   if (map[r]) return map[r];
   return r ? r.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }) : 'BD priority';
+}
+// State-aware CTA resolution (R4-C §2). Returns one of:
+//   'open_opp'  — no open opportunity yet → "Open opportunity →"
+//   'log_touch' — open opportunity + a cadence touch due/overdue → "Log touch →"
+//   'view_opp'  — open opportunity, nothing due → "View opportunity →"
+// Uses the open_opportunity flag the list now attaches; falls back to band/
+// cadence inference when the flag is absent (older payloads / soft-fail).
+function _pqCtaState(it) {
+  var band = String(it.priority_band || '').toUpperCase();
+  var reason = String(it.reason || '');
+  var hasOpp = (it.open_opportunity === true);
+  var oppResolved = (typeof it.open_opportunity === 'boolean');
+  var dueNow = false;
+  if (it.next_touch_due) { try { dueNow = new Date(it.next_touch_due).getTime() <= Date.now(); } catch (_e) {} }
+  // P0.5 doctrine: explicitly needs an opportunity opened.
+  if (band === 'P0.5' || reason === 'open_bd_opportunity_needed') return 'open_opp';
+  // Bands that by definition carry an open opp + an overdue cadence touch.
+  if (band === 'P0' || band === 'P6' || band === 'P7') return 'log_touch';
+  if (oppResolved) {
+    if (!hasOpp) return 'open_opp';
+    return dueNow ? 'log_touch' : 'view_opp';
+  }
+  // Unresolved payload: infer from the cadence signal.
+  if (dueNow) return 'log_touch';
+  if (it.next_touch_due) return 'view_opp';
+  return 'open_opp';
 }
 function _pqMoney(v) {
   var n = Number(v);
@@ -1393,6 +1488,7 @@ function _pqMoney(v) {
 async function renderPriorityQueuePage(band) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
+  window._pqCurrentBand = band || null;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   var perf = opsPerf('render:priority_queue');
   var qs = '/api/priority-queue?limit=150' + (band ? '&band=' + encodeURIComponent(band) : '');
@@ -1413,6 +1509,10 @@ async function renderPriorityQueuePage(band) {
   });
   html += '</div>';
   if (!items.length) { html += '<div class="ops-empty">Nothing in this band. \u2713</div>'; el.innerHTML = html; perf.end(); return; }
+  // Collect entities still needing an opportunity opened, for the bulk
+  // "Open top N" action (R4-C \u00A72). Reset per render.
+  var _openOppCandidates = [];
+  var _rowsHtml = '';
   items.forEach(function (it, _ix) {
     var domShort = it.source_domain === 'government' ? 'gov' : it.source_domain === 'dialysis' ? 'dia' : (it.source_domain || '');
     var hasProp = it.source_property_id != null && domShort;
@@ -1428,13 +1528,23 @@ async function renderPriorityQueuePage(band) {
     // data-q-id keys the self-propelling row-advance (entity_id is the natural
     // PQ row key); reused by _opsAdvanceAfterComplete after open_opportunity.
     var _qid = it.entity_id == null ? '' : String(it.entity_id);
-    // Owner-level rows have no property to open. If they carry an entity_id we
-    // can open a BD opportunity (QA#2); only fall back to the inert badge when
-    // there's genuinely no entity to act on.
-    var _ownerAction = (!hasProp && _qid)
-      ? '<button class="q-action primary" onclick="pqOpenOpportunity(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Open opportunity \u2192</button>'
-      : '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
-    html += '<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
+    // State-aware CTA (R4-C \u00A72): the action reflects the row's CURRENT state
+    // instead of always offering "Open opportunity". Owner-level rows (no
+    // property to open) act directly on the entity; property rows route to the
+    // detail banner, which is itself state-aware.
+    var _state = _qid ? _pqCtaState(it) : null;
+    var _ownerAction;
+    if (!_qid) {
+      _ownerAction = '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
+    } else if (_state === 'log_touch') {
+      _ownerAction = '<button class="q-action primary" onclick="pqLogTouch(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Log touch \u2192</button>';
+    } else if (_state === 'view_opp') {
+      _ownerAction = '<button class="q-action" onclick="pqLogTouch(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">View opportunity \u2192</button>';
+    } else {
+      _openOppCandidates.push({ id: _qid, vertical: it.vertical || '' });
+      _ownerAction = '<button class="q-action primary" onclick="pqOpenOpportunity(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Open opportunity \u2192</button>';
+    }
+    _rowsHtml += '<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
       + '<div class="q-item-header">'
       + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
       + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
@@ -1447,10 +1557,68 @@ async function renderPriorityQueuePage(band) {
           : _ownerAction)
       + '</div></div>';
   });
+  // Bulk "Open top N" action (R4-C §2): when a band (esp. P0.5) holds many rows
+  // that all just need an opportunity opened, let the operator clear the top
+  // slice in one idempotent click instead of 488 individual ones.
+  window._pqOpenOppCandidates = _openOppCandidates;
+  if (_openOppCandidates.length > 1) {
+    var _bulkN = Math.min(20, _openOppCandidates.length);
+    html += '<div class="pq-bulkbar">'
+      + '<span class="pq-bulkbar-label">' + _openOppCandidates.length + ' rows just need an opportunity opened.</span> '
+      + '<button class="q-action primary" onclick="pqOpenTopN(' + _bulkN + ')">⚡ Open top ' + _bulkN + ' opportunities</button>'
+      + '</div>';
+  }
+  html += _rowsHtml;
   el.innerHTML = html;
   perf.end();
 }
 window.renderPriorityQueuePage = renderPriorityQueuePage;
+
+// Bulk-open the top N owner opportunities still needing one (R4-C §2). Reuses
+// the idempotent open_opportunity path, so re-clicks and overlaps are safe.
+async function pqOpenTopN(n) {
+  var list = (window._pqOpenOppCandidates || []).slice(0, Math.max(1, n || 10));
+  if (!list.length) { showToast('No opportunities to open', 'info'); return; }
+  showToast('Opening ' + list.length + ' opportunities…', 'info');
+  var opened = 0, already = 0, failed = 0;
+  for (var i = 0; i < list.length; i++) {
+    try {
+      var res = await opsPost('/api/operations?action=open_opportunity', { entity_id: list[i].id, vertical: list[i].vertical || null });
+      if (res.ok && res.data && res.data.ok) { if (res.data.already_open) already++; else opened++; }
+      else failed++;
+    } catch (_e) { failed++; }
+  }
+  showToast('Opened ' + opened + (already ? ' · ' + already + ' already open' : '') + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+  renderPriorityQueuePage(window._pqCurrentBand || undefined);
+}
+window.pqOpenTopN = pqOpenTopN;
+
+// Log a cadence touch for an owner-level priority-queue row, then advance the
+// row in place so the queue self-propels (R4-C §2 state-aware CTA). Used by the
+// "Log touch →" / "View opportunity →" CTAs (open opp + cadence present).
+async function pqLogTouch(entityId, vertical, btn) {
+  if (!entityId) { showToast('No entity to log a touch for', 'error'); return; }
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Logging…'; }
+  try {
+    const res = await opsPost('/api/operations?action=advance_cadence', {
+      entity_id: entityId,
+      type: 'touch',
+      outcome: 'logged_from_priority_queue',
+    });
+    if (res.ok && res.data && (res.data.ok || res.data.cadence_id || res.data.next_touch_due)) {
+      showToast('Touch logged', 'success');
+      if (!_opsAdvanceAfterComplete(entityId)) renderPriorityQueuePage(window._pqCurrentBand || undefined);
+    } else {
+      showToast((res.data && res.data.error) || res.error || 'Could not log touch', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Log touch →'; }
+    }
+  } catch (err) {
+    showToast('Log touch error: ' + (err && err.message ? err.message : err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Log touch →'; }
+  }
+}
+window.pqLogTouch = pqLogTouch;
 
 // QA#2 — open a BD opportunity for an owner-level priority-queue row, then
 // advance the row in place so the queue self-propels.

@@ -6810,7 +6810,10 @@ function renderDailyBriefingPanel() {
   html += '</div>';
 
   if (degraded && missing.length > 0) {
-    html += `<div class="db-missing" style="font-size:11px;color:var(--text3);margin-top:2px">Some briefing sections are still loading</div>`;
+    // R4-C §4: name the sections instead of an eternal generic "still loading"
+    // so a legitimately-failed section is visible, not indistinguishable from a
+    // slow one.
+    html += `<div class="db-missing" style="font-size:11px;color:var(--text3);margin-top:2px">Unavailable / still loading: ${esc(missing.join(', '))}</div>`;
   }
 
   html += '<div class="db-section">';
@@ -6827,7 +6830,18 @@ function renderDailyBriefingPanel() {
   html += '<div class="db-grid">';
   html += '<div class="db-section">';
   html += '<div class="db-section-title">My Priorities</div>';
-  html += renderBriefingItems(usp.today_top_5 || [], 'No priority items.', 5);
+  // R4-C §4: the briefing's today_top_5 was empty even when the priority queue
+  // held >1,000 rows. When the snapshot has no priorities, fall back to the
+  // live priority queue (same source as the NBA list) instead of showing an
+  // empty section that contradicts the queue.
+  let _dbFillPriorities = false;
+  const _topPri = Array.isArray(usp.today_top_5) ? usp.today_top_5 : [];
+  if (_topPri.length) {
+    html += renderBriefingItems(_topPri, 'No priority items.', 5);
+  } else {
+    html += '<div id="dbMyPriorities" class="db-empty">Loading priorities…</div>';
+    _dbFillPriorities = true;
+  }
   html += '</div>';
   html += '<div class="db-section">';
   html += '<div class="db-section-title">Team Signals</div>';
@@ -6883,6 +6897,29 @@ function renderDailyBriefingPanel() {
   html += '</div>';
 
   el.innerHTML = html;
+  if (_dbFillPriorities) _dbFillMyPrioritiesFromQueue();
+}
+
+// R4-C §4: fill the briefing's My Priorities section from the live priority
+// queue when the snapshot carried none. Mirrors the renderBriefingItems markup.
+async function _dbFillMyPrioritiesFromQueue() {
+  const elp = document.getElementById('dbMyPriorities');
+  if (!elp) return;
+  try {
+    const r = await fetch('/api/priority-queue?limit=5');
+    if (!r.ok) { elp.outerHTML = '<div class="db-empty">No priority items.</div>'; return; }
+    const d = await r.json();
+    const items = Array.isArray(d.items) ? d.items : [];
+    if (!items.length) { elp.outerHTML = '<div class="db-empty">No priority items.</div>'; return; }
+    const li = items.map(function (it) {
+      const title = it.name || 'Owner';
+      const meta = [it.priority_band, it.source_property_address].filter(Boolean).join(' · ');
+      return '<li><span class="db-li-title">' + esc(title) + '</span>' + (meta ? '<span class="db-li-meta">' + esc(meta) + '</span>' : '') + '</li>';
+    }).join('');
+    elp.outerHTML = '<ul class="db-list">' + li + '</ul>';
+  } catch (e) {
+    elp.outerHTML = '<div class="db-empty">No priority items.</div>';
+  }
 }
 
 async function loadDailyBriefingData(force = false) {

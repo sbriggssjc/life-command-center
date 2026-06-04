@@ -760,6 +760,77 @@ async function recordClientPerf(req, res) {
 // INBOX — Merged from inbox.js (triage, promote, assign, dismiss)
 // ============================================================================
 
+// Map a staged-intake status to the verdict the Inbox card renders (R4-C §1).
+function _intakeVerdict(status) {
+  if (status === 'finalized' || status === 'matched') return 'processed';
+  if (status === 'review_required' || status === 'failed') return 'review';
+  if (status === 'discarded') return 'archived';
+  return 'pending'; // queued / processing / no_match etc.
+}
+
+// Join a page of inbox items to their staged-intake outcome so each card shows
+// what the pipeline already did (R4-C §1: Inbox didn't know the intake pipeline
+// had auto-extracted/matched/promoted most OM emails). Lineage key:
+// staged_intake_items.intake_id = inbox_items.id, with the legacy
+// metadata.bridged_to_intake_id as a fallback. Two cheap batched reads per ~60
+// ids; soft-fails so the list still renders if the intake DB hiccups.
+async function attachInboxIntakeOutcome(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const idToItems = new Map();
+  for (const it of items) {
+    const cands = new Set();
+    if (it.id) cands.add(String(it.id));
+    const bridged = it.metadata && it.metadata.bridged_to_intake_id;
+    if (bridged) cands.add(String(bridged));
+    it.__intakeCands = Array.from(cands);
+    for (const c of it.__intakeCands) {
+      if (!idToItems.has(c)) idToItems.set(c, []);
+      idToItems.get(c).push(it);
+    }
+  }
+  const allIds = Array.from(idToItems.keys());
+  if (!allIds.length) return;
+  const statusById = new Map();
+  const matchById = new Map();
+  for (let i = 0; i < allIds.length; i += 60) {
+    const chunk = allIds.slice(i, i + 60);
+    const inList = 'in.(' + chunk.join(',') + ')';
+    try {
+      const r = await opsQuery('GET',
+        'staged_intake_items?select=intake_id,status,source_type&intake_id=' + inList,
+        undefined, { countMode: 'none' });
+      if (r.ok && Array.isArray(r.data)) for (const row of r.data) statusById.set(String(row.intake_id), row);
+    } catch (_e) { /* soft-fail */ }
+    try {
+      const m = await opsQuery('GET',
+        'staged_intake_matches?select=intake_id,domain,property_id,decision,confidence&intake_id='
+        + inList + '&order=confidence.desc.nullslast',
+        undefined, { countMode: 'none' });
+      if (m.ok && Array.isArray(m.data)) for (const row of m.data) {
+        if (!matchById.has(String(row.intake_id))) matchById.set(String(row.intake_id), row);
+      }
+    } catch (_e) { /* soft-fail: verdict still works from status alone */ }
+  }
+  for (const it of items) {
+    let chosen = null;
+    for (const c of (it.__intakeCands || [])) {
+      const s = statusById.get(c);
+      if (s) { chosen = { intake_id: c, status: s.status, match: matchById.get(c) || null }; break; }
+    }
+    delete it.__intakeCands;
+    if (chosen) {
+      it.intake_outcome = {
+        intake_id: chosen.intake_id,
+        status: chosen.status,
+        verdict: _intakeVerdict(chosen.status),
+        matched_domain: chosen.match ? (chosen.match.domain || null) : null,
+        matched_property_id: chosen.match ? (chosen.match.property_id || null) : null,
+        match_decision: chosen.match ? (chosen.match.decision || null) : null,
+      };
+    }
+  }
+}
+
 async function handleInbox(req, res, user, workspaceId) {
   // GET
   if (req.method === 'GET') {
@@ -787,7 +858,9 @@ async function handleInbox(req, res, user, workspaceId) {
     path += paginationParams({ ...req.query, order: req.query.order || 'received_at.desc' });
 
     const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
-    return res.status(200).json({ items: result.data || [], count: result.count });
+    const items = result.data || [];
+    await attachInboxIntakeOutcome(items);
+    return res.status(200).json({ items, count: result.count });
   }
 
   // POST
