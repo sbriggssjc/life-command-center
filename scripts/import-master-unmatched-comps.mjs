@@ -69,7 +69,7 @@
  * property + sale_date within +/-90 days + sold_price within +/-3%) are skipped, and the
  * data_source tag ('master_xlsx_backfill_r2') lets you DELETE a bad run:
  *   DELETE FROM sales_transactions WHERE data_source='master_xlsx_backfill_r2';
- *   DELETE FROM properties WHERE data_source='master_xlsx_backfill_r2_stub'
+ *   DELETE FROM properties WHERE source='master_xlsx_backfill_r2_stub'
  *     AND property_id NOT IN (SELECT property_id FROM sales_transactions);
  */
 
@@ -354,7 +354,9 @@ function normCap(v) {
         address: row.address, city: row.city || null, state: row.state,
         tenant: row.tenant || null,
         latitude: geo?.lat ?? null, longitude: geo?.lng ?? null,
-        data_source: DATA_SOURCE_STUB,
+        // properties table has `source`, not `data_source` (that column is on
+        // sales_transactions) — PGRST204 on the first stub insert otherwise.
+        source: DATA_SOURCE_STUB,
       });
       const newId = stub[0].property_id;
       existing.push({ property_id: newId, state: row.state, norm: nAddr, num, lat: geo?.lat ?? null, lng: geo?.lng ?? null });
