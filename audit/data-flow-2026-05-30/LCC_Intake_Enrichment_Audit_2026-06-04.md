@@ -103,3 +103,44 @@ three real OM↔DB pairs.
 **Deploy ordering:** merge → Railway redeploy (route live) → THEN cron migration
 `20260604120000_lcc_intake_rematch_cron.sql` on LCC Opps. Post-deploy: dry-run,
 drain, report actual `newly_matched`/`promoted` counts.
+
+## Addendum 2 — LIVE VERIFIED: the drain works (2026-06-04 ~19:30 UTC)
+
+Deployed, cron applied, drain exercised with real writes:
+
+- **Route live** — GET dry-run returns clean JSON (scanned 100 / eligible 70 /
+  30 no-address); portfolio OMs now carry `addresses` as a real array (the
+  Carbondale IL + Lubbock TX Bio-Medical pair visible in the candidate list).
+- **Cron registered** — `lcc-intake-rematch` `*/30 * * * *` active on LCC Opps.
+- **First apply tick:** 13 rematched → **9 newly_matched (69%)**, 3 promoted —
+  right on the ≥76% estimate's doorstep on a tiny sample.
+- **~20 min of manual draining:** review_required **2,900 → 2,747 (−153)**;
+  matched 321 → 469 (+148); finalized +5. (Pile had grown 2,705→2,900 since the
+  audit — the leak was real and is now reversed.)
+- **The original layup closed the loop:** intake `81439334…` ("198 N Springfield
+  Ave") → rematch stamp `{outcome: matched, attempts: 1}` → finalized → full OM
+  payload landed on **dia prop 37106** (anchor_rent, year_built, building_size,
+  lease 24734 with rent/expense_structure/renewal_options/guarantor, listing
+  12726 with cap rates + broker, broker contact) — all provenance-tracked as
+  `om_extraction`.
+
+Cron takes it from here (~100-row ticks, 2×/hr; still-unmatched rows get a 168h
+cooldown so the working set shrinks). Residual unmatched = genuinely-new
+properties → **F4 create-from-intake** is the remaining drain.
+
+## Addendum 3 — residual pile decomposed; F8 found (2026-06-04, F4 prep)
+
+Post-rematch forensics on the remaining review pile (~2,731 at sample time):
+
+| Class | Count | Drain |
+|---|---|---|
+| Has address, unmatched (mostly genuinely-new properties) | ~613 — **334 with full deal signature** (addr+tenant+price) | F4 create-from-intake |
+| No-address email bodies (`email_update` 1,160 / `unknown` 410 / null 343 / `broker_email` 61) — newsletters, blasts, thread histories | **~2,018** | auto-disposition → `discarded` + reason (non-deal rule) |
+| **F8 (NEW): PDFs parsed to zero text** (`pdf_text_len=0`, scanned/image PDFs) — incl. real OMs like "Fresenius - Independence - MO - OM.pdf" | 39 (24 named `*OM*`) | flag `ocr_needed` + Claude-vision PDF fallback |
+
+Also observed: one email body staged twice ~1s apart (idempotency-guard check
+folded into the prompt). All three drains specced in
+`CLAUDECODE_PROMPT_F4_create_from_intake.md` (create-property reuses
+`upsertDomainProperty` + `runDownstreamPipeline`; auto-create flag-gated
+`INTAKE_AUTOCREATE`, default off; soft-disposition doctrine — status+reason,
+never delete).
