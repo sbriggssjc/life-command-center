@@ -582,6 +582,64 @@ export async function invokeExtractionAI({ prompt }) {
   return { ...primary, tried, exhausted: true };
 }
 
+/**
+ * Vision / OCR extraction for scanned (zero-text) PDFs.
+ *
+ * pdf-parse returns 0 chars on image-based / scanned PDFs, so the normal
+ * text-in-prompt extraction has nothing to work with and parks the intake as
+ * an all-null review row (F8, 2026-06-04). This sends the PDF bytes themselves
+ * to OpenAI's Responses API as an `input_file` document block — gpt-4o reads
+ * (OCRs) the pages natively. Self-contained prompt (no Copilot instructions,
+ * which would bias structured output). Returns the same shape as
+ * invokeOpenAIExtraction: { ok, status, provider, data:{ response, model } }.
+ *
+ * Feature-gated on OPENAI_API_KEY. Caller is responsible for the byte-size cap.
+ */
+export async function invokeVisionExtractionAI({ prompt, base64, mediaType, filename }) {
+  const cfg = getAiConfig();
+  if (!cfg.openaiApiKey) {
+    return { ok: false, status: 503, data: { error: 'OPENAI_API_KEY missing' }, provider: 'openai' };
+  }
+  const model = process.env.AI_OCR_MODEL || 'gpt-4o';
+  const mime = (mediaType || 'application/pdf').toLowerCase();
+  const dataUrl = `data:${mime};base64,${base64}`;
+  const isImage = mime.startsWith('image/');
+  const content = [{ type: 'input_text', text: prompt }];
+  if (isImage) {
+    content.push({ type: 'input_image', image_url: dataUrl, detail: 'auto' });
+  } else {
+    content.push({ type: 'input_file', filename: filename || 'document.pdf', file_data: dataUrl });
+  }
+  try {
+    const res = await fetch(`${cfg.openaiBaseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.openaiApiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: [{ type: 'message', role: 'user', content }],
+        store: false,
+      }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch { data = { error: 'Invalid OpenAI response' }; }
+    return {
+      ok: res.ok,
+      status: res.status,
+      provider: 'openai',
+      data: {
+        ...data,
+        model: data?.model || model,
+        response: extractResponseText(data) || '',
+      },
+    };
+  } catch (err) {
+    return { ok: false, status: 0, data: { error: err?.message || String(err) }, provider: 'openai' };
+  }
+}
+
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   const route = resolveAiRoute(cfg, context);

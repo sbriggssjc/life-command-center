@@ -863,6 +863,16 @@ function inboxItemHTML(item, idx) {
   const bridgedIntakeId = item?.metadata?.bridged_to_intake_id || null;
   if (bridgedIntakeId) {
     const intakeShort = String(bridgedIntakeId).slice(0, 8);
+    // Zero-text PDF (scanned OM) badge (F8, 2026-06-04) — set on the inbox row
+    // metadata when extraction parked the artifact as ocr_needed. Surfaces the
+    // OM-named scans instead of letting them hide among newsletters.
+    if (item?.metadata?.extraction_quality === 'ocr_needed') {
+      html += `<div style="display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0;padding:3px 8px;border-radius:10px;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.40);font-size:11px;color:var(--text2)">`;
+      html += `<span style="color:#fbbf24;font-weight:600">⚠ OCR needed</span>`;
+      html += `<span style="color:var(--text3)">scanned PDF — no embedded text</span>`;
+      html += `<button class="q-link" title="Re-extract via vision/OCR" onclick="event.stopPropagation();ocrReextractIntake(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">Re-extract (OCR) ↻</button>`;
+      html += `</div>`;
+    }
     html += `<div style="display:inline-flex;align-items:center;gap:6px;margin:0 0 6px;padding:3px 8px;border-radius:10px;background:rgba(52,211,153,0.10);border:1px solid rgba(52,211,153,0.35);font-size:11px;color:var(--text2)">`;
     html += `<span style="color:#34d399;font-weight:600">⚙ Staged</span>`;
     html += `<span style="color:var(--text3)">intake ${esc(intakeShort)}…</span>`;
@@ -873,6 +883,13 @@ function inboxItemHTML(item, idx) {
     // Useful after a promoter bug fix to clear stalled review_required
     // intakes without re-flagging the email in Outlook.
     html += `<button class="q-link" title="Re-run promotion from existing extraction" onclick="event.stopPropagation();repromoteIntake(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-left:4px">Re-promote ↻</button>`;
+    // Create-from-intake button (2026-06-04): for an unmatched staged item
+    // (no entity_id) whose extraction has an address, create the new property
+    // in its domain and run the full promotion path. The route re-runs the
+    // matcher first, so a no-address item just returns an error toast.
+    if (!item.entity_id) {
+      html += `<button class="q-link" title="Create a new property from this extraction and promote" onclick="event.stopPropagation();createPropertyFromIntakeUI(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-left:4px">Create property →</button>`;
+    }
     html += `</div>`;
   }
 
@@ -999,6 +1016,63 @@ async function repromoteIntake(intakeId, btn) {
   } catch (err) {
     showToast('Re-promote error: ' + (err?.message || err), 'error');
     if (btn) { btn.disabled = false; btn.textContent = origText || 'Re-promote ↻'; }
+  }
+}
+
+// Create a NEW property from a staged-intake extraction and run the full
+// promotion path. Calls /api/intake?_route=create-property, which re-runs the
+// matcher first (so an item that now matches just promotes), then creates the
+// property in its routed domain (source=om_intake) and promotes. Used to clear
+// the "valid extraction, no existing property" review pile.
+async function createPropertyFromIntakeUI(intakeId, btn) {
+  if (!intakeId) return;
+  const origText = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  try {
+    const res = await opsPost('/api/intake?_route=create-property', { intake_id: intakeId });
+    if (res.ok && res.data?.ok) {
+      const created = (res.data.created || []).filter(c => c.ok);
+      const first = created[0];
+      if (res.data.note === 'already_matched_no_create') {
+        showToast('Already matched — promoted to existing property', 'success');
+      } else if (first) {
+        showToast(`Created ${first.domain} property ${first.property_id}` +
+          (created.length > 1 ? ` (+${created.length - 1} more)` : '') +
+          (res.data.matched ? ' — promoted' : ''), 'success');
+      } else {
+        showToast('Property created', 'success');
+      }
+      renderInboxTriage();
+    } else {
+      const why = res.data?.error || res.error || 'Create property failed';
+      showToast(why, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Create property →'; }
+    }
+  } catch (err) {
+    showToast('Create property error: ' + (err?.message || err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Create property →'; }
+  }
+}
+
+// Re-extract a zero-text (scanned) PDF through the vision/OCR fallback. Calls
+// /api/intake?_route=ocr-reextract which forces a full re-extraction; the
+// extractor's OCR path runs because pdf-parse yields 0 chars on the scan.
+async function ocrReextractIntake(intakeId, btn) {
+  if (!intakeId) return;
+  const origText = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Re-extracting…'; }
+  try {
+    const res = await opsPost('/api/intake?_route=ocr-reextract', { intake_id: intakeId });
+    if (res.ok && res.data?.ok !== false) {
+      showToast('Re-extracted via OCR — refresh to see results', 'success');
+      renderInboxTriage();
+    } else {
+      showToast(res.data?.error || res.error || 'OCR re-extract failed', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Re-extract (OCR) ↻'; }
+    }
+  } catch (err) {
+    showToast('OCR re-extract error: ' + (err?.message || err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Re-extract (OCR) ↻'; }
   }
 }
 

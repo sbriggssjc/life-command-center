@@ -31,6 +31,12 @@ import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured } from './_shared/salesforce.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
+import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
+import {
+  isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
+  snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES,
+} from './_shared/intake-classify.js';
+import { normalizeState } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
 // Default flag values — safe defaults for gradual rollout
@@ -3592,6 +3598,15 @@ async function handleIntakeRematch(req, res) {
     || process.env.LCC_DEFAULT_WORKSPACE_ID
     || null;
 
+  // Guarded AUTO create-from-intake (2026-06-04). Default OFF. When
+  // INTAKE_AUTOCREATE=1, the worker auto-creates a property for items that have
+  // already been rematched once (cooldown stamp present), still don't match,
+  // carry a full deal signature (address+tenant+asking_price), parse to a real
+  // state, and classify as a listing doc. Capped per tick.
+  const autoEnabled = process.env.INTAKE_AUTOCREATE === '1';
+  const autoCap = Math.max(0, parseInt(process.env.INTAKE_AUTOCREATE_CAP || '10', 10));
+  let autoCreatedThisTick = 0;
+
   const result = {
     mode: dryRun ? 'dry_run' : 'apply',
     scanned: 0,
@@ -3602,6 +3617,12 @@ async function handleIntakeRematch(req, res) {
     still_unmatched: 0,
     skipped_no_address: 0,
     skipped_cooldown: 0,
+    // Disposition pass (2026-06-04):
+    dispositioned_non_deal: 0,   // no-address non-deal → discarded
+    flagged_ocr_needed: 0,       // zero-text PDF → review + ocr_needed flag
+    auto_create_enabled: autoEnabled,
+    auto_created: 0,
+    auto_promoted: 0,
     errored: 0,
     items: [],
   };
@@ -3633,11 +3654,108 @@ async function handleIntakeRematch(req, res) {
     const ext = payload.extraction_result || {};
     // Eligible = has an extracted address (single or multi).
     const hasAddress = !!(ext.address || (Array.isArray(ext.addresses) && ext.addresses.length));
+
+    // ---- Disposition pass (2026-06-04) -------------------------------------
+    // Drain the no-address pile that will never match/promote, and rescue
+    // zero-text PDFs that parked as all-null review rows. Runs before the
+    // rematch eligibility so non-deal newsletters stop being re-ground.
+    const alreadyFlaggedOcr = payload.extraction_quality === 'ocr_needed';
+    const diags = Array.isArray(ext.diagnostics) ? ext.diagnostics : [];
+    const zeroTextPdf = !alreadyFlaggedOcr && diags.some(d =>
+      (String(d.mime_type || '').toLowerCase() === 'application/pdf'
+        || /\.pdf$/i.test(d.file_name || ''))
+      && d.pdf_text_len === 0 && !d.pdf_parse_error && !d.ocr_ok
+    );
+    if (zeroTextPdf) {
+      // Scanned/image PDF — flag it so it surfaces in triage instead of hiding
+      // among newsletters; keep it in review (a human or the ocr-reextract
+      // route rescues it). Never discard a real OM scan.
+      result.flagged_ocr_needed += 1;
+      if (!dryRun) {
+        await opsQuery('PATCH',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+          { raw_payload: { ...payload, extraction_quality: 'ocr_needed' } }
+        ).catch(() => {});
+      }
+      if (result.items.length < 100) result.items.push({ intake_id: intakeId, action: 'flagged_ocr_needed' });
+      continue;
+    }
+    if (!alreadyFlaggedOcr && isNonDealSnapshot({
+      document_type: ext.document_type,
+      address:       ext.address,
+      addresses:     ext.addresses,
+      asking_price:  ext.asking_price,
+      cap_rate:      ext.cap_rate,
+      tenant_name:   ext.tenant_name,
+    })) {
+      // Newsletter / broker blast / thread history — no address, no price, no
+      // cap, non-listing doctype. Soft-disposition to 'discarded' (status +
+      // reason, never delete; reversible by re-running extraction).
+      result.dispositioned_non_deal += 1;
+      if (!dryRun) {
+        await opsQuery('PATCH',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+          { status: 'discarded',
+            raw_payload: { ...payload, discard_reason: 'non_deal_no_address' },
+            updated_at: new Date().toISOString() }
+        ).catch(() => {});
+        // Drain the triage view too (best-effort).
+        await opsQuery('PATCH',
+          `inbox_items?id=eq.${encodeURIComponent(intakeId)}`, { status: 'dismissed' }
+        ).catch(() => {});
+      }
+      if (result.items.length < 100) result.items.push({ intake_id: intakeId, action: 'discarded_non_deal' });
+      continue;
+    }
+
     if (!hasAddress) { result.skipped_no_address += 1; continue; }
 
-    // Cooldown: skip rows we already re-matched recently and that stayed unmatched.
+    // Cooldown: skip rows we already re-matched recently and that stayed
+    // unmatched — but this is exactly the set the guarded AUTO create acts on
+    // (previously attempted, still unmatched).
     const lastAt = payload.rematch?.last_at || null;
-    if (lastAt && lastAt > cooldownCut) { result.skipped_cooldown += 1; continue; }
+    if (lastAt && lastAt > cooldownCut) {
+      result.skipped_cooldown += 1;
+      if (!dryRun && autoEnabled && autoCreatedThisTick < autoCap && payload.autocreated == null) {
+        const sig = {
+          document_type:    ext.document_type,
+          address:          ext.address,
+          addresses:        ext.addresses,
+          tenant_name:      ext.tenant_name,
+          asking_price:     ext.asking_price,
+          cap_rate:         ext.cap_rate,
+          building_sf:      ext.building_sf,
+          lease_expiration: ext.lease_expiration,
+        };
+        const dt = normalizeDocType(ext.document_type || '');
+        const docOk = LISTING_DOCUMENT_TYPES.has(dt) || snapshotLooksLikeListing(sig);
+        const stateOk = !!normalizeState(ext.state);
+        if (hasFullDealSignature(sig) && docOk && stateOk) {
+          autoCreatedThisTick += 1;
+          try {
+            const cr = await createPropertyFromIntake(intakeId, {
+              workspaceId: row.workspace_id || workspaceId,
+              actorId: user.id,
+              trigger: 'auto',
+            });
+            result.auto_created += 1;
+            if (cr?.matched && cr?.promotion_result?.ok) result.auto_promoted += 1;
+            if (result.items.length < 100) {
+              result.items.push({ intake_id: intakeId, action: 'auto_created',
+                ok: cr?.ok ?? null, matched: cr?.matched ?? null,
+                created: (cr?.created || []).filter(c => c.ok).length });
+            }
+          } catch (err) {
+            result.errored += 1;
+            if (result.items.length < 100) {
+              result.items.push({ intake_id: intakeId, action: 'auto_create_error',
+                error: String(err?.message || err).slice(0, 200) });
+            }
+          }
+        }
+      }
+      continue;
+    }
 
     result.eligible += 1;
     if (dryRun) {

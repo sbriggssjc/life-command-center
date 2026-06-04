@@ -36,7 +36,7 @@ import {
 // "Bio-Medical Applications of Florida") routed to government and parked
 // unmatched because the dialysis tenant wasn't recognized. Also covers
 // Satellite Healthcare, DCI, and nephrology operators.
-const DIALYSIS_KEYWORDS =
+export const DIALYSIS_KEYWORDS =
   /davita|fresenius|dialysis|kidney|renal|nephrolog|bio[-\s]?medical\s+applications|satellite\s+health|\bdci\b|total\s+renal/i;
 
 // ============================================================================

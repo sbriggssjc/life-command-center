@@ -46,6 +46,7 @@ import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
+import { LISTING_DOCUMENT_TYPES, normalizeDocType, snapshotLooksLikeListing } from '../_shared/intake-classify.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -143,98 +144,14 @@ async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {
   await Promise.allSettled(promises);
 }
 
-// Document types that represent on-market listing marketing. Full OMs,
-// 1-page broker flyers, and marketing brochures all contain listing-grade
-// data (address, tenant, price, cap rate, lease terms, broker) and should
-// populate available_listings identically. Comps and lease abstracts are
-// deal-adjacent but not listings-of-record; they stay out of this set.
-const LISTING_DOCUMENT_TYPES = new Set([
-  'om',
-  'flyer',
-  'marketing_brochure',
-]);
-
-// ── Doctype normalization (Bug Z fix, 2026-04-27) ────────────────────────
-// The extractor returns document_type values that vary across AI providers
-// and prompt versions: 'om', 'OM', 'offering_memorandum', 'offering memorandum',
-// 'broker package', 'broker_package', 'flyer', 'marketing_flyer', etc.
-// The promoter's LISTING_DOCUMENT_TYPES set only had the 3 canonical short
-// forms, so 25 of 30 OMs in the 24-48h audit window were rejected at the
-// `not_a_listing_doc` guard. Normalize at the boundary so any variant of
-// "OM" maps back to 'om', etc.
-const DOCTYPE_ALIASES = {
-  // OM variants
-  'om':                    'om',
-  'offering_memorandum':   'om',
-  'offering memorandum':   'om',
-  'offering-memorandum':   'om',
-  'offering':              'om',
-  'broker_package':        'om',
-  'broker package':        'om',
-  'investment_memorandum': 'om',
-  'investment memorandum': 'om',
-  // Flyer variants
-  'flyer':                 'flyer',
-  'broker_flyer':          'flyer',
-  'broker flyer':          'flyer',
-  'marketing_flyer':       'flyer',
-  'marketing flyer':       'flyer',
-  'one_pager':             'flyer',
-  'one pager':             'flyer',
-  'one-pager':             'flyer',
-  // Brochure variants
-  'marketing_brochure':    'marketing_brochure',
-  'marketing brochure':    'marketing_brochure',
-  'brochure':              'marketing_brochure',
-};
-
-/**
- * Normalize a document_type string to its canonical short form.
- * Returns the input unchanged if no alias matches (so non-listing types
- * like 'lease_abstract', 'rent_roll', 'unknown', etc. flow through and
- * get rejected by the LISTING_DOCUMENT_TYPES guard normally).
- */
-function normalizeDocType(dt) {
-  if (!dt || typeof dt !== 'string') return dt;
-  const key = dt.toLowerCase().trim();
-  // Tolerate common typos / extra punctuation
-  const dedup = key.replace(/r{2,}/g, 'r').replace(/[.,]/g, '');
-  return DOCTYPE_ALIASES[key] || DOCTYPE_ALIASES[dedup] || key;
-}
-
-/**
- * Heuristic: classify an extraction snapshot as listing-grade when
- * `document_type` is null/unknown but the snapshot carries the signals
- * a listing usually has (asking price + tenant + at least one of cap
- * rate / building SF / lease term). Used as a fallback in
- * promoteIntakeToDomainListing so that low-quality classification doesn't
- * block obviously-promotable deals (Bug Z follow-up, 2026-04-27).
- */
-function snapshotLooksLikeListing(snapshot) {
-  if (!snapshot) return false;
-  const hasPrice  = Number(snapshot.asking_price) > 0;
-  const hasCap    = Number(snapshot.cap_rate) > 0
-                 || (typeof snapshot.cap_rate === 'string' && /\d/.test(snapshot.cap_rate));
-  const hasNoi    = Number(snapshot.noi) > 0;
-  const hasTenant = !!(snapshot.tenant_name || snapshot.primary_tenant);
-  const supportingFields = [
-    snapshot.cap_rate,
-    snapshot.building_sf,
-    snapshot.lease_term_years,
-    snapshot.lease_expiration,
-    snapshot.noi,
-  ].filter(v => v != null && v !== '').length;
-  // Original heuristic (Bug Z, 2026-04-27): asking_price + tenant + ≥1
-  // supporting field. Round 76ej.d (2026-05-04) extension: also accept
-  // (cap_rate OR noi) + tenant + lease_expiration. CREXi listing
-  // captures often arrive with asking_price scrubbed (broker requires
-  // an NDA before showing the price) but always carry a stated cap
-  // rate, NOI, tenant, and lease expiration — that combination is
-  // unambiguously an active listing and should promote.
-  if (hasPrice && hasTenant && supportingFields >= 1) return true;
-  if ((hasCap || hasNoi) && hasTenant && snapshot.lease_expiration) return true;
-  return false;
-}
+// Doctype normalization + listing-grade heuristics moved to the shared,
+// dependency-free `_shared/intake-classify.js` (2026-06-04) so the extractor,
+// the create-from-intake handler, and the rematch/disposition worker share a
+// single source of truth. Re-imported here; the promoter's behavior is
+// unchanged.
+//   - LISTING_DOCUMENT_TYPES : om / flyer / marketing_brochure
+//   - normalizeDocType       : alias map back to canonical short form
+//   - snapshotLooksLikeListing: listing-grade fallback heuristic
 
 // ============================================================================
 // 1. AVAILABLE_LISTINGS MAPPERS (per domain)

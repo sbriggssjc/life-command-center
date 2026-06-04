@@ -2945,7 +2945,7 @@ async function linkDialysisMedicareIdInline(propertyId, entity) {
   }
 }
 
-async function upsertDomainProperty(domain, entity, metadata) {
+export async function upsertDomainProperty(domain, entity, metadata) {
   // Round 76fg: reset captured error each call. Set on the true-failure
   // path (POST 4xx + retry-lookup miss) so propagateToDomainDbDirect can
   // surface it into the entity metadata.
@@ -3377,7 +3377,15 @@ async function upsertDomainProperty(domain, entity, metadata) {
     return propertyId;
   }
 
-  // Create new property
+  // Create new property. Tag the originating source on brand-new rows only
+  // (metadata._source_tag, e.g. 'om_intake' from the create-from-intake flow)
+  // so forensics can tell OM-created properties from CoStar captures. Injected
+  // here, after the UPDATE path has returned, so it never re-stamps an existing
+  // property. gov.properties uses `data_source`; dia.properties uses `source`.
+  if (metadata._source_tag) {
+    if (domain === 'government') propertyData.data_source = metadata._source_tag;
+    else propertyData.source = metadata._source_tag;
+  }
   const result = await domainQuery(domain, 'POST', 'properties', propertyData);
   if (result.ok && result.data) {
     const created = Array.isArray(result.data) ? result.data[0] : result.data;
