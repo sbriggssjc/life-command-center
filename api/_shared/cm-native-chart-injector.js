@@ -543,6 +543,15 @@ function buildSingleBarChartXml(spec) {
   const dLblsFrag = dLblsXml(spec.dataLabels);
   // Horizontal bar: orient cat axis maxMin so largest values appear at top
   const catOrientation = horizontal ? 'maxMin' : 'minMax';
+  // R68-E (G11): for horizontal state-ranking bars, the shared
+  // tickLblPos="low" pinned every category label to the value-axis low end,
+  // detaching the state name from its bar row ("ambiguous which bar"). Use
+  // tickLblPos="nextTo" + centered lblAlgn so each label sits beside its own
+  // bar. Vertical (date) axes keep the shared 'low' pin unchanged.
+  const catTickLblPos = horizontal ? '<c:tickLblPos val="nextTo"/>' : CAT_AX_TICK_LBL_POS;
+  const catLblAlignFrag = horizontal
+    ? '<c:lblAlgn val="ctr"/><c:lblOffset val="100"/>'
+    : '';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}">
   <c:roundedCorners val="0"/>
@@ -583,9 +592,10 @@ ${dLblsFrag}
         <c:delete val="0"/>
         <c:axPos val="${catAxPos}"/>
         ${catFmtFrag}
-        ${CAT_AX_TICK_LBL_POS}
+        ${catTickLblPos}
         ${CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
+        ${catLblAlignFrag}
       </c:catAx>
       <c:valAx>
         <c:axId val="2"/>
@@ -1202,7 +1212,11 @@ function buildDoughnutChartXml(spec) {
             <a:lstStyle/>
             <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
           </c:txPr>
-          <c:dLblPos val="ctr"/>
+          <!-- R68-E (D14): dLblPos is ILLEGAL under c:doughnutChart per ECMA-376;
+               its presence made Excel classify chart31/chart32 as corrupt and
+               auto-repair silently stripped them on open (Available-by-Tenant
+               donuts rendered as data-only tabs). showPercent=1 renders ring
+               labels without a position element. Do NOT re-add dLblPos here. -->
           <c:showLegendKey val="0"/>
           <c:showVal val="0"/>
           <c:showCatName val="0"/>
@@ -2820,8 +2834,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       };
     }
     case 'quarterly_volume_bars':
+      // R68-E (D13): abbreviate the currency y-axis ($300M, $1.2B) instead of
+      // raw $300,000,000. Quarterly volume spans ~$100M-$1.2B; the $X.XM form
+      // matches the avg_deal_size convention and keeps tick labels legible.
+      // (volume_ttm_by_quarter already abbreviates in billions.)
       return singleSeries('bar', 'quarterly_volume', sky, {
-        valAxNumFmt: VAL_FMT_CURRENCY,
+        valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
       });
 
     // P4 — stacked bar charts
@@ -3490,8 +3508,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           dataStart, dataEnd,
           // R37 P1 — year x-axis (integer 1990, 1995, etc.), not quarter date.
           catAxNumFmt: '0',
-          // R37 P2 — gov rent PSF 0-70 (renderer line ~1769)
-          yLeftRange:  { min: 0, max: 70 },
+          // R68-E (G9): tightened 0-70 -> 0-50. After the cohort-coherent view
+          // rebuild, max upper-quartile rent/SF is ~$46; 70 wasted the top third
+          // of the plot. 0-50 gives headroom without crushing the IQR band.
+          yLeftRange:  { min: 0, max: 50 },
           yLeftNumFmt: VAL_FMT_CURRENCY,
           barGrouping: 'stacked',
           sharedAxis: true,

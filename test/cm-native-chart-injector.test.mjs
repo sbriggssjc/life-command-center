@@ -23,6 +23,8 @@ import {
   buildInjectionSpec,
   buildMultiLineChartXml,
   buildComboChartXml,
+  buildSingleBarChartXml,
+  buildDoughnutChartXml,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -2520,7 +2522,10 @@ test('R46: doughnut chart emits per-segment % labels when showSegmentLabels=true
   assert.match(chartXml, /<c:dLbls>/, '<c:dLbls> block emitted');
   assert.match(chartXml, /<c:showPercent val="1"\/>/, 'showPercent=1');
   assert.match(chartXml, /<c:showVal val="0"\/>/, 'showVal=0 (use percent only)');
-  assert.match(chartXml, /<c:dLblPos val="ctr"\/>/, 'labels centered in segment');
+  // R68-E (D14): dLblPos is ILLEGAL under c:doughnutChart per ECMA-376 — its
+  // presence made Excel auto-repair strip the chart on open. Must be absent;
+  // showPercent=1 renders the ring labels without a position element.
+  assert.ok(!/<c:dLblPos/.test(chartXml), 'no dLblPos under doughnut (ECMA-376)');
   assert.match(chartXml, /formatCode="0%"/, 'percent format 0%');
 });
 
@@ -5241,4 +5246,92 @@ test('R71: single-chart path preserves legacy drawing.xml byte shape', async () 
     'R71: single-chart path keeps legacy cNvPr id=2, name="Chart 1"');
   const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
   assert.equal(anchorCount, 1, 'R71: single-chart drawing has exactly 1 anchor');
+});
+
+// ============================================================================
+// Round 68-E — formatting-pack harness assertions (Scott's per-item protocol,
+// 2026-06-04). Verify the generated chart XML in-session; rendered-workbook
+// audit happens post-merge on Railway.
+// ============================================================================
+
+test('R68-E D14: available-by-tenant donut emits NO dLblPos (illegal under c:doughnutChart)', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_tenant_count_donut',
+    tabName: 'Data_Avail_Tenant_CountD',
+    cols: [
+      { key: 'tenant',       col: 'A' },
+      { key: 'count_active', col: 'B' },
+      { key: 'period_end',   col: 'C' },
+    ],
+    dataStart: 5, dataEnd: 8,
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.type, 'doughnut');
+  const xml = buildDoughnutChartXml(out.spec);
+  // ECMA-376: dLblPos is not a legal child of a doughnutChart series. Its
+  // presence triggered Excel auto-repair to strip chart31/chart32 on open.
+  assert.ok(!/<c:dLblPos/.test(xml), 'doughnut XML must NOT contain a <c:dLblPos element');
+  assert.match(xml, /<c:showPercent val="1"\/>/, 'ring % labels still on via showPercent');
+});
+
+test('R68-E D13: quarterly_volume_bars y-axis uses abbreviated currency (millions)', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'quarterly_volume_bars',
+    tabName: 'Data_Volume_Quarterly',
+    cols: [
+      { key: 'period_end',       col: 'A' },
+      { key: 'quarterly_volume', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 20,
+    brand: { palette: {} },
+  });
+  assert.match(out.spec.valAxNumFmt, /,,"M"/, 'spec carries abbreviated millions format');
+  const xml = buildSingleBarChartXml(out.spec);
+  assert.match(xml, /,,&quot;M&quot;/, 'val-axis numFmt rendered as $X.XM in chart XML');
+  assert.ok(!/formatCode="\$#,##0_\)/.test(xml), 'no raw $#,##0 currency axis');
+});
+
+test('R68-E G11: sources_of_capital horizontal bar — category labels nextTo + centered', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'sources_of_capital',
+    tabName: 'Data_Sources',
+    cols: [
+      { key: 'rank_15y',         col: 'A' },
+      { key: 'buyer_state',      col: 'B' },
+      { key: 'total_volume_15y', col: 'C' },
+      { key: 'pct_of_total_15y', col: 'D' },
+      { key: 'deal_count_15y',   col: 'E' },
+    ],
+    dataStart: 5, dataEnd: 19,
+    brand: { palette: {} },
+  });
+  assert.equal(out.spec.horizontal, true);
+  const xml = buildSingleBarChartXml(out.spec);
+  assert.match(xml, /<c:tickLblPos val="nextTo"\/>/, 'state labels sit next to their bar');
+  assert.match(xml, /<c:lblAlgn val="ctr"\/>/, 'centered category-label alignment');
+});
+
+test('R68-E D15/G17: term-summary cap-rate dots carry value callouts at a legal position', () => {
+  const out = buildInjectionSpec({
+    chart_template_id: 'available_by_term_summary',
+    tabName: 'Data_Avail_Term',
+    cols: [
+      { key: 'term_bucket',        col: 'A' },
+      { key: 'avg_price',          col: 'B' },
+      { key: 'avg_cap',            col: 'C' },
+      { key: 'upper_quartile_cap', col: 'D' },
+      { key: 'lower_quartile_cap', col: 'E' },
+      { key: 'median_cap',         col: 'F' },
+    ],
+    dataStart: 5, dataEnd: 8,
+    brand: { palette: {} },
+  });
+  assert.ok(Array.isArray(out.spec.lineSeries) && out.spec.lineSeries.length >= 4);
+  for (const s of out.spec.lineSeries) {
+    assert.equal(s.dataLabels?.showVal, true, 'each cap dot has a value callout');
+  }
+  const xml = buildComboChartXml(out.spec);
+  assert.match(xml, /<c:showVal val="1"\/>/, 'value labels turned on');
+  // dLblPos="t" is legal for line/marker series (only doughnut bans it — D14).
+  assert.match(xml, /<c:dLblPos val="t"\/>/, 'legal top position for marker series');
 });
