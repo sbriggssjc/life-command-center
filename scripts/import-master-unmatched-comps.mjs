@@ -52,7 +52,7 @@
  *   --plan-out=FILE      Write the per-row decision plan as JSON for audit.
  *
  * Idempotency: re-running is safe — rows whose sale already exists (matched
- * property + same sale_date + sold_price within $1k) are skipped, and the
+ * property + sale_date within +/-90 days + sold_price within +/-3%) are skipped, and the
  * data_source tag ('master_xlsx_backfill_r2') lets you DELETE a bad run:
  *   DELETE FROM sales_transactions WHERE data_source='master_xlsx_backfill_r2';
  *   DELETE FROM properties WHERE data_source='master_xlsx_backfill_r2_stub'
@@ -244,11 +244,23 @@ function normCap(v) {
     };
 
     if (match) {
-      // does this exact sale already exist on the matched property?
-      const dupSale = await rest('GET',
-        `sales_transactions?select=sale_id,sold_price&property_id=eq.${match.property_id}` +
-        `&sale_date=eq.${saleRow.sale_date}&limit=20`);
-      const twin = dupSale.find(s => Math.abs(Number(s.sold_price) - saleRow.sold_price) <= 1000);
+      // Tolerant same-transaction dedup: a sale on the SAME property within
+      // +/-90 days AND +/-3% price is the SAME deal (master vs CoStar date/price
+      // drift), not a new sale. (Exact date + $1k was far too strict —
+      // independent tolerant-match sampling (n=203) showed ~88% of master rows
+      // already have their sale in the DB at this tolerance; the strict matcher
+      // mislabeled ~600 of them ATTACH_EXISTING, which would insert duplicates.)
+      const d = new Date(saleRow.sale_date);
+      const lo = new Date(d); lo.setDate(lo.getDate() - 90);
+      const hi = new Date(d); hi.setDate(hi.getDate() + 90);
+      const tol = 0.03 * saleRow.sold_price;
+      const near = await rest('GET',
+        `sales_transactions?select=sale_id,sale_date,sold_price&property_id=eq.${match.property_id}` +
+        `&sale_date=gte.${lo.toISOString().slice(0, 10)}&sale_date=lte.${hi.toISOString().slice(0, 10)}&limit=50`);
+      const twin = near.find(s => {
+        const p = Number(s.sold_price);
+        return p > 0 && Math.abs(p - saleRow.sold_price) <= tol;
+      });
       if (twin) { counts.sale_exists++; plan.push({ i, address: row.address, decision: 'SALE_EXISTS', property_id: match.property_id, sale_id: twin.sale_id }); continue; }
       counts.attach_existing++;
       plan.push({ i, address: row.address, decision: 'ATTACH_EXISTING', property_id: match.property_id, cap, geocode: geo?.src || 'miss' });
