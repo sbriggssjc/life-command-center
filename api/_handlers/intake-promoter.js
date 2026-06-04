@@ -37,7 +37,7 @@ import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
 
 import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
+import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIdentitySystem } from '../_shared/entity-link.js';
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
@@ -1986,16 +1986,17 @@ async function promoteLccEntity(workspaceId, actorId, snapshot, match) {
     return { ok: true, skipped: 'lcc_entity_not_needed_for_domain', domain: match.domain };
   }
 
-  // sourceSystem mirrors the pattern used by sidebar-pipeline when it
-  // creates entities from CoStar DOM scrapes (gov_db / dia_db).
-  const sourceSystem = match.domain === 'government' ? 'gov_db' : 'dia_db';
+  // R4-A: canonical domain source_system ('dia' | 'gov') + source_type 'asset'.
+  // ensureEntityLink canonicalizes anyway, but pass the canonical values so the
+  // intent is explicit and matches the sidebar/log_activity writers.
+  const sourceSystem = canonicalIdentitySystem(match.domain);
   const externalId   = String(match.property_id);
 
   const result = await ensureEntityLink({
     workspaceId,
     userId:       actorId,
     sourceSystem,
-    sourceType:   'property',
+    sourceType:   'asset',
     externalId,
     domain:       match.domain,
     seedFields: {
@@ -2126,14 +2127,16 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       if (!domainProp) {
         const idLookup = await opsQuery('GET',
           `external_identities?entity_id=eq.${encodeURIComponent(match.property_id)}` +
-          `&source_system=in.(gov_db,dia_db)` +
+          // R4-A: canonical 'gov'/'dia' first; accept the deprecated spellings
+          // during the transition window (pre-redeploy rows may linger).
+          `&source_system=in.(gov,dia,gov_db,dia_db,gov_supabase,dia_supabase)` +
           `&select=source_system,external_id&limit=1`
         );
         if (idLookup.ok && Array.isArray(idLookup.data) && idLookup.data.length) {
           const row = idLookup.data[0];
           domainProp = row.external_id;
           if (!domain || domain === 'lcc') {
-            domain = row.source_system === 'gov_db' ? 'government' : 'dialysis';
+            domain = String(row.source_system).startsWith('gov') ? 'government' : 'dialysis';
           }
         }
       }

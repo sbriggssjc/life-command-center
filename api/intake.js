@@ -1490,12 +1490,13 @@ async function handleIntakePromote(req, res) {
     try {
       const idLookup = await opsQuery('GET',
         `external_identities?entity_id=eq.${encodeURIComponent(matchPid)}` +
-        `&source_system=in.(gov_db,dia_db)&select=source_system,external_id&limit=1`
+        // R4-A: canonical 'gov'/'dia' first; accept deprecated spellings during transition.
+        `&source_system=in.(gov,dia,gov_db,dia_db,gov_supabase,dia_supabase)&select=source_system,external_id&limit=1`
       );
       if (idLookup.ok && idLookup.data?.[0]) {
         const r = idLookup.data[0];
         matchPid    = r.external_id;
-        matchDomain = r.source_system === 'gov_db' ? 'government' : 'dialysis';
+        matchDomain = String(r.source_system).startsWith('gov') ? 'government' : 'dialysis';
       }
     } catch (err) {
       console.warn('[intake-promote] lcc-bridge unwrap failed (non-fatal):', err?.message);

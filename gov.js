@@ -2795,7 +2795,7 @@ async function saveOwnership(rec) {
   canonicalBridge('save_ownership', {
     domain: 'government',
     external_id: String(propertyId || rec.ownership_id),
-    source_system: 'gov_supabase',
+    source_system: 'gov',
     source_type: 'asset',
     owner_name: recordedOwner,
     true_owner_name: trueOwner,
@@ -2810,7 +2810,7 @@ async function saveOwnership(rec) {
   if (propertyId) {
     canonicalBridge('update_entity', {
       external_id: String(propertyId),
-      source_system: 'gov_supabase',
+      source_system: 'gov',
       source_type: 'asset',
       fields: {
         name: rec.address || rec.property_name || `Government Property ${propertyId}`,
@@ -3025,7 +3025,7 @@ async function saveLead(rec) {
     domain: 'government',
     research_type: 'lead',
     external_id: String(rec.property_id || rec.lead_id),
-    source_system: 'gov_supabase',
+    source_system: 'gov',
     source_type: 'lead',
     outcome: quickStatus === 'not_applicable' ? 'not_applicable' : 'completed',
     notes: leadData.research_notes,
@@ -3050,7 +3050,7 @@ async function saveLead(rec) {
   if (rec.lead_id) {
     canonicalBridge('update_entity', {
       external_id: String(rec.lead_id),
-      source_system: 'gov_supabase',
+      source_system: 'gov',
       source_type: 'lead',
       fields: {
         name: rec.address || leadData.true_owner || leadData.recorded_owner || `Lead ${rec.lead_id}`,
@@ -3250,7 +3250,7 @@ async function saveIntel(rec) {
     domain: 'government',
     research_type: 'intel',
     external_id: String(propertyId),
-    source_system: 'gov_supabase',
+    source_system: 'gov',
     source_type: 'asset',
     outcome: 'completed',
     notes: notes,
@@ -3270,7 +3270,7 @@ async function saveIntel(rec) {
   if (recordedOwner || trueOwner) {
     canonicalBridge('update_entity', {
       external_id: String(propertyId),
-      source_system: 'gov_supabase',
+      source_system: 'gov',
       source_type: 'asset',
       fields: {
         name: rec.address || rec.property_name || `Property ${propertyId}`,
@@ -8408,7 +8408,7 @@ function saveGovDetailLead(leadId) {
         domain: 'government',
         research_type: 'ownership',
         external_id: String(leadId),
-        source_system: 'gov_supabase',
+        source_system: 'gov',
         outcome: researchStatus === 'complete' ? 'completed' : researchStatus,
         notes: researchNotes,
         gov_change_event_id: writeResult?.change_event_id || null,

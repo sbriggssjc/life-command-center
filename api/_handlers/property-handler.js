@@ -183,8 +183,12 @@ export async function propertyHandler(req, res) {
 
   // Identify linked external records
   const extIds = entity.external_identities || [];
+  // R4-A: canonical 'gov' first; accept deprecated spellings during transition.
   const govIds = extIds.filter(
-    (x) => x.source_system === 'gov_db' || x.source_system === 'government'
+    (x) => x.source_system === 'gov'
+        || x.source_system === 'gov_db'
+        || x.source_system === 'gov_supabase'
+        || x.source_system === 'government'
   );
 
   // ── Parallel fetches ──────────────────────────────────────────────────────

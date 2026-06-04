@@ -10857,8 +10857,9 @@ function scoreLiveIngestEntity(entity, context, domainKey) {
   const expectedIds = [rec.property_id, rec.lead_id, rec.ownership_id, rec.clinic_id, rec.medicare_id].filter((value) => value != null).map(String);
   identities.forEach((identity) => {
     if (expectedIds.includes(String(identity.external_id))) score += 60;
-    if (domainKey === 'government' && identity.source_system === 'gov_supabase') score += 8;
-    if (domainKey === 'dialysis' && identity.source_system === 'dialysis') score += 8;
+    // R4-A: canonical 'gov'/'dia'; accept deprecated spellings during transition.
+    if (domainKey === 'government' && (identity.source_system === 'gov' || identity.source_system === 'gov_supabase' || identity.source_system === 'gov_db')) score += 8;
+    if (domainKey === 'dialysis' && (identity.source_system === 'dia' || identity.source_system === 'dialysis' || identity.source_system === 'dia_supabase' || identity.source_system === 'dia_db')) score += 8;
     if (identity.source_system === 'salesforce') score += 4;
   });
 

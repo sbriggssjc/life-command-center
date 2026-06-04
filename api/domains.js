@@ -17,6 +17,7 @@
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { canonicalIdentitySystem } from './_shared/entity-link.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -335,9 +336,12 @@ async function syncDomainEntities(req, res, user, workspaceId) {
         if (!mapped.name) continue;
 
         // Check if entity already exists (by external identity)
+        // R4-A: canonicalize the connector slug so dia/gov connectors resolve
+        // under the single 'dia'/'gov' spelling (vendor slugs pass through).
+        const canonSystem = canonicalIdentitySystem(domain.slug);
         const externalId = mapped._external_id || record.id;
         const existingRes = await opsQuery('GET',
-          `external_identities?source_system=eq.${pgFilterVal(domain.slug)}&external_id=eq.${pgFilterVal(externalId)}&select=entity_id&limit=1`
+          `external_identities?source_system=eq.${pgFilterVal(canonSystem)}&external_id=eq.${pgFilterVal(externalId)}&select=entity_id&limit=1`
         );
 
         if (existingRes.data?.length) {
@@ -377,7 +381,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
             await opsQuery('POST', 'external_identities', {
               workspace_id: workspaceId,
               entity_id: entityRes.data[0].id,
-              source_system: domain.slug,
+              source_system: canonSystem,
               source_type: mapping.source_table,
               external_id: externalId,
               last_synced_at: new Date().toISOString()

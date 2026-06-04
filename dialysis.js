@@ -8025,7 +8025,7 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
     canonicalBridge('log_activity', {
       title: 'Property link approved',
       domain: 'dialysis',
-      source_system: 'dia_supabase',
+      source_system: 'dia',
       external_id: String(clinicId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       metadata: { clinic_id: clinicId, property_id: propertyId, source: 'one_click_candidate' }
@@ -8162,7 +8162,7 @@ async function _saveClinicLeadResearchInner(rec) {
     domain: 'dialysis',
     research_type: 'clinic_lead',
     external_id: String(rec.medicare_id || rec.property_id),
-    source_system: 'dia_supabase',
+    source_system: 'dia',
     source_type: rec.property_id ? 'asset' : 'clinic',
     outcome: 'completed',
     notes: data.notes,
@@ -8197,7 +8197,7 @@ async function markClinicLead(rec, status) {
     domain: 'dialysis',
     research_type: 'clinic_lead',
     external_id: String(rec.medicare_id || rec.property_id),
-    source_system: 'dia_supabase',
+    source_system: 'dia',
     outcome: status,
     reason: status
   });
@@ -8244,7 +8244,7 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
     canonicalBridge('log_activity', {
       title: 'Clinic lead outcome recorded',
       domain: 'dialysis',
-      source_system: 'dia_supabase',
+      source_system: 'dia',
       external_id: String(clinicId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       metadata: { clinic_id: clinicId, status: status, notes: notes, property_id: propertyId }
@@ -8337,7 +8337,7 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source
     canonicalBridge('log_activity', {
       title: 'Research outcome saved',
       domain: 'dialysis',
-      source_system: 'dia_supabase',
+      source_system: 'dia',
       external_id: String(clinicId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes, source: source, lease_term: term, annual_rent: rent, rent_per_sf: rentSF }
@@ -11293,7 +11293,7 @@ async function saveSaleTransaction() {
       canonicalBridge('log_activity', {
         title: 'Sale transaction saved',
         domain: 'dialysis',
-        source_system: 'dia_supabase',
+        source_system: 'dia',
         external_id: String(record.sale_id),
         user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
         metadata: { sale_id: record.sale_id, buyer: buyer, seller: seller, sold_price: price, sale_date: saleDate }
@@ -11346,7 +11346,7 @@ async function saveSaleProperty() {
       canonicalBridge('log_activity', {
         title: 'Sale property updated',
         domain: 'dialysis',
-        source_system: 'dia_supabase',
+        source_system: 'dia',
         external_id: String(record.property_id),
         user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
         property_name: address || null,
@@ -11379,7 +11379,7 @@ async function saveSaleOwner(ownershipId, idx) {
     showToast('Owner record saved successfully', 'success');
     canonicalBridge('save_ownership', {
       domain: 'dialysis',
-      source_system: 'dia_supabase',
+      source_system: 'dia',
       external_id: String(ownershipId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       owner_type: ownerType,
@@ -11436,7 +11436,7 @@ async function saveSaleResearch() {
     canonicalBridge('complete_research', {
       domain: 'dialysis',
       research_type: 'entity_enrichment',
-      source_system: 'dia_supabase',
+      source_system: 'dia',
       external_id: String(record.clinic_id),
       source_type: 'clinic',
       outcome: status || 'completed',
@@ -11750,7 +11750,7 @@ async function saveDiaOwnershipResolution() {
   showToast('Ownership resolution saved!', 'success');
   canonicalBridge('save_ownership', {
     domain: 'dialysis',
-    source_system: 'dia_supabase',
+    source_system: 'dia',
     external_id: String(propertyId),
     user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
     owner_name: recordedOwner,
