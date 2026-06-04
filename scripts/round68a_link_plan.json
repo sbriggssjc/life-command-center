@@ -1,0 +1,113 @@
+{
+  "round": "68-A",
+  "task": "Task 2 — LINK class (real listing -> nearest prior sale)",
+  "generated_at": "2026-06-04T23:05:55.961Z",
+  "mode": "commit",
+  "total_links": 212,
+  "gap_days": {
+    "min": 7,
+    "median": 174,
+    "max": 848
+  },
+  "links_by_sale_year": {
+    "2013": 4,
+    "2015": 5,
+    "2016": 12,
+    "2017": 10,
+    "2018": 25,
+    "2019": 28,
+    "2020": 27,
+    "2021": 40,
+    "2022": 14,
+    "2023": 19,
+    "2024": 15,
+    "2025": 12,
+    "2026": 1
+  },
+  "sample_12": [
+    {
+      "listing_id": 9121,
+      "sale_id": 14411,
+      "listing_date": "2024-02-06",
+      "sale_date": "2026-01-05",
+      "gap_days": 699
+    },
+    {
+      "listing_id": 9063,
+      "sale_id": 14386,
+      "listing_date": "2024-09-25",
+      "sale_date": "2025-12-01",
+      "gap_days": 432
+    },
+    {
+      "listing_id": 11881,
+      "sale_id": 14413,
+      "listing_date": "2025-09-22",
+      "sale_date": "2025-10-21",
+      "gap_days": 29
+    },
+    {
+      "listing_id": 11915,
+      "sale_id": 14228,
+      "listing_date": "2024-05-03",
+      "sale_date": "2025-08-15",
+      "gap_days": 469
+    },
+    {
+      "listing_id": 9673,
+      "sale_id": 8867,
+      "listing_date": "2023-11-15",
+      "sale_date": "2025-06-23",
+      "gap_days": 586
+    },
+    {
+      "listing_id": 9098,
+      "sale_id": 14215,
+      "listing_date": "2024-10-09",
+      "sale_date": "2025-06-16",
+      "gap_days": 250
+    },
+    {
+      "listing_id": 9722,
+      "sale_id": 14212,
+      "listing_date": "2024-10-10",
+      "sale_date": "2025-05-27",
+      "gap_days": 229
+    },
+    {
+      "listing_id": 9176,
+      "sale_id": 8268,
+      "listing_date": "2024-06-06",
+      "sale_date": "2025-05-05",
+      "gap_days": 333
+    },
+    {
+      "listing_id": 9231,
+      "sale_id": 9167,
+      "listing_date": "2024-06-18",
+      "sale_date": "2025-05-01",
+      "gap_days": 317
+    },
+    {
+      "listing_id": 8831,
+      "sale_id": 14208,
+      "listing_date": "2024-02-07",
+      "sale_date": "2025-04-23",
+      "gap_days": 441
+    },
+    {
+      "listing_id": 8766,
+      "sale_id": 14207,
+      "listing_date": "2024-12-17",
+      "sale_date": "2025-03-26",
+      "gap_days": 99
+    },
+    {
+      "listing_id": 9505,
+      "sale_id": 9207,
+      "listing_date": "2024-12-09",
+      "sale_date": "2025-03-01",
+      "gap_days": 82
+    }
+  ]
+}
