@@ -53,6 +53,18 @@ Net: synthetic rows raise the **count** of active listings (the universe) but
 contribute **nothing** to any cap, price, DOM, or price-change aggregate, in
 either the direct or inherited views.
 
+## LINK class effect on the views (plan v2)
+
+The 212 LINK updates set `sale_transaction_id` + `status='sold'` + `is_active=false`
++ `off_market_date`/`sold_date` (where NULL) on **existing real** listings. They
+do **not** change any guard. Effect on the INCLUDE views: these real listings are
+already counted by their real `listing_date`; linking simply **bounds their active
+window to end at the sale** (`off_market_date`/`sold_date` = sale_date), which is a
+correction — previously some were counted active indefinitely via the `last_seen`
+fallback. They never enter the EXCLUDE (price/DOM/cap) views because they carry
+real prices and so flow through the normal (non-synthetic) paths exactly as any
+sold listing does — `data_source` stays NULL on them.
+
 ## Known residual (Task 1)
 
 2026-captured actives whose CREXi/CoStar/LoopNet pages carry no marketing-start
