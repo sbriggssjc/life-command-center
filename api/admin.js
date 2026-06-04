@@ -293,7 +293,7 @@ async function handleReviewCounts(req, res) {
   const [
     provConflicts, staleIdentities, unlinkedEntities,
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
-    govDupAddr, govPending, govSosLinks,
+    govDupAddr, govPending, govSosLinks, stagedIntakeReview,
   ] = await Promise.all([
     opsLane('data_conflicts',    'v_field_provenance_actionable'),
     opsLane('stale_identities',  'v_stale_identities'),
@@ -305,6 +305,10 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(domCount('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address')),
     withLaneTimeout(domCount('gov', 'pending_updates?status=eq.pending')),
     withLaneTimeout(domCount('gov', 'v_recorded_owner_link_review')),
+    // R4-C §3: the round-3 staged-intake review queue had no console surface.
+    // Its per-item actions (Create property / Re-extract OCR / View extraction)
+    // now live on the Inbox cards, so the lane deep-links there.
+    withLaneTimeout(opsCount('staged_intake_items?status=in.(review_required,failed)')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -351,6 +355,11 @@ async function handleReviewCounts(req, res) {
       count: sum(govSosLinks), parts: { fl_sos_weak_links: val(govSosLinks) },
       count_mode: 'exact', status: laneStatus(govSosLinks),
       href: 'pageDataQuality', tone: '' },
+    { key: 'staged_intake_review', label: 'Staged intake — needs review',
+      count: sum(stagedIntakeReview),
+      parts: { review_required_or_failed: val(stagedIntakeReview) },
+      count_mode: 'exact', status: laneStatus(stagedIntakeReview),
+      href: 'pageInbox', tone: 'yellow' },
   ];
 
   return res.status(200).json({
