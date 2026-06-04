@@ -157,6 +157,74 @@ HONEST-ACCEPTANCE (deck targets at the labelled dates -- same format as R66x):
   final 6.84, single-deal max 11.58), so that specific labelled extreme is the
   likely "documented unreachable" outcome unless new 2019 short-deal rent lands.
 
+--------------------------------------------------------------------------------
+PHASE 1 — NEXT INCREMENT: OM / CMBS in-place-NOI capture on dia sales (scoped
+2026-06-04). MIRROR the government Round 76ek.f machinery -- do NOT invent a new
+provenance model.
+--------------------------------------------------------------------------------
+WHY THIS IS THE LEVER. The backfill above proved lease Y1 rent is too conservative
+for the short cohort. The deck's high <=5 caps are GOING-IN yields backed by the
+deal's own underwritten NOI, which on dialysis lives in the OM, not the lease
+table and not (usually) CMBS. Nearly every marketed dia deal had an OM and the OM
+intake pipeline already extracts a financial snapshot (snapshot.noi / .cap_rate /
+.annual_rent). The gap is purely that this NOI never reaches the SALE row.
+
+THE GOV PATTERN TO COPY (already built, gov-only today):
+  api/_handlers/sidebar-pipeline.js :: resolveCapRateProvenance(domain, propertyId,
+  sale, metadata) -- a four-tier ladder writing cap_rate_noi_source_table /
+  cap_rate_noi_source_id / cap_rate_quality onto sales_transactions:
+     1 CMBS loan_snapshots.noi, as_of within 18mo before sale -> 'cmbs_audited'
+     2 property_financials.is_actual, fiscal_year = sale_year or -1 -> 'om_actual'
+     3 metadata.noi present (OM/CoStar aggregate) -> 'om_pro_forma'
+     4 else -> 'market_implied'
+  It is hard-gated `if (domain !== 'government') return {}` (line ~4478).
+
+DIA IS ALREADY SCHEMA-READY (verified 2026-06-04 -- no migration needed for cols):
+  * sales_transactions carries cap_rate_noi_source_table / _id / cap_rate_quality.
+  * the cap_rate_quality CHECK constraint ALREADY allows
+    'cmbs_audited','om_actual','om_pro_forma','market_implied' (alongside dia's
+    'verified','stated_only','implausible_unverified').
+  * property_financials, loan_snapshots, loans all exist on dia.
+  * BUT: 0 dia sales carry cap_rate_noi_source_table today, and the dia OM promoter
+    (intake-promoter.js::promoteDiaPropertyFromOm) DROPS snapshot.noi
+    ('property_financials_not_supported_for_dia') and never writes sales_transactions.
+
+WIRING TASKS (dia-specific; OM is the dominant source, CMBS the rare bonus):
+  1. LAND OM NOI ON THE DEAL. When an OM promotes and resolves to a sale (or to a
+     property with a recent sale), write the OM's underwritten/in-place NOI so the
+     ladder can point at it. Preferred: write a dia property_financials row
+     (is_actual = the OM's "actual"/in-place vs pro-forma flag, fiscal_year,
+     noi, source='om_intake', + a back-reference to the staged OM artifact) so
+     tier 2 ('om_actual') resolves with a real cap_rate_noi_source_id. Distinguish
+     OM "Actual/In-Place/Current" NOI (-> om_actual) from "Pro Forma/Year 1/
+     Stabilized" NOI (-> om_pro_forma); the dia OM extractor snapshot should
+     surface which one it captured.
+  2. ENABLE THE LADDER FOR DIA. Drop the gov-only guard in resolveCapRateProvenance
+     and call it from the dia sale-write paths. Order is unchanged (CMBS -> actuals
+     -> pro-forma -> market_implied); on dia it will simply fall past the empty
+     CMBS tier to property_financials/OM most of the time. Stamp
+     cap_rate_noi_source_table/_id/quality on the dia sale exactly as gov does.
+  3. PROMOTE VERIFIED GOING-IN NOI FOR SHORT TERM ONLY. Extend
+     dia_derive_cap_of_record so a HIGH-QUALITY noi_derived cap
+     (cap_rate_quality IN ('cmbs_audited','om_actual')) may OUTRANK broker_stated
+     for <=5yr remaining term -- because on short deals the broker's stabilized cap
+     understates the going-in yield the deck reports. Never let 'om_pro_forma' or
+     'market_implied' or lease-Y1 outrank a reported cap; keep the R66x tier-4
+     stored-calc as the last resort. This is the single ladder change that reopens
+     the fan, and ONLY where a verified going-in NOI exists.
+
+HONEST-ACCEPTANCE (same frame -- deck targets at the labelled dates):
+  SUCCESS = the by-term fan reopens toward ~140 bps with <=5 highest ON THE DEALS
+  WHERE AN OM/CMBS GOING-IN NOI EXISTS, moving Dec-2025 off the R66x baseline
+  (12+ 6.80 / 8-12 6.60 / 6-8 6.88 / <=5 7.45) toward the deck
+  (6.89 / 6.84 / 7.28 / 8.29) WITHOUT regressing 12+ or 8-12. Success is NOT
+  hitting every deck point: the 2019 <=5 = 9.46% peak stays documented-unreachable
+  (the deals are not in our data), and cohorts with no OM-NOI coverage stay at the
+  conservative broker-of-record level. Re-run the R66x harness (cm_dialysis_sold_
+  cap_by_term_dot + master_m/cap_by_term_m/_q) at the labelled dates after each
+  increment; report coverage (how many <=5 deals gained an om_actual cap) alongside
+  the cohort moves so the gain is attributable, not a smoothing artifact.
+
 ================================================================================
 PHASE 2 — available_listings price/cap capture (last_cap_rate + initial_price)
 ================================================================================
