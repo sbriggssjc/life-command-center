@@ -227,3 +227,26 @@ Tests 502/0. No migrations. Post-deploy checks: (1) re-promote Buckeye
 Re-promote button no longer 500s; (3) next rematch tick matches `cd2172dd…`
 (Eight Mile → dia 26639) and `34133e33…` (Atlantic Ave → dia 22041) with NO new
 property created. THEN `INTAKE_AUTOCREATE` can be considered.
+
+## Addendum 7 — F4B LIVE VERIFIED, all checks pass (2026-06-04 night)
+
+1. ✅ **Buckeye promotion fully lands**: dia listing 12772 `current_cap_rate
+   0.0550` (was 0.0006-rejected), `listing_broker` human-joined "Jay Patel,
+   Thomas Ladt, Nico Lautmann" (was raw JSON), **3 broker contacts created**
+   (`split_count: 3`), financials ✓, unified contact ✓, `created: []` (no dupe).
+2. ✅ **Re-promote 500 gone** — route returns 200 and runs the sidebar-style
+   propagation pipeline (note: `_route=promote` is propagation, NOT the OM
+   listing promoter; the OM path rides create-property's race guard).
+3. ✅ **Dupe prevention proven**: cooldowns cleared + one rematch tick →
+   `cd2172dd…` (Eight Mile) matched EXISTING dia **26639**, `34133e33…`
+   (Atlantic Ave) matched EXISTING dia **22041** — both finalized, zero new
+   properties created.
+
+**The intake round is closed.** Email OM → extract (incl. vision OCR for
+scanned PDFs) → canonical match (directionals, suffixes, number-words, ranges,
+multi-address, cross-domain) → promote (cap-rate form-safe, array-safe) →
+domain DBs, with review purgatory draining on cron (2,900 → ~1,900 day one)
+and three drains for the residue: rematch, disposition, create-from-intake.
+Remaining decision: flip `INTAKE_AUTOCREATE=1` on Railway when ready to make
+the residual drain fully self-propelling. Open siblings: F5 (SOS adapters
+beyond FL), F6 (iOS share-inbox surface).
