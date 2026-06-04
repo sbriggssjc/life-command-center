@@ -116,6 +116,31 @@ REFINED PHASE-1 TASKS (do in this order):
      all read it. After each coverage increment, re-query the four cohorts at the
      labelled dates and compare to the deck (no code changes needed to measure).
 
+BACKFILL ATTEMPT & RESULT (2026-06-04, EXECUTED then REVERTED -- read before
+redoing task 2). Task 2 as stated ("rent coverage is the main lever") was tested
+and is WRONG. A gated backfill set rent_at_sale = the in-effect lease's
+annual_rent for 507 no-rent market sales (111 in <=5), lifting rent coverage
+44% -> 63%. Measured deck effect: Dec-2025 <=5 went 7.45% -> 7.22% and 6-8
+6.88% -> 6.76% -- it moved the short cohorts AWAY from the deck. Reverted.
+  WHY: the cap-of-record ladder ranks noi_derived from rent_at_sale/price (tier 3)
+  ABOVE the R66x tier-4 stored-calculated_cap_rate. On <=5 deals the lease's
+  in-place rent implies ~6.6-7.5% caps (even PROJECTED to sale via
+  dia_project_rent_at_date the <=5 subset only reached 7.45%), which is LOWER than
+  the calc caps (~8.3%) that were already closest to the deck. So lease-table rent
+  is MORE CONSERVATIVE than the deck's going-in short-deal yields; backfilling it
+  replaces the better proxy with a worse one. Cap-of-record coverage barely moved
+  (+5) anyway -- R66x tier-4 had already maxed it; the lease backfill only added
+  rent_at_sale, which then out-ranked calc and hurt the cohort.
+  CORRECTED LEVER: coverage from the LEASE TABLE does not close the short-cohort
+  gap. The deck's high <=5 caps come from genuine IN-PLACE / GOING-IN NOI (high
+  contractual rent against a discounted short-remaining-term price), NOT lease Y1
+  base rent. To actually move the short cohort toward the deck you must source that
+  going-in NOI directly -- OM "actual"/in-place NOI, CMBS net cash flow, or the
+  sale's own underwriting -- and only then consider promoting it in the ladder for
+  <=5. Absent such a source, the short-cohort deck gap is the DOCUMENTED-UNREACHABLE
+  outcome (the deck's number is driven by values we exclude as implausible or do
+  not hold). Do NOT re-run the lease-table coverage backfill expecting the deck.
+
 HONEST-ACCEPTANCE (deck targets at the labelled dates -- same format as R66x):
   SUCCESS = the unified by-term cohorts reach the deck within ~15-20 bps at
   Dec-2025 AND the 2019/2022 labelled points, fanning ~140 bps with <=5 highest:
