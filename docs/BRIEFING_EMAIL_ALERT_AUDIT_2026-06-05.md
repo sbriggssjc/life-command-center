@@ -159,6 +159,32 @@ Observed in the channel capture:
    `extraction_status='queued'` backlog draining slowly. Separate issue,
    not addressed today.
 
+## 5c. Final PA cleanup session (2026-06-05, after merge + Railway deploy)
+
+1. **Flows deleted** (user-approved): `LCC Weekday Briefing Email`,
+   `Sync Flagged Emails to Supabase` (11:17 copy), `LCC Morning Briefing
+   Email` (weekend). Verified gone from My Flows.
+2. **Backfill fault branch fixed** — added a `Filter array` action
+   (`result('Apply_to_each_1')` where status = Failed) feeding
+   PostDeadLetter; the dead letter now sends `p_failed_action` (real action
+   name), `p_error_code`, and `p_error_detail` (first 3 failed results as
+   JSON) instead of an empty detail + run header only.
+3. **Backfill pagination fixed** — Get records 2 already had Top Count 5000
+   + `LastModifiedDate desc` + tenant filter, but the SF connector caps at
+   ~200/page, which is why runs only ever saw 200 Comps. Enabled Pagination
+   (threshold 5000). First full-sweep run will be long (~30-45 min); once
+   it completes clean, consider dropping Top Count to ~500 to cut daily SF
+   calls (LastModifiedDate desc ordering means recent changes are always
+   covered).
+4. **Game Plan mystery solved — no build needed.** v2 already had
+   Get events (V4) + List Tasks Folder V2 + POST body wired. Today's 7:30
+   v2 run returned `personal_context_present: true` (calendar event posted
+   fine). The empty-Game-Plan email analyzed in §3.1 was the now-deleted
+   duplicate flow's body-less GET render. Residual nit: the render cache
+   key deliberately ignores the POST body, so any same-day GET preview
+   before the 7:30 POST could serve a body-less render — consider adding
+   `personal_context_present` to the cache key in a future round.
+
 ## 6. Watch plan
 
 - **Sat Jun 6 / Mon Jun 8:** confirm exactly one briefing email arrives. If
