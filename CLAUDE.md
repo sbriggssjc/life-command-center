@@ -1083,7 +1083,9 @@ live 2026-06-07; migration committed (idempotent).
 - `POST /api/decision-verdict {decision_id, verdict, payload}` — dispatches by
   `(decision_type, verdict)` to the **LCC-local** effect and records it:
   - confirm_true_owner: `correct` → confirm + hand off to the connect ladder
-    (`next:{action:'connect',…}`); `research` → activity_events task; `skip`.
+    (`next:{action:'connect',…}`); `research` → **research_tasks** row (effect
+    written FIRST and gated — on a failed write the decision stays `open` with
+    `effects.research_task=false`, never a false `decided`); `skip`.
     **`stale` is RECORD-ONLY** (`verdict='stale_pending_writeback'`,
     `effects.writeback='deferred_slice3'`) — no domain DB is touched; the gov
     `true_owner` write-back is **Slice 3** behind Scott's blessing.
