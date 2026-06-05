@@ -39,6 +39,30 @@ verification records now live separately).
 9. Carried: §5 skeleton sweep on remaining lazy sections; reflow debounce
    (deferred by design).
 
+## R4-D — LIVE VERIFIED (2026-06-05, post-redeploy)
+
+- **#4 Cache-busting:** all bundles serve `?v=a35851601cda` (commit SHA) —
+  every future deploy now self-busts browser caches.
+- **#5 NBA:** top-10 all distinct property ids; the $950M magnitude row is
+  suppressed.
+- **#6 Gov action item:** "407 leases expiring within 6 months" — exactly
+  matches the section bucket (was 7,589).
+- **#1/#2/#3/#7:** console CLEAN on fresh gov overview load AND dia detail
+  open — zero 403s (deed_records / sf_activities), zero 57014 timeouts, zero
+  HTML-parse errors, zero xref spam. LLC-queue widget no longer
+  "unavailable". (The 67 xref conflicts now live in dia
+  `v_data_quality_issues` as `sales_price_xref_conflict`.)
+- **Cron pulse:** last 90 min of pg_net responses on LCC Opps — all JSON
+  200/202 (rematch, geocode, merge-log replay, BD owner-sync feeds); no HTML
+  responses, no errors. The newly mounted routes are executing.
+
+**Intake-drain epilogue (the crons finished the job overnight):**
+`review_required` **2,900 → 457 (−84%)** · matched 321 → **862** (+541 OMs
+attached to their properties) · finalized 1,358 · non-deal discarded 2,606.
+The remaining 457 ≈ genuinely-new-property residue (create-from-intake
+candidates) + cooldown stragglers — exactly the population the F4 button and
+the (still dark) INTAKE_AUTOCREATE flag exist for.
+
 ## R5 — SPE→parent reconciliation + buyer-vs-prospect doctrine (Scott, 2026-06-05)
 
 Observed on the live Priority Queue: several P0.5 rows are **SPEs controlled
