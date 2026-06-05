@@ -748,17 +748,29 @@ async function handleDecisionVerdict(req, res) {
     });
     return r;
   };
-  const logResearch = async (title, entityId, domain) => {
-    try {
-      await opsQuery('POST', 'activity_events', {
-        workspace_id: decision.workspace_id || null, actor_id: user.id,
-        category: 'status_change', title, body: 'Raised from the Decision Center.',
-        entity_id: entityId || null, source_type: 'system', domain: domain || null,
-        visibility: 'shared', metadata: { decision_id: decisionId, decision_type: decision.decision_type },
-        occurred_at: new Date().toISOString(),
-      });
-    } catch (_e) { /* non-fatal */ }
+  // Spawn a research_task (the decision-inventory target — mirrors
+  // lcc_generate_chain_research_tasks: research_type/title/instructions/
+  // entity_id/domain/source_*). Returns the opsQuery result so the caller can
+  // gate the verdict on the ACTUAL outcome (never claim success on a failed
+  // write). research_tasks.domain/workspace_id are NOT NULL; both are present
+  // on every seeded decision.
+  const createResearchTask = async ({ research_type, title, instructions }) => {
+    return opsQuery('POST', 'research_tasks', {
+      workspace_id: decision.workspace_id,
+      created_by: user.id || null,
+      research_type, title, instructions: instructions || null,
+      entity_id: decision.subject_entity_id || null,
+      domain: decision.subject_domain || 'lcc',
+      status: 'queued', priority: 50,
+      source_record_id: String(decisionId), source_table: 'lcc_decisions',
+      metadata: { decision_id: decisionId, decision_type: decision.decision_type },
+    }); // POST defaults to Prefer: return=representation, so rt.data carries the row
   };
+  // On a failed effect: record the real outcome in effects + KEEP the decision
+  // open (retryable) — do not stamp a verdict/decided_at it didn't earn.
+  const recordEffectFailure = async (effects) =>
+    opsQuery('PATCH', 'lcc_decisions?id=eq.' + decisionId,
+      { effects, updated_at: new Date().toISOString() });
 
   try {
     // ---- confirm_true_owner -------------------------------------------------
@@ -785,10 +797,21 @@ async function handleDecisionVerdict(req, res) {
           note: 'Recorded. The domain true_owner write-back ships in Slice 3.' });
       }
       if (verdict === 'research') {
-        await logResearch('Research task: confirm true owner for ' + (decision.context?.entity_name || 'entity'),
-          decision.subject_entity_id, decision.subject_domain);
-        await record('research', 'decided', payload, { research_task: true });
-        return res.status(200).json({ ok: true, verdict: 'research' });
+        // Effect FIRST; the recorded outcome must reflect the actual write.
+        const rt = await createResearchTask({
+          research_type: 'confirm_true_owner',
+          title: 'Confirm true owner for ' + (decision.context?.entity_name || 'entity'),
+          instructions: 'Decision Center: verify whether the domain true_owner ("'
+            + (decision.context?.true_owner_name || '?') + '") is current or stale (pre-acquisition) '
+            + 'for this entity, then confirm or correct it.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data || rt.status });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
       }
       if (verdict === 'skip') {
         await record('skip', 'skipped', null, null);
@@ -812,10 +835,19 @@ async function handleDecisionVerdict(req, res) {
         return res.status(501).json({ error: 'deferred', detail: 're-parent / rename anchor lands in a later slice' });
       }
       if (verdict === 'research') {
-        await logResearch('Research task: confirm controlling sponsor for ' + (decision.context?.parent_name || 'buyer parent'),
-          decision.subject_entity_id, decision.subject_domain);
-        await record('research', 'decided', payload, { research_task: true });
-        return res.status(200).json({ ok: true, verdict: 'research' });
+        const rt = await createResearchTask({
+          research_type: 'confirm_buyer_parent',
+          title: 'Confirm controlling sponsor for ' + (decision.context?.parent_name || 'buyer parent'),
+          instructions: 'Decision Center: identify/confirm the controlling sponsor for this repeat-buyer '
+            + 'parent before any buy-side opportunity is opened on it.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data || rt.status });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
       }
       if (verdict === 'skip') {
         await record('skip', 'skipped', null, null);
