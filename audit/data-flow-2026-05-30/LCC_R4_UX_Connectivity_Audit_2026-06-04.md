@@ -93,3 +93,42 @@ intake highlights surfacing on Today; My Work hero + Start/Wait.
 *Method: Chrome MCP live walk + LCC Opps/dia/gov SQL cross-checks. Note: page
 screenshots intermittently time out on heavy pages (21s gov load) — text
 extraction used instead; the load-time problem is itself catalogued in B/C.*
+
+## Addendum — all three clusters shipped (pending merge + deploy)
+
+**R4-A (PR #1048):** canonical scheme documented (dia/gov + asset/true_owner;
+property/clinic/facility collapsed → asset; email_intake verified as a
+distinct channel identity, 231/231 UUIDs, left as-is). Data migrations ALREADY
+LIVE: 6,900 rows normalized, 2,521 property→asset, 2 collisions deduped, 41
+junk entities soft-flagged. Writers choke-pointed through
+`canonicalIdentitySystem()`; consumers tolerate deprecated forms in transition.
+⚠️ **Deferred CHECK constraint `20260604121000` applies ONLY after Railway
+redeploys merged main** — current deployed writers still emit dia_db/gov_db.
+
+**R4-B (branch great-lovelace):** mv_gov_overview_stats rebuilt — All-Time
+Comps 1,000→**11,911**, leads 11,537 w/ avg $7.66M (was $28M over the cap),
+GSA events 52,828 of 261,254, FRPP 21,947. **Forensic corrections:** lease
+pile = bucketing on clamped firm_term_remaining, not stale data — rebucketed
+by lease_expiration (<1yr 7,722→793 + honest 4,798 expired/holdover cohort;
+4,002 stale >1yr logged as real refresh-gap backlog). Dupe sales =
+v_sjc_deal_book emitting import snapshots (13,940 rows → 161 deals; one deal
+×205) — DISTINCT ON fix; "2024 gap" was dup inflation (real: 2023=6, 2024=1,
+2025=3). Financial Estimates: 37 round-trips → one-row view (8,511 clinics /
+$49.9B instant). Team Pulse 3000 verified genuine (3,021). Migrations live;
+frontend on redeploy.
+
+**R4-C (PR #1052):** inbox↔intake unified at the DATA layer — backfill LIVE:
+"New" **6,804 → 1,749 (−74%)**; ongoing trigger `lcc_inbox_autotriage_from_intake`
+closes the loop for every future writer. Cards show verdict + real next
+actions; Promote runs OM promotion on OM rows; bulk dismiss/archive enabled.
+Queue CTA state-aware (Eagle River → "Log touch"); within-band value sort +
+"Open top N"; staged-intake lane added to Review Console; My Priorities falls
+back to live queue; gov Ownership Intelligence skeletons. Flagged follow-ups:
+§5 skeleton sweep across remaining lazy sections; list-reflow debounce
+(deliberately not shipped — fragile).
+
+**Post-deploy sequence:** merge all three → single Railway redeploy → (1) I
+apply the deferred CHECK constraint to LCC Opps, (2) full live verification:
+44309 detail header/badge + canonical writes (A); gov overview true totals +
+honest lease buckets + 10 distinct recent sales (B); inbox verdict cards +
+state-aware queue CTAs + new console lane + My Priorities (C).
