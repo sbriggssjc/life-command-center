@@ -6186,6 +6186,11 @@ async function _udResolveEntityViaCreateLead() {
     source: 'property_flow',
   };
   const resp = await _udApiPost('/api/operations?action=create_lead', body);
+  // R5: repeat-buyer refusal — no lead/opp was created, so do NOT cache an open
+  // opportunity. Pass the structured refusal back to the caller untouched.
+  if (resp && resp.blocked === 'repeat_buyer_spe') {
+    return resp;
+  }
   if (resp && resp.ok && resp.entity_id) {
     _udCache.ownership = _udCache.ownership || {};
     _udCache.ownership.owner_entity_id = resp.entity_id;
@@ -6213,6 +6218,28 @@ async function _udCreateLeadFromProperty() {
   if (!pid) { showToast('No property id in context', 'error'); return; }
   try {
     const resp = await _udResolveEntityViaCreateLead();
+    // R5: the owner reconciles to a repeat-buyer parent — buyers are prospected
+    // buy-side (showings + buy-side outreach), not with a standard prospect
+    // lead. Offer the one allowed action: a Government Buyer opportunity on the
+    // PARENT account.
+    if (resp && resp.blocked === 'repeat_buyer_spe') {
+      const pn = resp.parent_name || 'a top repeat buyer';
+      if (resp.parent_entity_id && window.confirm('This owner is an SPE of ' + pn
+          + ' — a top repeat buyer.\n\nBuyers are prospected buy-side (showings + buy-side outreach), '
+          + 'not with a standard prospect lead.\n\nOpen a Government Buyer opportunity on ' + pn + ' instead?')) {
+        const gb = await _udApiPost('/api/operations?action=open_government_buyer', { entity_id: resp.parent_entity_id });
+        if (gb && gb.ok) {
+          showToast((gb.already_open ? 'Government Buyer already open on ' : 'Government Buyer opportunity opened on ') + pn
+            + (gb.needs_sf_mapping ? ' · SF mapping research task logged' : ''), 'success');
+        } else {
+          showToast('Could not open Government Buyer: ' + ((gb && gb.error) || 'unknown'), 'error');
+        }
+      } else {
+        showToast('SPE of ' + pn + ' — prospect buy-side, not as a standard lead.', 'info');
+      }
+      try { _udRenderNextStep(); } catch (_e) {}
+      return;
+    }
     if (resp && resp.ok) {
       const msg = resp.already_open
         ? 'Lead already live · BD opportunity already open'

@@ -237,6 +237,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'create_lead':        return await bridgeCreateLead(req, res, user, workspaceId);
       case 'initiate_cadence':   return await bridgeInitiateCadence(req, res, user, workspaceId);
       case 'open_opportunity':   return await bridgeOpenOpportunity(req, res, user, workspaceId);
+      case 'open_government_buyer': return await bridgeOpenGovernmentBuyer(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
 
@@ -253,7 +254,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity'
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
         });
     }
   }
@@ -631,6 +632,23 @@ async function domainSelect(domain, pathWithQuery) {
   }
 }
 
+// R5 (2026-06-05): does an entity reconcile to a repeat-buyer PARENT? Repeat
+// buyers are buy-side relationships — they never get a standard prospect
+// opportunity (showings + buy-side outreach instead). Soft-fails to null so a
+// transient LCC Opps hiccup never blocks the normal lead flow. The DB-side
+// BEFORE-INSERT trigger is the hard guarantee; this is the friendly UI refusal.
+async function resolveBuyerParent(entityId) {
+  if (!entityId) return null;
+  try {
+    const r = await opsQuery('POST', 'rpc/lcc_resolve_buyer_parent', { p_entity_id: entityId });
+    const row = Array.isArray(r.data) ? r.data[0] : r.data;
+    if (r.ok && row && row.parent_entity_id) {
+      return { parent_entity_id: row.parent_entity_id, parent_name: row.parent_name || null, match_tier: row.match_tier || null };
+    }
+  } catch (_e) { /* soft-fail */ }
+  return null;
+}
+
 async function bridgeCreateLead(req, res, user, workspaceId) {
   const {
     domain, property_id, entity_id, owner_name, true_owner_name,
@@ -677,6 +695,25 @@ async function bridgeCreateLead(req, res, user, workspaceId) {
     // (E2E#6 follow-up, 2026-06-03)
     try { await refreshPlaceholderEntityNameById(resolvedEntityId, workspaceId, ownerDisplay); }
     catch (_e) { /* non-fatal: BD surfaces just keep the placeholder name */ }
+  }
+
+  // 1b. GATE (R5, 2026-06-05): SPE->parent reconciliation runs BEFORE opening.
+  // If the resolved owner reconciles to a repeat-buyer parent, refuse the
+  // standard prospect lead/opportunity and hand the caller the buy-side path
+  // ("Open Government Buyer opportunity on <Parent>"). No lead, no opp created.
+  const buyerParent = await resolveBuyerParent(resolvedEntityId);
+  if (buyerParent) {
+    return res.status(200).json({
+      ok: true,
+      blocked: 'repeat_buyer_spe',
+      entity_id: resolvedEntityId,
+      created_entity: createdEntity,
+      parent_entity_id: buyerParent.parent_entity_id,
+      parent_name: buyerParent.parent_name,
+      message: 'This is an SPE of ' + (buyerParent.parent_name || 'a top repeat buyer')
+        + ' — a repeat buyer. Buyers are prospected buy-side (showings + buy-side outreach), '
+        + 'not with a standard prospect lead.',
+    });
   }
 
   // 2. Insert the domain lead row (prospect_leads on gov, marketing_leads on dia).
@@ -929,16 +966,88 @@ async function bridgeOpenOpportunity(req, res, user, workspaceId) {
     return res.status(rpc.status || 500).json({ error: 'open_opportunity_failed', detail: rpc.data });
   }
 
-  // The RPC returns a single row {opportunity_id, already_open}: the existing
-  // open opportunity is reused when present (Bug b idempotency), else a new one
-  // is opened. PostgREST surfaces a RETURNS TABLE function as an array of rows.
+  // The RPC returns a single row {opportunity_id, already_open, blocked,
+  // parent_entity_id, parent_name}. R5: a repeat-buyer SPE/parent is refused a
+  // prospect opportunity — surface the structured refusal so the caller (and
+  // the bulk "Open top N") can skip-and-report and offer the buy-side path.
+  // PostgREST surfaces a RETURNS TABLE function as an array of rows.
   const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+  if (row && row.blocked === 'repeat_buyer_spe') {
+    return res.status(200).json({
+      ok: true,
+      blocked: 'repeat_buyer_spe',
+      bd_opportunity_id: null,
+      already_open: false,
+      parent_entity_id: row.parent_entity_id || null,
+      parent_name: row.parent_name || null,
+    });
+  }
   const oppId = row ? (row.opportunity_id || null) : null;
   const alreadyOpen = !!(row && row.already_open);
   return res.status(alreadyOpen ? 200 : 201).json({
     ok: true,
     bd_opportunity_id: oppId,
     already_open: alreadyOpen,
+  });
+}
+
+// ============================================================================
+// BRIDGE: Open a GOVERNMENT BUYER opportunity on a repeat-buyer PARENT (R5)
+// ============================================================================
+//
+// Doctrine: top repeat buyers are buy-side relationships. The only opportunity
+// they may carry is a "Government Buyer" opportunity, and it sits on the actual
+// PARENT account, never a subsidiary SPE. The RPC resolves an SPE to its parent
+// and is idempotent (one open government_buyer per parent). When the parent has
+// no mapped Salesforce account, the open-path logs a research task ("map
+// <Parent> to SF parent account") and the opportunity sync holds.
+async function bridgeOpenGovernmentBuyer(req, res, user, workspaceId) {
+  const { entity_id } = req.body || {};
+  if (!entity_id) return res.status(400).json({ error: 'entity_id is required' });
+
+  const rpc = await opsQuery('POST', 'rpc/lcc_open_government_buyer_opportunity', {
+    p_entity_id: entity_id,
+    p_owner_user_id: user.id,
+    p_source: 'priority_queue',
+  });
+  if (!rpc.ok) {
+    console.warn('[open_government_buyer] rpc failed:', rpc.status, rpc.data);
+    return res.status(rpc.status || 500).json({ error: 'open_government_buyer_failed', detail: rpc.data });
+  }
+  const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+  const oppId = row ? (row.opportunity_id || null) : null;
+  const alreadyOpen = !!(row && row.already_open);
+  const parentId = row ? (row.parent_entity_id || null) : null;
+  const parentName = row ? (row.parent_name || null) : null;
+  const needsSfMapping = !!(row && row.needs_sf_mapping);
+
+  // SF parent-account routing: when unmapped, never route to a subsidiary —
+  // log a research task and let the opportunity sync hold (surfaced in
+  // v_lcc_government_buyer_sync_health). Best-effort; never fails the open.
+  if (needsSfMapping && parentId && !alreadyOpen) {
+    try {
+      await opsQuery('POST', 'activity_events', {
+        workspace_id: workspaceId, actor_id: user.id,
+        category: 'status_change',
+        title: 'Research task: map ' + (parentName || 'buyer parent') + ' to its Salesforce parent account',
+        body: 'Government Buyer opportunity opened on the parent but no Salesforce Account is linked. '
+            + 'Map the SF parent account so the opportunity can sync (never route to a subsidiary SPE).',
+        entity_id: parentId,
+        source_type: 'system', domain: row.vertical || null,
+        visibility: 'shared',
+        metadata: { bridge_source: 'open_government_buyer', bd_opportunity_id: oppId, sf_mapping_needed: true },
+        occurred_at: new Date().toISOString(),
+      });
+    } catch (_e) { /* non-fatal */ }
+  }
+
+  return res.status(alreadyOpen ? 200 : 201).json({
+    ok: true,
+    bd_opportunity_id: oppId,
+    already_open: alreadyOpen,
+    parent_entity_id: parentId,
+    parent_name: parentName,
+    needs_sf_mapping: needsSfMapping,
   });
 }
 

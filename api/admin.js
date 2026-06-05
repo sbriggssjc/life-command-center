@@ -552,6 +552,9 @@ async function handlePriorityQueueList(req, res) {
     'source_domain', 'source_property_id', 'source_property_address',
     'source_property_city', 'source_property_state', 'source_property_lease_expiration',
     'source_property_firm_term_remaining',
+    // R5 P-BUYER lane: parent rollup of the SPE portfolio (NULL on other bands).
+    'buyer_spe_count', 'buyer_rollup_property_count', 'buyer_rollup_annual_rent',
+    'buyer_last_acquisition_date', 'buyer_sf_account_id', 'buyer_needs_sf_mapping',
   ].join(',');
 
   // Items page: most-urgent band first, then most-overdue within band, then
@@ -591,7 +594,7 @@ async function handlePriorityQueueList(req, res) {
     }
   }
   // Stable doctrinal order for the chips.
-  const BAND_ORDER = ['P0','P0.5','P1','P2','P3','P4','P5','P6','P7','P8'];
+  const BAND_ORDER = ['P0','P0.5','P-BUYER','P1','P2','P3','P4','P5','P6','P7','P8'];
   const counts = Object.keys(countMap)
     .sort((a, b) => (BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b)))
     .map(b => ({ band: b, n: countMap[b] }));

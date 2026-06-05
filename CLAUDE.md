@@ -824,3 +824,86 @@ never hard-deleted.
 
 Audit: `SELECT source_system, source_type, count(*) FROM external_identities
 GROUP BY 1,2` should show only canonical (`dia`/`gov`) + vendor systems.
+
+## R5 — SPE→parent reconciliation + buyer-vs-prospect doctrine (2026-06-05)
+
+Repeat-buyer SPE shells (NGP/Easterly/Boyd/UIRC… on gov; Elliott Bay/SMBC/
+AEI… on dia) were polluting the top of the **P0.5** "needs an opportunity"
+band — 86 of 491 P0.5 rows were buyer SPEs. Doctrine (Scott, grounded live
+2026-06-05): **one buyer, one account**; top repeat buyers are *buy-side
+relationships* (showings + buy-side outreach), never standard prospect
+opportunities; any buyer opportunity goes on the actual **parent** account in
+Salesforce, never the subsidiary SPE; SPE→parent reconciliation is a GATE that
+runs BEFORE opening. Landed before the "⚡ Open top 20" bulk action got real use.
+
+### What shipped (LCC Opps — applied live 2026-06-05)
+
+- Migrations `20260605120000_lcc_r5_buyer_parent_registry.sql` (registry,
+  read-only/additive) + `20260605120500_lcc_r5_buyer_gate_and_queue.sql` (gate +
+  queue). Both idempotent.
+- **Extends the operator-affiliate machinery, doesn't fork it.**
+  `lcc_operator_affiliate_patterns` gained a `relationship` column
+  (`operator` default | `buyer_parent`). The three existing OPERATOR consumers
+  (`v_lcc_operator_affiliates`, `v_lcc_operator_effective_portfolio`,
+  `v_lcc_listing_event_queue`) are now scoped `relationship='operator'` so
+  buyer patterns can't corrupt operator concentration / sale-leaseback logic.
+  **Any new operator consumer of that table MUST filter `relationship='operator'`.**
+- **24 buyer parents** registered in new table `lcc_buyer_parents`
+  (parent_entity_id PK, domain, sf_account_id, needs_sf_mapping, …). The seed
+  reuses the cleanest existing org entity per buyer, creating one only where
+  absent (UIRC, US Federal Properties Trust, USGBF). **USGBF sponsor is
+  unconfirmed — flagged `needs_sf_mapping` + a note for Scott to confirm.**
+  SF parent-account ids prefilled from `external_identities (salesforce,
+  Account)` (7/24 mapped).
+- **Classification (inspectable):** `v_lcc_buyer_spe_candidates` (prefix tier +
+  empirical-portfolio tier — the entity's current property's latest sale lists a
+  registered parent as buyer), `v_lcc_buyer_spe_entities` (+ parent_self for the
+  gate), `v_lcc_buyer_parent_rollup` (SPE portfolio rolled up per parent),
+  `v_lcc_buyer_name_canonical` (buyer-name fragmentation normalizer for
+  analytics). Resolver: `lcc_resolve_buyer_parent(entity)`.
+- **The GATE.** `lcc_open_prospect_opportunity` now returns an APPENDED refusal
+  payload `(…, blocked, parent_entity_id, parent_name)` — backward-compatible,
+  so DB-first or JS-first deploy is both safe. A **BEFORE-INSERT trigger**
+  `trg_bd_block_repeat_buyer_prospect` on `bd_opportunities` is the hard
+  guarantee: a `type='prospect'` opp can never be created for a buyer
+  parent/SPE on ANY path (incl. `bridgeCreateLead`'s direct insert), so the gate
+  is deploy-order-proof. `bridgeCreateLead` already treats opp-insert failure as
+  non-fatal.
+- **Government Buyer opportunity.** `bd_opportunities.type` CHECK widened to add
+  `government_buyer` (widening only — deploy-safe). `lcc_open_government_buyer_opportunity(entity)`
+  resolves an SPE to its parent, idempotently opens ONE open `government_buyer`
+  on the PARENT, and reports `needs_sf_mapping`. Does NOT auto-seed a cadence
+  (the cadence trigger only fires on `type='prospect'`).
+- **Queue lane.** `v_priority_queue` drops buyer SPEs out of P0.5
+  (`NOT IN v_lcc_buyer_spe_entities`) and adds a **P-BUYER** lane: one row per
+  parent with the SPE portfolio rolled up (count / rent / last acquisition).
+  `v_priority_queue_enriched` gained appended `buyer_*` columns.
+  `v_priority_queue_band_counts` surfaces P-BUYER automatically.
+- **SF routing.** `lcc_buyer_parents.sf_account_id` is the routing source of
+  truth. `v_lcc_government_buyer_sync_health` reports each open government_buyer
+  as `synced` / `ready_to_sync` / `hold_unmapped`. The opportunity sync MUST use
+  the mapped PARENT sf_account_id and HOLD when unmapped — never route to a
+  subsidiary. Unmapped opens log a research task ("map <Parent> to SF parent
+  account") via `activity_events`.
+
+### JS (ships on Railway redeploy of merged `main`)
+
+- `api/operations.js`: `resolveBuyerParent()` helper; create_lead GATE (refuses
+  before any lead/opp); `open_opportunity` surfaces the refusal; new
+  `open_government_buyer` action (logs the SF-mapping research task when unmapped).
+- `ops.js`: bulk "Open top N" skip-and-reports repeat buyers (never fails the
+  batch); P-BUYER lane renders the rollup + a single "Open Government Buyer
+  opportunity →" CTA; refusal on a P0.5 open reroutes to the buy-side path.
+- `api/admin.js`: `BAND_ORDER` includes `P-BUYER`; queue select carries the
+  `buyer_*` rollup columns.
+- `detail.js`: property-flow create-lead handles the refusal (offers the
+  Government Buyer path on the parent).
+
+### Verified live 2026-06-05
+86/491 P0.5 → buyer SPEs (NGP 31, Easterly 21, Boyd 15, UIRC 14…); after rewrite
+P0.5 = 402, **0 buyer SPEs remain in P0.5**, P-BUYER = 18 parents. Gate test:
+`open_opportunity` on "NGP VI FALLS CHURCH VA LLC" → `blocked=repeat_buyer_spe`,
+parent=NGP Capital. `open_government_buyer` from the SPE → one opp on NGP parent;
+second call → `already_open`. Trigger blocks a direct prospect insert on a buyer
+SPE. Zero open prospect opps leaked onto buyer entities (clean ground). Test
+artifacts cleaned up.
