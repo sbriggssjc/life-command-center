@@ -983,3 +983,71 @@ buyer-SPE gate + P-BUYER intact). `node --check` clean; `ls api/*.js | wc -l`=12
   (already registered), so "Office Properties Income Trust (OPI)" as a GPT alias
   isn't warranted by the data. Rename explicitly if you still want it.
 - dia owner-facts leg + chain phase 3(c) are the obvious follow-ups.
+
+## R7 Phase 0 — Decision Center perf prerequisite (Slice 1, 2026-06-07)
+
+The priority queue read floor was ~5-7s unfiltered (PR #1062), which gated the
+forthcoming Decision Center (it reads the same state). Slice 1 of R7 fixes the
+floor with two cache tables on LCC Opps — both the proven cache-or-live pattern
+(empty cache ⇒ exact live behavior, so deploy ordering is irrelevant and a
+stalled cron only ever costs latency, never correctness). Applied live
+2026-06-07; migrations committed too (idempotent re-apply safe).
+
+### What shipped
+- **`lcc_buyer_spe_resolved`** (migration `20260607120000`) — materializes
+  `v_lcc_buyer_spe_entities` (~598 rows). That view's 4-branch UNION
+  (`lcc_match_buyer_parent_by_name` LATERAL + a 9,934-org × 55-pattern LIKE
+  nested loop) cost ~1.2s AND was mis-estimated at ~1.05M rows; it is consumed
+  3× inside `v_priority_queue` (two NOT IN gates + the P-BUYER rollup) plus
+  again in the enriched view, so the cardinality lie poisoned every downstream
+  plan. The view is repointed at the cache; `v_lcc_buyer_spe_entities_live`
+  holds the verbatim live body for the fallback + the refresh source.
+  `lcc_refresh_buyer_spe_resolved()` + cron `lcc-buyer-spe-refresh` (*/15).
+- **`lcc_priority_queue_resolved`** (migration `20260607120500`) — materializes
+  `v_priority_queue` itself (~1,041 rows, exact 17-col shape).
+  `v_priority_queue_band_counts` and `v_priority_queue_enriched` read
+  `v_priority_queue` by name, so they inherit the speed-up with **no change to
+  their own definitions**, and the planner — now seeing a real analyzed
+  1,041-row table — switches the enriched portfolio/property joins from
+  nested-loop-rescan to hash joins. `v_priority_queue_live` holds the full
+  11-branch body (captured via a guarded dynamic copy — idempotent, no
+  recursion on re-apply). `lcc_refresh_priority_queue_resolved()` + cron
+  `lcc-priority-queue-refresh` (*/5, parity with `refresh_work_counts`).
+- Both refreshes `ANALYZE` at the end (PR #1062 lesson). Both cache tables have
+  autovacuum hardened (`scale_factor=0`, `threshold=500`) because the crons
+  full-replace them each tick (sf_sync_log churn lesson). Tiny (≤480 kB).
+- **`api/admin.js`** — the R6 hotfix's 25s timeout band-aid in
+  `handlePriorityQueueList` is removed (`HEAVY` back to `{countMode:'none'}`,
+  default fetch budget). This JS change ships on the Railway redeploy; it is
+  safe in any order because the DB is already fast (applied live first).
+
+### Verified live (read-only) 2026-06-07
+- Latency: unfiltered enriched 5,785ms → ~1,140ms raw; items page (enriched +
+  ORDER BY + LIMIT 150) ~866ms (`EXPLAIN ANALYZE, TIMING OFF`); band counts
+  627ms → 68ms. Gate (queue API <1.5s, band counts <300ms) met.
+- **Band membership byte-identical** pre/post: all 12 bands match on both count
+  AND an md5 of the ordered entity-id set (P0.4=348, P0.5=16, P-BUYER=21, …).
+- R5 gate intact: `lcc_resolve_buyer_parent('NGP VI FALLS CHURCH VA LLC')` →
+  NGP Capital (domain_true_owner) → prospect refusal stands. R6 intact:
+  ARLINGTON VA I FGF resolves to NULL and stays in P0.4 (not P0.5, not rolled
+  to Boyd).
+- Auth blast radius: nothing here touches the auth schema / GoTrue /
+  public.users / workspace_memberships; no long locks; bounded-size tables.
+  DB 9.6 GB, well under the 11/12.5 GB disk-health thresholds.
+
+### Staleness contract (worklist, not real-time)
+The queue cache refreshes every 5 min; band transitions keyed on
+`next_touch_due<=now()` (P0/P6/P7) or connection/SPE/opp state
+(P0.4/P0.5/P-BUYER) land within one interval. `days_overdue` is frozen at
+refresh time (measured in days; minutes of lag are noise). A connect/verdict
+action that should move a row out of a band can call
+`lcc_refresh_priority_queue_resolved()` to update immediately — wire that in
+Slice 2/3 when those actions land.
+
+### Slice 2/3 (NOT in this slice)
+`lcc_decisions` + `lcc_open_decision()` + Decision Center shell/lanes (Slice 2)
+and the cross-domain gov `true_owner` write-back (Slice 3) come after Slice 1
+is verified live. Connection-predicate caching was evaluated and **deferred**:
+the predicate measured 95ms standalone and is not on the critical path once the
+queue is materialized — not worth a trigger on the hot `external_identities` /
+`entity_relationships` write paths.
