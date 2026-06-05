@@ -1905,15 +1905,25 @@ window.pqOpenOpportunity = pqOpenOpportunity;
 // holds (never routes to a subsidiary SPE).
 async function pqOpenGovernmentBuyer(entityId, parentName, btn) {
   if (!entityId) { showToast('No parent account to open a Government Buyer opportunity for', 'error'); return; }
+  const card = (btn && btn.closest) ? btn.closest('.q-item') : null;
   const origText = btn ? btn.textContent : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
   try {
     const res = await opsPost('/api/operations?action=open_government_buyer', { entity_id: entityId });
     if (res.ok && res.data && res.data.ok) {
-      const base = res.data.already_open ? 'Government Buyer already open' : 'Government Buyer opportunity opened';
-      const tail = res.data.needs_sf_mapping ? ' · SF mapping research task logged' : '';
-      showToast(base + ' on ' + (res.data.parent_name || parentName || 'the parent') + tail, 'success');
-      renderPriorityQueuePage(window._pqCurrentBand || undefined);
+      const d = res.data;
+      const pname = d.parent_name || parentName || 'the parent';
+      const needsMap = !!d.needs_sf_mapping;
+      const base = d.already_open ? 'Government Buyer already open' : 'Government Buyer opportunity opened';
+      const tail = needsMap ? ' · finish the SF parent mapping' : '';
+      showToast(base + ' on ' + pname + tail, 'success');
+      // Self-propelling contract: advance the card to its mapped/working state in
+      // place instead of leaving it identical. On already_open a full re-render
+      // would just redraw the same row (the parent stays in P-BUYER), so the
+      // operator would see no progress — mutate the card instead. When the parent
+      // still needs a Salesforce mapping, route straight to the Decision Center
+      // map card so it can be finished now, not only logged for later.
+      _pqAdvanceGovBuyerCard(card, pname, needsMap);
     } else {
       showToast((res.data && res.data.error) || res.error || 'Could not open Government Buyer opportunity', 'error');
       if (btn) { btn.disabled = false; btn.textContent = origText || 'Open Government Buyer opportunity →'; }
@@ -1924,6 +1934,28 @@ async function pqOpenGovernmentBuyer(entityId, parentName, btn) {
   }
 }
 window.pqOpenGovernmentBuyer = pqOpenGovernmentBuyer;
+
+// Advance a P-BUYER row to its post-open state (self-propelling contract). A
+// mapped parent settles to "open · SF mapped"; an unmapped parent advances to a
+// "finish SF mapping" state whose CTA jumps to the Decision Center map lane
+// (map_sf_parent_account), where the mapping can be completed immediately.
+function _pqAdvanceGovBuyerCard(card, parentName, needsMap) {
+  if (!card) { renderPriorityQueuePage(window._pqCurrentBand || undefined); return; }
+  card.classList.add('resolved');
+  const actions = card.querySelector('.q-actions');
+  if (needsMap) {
+    const meta = document.createElement('div');
+    meta.className = 'q-item-meta';
+    meta.innerHTML = '✓ Government Buyer opportunity open on <b>' + esc(parentName)
+      + '</b> — map its Salesforce parent account to release the sync.';
+    if (actions) card.insertBefore(meta, actions); else card.appendChild(meta);
+    if (actions) actions.innerHTML =
+      '<button class="q-action primary" onclick="navTo(\'pageReviewConsole\');setTimeout(renderBuyerParentLane,400)">Map SF parent now →</button>';
+  } else if (actions) {
+    actions.innerHTML = '<span class="q-badge">✓ Government Buyer open · SF mapped</span>';
+  }
+}
+window._pqAdvanceGovBuyerCard = _pqAdvanceGovBuyerCard;
 
 // R6 — owner-level "Resolve owner →" for a P0.4 row that has no representative
 // property to route through. The control structure must be resolved + connected

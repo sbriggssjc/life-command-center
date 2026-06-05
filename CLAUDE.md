@@ -1178,3 +1178,50 @@ manual_decision/gov_db, `ownership_history` manual_correction); idempotent
 re-run `already_applied`. **All test fixtures deleted (0 residue).** No real
 gov row (Shooshan/ARLINGTON included) was touched. `node --check` clean; 12
 functions.
+
+## R6 resolver fix — parent_self outranks tier-0 (2026-06-08)
+
+Bug (live, P-BUYER lane): clicking "Open Government Buyer →" on a **registered**
+buyer parent routed the opportunity to a DIFFERENT parent. Repro: Boyd Watterson
+Global (registered parent `78bc96e4…`) resolved to **NGP Capital** via
+`lcc_resolve_buyer_parent`, `match_tier='domain_true_owner'`.
+
+Mechanism: in `lcc_resolve_buyer_parent` the tier-0 `domain_true_owner` CTE ran
+BEFORE the `parent_self` branch. Boyd's current portfolio is mostly Boyd-owned
+properties plus **one stray NGP-owned property**. Tier-0 excludes the entity's
+own-name matches (`m.parent_entity_id <> p_entity_id`), so that single NGP
+property was the only surviving tier-0 match → the unordered `LIMIT 1` returned
+NGP. The `parent_self` check that would correctly return Boyd never ran (it was
+gated on `NOT EXISTS (t0)`).
+
+Doctrine: a registered buyer parent is **never** an SPE of another parent — if
+the entity is itself a row in `lcc_buyer_parents`, resolve to itself and stop.
+
+Fix (migration `20260608120000_lcc_r6_resolver_parent_self_precedence.sql`,
+applied live to LCC Opps + committed; additive CREATE OR REPLACE, idempotent):
+- `lcc_resolve_buyer_parent` — a `ps` (parent_self) CTE is evaluated FIRST;
+  tier-0 and the candidate tiers are gated on `NOT EXISTS (ps)`. Signature
+  unchanged → the R5 gate trigger, JS `resolveBuyerParent()`, the queue
+  exclusion, and P-BUYER all inherit the precedence fix.
+- `v_lcc_buyer_spe_entities_live` (the cache source for the queue/rollup) — its
+  tier-0 UNION branch now also excludes entities that are themselves registered
+  parents (`AND NOT EXISTS (… lcc_buyer_parents WHERE parent_entity_id =
+  pf.entity_id)`), so `lcc_buyer_spe_resolved` + the P-BUYER rollup + the P0.5
+  `NOT IN` gates can't mis-attribute one parent's portfolio to another.
+- The migration refreshes `lcc_buyer_spe_resolved` + `lcc_priority_queue_resolved`
+  at the end.
+
+UX (`ops.js`, ships on Railway redeploy): `pqOpenGovernmentBuyer` no longer
+full-re-renders the queue (which redrew the same row on `already_open`). New
+`_pqAdvanceGovBuyerCard` advances the card in place — a mapped parent settles to
+"✓ Government Buyer open · SF mapped"; an unmapped parent advances to a "finish
+SF mapping" state whose CTA jumps straight to the Decision Center
+`map_sf_parent_account` lane (`navTo('pageReviewConsole')`+`renderBuyerParentLane`)
+so the mapping is completed now, not only logged as a research task.
+
+Verified live 2026-06-08: `lcc_resolve_buyer_parent('Boyd Watterson Global')` →
+Boyd / `parent_self`; NGP self → `parent_self`; NGP SPE → NGP /
+`domain_true_owner` (R5 refusal intact). Task acceptance query (no buyer parent
+resolves to a different parent) returns **0 rows** (was 3); Boyd not cached as a
+foreign SPE; P-BUYER lane intact at 21 parents with Boyd present as its own row.
+`node --check` clean; 12 functions.
