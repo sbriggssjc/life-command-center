@@ -123,3 +123,33 @@ anchors (Boyd → "Boyd Watterson Global", AEI → "Aei Capital Corp", GPT →
 SF parent accounts (research tasks auto-created when a buyer opp opens
 unmapped). UI verification (P-BUYER lane render, refusal UX, bulk-open
 skip-and-report) pends the Railway redeploy of merged main.
+
+## R6 — APPLIED + LIVE VERIFIED end-to-end (2026-06-05)
+
+Migrations applied by me (gov anon view → 4 LCC files in order; patched two
+nested-`$$` quoting hazards in the cron DO blocks). Owner-facts sync run
+manually: **17,875 gov rows mirrored**. Results, all verified live:
+
+- **Band flip:** P0.5 402 → **16** genuinely-ready · **P0.4 = 348** "Resolve
+  Ownership Control" · P-BUYER 18 → **21 parents**. Tier-0 more than doubled
+  Boyd's resolved rollup (70 → **147 SPEs / 179 properties** in the hero).
+- **Tier-0 per-row truth:** 8/12 FGF shells → Boyd Watterson Global
+  (`domain_true_owner`); ARLINGTON VA I FGF correctly P0.4 with
+  "true_owner_known_connect: **The Shooshan Company**"; OPI BND → Pine
+  Properties. Queue rows render reason + property + "Open property →" into
+  the resolution ladder. R5 NGP refusal regression ✓.
+- **Chain-to-developer:** completeness view live; first **100 research tasks**
+  generated rent-first (`trace_ownership_to_developer`); daily cron at 05:10.
+- **Hotfix saga (PR #1062):** queue API 500'd post-apply. My first diagnosis
+  (JS reference bug) was WRONG — Claude Code proved the real mechanism: the
+  unfiltered enriched view is genuinely ~5-7s; a wasted `Prefer: count=exact`
+  pushed it past the 8s AbortController → abort → Promise.all reject → 500.
+  (My "queries never arrived in Supabase logs" = aborted mid-flight; my
+  "0-50ms post-ANALYZE" = filtered probe.) Fixes: countMode none, 25s
+  timeout on the two heavy reads, band-counts soft-fail, ANALYZE baked into
+  the sync finalize. Verified live: API 200 in 6.7s, page renders.
+
+**R7 candidate (queued):** materialize the buyer-parent rollup — the ~1M-row
+HashAggregate (`lcc_match_buyer_parent_by_name` nested loop) runs on EVERY
+queue read and is the 5-7s floor under the 25s band-aid. Pairs with the dia
+owner-facts leg + chain phase 3(c) as the natural next round.
