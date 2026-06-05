@@ -1,13 +1,22 @@
 # Round 68-A — dia listing-side data depth (verification gate)
 
-Addresses Scott's notes D2/D5/D6/D7/D8/D9/D11. **Gate state: plan artifacts +
-code pushed; nothing that changes chart output or writes rows has been applied.**
+Addresses Scott's notes D2/D5/D6/D7/D8/D9/D11.
+
+> **STATE UPDATE (2026-06-05): EXECUTED.** The gate has been cleared and all
+> three tasks are live in prod (Dialysis_DB `zqzrriwuavgrquhisnoa`) and
+> committed. 1,207 synthetic rows + 207/212 LINK updates are live; the view
+> include/exclude rules, the Task 3 pooled quartiles, and the go-forward capture
+> code are all applied. A post-backfill audit also found and fixed a synthetic
+> **price/cap leak** into the cap-quartile / market-size charts. **See
+> [`R68A_FINAL_REPORT.md`](./R68A_FINAL_REPORT.md) for the authoritative applied
+> state + per-chart before/after.** The plan-state notes below are retained for
+> history.
 
 > **Plan v2** (2026-06-04): Scott's v1 review split the synth set into a **LINK
 > class** (link the real listing, don't double-count) + a reduced **SYNTH class**.
 > See `R68A_SYNTHESIS_PLAN.md`.
 
-## What's applied to prod (gate-enablement only, non-destructive)
+## What was applied to prod (originally gate-enablement only, non-destructive)
 
 - `20260605_cm_round68a_listing_provenance_columns.sql` — nullable `data_source`
   + `listing_date_source` on `available_listings` (no rewrite).
@@ -18,7 +27,7 @@ code pushed; nothing that changes chart output or writes rows has been applied.*
 - `20260605_cm_round68a_dia_listing_date_correction_rpc.sql` — Task 1 receipt-
   gated re-date RPC.
 
-## Held for the go (execution)
+## Held for the go (execution) — ALL EXECUTED 2026-06-05 (see R68A_FINAL_REPORT.md)
 
 - `20260605_cm_round68a_synthetic_listing_views.sql` — chart include/exclude
   rules. Output-neutral until rows land (the active-listings rewrite was
