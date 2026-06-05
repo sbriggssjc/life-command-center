@@ -134,12 +134,17 @@ function storagePath(row: Record<string, unknown>): string {
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
+  // Allocation-friendly: build an array of per-chunk strings and join once at
+  // the end rather than `binary += ...` (which reallocates an ever-growing
+  // string for every chunk — a 6-9MB PDF would churn ~200 reallocations and
+  // pin double the bytes in memory mid-loop). Array-of-chunks + a single join
+  // keeps peak allocation bounded.
   const CHUNK = 0x8000;
+  const chunks: string[] = [];
   for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)));
   }
-  return btoa(binary);
+  return btoa(chunks.join(""));
 }
 
 // ── main handler ────────────────────────────────────────────────────────────
@@ -438,21 +443,42 @@ async function handleFetch(req: Request, body: Record<string, unknown> | null): 
 const LCC_BASE_URL = Deno.env.get("LCC_BASE_URL") || "tranquil-delight-production-633f.up.railway.app";
 const LCC_API_KEY = Deno.env.get("LCC_API_KEY") || "";
 
+// Per-tick wall-clock budget. The edge function's CPU/wall budget is finite and
+// each row is heavy (download 6-9MB PDF + base64 + a 5-30s LCC /stage-om call).
+// We stop *starting* new rows once elapsed crosses this; an in-flight row always
+// runs to completion so no row is ever left half-processed by the cutoff.
+const STAGE_QUEUED_WALL_BUDGET_MS = 45_000;
+// Files larger than this are skipped (marked extract_failed) rather than risk an
+// OOM base64-encoding them in the edge function. ~15MB raw.
+const STAGE_QUEUED_MAX_FILE_BYTES = 15 * 1024 * 1024;
+
 async function handleStageQueued(req: Request, body: Record<string, unknown> | null): Promise<Response> {
   if (!LCC_API_KEY) {
     return errorResponse(req, "LCC_API_KEY not configured — set it as an edge function secret", 503);
   }
   const b = body || {};
-  const limit = Math.min(Number(b.limit) || 10, 50);
+  // Default 3 rows/tick (was 10) — fits the wall budget even when several large
+  // PDFs land in one tick. Body override honored, capped at 10 (was 50).
+  const limit = Math.min(Number(b.limit) || 3, 10);
   const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
 
+  const startedAt = Date.now();
+  let budgetExhausted = false;
   const report: Record<string, unknown> = {};
 
   for (const vertical of verticals) {
     const vStats = {
-      queued: 0, staged: 0, failed: 0, errors: [] as string[],
+      queued: 0, staged: 0, failed: 0, skipped: 0, remaining: 0,
+      errors: [] as string[],
       stage_results: [] as Record<string, unknown>[],
     };
+
+    // Budget already spent by a prior vertical — don't even probe this one.
+    if (Date.now() - startedAt >= STAGE_QUEUED_WALL_BUDGET_MS) {
+      budgetExhausted = true;
+      report[vertical] = { ...vStats, deferred: "wall budget exhausted before this vertical" };
+      continue;
+    }
 
     const pending = await dbFetch(vertical, "GET",
       `sf_files?ingestion_status=eq.stored&extraction_status=eq.queued&source_system=eq.salesforce` +
@@ -468,7 +494,15 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
       continue;
     }
 
+    let idx = 0;
     for (const row of rows) {
+      // Never START a new row past the budget — leave the rest for the next tick.
+      if (Date.now() - startedAt >= STAGE_QUEUED_WALL_BUDGET_MS) {
+        budgetExhausted = true;
+        vStats.remaining = rows.length - idx;
+        break;
+      }
+      idx++;
       const fileId = row.file_id;
       const storagePathStr = String(row.storage_path || "");
       if (!storagePathStr) {
@@ -477,6 +511,21 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
         await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
           extraction_status: "extract_failed",
           process_notes: "no storage_path on row",
+          updated_at: isoNow(),
+        });
+        continue;
+      }
+
+      // Skip oversize files BEFORE downloading — base64-encoding a >15MB PDF in
+      // the edge function risks OOM. Mark extract_failed so it leaves the queue.
+      const declaredSize = Number(row.size_bytes) || 0;
+      if (declaredSize > STAGE_QUEUED_MAX_FILE_BYTES) {
+        vStats.skipped++;
+        const human = `${(declaredSize / (1024 * 1024)).toFixed(1)}MB`;
+        vStats.errors.push(`file_id ${fileId}: too large (${human})`);
+        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
+          extraction_status: "extract_failed",
+          process_notes: `file too large for edge staging (${human})`,
           updated_at: isoNow(),
         });
         continue;
@@ -497,6 +546,20 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
         continue;
       }
       const bytes = new Uint8Array(await dlRes.arrayBuffer());
+      // Authoritative size guard: size_bytes may be NULL on legacy rows, so the
+      // pre-download check can miss an oversize file. Re-check the real byte
+      // length before the heavy base64 step.
+      if (bytes.byteLength > STAGE_QUEUED_MAX_FILE_BYTES) {
+        vStats.skipped++;
+        const human = `${(bytes.byteLength / (1024 * 1024)).toFixed(1)}MB`;
+        vStats.errors.push(`file_id ${fileId}: too large (${human})`);
+        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${fileId}`, {
+          extraction_status: "extract_failed",
+          process_notes: `file too large for edge staging (${human})`,
+          updated_at: isoNow(),
+        });
+        continue;
+      }
       const base64 = bytesToBase64(bytes);
 
       const linkedType = String(row.linked_entity_type || "Comp__c");
@@ -573,11 +636,20 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
     report[vertical] = vStats;
   }
 
+  const remainingTotal = Object.values(report).reduce(
+    (sum, v) => sum + (Number((v as Record<string, unknown>).remaining) || 0), 0);
+
   return jsonResponse(req, {
     ok: true,
     mode: "stage-queued",
+    budget_exhausted: budgetExhausted,
+    remaining: remainingTotal,
+    elapsed_ms: Date.now() - startedAt,
     note: "Pumped sf_files at extraction_status='queued' through LCC /api/intake/stage-om. " +
-      "Successful rows are now extraction_status='extracted' with intake_id in process_notes.",
+      "Successful rows are now extraction_status='extracted' with intake_id in process_notes." +
+      (budgetExhausted
+        ? ` Wall budget (${STAGE_QUEUED_WALL_BUDGET_MS}ms) hit — ${remainingTotal} row(s) left for the next tick.`
+        : ""),
     by_vertical: report,
   });
 }
