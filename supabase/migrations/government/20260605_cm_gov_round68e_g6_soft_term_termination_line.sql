@@ -1,0 +1,22 @@
+-- =====================================================================
+-- Round 68-E G6 — Gov "Lease Termination Rate" chart: add the PDF's
+-- soft-term termination LINE series.
+--
+-- Applied to gov DB scknotsqkcheojiaewwh on 2026-06-05. No
+-- life-command-center code change is required for the data layer beyond
+-- the chart renderer + native injector + Data_Term_Rate column schema
+-- (this round's JS changes) — the API fetches the wrapper view by name
+-- and the 3 new columns are picked up transparently.
+--
+-- The view gains (appended, byte-identical existing 4 cols):
+--   • terminated_outside_firm_term       — numerator: TTM terminations
+--                                           past firm term (Succeeding/
+--                                           Extension proxy)
+--   • avg_leases_outside_firm_term_ttm   — denominator: avg soft-term
+--                                           cohort over the trailing 12mo
+--   • terminated_outside_firm_term_pct   — the line (decimal fraction):
+--                                           numerator ÷ denominator
+--
+-- See government-lease/sql/20260608_cm_gov_round68e_g6_soft_term_termination_line.sql
+-- for the full CREATE OR REPLACE VIEW body + rationale.
+-- =====================================================================

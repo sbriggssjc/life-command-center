@@ -1614,9 +1614,28 @@ function buildChartConfig(chart, brand) {
       // Round 31 Tier 2 — Added First Generation Lease Commencements
       // (5th series) to match master Excel "Renewal_Rate" chart in
       // `Copy Government Master Document.xlsx` > 'All Charts' > chart
-      // 3. Series order matches master: First Gen, Renewed, S/S,
-      // Expired, Terminated. The in-app renderer (capital-markets.js)
-      // already had this series since R29.
+      // 3. Series order: First Gen, Renewed, S/S, Expired, Terminated.
+      // R68-E G5 — DIVERGING bars + net line. Scott (2026-06-04): render
+      // terminations/expirations as NEGATIVE bars below zero so net
+      // movement reads, plus a net-line overlay (signed sum per period)
+      // riding the bars. The series→sign map is CONFIG (not hard-coded)
+      // so a PDF-reconciliation mismatch is a one-line flip. Mirrored in
+      // cm-native-chart-injector.js (keep the two in sync). pdf_reconcile.
+      const LEASE_RENEWAL_SERIES = [
+        { key: 'first_generation_commencements', label: 'First Generation Commencements', color: palette[3],           sign: +1 },
+        { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
+        { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
+        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: -1 },
+        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
+      ];
+      const netData = rows.map(r => {
+        let net = 0; let seen = false;
+        for (const s of LEASE_RENEWAL_SERIES) {
+          const v = r[s.key];
+          if (v != null) { net += s.sign * Number(v); seen = true; }
+        }
+        return seen ? net : null;
+      });
       const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
@@ -1625,22 +1644,20 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            { label: 'First Generation Commencements',
-              data: rows.map(r => r.first_generation_commencements),
-              backgroundColor: palette[3],              // pale (additive new supply)
-              stack: 'leases' },
-            { label: 'Renewed',           data: rows.map(r => r.renewed_leases),
-              backgroundColor: PDF_COLORS.cap_short,    // navy
-              stack: 'leases' },
-            { label: 'Succeed/Supersede', data: rows.map(r => r.succeeding_superseding_leases),
-              backgroundColor: palette[2],              // mid-blue
-              stack: 'leases' },
-            { label: 'Expired',           data: rows.map(r => r.expired_leases),
-              backgroundColor: PDF_COLORS.cap_mid,      // sky
-              stack: 'leases' },
-            { label: 'Terminated',        data: rows.map(r => r.terminated_leases),
-              backgroundColor: '#D97706',               // amber — negative outcome
-              stack: 'leases' },
+            ...LEASE_RENEWAL_SERIES.map(s => ({
+              label: s.label,
+              // Subtractive outcomes (sign -1) plot below zero.
+              data: rows.map(r => r[s.key] != null ? s.sign * Number(r[s.key]) : null),
+              backgroundColor: s.color,
+              stack: 'leases',
+            })),
+            // Net line on the SAME count axis; its own stack so it plots
+            // at the raw signed sum (not stacked onto the bars).
+            { type: 'line', label: 'Net Movement',
+              data: netData,
+              borderColor: '#191919', backgroundColor: 'transparent',
+              tension: 0.2, pointRadius: 2, borderWidth: 2.5,
+              yAxisID: 'y', stack: 'net', order: 0 },
           ],
         },
         options: opts,
@@ -1666,28 +1683,49 @@ function buildChartConfig(chart, brand) {
         if (total == null || outside == null) return null;
         return Math.max(0, total - outside);
       });
-      const opts = commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
+      // R68-E G6 — add the PDF's soft-term termination LINE. Scott
+      // (2026-06-04): "leases outside the firm term actually terminated
+      // over the prior period as a % of the total" — a conditional rate
+      // on the at-risk cohort (numerator = terminations past firm term ÷
+      // denominator = avg leases past firm term over the TTM). The view
+      // emits terminated_outside_firm_term_pct as a decimal fraction; the
+      // % axis (×100) renders it. Right axis so it doesn't shadow the
+      // count bars. pdf_reconcile (denominator may switch to all-leases).
+      const softTermRate = rows.map(r =>
+        r.terminated_outside_firm_term_pct != null ? Number(r.terminated_outside_firm_term_pct) : null
+      );
+      const hasSoftTermRate = softTermRate.some(v => v != null);
+      const opts = hasSoftTermRate
+        ? comboOpts({ yLeftFormat: AXIS_FORMAT_INTEGER, yRightFormat: AXIS_FORMAT_PERCENT_1DP,
+                      // Soft-term rate runs ~1-19% over history (avg 8%); pin 0-25%.
+                      yRightRange: { min: 0, max: 0.25 } })
+        : commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
+      const datasets = [
+        { type: 'bar', label: 'Leases In Firm Term (TTM)',
+          data: inFirm,
+          backgroundColor: palette[0],            // NM navy
+          borderColor: palette[0],
+          borderRadius: 1, yAxisID: 'y',
+          stack: 'leases' },
+        { type: 'bar', label: 'Leases Outside Firm (TTM)',
+          data: outsideFirm,
+          backgroundColor: palette[1],            // sky
+          borderColor: palette[1],
+          borderRadius: 1, yAxisID: 'y',
+          stack: 'leases' },
+      ];
+      if (hasSoftTermRate) {
+        datasets.push({ type: 'line', label: 'Soft-Term Termination Rate (% of leases past firm term)',
+          data: softTermRate,
+          borderColor: '#D97706', backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 1, borderWidth: 2.5,
+          yAxisID: 'y1', stack: 'rate', order: 0 });
+      }
       return {
         type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            { type: 'bar', label: 'Leases In Firm Term (TTM)',
-              data: inFirm,
-              backgroundColor: palette[0],            // NM navy
-              borderColor: palette[0],
-              borderRadius: 1, yAxisID: 'y',
-              stack: 'leases' },
-            { type: 'bar', label: 'Leases Outside Firm (TTM)',
-              data: outsideFirm,
-              backgroundColor: palette[1],            // sky
-              borderColor: palette[1],
-              borderRadius: 1, yAxisID: 'y',
-              stack: 'leases' },
-          ],
-        },
+        data: { labels, datasets },
         options: opts,
       };
     }

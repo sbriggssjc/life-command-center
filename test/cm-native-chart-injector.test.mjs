@@ -1819,7 +1819,7 @@ test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   assert.equal(unknown, null);
 });
 
-test('buildInjectionSpec: lease_renewal_rate builds 5-series stacked-bar', () => {
+test('R68-E G5: lease_renewal_rate builds diverging stacked combo + net line', () => {
   const cols = [
     { key: 'period_end',                       col: 'A' },
     { key: 'first_generation_commencements',   col: 'B' },
@@ -1835,20 +1835,72 @@ test('buildInjectionSpec: lease_renewal_rate builds 5-series stacked-bar', () =>
     cols, dataStart: 5, dataEnd: 100, brand,
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'stacked-bar');
+  // R68-E — diverging bars + net line ride a single shared count axis.
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barGrouping, 'stacked', 'stacked diverging bars');
+  assert.equal(out.spec.sharedAxis, true, 'net line shares the count axis (no 2nd axis)');
   assert.equal(out.spec.catCol, 'A', 'period_end is the x-axis');
-  assert.equal(out.spec.series.length, 5, '5 series stacked');
-  // Verify color order matches PDF renderer
+  assert.equal(out.spec.barSeries.length, 5, '5 outcome bars');
+  // Color order unchanged: pale / navy / mid / sky / amber
   assert.deepEqual(
-    out.spec.series.map(s => s.color),
+    out.spec.barSeries.map(s => s.color),
     ['E0E8F4', '003DA5', '265AB2', '62B5E5', 'D97706'],
-    'series colors: pale / navy / mid / sky / amber'
   );
-  // Verify each series points at its own column
-  assert.deepEqual(
-    out.spec.series.map(s => s.valCol),
-    ['B', 'C', 'D', 'E', 'F'],
+  // Additive series (first 3) chart their own positive cols B/C/D.
+  // Subtractive series (expired/terminated) chart NEGATED helper cols
+  // (G/H = past the 6 regular cols A-F), but their TITLE still points at
+  // the original positive header (E/F) so the legend reads plain names.
+  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['B', 'C', 'D', 'G', 'H']);
+  assert.deepEqual(out.spec.barSeries.map(s => s.titleCol), ['B', 'C', 'D', 'E', 'F']);
+  // Net line is the signed sum, on the same axis, drawn from the net helper col (I).
+  assert.equal(out.spec.lineSeries.length, 1, 'one net-movement line');
+  assert.equal(out.spec.lineSeries[0].valCol, 'I');
+  assert.equal(out.spec.lineSeries[0].color, '191919', 'net line = rich black');
+  // Helper cols: expired_neg (G), terminated_neg (H), net_movement (I).
+  assert.deepEqual(out.helperCols.map(h => h.key),
+    ['expired_leases_neg', 'terminated_leases_neg', 'net_movement']);
+  // Negation: expired 40 -> -40
+  assert.equal(out.helperCols[0].getValue({ expired_leases: 40 }), -40);
+  // Net = +firstgen +renewed +succ -expired -terminated
+  assert.equal(
+    out.helperCols[2].getValue({
+      first_generation_commencements: 10, renewed_leases: 50,
+      succeeding_superseding_leases: 20, expired_leases: 40, terminated_leases: 15,
+    }),
+    10 + 50 + 20 - 40 - 15, // = 25
+    'net movement = signed sum of all outcomes',
   );
+  // All-null row -> null net (not a misleading 0)
+  assert.equal(out.helperCols[2].getValue({}), null);
+});
+
+test('R68-E G6: lease_termination_rate adds soft-term % line when the rate column is present', () => {
+  const cols = [
+    { key: 'period_end',                        col: 'A' },
+    { key: 'total_leases_active',               col: 'B' },
+    { key: 'terminated_ttm',                    col: 'C' },
+    { key: 'leases_outside_firm_term',          col: 'D' },
+    { key: 'terminated_outside_firm_term',      col: 'E' },
+    { key: 'avg_leases_outside_firm_term_ttm',  col: 'F' },
+    { key: 'terminated_outside_firm_term_pct',  col: 'G' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'lease_termination_rate',
+    tabName: 'Data_Term_Rate',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // Combo: 2 count bars (left axis) + 1 rate line (right % axis).
+  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.barGrouping, 'stacked');
+  assert.notEqual(out.spec.sharedAxis, true, 'rate line uses the secondary % axis');
+  assert.equal(out.spec.yRightNumFmt, '0.0%', 'right axis is a percent');
+  assert.equal(out.spec.barSeries.length, 2, 'In Firm + Outside bars');
+  // In-firm helper col lands past the 7 regular cols A-G = H.
+  assert.equal(out.spec.barSeries[0].valCol, 'H', 'bottom = in_firm helper col');
+  assert.equal(out.spec.lineSeries.length, 1, 'soft-term rate line');
+  assert.equal(out.spec.lineSeries[0].valCol, 'G', 'line = terminated_outside_firm_term_pct');
+  assert.equal(out.spec.lineSeries[0].color, 'D97706', 'amber line');
 });
 
 test('buildInjectionSpec: buyer_pool_monthly_count builds 3-series stacked-bar', () => {
@@ -5334,4 +5386,71 @@ test('R68-E D15/G17: term-summary cap-rate dots carry value callouts at a legal 
   assert.match(xml, /<c:showVal val="1"\/>/, 'value labels turned on');
   // dLblPos="t" is legal for line/marker series (only doughnut bans it — D14).
   assert.match(xml, /<c:dLblPos val="t"\/>/, 'legal top position for marker series');
+});
+
+// ---------------------------------------------------------------------------
+// R68-E G5/G6 — XML-level harness assertions (Scott's verification protocol:
+// series signs, axis crossing at zero, net-line presence; secondary % axis).
+// ---------------------------------------------------------------------------
+test('R68-E G5: renewal_rate XML — stacked diverging bars, zero-crossing single axis, net line', () => {
+  const cols = [
+    { key: 'period_end',                       col: 'A' },
+    { key: 'first_generation_commencements',   col: 'B' },
+    { key: 'renewed_leases',                   col: 'C' },
+    { key: 'succeeding_superseding_leases',    col: 'D' },
+    { key: 'expired_leases',                   col: 'E' },
+    { key: 'terminated_leases',                col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'lease_renewal_rate',
+    tabName: 'Data_Lease_Renewal',
+    cols, dataStart: 5, dataEnd: 100,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  const xml = buildComboChartXml(out.spec);
+  // Diverging stacked bars + a line block (net).
+  assert.match(xml, /<c:barChart>/);
+  assert.match(xml, /<c:grouping val="stacked"\/>/, 'bars are stacked');
+  assert.match(xml, /<c:lineChart>/, 'net line present');
+  // invertIfNegative=0 → negative (subtractive) bars plot below zero rather
+  // than flipping color; the val axis auto-crosses at zero.
+  assert.match(xml, /<c:invertIfNegative val="0"\/>/);
+  // sharedAxis ⇒ exactly ONE value axis (net rides the bars' count scale).
+  assert.equal((xml.match(/<c:valAx>/g) || []).length, 1, 'single shared value axis');
+  // 6 series total: 5 bars + 1 net line, unique idx 0..5.
+  const idxs = Array.from(xml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  assert.deepEqual(idxs, [0, 1, 2, 3, 4, 5]);
+  // The two subtractive bars chart the negated helper cols (G, H).
+  assert.match(xml, /\$G\$5:\$G\$100/, 'expired plots from negated helper col G');
+  assert.match(xml, /\$H\$5:\$H\$100/, 'terminated plots from negated helper col H');
+  // Net line plots from the net helper col (I).
+  assert.match(xml, /\$I\$5:\$I\$100/, 'net line plots from net helper col I');
+});
+
+test('R68-E G6: termination_rate XML — count bars + soft-term % line on a secondary axis', () => {
+  const cols = [
+    { key: 'period_end',                        col: 'A' },
+    { key: 'total_leases_active',               col: 'B' },
+    { key: 'terminated_ttm',                    col: 'C' },
+    { key: 'leases_outside_firm_term',          col: 'D' },
+    { key: 'terminated_outside_firm_term',      col: 'E' },
+    { key: 'avg_leases_outside_firm_term_ttm',  col: 'F' },
+    { key: 'terminated_outside_firm_term_pct',  col: 'G' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'lease_termination_rate',
+    tabName: 'Data_Term_Rate',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  const xml = buildComboChartXml(out.spec);
+  assert.match(xml, /<c:barChart>/);
+  assert.match(xml, /<c:grouping val="stacked"\/>/, 'count bars stacked');
+  assert.match(xml, /<c:lineChart>/, 'soft-term rate line present');
+  // Two value axes — counts on the left, % on the right (axId 3).
+  assert.equal((xml.match(/<c:valAx>/g) || []).length, 2, 'two value axes');
+  const rightAx = xml.match(/<c:valAx>\s*<c:axId val="3"\/>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(rightAx, /0\.0%/, 'right axis formats as percent');
+  // Line plots the real rate column G.
+  assert.match(xml, /\$G\$5:\$G\$60/, 'rate line plots from terminated_outside_firm_term_pct (col G)');
 });
