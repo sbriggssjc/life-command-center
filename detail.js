@@ -6066,6 +6066,15 @@ function _udRenderNextStep() {
   } else if (!trueResolved) {
     step = { label: 'Resolve the true owner', sub: 'Recorded owner known; decision-maker not resolved.', cta: 'Open Ownership \u2192',
       onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
+  } else if (band && (band.priority_band === 'P0.4' || band.reason === 'resolve_ownership_control') && band.resolve_is_connected === false) {
+    // R6: the owner is resolved but the control structure isn't CONNECTED yet
+    // (no Salesforce account / contact). Doctrine: connect first \u2014 the lead is
+    // not the next action. Kept consistent with the queue's P0.4 verdict.
+    step = { label: 'Resolve ownership & control',
+      sub: band.resolve_true_owner_name
+        ? ('True owner: ' + band.resolve_true_owner_name + ' \u2014 link a Salesforce account / contact before opening a lead.')
+        : 'Identify the true owner/parent and link a CRM account / contact before opening a lead.',
+      cta: 'Open Ownership \u2192', onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
   } else if (needsLead) {
     step = { label: 'Create the lead', sub: 'Owner resolved' + (linked ? ' & CRM-linked' : '') + '. Open a BD opportunity.', cta: 'Create lead',
       onclick: '_udBtnGuard(this,_udCreateLeadFromProperty)' };

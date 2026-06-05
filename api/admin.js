@@ -400,6 +400,9 @@ async function handlePriorityBand(req, res) {
     'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
     'total_property_count', 'current_property_count', 'next_touch_due',
     'days_overdue', 'source_domain', 'source_property_id', 'source_property_address',
+    // R6: ownership-resolution context so the detail Next-Step banner stays
+    // consistent with the queue's P0.4 verdict (same state source).
+    'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
   ].join(',');
 
   let path;
@@ -468,6 +471,11 @@ async function handlePriorityBand(req, res) {
     open_opportunity: oppState.open_opportunity,
     bd_opportunity_id: oppState.bd_opportunity_id,
     cadence_next_touch_due: oppState.cadence_next_touch_due,
+    // R6 ownership-resolution context (drives the banner's "Resolve ownership
+    // & control" step when the owner isn't yet connected).
+    resolve_reason: row.resolve_reason || null,
+    resolve_true_owner_name: row.resolve_true_owner_name || null,
+    resolve_is_connected: row.resolve_is_connected != null ? !!row.resolve_is_connected : null,
   });
 }
 
@@ -555,6 +563,8 @@ async function handlePriorityQueueList(req, res) {
     // R5 P-BUYER lane: parent rollup of the SPE portfolio (NULL on other bands).
     'buyer_spe_count', 'buyer_rollup_property_count', 'buyer_rollup_annual_rent',
     'buyer_last_acquisition_date', 'buyer_sf_account_id', 'buyer_needs_sf_mapping',
+    // R6 P0.4 resolve band: ownership-resolution context.
+    'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
   ].join(',');
 
   // Items page: most-urgent band first, then most-overdue within band, then
@@ -594,7 +604,7 @@ async function handlePriorityQueueList(req, res) {
     }
   }
   // Stable doctrinal order for the chips.
-  const BAND_ORDER = ['P0','P0.5','P-BUYER','P1','P2','P3','P4','P5','P6','P7','P8'];
+  const BAND_ORDER = ['P0','P0.4','P0.5','P-BUYER','P1','P2','P3','P4','P5','P6','P7','P8'];
   const counts = Object.keys(countMap)
     .sort((a, b) => (BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b)))
     .map(b => ({ band: b, n: countMap[b] }));
