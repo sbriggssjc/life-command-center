@@ -81,6 +81,13 @@ export const GOV_READ_TABLES = new Set([
   'v_recorded_owner_link_review',
   'v_recorded_owner_link_status',
   'v_recorded_vs_assessor_owner_divergence',
+  // R4-D (2026-06-05): post-verification residue — frontend queried these but
+  // they 403'd. Mirror of the data-query Edge Function GOV_READ_TABLES.
+  'sf_activities',
+  'v_agency_portfolio',
+  'gsa_lease_timeline',
+  'opm_agency_location_rollups',
+  'v_listing_verification_summary',
 ]);
 
 // Government Supabase — allowed tables for write (POST/PATCH)
@@ -212,6 +219,17 @@ export const DIA_READ_TABLES = new Set([
   'v_gap_chain_drift',
   'v_gap_orphan_sale_owner',
   'llc_research_queue',
+  // R4-D (2026-06-05): post-verification residue — frontend queried these but
+  // they 403'd. Mirror of the data-query Edge Function DIA_READ_TABLES.
+  'deed_records',
+  'pending_updates',
+  'v_pending_updates_workbench',
+  'ingestion_tracker',
+  'v_source_health_dashboard',
+  'v_clinic_financial_overview',
+  'medicare_ingest_quarantine',
+  'npi_registry',
+  'npi_registry_lookups',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)

@@ -68,6 +68,20 @@ const GOV_READ_TABLES = new Set([
   "v_recorded_owner_link_review",
   "v_recorded_owner_link_status",
   "v_recorded_vs_assessor_owner_divergence",
+  // R4-D (2026-06-05): post-verification residue. Frontend queried these gov
+  // tables/views but they were never allowlisted, so every load 403'd:
+  //   sf_activities                 — gov.js:4465 (NM Performance recent-acts)
+  //   v_agency_portfolio            — detail.js:1178 (agency portfolio panel)
+  //   gsa_lease_timeline            — detail.js:1147 (GSA lease timeline panel)
+  //   opm_agency_location_rollups   — detail.js:1168 (OPM workforce panel)
+  //   v_listing_verification_summary— gov.js:8534 (URL-probe summary widget)
+  // All verified to exist on the gov project (scknotsqkcheojiaewwh). Same
+  // non-PII operational/aggregate sensitivity class as the existing entries.
+  "sf_activities",
+  "v_agency_portfolio",
+  "gsa_lease_timeline",
+  "opm_agency_location_rollups",
+  "v_listing_verification_summary",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -164,6 +178,27 @@ const DIA_READ_TABLES = new Set([
   "v_data_health_sales", "v_data_health_ownership", "v_data_health_entities",
   "v_sales_completeness_summary", "v_sales_completeness",
   "v_data_health_trend", "v_sf_link_queue_summary", "v_sf_link_review_queue",
+  // R4-D (2026-06-05): post-verification residue. Frontend queried these dia
+  // tables/views but they were never allowlisted, so every load 403'd:
+  //   deed_records              — dialysis.js:380 (Deal History deed lookups)
+  //   pending_updates           — dialysis.js:4406 (manual review queue)
+  //   v_pending_updates_workbench — dialysis.js:4361 (review workbench)
+  //   ingestion_tracker         — dialysis.js:4857 (pipeline metrics tile)
+  //   v_source_health_dashboard — dialysis.js:4671 (source health tile)
+  //   v_clinic_financial_overview — dialysis.js:1226 (financial overview)
+  //   medicare_ingest_quarantine— dialysis.js:4384 (CMS quarantine widget)
+  //   npi_registry / npi_registry_lookups — dialysis.js:3817/3839 (NPI intel)
+  // All verified to exist on the dia project (zqzrriwuavgrquhisnoa). Non-PII
+  // operational tables, same sensitivity class as the existing entries.
+  "deed_records",
+  "pending_updates",
+  "v_pending_updates_workbench",
+  "ingestion_tracker",
+  "v_source_health_dashboard",
+  "v_clinic_financial_overview",
+  "medicare_ingest_quarantine",
+  "npi_registry",
+  "npi_registry_lookups",
 ]);
 
 const DIA_WRITE_TABLES = new Set([

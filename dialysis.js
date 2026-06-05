@@ -305,7 +305,10 @@ async function loadDiaSalesCompsFromTxns() {
     loadDiaAvailableListingsByPropertyId(),
   ]);
 
-  return salesPages.map(r => {
+  // R4-D #7: reset the xref-conflict collector before the per-row pass so it
+  // reflects this load only (normalizeSalesTxnRow appends to it).
+  window._diaSalesCompXrefConflicts = [];
+  const mapped = salesPages.map(r => {
     r.sale_brokers = brokerMap[r.sale_id] || [];
     return normalizeSalesTxnRow(r, {
       ohBySaleId,
@@ -314,6 +317,16 @@ async function loadDiaSalesCompsFromTxns() {
       listingsByPropId,
     });
   });
+  // R4-D #7: ONE summary line instead of N per-row warnings. The conflicts are
+  // available on window._diaSalesCompXrefConflicts for the data-conflicts review
+  // lane, and the canonical st↔ownership_history set is also surfaced in
+  // dia v_data_quality_issues (issue_kind='sales_price_xref_conflict').
+  const _xref = window._diaSalesCompXrefConflicts;
+  if (_xref.length) {
+    console.warn('[sales-comp xref] ' + _xref.length + ' price disagreement(s) this load — '
+      + 'see window._diaSalesCompXrefConflicts / dia v_data_quality_issues (sales_price_xref_conflict).');
+  }
+  return mapped;
 }
 
 // -- Cross-source fallback loaders ------------------------------------------
@@ -675,19 +688,28 @@ function normalizeSalesTxnRow(r, lookups) {
   );
   if (procuringBrokerPick.source && procuringBrokerPick.source !== 'sales_transactions.procuring_broker') prov.procuring_broker = procuringBrokerPick.source;
 
-  // Cross-validation warning: when both primary and fallback have values for
-  // price and they disagree by >5%, log so we can quantify ingestion drift.
-  // Console-only — no UI surfacing yet; this is observation, not enforcement.
+  // Cross-validation: when both primary and fallback have a price and they
+  // disagree by >5%, record it. R4-D #7 (2026-06-05): this used to console.warn
+  // PER ROW on every dia load — 67+ lines of spam that everyone ignored. Now we
+  // collect them into window._diaSalesCompXrefConflicts (the load wrapper emits
+  // ONE summary line and the data-conflicts review lane reads the array), and
+  // the canonical st↔ownership_history conflict is also surfaced server-side as
+  // `sales_price_xref_conflict` in dia v_data_quality_issues so it gets
+  // triaged + resolved instead of scrolling past in the console. (deed
+  // consideration disagreements are expected — deeds often carry nominal
+  // transfer values — so they're noted for the lane but not raised in the view.)
   if (r.sold_price != null && oh && oh.sold_price != null) {
     const a = Number(r.sold_price), b = Number(oh.sold_price);
     if (a > 0 && b > 0 && Math.abs(a - b) / a > 0.05) {
-      console.warn('[sales-comp xref] price disagreement sale_id=' + r.sale_id + ' st=$' + a + ' oh=$' + b);
+      (window._diaSalesCompXrefConflicts || (window._diaSalesCompXrefConflicts = []))
+        .push({ sale_id: r.sale_id, source: 'ownership_history', sales_transactions: a, other: b });
     }
   }
   if (r.sold_price != null && deed && deed.consideration != null) {
     const a = Number(r.sold_price), b = Number(deed.consideration);
     if (a > 0 && b > 0 && Math.abs(a - b) / a > 0.05) {
-      console.warn('[sales-comp xref] price disagreement sale_id=' + r.sale_id + ' st=$' + a + ' deed=$' + b);
+      (window._diaSalesCompXrefConflicts || (window._diaSalesCompXrefConflicts = []))
+        .push({ sale_id: r.sale_id, source: 'deed_records', sales_transactions: a, other: b });
     }
   }
 
