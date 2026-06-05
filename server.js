@@ -44,6 +44,46 @@ import intakeShareHandler from './api/intake-share.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 
+// ── Deploy-derived asset version (R4-D #4, 2026-06-05) ──────────────────────
+// index.html shipped hard-coded `?v=2026050802` cache-busters on every <script>.
+// Because the value never changed across deploys, a Railway redeploy did NOT
+// bust browser caches — users ran weeks-old frontends until a manual hard
+// refresh (a contributor to the 2026-06-03 stale-export day). We now derive a
+// version token from the deploy itself so every redeploy mints a fresh `?v=`.
+// Railway injects RAILWAY_GIT_COMMIT_SHA / RAILWAY_DEPLOYMENT_ID; if neither is
+// present (local/other host) we fall back to server-start time, which still
+// changes on every restart/redeploy.
+const DEPLOY_VERSION = (
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.RAILWAY_DEPLOYMENT_ID ||
+  process.env.RENDER_GIT_COMMIT ||
+  process.env.SOURCE_VERSION ||
+  String(Date.now())
+).slice(0, 12);
+
+// Serve index.html with (a) every asset `?v=…` rewritten to DEPLOY_VERSION and
+// (b) a no-cache header on the HTML itself, so a redeployed bundle is always
+// picked up on the next navigation. The static JS files keep their own
+// validators; the changed query string is what forces the refetch.
+let _indexHtmlCache = null;
+function readIndexHtml() {
+  if (_indexHtmlCache == null) {
+    _indexHtmlCache = readFileSync(join(__dirname, 'index.html'), 'utf8');
+  }
+  // Rewrite existing ?v=<token> busters and append ?v= to any unversioned LOCAL
+  // .js/.css refs so the deploy token is the single source of truth. The
+  // negative lookahead skips absolute/CDN URLs (https://…, //…) so we never
+  // rewrite Chart.js/pdf.js/xlsx and friends.
+  return _indexHtmlCache
+    .replace(/(\b(?:src|href)=")(?!https?:|\/\/)([^"?]+\.(?:js|css))(\?v=[^"]*)?(")/g,
+      (_m, pre, path, _old, post) => `${pre}${path}?v=${DEPLOY_VERSION}${post}`);
+}
+function sendIndex(res) {
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  res.type('html').send(readIndexHtml());
+}
+app.get(['/', '/index.html'], (req, res) => sendIndex(res));
+
 // 30 MB matches the OM_INLINE_MAX_BYTES (25 MB) + headroom for base64 inflation
 // of post-bytes JSON envelope. NorthMarq OMs from SF average 5-15 MB; the largest
 // observed (Pizza Hut Fairview OM, ingested via Flow 7 backfill) was 27 MB.
@@ -103,6 +143,21 @@ app.all('/api/generate-research-tasks', (req, res) => { req.query._route = 'gene
 // vercel.json rewrites only apply on Vercel, so without these the Express server returns "Cannot POST /api/npi-lookup".
 app.all('/api/npi-lookup', (req, res) => { req.query._route = 'npi-lookup'; adminHandler(req, res); });
 app.all('/api/npi-registry-sync', (req, res) => { req.query._route = 'npi-registry-sync'; adminHandler(req, res); });
+// R4-D #3 (2026-06-05): these eight admin sub-routes existed in vercel.json but
+// were never mounted on Railway, so on the live app they fell through to the
+// SPA catch-all and returned index.html (E2E#1 class). The frontend ones broke
+// loudly — gov.js's LLC-queue widget fetched /api/llc-research-queue, got
+// "<!DOCTYPE …", and `resp.json()` threw "Unexpected token '<'". The cron-driven
+// ones (offload/auto-scrape/merge-reconcile/sf-link/llc tick) silently 404'd
+// against pg_cron POSTs. All eight map to real admin.js _route cases.
+app.all('/api/llc-research-queue',         (req, res) => { req.query._route = 'llc-research-queue';         adminHandler(req, res); });
+app.all('/api/resolve-llc-research',       (req, res) => { req.query._route = 'resolve-llc-research';       adminHandler(req, res); });
+app.all('/api/llc-research-tick',          (req, res) => { req.query._route = 'llc-research-tick';          adminHandler(req, res); });
+app.all('/api/resolve-listing-confirmation', (req, res) => { req.query._route = 'resolve-listing-confirmation'; adminHandler(req, res); });
+app.all('/api/auto-scrape-listings',       (req, res) => { req.query._route = 'auto-scrape-listings';       adminHandler(req, res); });
+app.all('/api/artifact-offload',           (req, res) => { req.query._route = 'artifact-offload';           adminHandler(req, res); });
+app.all('/api/merge-log-reconcile',        (req, res) => { req.query._route = 'merge-log-reconcile';        adminHandler(req, res); });
+app.all('/api/sf-link-tick',               (req, res) => { req.query._route = 'sf-link-tick';               adminHandler(req, res); });
 
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
@@ -312,15 +367,16 @@ app.get('/office-addins/:addin/manifest.xml', (req, res) => {
 });
 
 // ── Static files ────────────────────────────────────────────────────────────
+// index:false so express.static never serves the *unstamped* index.html — the
+// explicit `/` + `/index.html` routes above (and the SPA fallback below) own
+// index delivery and inject the deploy-version cache-buster (R4-D #4).
 app.use(express.static(__dirname, {
-  index: 'index.html',
+  index: false,
   extensions: ['html']
 }));
 
-// SPA fallback — serve index.html for unmatched routes
-app.get('*', (req, res) => {
-  res.sendFile(join(__dirname, 'index.html'));
-});
+// SPA fallback — serve the version-stamped index.html for unmatched routes
+app.get('*', (req, res) => sendIndex(res));
 
 // ── Start server ────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
