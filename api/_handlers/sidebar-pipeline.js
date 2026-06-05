@@ -4893,6 +4893,32 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
 
     const { transaction_type, exclude_from_market_metrics } = classifySaleType(sale);
 
+    // Task 2 (R68-B, 2026-06-05): guarantee the firm-term resolver has a term to
+    // work with at INSERT even when no covering lease row lands. The dia
+    // BEFORE-INSERT trigger (dia_sales_set_firm_term) resolves term via
+    // dia_firm_term_fields() — tier 1 = a covering leases row, tier 3 =
+    // sale_notes_extracted->>'years_remaining'. parseSaleNotes only catches a term
+    // phrased in the *narrative*; CoStar normally carries it as the structured
+    // metadata.lease_expiration, so tier 3 never fired (live audit: 0/57 unresolved
+    // 2026 sales had a notes term). For the MOST RECENT sale only — the one the
+    // current lease describes; applying it to historical deed rows would violate
+    // the Round-66 freeze-at-sale doctrine — derive years_remaining from
+    // (lease_expiration − sale_date). A real covering lease row, written later by
+    // upsertDomainLeases, still upgrades this via tier 1 (these rows stay unlocked).
+    let saleNotesForRow = saleNotesExtracted;
+    if (domain === 'dialysis' && datePart === mostRecentSaleDatePart
+        && saleNotesExtracted.years_remaining == null) {
+      const expStr = parseDate(metadata.lease_expiration)?.split('T')[0];
+      if (expStr) {
+        const yr = (new Date(expStr).getTime() - new Date(datePart).getTime()) / (365.25 * 86400000);
+        if (yr > 0 && yr <= 25) {
+          saleNotesForRow = { ...saleNotesExtracted,
+            years_remaining: Math.round(yr * 10000) / 10000,
+            years_remaining_source: 'derived_lease_expiration' };
+        }
+      }
+    }
+
     const saleData = stripNulls({
       property_id: propertyId,
       sale_date:   datePart,
@@ -4919,8 +4945,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           saleNotesRaw ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
         ].filter(Boolean).join('; ') || null,
         sale_notes_raw: saleNotesRaw,
-        sale_notes_extracted: Object.keys(saleNotesExtracted).length > 0
-          ? saleNotesExtracted : null,
+        sale_notes_extracted: Object.keys(saleNotesForRow).length > 0
+          ? saleNotesForRow : null,
       } : {}),
     });
     if (transaction_type !== null) saleData.transaction_type = transaction_type;
