@@ -2354,7 +2354,13 @@ const MIN_YEAR_BY_TEMPLATE = {
   // gets 2005 (avoids 2003-2004 thin data); yoy_volume_change goes
   // to 2003 so YoY is computed against 2002 (which exists per R47
   // 12 sales/yr in 2001-2002).
-  valuation_index:              2013,
+  // R68-D (2026-06-05) — was static 2013, which cropped the index + its YoY%
+  // overlay to ~2014 even though the inputs (rent_at_sale + cap) support ~2011.
+  // The valuation_index view now self-gates per row at ttm_n>=12 (migration
+  // 20260713), so track the data start data-aware on ttm_n rather than a static
+  // floor. Lands at 2011 (Sep-2011 is the first run of 4 consecutive n>=12
+  // months); the embedded YoY% bars (lag-12 of the index) follow automatically.
+  valuation_index:              (rows) => findFirstDenseYear(rows, 'ttm_n', 12) ?? 2011,
   // 2026-05-29 - start the credit-tier chart ~2000 (pre-2000 gov cap data
   // is sparse/noisy). User: "stop the x-axis around 2000".
   cap_rate_by_credit:           2000,

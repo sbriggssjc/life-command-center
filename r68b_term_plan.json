@@ -1,0 +1,3014 @@
+{
+  "params": {
+    "DAY_TOL": 90,
+    "PRICE_TOL": 0.03,
+    "CAP_TOL": 0.0005,
+    "TERM_TOL": 1.5,
+    "LOCK_MODE": "all",
+    "ALLOW_NOCAP": false
+  },
+  "counts": {
+    "matched": 993,
+    "nocap_skipped": 78,
+    "no_match": 415,
+    "locked": 228,
+    "term_agrees": 638,
+    "backfill_null": 49,
+    "backfill_override": 78,
+    "sale_taken": 13
+  },
+  "by_year": {
+    "2006": {
+      "null_fill": 1,
+      "override": 0
+    },
+    "2007": {
+      "null_fill": 1,
+      "override": 1
+    },
+    "2008": {
+      "null_fill": 1,
+      "override": 1
+    },
+    "2010": {
+      "null_fill": 1,
+      "override": 2
+    },
+    "2011": {
+      "null_fill": 1,
+      "override": 0
+    },
+    "2013": {
+      "null_fill": 0,
+      "override": 2
+    },
+    "2014": {
+      "null_fill": 2,
+      "override": 4
+    },
+    "2015": {
+      "null_fill": 4,
+      "override": 2
+    },
+    "2016": {
+      "null_fill": 2,
+      "override": 7
+    },
+    "2017": {
+      "null_fill": 0,
+      "override": 6
+    },
+    "2018": {
+      "null_fill": 3,
+      "override": 15
+    },
+    "2019": {
+      "null_fill": 12,
+      "override": 10
+    },
+    "2020": {
+      "null_fill": 5,
+      "override": 6
+    },
+    "2021": {
+      "null_fill": 2,
+      "override": 11
+    },
+    "2022": {
+      "null_fill": 4,
+      "override": 5
+    },
+    "2023": {
+      "null_fill": 4,
+      "override": 3
+    },
+    "2024": {
+      "null_fill": 3,
+      "override": 2
+    },
+    "2025": {
+      "null_fill": 3,
+      "override": 1
+    }
+  },
+  "rows": [
+    {
+      "i": 12,
+      "sale_id": 14244,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 19,
+      "sale_id": 7959,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 28,
+      "sale_id": 14236,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 31,
+      "sale_id": 8043,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 35,
+      "sale_id": 14235,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 42,
+      "sale_id": 14231,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 51,
+      "sale_id": 7942,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2025-09-02",
+      "master_term": 12.2521,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "3 Star Retail, reinforced concrete construction, suburban location, frontage: 234' on Caroline, 189' on Club Center.",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 52,
+      "sale_id": 14228,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 53,
+      "sale_id": 14227,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2025-08-13",
+      "master_term": 13.8877,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita MOB",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 81,
+      "sale_id": 7862,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 85,
+      "sale_id": 14214,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 92,
+      "sale_id": 9170,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 105,
+      "sale_id": 14422,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 106,
+      "sale_id": 8852,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2025-03-31",
+      "master_term": 13.4521,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 2.3,
+      "lock": true
+    },
+    {
+      "i": 108,
+      "sale_id": 14207,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2025-03-26",
+      "master_term": 5.0164,
+      "prev_term": 0.013689253935660506,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.5,
+      "lock": true
+    },
+    {
+      "i": 117,
+      "sale_id": 5998,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 121,
+      "sale_id": 14205,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 133,
+      "sale_id": 32,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 135,
+      "sale_id": 5994,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 142,
+      "sale_id": 11723,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 147,
+      "sale_id": 8010,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 166,
+      "sale_id": 14194,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2024-10-07",
+      "master_term": 5.9342,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis |San Antonio Kidney Disease Center",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 168,
+      "sale_id": 6016,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 177,
+      "sale_id": 8171,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 184,
+      "sale_id": 1007,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 185,
+      "sale_id": 6022,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 187,
+      "sale_id": 14188,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2024-07-02",
+      "master_term": 1.8274,
+      "prev_term": 3.912388774811773,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care - MOB",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 190,
+      "sale_id": 14187,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2024-06-26",
+      "master_term": 4.9315,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.5,
+      "lock": true
+    },
+    {
+      "i": 196,
+      "sale_id": 14186,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2024-05-23",
+      "master_term": 10.5726,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 201,
+      "sale_id": 14431,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 207,
+      "sale_id": 14432,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 210,
+      "sale_id": 4,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2024-04-09",
+      "master_term": 12.9836,
+      "prev_term": 9.81245722108145,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Located across from Anderson University; recent major CapEx with a new roof installed in 2024.",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 211,
+      "sale_id": 14182,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 212,
+      "sale_id": 6036,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 216,
+      "sale_id": 516,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 267,
+      "sale_id": 14163,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 274,
+      "sale_id": 14443,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 278,
+      "sale_id": 27,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 284,
+      "sale_id": 8877,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2023-08-25",
+      "master_term": 9.44,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 302,
+      "sale_id": 14444,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 310,
+      "sale_id": 14152,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2023-07-05",
+      "master_term": 10.7452,
+      "prev_term": 5.738535249828884,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 321,
+      "sale_id": 6067,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 324,
+      "sale_id": 14446,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 325,
+      "sale_id": 8829,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2023-06-02",
+      "master_term": 7.5863,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 332,
+      "sale_id": 4964,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2023-05-08",
+      "master_term": 4.4247,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub property; Tenants: single tenant -- DaVita Dialysis;\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 333,
+      "sale_id": 9711,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 335,
+      "sale_id": 1036,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2023-05-04",
+      "master_term": 3.7479,
+      "prev_term": 8.744695414099931,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "--- Sale Notes ---\nCook Commercial Partners are pleased to present the DaVita Dialysis – West Branch clinic located in West Branch, Michigan. This single-tenant, 5,600-square-foot facility was built-to-suit for DaVita in 2011. The property is 100% occupied with just under six years of term remaining. DaVita has recently executed a 5-year renewal extension reflecting a strong commitment to the location. The lease includes 2.50% annual rental increases and three, five-year renewal options. This investment opportunity offers a stable income stream backed by DaVita, a leading provider of kidney care with a strong national presence. DaVita Inc. is a national leader in kidney care services, with over 2,600 locations across the United States. Known for its strong presence and unwavering commitment to high-quality dialysis care, DaVita offers investors a secure and reliable opportunity with a creditworthy tenant.",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 339,
+      "sale_id": 14450,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 342,
+      "sale_id": 14145,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2023-04-10",
+      "master_term": 5.2274,
+      "prev_term": 1.2265571526351815,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 343,
+      "sale_id": 9723,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 344,
+      "sale_id": 14144,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2023-03-31",
+      "master_term": 3.0849,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 350,
+      "sale_id": 6591,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 355,
+      "sale_id": 885,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 358,
+      "sale_id": 14453,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 359,
+      "sale_id": 1121,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 363,
+      "sale_id": 502,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 381,
+      "sale_id": 14130,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2022-12-15",
+      "master_term": 5.5863,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 402,
+      "sale_id": 878,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 403,
+      "sale_id": 11277,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 422,
+      "sale_id": 14459,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 425,
+      "sale_id": 14119,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2022-10-03",
+      "master_term": 5.2493,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care (MOB)",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 435,
+      "sale_id": 5007,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 448,
+      "sale_id": 14462,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 452,
+      "sale_id": 14463,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 454,
+      "sale_id": 8351,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 456,
+      "sale_id": 788,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 458,
+      "sale_id": 87,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 494,
+      "sale_id": 8830,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2022-07-15",
+      "master_term": 10.6345,
+      "prev_term": 14.480492813141684,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 495,
+      "sale_id": 14469,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 508,
+      "sale_id": 806,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 514,
+      "sale_id": 14100,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2022-06-03",
+      "master_term": 9.1112,
+      "prev_term": 13.073237508555783,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 515,
+      "sale_id": 14474,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 539,
+      "sale_id": 426,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2022-04-29",
+      "master_term": 3.5096,
+      "prev_term": 0.5065023956194388,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 558,
+      "sale_id": 14089,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2022-03-25",
+      "master_term": 4.5205,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 574,
+      "sale_id": 417,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2022-02-18",
+      "master_term": 3.9534,
+      "prev_term": 8.531143052703628,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "2025-11-13",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 577,
+      "sale_id": 588,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 585,
+      "sale_id": 14080,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2022-02-02",
+      "master_term": 14.6658,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 595,
+      "sale_id": 18,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 602,
+      "sale_id": 720,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2022-01-14",
+      "master_term": 10.6877,
+      "prev_term": 12.583162217659138,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Fairburn Palmetto Dialysis;",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 608,
+      "sale_id": 10072,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 617,
+      "sale_id": 50,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-12-21",
+      "master_term": 14.4493,
+      "prev_term": 4.27378507871321,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 624,
+      "sale_id": 14070,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 627,
+      "sale_id": 1035,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 633,
+      "sale_id": 14066,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 635,
+      "sale_id": 5540,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 638,
+      "sale_id": 14065,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-11-30",
+      "master_term": 3.8356,
+      "prev_term": 5.831622176591376,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 644,
+      "sale_id": 14063,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 654,
+      "sale_id": 14498,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 655,
+      "sale_id": 14060,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-11-02",
+      "master_term": 14.5863,
+      "prev_term": 3.4086242299794662,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 658,
+      "sale_id": 5525,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-10-25",
+      "master_term": 11.3534,
+      "prev_term": 5.0978781656399725,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 666,
+      "sale_id": 5532,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 676,
+      "sale_id": 14050,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-09-16",
+      "master_term": 1.9315,
+      "prev_term": 6.93223819301848,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=U.S. Renal Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 680,
+      "sale_id": 5572,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 682,
+      "sale_id": 5541,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 683,
+      "sale_id": 10387,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 686,
+      "sale_id": 10393,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 692,
+      "sale_id": 14045,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-08-30",
+      "master_term": 7.6712,
+      "prev_term": 0.6652977412731006,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 693,
+      "sale_id": 14500,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 697,
+      "sale_id": 293,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 725,
+      "sale_id": 976,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 726,
+      "sale_id": 8827,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 733,
+      "sale_id": 1126,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 734,
+      "sale_id": 168,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 735,
+      "sale_id": 14037,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-06-25",
+      "master_term": 4.5863,
+      "prev_term": 9.60164271047228,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 751,
+      "sale_id": 14034,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2021-06-08",
+      "master_term": 13.9178,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 752,
+      "sale_id": 993,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 763,
+      "sale_id": 557,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 769,
+      "sale_id": 14504,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 773,
+      "sale_id": 575,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 781,
+      "sale_id": 506,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 783,
+      "sale_id": 14025,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2021-04-29",
+      "master_term": 15.4301,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 784,
+      "sale_id": 5601,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 795,
+      "sale_id": 6428,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 796,
+      "sale_id": 14508,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 797,
+      "sale_id": 14021,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-04-16",
+      "master_term": 2.3726,
+      "prev_term": 5.541409993155373,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 804,
+      "sale_id": 14510,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 806,
+      "sale_id": 14512,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 807,
+      "sale_id": 8859,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 818,
+      "sale_id": 14513,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-03-23",
+      "master_term": 2.7753,
+      "prev_term": 6.439425051334703,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r2 tenant=Fresenius Medical Care - Condo",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 827,
+      "sale_id": 688,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 832,
+      "sale_id": 985,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 833,
+      "sale_id": 14015,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-02-26",
+      "master_term": 10.7644,
+      "prev_term": 0.758384668035592,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 834,
+      "sale_id": 155,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 838,
+      "sale_id": 14013,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2021-02-15",
+      "master_term": 5.1014,
+      "prev_term": 0.09856262833675565,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 839,
+      "sale_id": 5670,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 846,
+      "sale_id": 118,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 848,
+      "sale_id": 14516,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 849,
+      "sale_id": 14010,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 855,
+      "sale_id": 798,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 862,
+      "sale_id": 1037,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2020-12-29",
+      "master_term": 11.5096,
+      "prev_term": 4.501026694045175,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 863,
+      "sale_id": 10783,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 866,
+      "sale_id": 96,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 884,
+      "sale_id": 10847,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 885,
+      "sale_id": 14519,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 895,
+      "sale_id": 8865,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2020-11-24",
+      "master_term": 13.9644,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 906,
+      "sale_id": 14521,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 909,
+      "sale_id": 14006,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2020-11-04",
+      "master_term": 9.6,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita - Multi Tenant",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 914,
+      "sale_id": 14523,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 919,
+      "sale_id": 14004,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2020-10-09",
+      "master_term": 3.8959,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis - Condo",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 925,
+      "sale_id": 14001,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 932,
+      "sale_id": 14527,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 939,
+      "sale_id": 5722,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 950,
+      "sale_id": 14531,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 951,
+      "sale_id": 5721,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 957,
+      "sale_id": 14532,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 960,
+      "sale_id": 671,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2020-07-27",
+      "master_term": 19.4411,
+      "prev_term": 17.75770020533881,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 970,
+      "sale_id": 657,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2020-07-08",
+      "master_term": 3.6438,
+      "prev_term": 8.314852840520192,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 971,
+      "sale_id": 14533,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 983,
+      "sale_id": 110,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 985,
+      "sale_id": 11250,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 989,
+      "sale_id": 14536,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 997,
+      "sale_id": 1240,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 998,
+      "sale_id": 9494,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 999,
+      "sale_id": 6148,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1002,
+      "sale_id": 62,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2020-05-22",
+      "master_term": 14.7041,
+      "prev_term": 1.4757015742642026,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1007,
+      "sale_id": 612,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1010,
+      "sale_id": 11348,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1018,
+      "sale_id": 6159,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1027,
+      "sale_id": 1226,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1037,
+      "sale_id": 13923,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2020-03-03",
+      "master_term": 3.326,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.5,
+      "lock": true
+    },
+    {
+      "i": 1041,
+      "sale_id": 14545,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1051,
+      "sale_id": 13920,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2020-02-06",
+      "master_term": 4.5699,
+      "prev_term": 9.566050650239562,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1056,
+      "sale_id": 111,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1059,
+      "sale_id": 572,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1063,
+      "sale_id": 71,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1068,
+      "sale_id": 114,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1072,
+      "sale_id": 9,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2020-01-13",
+      "master_term": 13.5945,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1074,
+      "sale_id": 6201,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2020-01-01",
+      "master_term": 10.5671,
+      "prev_term": 3.578370978781656,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1076,
+      "sale_id": 6200,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1077,
+      "sale_id": 350,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1081,
+      "sale_id": 13914,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-12-31",
+      "master_term": 3.9178,
+      "prev_term": 8.917180013689254,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1082,
+      "sale_id": 13912,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-12-30",
+      "master_term": 14.5096,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 1084,
+      "sale_id": 6202,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-12-23",
+      "master_term": 14.1397,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1092,
+      "sale_id": 13911,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-12-11",
+      "master_term": 8.5616,
+      "prev_term": 13.552361396303901,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1096,
+      "sale_id": 156,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-12-06",
+      "master_term": 14.3425,
+      "prev_term": 0.31759069130732376,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1110,
+      "sale_id": 11876,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-09-01",
+      "master_term": 9.7973,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 2.6,
+      "lock": true
+    },
+    {
+      "i": 1115,
+      "sale_id": 13906,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-10-31",
+      "master_term": 3.0027,
+      "prev_term": 8,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1116,
+      "sale_id": 6239,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-10-10",
+      "master_term": 15,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Dialysis; sale-leaseback (Standard/Full);\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1117,
+      "sale_id": 6351,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-10-23",
+      "master_term": 12.1123,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1131,
+      "sale_id": 520,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-09-25",
+      "master_term": 14.3562,
+      "prev_term": 5.514031485284052,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita HealthCare Prtnrs",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1137,
+      "sale_id": 165,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-09-11",
+      "master_term": 13.8959,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Kidney Care; prior sale: Sep-19;",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1150,
+      "sale_id": 13900,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-08-21",
+      "master_term": 4.0301,
+      "prev_term": 9.02943189596167,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=U.S. Renal Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1159,
+      "sale_id": 13899,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-08-01",
+      "master_term": 4.0877,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.5,
+      "lock": true
+    },
+    {
+      "i": 1161,
+      "sale_id": 14556,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1169,
+      "sale_id": 13894,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-07-16",
+      "master_term": 5.7123,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Satellite Healthcare",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1171,
+      "sale_id": 13893,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-07-11",
+      "master_term": 10.2301,
+      "prev_term": 0.22176591375770022,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1173,
+      "sale_id": 1207,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1180,
+      "sale_id": 14557,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1181,
+      "sale_id": 13892,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-07-02",
+      "master_term": 5.337,
+      "prev_term": 7.1649555099247095,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis At Home- Condo",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1186,
+      "sale_id": 224,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1187,
+      "sale_id": 13889,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-06-25",
+      "master_term": 10.274,
+      "prev_term": 3.247091033538672,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1193,
+      "sale_id": 513,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2019-06-11",
+      "master_term": 10.811,
+      "prev_term": 0.8049281314168378,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Dialysis;",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1215,
+      "sale_id": 159,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1220,
+      "sale_id": 5063,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-04-15",
+      "master_term": 14.1014,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1224,
+      "sale_id": 13879,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-04-10",
+      "master_term": 14.5699,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1226,
+      "sale_id": 6451,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1235,
+      "sale_id": 13876,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-03-14",
+      "master_term": 8.7205,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1237,
+      "sale_id": 171,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1250,
+      "sale_id": 5076,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1251,
+      "sale_id": 161,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1261,
+      "sale_id": 13868,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2019-01-11",
+      "master_term": 5.389,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 1271,
+      "sale_id": 13864,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-12-27",
+      "master_term": 12.4301,
+      "prev_term": 2.3408624229979464,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1274,
+      "sale_id": 5086,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2018-12-20",
+      "master_term": 13.6027,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Dialysis\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1281,
+      "sale_id": 1025,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1282,
+      "sale_id": 486,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1287,
+      "sale_id": 1093,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1292,
+      "sale_id": 13860,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-11-17",
+      "master_term": 4.7644,
+      "prev_term": 9.763175906913073,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=U.S. Renal Care",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1295,
+      "sale_id": 144,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1299,
+      "sale_id": 1112,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1300,
+      "sale_id": 13857,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-11-02",
+      "master_term": 2.1671,
+      "prev_term": 7.181382614647502,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1301,
+      "sale_id": 672,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1306,
+      "sale_id": 5103,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2018-10-26",
+      "master_term": 11.8082,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Tenants: single tenant -- DaVita Dialysis",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1315,
+      "sale_id": 13850,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-10-15",
+      "master_term": 10.9671,
+      "prev_term": 3.9397672826830936,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1319,
+      "sale_id": 669,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-10-05",
+      "master_term": 15.0795,
+      "prev_term": 10.239561943874058,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1320,
+      "sale_id": 13848,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-10-04",
+      "master_term": 1.2411,
+      "prev_term": 10.242299794661191,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1321,
+      "sale_id": 858,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-09-28",
+      "master_term": 12.0137,
+      "prev_term": 7.006160164271047,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1322,
+      "sale_id": 342,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1325,
+      "sale_id": 14570,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1328,
+      "sale_id": 13847,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-09-05",
+      "master_term": 4.0603,
+      "prev_term": 9.067761806981519,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1333,
+      "sale_id": 1045,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-08-22",
+      "master_term": 0.8548,
+      "prev_term": 3.4442162902121836,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1337,
+      "sale_id": 314,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1341,
+      "sale_id": 13845,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1352,
+      "sale_id": 6412,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-06-27",
+      "master_term": 4.8493,
+      "prev_term": 13.927446954140999,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1357,
+      "sale_id": 5135,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1360,
+      "sale_id": 177,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1361,
+      "sale_id": 5136,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-07-17",
+      "master_term": 14.9644,
+      "prev_term": 1.4565366187542779,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Kidney Center\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1362,
+      "sale_id": 5128,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1364,
+      "sale_id": 205,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-06-29",
+      "master_term": 4.6493,
+      "prev_term": 15.091033538672143,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Est Completion: Q4 2017; Office - Sub/medical property; prior sale: Nov-16;",
+      "cap_diff_bp": 0.5,
+      "lock": true
+    },
+    {
+      "i": 1368,
+      "sale_id": 281,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1370,
+      "sale_id": 5115,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1375,
+      "sale_id": 13835,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-06-15",
+      "master_term": 14.137,
+      "prev_term": 9.377138945927447,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1379,
+      "sale_id": 14576,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1390,
+      "sale_id": 911,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1400,
+      "sale_id": 5161,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1401,
+      "sale_id": 13827,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-05-08",
+      "master_term": 13.0685,
+      "prev_term": 2.9787816563997263,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1403,
+      "sale_id": 13821,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1416,
+      "sale_id": 697,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1421,
+      "sale_id": 5172,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2018-04-12",
+      "master_term": 13.6438,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1427,
+      "sale_id": 163,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1434,
+      "sale_id": 13824,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2018-03-29",
+      "master_term": 3.4274,
+      "prev_term": 8.424366872005475,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1438,
+      "sale_id": 14578,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1439,
+      "sale_id": 14579,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1443,
+      "sale_id": 1218,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1449,
+      "sale_id": 134,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1455,
+      "sale_id": 5195,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1460,
+      "sale_id": 352,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1461,
+      "sale_id": 321,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1488,
+      "sale_id": 1242,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1496,
+      "sale_id": 327,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1506,
+      "sale_id": 931,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2017-11-28",
+      "master_term": 14.8493,
+      "prev_term": 0.837782340862423,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 4,
+      "lock": true
+    },
+    {
+      "i": 1510,
+      "sale_id": 937,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1513,
+      "sale_id": 5227,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2017-11-10",
+      "master_term": 3.4712,
+      "prev_term": 6.888432580424367,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Tenants: single tenant -- Fresenius",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1517,
+      "sale_id": 14590,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1518,
+      "sale_id": 13810,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1521,
+      "sale_id": 5235,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1522,
+      "sale_id": 6375,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1532,
+      "sale_id": 284,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2017-09-29",
+      "master_term": 14.6795,
+      "prev_term": 3.583846680355921,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1540,
+      "sale_id": 7033,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1541,
+      "sale_id": 1133,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2017-08-31",
+      "master_term": 9.4247,
+      "prev_term": 4.418891170431212,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1549,
+      "sale_id": 14592,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1550,
+      "sale_id": 861,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1555,
+      "sale_id": 14593,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1566,
+      "sale_id": 5261,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1578,
+      "sale_id": 318,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2017-06-22",
+      "master_term": 14.7014,
+      "prev_term": 7.02258726899384,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1601,
+      "sale_id": 14602,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1609,
+      "sale_id": 914,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1610,
+      "sale_id": 14603,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1613,
+      "sale_id": 14604,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1623,
+      "sale_id": 5299,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1625,
+      "sale_id": 1141,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2017-03-02",
+      "master_term": 12.5068,
+      "prev_term": 9.229295003422314,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1633,
+      "sale_id": 13779,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1645,
+      "sale_id": 14608,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1658,
+      "sale_id": 13785,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2016-12-08",
+      "master_term": 9.8164,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 1664,
+      "sale_id": 13780,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1668,
+      "sale_id": 5332,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-11-16",
+      "master_term": 14.7342,
+      "prev_term": 9.535934291581109,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1673,
+      "sale_id": 6435,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-11-03",
+      "master_term": 14.8329,
+      "prev_term": 6.992470910335387,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1682,
+      "sale_id": 6376,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-10-24",
+      "master_term": 3.2712,
+      "prev_term": 8.271047227926077,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Auto-created from Comps - Ascendix.xlsx - row 572\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1684,
+      "sale_id": 14613,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1686,
+      "sale_id": 5342,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1689,
+      "sale_id": 14614,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1693,
+      "sale_id": 5348,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-10-04",
+      "master_term": 14.411,
+      "prev_term": 10.401095140314853,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1696,
+      "sale_id": 14616,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1704,
+      "sale_id": 13772,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-08-26",
+      "master_term": 15,
+      "prev_term": 11.594798083504449,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita (Two-Tenant)",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 1707,
+      "sale_id": 610,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1709,
+      "sale_id": 13770,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1712,
+      "sale_id": 13769,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-07-29",
+      "master_term": 3.9233,
+      "prev_term": 8.919917864476385,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1714,
+      "sale_id": 13771,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1720,
+      "sale_id": 1214,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1724,
+      "sale_id": 5368,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2016-06-01",
+      "master_term": 11.3671,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 1726,
+      "sale_id": 14619,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1738,
+      "sale_id": 13762,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1740,
+      "sale_id": 13761,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1766,
+      "sale_id": 13757,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2016-03-10",
+      "master_term": 5.2274,
+      "prev_term": 10.223134839151266,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1786,
+      "sale_id": 13754,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2015-12-31",
+      "master_term": 11.674,
+      "prev_term": 8,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1788,
+      "sale_id": 727,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1791,
+      "sale_id": 14631,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1805,
+      "sale_id": 6431,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1811,
+      "sale_id": 1043,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2015-10-14",
+      "master_term": 2.1,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 1813,
+      "sale_id": 14634,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1822,
+      "sale_id": 13689,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1823,
+      "sale_id": 14635,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1828,
+      "sale_id": 14636,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1838,
+      "sale_id": 6390,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1845,
+      "sale_id": 8831,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2015-07-09",
+      "master_term": 10.7342,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 1848,
+      "sale_id": 6354,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1871,
+      "sale_id": 6437,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2015-04-23",
+      "master_term": 7.1589,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1872,
+      "sale_id": 8864,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2015-04-22",
+      "master_term": 12.5342,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1874,
+      "sale_id": 533,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2015-04-16",
+      "master_term": 14.0493,
+      "prev_term": 7.4579055441478435,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Auto-created from Comps - Ascendix.xlsx - row 143",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1877,
+      "sale_id": 5759,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1887,
+      "sale_id": 1038,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1895,
+      "sale_id": 14645,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1901,
+      "sale_id": 889,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1908,
+      "sale_id": 12522,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1910,
+      "sale_id": 14649,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1924,
+      "sale_id": 5798,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2014-10-29",
+      "master_term": 3.0904,
+      "prev_term": 5.086926762491444,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Dialysis; prior sale: Oct-14 (4.0m);\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0.2,
+      "lock": true
+    },
+    {
+      "i": 1936,
+      "sale_id": 13669,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2014-09-08",
+      "master_term": 4.811,
+      "prev_term": 7.397672826830938,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1939,
+      "sale_id": 5808,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2014-09-03",
+      "master_term": 5.3288,
+      "prev_term": 15.326488706365502,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- Fresenius;\n[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0.5,
+      "lock": true
+    },
+    {
+      "i": 1950,
+      "sale_id": 1152,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1955,
+      "sale_id": 14657,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2014-07-03",
+      "master_term": 8.9973,
+      "prev_term": 14.581793292265571,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r2 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 1960,
+      "sale_id": 42,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2014-06-17",
+      "master_term": 5.6274,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "Office - Sub/medical property; Tenants: single tenant -- DaVita Dialysis",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 1966,
+      "sale_id": 449,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1969,
+      "sale_id": 6369,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1979,
+      "sale_id": 6312,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2014-03-13",
+      "master_term": 9.3041,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 2,
+      "lock": true
+    },
+    {
+      "i": 1985,
+      "sale_id": 14659,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1987,
+      "sale_id": 6357,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 1990,
+      "sale_id": 434,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2013-12-31",
+      "master_term": 9.9315,
+      "prev_term": 14.926762491444217,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "2025-11-13",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 2008,
+      "sale_id": 13660,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2013-11-12",
+      "master_term": 5.0548,
+      "prev_term": 10.203969883641342,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 2020,
+      "sale_id": 14665,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2021,
+      "sale_id": 527,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2046,
+      "sale_id": 14666,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2071,
+      "sale_id": 8837,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2072,
+      "sale_id": 5879,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2085,
+      "sale_id": 5886,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2086,
+      "sale_id": 14671,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2140,
+      "sale_id": 6328,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2011-02-28",
+      "master_term": 12.1753,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 2146,
+      "sale_id": 6440,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2148,
+      "sale_id": 734,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2149,
+      "sale_id": 453,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2150,
+      "sale_id": 6410,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2157,
+      "sale_id": 13627,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2010-04-01",
+      "master_term": 11.2548,
+      "prev_term": 23.750855578370977,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 2158,
+      "sale_id": 6334,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2161,
+      "sale_id": 13625,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2010-03-01",
+      "master_term": 9.8411,
+      "prev_term": 14.836413415468856,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 2163,
+      "sale_id": 6404,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2010-01-29",
+      "master_term": 11.5096,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "[Round 76ai 2026-04-28] Tagged as historical_csv_import — date+price valid, parties never captured",
+      "cap_diff_bp": 0,
+      "lock": true
+    },
+    {
+      "i": 2172,
+      "sale_id": 8853,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2176,
+      "sale_id": 13623,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2008-12-01",
+      "master_term": 13.0055,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=DaVita Dialysis",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 2178,
+      "sale_id": 11279,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2192,
+      "sale_id": 755,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2008-02-26",
+      "master_term": 8.0986,
+      "prev_term": 18.091718001368925,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": null,
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 2194,
+      "sale_id": 14681,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2197,
+      "sale_id": 8854,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2200,
+      "sale_id": 14682,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2201,
+      "sale_id": 13618,
+      "action": "BACKFILL",
+      "class": "OVERRIDE",
+      "sale_date": "2007-10-26",
+      "master_term": 12.6877,
+      "prev_term": 17.678302532511978,
+      "prev_source": "lease_in_effect",
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.4,
+      "lock": true
+    },
+    {
+      "i": 2212,
+      "sale_id": 13612,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2007-02-27",
+      "master_term": 9.5973,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.3,
+      "lock": true
+    },
+    {
+      "i": 2214,
+      "sale_id": 13611,
+      "action": "BACKFILL",
+      "class": "NULL_FILL",
+      "sale_date": "2006-08-03",
+      "master_term": 7.8301,
+      "prev_term": null,
+      "prev_source": null,
+      "prev_locked": false,
+      "prev_notes": "master_xlsx_backfill_r72 tenant=Fresenius Medical Care",
+      "cap_diff_bp": 0.1,
+      "lock": true
+    },
+    {
+      "i": 2219,
+      "sale_id": 14685,
+      "action": "SKIP_LOCKED"
+    },
+    {
+      "i": 2222,
+      "sale_id": 14686,
+      "action": "SKIP_LOCKED"
+    }
+  ]
+}
