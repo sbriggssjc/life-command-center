@@ -2844,37 +2844,85 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     // P4 — stacked bar charts
     case 'lease_renewal_rate': {
-      // 5-series stack matching the renderer's color scheme
-      // (api/_shared/cm-chart-image-renderer.js around line 1602).
-      // First Gen (palette nm_pale ish — light), Renewed (PDF.cap_short navy),
-      // Succ/Super (palette[2] mid blue), Expired (PDF.cap_mid sky),
-      // Terminated (amber #D97706).
+      // R68-E G5 — DIVERGING stacked bars + net line. Mirrors the renderer
+      // (cm-chart-image-renderer.js lease_renewal_rate). Additive outcomes
+      // (sign +1) plot above zero; subtractive (sign -1) below. The data
+      // tab keeps every count POSITIVE (auditable); chart-support helper
+      // cols carry the negated values + the per-period net (signed sum).
+      // Series→sign is CONFIG so a PDF-reconciliation mismatch is a
+      // one-line flip. Stacked combo on a shared count axis (same machinery
+      // as inventory_backlog's negative-bar + net-line visual). pdf_reconcile.
       const periodCol = findCol('period_end');
-      const seriesDefs = [
-        { key: 'first_generation_commencements', color: 'E0E8F4' },  // pale
-        { key: 'renewed_leases',                 color: '003DA5' },  // navy
-        { key: 'succeeding_superseding_leases',  color: '265AB2' },  // mid blue
-        { key: 'expired_leases',                 color: '62B5E5' },  // sky
-        { key: 'terminated_leases',              color: 'D97706' },  // amber
+      const RENEWAL_SERIES = [
+        { key: 'first_generation_commencements', color: 'E0E8F4', sign: +1 },  // pale
+        { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
+        { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
+        { key: 'expired_leases',                 color: '62B5E5', sign: -1 },  // sky
+        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
       ];
-      const series = seriesDefs
+      const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
         .filter(s => s.col);
-      if (!periodCol || series.length === 0) return null;
+      if (!periodCol || resolved.length === 0) return null;
+
+      // Helper cols land one past the regular CHART_COLUMNS entries.
+      // Negated cols for every subtractive series, then the net col.
+      const negSeries = resolved.filter(s => s.sign < 0);
+      const helperLetters = {};
+      negSeries.forEach((s, i) => {
+        helperLetters[s.key] = String.fromCharCode(65 + cols.length + i);
+      });
+      const netColLetter = String.fromCharCode(65 + cols.length + negSeries.length);
+
+      const barSeries = resolved.map(s => ({
+        // Series TITLE always references the original (positive) header cell
+        // so the legend reads the plain outcome name; VAL points at the
+        // negated helper col for subtractive series.
+        titleCol: s.col, titleRow: headerRow,
+        valCol: s.sign < 0 ? helperLetters[s.key] : s.col,
+        color: s.color,
+      }));
+
+      const helperCols = negSeries.map(s => ({
+        key: `${s.key}_neg`,
+        header: `${s.key} (chart, neg)`,
+        format: 'integer_count',
+        width: 18,
+        getValue: (row) => row[s.key] == null ? null : -Number(row[s.key]),
+      }));
+      helperCols.push({
+        key: 'net_movement',
+        header: 'Net Movement',
+        format: 'integer_count',
+        width: 16,
+        getValue: (row) => {
+          let net = 0; let seen = false;
+          for (const s of RENEWAL_SERIES) {
+            const v = row[s.key];
+            if (v != null) { net += s.sign * Number(v); seen = true; }
+          }
+          return seen ? net : null;
+        },
+      });
+
       return {
         tabName,
         spec: {
-          type: 'stacked-bar',
+          type: 'combo',
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          series: series.map(s => ({
-            titleCol: s.col, titleRow: headerRow,
-            valCol: s.col,
-            color: s.color,
-          })),
+          barGrouping: 'stacked',
+          sharedAxis:  true,            // net line on the same count axis
+          valAxNumFmt: VAL_FMT_INTEGER,
+          yLeftNumFmt: VAL_FMT_INTEGER,
+          barSeries,
+          lineSeries: [
+            { titleCol: netColLetter, titleRow: headerRow, valCol: netColLetter, color: '191919' },
+          ],
           anchor: standardAnchor,
         },
+        helperCols,
       };
     }
 
@@ -4613,45 +4661,77 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // The "In Firm Term" series is COMPUTED at render time, not stored.
       // Use the P8.5 helper-col infrastructure to write it as col E on
       // the data tab, then reference it as the bottom of a stacked bar.
+      // R68-E G6 — add the PDF's soft-term termination LINE on a secondary
+      // % axis. The two count bars (In Firm + Outside) stay on the left
+      // integer axis; terminated_outside_firm_term_pct (a real view column,
+      // decimal fraction) drives an amber line on the right % axis. Falls
+      // back to the pure stacked-bar shape when the pct column is absent
+      // (pre-R68-E view). pdf_reconcile.
       const periodCol  = findCol('period_end');
       const totalCol   = findCol('total_leases_active');
       const outsideCol = findCol('leases_outside_firm_term');
+      const rateCol    = findCol('terminated_outside_firm_term_pct');
       if (!periodCol || !totalCol || !outsideCol) return null;
 
       // Helper col letter — lands one past the regular CHART_COLUMNS entries
       const inFirmCol = String.fromCharCode(65 + cols.length);
 
+      const inFirmHelper = {
+        key: 'in_firm_term',
+        header: 'Leases In Firm Term (TTM)',
+        format: 'integer_count',
+        width: 22,
+        getValue: (row) => {
+          const total   = row.total_leases_active;
+          const outside = row.leases_outside_firm_term;
+          if (total == null || outside == null) return null;
+          return Math.max(0, Number(total) - Number(outside));
+        },
+      };
+
+      const barSeries = [
+        // Bottom: In Firm Term (computed helper col), navy
+        { titleCol: inFirmCol,  titleRow: headerRow, valCol: inFirmCol,  color: navy },
+        // Top: Outside Firm Term, sky
+        { titleCol: outsideCol, titleRow: headerRow, valCol: outsideCol, color: sky },
+      ];
+
+      // No line column available → keep the original stacked-bar visual.
+      if (!rateCol) {
+        return {
+          tabName,
+          spec: {
+            type: 'stacked-bar',
+            tabName,
+            catCol: periodCol,
+            dataStart, dataEnd,
+            valAxNumFmt: VAL_FMT_INTEGER,
+            series: barSeries,
+            anchor: standardAnchor,
+          },
+          helperCols: [inFirmHelper],
+        };
+      }
+
       return {
         tabName,
         spec: {
-          type: 'stacked-bar',
+          type: 'combo',
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — integer count of leases (renderer ~1648)
-          valAxNumFmt: VAL_FMT_INTEGER,
-          series: [
-            // Bottom: In Firm Term (computed helper col), navy
-            { titleCol: inFirmCol,  titleRow: headerRow, valCol: inFirmCol,
-              color: navy },
-            // Top: Outside Firm Term (col D), sky
-            { titleCol: outsideCol, titleRow: headerRow, valCol: outsideCol,
-              color: sky },
+          barGrouping: 'stacked',
+          yLeftNumFmt:  VAL_FMT_INTEGER,
+          yRightNumFmt: VAL_FMT_PERCENT_1DP,
+          // Soft-term rate runs ~1-19% over history (avg 8%); pin 0-25%.
+          yRightRange:  { min: 0, max: 0.25 },
+          barSeries,
+          lineSeries: [
+            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: 'D97706' },
           ],
           anchor: standardAnchor,
         },
-        helperCols: [{
-          key: 'in_firm_term',
-          header: 'Leases In Firm Term (TTM)',
-          format: 'integer_count',
-          width: 22,
-          getValue: (row) => {
-            const total   = row.total_leases_active;
-            const outside = row.leases_outside_firm_term;
-            if (total == null || outside == null) return null;
-            return Math.max(0, Number(total) - Number(outside));
-          },
-        }],
+        helperCols: [inFirmHelper],
       };
     }
 
