@@ -153,3 +153,36 @@ manually: **17,875 gov rows mirrored**. Results, all verified live:
 HashAggregate (`lcc_match_buyer_parent_by_name` nested loop) runs on EVERY
 queue read and is the 5-7s floor under the 25s band-aid. Pairs with the dia
 owner-facts leg + chain phase 3(c) as the natural next round.
+
+## R7 — Decision Center: ALL THREE SLICES SHIPPED + VERIFIED (PR #1063, 2026-06-05/07)
+
+- **Slice 1 (perf):** `lcc_buyer_spe_resolved` + `lcc_priority_queue_resolved`
+  cache-or-live tables (empty cache = exact live behavior); band membership
+  byte-identical; queue API ~1.8-2.7s end-to-end (was 6.7s), counts 68ms;
+  25s band-aid removed; crons */15 + */5 active. Root cause was a 1.05M-row
+  planner mis-estimate on the SPE view consumed 3× per read.
+- **Slice 2 (shell + lanes):** `lcc_decisions` (soft-disposition, ids+scalars
+  context) + open/verdict/refresh RPCs + cron; Decision Center UI (Review
+  Console renamed) with "Confirm the true owner" (142 — the
+  true_owner_known_connect subset of P0.4, rent-ranked, ARLINGTON/Shooshan on
+  top) and "Buyer parents & SF mapping" (18 incl. USGBF sponsor question);
+  legacy lanes under "More review work". **Verification caught a silent
+  effect failure** (research verdict recorded success without writing the
+  task) — fixed effect-first/outcome-truthful; closed-loop re-verified on the
+  same reopened decision (real research_tasks row, honest effects, count 141).
+- **Slice 3 (gated write-back):** `gov_apply_manual_true_owner()` RPC
+  (SECURITY DEFINER, service_role-only, dry_run DEFAULT TRUE, idempotent)
+  writing the full gov provenance chain (manual_change_events,
+  field_value_provenance rank-90 override, provenance_event_log
+  source='manual_decision', ownership_history manual_correction). LCC `stale`
+  verdict: record-only until **`DECISION_GOV_WRITEBACK=on`** in Railway env
+  AND gov subject; dia falls through to record-only (owner-facts leg
+  deferred). Verified on synthetic row 990000001 only; zero residue.
+
+**Scott's activation checklist:** (1) merge + Railway redeploy; (2) work a few
+lane cards (USGBF sponsor, an SF mapping, a Shooshan-class stale verdict with
+`dry_run` preview); (3) when satisfied, set `DECISION_GOV_WRITEBACK=on` —
+accumulated `stale_pending_writeback` verdicts can then be re-applied/flushed.
+**Backlog still open:** dia owner-facts leg; chain phase 3(c); Decision Center
+Phases 2-3 (convert legacy lanes; gate-predicate sweep; automation→lane
+funnel); duplicate sale activity_events (~1s apart).
