@@ -581,9 +581,32 @@ async function handlePriorityQueueList(req, res) {
   // the queue to one row per band, so a plain select returns every band.
   const countsPath = 'v_priority_queue_band_counts?select=priority_band,n';
 
+  // R6 hotfix (2026-06-05): the queue page hard-downed with a blanket 500.
+  // Root cause: v_priority_queue_enriched materializes the full priority-queue
+  // CTE (16k entities + the buyer-parent rollup) on every read — ~5-7s warm,
+  // unfiltered. The default `Prefer: count=exact` made PostgREST count the whole
+  // (unbounded) source on top of that; with count serialization + network it
+  // crept past fetchWithTimeout's 8s AbortController. The abort REJECTED the
+  // opsQuery promise → Promise.all rejected → withErrorHandler → 500.
+  // (priority-band dodged it: an entity_id filter pushes down and prunes the
+  // view, so its count was trivial.) Two changes make this read robust:
+  //   1. countMode:'none' — the handler derives `total` from the band-counts
+  //      rows and never consumes itemsR.count, so the exact COUNT was pure
+  //      (fatal) waste. Dropping it removes the extra full-source pass.
+  //   2. timeoutMs:25000 — generous headroom so the inherently ~5-7s view read
+  //      can succeed instead of being aborted into a 500. (The view's cost is a
+  //      separate, larger optimization; tracked for follow-up.)
+  // Band-counts also soft-fails independently below: a hiccup on the chips view
+  // must never take down the page — items still render with empty chips.
+  const HEAVY = { countMode: 'none', timeoutMs: 25000 };
+  const countsR0 = opsQuery('GET', countsPath, undefined, HEAVY)
+    .catch((e) => {
+      console.warn('[priority-queue] band-counts query threw:', e?.message || e);
+      return { ok: false, status: 0, data: null };
+    });
   const [itemsR, countsR] = await Promise.all([
-    opsQuery('GET', itemsPath),
-    opsQuery('GET', countsPath),
+    opsQuery('GET', itemsPath, undefined, HEAVY),
+    countsR0,
   ]);
   if (!itemsR.ok) {
     console.warn('[priority-queue] items query failed:', itemsR.status, itemsR.data);

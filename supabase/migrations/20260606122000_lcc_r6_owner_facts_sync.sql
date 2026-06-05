@@ -135,6 +135,14 @@ BEGIN
 
   DELETE FROM public.lcc_owner_facts_sync_inflight
   WHERE issued_at < NOW() - interval '24 hours';
+
+  -- Refresh planner stats after the bulk upsert. The 17.8k-row mirror is
+  -- populated in one shot; without fresh stats the planner badly misestimates
+  -- the join cardinality in v_priority_queue_band_counts /
+  -- v_priority_queue_enriched (observed 4.7-4.9s vs 0-50ms after ANALYZE,
+  -- 2026-06-05). ANALYZE is transaction-safe inside a function (unlike VACUUM),
+  -- so every future sync self-corrects the stats. (R6 hotfix, 2026-06-05)
+  ANALYZE public.lcc_property_owner_facts;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
