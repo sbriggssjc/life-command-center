@@ -172,7 +172,7 @@ names need confirming before the surgical gate — next.)
 | Task | Artifact | State |
 |----|----|----|
 | 1 (D10) | `scripts/round68b-term-backfill-from-master.mjs` + grounded bounds | **Ready for workstation dry-run → verify → commit.** Lock-mode decided: `all` + notes receipt. |
-| 2 | diagnosis (capture gap, not resolver) + JS writer-fix spec | Diagnosed; JS fix scoped (next). |
-| 3 (D12) | quartile-band n<8 suppression gate spec | Spec'd (next). |
-| 4 (D1) | bid-ask pre-2016 n≥5 gate spec | Spec'd (next). |
-| 5 (D3) | `20260713_cm_round68d_dia_valuation_index_extend_back.sql` (index `_m`+`_q`) | **APPLIED LIVE 2026-06-05.** Both start 2011-09. YOY chart-crop fix scoped (next). |
+| 2 | `sidebar-pipeline.js` — tier-3 `years_remaining` fallback at sale insert | **DONE** (rides next Railway redeploy). Derives years_remaining from `lease_expiration − sale_date` for the most-recent sale when no narrative term + no covering lease; a later lease row still upgrades via tier-1. dia-only, freeze-at-sale safe. |
+| 3 (D12) | `20260714_cm_round68b_dia_cap_quartile_gate_8.sql` (gate 4→8) | **APPLIED LIVE 2026-06-05.** Band suppressed where TTM n<8 (2005/2010 blank, 2007-08/2011+ kept); avg line untouched. |
+| 4 (D1) | bid-ask gate | **No change needed** — `cm_dialysis_bid_ask_spread_m` already gates `n_with_spread>=5` globally with the synthetic guard (`data_source IS DISTINCT FROM 'synthetic_from_sale'`) intact. 2014=10/12 mo shown, 2015=12/12, 2012-13 correctly suppressed. Lever (a) wouldn't change the 2014-floored chart. |
+| 5 (D3) | `20260713_…valuation_index_extend_back.sql` + `cm-native-chart-injector.js` floor | **APPLIED/DONE.** View live (both start 2011-09); chart `valuation_index` floor 2013→data-aware `ttm_n>=12` (≈2011) — extends the index line + YoY% overlay together. Standalone `yoy_volume_change` chart already floors 2005 (R62). |
