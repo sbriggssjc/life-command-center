@@ -1,0 +1,505 @@
+{
+  "round": "68-A",
+  "task": "Task 2 — synthesize listing history from unlinked sold deals",
+  "generated_at": "2026-06-04T23:06:46.089Z",
+  "mode": "commit",
+  "totals": {
+    "synthesizable_candidates": 1207,
+    "derivation_classes": {
+      "year_median": 1050,
+      "pooled_median": 157
+    }
+  },
+  "gap_funnel_reference": {
+    "u0_all_unlinked": 3058,
+    "u1_has_sale_date": 3058,
+    "u2_2013plus": 2678,
+    "u3_sold_price_gt_0": 2308,
+    "u4_not_excluded_from_metrics": 1608,
+    "u5_has_property": 1608,
+    "filtered_out": {
+      "pre_2013_sales": 380,
+      "sold_price_null_or_zero": 370,
+      "exclude_from_market_metrics": 700
+    },
+    "note": "Live candidate count should equal u5 (drift = source data changed since the plan was authored)."
+  },
+  "dom_rule": [
+    {
+      "yr": 2007,
+      "linked_n": 5,
+      "median_dom": 180,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2008,
+      "linked_n": 3,
+      "median_dom": 180,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2009,
+      "linked_n": 1,
+      "median_dom": 180,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2010,
+      "linked_n": 2,
+      "median_dom": 180,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2011,
+      "linked_n": 7,
+      "median_dom": 180,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2012,
+      "linked_n": 2,
+      "median_dom": 142,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2013,
+      "linked_n": 11,
+      "median_dom": 180,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2014,
+      "linked_n": 7,
+      "median_dom": 99,
+      "uses_year_median": false
+    },
+    {
+      "yr": 2015,
+      "linked_n": 24,
+      "median_dom": 140,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2016,
+      "linked_n": 24,
+      "median_dom": 115,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2017,
+      "linked_n": 69,
+      "median_dom": 143,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2018,
+      "linked_n": 113,
+      "median_dom": 171,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2019,
+      "linked_n": 114,
+      "median_dom": 213,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2020,
+      "linked_n": 116,
+      "median_dom": 170,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2021,
+      "linked_n": 136,
+      "median_dom": 172,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2022,
+      "linked_n": 98,
+      "median_dom": 176,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2023,
+      "linked_n": 63,
+      "median_dom": 187,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2024,
+      "linked_n": 53,
+      "median_dom": 222,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2025,
+      "linked_n": 38,
+      "median_dom": 267,
+      "uses_year_median": true
+    },
+    {
+      "yr": 2026,
+      "linked_n": 11,
+      "median_dom": 792,
+      "uses_year_median": false
+    }
+  ],
+  "per_year_synthetic": [
+    {
+      "year": 2012,
+      "n": 28
+    },
+    {
+      "year": 2013,
+      "n": 45
+    },
+    {
+      "year": 2014,
+      "n": 93
+    },
+    {
+      "year": 2015,
+      "n": 73
+    },
+    {
+      "year": 2016,
+      "n": 107
+    },
+    {
+      "year": 2017,
+      "n": 89
+    },
+    {
+      "year": 2018,
+      "n": 120
+    },
+    {
+      "year": 2019,
+      "n": 83
+    },
+    {
+      "year": 2020,
+      "n": 114
+    },
+    {
+      "year": 2021,
+      "n": 105
+    },
+    {
+      "year": 2022,
+      "n": 103
+    },
+    {
+      "year": 2023,
+      "n": 70
+    },
+    {
+      "year": 2024,
+      "n": 101
+    },
+    {
+      "year": 2025,
+      "n": 76
+    },
+    {
+      "year": 2026,
+      "n": 0
+    }
+  ],
+  "recovery_table": [
+    {
+      "year": 2012,
+      "current_listings": 4,
+      "synthetic_add": 28,
+      "combined": 32
+    },
+    {
+      "year": 2013,
+      "current_listings": 18,
+      "synthetic_add": 45,
+      "combined": 63
+    },
+    {
+      "year": 2014,
+      "current_listings": 24,
+      "synthetic_add": 93,
+      "combined": 117
+    },
+    {
+      "year": 2015,
+      "current_listings": 40,
+      "synthetic_add": 73,
+      "combined": 113
+    },
+    {
+      "year": 2016,
+      "current_listings": 56,
+      "synthetic_add": 107,
+      "combined": 163
+    },
+    {
+      "year": 2017,
+      "current_listings": 145,
+      "synthetic_add": 89,
+      "combined": 234
+    },
+    {
+      "year": 2018,
+      "current_listings": 185,
+      "synthetic_add": 120,
+      "combined": 305
+    },
+    {
+      "year": 2019,
+      "current_listings": 203,
+      "synthetic_add": 83,
+      "combined": 286
+    },
+    {
+      "year": 2020,
+      "current_listings": 155,
+      "synthetic_add": 114,
+      "combined": 269
+    },
+    {
+      "year": 2021,
+      "current_listings": 149,
+      "synthetic_add": 105,
+      "combined": 254
+    },
+    {
+      "year": 2022,
+      "current_listings": 113,
+      "synthetic_add": 103,
+      "combined": 216
+    },
+    {
+      "year": 2023,
+      "current_listings": 147,
+      "synthetic_add": 70,
+      "combined": 217
+    },
+    {
+      "year": 2024,
+      "current_listings": 139,
+      "synthetic_add": 101,
+      "combined": 240
+    },
+    {
+      "year": 2025,
+      "current_listings": 20,
+      "synthetic_add": 76,
+      "combined": 96
+    },
+    {
+      "year": 2026,
+      "current_listings": 149,
+      "synthetic_add": 0,
+      "combined": 149
+    }
+  ],
+  "sample_20": [
+    {
+      "sale_id": 14249,
+      "property_id": 37852,
+      "sale_date": "2026-05-22",
+      "sold_price": 2722500,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-11-28"
+    },
+    {
+      "sale_id": 13255,
+      "property_id": 32485,
+      "sale_date": "2026-05-07",
+      "sold_price": 5244000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-11-13"
+    },
+    {
+      "sale_id": 9004,
+      "property_id": 37788,
+      "sale_date": "2026-05-07",
+      "sold_price": 3800000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-11-13"
+    },
+    {
+      "sale_id": 13267,
+      "property_id": 30181,
+      "sale_date": "2026-04-24",
+      "sold_price": 1379875,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-31"
+    },
+    {
+      "sale_id": 14268,
+      "property_id": 25334,
+      "sale_date": "2026-04-23",
+      "sold_price": 1207269,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-30"
+    },
+    {
+      "sale_id": 14315,
+      "property_id": 26914,
+      "sale_date": "2026-04-22",
+      "sold_price": 870000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-29"
+    },
+    {
+      "sale_id": 8008,
+      "property_id": 37467,
+      "sale_date": "2026-04-07",
+      "sold_price": 3313000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-14"
+    },
+    {
+      "sale_id": 14274,
+      "property_id": 27782,
+      "sale_date": "2026-04-02",
+      "sold_price": 3000000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-09"
+    },
+    {
+      "sale_id": 8009,
+      "property_id": 37468,
+      "sale_date": "2026-04-01",
+      "sold_price": 1231890,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-08"
+    },
+    {
+      "sale_id": 12090,
+      "property_id": 35356,
+      "sale_date": "2026-04-01",
+      "sold_price": 2600000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-08"
+    },
+    {
+      "sale_id": 8134,
+      "property_id": 37513,
+      "sale_date": "2026-03-31",
+      "sold_price": 2858780,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-07"
+    },
+    {
+      "sale_id": 7995,
+      "property_id": 37461,
+      "sale_date": "2026-03-31",
+      "sold_price": 1598730,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-07"
+    },
+    {
+      "sale_id": 14287,
+      "property_id": 44175,
+      "sale_date": "2026-03-31",
+      "sold_price": 2858780,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-07"
+    },
+    {
+      "sale_id": 8012,
+      "property_id": 37469,
+      "sale_date": "2026-03-30",
+      "sold_price": 130000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-06"
+    },
+    {
+      "sale_id": 14306,
+      "property_id": 29586,
+      "sale_date": "2026-03-26",
+      "sold_price": 6050000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-10-02"
+    },
+    {
+      "sale_id": 13294,
+      "property_id": 23356,
+      "sale_date": "2026-03-13",
+      "sold_price": 4476111,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-09-19"
+    },
+    {
+      "sale_id": 7993,
+      "property_id": 35760,
+      "sale_date": "2026-03-05",
+      "sold_price": 4045000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-09-11"
+    },
+    {
+      "sale_id": 9031,
+      "property_id": 23423,
+      "sale_date": "2026-03-01",
+      "sold_price": 3728888,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-09-07"
+    },
+    {
+      "sale_id": 9034,
+      "property_id": 24030,
+      "sale_date": "2026-03-01",
+      "sold_price": 3622050,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-09-07"
+    },
+    {
+      "sale_id": 9022,
+      "property_id": 3051253,
+      "sale_date": "2026-03-01",
+      "sold_price": 8525000,
+      "sale_year": 2026,
+      "dom_used": 175,
+      "dom_class": "pooled_median",
+      "synth_listing_date": "2025-09-07"
+    }
+  ]
+}
