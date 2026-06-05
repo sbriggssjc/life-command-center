@@ -124,6 +124,9 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
+    case 'decisions':                  return handleDecisionsList(req, res);
+    case 'decision-verdict':           return handleDecisionVerdict(req, res);
+    case 'decision-sf-search':         return handleDecisionSfSearch(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -631,6 +634,253 @@ async function handlePriorityQueueList(req, res) {
     .map(b => ({ band: b, n: countMap[b] }));
 
   return res.status(200).json({ counts, total, band: band || null, items });
+}
+
+// ============================================================================
+// DECISION CENTER (R7 Phase 1, Slice 2 — 2026-06-07)
+// ============================================================================
+// The Review Console becomes the Decision Center: one surface, lanes keyed by
+// the QUESTION being asked (decision_type). The decision record (lcc_decisions)
+// is first-class; verdicts RIDE EXISTING MACHINERY (ensureEntityLink, the
+// lcc_buyer_parents upsert, activity_events research tasks) — the Decision
+// Center is a router + recorder, not a new pipeline.
+//
+//   GET  /api/admin?_route=decisions[&type=<dt>][&summary=1][&limit][&offset]
+//   POST /api/admin?_route=decision-verdict   {decision_id, verdict, payload}
+//   GET  /api/admin?_route=decision-sf-search&name=<parent name>
+//
+// Lanes in this slice: confirm_true_owner (142 P0.4 true_owner_known_connect),
+// confirm_buyer_parent + map_sf_parent_account (18 buyer parents incl. USGBF).
+// The "Stale — new owner is…" verdict is RECORD-ONLY here (no domain write —
+// the cross-domain gov true_owner write-back is Slice 3, behind Scott's
+// explicit blessing). Re-parent / rename anchor verdicts are deferred too.
+// ============================================================================
+
+// Refresh the priority-queue cache immediately when a verdict's effect should
+// move a row between bands (the Slice-1 staleness contract), instead of waiting
+// out the 5-minute cron tick. Best-effort: a refresh hiccup never fails the
+// verdict (the cron still catches up).
+async function refreshQueueAfterDecision() {
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); }
+  catch (e) { console.warn('[decision-verdict] queue refresh skipped:', e?.message || e); }
+}
+
+async function handleDecisionsList(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  // Summary mode: open-decision counts per lane (the chip row).
+  if (req.query.summary) {
+    const r = await opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n');
+    const lanes = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    const total = lanes.reduce((s, l) => s + (Number(l.n) || 0), 0);
+    return res.status(200).json({ lanes, total });
+  }
+
+  const type = req.query.type ? String(req.query.type) : null;
+  if (!type) return res.status(400).json({ error: 'type (decision_type) or summary=1 required' });
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
+  const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
+
+  // Workable top-N ranked by $ value; universe count returned separately so the
+  // UI can demote it to a subtitle.
+  const selectCols = 'id,decision_type,status,subject_entity_id,subject_domain,'
+    + 'subject_property_id,subject_ref,question,context,rank_value,created_at';
+  const itemsPath = 'lcc_decisions?select=' + selectCols
+    + '&status=eq.open&decision_type=eq.' + pgFilterVal(type)
+    + '&order=rank_value.desc.nullslast,created_at.asc'
+    + '&limit=' + limit + '&offset=' + offset;
+  const [itemsR, countR] = await Promise.all([
+    opsQuery('GET', itemsPath),
+    opsQuery('GET', 'lcc_decisions?select=id&status=eq.open&decision_type=eq.'
+      + pgFilterVal(type) + '&limit=1', undefined, { countMode: 'exact' }),
+  ]);
+  if (!itemsR.ok) return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
+  return res.status(200).json({
+    type,
+    total: (countR.ok && typeof countR.count === 'number') ? countR.count : null,
+    items: Array.isArray(itemsR.data) ? itemsR.data : [],
+  });
+}
+
+// SF account typeahead for the buyer-parent mapping verdict.
+async function handleDecisionSfSearch(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const name = String(req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  try {
+    const { findSalesforceAccountByName } = await import('./_shared/salesforce.js');
+    const r = await findSalesforceAccountByName(name);
+    return res.status(200).json(r);
+  } catch (err) {
+    console.error('[decision-sf-search]', err?.message || err);
+    return res.status(500).json({ error: 'sf_search_failed', message: err?.message });
+  }
+}
+
+async function handleDecisionVerdict(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const body = req.body || {};
+  const decisionId = Number(body.decision_id);
+  const verdict = String(body.verdict || '').toLowerCase();
+  const payload = (body.payload && typeof body.payload === 'object') ? body.payload : {};
+  if (!Number.isFinite(decisionId)) return res.status(400).json({ error: 'decision_id (number) required' });
+  if (!verdict) return res.status(400).json({ error: 'verdict required' });
+
+  // Load the decision so we can dispatch on its type + subject.
+  const dR = await opsQuery('GET', 'lcc_decisions?id=eq.' + decisionId + '&select=*&limit=1');
+  const decision = (dR.ok && Array.isArray(dR.data)) ? dR.data[0] : null;
+  if (!decision) return res.status(404).json({ error: 'decision_not_found' });
+  if (decision.status !== 'open') {
+    return res.status(409).json({ error: 'decision_not_open', status: decision.status });
+  }
+
+  const record = async (v, status, verdictPayload, effects) => {
+    const r = await opsQuery('POST', 'rpc/lcc_record_decision_verdict', {
+      p_decision_id: decisionId, p_verdict: v, p_status: status,
+      p_verdict_payload: verdictPayload || null, p_effects: effects || null,
+      p_decided_by: user.id || null,
+    });
+    return r;
+  };
+  const logResearch = async (title, entityId, domain) => {
+    try {
+      await opsQuery('POST', 'activity_events', {
+        workspace_id: decision.workspace_id || null, actor_id: user.id,
+        category: 'status_change', title, body: 'Raised from the Decision Center.',
+        entity_id: entityId || null, source_type: 'system', domain: domain || null,
+        visibility: 'shared', metadata: { decision_id: decisionId, decision_type: decision.decision_type },
+        occurred_at: new Date().toISOString(),
+      });
+    } catch (_e) { /* non-fatal */ }
+  };
+
+  try {
+    // ---- confirm_true_owner -------------------------------------------------
+    if (decision.decision_type === 'confirm_true_owner') {
+      if (verdict === 'correct' || verdict === 'correct_connect') {
+        // Confirm the domain true_owner is current and hand off to the existing
+        // connect ladder (LCC-local; the entity leaves P0.4 once connection
+        // completes there — no band move recorded here).
+        const effects = { recorded: 'true_owner_confirmed_current', next: 'connect_ladder' };
+        await record('correct_connect', 'decided', payload, effects);
+        return res.status(200).json({ ok: true, verdict: 'correct_connect',
+          next: { action: 'connect', entity_id: decision.subject_entity_id,
+            source_domain: decision.subject_domain, source_property_id: decision.subject_property_id } });
+      }
+      if (verdict === 'stale') {
+        // RECORD-ONLY in Slice 2. The cross-domain gov true_owner write-back is
+        // Slice 3 (behind Scott's blessing) — we capture the judgment + proposed
+        // owner now and defer the write. No domain DB is touched.
+        const vp = { proposed_owner_name: payload.proposed_owner_name || null,
+          proposed_owner_entity_id: payload.proposed_owner_entity_id || null };
+        await record('stale_pending_writeback', 'decided', vp, { writeback: 'deferred_slice3' });
+        return res.status(200).json({ ok: true, verdict: 'stale_pending_writeback',
+          deferred: 'slice3_writeback',
+          note: 'Recorded. The domain true_owner write-back ships in Slice 3.' });
+      }
+      if (verdict === 'research') {
+        await logResearch('Research task: confirm true owner for ' + (decision.context?.entity_name || 'entity'),
+          decision.subject_entity_id, decision.subject_domain);
+        await record('research', 'decided', payload, { research_task: true });
+        return res.status(200).json({ ok: true, verdict: 'research' });
+      }
+      if (verdict === 'skip') {
+        await record('skip', 'skipped', null, null);
+        return res.status(200).json({ ok: true, verdict: 'skip' });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- confirm_buyer_parent (sponsor confirmation, e.g. USGBF) -----------
+    if (decision.decision_type === 'confirm_buyer_parent') {
+      if (verdict === 'confirm_sponsor' || verdict === 'confirm_parent') {
+        const pid = decision.subject_entity_id;
+        const pr = await opsQuery('PATCH', 'lcc_buyer_parents?parent_entity_id=eq.' + pgFilterVal(pid),
+          { confirmed_by: user.id, confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+        if (!pr.ok) return res.status(502).json({ error: 'confirm_failed', detail: pr.data });
+        await record('confirm_sponsor', 'decided', payload, { lcc_buyer_parents: 'confirmed' });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict: 'confirm_sponsor', parent_entity_id: pid });
+      }
+      if (verdict === 'subsidiary_of' || verdict === 'rename') {
+        return res.status(501).json({ error: 'deferred', detail: 're-parent / rename anchor lands in a later slice' });
+      }
+      if (verdict === 'research') {
+        await logResearch('Research task: confirm controlling sponsor for ' + (decision.context?.parent_name || 'buyer parent'),
+          decision.subject_entity_id, decision.subject_domain);
+        await record('research', 'decided', payload, { research_task: true });
+        return res.status(200).json({ ok: true, verdict: 'research' });
+      }
+      if (verdict === 'skip') {
+        await record('skip', 'skipped', null, null);
+        return res.status(200).json({ ok: true, verdict: 'skip' });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- map_sf_parent_account ---------------------------------------------
+    if (decision.decision_type === 'map_sf_parent_account') {
+      if (verdict === 'map') {
+        const sfId = String(payload.sf_account_id || '').trim();
+        const sfName = payload.sf_account_name ? String(payload.sf_account_name) : null;
+        if (!sfId) return res.status(400).json({ error: 'payload.sf_account_id required' });
+        const pid = decision.subject_entity_id;
+        // 1) lcc_buyer_parents is the routing source of truth — set it + clear
+        //    the hold so v_lcc_government_buyer_sync_health flips ready_to_sync.
+        const pr = await opsQuery('PATCH', 'lcc_buyer_parents?parent_entity_id=eq.' + pgFilterVal(pid),
+          { sf_account_id: sfId, sf_account_name: sfName, needs_sf_mapping: false,
+            updated_at: new Date().toISOString() });
+        if (!pr.ok) return res.status(502).json({ error: 'map_failed', detail: pr.data });
+        // 2) Mirror into the entity graph (best-effort) so the parent carries a
+        //    Salesforce identity. ensureEntityLink canonicalizes the system.
+        let identityLinked = false;
+        try {
+          const { ensureEntityLink } = await import('./_shared/entity-link.js');
+          const link = await ensureEntityLink({
+            workspaceId: decision.workspace_id || null, userId: user.id,
+            sourceSystem: 'salesforce', sourceType: 'Account', externalId: sfId,
+            entityId: pid, seedFields: sfName ? { name: sfName } : {},
+            metadata: { via: 'decision_center', decision_id: decisionId },
+          });
+          identityLinked = !!(link && link.ok);
+        } catch (e) { console.warn('[decision-verdict] sf identity link skipped:', e?.message || e); }
+        await record('map', 'decided', { sf_account_id: sfId, sf_account_name: sfName },
+          { lcc_buyer_parents: 'mapped', external_identity: identityLinked });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict: 'map', parent_entity_id: pid,
+          sf_account_id: sfId, identity_linked: identityLinked });
+      }
+      if (verdict === 'create_later') {
+        await record('create_later', 'decided', payload, { sf_mapping: 'hold' });
+        return res.status(200).json({ ok: true, verdict: 'create_later' });
+      }
+      if (verdict === 'confirm_sponsor') {
+        // A map card can also bless the sponsor inline.
+        const pid = decision.subject_entity_id;
+        const pr = await opsQuery('PATCH', 'lcc_buyer_parents?parent_entity_id=eq.' + pgFilterVal(pid),
+          { confirmed_by: user.id, confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+        if (!pr.ok) return res.status(502).json({ error: 'confirm_failed', detail: pr.data });
+        await record('confirm_sponsor', 'decided', payload, { lcc_buyer_parents: 'confirmed' });
+        return res.status(200).json({ ok: true, verdict: 'confirm_sponsor', parent_entity_id: pid });
+      }
+      if (verdict === 'skip') {
+        await record('skip', 'skipped', null, null);
+        return res.status(200).json({ ok: true, verdict: 'skip' });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    return res.status(400).json({ error: 'unsupported_decision_type', decision_type: decision.decision_type });
+  } catch (err) {
+    console.error('[decision-verdict]', err?.message || err);
+    return res.status(500).json({ error: 'verdict_failed', message: err?.message });
+  }
 }
 
 // ============================================================================

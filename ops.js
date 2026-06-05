@@ -1288,26 +1288,55 @@ async function renderOpsHealthPage() {
 }
 window.renderOpsHealthPage = renderOpsHealthPage;
 
+// ── Decision Center (R7 Phase 1, Slice 2 — 2026-06-07) ─────────────────────
+// The Review Console becomes the Decision Center: lanes keyed by the QUESTION
+// being asked. Decision lanes (backed by lcc_decisions) render on top; the
+// legacy review-count lanes follow under "More review work" until Phase 2
+// converts them. Each decision lane: question → subject+context card → 2-4
+// one-click verdicts → workable top-N by $ value, self-propelling.
+function _dcMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
+function _dcLaneCard(count, label, sub, onclick, tone) {
+  const countStr = (typeof count === 'number') ? count.toLocaleString() : '—';
+  return '<button type="button" class="rc-lane ' + (tone || '') + '" onclick="' + onclick + '">'
+    + '<div class="rc-lane-count">' + countStr + '</div>'
+    + '<div class="rc-lane-label">' + esc(label) + '</div>'
+    + (sub ? '<div class="rc-lane-parts">' + esc(sub) + '</div>' : '')
+    + '<div class="rc-lane-cta">Decide →</div></button>';
+}
+
 async function renderReviewConsolePage() {
   const el = document.getElementById('reviewConsoleContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = (typeof opsPerf === 'function') ? opsPerf('render:review_console') : { end() {} };
 
-  const res = await opsApi('/api/review-counts');
-  if (!res.ok) {
-    el.innerHTML = '<div class="ops-empty">Could not load review counts.<br><small>' + esc(res.error || '') + '</small></div>';
-    perf.end();
-    return;
+  // Decision-lane counts (top) + legacy review-count lanes (below), in parallel.
+  const [decR, res] = await Promise.all([
+    opsApi('/api/decisions?summary=1'),
+    opsApi('/api/review-counts'),
+  ]);
+
+  let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
+  html += '<div class="rc-intro">Every manual decision in one place, organized by the question being asked. Pick a lane, work the top items by value, and record a verdict to move each subject to the next bucket.</div>';
+
+  // ---- Decision lanes (lcc_decisions) ----
+  const dc = {};
+  if (decR.ok && decR.data && Array.isArray(decR.data.lanes)) {
+    decR.data.lanes.forEach(function (l) { dc[l.decision_type] = Number(l.n) || 0; });
   }
-  const lanes = (res.data && Array.isArray(res.data.lanes)) ? res.data.lanes : [];
+  const trueOwnerN = dc['confirm_true_owner'] || 0;
+  const buyerN = (dc['confirm_buyer_parent'] || 0) + (dc['map_sf_parent_account'] || 0);
+  html += '<div class="rc-lanes">';
+  html += _dcLaneCard(trueOwnerN, 'Confirm the true owner', 'Stale-vs-current domain owner verdicts',
+    "renderDecisionLane('confirm_true_owner')", trueOwnerN > 0 ? 'rc-lane-red' : '');
+  html += _dcLaneCard(buyerN, 'Buyer parents & SF mapping', 'Confirm sponsors · map to Salesforce parent',
+    'renderBuyerParentLane()', buyerN > 0 ? 'rc-lane-yellow' : '');
+  html += '</div>';
 
-  let html = '<div class="ops-header"><h2>Review Console</h2></div>';
-  html += '<div class="rc-intro">One home for review work, organized by what the job is — not which domain it lives in. Each lane opens the surface that owns that work today.</div>';
-
-  if (!lanes.length) {
-    html += '<div class="ops-empty">No review lanes returned.</div>';
-  } else {
+  // ---- Legacy review-count lanes (Phase 2 will convert these) ----
+  const lanes = (res.ok && res.data && Array.isArray(res.data.lanes)) ? res.data.lanes : [];
+  if (lanes.length) {
+    html += '<div class="rc-subhead" style="margin:18px 0 8px;font-weight:600;color:var(--text2)">More review work</div>';
     html += '<div class="rc-lanes">';
     lanes.forEach(function (ln) {
       const c = ln.count;
@@ -1416,6 +1445,171 @@ function _sosAdvanceToNext() {
   }
 }
 window.resolveOwnerLink = resolveOwnerLink;
+
+// ── Decision Center lanes (R7 Phase 1, Slice 2 — 2026-06-07) ───────────────
+// Inline worklists for the lcc_decisions lanes. Card anatomy: subject+context,
+// then one-click verdicts that record + move the subject forward (the SOS-lane
+// self-propelling model). Verdicts ride existing machinery via
+// /api/decision-verdict; the surface is a router + recorder.
+let _dcItems = {};
+
+function _dcCardHTML(it, isNext) {
+  const c = it.context || {};
+  const id = it.id;
+  let body = '', actions = '';
+  if (it.decision_type === 'confirm_true_owner') {
+    const rent = _dcMoney(c.annual_rent);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.entity_name || 'Entity') + '</span>'
+      + (rent ? '<div class="q-item-badges"><span class="q-badge">' + rent + '/yr</span></div>' : '') + '</div>'
+      + '<div class="q-item-meta">Domain true owner: <b>' + esc(c.true_owner_name || '—') + '</b> — current, or stale (pre-acquisition)?</div>'
+      + (c.source_property_address ? '<div class="q-item-meta">Property: ' + esc(c.source_property_address)
+          + (c.source_property_state ? ', ' + esc(c.source_property_state) : '') + '</div>' : '');
+    actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'correct\')">Correct — connect</button>'
+      + '<button class="q-action" onclick="dcStale(' + id + ')">Stale — new owner…</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'skip\')">Skip</button>';
+  } else if (it.decision_type === 'confirm_buyer_parent') {
+    const rent = _dcMoney(c.rollup_annual_rent);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.parent_name || 'Buyer parent') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + (Number(c.spe_count) || 0) + ' SPEs</span>'
+      + (rent ? '<span class="q-badge">' + rent + '/yr</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">Confirm the controlling sponsor before any buy-side opportunity is opened on the parent.</div>';
+    actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'confirm_sponsor\')">Confirm sponsor</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'skip\')">Skip</button>';
+  } else if (it.decision_type === 'map_sf_parent_account') {
+    const rent = _dcMoney(c.rollup_annual_rent);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.parent_name || 'Buyer parent') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + (Number(c.spe_count) || 0) + ' SPEs</span>'
+      + (rent ? '<span class="q-badge">' + rent + '/yr</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">Map to the Salesforce <b>parent</b> account (never a subsidiary SPE). Held government-buyer syncs release once mapped.</div>'
+      + '<div class="q-item-meta" id="dcsf-' + id + '"></div>';
+    actions = '<button class="q-action primary" onclick="dcFindSf(' + id + ')">Find SF account →</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_later\')">No account — hold</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'skip\')">Skip</button>';
+  }
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
+    + '<div class="q-actions">' + actions + '</div></div>';
+}
+
+async function renderDecisionLane(type) {
+  const el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50');
+  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load decisions.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  const total = res.data ? res.data.total : null;
+  const titles = { confirm_true_owner: 'Confirm the true owner' };
+  const intros = { confirm_true_owner: 'The domain true owner may be stale (pre-acquisition). Confirm it’s current and connect, mark it stale with the new owner (recorded now; write-back ships in Slice 3), or send to research.' };
+  let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
+    + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
+  html += '<div class="rc-intro">' + esc(intros[type] || '') + '</div>';
+  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
+    + (total != null ? ' · ' + total.toLocaleString() + ' in this lane' : '') + '</div>';
+  _dcItems = {};
+  items.forEach(function (it, ix) { _dcItems[it.id] = it; html += _dcCardHTML(it, ix === 0); });
+  el.innerHTML = html;
+}
+window.renderDecisionLane = renderDecisionLane;
+
+async function renderBuyerParentLane() {
+  const el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const [a, b] = await Promise.all([
+    opsApi('/api/decisions?type=confirm_buyer_parent&limit=50'),
+    opsApi('/api/decisions?type=map_sf_parent_account&limit=50'),
+  ]);
+  const items = [].concat(
+    (a.ok && a.data && a.data.items) || [],
+    (b.ok && b.data && b.data.items) || []);
+  let html = '<div class="ops-header"><h2>Buyer parents &amp; SF mapping</h2>'
+    + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
+  html += '<div class="rc-intro">Confirm controlling sponsors and map each repeat-buyer parent to its Salesforce parent account. One buyer, one account — the opportunity routes to the parent, never a subsidiary SPE.</div>';
+  if (!items.length) { html += '<div class="ops-empty">All buyer parents mapped &amp; confirmed. ✓</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> to decide</div>';
+  _dcItems = {};
+  items.forEach(function (it, ix) { _dcItems[it.id] = it; html += _dcCardHTML(it, ix === 0); });
+  el.innerHTML = html;
+}
+window.renderBuyerParentLane = renderBuyerParentLane;
+
+function dcStale(id) {
+  const name = (typeof prompt === 'function')
+    ? prompt('Current (new) owner name. Recorded now — the domain true_owner write-back ships in Slice 3:')
+    : '';
+  if (name == null) return;
+  dcVerdict(id, 'stale', { proposed_owner_name: String(name || '').trim() || null });
+}
+window.dcStale = dcStale;
+
+async function dcFindSf(id) {
+  const it = _dcItems[id];
+  const name = (it && it.context) ? it.context.parent_name : '';
+  const slot = document.getElementById('dcsf-' + id);
+  if (slot) slot.innerHTML = '<span class="spinner"></span> searching Salesforce…';
+  const res = await opsApi('/api/decision-sf-search?name=' + encodeURIComponent(name || ''));
+  if (!res.ok || !res.data) { if (slot) slot.textContent = 'SF search failed.'; return; }
+  const acct = res.data.account;
+  if (acct && acct.Id) {
+    const safeName = String(acct.Name || '').replace(/'/g, '’');
+    slot.innerHTML = 'Match: <b>' + esc(acct.Name) + '</b> '
+      + '<button class="q-action primary" onclick="dcMap(' + id + ', \'' + esc(acct.Id) + '\', \'' + esc(safeName) + '\')">Map to ' + esc(acct.Name) + '</button>';
+  } else {
+    slot.innerHTML = 'No good Salesforce match'
+      + (res.data.best_candidate_name ? ' (closest: ' + esc(res.data.best_candidate_name) + ')' : '')
+      + '. <button class="q-action" onclick="dcVerdict(' + id + ', \'create_later\')">Hold — create later</button>';
+  }
+}
+window.dcFindSf = dcFindSf;
+function dcMap(id, sfId, sfName) { dcVerdict(id, 'map', { sf_account_id: sfId, sf_account_name: sfName }); }
+window.dcMap = dcMap;
+
+async function dcVerdict(id, verdict, payload) {
+  const res = await opsApi('/api/decision-verdict', {
+    method: 'POST', body: JSON.stringify({ decision_id: id, verdict: verdict, payload: payload || {} }),
+  });
+  const row = document.getElementById('dc-' + id);
+  if (res.ok && res.data && res.data.ok) {
+    if (row) {
+      row.classList.add('resolved');
+      row.style.opacity = '0.5';
+      const label = res.data.deferred ? 'Recorded — write-back in Slice 3' : ('✓ ' + (res.data.verdict || verdict));
+      let fwd = '';
+      const nx = res.data.next;
+      if (nx && nx.action === 'connect' && nx.source_property_id != null && typeof openUnifiedDetail === 'function') {
+        fwd = '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(nx.source_domain || 'gov')
+          + '\', {property_id: ' + nx.source_property_id + '}, {}, \'Ownership &amp; CRM\')">Connect →</button>';
+      }
+      const qa = row.querySelector('.q-actions');
+      if (qa) qa.innerHTML = '<span class="q-badge">' + label + '</span>' + fwd;
+    }
+    if (typeof showToast === 'function') showToast('Recorded', 'success');
+    _dcAdvance();
+  } else {
+    if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+window.dcVerdict = dcVerdict;
+
+function _dcAdvance() {
+  const scope = document.getElementById('reviewConsoleContent');
+  if (!scope) return;
+  const pending = scope.querySelectorAll('.q-item[id^="dc-"]:not(.resolved)');
+  const rem = document.getElementById('dcRemaining');
+  if (rem) rem.textContent = pending.length;
+  scope.querySelectorAll('.q-item.pq-next').forEach(function (n) { n.classList.remove('pq-next'); });
+  if (pending.length) {
+    pending[0].classList.add('pq-next');
+    pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else {
+    const prog = scope.querySelector('.rc-progress');
+    if (prog) prog.innerHTML = 'All decided in this lane ✓';
+    if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
+  }
+}
 
 // ── Priority Queue (BD front door, 2026-06-03) ─────────────────────────────
 // The 'start here' worklist. Renders the doctrinal priority bands from

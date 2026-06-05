@@ -1051,3 +1051,67 @@ is verified live. Connection-predicate caching was evaluated and **deferred**:
 the predicate measured 95ms standalone and is not on the critical path once the
 queue is materialized — not worth a trigger on the hot `external_identities` /
 `entity_relationships` write paths.
+
+## R7 Phase 1 — Decision Center shell + first two lanes (Slice 2, 2026-06-07)
+
+The Review Console becomes the **Decision Center** (same nav slot, renamed):
+one surface, lanes keyed by the QUESTION being asked. The decision record is
+first-class; verdicts ride existing machinery — the surface is a router +
+recorder, not a new pipeline. Builds on Slice 1's materialized queue. Applied
+live 2026-06-07; migration committed (idempotent).
+
+### DB (migration `20260607121000`, LCC Opps)
+- **`lcc_decisions`** — soft-disposition record (`open|decided|skipped|
+  superseded`, never hard-deleted; the audit trail for "why is this in this
+  bucket"). `context` jsonb is **ids + scalar facts only** (no inline docs —
+  the artifact-offload lesson). Partial unique index = one open decision per
+  `(decision_type, subject)`.
+- **`lcc_open_decision()`** — the one funnel engines/seeders call (idempotent on
+  the open-subject key). **`lcc_record_decision_verdict()`** stamps verdict +
+  effects and moves the row off `open`. **`lcc_refresh_decisions()`** seeds +
+  sweeps (auto-closes decisions whose subject no longer meets the predicate);
+  cron `lcc-decision-refresh` (*/15). **`v_lcc_decision_open_counts`** drives
+  the lane chips.
+- Seeded: **confirm_true_owner = 142** (P0.4 `true_owner_known_connect`),
+  **map_sf_parent_account = 17**, **confirm_buyer_parent = 1** (USGBF —
+  name-flagged unconfirmed sponsor; the other 17 need_sf_mapping parents ask
+  the mapping question).
+
+### API (`api/admin.js` + `server.js` + `vercel.json`)
+- `GET  /api/decisions?type=<dt>` — workable top-N by `rank_value` ($ value) +
+  universe count; `?summary=1` → per-lane open counts.
+- `POST /api/decision-verdict {decision_id, verdict, payload}` — dispatches by
+  `(decision_type, verdict)` to the **LCC-local** effect and records it:
+  - confirm_true_owner: `correct` → confirm + hand off to the connect ladder
+    (`next:{action:'connect',…}`); `research` → activity_events task; `skip`.
+    **`stale` is RECORD-ONLY** (`verdict='stale_pending_writeback'`,
+    `effects.writeback='deferred_slice3'`) — no domain DB is touched; the gov
+    `true_owner` write-back is **Slice 3** behind Scott's blessing.
+  - confirm_buyer_parent: `confirm_sponsor` → sets `lcc_buyer_parents.
+    confirmed_*`. map_sf_parent_account: `map` → sets `sf_account_id` +
+    `needs_sf_mapping=false` (releases held government_buyer syncs) and mirrors
+    a Salesforce identity via `ensureEntityLink` (best-effort); `create_later`.
+    Re-parent / rename anchor deferred.
+- `GET /api/decision-sf-search?name=` — `findSalesforceAccountByName` typeahead.
+- **Staleness hook (Slice-1 contract):** band-moving verdicts call
+  `lcc_refresh_priority_queue_resolved()` so the queue updates immediately
+  instead of waiting the 5-min tick.
+
+### UI (`ops.js`, `index.html`)
+- Nav label + page H2 → **Decision Center**. Two decision lanes render on top
+  ("Confirm the true owner", "Buyer parents & SF mapping"); legacy review-count
+  lanes move under "More review work" (Phase 2 converts them). Each lane:
+  question → subject+context card → one-click verdicts → self-propelling
+  advance (the SOS-lane model). The map card runs the SF typeahead inline.
+
+### Verified headless 2026-06-07
+160 decisions seeded (142/17/1), 0 residue; `lcc_record_decision_verdict`
+transitions open→decided; list ranks by rollup rent (Boyd $174M, Easterly
+$118M, NGP $80M). `node --check` clean (admin.js, server.js, ops.js); 12
+functions; vercel.json valid.
+
+### Slice 3 (next, gated)
+The "Stale — new owner is…" cross-domain gov `true_owner` write-back: gov
+migration first (R6 rule), write through the existing gov-write edge path with
+`source='manual_decision'` provenance, exercised on a TEST row only until Scott
+blesses it. Everything else in Phase 1 works without it.
