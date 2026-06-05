@@ -4699,17 +4699,29 @@ function renderGovOverview() {
   const highlights = [];
 
   // Highlight 1: Leases expiring within 6 months
-  if (!useMV) {
-    const sixMoLeases = withTerm.filter(p => p.firm_term_remaining != null && p.firm_term_remaining >= 0 && p.firm_term_remaining <= 0.5);
-    if (sixMoLeases.length > 0) {
-      const topLease = sixMoLeases.sort((a, b) => (a.firm_term_remaining || 0) - (b.firm_term_remaining || 0))[0];
-      highlights.push({
-        icon: '⏰', color: '#f87171', urgency: 'urgent',
-        title: sixMoLeases.length + ' lease' + (sixMoLeases.length > 1 ? 's' : '') + ' expiring within 6 months',
-        detail: 'Soonest: ' + (topLease.address || 'Unknown') + ' — ' + (topLease.agency || topLease.agency_full_name || 'Unknown agency'),
-        action: 'Review Leases', tab: 'leases'
-      });
-    }
+  // R4-D #6 (2026-06-05): bucket by ACTUAL lease_expiration date, matching the
+  // R4-B Lease Expiration Risk section above (expLease6mo). The old predicate
+  // counted firm_term_remaining <= 0.5, but firm_term_remaining clamps to 0
+  // once the firm term elapses, so every long-expired lease piled into this
+  // "expiring within 6 months" bucket (7,589 vs the section's 407). Use the
+  // same [now, now+6mo) window — expLease6mo already resolves from the MV or
+  // the client-side _withLeaseExp pass, so this works for both paths.
+  if (expLease6mo > 0) {
+    // Soonest property for the detail line — only available when we have the
+    // per-property rows (non-MV pass, or portfolio otherwise loaded). Under the
+    // MV path portfolio may be empty; the count is still correct from the MV.
+    const sixMoLeases = _withLeaseExp
+      .filter(p => { const y = _leaseExpYrs(p); return y >= 0 && y < 0.5; })
+      .sort((a, b) => new Date(a.lease_expiration) - new Date(b.lease_expiration));
+    const topLease = sixMoLeases[0];
+    highlights.push({
+      icon: '⏰', color: '#f87171', urgency: 'urgent',
+      title: expLease6mo.toLocaleString() + ' lease' + (expLease6mo !== 1 ? 's' : '') + ' expiring within 6 months',
+      detail: topLease
+        ? 'Soonest: ' + (topLease.address || 'Unknown') + ' — ' + (topLease.agency || topLease.agency_full_name || 'Unknown agency')
+        : 'Bucketed by actual lease_expiration date',
+      action: 'Review Leases', tab: 'leases'
+    });
   }
 
   // Highlight 2: Hot leads needing follow-up (>14 days since last contact)
@@ -4798,7 +4810,12 @@ function renderGovOverview() {
     const avgNOI = noiDenom > 0 ? totalNOI / noiDenom : 0;
     html += govCard({ title: 'Avg NOI / Property', value: avgNOI > 0 ? '$' + fmtN(Math.round(avgNOI / 1000)) + 'K' : '—', sub: 'across portfolio', color: 'blue', tab: 'search' });
     const contactCount = useMV ? (mv.total_contacts || contacts.length) : contacts.length;
-    html += govCard({ title: 'Contacts', value: fmtN(contactCount), sub: 'owners & principals', color: 'purple', tab: 'search' });
+    // R4-D #8: contacts is a Phase-2 array (govData.contacts, loaded after the
+    // overview first paints). Until it resolves (and the MV didn't supply a
+    // total), skeleton instead of painting a literal 0 the user can't tell from
+    // a real "no contacts" — this is the "CONTACTS 0 → 10,520" flash.
+    const _contactsLoading = !govData._phase2Loaded && contacts.length === 0 && !(useMV && mv.total_contacts);
+    html += govCard({ title: 'Contacts', value: _contactsLoading ? '…' : fmtN(contactCount), sub: _contactsLoading ? 'loading…' : 'owners & principals', color: 'purple', tab: 'search' });
     html += '</div>';
   }
 
@@ -5063,10 +5080,16 @@ function renderGovOverview() {
 
   html += govSectionHeader('GSA Lease Intelligence', '📋', 'search');
   html += '<div class="gov-grid gov-grid-4">';
-  html += govCard({ title: 'GSA Events YTD', value: fmtN(gsaEventsYTD), sub: now.getFullYear() + ' of ' + fmtN(gsaEventsTotal) + ' tracked', color: 'blue' });
-  html += govCard({ title: 'GSA Total Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaLeasesTracked) + ' leases tracked', color: 'green' });
-  html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(frppCountTotal) + ' federal properties', color: 'cyan' });
-  html += govCard({ title: 'FRPP Agencies', value: fmtN(frppAgencies), sub: '$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent', color: 'purple' });
+  // R4-D #8: without the MV these four cards derive from the Phase-2 gsaEvents /
+  // gsaSnapshots / frpp arrays, which are empty until the background load
+  // finishes — so they painted literal 0 / $0M. Skeleton while pending. (When
+  // the MV is present the totals are real immediately, so no skeleton.)
+  const _gsaLoading = !mv && !govData._phase2Loaded;
+  const _gsaSk = '…';
+  html += govCard({ title: 'GSA Events YTD', value: _gsaLoading ? _gsaSk : fmtN(gsaEventsYTD), sub: _gsaLoading ? 'loading…' : (now.getFullYear() + ' of ' + fmtN(gsaEventsTotal) + ' tracked'), color: 'blue' });
+  html += govCard({ title: 'GSA Total Rent', value: _gsaLoading ? _gsaSk : ('$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M'), sub: _gsaLoading ? 'loading…' : (fmtN(gsaLeasesTracked) + ' leases tracked'), color: 'green' });
+  html += govCard({ title: 'FRPP Square Feet', value: _gsaLoading ? _gsaSk : (fmtN(Math.round(frppTotalSF / 1e6)) + 'M'), sub: _gsaLoading ? 'loading…' : (fmtN(frppCountTotal) + ' federal properties'), color: 'cyan' });
+  html += govCard({ title: 'FRPP Agencies', value: _gsaLoading ? _gsaSk : fmtN(frppAgencies), sub: _gsaLoading ? 'loading…' : ('$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent'), color: 'purple' });
   html += '</div>';
 
   // GSA event type breakdown

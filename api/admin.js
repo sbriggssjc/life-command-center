@@ -4230,14 +4230,48 @@ async function handleNextBestAction(req, res) {
   for (const { rows } of fanOutResults) {
     for (const row of rows) merged.push(row);
   }
-  merged.sort((a, b) => {
+
+  // R4-D #5 (2026-06-05): magnitude plausibility guard. A dia row surfaced a
+  // "$950M" gap_value (QA#1 aggregate-bleed class — a portfolio sale price bled
+  // onto a single property and not yet auto-nulled). Such artifacts otherwise
+  // rank #1 on a phantom value. Reuse the per-domain ceiling from
+  // sidebar-pipeline.js::SALE_PRICE_BLEED_CEILING (mirrored here to avoid
+  // importing the heavy handler module). This is a display-layer filter only —
+  // no DB writes — so it never auto-nulls a legitimately large gov building.
+  const NBA_VALUE_CEILING = { dialysis: 50000000, government: 250000000 };
+  let suppressedImplausible = 0;
+  const plausible = merged.filter(row => {
+    const ceiling = NBA_VALUE_CEILING[row.source_domain] ?? NBA_VALUE_CEILING.government;
+    const v = Number(row.gap_value);
+    if (Number.isFinite(v) && v > ceiling) { suppressedImplausible++; return false; }
+    return true;
+  });
+
+  plausible.sort((a, b) => {
     const av = Number(a.gap_priority_score ?? a.gap_value) || 0;
     const bv = Number(b.gap_priority_score ?? b.gap_value) || 0;
     if (av !== bv) return bv - av;
     return String(a.first_seen_at || '').localeCompare(String(b.first_seen_at || ''));
   });
 
-  const items = merged.slice(offset, offset + limit).map((row, idx) => ({
+  // R4-D #5 (2026-06-05): dedupe by (domain, property) BEFORE slicing so the
+  // top-10 are 10 distinct items. v_next_best_action can emit several gap rows
+  // for the same property (and join fan-out can duplicate exact rows), which is
+  // why #6/#7/#9 were all the same gov property. Keep the highest-priority row
+  // per property (the list is already sorted by priority). Rows without a
+  // property_id fall back to a gap_type+label key so they aren't all collapsed.
+  const seenKeys = new Set();
+  const deduped = [];
+  for (const row of plausible) {
+    const key = row.property_id != null
+      ? `${row.source_domain}:${row.property_id}`
+      : `${row.source_domain}:nolabel:${row.gap_type || ''}:${row.gap_label || ''}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    deduped.push(row);
+  }
+
+  const items = deduped.slice(offset, offset + limit).map((row, idx) => ({
     // Hotfix (2026-05-17): spread row FIRST so the per-domain ROW_NUMBER()
     // rank from each v_next_best_action view doesn't clobber the merged
     // cross-domain rank below.
@@ -4254,7 +4288,11 @@ async function handleNextBestAction(req, res) {
 
   return res.status(200).json({
     ok:            true,
-    total_merged:  merged.length,
+    // total_merged now reflects DISTINCT plausible open items (post dedupe +
+    // magnitude guard) so the "N total open" UI count agrees with the list.
+    total_merged:  deduped.length,
+    total_raw:     merged.length,
+    suppressed_implausible: suppressedImplausible,
     returned:      items.length,
     limit, offset,
     severity:      severityFilter,
