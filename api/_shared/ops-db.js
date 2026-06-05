@@ -67,13 +67,20 @@ export async function opsQuery(method, path, body, opts = {}) {
     return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
   }
 
-  // Detect new-style opts (has countMode or headers key) vs legacy headers obj.
+  // Detect new-style opts (has countMode / headers / timeoutMs key) vs legacy
+  // headers obj.
   const isOptsShape = opts && typeof opts === 'object'
     && (Object.prototype.hasOwnProperty.call(opts, 'countMode')
-      || Object.prototype.hasOwnProperty.call(opts, 'headers'));
+      || Object.prototype.hasOwnProperty.call(opts, 'headers')
+      || Object.prototype.hasOwnProperty.call(opts, 'timeoutMs'));
   const extraHeaders = isOptsShape ? (opts.headers || {}) : opts;
   const rawCountMode = isOptsShape ? opts.countMode : undefined;
   const countMode = VALID_COUNT_MODES.has(rawCountMode) ? rawCountMode : 'exact';
+  // Per-call fetch timeout. Default 8s as before; heavy aggregate views (e.g.
+  // v_priority_queue_enriched, ~5-7s to materialize) need more headroom so a
+  // slow-but-successful read isn't aborted into a blanket 500. (R6 hotfix.)
+  const timeoutMs = isOptsShape && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+    ? opts.timeoutMs : 8000;
 
   let defaultPrefer;
   if (method === 'GET') {
@@ -96,7 +103,7 @@ export async function opsQuery(method, path, body, opts = {}) {
     fetchOpts.body = JSON.stringify(body);
   }
 
-  const res = await fetchWithTimeout(url, fetchOpts, 8000);
+  const res = await fetchWithTimeout(url, fetchOpts, timeoutMs);
   const text = await res.text();
 
   let data = null;
