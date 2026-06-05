@@ -136,6 +136,10 @@ app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'
 app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });
 app.all('/api/resolve-owner-link', (req, res) => { req.query._route = 'resolve-owner-link'; adminHandler(req, res); });
+// R7 Phase 1 Slice 2 (2026-06-07): Decision Center list / verdict / SF search.
+app.all('/api/decisions', (req, res) => { req.query._route = 'decisions'; adminHandler(req, res); });
+app.all('/api/decision-verdict', (req, res) => { req.query._route = 'decision-verdict'; adminHandler(req, res); });
+app.all('/api/decision-sf-search', (req, res) => { req.query._route = 'decision-sf-search'; adminHandler(req, res); });
 // Round 77 (2026-05-21): SOS write-back (extension sidebar posts here via LCC_RAILWAY_URL) + research-task generator. Without these the Express server 404s them — vercel.json rewrites only apply on Vercel.
 app.all('/api/sos-writeback', (req, res) => { req.query._route = 'sos-writeback'; adminHandler(req, res); });
 app.all('/api/generate-research-tasks', (req, res) => { req.query._route = 'generate-research-tasks'; adminHandler(req, res); });
