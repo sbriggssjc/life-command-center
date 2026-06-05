@@ -1538,7 +1538,7 @@ window.renderBuyerParentLane = renderBuyerParentLane;
 
 function dcStale(id) {
   const name = (typeof prompt === 'function')
-    ? prompt('Current (new) owner name. Recorded now — the domain true_owner write-back ships in Slice 3:')
+    ? prompt('Current (new) owner name. Recorded now; the gov true_owner write-back applies once DECISION_GOV_WRITEBACK is enabled:')
     : '';
   if (name == null) return;
   dcVerdict(id, 'stale', { proposed_owner_name: String(name || '').trim() || null });
@@ -1576,7 +1576,7 @@ async function dcVerdict(id, verdict, payload) {
     if (row) {
       row.classList.add('resolved');
       row.style.opacity = '0.5';
-      const label = res.data.deferred ? 'Recorded — write-back in Slice 3' : ('✓ ' + (res.data.verdict || verdict));
+      const label = res.data.deferred ? 'Recorded — gov write-back pending' : ('✓ ' + (res.data.verdict || verdict));
       let fwd = '';
       const nx = res.data.next;
       if (nx && nx.action === 'connect' && nx.source_property_id != null && typeof openUnifiedDetail === 'function') {

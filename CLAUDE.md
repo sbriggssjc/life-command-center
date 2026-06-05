@@ -1117,3 +1117,64 @@ The "Stale — new owner is…" cross-domain gov `true_owner` write-back: gov
 migration first (R6 rule), write through the existing gov-write edge path with
 `source='manual_decision'` provenance, exercised on a TEST row only until Scott
 blesses it. Everything else in Phase 1 works without it.
+
+## R7 Phase 1 — Slice 3: gated gov true_owner write-back (2026-06-07)
+
+The Decision Center's **"Stale — new owner is…"** verdict (decision_type
+`confirm_true_owner`) corrects the curated gov `properties.true_owner_id` when
+Scott judges the domain owner stale (pre-acquisition). Gov side landed first
+(R6 rule); the write goes through the **existing gov provenance path** with the
+`manual_decision` origin. Applied live to the gov DB 2026-06-07; gov migration
+committed (`supabase/migrations/government/20260607123000_…`).
+
+### Gov RPC (the write path)
+`public.gov_apply_manual_true_owner(p_property_id, p_new_owner_name, p_actor,
+p_idempotency_key, p_dry_run default TRUE)` — SECURITY DEFINER, EXECUTE granted
+to **service_role only** (REVOKEd from anon/authenticated, so the anon BD pulls
+can't reach it). On a real write it:
+- resolves/creates the `true_owners` row, sets `properties.true_owner_id`;
+- writes **`manual_change_events`** (`source_action='save_ownership_resolution'`,
+  `source_app='lcc'`, `status='applied'`, `actor_context.provenance_source=
+  'manual_decision'`, idempotency_key) — the gov vocab is CHECK-constrained, so
+  the `manual_decision` origin rides in `actor_context` + the log below;
+- upserts **`field_value_provenance`** (`authority_source='manual'`,
+  `authority_rank=90` top-of-ladder, `manual_override=true`);
+- writes **`provenance_event_log`** (`source='manual_decision'`,
+  `target_database='gov_db'`, flushes to LCC Opps — the authoritative
+  manual_decision provenance);
+- appends **`ownership_history`** (`change_type='manual_correction'`,
+  `data_source='manual_decision'`, `ownership_state='active'`).
+**Safe by construction:** `p_dry_run` DEFAULTS TRUE (a call without explicit
+`dry_run=false` writes nothing); idempotent on `idempotency_key`
+(`already_applied` no-op). Gotchas hit + fixed: `#variable_conflict use_column`
+(property_id/change_event_id OUT params clash columns); the three constrained
+vocabularies above.
+
+### LCC side (gated)
+`api/admin.js` `decision-verdict` `stale` branch:
+- **`payload.dry_run`** → calls the RPC dry-run, returns the preview, records
+  nothing (always safe, no flag needed).
+- **Real write requires BOTH** `DECISION_GOV_WRITEBACK` enabled (env, Scott's
+  blessing) **and** a gov property subject. Otherwise → record-only
+  (`verdict='stale_pending_writeback'`, `effects.writeback=
+  'deferred_pending_blessing'`), exactly the Slice-2 behavior.
+- When blessed: effect FIRST via `domainQuery('government','POST',
+  'rpc/gov_apply_manual_true_owner', {…dry_run:false})`; on success patches the
+  LCC `lcc_property_owner_facts` mirror (resolver re-runs immediately) +
+  `lcc_refresh_priority_queue_resolved()`, records `verdict='stale_applied'`;
+  on failure records `effects.writeback=false` and KEEPS the decision open (502).
+
+### Activation
+**The write-back is OFF until `DECISION_GOV_WRITEBACK` is set in the Railway
+env** (default unset ⇒ record-only). dia property subjects fall through to
+record-only (dia owner-facts leg deferred, mirrors R6).
+
+### Verified live 2026-06-07 (test row only)
+Synthetic gov property (990000001) → dry-run wrote nothing
+(`would_create_owner_and_write`); real write set the owner + all four
+provenance rows (`manual_change_events` save_ownership_resolution/lcc/applied,
+`field_value_provenance` manual/90/override, `provenance_event_log`
+manual_decision/gov_db, `ownership_history` manual_correction); idempotent
+re-run `already_applied`. **All test fixtures deleted (0 residue).** No real
+gov row (Shooshan/ARLINGTON included) was touched. `node --check` clean; 12
+functions.

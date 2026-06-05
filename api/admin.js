@@ -786,15 +786,67 @@ async function handleDecisionVerdict(req, res) {
             source_domain: decision.subject_domain, source_property_id: decision.subject_property_id } });
       }
       if (verdict === 'stale') {
-        // RECORD-ONLY in Slice 2. The cross-domain gov true_owner write-back is
-        // Slice 3 (behind Scott's blessing) — we capture the judgment + proposed
-        // owner now and defer the write. No domain DB is touched.
-        const vp = { proposed_owner_name: payload.proposed_owner_name || null,
-          proposed_owner_entity_id: payload.proposed_owner_entity_id || null };
-        await record('stale_pending_writeback', 'decided', vp, { writeback: 'deferred_slice3' });
-        return res.status(200).json({ ok: true, verdict: 'stale_pending_writeback',
-          deferred: 'slice3_writeback',
-          note: 'Recorded. The domain true_owner write-back ships in Slice 3.' });
+        // Slice 3: the cross-domain gov true_owner write-back. GATED — the real
+        // write fires only when DECISION_GOV_WRITEBACK is enabled (Scott's
+        // blessing) AND the subject is a gov property. A dry-run preview is
+        // always available; otherwise we record-only (Slice-2 behavior).
+        const newOwner = String(payload.proposed_owner_name || '').trim();
+        if (!newOwner) return res.status(400).json({ error: 'payload.proposed_owner_name required' });
+        const writebackOn = /^(on|1|true|yes|enabled)$/i.test(String(process.env.DECISION_GOV_WRITEBACK || ''));
+        const pid = parseInt(decision.subject_property_id, 10);
+        const govSubject = decision.subject_domain === 'gov' && Number.isFinite(pid);
+        const actor = user.email || user.id || 'decision_center';
+        const idem = 'decision:' + decisionId;
+
+        // Always-safe preview (no flag, no record): show what WOULD change.
+        if (payload.dry_run) {
+          if (!govSubject) {
+            return res.status(200).json({ ok: true, dry_run: true, supported: false,
+              note: 'Write-back currently supports gov property subjects only.' });
+          }
+          const dr = await domainQuery('government', 'POST', 'rpc/gov_apply_manual_true_owner', {
+            p_property_id: pid, p_new_owner_name: newOwner, p_actor: actor,
+            p_idempotency_key: idem, p_dry_run: true });
+          const prow = (dr.ok && Array.isArray(dr.data)) ? dr.data[0] : null;
+          return res.status(dr.ok ? 200 : 502).json({ ok: dr.ok, dry_run: true, preview: prow,
+            detail: dr.ok ? undefined : dr.data });
+        }
+
+        // Not blessed (or unsupported subject) → record-only, defer the write.
+        if (!writebackOn || !govSubject) {
+          await record('stale_pending_writeback', 'decided',
+            { proposed_owner_name: newOwner, proposed_owner_entity_id: payload.proposed_owner_entity_id || null },
+            { writeback: writebackOn ? 'unsupported_subject' : 'deferred_pending_blessing' });
+          return res.status(200).json({ ok: true, verdict: 'stale_pending_writeback',
+            deferred: writebackOn ? 'unsupported_subject' : 'pending_blessing',
+            note: writebackOn
+              ? 'Recorded. Write-back supports gov property subjects only.'
+              : 'Recorded. Set DECISION_GOV_WRITEBACK to enable the gov true_owner write-back.' });
+        }
+
+        // Blessed + gov subject: write through the existing gov provenance path
+        // (manual_change_events + field_value_provenance + provenance_event_log
+        // + ownership_history; source='manual_decision'). Effect FIRST, gated.
+        const wr = await domainQuery('government', 'POST', 'rpc/gov_apply_manual_true_owner', {
+          p_property_id: pid, p_new_owner_name: newOwner, p_actor: actor,
+          p_idempotency_key: idem, p_dry_run: false });
+        const row = (wr.ok && Array.isArray(wr.data)) ? wr.data[0] : null;
+        if (!wr.ok || !row || (!row.wrote && row.note !== 'already_applied')) {
+          await recordEffectFailure({ writeback: false, error: (row && row.note) || wr.data || wr.status });
+          return res.status(502).json({ error: 'writeback_failed', detail: row || wr.data });
+        }
+        // Update the LCC owner-facts mirror so the resolver re-runs immediately
+        // (best-effort; the provenance_event_log flush + R6 sync also reconcile).
+        try {
+          await opsQuery('PATCH', 'lcc_property_owner_facts?source_domain=eq.gov&source_property_id=eq.'
+            + pgFilterVal(decision.subject_property_id),
+            { true_owner_name: newOwner, updated_at: new Date().toISOString() });
+        } catch (e) { console.warn('[decision-verdict] owner-facts mirror patch skipped:', e?.message || e); }
+        await record('stale_applied', 'decided', { proposed_owner_name: newOwner },
+          { writeback: 'applied', gov_note: row.note, gov_change_event_id: row.change_event_id,
+            gov_new_true_owner_id: row.new_true_owner_id });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict: 'stale_applied', gov: row });
       }
       if (verdict === 'research') {
         // Effect FIRST; the recorded outcome must reflect the actual write.
