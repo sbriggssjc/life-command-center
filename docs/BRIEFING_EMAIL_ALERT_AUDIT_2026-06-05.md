@@ -122,6 +122,43 @@ Observed in the channel capture:
   is executed.
 - Teams webhook posts: ~4× reduction once alert dedup (§4.1) ships.
 
+## 5b. Fixes applied later the same day (2026-06-05 PM session)
+
+1. **§2.1 done** — duplicate `Sync Flagged Emails to Supabase` (11:17 AM copy,
+   `b53a73db`) turned off. The 6:32 AM copy (`47568a01`) does the real work.
+2. **§2.2 done** — weekend `LCC Morning Briefing Email` (`6ec55229`) turned off.
+3. **§2.3 done (Option B)** — Bulk File Backfill flow finished + fixed. The
+   build was already complete; the real bug: the flow ran the
+   download/upload chain even when the manifest returned `to_fetch: []`
+   (already-stored file). Gov-stored files → `vertical ""` → dia-default
+   lookup → 404 → daily failure; dia-stored files → re-downloaded from SF +
+   re-uploaded to Storage + re-queued for AI extraction EVERY DAY. Fix: a
+   `length(body('HTTP')?['to_fetch']) > 0` Condition wrapping the 4
+   fetch/upload actions. Manual test: **succeeded, 6m59s** (vs 12-min daily
+   failures since May 17). Alert #516 resolved. Follow-ups: fault branch
+   still posts empty `error_detail`; `Get records 2` Top Count = 200 (no
+   pagination past the first 200 Comps).
+4. **§3.1–3.7 code fixes** — branch `claude/briefing-email-fixes-r1`
+   (commit 711fbc3): action-first section reorder, subject with counts +
+   10Y, OM-intake dedup, Sector Watch/Reading List dedup, `&middot;` leak.
+   Plus two counter root-causes found and fixed: `is_closed` column doesn't
+   exist on dia `salesforce_activities` (PostgREST 400 → "Pipeline: 0"
+   forever; real open count is ~972) and Touchpoints=0 is a missing data
+   feed (activity_events has no call/email/meeting rows) — added
+   `fetchSfTouchpoints` fallback (gov SF activities alone: 362 in 7d).
+   **Ships via Railway redeploy of merged main.**
+5. **§4.1 done** — `lcc_health_alert_flap_suppression` migration applied
+   live to LCC Opps. Root cause of the 4× geocode-tick spam: opener used a
+   24h pg_net lookback, auto-resolver a 2h lookback → hourly
+   open→notify→resolve flap for any transient failure. Fix: don't re-open
+   for a failure occurrence already covered by a resolved alert, + per-key
+   6h Teams notify cooldown. Verified: `lcc_check_cron_health()` now mints
+   0 new alerts for the stale geocode-tick failure.
+6. **Edge-side observation** — `intake-salesforce-files?action=stage-queued`
+   hit a 546 (resource limit) after 90s on 2026-06-05; dia has a 100-row
+   `extraction_status='queued'` backlog draining slowly. Separate issue,
+   not addressed today.
+
 ## 6. Watch plan
 
 - **Sat Jun 6 / Mon Jun 8:** confirm exactly one briefing email arrives. If
