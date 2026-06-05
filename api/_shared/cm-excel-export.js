@@ -651,6 +651,11 @@ const CHART_COLUMNS = {
     // Round 11 — was missing; Round 9 added the column to the gov view +
     // chart renderer but the data tab didn't surface it.
     { key: 'leases_outside_firm_term', header: 'Outside Firm Term', format: 'integer_count', width: 18 },
+    // R68-E G6 — soft-term termination line inputs. Numerator + denominator
+    // surfaced so the data tab makes the rate auditable (Scott's request).
+    { key: 'terminated_outside_firm_term', header: 'Terminated Past Firm Term (TTM)', format: 'integer_count', width: 26 },
+    { key: 'avg_leases_outside_firm_term_ttm', header: 'Avg Leases Past Firm Term (TTM)', format: 'integer_count', width: 26 },
+    { key: 'terminated_outside_firm_term_pct', header: 'Soft-Term Termination Rate', format: 'percent_one_decimal', width: 22 },
   ],
   rent_by_year_built: [
     { key: 'year', header: 'Year Built', format: 'integer_count', width: 11 },
