@@ -1425,6 +1425,7 @@ function _pqBandColor(band) {
   var b = String(band || '').toUpperCase();
   if (b === 'P0') return '#7A1020';
   if (b === 'P0.5') return 'var(--red)';
+  if (b === 'P-BUYER') return 'var(--purple)';
   if (b === 'P1') return 'var(--yellow)';
   if (b === 'P2' || b === 'P3') return 'var(--purple)';
   if (b === 'P5') return 'var(--accent2)';
@@ -1438,6 +1439,9 @@ function _pqReason(reason) {
   // P6 onboarding steps arrive as onboarding_step_due_<N> — keep them plain.
   var ob = r.match(/^onboarding_step_due_?(\d+)?$/);
   if (ob) return 'Onboarding touch overdue' + (ob[1] ? ' (step ' + ob[1] + ')' : '');
+  // P-BUYER lane: repeat buyer, SPE portfolio rolled up to the parent.
+  var rb = r.match(/^repeat_buyer_relationship:(\d+)$/);
+  if (rb) return 'Repeat buyer · ' + rb[1] + ' SPE' + (rb[1] === '1' ? '' : 's') + ' rolled up';
   // Plain-language map — no doctrine jargon ("Developer Overdue") leaking to
   // the operator (R4-C §2).
   var map = {
@@ -1519,11 +1523,21 @@ async function renderPriorityQueuePage(band) {
     // Self-propelling contract: elevate the single top item as 'do this first'.
     var _itemCls = 'q-item' + (_ix === 0 ? ' pq-hero' : '');
     var _heroFlag = _ix === 0 ? '<div class="pq-hero-flag">\u25B6 Do this first</div>' : '';
+    var isBuyerLane = String(it.priority_band || '').toUpperCase() === 'P-BUYER';
     var ctx = [];
-    if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + (Number(it.total_property_count) === 1 ? ' property' : ' properties'));
-    var money = _pqMoney(it.current_annual_rent_total);
-    if (money) ctx.push(money + ' rent');
-    if (it.is_cross_vertical) ctx.push('cross-vertical');
+    if (isBuyerLane) {
+      // Parent rollup of the whole SPE portfolio (R5).
+      if (it.buyer_spe_count != null) ctx.push(esc(String(it.buyer_spe_count)) + ' SPE' + (Number(it.buyer_spe_count) === 1 ? '' : 's'));
+      if (it.buyer_rollup_property_count) ctx.push(esc(String(it.buyer_rollup_property_count)) + ' properties');
+      var bmoney = _pqMoney(it.buyer_rollup_annual_rent);
+      if (bmoney) ctx.push(bmoney + ' rent');
+      ctx.push(it.buyer_sf_account_id ? 'SF account mapped' : 'SF mapping needed');
+    } else {
+      if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + (Number(it.total_property_count) === 1 ? ' property' : ' properties'));
+      var money = _pqMoney(it.current_annual_rent_total);
+      if (money) ctx.push(money + ' rent');
+      if (it.is_cross_vertical) ctx.push('cross-vertical');
+    }
     var addr = hasProp ? (it.source_property_address || '') + (it.source_property_city ? ', ' + it.source_property_city : '') + (it.source_property_state ? ', ' + it.source_property_state : '') : '';
     // data-q-id keys the self-propelling row-advance (entity_id is the natural
     // PQ row key); reused by _opsAdvanceAfterComplete after open_opportunity.
@@ -1534,7 +1548,14 @@ async function renderPriorityQueuePage(band) {
     // detail banner, which is itself state-aware.
     var _state = _qid ? _pqCtaState(it) : null;
     var _ownerAction;
-    if (!_qid) {
+    if (isBuyerLane && _qid) {
+      // R5: repeat buyers are buy-side relationships. The only opportunity they
+      // may carry is a Government Buyer opportunity on the PARENT account. No
+      // standard prospect opportunity \u2014 keep this row OUT of the bulk "Open top
+      // N" candidate set.
+      var _gbLabel = it.buyer_needs_sf_mapping ? 'Open Government Buyer (map SF) \u2192' : 'Open Government Buyer opportunity \u2192';
+      _ownerAction = '<button class="q-action primary" onclick="pqOpenGovernmentBuyer(' + jsStringArg(_qid) + ', ' + jsStringArg(it.name || '') + ', this)">' + _gbLabel + '</button>';
+    } else if (!_qid) {
       _ownerAction = '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
     } else if (_state === 'log_touch') {
       _ownerAction = '<button class="q-action primary" onclick="pqLogTouch(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Log touch \u2192</button>';
@@ -1580,15 +1601,21 @@ async function pqOpenTopN(n) {
   var list = (window._pqOpenOppCandidates || []).slice(0, Math.max(1, n || 10));
   if (!list.length) { showToast('No opportunities to open', 'info'); return; }
   showToast('Opening ' + list.length + ' opportunities…', 'info');
-  var opened = 0, already = 0, failed = 0;
+  var opened = 0, already = 0, failed = 0, skippedBuyers = 0;
   for (var i = 0; i < list.length; i++) {
     try {
       var res = await opsPost('/api/operations?action=open_opportunity', { entity_id: list[i].id, vertical: list[i].vertical || null });
-      if (res.ok && res.data && res.data.ok) { if (res.data.already_open) already++; else opened++; }
+      // R5: repeat-buyer SPEs are skipped-and-reported, never failed — they are
+      // buy-side relationships handled in the P-BUYER lane, not prospects.
+      if (res.ok && res.data && res.data.blocked === 'repeat_buyer_spe') { skippedBuyers++; }
+      else if (res.ok && res.data && res.data.ok) { if (res.data.already_open) already++; else opened++; }
       else failed++;
     } catch (_e) { failed++; }
   }
-  showToast('Opened ' + opened + (already ? ' · ' + already + ' already open' : '') + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+  showToast('Opened ' + opened
+    + (already ? ' · ' + already + ' already open' : '')
+    + (skippedBuyers ? ' · ' + skippedBuyers + ' repeat buyers skipped (see P-BUYER)' : '')
+    + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
   renderPriorityQueuePage(window._pqCurrentBand || undefined);
 }
 window.pqOpenTopN = pqOpenTopN;
@@ -1631,6 +1658,18 @@ async function pqOpenOpportunity(entityId, vertical, btn) {
       entity_id: entityId,
       vertical: vertical || null,
     });
+    // R5 refusal: this owner reconciles to a repeat-buyer parent. Offer the
+    // buy-side path instead of a prospect opportunity.
+    if (res.ok && res.data && res.data.blocked === 'repeat_buyer_spe') {
+      const pn = res.data.parent_name || 'a top repeat buyer';
+      showToast('SPE of ' + pn + ' — buyers are prospected buy-side. Opening Government Buyer on the parent…', 'info');
+      if (res.data.parent_entity_id) {
+        await pqOpenGovernmentBuyer(res.data.parent_entity_id, pn, null);
+      } else {
+        renderPriorityQueuePage(window._pqCurrentBand || undefined);
+      }
+      return;
+    }
     if (res.ok && res.data && res.data.ok) {
       showToast(res.data.already_open ? 'Opportunity already open' : 'Opportunity opened', 'success');
       if (!_opsAdvanceAfterComplete(entityId)) renderPriorityQueuePage();
@@ -1644,6 +1683,32 @@ async function pqOpenOpportunity(entityId, vertical, btn) {
   }
 }
 window.pqOpenOpportunity = pqOpenOpportunity;
+
+// R5 — open (or reuse) the single Government Buyer opportunity on a repeat-buyer
+// PARENT account. Idempotent server-side; when the parent has no Salesforce
+// account mapped, the server logs a research task and the opportunity sync
+// holds (never routes to a subsidiary SPE).
+async function pqOpenGovernmentBuyer(entityId, parentName, btn) {
+  if (!entityId) { showToast('No parent account to open a Government Buyer opportunity for', 'error'); return; }
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+  try {
+    const res = await opsPost('/api/operations?action=open_government_buyer', { entity_id: entityId });
+    if (res.ok && res.data && res.data.ok) {
+      const base = res.data.already_open ? 'Government Buyer already open' : 'Government Buyer opportunity opened';
+      const tail = res.data.needs_sf_mapping ? ' · SF mapping research task logged' : '';
+      showToast(base + ' on ' + (res.data.parent_name || parentName || 'the parent') + tail, 'success');
+      renderPriorityQueuePage(window._pqCurrentBand || undefined);
+    } else {
+      showToast((res.data && res.data.error) || res.error || 'Could not open Government Buyer opportunity', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Open Government Buyer opportunity →'; }
+    }
+  } catch (err) {
+    showToast('Open Government Buyer error: ' + (err && err.message ? err.message : err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Open Government Buyer opportunity →'; }
+  }
+}
+window.pqOpenGovernmentBuyer = pqOpenGovernmentBuyer;
 
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');
