@@ -94,3 +94,32 @@ parent-account linkage); de-dupe/void any already-opened SPE-level
 opportunities (soft-disposition doctrine); queue-side parent rollup; the
 open-time gate; "Government Buyer" opportunity type routed to the SF parent
 account.
+
+### R5 — SHIPPED + DB-side LIVE (2026-06-05, branch pensive-curie-bLZt9)
+
+Grounding: gov buyers Boyd Watterson 787/$13.5B · NGP 169/$2.7B · Easterly
+215 (×3 spellings) · Elman/Tanenbaum/UIRC/GPT/HC/CoreCivic/Saban; dia buyers
+Elliott Bay 80 · Sumitomo/SMBC 186 (×3) · MassMutual/ExchangeRight/Kingsbarn/
+AEI/Realty Income/Agree. Zero open opps on SPEs pre-gate (clean ground).
+
+Shipped: `relationship` column on lcc_operator_affiliate_patterns (operator
+consumers re-scoped); **24 buyer parents** in new `lcc_buyer_parents` (SF ids
+prefilled 7/24); GATE = appended backward-compatible refusal in
+`lcc_open_prospect_opportunity` + **BEFORE-INSERT trigger** (deploy-order-
+proof, blocks prospect opps on buyer parents/SPEs on ANY path);
+`government_buyer` opp type + `lcc_open_government_buyer_opportunity`
+(idempotent, parent-only, SF routing held for unmapped via
+`v_lcc_government_buyer_sync_health`); **P-BUYER lane** (one row per parent,
+portfolio rollup); `v_lcc_buyer_name_canonical` analytics normalizer.
+
+Live-verified: 86/491 P0.5 were buyer SPEs → P0.5 = 402 with 0 SPEs;
+P-BUYER = 18 parents; NGP gate test blocked → government_buyer on parent →
+already_open on repeat; trigger blocks direct inserts; test artifacts cleaned.
+
+**Open items for Scott:** (1) confirm USGBF's true controlling sponsor
+(registered as own parent, `needs_sf_mapping`); (2) optionally rename parent
+anchors (Boyd → "Boyd Watterson Global", AEI → "Aei Capital Corp", GPT →
+"Government Properties Income Trust LLC"); (3) map remaining 17/24 parents to
+SF parent accounts (research tasks auto-created when a buyer opp opens
+unmapped). UI verification (P-BUYER lane render, refusal UX, bulk-open
+skip-and-report) pends the Railway redeploy of merged main.
