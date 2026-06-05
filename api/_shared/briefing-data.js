@@ -302,7 +302,7 @@ export async function fetchNewIntakes(workspaceId, hours = 24, limit = 10) {
     `&order=promoted_at.desc&limit=${Math.max(1, Math.min(limit, 50))}`;
   const res = await opsQuery('GET', path, undefined, { countMode: 'none' });
   const rawItems = Array.isArray(res.data) ? res.data : [];
-  const items = rawItems.map((r) => {
+  const mapped = rawItems.map((r) => {
     const pr = r.pipeline_result || {};
     const listing = pr.listing || {};
     const snap    = pr.snapshot || {};
@@ -322,6 +322,18 @@ export async function fetchNewIntakes(workspaceId, hours = 24, limit = 10) {
       asking_price:    snap.asking_price ?? null,
     };
   });
+  // Dedup re-promotions of the same deal (same address+tenant+price showed
+  // twice in the 2026-06-05 deep dive). Keep the most recent promotion —
+  // rows are already ordered promoted_at.desc.
+  const seen = new Set();
+  const items = [];
+  for (const it of mapped) {
+    const key = [it.address, it.city, it.tenant_agency, it.asking_price]
+      .map((v) => String(v ?? '').trim().toLowerCase()).join('|');
+    if (key !== '|||' && seen.has(key)) continue;
+    seen.add(key);
+    items.push(it);
+  }
   return {
     window_hours: hours,
     count:        items.length,
@@ -414,10 +426,14 @@ export async function fetchDiaPipeline() {
   if (!DIA_URL || !DIA_KEY) return { deals: [], leads: [] };
   try {
     const [dealsRes, leadsRes] = await Promise.all([
-      fetchWithTimeout(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&is_closed=eq.false&order=activity_date.desc&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
+      // NOTE: dia salesforce_activities has no is_closed column — the old
+      // is_closed=eq.false filter 400'd at PostgREST and this function
+      // silently returned empty deals/leads forever (found 2026-06-05).
+      // "Open" status is the open marker; Opportunities also use "In Progress".
+      fetchWithTimeout(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&status=in.(Open,%22In%20Progress%22)&order=activity_date.desc&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
         headers: { 'apikey': DIA_KEY, 'Authorization': `Bearer ${DIA_KEY}` }
       }, 5000),
-      fetchWithTimeout(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Task&is_closed=eq.false&order=due_date.asc.nullslast&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
+      fetchWithTimeout(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Task&status=in.(Open,%22In%20Progress%22,%22Not%20Started%22)&order=due_date.asc.nullslast&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
         headers: { 'apikey': DIA_KEY, 'Authorization': `Bearer ${DIA_KEY}` }
       }, 5000)
     ]);
@@ -964,9 +980,15 @@ export async function fetchPipelineRollup() {
   const zero = { open_count: 0, total_value: 0, weighted_value: 0, by_stage: [] };
   if (!DIA_URL || !DIA_KEY) return zero;
   try {
+    // NOTE: is_closed does not exist on dia salesforce_activities — the old
+    // filter made PostgREST return 400 and this rollup reported "Pipeline: 0
+    // open opportunities" in every briefing (found 2026-06-05). Open pipeline
+    // = status Open or In Progress (excludes Not Started bulk-import noise,
+    // Completed, Abandoned).
     const r = await fetchWithTimeout(
-      `${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&is_closed=eq.false` +
-        `&select=id,status,priority,what_name,description&limit=500`,
+      `${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity` +
+        `&status=in.(Open,%22In%20Progress%22)` +
+        `&select=id,status,priority,what_name,description&limit=2000`,
       { headers: { apikey: DIA_KEY, Authorization: `Bearer ${DIA_KEY}` } },
       5000,
     );
@@ -1156,8 +1178,40 @@ export async function fetchMarketStats(days = 365) {
  *     government: { ...same... },
  *   }
  */
+/**
+ * Count Salesforce activities in the trailing window directly from the
+ * domain DBs. Fallback feed for the Touchpoints tile: LCC's activity_events
+ * has no call/email/meeting rows yet (the SF → activity_events mirror is not
+ * built), so the workspace RPC reports 0 even in weeks with hundreds of
+ * logged SF activities (2026-06-05 audit). Future-dated SF tasks are
+ * excluded — activity_date can be a scheduled date.
+ */
+async function fetchSfTouchpoints(days = 7) {
+  const today = new Date().toISOString().slice(0, 10);
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const countOf = async (url, key, path) => {
+    if (!url || !key) return 0;
+    try {
+      const r = await fetchWithTimeout(`${url}/rest/v1/${path}`, {
+        method: 'HEAD',
+        headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'count=exact' },
+      }, 5000);
+      const range = r.headers.get('content-range') || '';
+      const m = range.match(/\/(\d+)/);
+      return m ? parseInt(m[1], 10) : 0;
+    } catch { return 0; }
+  };
+  const [govN, diaN] = await Promise.all([
+    countOf(GOV_URL, GOV_KEY,
+      `sf_activities?activity_date=gte.${since}&activity_date=lte.${today}&select=sf_task_id&limit=1`),
+    countOf(DIA_URL, DIA_KEY,
+      `salesforce_activities?activity_date=gte.${since}&activity_date=lte.${today}&select=activity_id&limit=1`),
+  ]);
+  return (govN || 0) + (diaN || 0);
+}
+
 export async function fetchResearchProgress(workspaceId, days = 7) {
-  const [wsRow, dia, gov] = await Promise.all([
+  const [wsRow, dia, gov, sfTouchpoints] = await Promise.all([
     workspaceId
       ? opsQuery(
           'POST',
@@ -1167,6 +1221,7 @@ export async function fetchResearchProgress(workspaceId, days = 7) {
       : Promise.resolve(null),
     rpcDomain('dia', 'lcc_briefing_research_counts', { p_days: days }),
     rpcDomain('gov', 'lcc_briefing_research_counts', { p_days: days }),
+    fetchSfTouchpoints(days).catch(() => 0),
   ]);
 
   const wrap = (row) => {
@@ -1189,6 +1244,7 @@ export async function fetchResearchProgress(workspaceId, days = 7) {
     const withAct  = Number(wsRow.entities_with_recent_activity) || 0;
     workspace = {
       touchpoints_this_week:        Number(wsRow.touchpoints_this_week) || 0,
+      sf_touchpoints:               Number(sfTouchpoints) || 0,
       prospects_added_this_week:    Number(wsRow.prospects_added_this_week) || 0,
       opportunities_open:           Number(wsRow.opportunities_open) || 0,
       opportunities_opened_this_week: Number(wsRow.opportunities_opened_this_week) || 0,

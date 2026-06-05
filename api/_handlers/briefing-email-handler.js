@@ -113,6 +113,33 @@ function formatSubject(date, variant) {
   return `${tag} — ${day}, ${month} ${date.getDate()}, ${date.getFullYear()}`;
 }
 
+/**
+ * Inbox-scannable subject: lead with actionable counts, end with the 10Y
+ * anchor. Example: "LCC Morning Briefing — Fri Jun 5 · 2 due · 6 OMs · 10Y 4.48%".
+ * Also makes a duplicate send instantly obvious in the inbox. The long-form
+ * date title (formatSubject) is still used as the email's H1.
+ */
+function formatSubjectWithCounts(date, variant, { due = 0, oms = 0, tenY = null } = {}) {
+  const tag = variant === 'friday_deep_dive' ? 'LCC Weekly Deep Dive' : 'LCC Morning Briefing';
+  const datePart = `${DAYS[date.getDay()].slice(0, 3)} ${MONTHS[date.getMonth()].slice(0, 3)} ${date.getDate()}`;
+  const bits = [`${due} due`, `${oms} OM${oms === 1 ? '' : 's'}`];
+  if (tenY) bits.push(`10Y ${tenY}`);
+  return `${tag} — ${datePart} · ${bits.join(' · ')}`;
+}
+
+/** Pull the 10Y treasury display value out of the intel snapshot, if present. */
+function extractTenY(intelSnapshot) {
+  const pools = [
+    Array.isArray(intelSnapshot?.key_numbers) ? intelSnapshot.key_numbers : [],
+    Array.isArray(intelSnapshot?.market_data?.yields) ? intelSnapshot.market_data.yields : [],
+  ];
+  for (const pool of pools) {
+    const hit = pool.find((k) => /10\s*y/i.test(String(k?.label || '')));
+    if (hit?.value) return String(hit.value);
+  }
+  return null;
+}
+
 function fmtMonthDay(value) {
   if (!value) return '';
   const d = new Date(value);
@@ -583,7 +610,14 @@ function renderResearchProgress({ researchProgress }) {
     row1 =
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
       `style="border:1px solid ${BRAND.bgAlt};border-radius:4px;margin-top:14px;background:#fafbfc;"><tr>` +
-      researchTile('Touchpoints',     fmtInt(ws.touchpoints_this_week),     'calls/emails/meetings 7d', BRAND.navy) +
+      // Touchpoints: LCC activity_events has no call/email/meeting feed yet,
+      // so fall back to the SF-activity count pulled from the domain DBs
+      // (fetchSfTouchpoints) when the workspace counter reads 0.
+      researchTile('Touchpoints',
+        fmtInt(ws.touchpoints_this_week || ws.sf_touchpoints || 0),
+        ws.touchpoints_this_week ? 'calls/emails/meetings 7d'
+          : (ws.sf_touchpoints ? 'SF activities 7d' : 'calls/emails/meetings 7d'),
+        BRAND.navy) +
       researchTile('Prospects Added', fmtInt(ws.prospects_added_this_week), 'new entities 7d',          BRAND.navy) +
       researchTile('Opps Opened',     fmtInt(ws.opportunities_opened_this_week), 'BD opportunities 7d',  BRAND.navy) +
       researchTile('% Prospected',    fmtPctRate(ws.pct_accounts_prospected),
@@ -919,7 +953,22 @@ function renderSectorWatch({ intelSnapshot }) {
 // ---------------------------------------------------------------------------
 
 function renderReadingList({ intelSnapshot }) {
-  const items = Array.isArray(intelSnapshot?.reading_list) ? intelSnapshot.reading_list.slice(0, 5) : [];
+  // Skip stories already shown in Sector Watch — the 2026-06-05 deep dive
+  // repeated the same MedCity/Bisnow items in both sections.
+  const news = intelSnapshot?.sector_news || {};
+  const shown = new Set();
+  for (const k of Object.keys(news)) {
+    for (const it of (Array.isArray(news[k]) ? news[k] : [])) {
+      if (it?.url) shown.add(String(it.url).trim());
+      if (it?.title) shown.add(String(it.title).trim().toLowerCase());
+    }
+  }
+  const items = (Array.isArray(intelSnapshot?.reading_list) ? intelSnapshot.reading_list : [])
+    .filter((it) => !(
+      (it?.url && shown.has(String(it.url).trim())) ||
+      (it?.title && shown.has(String(it.title).trim().toLowerCase()))
+    ))
+    .slice(0, 5);
   if (!items.length) return '';
 
   const rows = items.map((it) => {
@@ -1016,7 +1065,9 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes })
     `${escapeHtml(String(val))}</div></td>`
   )).join('');
 
-  const health = `${s.healthy || 0} healthy &middot; ${s.degraded || 0} degraded &middot; ${s.error || 0} error`;
+  // Plain '·' (not &middot;) — sectionHeader escapes its subtitle, so the
+  // entity leaked literally into the rendered email (2026-06-05 audit).
+  const health = `${s.healthy || 0} healthy · ${s.degraded || 0} degraded · ${s.error || 0} error`;
   return sectionHeader('Ops & Queue', `Connectors: ${health}`) +
     bodyCell(
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
@@ -1048,16 +1099,18 @@ function renderHtml(ctx) {
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" ` +
     `width="100%" style="max-width:680px;margin:0 auto;background:${BRAND.bg};` +
     `border:1px solid ${BRAND.bgAlt};">` +
+    // Action-first ordering (2026-06-05 audit): what do I do today →
+    // what changed in my book → market context → news → ops.
     renderHeader(ctx) +
     renderGamePlan(ctx) +
+    renderStrategicAndUrgent(ctx) +
+    renderDealIntelligence(ctx) +
+    renderNewOnMarket(ctx) +
     renderAnalystTake(ctx) +
     renderCapitalMarkets(ctx) +
     renderMarketStats(ctx) +
     renderWeeklyChanges(ctx) +
-    renderDealIntelligence(ctx) +
-    renderStrategicAndUrgent(ctx) +
     renderResearchProgress(ctx) +
-    renderNewOnMarket(ctx) +
     renderSectorWatch(ctx) +
     renderReadingList(ctx) +
     renderOpsAndQueue(ctx) +
@@ -1388,9 +1441,14 @@ export async function briefingEmailHandler(req, res) {
   const isWeekendCt = ctWeekday === 0 || ctWeekday === 6;
   const should_send = forceSend || !isWeekendCt;
 
-  const subject = formatSubject(ctNow(), variant);
+  const displayTitle = formatSubject(ctNow(), variant);
+  const subject = formatSubjectWithCounts(ctNow(), variant, {
+    due: (Number(workCounts.due_today) || 0) + (Number(workCounts.overdue) || 0),
+    oms: Number(newIntakes?.count) || 0,
+    tenY: extractTenY(effectiveSnapshot),
+  });
   const ctx = {
-    subject, generatedAt,
+    subject: displayTitle, generatedAt,
     personalContext, intelSnapshot: effectiveSnapshot,
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
