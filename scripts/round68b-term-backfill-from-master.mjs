@@ -126,6 +126,7 @@ async function doRevert() {
       firm_term_years_at_sale: w.prev_term ?? null,
       firm_term_source: w.prev_source ?? null,
       firm_term_locked: w.prev_locked ?? false,
+      notes: w.prev_notes ?? null,
       firm_term_computed_at: new Date().toISOString(),
     };
     if (COMMIT) await rest('PATCH', `sales_transactions?sale_id=eq.${w.sale_id}`, patch);
@@ -146,12 +147,12 @@ async function doRevert() {
   // (2) property -> state, then market sales with original (untouched) source cap
   const props = await pageAll(off => `properties?select=property_id,state&order=property_id&limit=1000&offset=${off}`);
   const pstate = new Map(props.map(p => [p.property_id, (p.state || '').toUpperCase().trim()]));
-  const sales = (await pageAll(off => `sales_transactions?select=sale_id,property_id,sale_date,sold_price,stated_cap_rate,cap_rate,firm_term_years_at_sale,firm_term_locked,firm_term_source,transaction_type,exclude_from_market_metrics&sold_price=gt.0&order=sale_id&limit=1000&offset=${off}`))
+  const sales = (await pageAll(off => `sales_transactions?select=sale_id,property_id,sale_date,sold_price,stated_cap_rate,cap_rate,firm_term_years_at_sale,firm_term_locked,firm_term_source,transaction_type,exclude_from_market_metrics,notes&sold_price=gt.0&order=sale_id&limit=1000&offset=${off}`))
     .filter(s => s.sale_date && !s.exclude_from_market_metrics && (s.transaction_type == null || ['Investment', 'Resale'].includes(s.transaction_type)))
     .map(s => ({ sale_id: s.sale_id, state: pstate.get(s.property_id) || null, t: new Date(s.sale_date).getTime(), price: Number(s.sold_price),
       src_cap: s.stated_cap_rate != null ? Number(s.stated_cap_rate) : (s.cap_rate != null ? Number(s.cap_rate) : null),
       cur_term: s.firm_term_years_at_sale != null ? Number(s.firm_term_years_at_sale) : null,
-      locked: !!s.firm_term_locked, source: s.firm_term_source, sale_date: s.sale_date }));
+      locked: !!s.firm_term_locked, source: s.firm_term_source, sale_date: s.sale_date, notes: s.notes || null }));
   console.log(`[t1] ${props.length} properties, ${sales.length} market sales loaded`);
 
   // index sales by state for a bounded scan
@@ -188,10 +189,16 @@ async function doRevert() {
     const lock = LOCK_MODE === 'all' ? true : (LOCK_MODE === 'overrides' ? isOverride : false);
     if (isNull) c.backfill_null++; else c.backfill_override++;
     const exp = new Date(S.t + m.term * 365.25 * DAY).toISOString().slice(0, 10);
+    // fingerprint receipt on the row (non-destructive append) so the provenance is
+    // discoverable without the plan JSON; idempotent — re-runs don't re-stamp.
+    const capBp = best.capDiff == null ? 'na' : (best.capDiff * 10000).toFixed(1);
+    const receipt = `r68b_term<-master fp(Δcap=${capBp}bp,Δd=${Math.round(best.dayDiff / DAY)}d,${klass.toLowerCase()})`;
+    const notes = (S.notes && S.notes.includes('r68b_term<-master')) ? S.notes
+      : (S.notes ? `${S.notes} | ${receipt}` : receipt);
     const patch = { firm_term_years_at_sale: Number(m.term.toFixed(4)), firm_term_expiration_at_sale: exp,
-      firm_term_source: 'master_curated', firm_term_locked: lock, firm_term_computed_at: new Date().toISOString() };
+      firm_term_source: 'master_curated', firm_term_locked: lock, firm_term_computed_at: new Date().toISOString(), notes };
     plan.push({ i: m.i, sale_id: S.sale_id, action: 'BACKFILL', class: klass, sale_date: S.sale_date,
-      master_term: Number(m.term.toFixed(4)), prev_term: S.cur_term, prev_source: S.source, prev_locked: S.locked,
+      master_term: Number(m.term.toFixed(4)), prev_term: S.cur_term, prev_source: S.source, prev_locked: S.locked, prev_notes: S.notes,
       cap_diff_bp: best.capDiff == null ? null : Number((best.capDiff * 10000).toFixed(1)), lock });
     if (COMMIT) await rest('PATCH', `sales_transactions?sale_id=eq.${S.sale_id}`, patch);
   }

@@ -57,18 +57,24 @@ The lift concentrates 2013–2022. **2026 master coverage is only 4 rows — Tas
 cannot fix 2026; that's a going-forward capture problem (Task 2).** Exact per-row
 counts + 20-row sample come from the dry-run.
 
-### ⚠️ Open decision — LOCKING
+### LOCKING — decided: `--lock-mode=all` (lock them)
 There is an AFTER trigger on `leases` (`dia_leases_refresh_firm_term`) that
 **re-resolves `firm_term_years_at_sale` for every UNLOCKED sale** on a property
-whenever any lease there changes — returning NULL for NULL_FILLs (no covering lease)
-and the wrong value for OVERRIDEs. So an **unlocked** master backfill is silently
-reverted on the next lease touch. The prompt says "NOT locked unless verified"; taken
-literally that maps to `--lock-mode=overrides` (lock OVERRIDEs only). But that leaves
-NULL_FILLs fragile.
+whenever any lease there changes — returning NULL for NULL_FILLs and the wrong value
+for OVERRIDEs. So an unlocked master backfill is silently reverted on the next lease
+touch. **Scott's call (2026-06-05): lock them**, `firm_term_locked=true`, on three
+grounds: (1) the fingerprint gate IS the verification — each term is the broker-curated
+value for the *same* transaction, the highest-trust source; (2) the Round-66 #1
+freeze-at-sale doctrine already decided term-remaining is a frozen historical fact, and
+a leases trigger reverting it is exactly the Venoy regression; (3) a future covering
+lease "auto-winning" only helps if the master was wrong — rare by construction, and
+then it's a manual-review correction with receipts, not a trigger's call.
 
-- **Recommended `--lock-mode=all`** (default; matches the 20260712 precedent): durable;
-  an analyst unlocks a specific row if a confirmed covering lease later lands.
-- `--lock-mode=overrides`: prompt-literal; NULL_FILLs revert on lease churn.
+So the default is `--lock-mode=all` with `firm_term_source='master_curated'` and a
+**fingerprint receipt appended to `notes`** (`r68b_term<-master fp(Δcap=…bp,Δd=…d,…)`,
+non-destructive, idempotent). Release valve: locked master terms are revisited per-deal
+via manual review — the trigger never wins against a receipt. `--lock-mode=overrides`
+remains available but is not the recommended commit.
 
 ### Run (workstation — creds live there, not in the web sandbox)
 ```bash
@@ -151,11 +157,13 @@ names need confirming before the surgical gate — next.)
    first month with TTM rent+cap n≥30 (~2014). **SHIPPED in this batch** — migration
    `20260713_cm_round68d_dia_valuation_index_extend_back.sql`: floor → 2008, swap the
    base-period crop for a per-row **n≥12** gate (base stays anchored at n≥30 for a
-   stable =100 reference). Validated read-only: index extends **2014-04 → 2011-09**
-   with no whipsaw (2011: 120–123, 2012: 97–128, 2013: 90–106) and pre-2011 (n<12)
-   gated out. The same n≥12 gate is added to `_q` (which was rendering from
-   2000-09-30 with 22 ungated thin quarters). This is the dia twin of the gov G13
+   stable =100 reference). The same n≥12 gate is added to `_q` (which was rendering
+   from 2000-09-30 with 22 ungated thin quarters). This is the dia twin of the gov G13
    min-n gate. `yoy_change_pct` (lag-12 of the index) inherits the longer window.
+   **APPLIED LIVE 2026-06-05** (per Scott — view changes go live per-request, no
+   mid-window consumer before this batch's export). Post-apply: both `_m` and `_q`
+   now start **2011-09-30** (was 2014-04 / 2000-09); index ranges 94.8–152.7 (_m),
+   95.9–170.8 (_q) — sane, no whipsaw.
 
 ---
 
@@ -163,8 +171,8 @@ names need confirming before the surgical gate — next.)
 
 | Task | Artifact | State |
 |----|----|----|
-| 1 (D10) | `scripts/round68b-term-backfill-from-master.mjs` + grounded bounds | **Ready for workstation dry-run → verify → commit.** Needs the lock-mode decision. |
+| 1 (D10) | `scripts/round68b-term-backfill-from-master.mjs` + grounded bounds | **Ready for workstation dry-run → verify → commit.** Lock-mode decided: `all` + notes receipt. |
 | 2 | diagnosis (capture gap, not resolver) + JS writer-fix spec | Diagnosed; JS fix scoped (next). |
 | 3 (D12) | quartile-band n<8 suppression gate spec | Spec'd (next). |
 | 4 (D1) | bid-ask pre-2016 n≥5 gate spec | Spec'd (next). |
-| 5 (D3) | `20260713_cm_round68d_dia_valuation_index_extend_back.sql` (index `_m`+`_q`) | **Validated, ready to apply.** YOY chart-crop fix scoped (next). |
+| 5 (D3) | `20260713_cm_round68d_dia_valuation_index_extend_back.sql` (index `_m`+`_q`) | **APPLIED LIVE 2026-06-05.** Both start 2011-09. YOY chart-crop fix scoped (next). |
