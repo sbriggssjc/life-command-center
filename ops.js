@@ -1424,6 +1424,7 @@ window.resolveOwnerLink = resolveOwnerLink;
 function _pqBandColor(band) {
   var b = String(band || '').toUpperCase();
   if (b === 'P0') return '#7A1020';
+  if (b === 'P0.4') return '#B5651D';
   if (b === 'P0.5') return 'var(--red)';
   if (b === 'P-BUYER') return 'var(--purple)';
   if (b === 'P1') return 'var(--yellow)';
@@ -1447,6 +1448,7 @@ function _pqReason(reason) {
   var map = {
     developer_overdue: 'Onboarding touch overdue (developer)',
     lease_expiry_24mo: 'Lease expires within 24 months',
+    resolve_ownership_control: 'Resolve ownership & control',
     open_bd_opportunity_needed: 'Needs a BD opportunity opened',
     onboarding_cadence_due: 'Onboarding touch due',
     onboarding_step_due: 'Onboarding touch overdue',
@@ -1471,7 +1473,10 @@ function _pqCtaState(it) {
   var oppResolved = (typeof it.open_opportunity === 'boolean');
   var dueNow = false;
   if (it.next_touch_due) { try { dueNow = new Date(it.next_touch_due).getTime() <= Date.now(); } catch (_e) {} }
-  // P0.5 doctrine: explicitly needs an opportunity opened.
+  // R6 doctrine: P0.4 owners aren't resolved+connected yet — resolve FIRST, the
+  // opportunity is not the next action.
+  if (band === 'P0.4' || reason === 'resolve_ownership_control') return 'resolve';
+  // P0.5 doctrine: explicitly needs an opportunity opened (resolution-complete).
   if (band === 'P0.5' || reason === 'open_bd_opportunity_needed') return 'open_opp';
   // Bands that by definition carry an open opp + an overdue cadence touch.
   if (band === 'P0' || band === 'P6' || band === 'P7') return 'log_touch';
@@ -1538,6 +1543,13 @@ async function renderPriorityQueuePage(band) {
       if (money) ctx.push(money + ' rent');
       if (it.is_cross_vertical) ctx.push('cross-vertical');
     }
+    // R6 P0.4: surface the resolution state so the row is truthful about WHY the
+    // CTA is "Resolve owner" instead of "Open opportunity".
+    if (String(it.priority_band || '').toUpperCase() === 'P0.4') {
+      if (it.resolve_true_owner_name) ctx.push('True owner: ' + esc(it.resolve_true_owner_name) + ' — connect');
+      else if (it.resolve_reason === 'recorded_owner_shell_true_owner_unresolved') ctx.push('Recorded owner shell — true owner unresolved');
+      else ctx.push('Owner known — connect SF account / contact');
+    }
     var addr = hasProp ? (it.source_property_address || '') + (it.source_property_city ? ', ' + it.source_property_city : '') + (it.source_property_state ? ', ' + it.source_property_state : '') : '';
     // data-q-id keys the self-propelling row-advance (entity_id is the natural
     // PQ row key); reused by _opsAdvanceAfterComplete after open_opportunity.
@@ -1555,6 +1567,15 @@ async function renderPriorityQueuePage(band) {
       // N" candidate set.
       var _gbLabel = it.buyer_needs_sf_mapping ? 'Open Government Buyer (map SF) \u2192' : 'Open Government Buyer opportunity \u2192';
       _ownerAction = '<button class="q-action primary" onclick="pqOpenGovernmentBuyer(' + jsStringArg(_qid) + ', ' + jsStringArg(it.name || '') + ', this)">' + _gbLabel + '</button>';
+    } else if (_state === 'resolve' && _qid) {
+      // R6: the control structure isn't resolved + connected yet. Route into the
+      // property resolution ladder (Owner \u203a Link \u2192 Lead) when we have a
+      // representative property; otherwise act on the owner entity directly.
+      if (hasProp) {
+        _ownerAction = '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(domShort) + '\', {property_id: ' + esc(String(it.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Resolve owner \u2192</button>';
+      } else {
+        _ownerAction = '<button class="q-action primary" onclick="pqResolveOwner(' + jsStringArg(_qid) + ', ' + jsStringArg(it.name || '') + ', this)">Resolve owner \u2192</button>';
+      }
     } else if (!_qid) {
       _ownerAction = '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
     } else if (_state === 'log_touch') {
@@ -1573,7 +1594,7 @@ async function renderPriorityQueuePage(band) {
       + (ctx.length ? '<div class="q-item-meta">' + esc(ctx.join(' \u00b7 ')) + '</div>' : '')
       + (addr ? '<div class="q-item-meta">' + esc(addr) + '</div>' : '')
       + '<div class="q-actions">'
-      + (hasProp
+      + ((hasProp && _state !== 'resolve')
           ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(domShort) + '\', {property_id: ' + esc(String(it.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property \u2192</button>'
           : _ownerAction)
       + '</div></div>';
@@ -1709,6 +1730,18 @@ async function pqOpenGovernmentBuyer(entityId, parentName, btn) {
   }
 }
 window.pqOpenGovernmentBuyer = pqOpenGovernmentBuyer;
+
+// R6 — owner-level "Resolve owner →" for a P0.4 row that has no representative
+// property to route through. The control structure must be resolved + connected
+// (true owner / parent identified, Salesforce account or contact linked) BEFORE
+// an opportunity is the next action. Routes to the entities surface where that
+// linkage is done; the queue re-bands the owner out of P0.4 once connected.
+function pqResolveOwner(entityId, name) {
+  if (!entityId) { showToast('No owner entity to resolve', 'error'); return; }
+  showToast('Resolve ' + (name || 'this owner') + ': identify the true owner/parent and link a Salesforce account or contact, then the opportunity becomes the next action.', 'info');
+  try { if (typeof navTo === 'function') navTo('pageEntities'); } catch (_e) {}
+}
+window.pqResolveOwner = pqResolveOwner;
 
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');

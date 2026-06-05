@@ -907,3 +907,79 @@ parent=NGP Capital. `open_government_buyer` from the SPE → one opp on NGP pare
 second call → `already_open`. Trigger blocks a direct prospect insert on a buyer
 SPE. Zero open prospect opps leaked onto buyer entities (clean ground). Test
 artifacts cleaned up.
+
+## R6 — ownership-resolution gating + chain-to-developer doctrine (2026-06-06)
+
+Refines R5. The Priority tab is a ranked hierarchy of *next best actions*. An
+opportunity is only the next action when the control structure is **already
+resolved AND connected**. R5's gate worked, but P0.5 still showed "Open
+opportunity →" on entities whose ownership wasn't resolved/connected. Grounded
+live 2026-06-06: of 402 P0.5 entities only **16** carry any Salesforce identity
+and **0** carry a linked contact — ~386 were mis-CTA'd.
+
+### Doctrine
+- An SPE shell must reconcile to its true owner/parent BEFORE an opportunity.
+- **Per-row domain truth OUTRANKS name patterns.** Live gov data refuted the
+  literal R6 ask: "* FGF *" splits across Boyd Watterson, **The Shooshan Company
+  (incl. the headline "ARLINGTON VA I FGF")**, Hyundai Securities, Lexington,
+  Mountain Real Estate, Princeton Holdings, The Boyer Co., …; "OPI WF OWNER LLC"
+  → **RMR** (not GPT). So NO blind `% FGF%`→Boyd / `OPI %`→GPT entity-name
+  patterns were registered — tier-0 consumes the domain `true_owner` per
+  property instead, resolving only to a REGISTERED parent.
+
+### What shipped (LCC Opps — migrations, applied in filename order)
+- `government/20260606120000_gov_v_property_owner_facts_portfolio.sql` — new
+  anon view exposing per-property `recorded_owner_name` / `true_owner_name` /
+  `developer_name` (names only, PII-free). **Apply FIRST** (before the LCC sync).
+- `20260606121000_lcc_r6_owner_facts_and_resolution.sql` — `lcc_property_owner_facts`
+  mirror; `lcc_match_buyer_parent_by_name()`; `lcc_is_spe_shell_name()`;
+  **tier-0** prepended to `lcc_resolve_buyer_parent()` (same signature → R5 gate
+  trigger + JS + queue inherit it); tier-0 UNION added to `v_lcc_buyer_spe_entities`
+  / `_candidates` (so domain-truth matches roll into **P-BUYER**); RMR true_owner
+  aliases (`rmr`, `the rmr group`); inspectable `v_lcc_entity_resolution_state`.
+- `20260606121500_lcc_r6_priority_queue_p04_gate.sql` — new **P0.4 "Resolve
+  ownership & control"** band AHEAD of P0.5. **Gate = entity-level connection**
+  (Salesforce Account identity OR a linked person/contact). Connected (16) stay
+  P0.5; the rest (386) move to P0.4 with a representative property attached
+  (229 routable into the resolution ladder, 157 owner-level). Enriched view
+  appends `resolve_reason` / `resolve_true_owner_name` / `resolve_is_connected`
+  cheaply (no resolver on the hot path). **Apply AFTER the 121000 file.**
+- `20260606122000_lcc_r6_owner_facts_sync.sql` — isolated cross-DB sync
+  (`lcc_sync_property_owner_facts` / `_finalize` + crons `lcc-r6-owner-facts-
+  sync`/`-finalize`). gov only; dia deferred. Graceful: empty mirror ⇒ resolver
+  + views behave exactly as R5 (no regression). **Apply AFTER the gov view.**
+- `20260606122500_lcc_r6_ownership_chain_and_research.sql` — Task 3(a)/(b):
+  `v_lcc_ownership_chain_completeness` (gov; current owner is a categorized
+  buyer ⇒ should trace back to a developer; `chain_complete` /
+  `earliest_known_owner` / `missing_segments`) + `lcc_generate_chain_research_
+  tasks()` writing `research_tasks(research_type='trace_ownership_to_developer')`
+  prioritized by rent (cron `lcc-r6-chain-research`). Phase 3(c) — connecting
+  each historical chain owner (ensureEntityLink + contact) — **DEFERRED** to the
+  existing entity-link machinery.
+
+### JS (Railway redeploy of merged `main`)
+- `api/admin.js`: `BAND_ORDER` adds `P0.4`; both queue handlers select the
+  `resolve_*` columns; `/api/priority-band` returns them for the detail banner.
+- `ops.js`: `_pqReason` (`resolve_ownership_control` → "Resolve ownership &
+  control"), `_pqCtaState` new `'resolve'` state, P0.4 row context ("True owner:
+  X — connect" / "Recorded owner shell — true owner unresolved"), **"Resolve
+  owner →"** CTA (routes to the property Ownership&CRM ladder, or `pqResolveOwner`
+  for owner-level rows). P0.4 stays OUT of the bulk "Open top N" set.
+- `detail.js`: Next-Step banner inserts a "Resolve ownership & control" step
+  (before "Create the lead") when the band is P0.4 and `resolve_is_connected` is
+  false — same state source as the queue (R4-C pattern).
+
+### Verified live (read-only, 2026-06-06)
+P0.5 402 → after gate **16 stay / 386 → P0.4** (229 with a representative
+property). Tier-0 name-match: `Boyd Watterson`→`Boyd Watterson Global`;
+`The Shooshan Company`/`Mountain Real Estate`→null (ARLINGTON correctly does NOT
+roll to Boyd — stays P0.4); `RMR`/`The RMR Group`→`RMR Group` (OPI-WF resolves
+once the mirror is populated). Shell detector: FGF/OWNER-LLC shells true;
+Avalon/Truist/Embree/Boyd false. No R5 regression (empty mirror ⇒ R5 behaviour;
+buyer-SPE gate + P-BUYER intact). `node --check` clean; `ls api/*.js | wc -l`=12.
+
+### NOTE FOR SCOTT
+- The OPI/GPT anchor was **not** auto-renamed. Domain truth shows OPI WF → RMR
+  (already registered), so "Office Properties Income Trust (OPI)" as a GPT alias
+  isn't warranted by the data. Rename explicitly if you still want it.
+- dia owner-facts leg + chain phase 3(c) are the obvious follow-ups.
