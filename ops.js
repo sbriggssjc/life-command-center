@@ -1240,8 +1240,23 @@ async function renderOpsHealthPage() {
   html += metricCardHTML('Workers Stuck', s.workers_stuck == null ? '—' : s.workers_stuck, 'queues degrading', (s.workers_stuck > 0) ? 'red' : 'green');
   html += metricCardHTML('Flow Failures', s.open_flow_failures == null ? '—' : s.open_flow_failures, 'Power Automate', (s.open_flow_failures > 0) ? 'yellow' : 'green');
   html += metricCardHTML('Cron Issues', s.open_cron_issues == null ? '—' : s.open_cron_issues, 'unresolved', (s.open_cron_issues > 0) ? 'yellow' : 'green');
-  html += metricCardHTML('Write Failures', s.write_failures_recent == null ? '—' : s.write_failures_recent, 'recent', (s.write_failures_recent > 0) ? 'yellow' : 'green');
+  const wf24 = s.write_failures_24h;
+  const wfSub = (s.write_failures_7d != null) ? ('last 24h · ' + Number(s.write_failures_7d).toLocaleString() + ' in 7d') : 'last 24h';
+  html += metricCardHTML('Write Failures', wf24 == null ? '—' : Number(wf24).toLocaleString(), wfSub, (wf24 > 0) ? 'yellow' : 'green');
   html += '</div>';
+
+  // Top write-failure offender (24h) — names the single worst path so a storm
+  // can't hide in a 7-day total (the LLC 23514 regression signature).
+  if (s.write_failures_top && s.write_failures_top.count_24h) {
+    const t = s.write_failures_top;
+    html += '<div class="widget"><div class="widget-title">Top write-failure path (24h)</div>'
+      + '<div class="q-item"><div class="q-item-header"><span class="q-item-title">'
+      + esc((t.domain || '?') + ' ' + (t.method || '') + ' ' + (t.path || '')) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge pri-high">' + Number(t.count_24h).toLocaleString() + '</span>'
+      + (t.http_status ? '<span class="q-badge">http ' + esc(String(t.http_status)) + '</span>' : '') + '</div></div>'
+      + (t.sample_error ? '<div class="q-item-meta">' + esc(String(t.sample_error).slice(0, 200)) + '</div>' : '')
+      + '</div></div>';
+  }
 
   // Workers.
   html += '<div class="widget"><div class="widget-title">Background Workers</div>';
