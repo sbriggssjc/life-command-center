@@ -1621,12 +1621,17 @@ function buildChartConfig(chart, brand) {
       // riding the bars. The series→sign map is CONFIG (not hard-coded)
       // so a PDF-reconciliation mismatch is a one-line flip. Mirrored in
       // cm-native-chart-injector.js (keep the two in sync). pdf_reconcile.
+      // R70 G25 — per Scott's deck design, all five categories stack POSITIVE
+      // so total bar height = total TTM actions (category-shaded). This
+      // supersedes R68-E's diverging (expired/terminated below zero) for this
+      // chart; the sign map stays CONFIG so a future flip is one line. The
+      // overlay line is now "Total Actions" (= stack height), not signed net.
       const LEASE_RENEWAL_SERIES = [
         { key: 'first_generation_commencements', label: 'First Generation Commencements', color: palette[3],           sign: +1 },
         { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
         { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
-        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: -1 },
-        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
+        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: +1 },
+        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: +1 },
       ];
       const netData = rows.map(r => {
         let net = 0; let seen = false;
@@ -1651,9 +1656,9 @@ function buildChartConfig(chart, brand) {
               backgroundColor: s.color,
               stack: 'leases',
             })),
-            // Net line on the SAME count axis; its own stack so it plots
-            // at the raw signed sum (not stacked onto the bars).
-            { type: 'line', label: 'Net Movement',
+            // Total-actions line on the SAME count axis; its own stack so it
+            // plots at the summed total (= stack height), not onto the bars.
+            { type: 'line', label: 'Total Actions',
               data: netData,
               borderColor: '#191919', backgroundColor: 'transparent',
               tension: 0.2, pointRadius: 2, borderWidth: 2.5,
@@ -2022,14 +2027,14 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'Cap Rate YoY Δ (All)',
+            { type: 'bar', label: 'Cap Rate YoY Δ (All, bps)',
               data: rows.map(r => r.pace_all),
               backgroundColor: palette[0],  // dark navy
               borderRadius: 1,
               barPercentage: 0.7,
               categoryPercentage: 0.85,
               order: 2 },
-            { type: 'bar', label: 'Cap Rate YoY Δ (Core 10+)',
+            { type: 'bar', label: 'Cap Rate YoY Δ (Core)',
               data: rows.map(r => r.pace_core),
               backgroundColor: 'rgba(98,181,229,0.55)',  // sky w/ alpha
               borderRadius: 1,
@@ -2045,10 +2050,13 @@ function buildChartConfig(chart, brand) {
           ],
         },
         options: (() => {
+          // Round 70 A2 — pace is in basis points (composer ×10000); integer
+          // bps axis, range -250..+350 bps (was decimal -0.025..0.035 %).
           const o = commonOpts({
-            yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            yAxisRange: { min: -0.025, max: 0.035 },
+            yAxisFormat: AXIS_FORMAT_INTEGER,
+            yAxisRange: { min: -250, max: 350 },
           });
+          const fmtBpsLbl = (v) => Math.round(Number(v)).toLocaleString() + ' bps';
           // Round 24 — user: "We're missing the high label callout."
           // The default buildAnnotations skips max/min when they
           // coincide with the most-recent point. For Pace_Cap_Expand
@@ -2076,13 +2084,13 @@ function buildChartConfig(chart, brand) {
             o.plugins.annotation = { annotations: {
               highVal: { ...labelStyle(PDF_COLORS.annotation_sky_bg),
                 xValue: maxP.i, yValue: Number(maxP.y),
-                content: fmtPct2(Number(maxP.y)), yAdjust: -16 },
+                content: fmtBpsLbl(maxP.y), yAdjust: -16 },
               lowVal:  { ...labelStyle(PDF_COLORS.annotation_sky_bg),
                 xValue: minP.i, yValue: Number(minP.y),
-                content: fmtPct2(Number(minP.y)), yAdjust: 16 },
+                content: fmtBpsLbl(minP.y), yAdjust: 16 },
               lastVal: { ...labelStyle(PDF_COLORS.annotation_navy_bg),
                 xValue: lastP.i, yValue: Number(lastP.y),
-                content: fmtPct2(Number(lastP.y)),
+                content: fmtBpsLbl(lastP.y),
                 yAdjust: Number(lastP.y) >= 0 ? -16 : 16 },
             }};
           }
