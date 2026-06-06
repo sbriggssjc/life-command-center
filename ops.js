@@ -1472,8 +1472,14 @@ function _dcCardHTML(it, isNext) {
       + '<div class="q-item-badges"><span class="q-badge">' + (Number(c.spe_count) || 0) + ' SPEs</span>'
       + (rent ? '<span class="q-badge">' + rent + '/yr</span>' : '') + '</div></div>'
       + '<div class="q-item-meta">Map to the Salesforce <b>parent</b> account (never a subsidiary SPE). Held government-buyer syncs release once mapped.</div>'
-      + '<div class="q-item-meta" id="dcsf-' + id + '"></div>';
-    actions = '<button class="q-action primary" onclick="dcFindSf(' + id + ')">Find SF account →</button>'
+      + '<div class="dcsf" id="dcsf-' + id + '">'
+      +   '<div class="dcsf-row"><input class="dcsf-input" id="dcsfq-' + id + '" type="text" value="' + esc(c.parent_name || '') + '" placeholder="Search Salesforce accounts" onkeydown="if(event.key===\'Enter\'){dcSfSearch(' + id + ');return false;}">'
+      +   '<button class="q-action" onclick="dcSfSearch(' + id + ')">Search</button></div>'
+      +   '<div class="dcsf-results" id="dcsfr-' + id + '"></div>'
+      +   '<div class="dcsf-row dcsf-manual"><input class="dcsf-input" id="dcsfid-' + id + '" type="text" placeholder="…or paste SF Account ID / record URL">'
+      +   '<button class="q-action" onclick="dcSfManual(' + id + ')">Validate &amp; map</button></div>'
+      + '</div>';
+    actions = '<button class="q-action primary" onclick="dcSfSearch(' + id + ')">Search Salesforce →</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_later\')">No account — hold</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'skip\')">Skip</button>';
   } else if (it.decision_type === 'junk_entity_name') {
@@ -1752,25 +1758,79 @@ function dcStale(id) {
 }
 window.dcStale = dcStale;
 
-async function dcFindSf(id) {
-  const it = _dcItems[id];
-  const name = (it && it.context) ? it.context.parent_name : '';
-  const slot = document.getElementById('dcsf-' + id);
+// SF-mapping card: editable search → scored candidate pick-list, plus a
+// manual "paste the Account ID / URL" path. Candidates are stashed per card so
+// the "Map to this account" buttons never have to embed arbitrary account names
+// in onclick (escaping hazard). "No account — hold" stays as the explicit
+// fallback, but is never the only option after a search returns candidates.
+let _dcSfCand = {};
+
+function _sfIdFromInput(raw) {
+  const s = String(raw || '').trim();
+  // Prefer an Account-prefixed (001) token; else any 18- or 15-char alnum Id.
+  const m = s.match(/\b001[A-Za-z0-9]{12}([A-Za-z0-9]{3})?\b/)
+    || s.match(/\b[A-Za-z0-9]{18}\b/) || s.match(/\b[A-Za-z0-9]{15}\b/);
+  return m ? m[0] : null;
+}
+
+async function dcSfSearch(id) {
+  const input = document.getElementById('dcsfq-' + id);
+  const q = input ? input.value.trim() : '';
+  const slot = document.getElementById('dcsfr-' + id);
+  if (!q) { if (slot) slot.textContent = 'Type a name to search.'; return; }
   if (slot) slot.innerHTML = '<span class="spinner"></span> searching Salesforce…';
-  const res = await opsApi('/api/decision-sf-search?name=' + encodeURIComponent(name || ''));
-  if (!res.ok || !res.data) { if (slot) slot.textContent = 'SF search failed.'; return; }
-  const acct = res.data.account;
-  if (acct && acct.Id) {
-    const safeName = String(acct.Name || '').replace(/'/g, '’');
-    slot.innerHTML = 'Match: <b>' + esc(acct.Name) + '</b> '
-      + '<button class="q-action primary" onclick="dcMap(' + id + ', \'' + esc(acct.Id) + '\', \'' + esc(safeName) + '\')">Map to ' + esc(acct.Name) + '</button>';
+  const res = await opsApi('/api/decision-sf-search?name=' + encodeURIComponent(q));
+  if (!res.ok || !res.data) { if (slot) slot.textContent = 'SF search failed: ' + ((res.data && res.data.error) || res.error || 'unknown'); return; }
+  const cands = Array.isArray(res.data.candidates) ? res.data.candidates : (res.data.account ? [res.data.account] : []);
+  _dcSfCand[id] = cands;
+  if (!cands.length) {
+    slot.innerHTML = '<div class="dcsf-empty">No accounts matched “' + esc(q) + '”. Try a variant name (e.g. add “Asset Management”) or paste the Account ID below.</div>';
+    return;
+  }
+  let html = '<div class="dcsf-hint">' + cands.length + ' candidate' + (cands.length === 1 ? '' : 's') + ' — pick the parent account:</div>';
+  cands.forEach(function (cn, ix) {
+    const meta = [cn.Type, cn.Industry].filter(Boolean).join(' · ');
+    const pct = Math.round((Number(cn.score) || 0) * 100);
+    html += '<div class="dcsf-cand"><div class="dcsf-cand-main"><b>' + esc(cn.Name) + '</b>'
+      + (meta ? ' <span class="dcsf-cand-meta">' + esc(meta) + '</span>' : '')
+      + ' <span class="q-badge">' + pct + '%</span></div>'
+      + '<button class="q-action primary" onclick="dcSfPick(' + id + ',' + ix + ')">Map to this account</button></div>';
+  });
+  slot.innerHTML = html;
+}
+window.dcSfSearch = dcSfSearch;
+
+function dcSfPick(id, ix) {
+  const cn = (_dcSfCand[id] || [])[ix];
+  if (!cn || !cn.Id) return;
+  dcMap(id, cn.Id, cn.Name || '');
+}
+window.dcSfPick = dcSfPick;
+
+async function dcSfManual(id) {
+  const input = document.getElementById('dcsfid-' + id);
+  const slot = document.getElementById('dcsfr-' + id);
+  const sfId = _sfIdFromInput(input ? input.value : '');
+  if (!sfId) { if (slot) slot.innerHTML = '<div class="dcsf-empty">That doesn’t look like a Salesforce Account ID (15 or 18 characters). Paste the ID or the record URL.</div>'; return; }
+  if (slot) slot.innerHTML = '<span class="spinner"></span> validating ' + esc(sfId) + '…';
+  const res = await opsApi('/api/decision-sf-search?id=' + encodeURIComponent(sfId));
+  if (res.ok && res.data && res.data.ok && res.data.account && res.data.account.Id) {
+    const acct = res.data.account;
+    _dcSfCand[id] = [acct];
+    slot.innerHTML = '<div class="dcsf-cand"><div class="dcsf-cand-main">Confirmed: <b>' + esc(acct.Name || acct.Id) + '</b>'
+      + (acct.Type ? ' <span class="dcsf-cand-meta">' + esc(acct.Type) + '</span>' : '') + '</div>'
+      + '<button class="q-action primary" onclick="dcSfPick(' + id + ',0)">Map to this account</button></div>';
   } else {
-    slot.innerHTML = 'No good Salesforce match'
-      + (res.data.best_candidate_name ? ' (closest: ' + esc(res.data.best_candidate_name) + ')' : '')
-      + '. <button class="q-action" onclick="dcVerdict(' + id + ', \'create_later\')">Hold — create later</button>';
+    // Flow can't confirm by-id (or doesn't implement it) — allow an explicit
+    // unverified map so the user with Salesforce open in another tab isn't stuck.
+    _dcSfCand[id] = [{ Id: sfId, Name: null }];
+    slot.innerHTML = '<div class="dcsf-empty">Couldn’t confirm the name for <b>' + esc(sfId) + '</b>'
+      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '') + '. '
+      + '<button class="q-action" onclick="dcSfPick(' + id + ',0)">Map by ID anyway</button></div>';
   }
 }
-window.dcFindSf = dcFindSf;
+window.dcSfManual = dcSfManual;
+
 function dcMap(id, sfId, sfName) { dcVerdict(id, 'map', { sf_account_id: sfId, sf_account_name: sfName }); }
 window.dcMap = dcMap;
 

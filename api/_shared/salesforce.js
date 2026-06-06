@@ -137,21 +137,32 @@ export async function findSalesforceAccountByName(ownerName) {
   }
 
   const targetNorm = normalizeBusinessName(ownerName);
-  let bestCand = null;
-  let bestScore = 0;
-  for (const cand of candidates) {
-    const candNorm = normalizeBusinessName(cand?.Name);
-    const s = scoreCandidate(targetNorm, candNorm);
-    if (s > bestScore) { bestScore = s; bestCand = cand; }
-  }
+  // Score every candidate, keep them sorted desc — the caller (Decision Center
+  // SF-mapping card) renders the full pick-list so a near-miss on the top-1
+  // (e.g. "Boyd Watterson Global" vs an account named "Boyd Watterson Asset
+  // Management") is recoverable instead of a dead end.
+  const scored = candidates
+    .map((cand) => ({
+      Id: cand?.Id || cand?.id || null,
+      Name: cand?.Name || cand?.name || null,
+      Type: cand?.Type || cand?.type || null,
+      Industry: cand?.Industry || cand?.industry || null,
+      score: scoreCandidate(targetNorm, normalizeBusinessName(cand?.Name)),
+    }))
+    .filter((c) => c.Id && c.Name)
+    .sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, 12);
+  const bestCand = scored[0] || null;
+  const bestScore = bestCand ? bestCand.score : 0;
 
-  // Minimum confidence to accept: 0.50 — below that we'd rather flag as
-  // no_match and let a human decide than auto-link to the wrong Account.
+  // Minimum confidence to AUTO-accept: 0.50 — below that we don't pre-pick an
+  // account, but we STILL return the candidate list so the user can choose.
   if (bestScore < 0.50) {
     return {
       ok: true,
       account: null,
       reason: 'no_good_match',
+      candidates: top,
       candidates_count: candidates.length,
       best_candidate_name: bestCand?.Name || null,
       best_candidate_score: bestScore,
@@ -161,8 +172,40 @@ export async function findSalesforceAccountByName(ownerName) {
   return {
     ok:               true,
     account:          bestCand,
+    candidates:       top,
     candidates_count: candidates.length,
     score:            bestScore,
+  };
+}
+
+/**
+ * Fetch a Salesforce Account by its 15/18-char Id, to confirm the name before
+ * a manual map. Tries a `find_account_by_id` flow operation; tolerates flows
+ * that don't implement it (returns ok:false so the UI can map unverified).
+ *
+ * @param {string} accountId
+ * @returns {Promise<{ok:boolean, account?:{Id,Name,Type,Industry}|null, reason?:string}>}
+ */
+export async function getSalesforceAccountById(accountId) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const id = String(accountId || '').trim();
+  if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(id)) return { ok: false, reason: 'bad_id_shape' };
+  const result = await callSfLookupFlow({ operation: 'find_account_by_id', value: id });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed' };
+  }
+  let acct = null;
+  if (result.account) acct = result.account;
+  else if (Array.isArray(result.candidates) && result.candidates.length) acct = result.candidates[0];
+  if (!acct || !(acct.Id || acct.id)) return { ok: true, account: null, reason: 'no_match' };
+  return {
+    ok: true,
+    account: {
+      Id: acct.Id || acct.id,
+      Name: acct.Name || acct.name || null,
+      Type: acct.Type || acct.type || null,
+      Industry: acct.Industry || acct.industry || null,
+    },
   };
 }
 

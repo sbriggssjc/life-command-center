@@ -2034,6 +2034,19 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 
 /* Review Console lanes (UX move #2b, 2026-05-31) */
 .rc-intro { font-size: 13px; color: var(--text3); max-width: 720px; margin: 0 0 16px; line-height: 1.5; }
+/* Decision Center — SF-mapping pick-list (R7 Phase 2.1) */
+.dcsf { margin: 8px 0 4px; }
+.dcsf-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.dcsf-input { flex: 1 1 auto; min-width: 0; padding: 5px 8px; font-size: 13px;
+  background: var(--s0, #fff); color: var(--text1); border: 1px solid var(--border); border-radius: 4px; }
+.dcsf-manual { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.dcsf-results { display: flex; flex-direction: column; gap: 4px; }
+.dcsf-hint { font-size: 12px; color: var(--text3); margin: 4px 0; }
+.dcsf-empty { font-size: 12px; color: var(--text3); margin: 4px 0; }
+.dcsf-cand { display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  background: var(--s1); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; }
+.dcsf-cand-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dcsf-cand-meta { font-size: 11px; color: var(--text3); }
 .rc-lanes { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .rc-lane { text-align: left; background: var(--s1); border: 1px solid var(--border); border-left: 4px solid var(--accent);
   border-radius: 10px; padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s; font-family: inherit; }
