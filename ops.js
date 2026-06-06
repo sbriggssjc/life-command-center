@@ -1702,21 +1702,27 @@ async function dcFed(i, verdict, payload) {
   });
   const row = document.getElementById('dc-f' + i);
   if (res.ok && res.data && res.data.ok) {
-    if (row) {
-      row.classList.add('resolved');
-      row.style.opacity = '0.5';
-      let fwd = '';
-      const nx = res.data.next;
-      if (nx && nx.action === 'cms_unlink') {
-        fwd = '<button class="q-action primary" onclick="dcCmsUnlink(' + esc(String(nx.property_id)) + ')">Break link in cms-match →</button>';
-      } else if (nx && (nx.action === 'intake_create_property' || nx.action === 'intake_reextract')) {
-        fwd = '<button class="q-action primary" onclick="navTo(\'pageInbox\')">Finish in Inbox →</button>';
-      }
-      const qa = row.querySelector('.q-actions');
-      if (qa) qa.innerHTML = '<span class="q-badge">✓ ' + esc(res.data.verdict || verdict) + '</span>' + fwd;
+    let fwd = '';
+    const nx = res.data.next;
+    if (nx && nx.action === 'cms_unlink') {
+      fwd = ' <button class="q-action primary" onclick="dcCmsUnlink(' + esc(String(nx.property_id)) + ')">Break link in cms-match →</button>';
+    } else if (nx && (nx.action === 'intake_create_property' || nx.action === 'intake_reextract')) {
+      fwd = ' <button class="q-action primary" onclick="navTo(\'pageInbox\')">Finish in Inbox →</button>';
     }
     if (typeof showToast === 'function') showToast('Recorded', 'success');
-    _dcAdvanceFed();
+    if (row) {
+      row.classList.add('resolved');
+      row.innerHTML = '<div class="dc-collapsed">✓ ' + esc(res.data.verdict || verdict) + fwd + '</div>';
+      if (fwd) {
+        _dcAdvanceFed();                    // keep the collapsed row (has a CTA)
+      } else {
+        row.style.transition = 'opacity .4s ease';
+        row.style.opacity = '0';
+        setTimeout(function () { if (row.parentNode) row.remove(); _dcAdvanceFed(); }, 420);
+      }
+    } else {
+      _dcAdvanceFed();
+    }
   } else {
     const err = (res.data && (res.data.error || res.data.message)) || res.error || 'unknown';
     if (typeof showToast === 'function') showToast('Action failed: ' + err, 'error');
@@ -1840,21 +1846,39 @@ async function dcVerdict(id, verdict, payload) {
   });
   const row = document.getElementById('dc-' + id);
   if (res.ok && res.data && res.data.ok) {
-    if (row) {
-      row.classList.add('resolved');
-      row.style.opacity = '0.5';
-      const label = res.data.deferred ? 'Recorded — gov write-back pending' : ('✓ ' + (res.data.verdict || verdict));
-      let fwd = '';
-      const nx = res.data.next;
-      if (nx && nx.action === 'connect' && nx.source_property_id != null && typeof openUnifiedDetail === 'function') {
-        fwd = '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(nx.source_domain || 'gov')
-          + '\', {property_id: ' + nx.source_property_id + '}, {}, \'Ownership &amp; CRM\')">Connect →</button>';
-      }
-      const qa = row.querySelector('.q-actions');
-      if (qa) qa.innerHTML = '<span class="q-badge">' + label + '</span>' + fwd;
+    const v = res.data.verdict || verdict;
+    // One-line confirmation. The whole card (body included — the SF candidate
+    // list lives in the body, not the action row) must collapse out of the lane.
+    let label;
+    if (res.data.deferred) label = 'Recorded — gov write-back pending';
+    else if (v === 'map') label = '✓ Mapped to ' + esc((payload && payload.sf_account_name) || 'Salesforce account');
+    else if (v === 'confirm_sponsor') label = '✓ Sponsor confirmed';
+    else if (v === 'create_later') label = '✓ Held — no Salesforce account yet';
+    else if (v === 'rename') label = '✓ Renamed';
+    else if (v === 'merge') label = '✓ Merged';
+    else if (v === 'leave_flagged') label = '✓ Left flagged';
+    else label = '✓ ' + esc(v);
+    // Preserve a follow-up CTA (e.g. the connect ladder) when the verdict hands off.
+    let fwd = '';
+    const nx = res.data.next;
+    if (nx && nx.action === 'connect' && nx.source_property_id != null && typeof openUnifiedDetail === 'function') {
+      fwd = ' <button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(nx.source_domain || 'gov')
+        + '\', {property_id: ' + nx.source_property_id + '}, {}, \'Ownership &amp; CRM\')">Connect →</button>';
     }
     if (typeof showToast === 'function') showToast('Recorded', 'success');
-    _dcAdvance();
+    if (row) {
+      row.classList.add('resolved');
+      row.innerHTML = '<div class="dc-collapsed">' + label + fwd + '</div>';
+      if (fwd) {
+        _dcAdvance();                       // keep the collapsed row (has a CTA)
+      } else {
+        row.style.transition = 'opacity .4s ease';
+        row.style.opacity = '0';
+        setTimeout(function () { if (row.parentNode) row.remove(); _dcAdvance(); }, 420);
+      }
+    } else {
+      _dcAdvance();
+    }
   } else {
     if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
   }
