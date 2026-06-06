@@ -911,62 +911,48 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   }
 
   function findAddressInLines(lines) {
-    // Round 76dl: try the split-line combiner FIRST. Returns the full
-    // "Street, City, ST ZIP" form which is better for display + matching
-    // than the bare street that the single-line loop would return.
-    // Fall back to single-line scanning if no split match exists.
-    const split = findSplitAddressInLines(lines);
-    if (split) return split;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.length > 120 || line.length < 5) continue;
-      // Round 76ff: same foreign-address-block guard the split-line walker
-      // uses — don't let a Buyer/Seller/Owner mailing address (e.g. the
-      // True Buyer's "1 N Wacker Dr, Suite 4000") win as the subject's
-      // street when no property heading was found.
-      if (isInsideForeignAddressSection(lines, i)) continue;
-      const parsed = parseAddress(line);
-      if (parsed) return parsed;
-    }
-    return null;
-  }
-
-  function findSplitAddressInLines(lines) {
-    // Third alternative covers Salt Lake City-style grid addresses
-    // ("3854 W 5400 S") where the "street" is a directional + grid
-    // number with no St/Ave/Blvd suffix — see parseAddress GRID_STREET_RE.
+    // Round 76ff.b: ONE top-to-bottom pass — the FIRST address-shaped line
+    // that is not inside a foreign-party section wins. The subject property
+    // address is always at the top of the page (heading / stat block);
+    // broker, buyer, seller and lender addresses are always lower (Contacts /
+    // party panels).
+    //
+    // Why this replaced the old "split-walker first, then single-line" order:
+    // findSplitAddressInLines ran first and its STREET_RE requires a street
+    // *name* token before the suffix, so it CANNOT match "Highway"/"Route"-
+    // style subjects ("312 Highway 11 E"). It therefore skipped the subject
+    // heading and walked down to the first STREET_RE-matchable line that
+    // survived the guard — a broker's office ("1717 McKinney Ave, Suite 900,
+    // Dallas, TX") — and returned that as the property address. parseAddress
+    // DOES match the Highway/Route forms, so evaluating both the split-combine
+    // (a) and the single-line parse (b) in document order makes the top-of-page
+    // subject win regardless of suffix shape.
     const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
-    // Round 76di: widened the lookahead from 4 to 20 lines. CoStar's
-    // property summary puts stat cards (RBA, AC Lot, Built, Tenancy,
-    // Class, Submarket leasing data, etc.) between the street line and
-    // the city/state/zip line — typically 8-15 lines deep. The first
-    // street-pattern match on a property page is always paired with the
-    // first city/state/zip-pattern match anywhere in the page; there's
-    // no second address on a single-property summary that could create
-    // a false pairing.
-    // Round 76ds: section-context guard. The Public Record sub-tab puts
-    // the OWNER's mailing address in the body — "2 Claridge Dr #8ne /
-    // Verona, NJ 07044" appeared just below the page heading on
-    // 5 Route 45 / Mannington NJ. The split-line walker found that
-    // before any property-address line and combined them, overwriting
-    // the real subject property address. Round 76ff extended the guard to
-    // the Sale Comp Summary "Recorded Buyer / True Buyer" contact-block
-    // headers (see isInsideForeignAddressSection above). Reject streetLines
-    // that fall inside an Owner / Buyer / Seller / Lender mailing sub-block.
     for (let i = 0; i < lines.length; i++) {
-      const street = lines[i];
-      if (!street || street.length > 120) continue;
-      if (!STREET_RE.test(street)) continue;
+      const line = lines[i];
+      if (!line || line.length < 5 || line.length > 120) continue;
+      // Foreign-address-block guard (Round 76ds/76ff): skip any line that
+      // sits just below a Buyer / Seller / Owner / Lender / Broker header.
       if (isInsideForeignAddressSection(lines, i)) continue;
-      for (let j = i + 1; j < Math.min(i + 25, lines.length); j++) {
-        const cityLine = lines[j];
-        if (!cityLine || !CITY_RE.test(cityLine)) continue;
-        const combined = `${street}, ${cityLine}`;
-        const parsed = parseAddress(combined);
-        if (parsed) return parsed;
+      // (a) Full "Street, City, ST ZIP" form: this line is a street and a
+      //     city/state/zip line follows nearby (Round 76di lookahead window).
+      //     The city line must not itself be inside a foreign-party block.
+      if (STREET_RE.test(line)) {
+        for (let j = i + 1; j < Math.min(i + 25, lines.length); j++) {
+          const cityLine = lines[j];
+          if (!cityLine || !CITY_RE.test(cityLine)) continue;
+          if (isInsideForeignAddressSection(lines, j)) break;
+          const combined = parseAddress(`${line}, ${cityLine}`);
+          if (combined) return combined;
+          break; // first city line after the street is the pairing
+        }
       }
+      // (b) Single-line form — covers "312 Highway 11 E", Salt-Lake grid
+      //     ("3854 W 5400 S"), and "1 N Wacker Dr, Suite 4000" shapes that
+      //     (a)'s STREET_RE can't pair.
+      const single = parseAddress(line);
+      if (single) return single;
     }
     return null;
   }
