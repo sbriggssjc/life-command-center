@@ -1621,12 +1621,17 @@ function buildChartConfig(chart, brand) {
       // riding the bars. The series→sign map is CONFIG (not hard-coded)
       // so a PDF-reconciliation mismatch is a one-line flip. Mirrored in
       // cm-native-chart-injector.js (keep the two in sync). pdf_reconcile.
+      // R70 G25 — per Scott's deck design, all five categories stack POSITIVE
+      // so total bar height = total TTM actions (category-shaded). This
+      // supersedes R68-E's diverging (expired/terminated below zero) for this
+      // chart; the sign map stays CONFIG so a future flip is one line. The
+      // overlay line is now "Total Actions" (= stack height), not signed net.
       const LEASE_RENEWAL_SERIES = [
         { key: 'first_generation_commencements', label: 'First Generation Commencements', color: palette[3],           sign: +1 },
         { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
         { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
-        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: -1 },
-        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
+        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: +1 },
+        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: +1 },
       ];
       const netData = rows.map(r => {
         let net = 0; let seen = false;
@@ -1651,9 +1656,9 @@ function buildChartConfig(chart, brand) {
               backgroundColor: s.color,
               stack: 'leases',
             })),
-            // Net line on the SAME count axis; its own stack so it plots
-            // at the raw signed sum (not stacked onto the bars).
-            { type: 'line', label: 'Net Movement',
+            // Total-actions line on the SAME count axis; its own stack so it
+            // plots at the summed total (= stack height), not onto the bars.
+            { type: 'line', label: 'Total Actions',
               data: netData,
               borderColor: '#191919', backgroundColor: 'transparent',
               tension: 0.2, pointRadius: 2, borderWidth: 2.5,

@@ -2875,12 +2875,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // one-line flip. Stacked combo on a shared count axis (same machinery
       // as inventory_backlog's negative-bar + net-line visual). pdf_reconcile.
       const periodCol = findCol('period_end');
+      // R70 G25 — all five categories stack POSITIVE (total height = total TTM
+      // actions, category-shaded), per Scott's deck design; supersedes R68-E's
+      // diverging for this chart. Sign map stays CONFIG. With all signs +1 the
+      // negSeries set is empty (no negated helper cols) and the helper "total"
+      // col equals the stack height -> rendered as a "Total Actions" line.
       const RENEWAL_SERIES = [
         { key: 'first_generation_commencements', color: 'E0E8F4', sign: +1 },  // pale
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
-        { key: 'expired_leases',                 color: '62B5E5', sign: -1 },  // sky
-        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
+        { key: 'expired_leases',                 color: '62B5E5', sign: +1 },  // sky
+        { key: 'terminated_leases',              color: 'D97706', sign: +1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -2914,7 +2919,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       }));
       helperCols.push({
         key: 'net_movement',
-        header: 'Net Movement',
+        header: 'Total Actions',
         format: 'integer_count',
         width: 16,
         getValue: (row) => {
