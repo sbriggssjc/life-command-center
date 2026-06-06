@@ -171,7 +171,7 @@ const CHART_FOOTER_CAPTIONS = {
   asking_cap_quartiles_active:
     'Active-listing asking cap quartiles for the Total Market and the 10+ Year Term cohort. Read alongside the closed-sale cap-rate panel to gauge seller vs. clearing pricing.',
   available_market_size_combo:
-    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort.',
+    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort. The 10+ cohort cap line shows only when both cohorts have ≥3 in-band priced listings that quarter — when the non-core pool is thinner there is no meaningful contrast to draw.',
   dom_price_change_active:
     'Days on market and price-change frequency on active listings. Pair with the asking cap quartiles panel to gauge seller alignment with clearing pricing.',
   buyer_class_pct_by_year:
