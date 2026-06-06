@@ -136,6 +136,9 @@ const CAT_AX_HORIZONTAL_TXT = CAT_AX_VERTICAL_TXT;
 const VAL_FMT_PERCENT_2DP = '0.00%';
 const VAL_FMT_PERCENT_1DP = '0.0%';
 const VAL_FMT_PERCENT_0DP = '0%';
+// Round 70 A2 — pace_of_cap_rate_expansion data is in basis points (composer
+// ×10000); value axis shows integer bps (negatives with a minus sign).
+const VAL_FMT_BPS         = '0 "bps";-0 "bps"';
 const VAL_FMT_CURRENCY    = '$#,##0_);[Red]($#,##0)';
 const VAL_FMT_CURRENCY_M  = '$#,##0,,"M"_);[Red]($#,##0,,"M")';   // millions ($150M / red ($150M))
 const VAL_FMT_CURRENCY_K  = '$#,##0,"K"_);[Red]($#,##0,"K")';     // thousands ($150K / red ($150K))
@@ -2872,12 +2875,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // one-line flip. Stacked combo on a shared count axis (same machinery
       // as inventory_backlog's negative-bar + net-line visual). pdf_reconcile.
       const periodCol = findCol('period_end');
+      // R70 G25 — all five categories stack POSITIVE (total height = total TTM
+      // actions, category-shaded), per Scott's deck design; supersedes R68-E's
+      // diverging for this chart. Sign map stays CONFIG. With all signs +1 the
+      // negSeries set is empty (no negated helper cols) and the helper "total"
+      // col equals the stack height -> rendered as a "Total Actions" line.
       const RENEWAL_SERIES = [
         { key: 'first_generation_commencements', color: 'E0E8F4', sign: +1 },  // pale
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
-        { key: 'expired_leases',                 color: '62B5E5', sign: -1 },  // sky
-        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
+        { key: 'expired_leases',                 color: '62B5E5', sign: +1 },  // sky
+        { key: 'terminated_leases',              color: 'D97706', sign: +1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -2911,7 +2919,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       }));
       helperCols.push({
         key: 'net_movement',
-        header: 'Net Movement',
+        header: 'Total Actions',
         format: 'integer_count',
         width: 16,
         getValue: (row) => {
@@ -4170,8 +4178,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           spec: {
             type: 'clustered-bar', tabName, catCol: periodCol, dataStart, dataEnd,
-            yAxisRange: { min: -0.025, max: 0.035 },
-            valAxNumFmt: VAL_FMT_PERCENT_2DP,
+            yAxisRange: { min: -250, max: 350 },   // R70 A2 — bps
+            valAxNumFmt: VAL_FMT_BPS,
             series: [
               { titleCol: allCol,  titleRow: headerRow, valCol: allCol,  color: navy },
               { titleCol: coreCol, titleRow: headerRow, valCol: coreCol, color: sky  },
@@ -4189,9 +4197,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           dataStart, dataEnd,
           barGrouping:    'clustered',
           sharedAxis:     true,   // pace_cost is in the same units as pace_all/core
-          yAxisRange:     { min: -0.025, max: 0.035 },
-          valAxNumFmt:    VAL_FMT_PERCENT_2DP,
-          yLeftNumFmt:    VAL_FMT_PERCENT_2DP,
+          yAxisRange:     { min: -250, max: 350 },   // R70 A2 — bps
+          valAxNumFmt:    VAL_FMT_BPS,
+          yLeftNumFmt:    VAL_FMT_BPS,
           barSeries: [
             { titleCol: allCol,  titleRow: headerRow, valCol: allCol,  color: navy },
             { titleCol: coreCol, titleRow: headerRow, valCol: coreCol, color: sky  },

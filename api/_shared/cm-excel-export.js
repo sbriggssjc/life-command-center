@@ -83,6 +83,8 @@ const FMT = {
   currency_billions:    '"$"#,##0.0,,,"B"',
   currency_per_sf:      '"$"#,##0.00',
   percent_basis_points: '0.00%',
+  // R70 A2 — true basis points (value already ×10000 by the pace composer).
+  basis_points:         '0 "bps";-0 "bps"',
   percent_one_decimal:  '0.0%',
   percent_signed:       '+0.0%;-0.0%',
   integer_count:        '#,##0',
@@ -211,7 +213,7 @@ const CHART_FOOTER_CAPTIONS = {
   case_for_renewal:
     'Annual GSA new-lease commencements (bars) vs. average rent / SF (line).',
   pace_of_cap_rate_expansion:
-    'Month-over-month change (annualized) in TTM avg cap rate (all cohort, navy) and 10+ Year Term cohort (sky). Bars above zero = expansion (cap rates rising); below zero = compression. Use to spot the rate-cycle inflection.',
+    'Nominal year-over-year change (in basis points) of the TTM avg cap rate — all cohort (navy) and the core cohort (sky; gov 6+ / dia 12+ firm-term yr). Bars above zero = expansion (cap rates rising); below zero = compression. Use to spot the rate-cycle inflection.',
 };
 
 // Default brand tokens (used as fallback if cm_brand_tokens query failed)
@@ -269,13 +271,13 @@ const CHART_COLUMNS = {
   ],
   pace_of_cap_rate_expansion: [
     { key: 'period_end', header: 'Month End',                          format: 'date_short',          width: 13 },
-    { key: 'pace_all',   header: 'Pace — All Cohort (annualized)',     format: 'percent_basis_points', width: 28 },
-    { key: 'pace_core',  header: 'Pace — 10+ Year Cohort (annualized)',format: 'percent_basis_points', width: 32 },
+    { key: 'pace_all',   header: 'Pace — All Cohort (YoY, bps)',       format: 'basis_points', width: 28 },
+    { key: 'pace_core',  header: 'Pace — Core Cohort (YoY, bps)',      format: 'basis_points', width: 32 },
     // R56 — pace_cost (YoY cost-of-capital change) was being computed
     // by the synthetic composer but dropped here. User notes 2026-05-22:
     // "We also have a YOY pace of change line in our Excel/PDF version
     // that is missing from this one."
-    { key: 'pace_cost',  header: 'Pace — Cost of Capital (YoY)',       format: 'percent_basis_points', width: 28 },
+    { key: 'pace_cost',  header: 'Pace — Cost of Capital (YoY, bps)',  format: 'basis_points', width: 28 },
   ],
   // Audit-fix: catalog rows existed but TAB_NAMES + CHART_COLUMNS were missing,
   // so these DataTables were silently dropped from every export.

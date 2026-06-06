@@ -149,14 +149,19 @@ const SYNTHETIC_COMPOSERS = {
     const out = [];
     for (let i = yoyLag; i < sorted.length; i++) {
       const prev = sorted[i - yoyLag], curr = sorted[i];
+      // Round 70 A2 — emit the YoY pace in BASIS POINTS (× 10000) per Scott's
+      // spec ("6.50% vs 6.75% -> +25bps"). 0.0675 - 0.0650 = 0.0025 -> 25 bps.
+      // pace_all/core/cost are consumed only by the pace_of_cap_rate_expansion
+      // chart (all three surfaces format as integer bps). Nulls preserved
+      // (JS `null * 10000` would be 0 — guarded by the ternary).
       const pace_all = (curr.avg_cap != null && prev.avg_cap != null)
-        ? Number(curr.avg_cap) - Number(prev.avg_cap)
+        ? (Number(curr.avg_cap) - Number(prev.avg_cap)) * 10000
         : null;
       const pace_core = (curr.cap_10plus != null && prev.cap_10plus != null)
-        ? Number(curr.cap_10plus) - Number(prev.cap_10plus)
+        ? (Number(curr.cap_10plus) - Number(prev.cap_10plus)) * 10000
         : null;
       const pace_cost = (curr.cost_capital != null && prev.cost_capital != null)
-        ? Number(curr.cost_capital) - Number(prev.cost_capital)
+        ? (Number(curr.cost_capital) - Number(prev.cost_capital)) * 10000
         : null;
       out.push({ period_end: curr.period_end, pace_all, pace_core, pace_cost });
     }
