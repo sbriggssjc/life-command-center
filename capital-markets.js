@@ -107,6 +107,9 @@
         return (v) => v == null ? '' : (Number(v) * 100).toFixed(1) + '%';
       case 'percent_zero_decimal':
         return (v) => v == null ? '' : Math.round(Number(v) * 100) + '%';
+      case 'basis_points':
+        // Round 70 A2 — value is already in basis points (pace composer ×10000).
+        return (v) => v == null ? '' : Math.round(Number(v)).toLocaleString() + ' bps';
       case 'integer_count':
         return (v) => v == null ? '' : Number(v).toLocaleString();
       default:
@@ -942,14 +945,16 @@
         // (Cost of Capital YoY).
         const navy = brandColor('nm_navy', '#003DA5');
         const sky  = brandColor('nm_sky',  '#62B5E5');
-        const opts = commonChartOptions('percent_basis_points');
-        opts.scales.y.min = -0.025; opts.scales.y.max = 0.035;
+        // Round 70 A2 — pace is now in basis points (composer ×10000); axis +
+        // ticks read bps, range -250..+350 bps (was decimal -0.025..0.035).
+        const opts = commonChartOptions('basis_points');
+        opts.scales.y.min = -250; opts.scales.y.max = 350;
         datasets = [
-          { type: 'bar', label: 'Cap Rate YoY Δ (All)',
+          { type: 'bar', label: 'Cap Rate YoY Δ (All, bps)',
             data: chart.rows.map(r => r.pace_all),
             backgroundColor: navy, borderRadius: 1,
             barPercentage: 0.7, categoryPercentage: 0.85, order: 2 },
-          { type: 'bar', label: 'Cap Rate YoY Δ (Core 10+)',
+          { type: 'bar', label: 'Cap Rate YoY Δ (Core)',
             data: chart.rows.map(r => r.pace_core),
             backgroundColor: 'rgba(98,181,229,0.55)', borderRadius: 1,
             barPercentage: 0.5, categoryPercentage: 0.85, order: 1 },
