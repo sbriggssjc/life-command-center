@@ -665,6 +665,36 @@ window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
 // property record from the appropriate domain DB, and hand it to
 // showDetail() with the Sales tab pre-selected so the user lands on the
 // listing+OM-artifact context for the email they were just looking at.
+// A1 (2026-06-06): no dead-end when an intake has no matched property. Offer
+// the real next action — create a property from the extraction and promote it
+// (the F4 machinery: /api/intake?_route=create-property, reused via
+// createPropertyFromIntakeUI). Falls back to deep-linking the Inbox so the user
+// can see the extraction + match-search affordances there.
+async function _intakeOfferCreateProperty(intakeId, reasonMsg) {
+  const canCreate = typeof createPropertyFromIntakeUI === 'function';
+  const msg = (reasonMsg || 'No matched property for this intake.')
+    + (canCreate ? '\n\nCreate a new property from this extraction and promote it?' : '');
+  let yes = false;
+  if (canCreate && typeof lccConfirm === 'function') {
+    yes = await lccConfirm(msg, 'Create property');
+  } else if (canCreate && typeof confirm === 'function') {
+    yes = confirm(msg);
+  }
+  if (yes && canCreate) {
+    try { await createPropertyFromIntakeUI(intakeId, null); return; }
+    catch (e) { if (typeof showToast === 'function') showToast('Create property failed: ' + (e?.message || e), 'error'); }
+  }
+  // Either declined or no create path — route to the Inbox where the extraction
+  // and match-search affordances live, instead of stranding the user.
+  if (typeof navTo === 'function') {
+    navTo('pageInbox');
+    if (typeof showToast === 'function') showToast(reasonMsg + ' Opened the Inbox — use the row to view the extraction or search for a match.', 'info');
+  } else if (typeof showToast === 'function') {
+    showToast(reasonMsg, 'warn');
+  }
+}
+window._intakeOfferCreateProperty = _intakeOfferCreateProperty;
+
 window.openIntakeFromInbox = async function (intakeId) {
   if (!intakeId) return;
   try {
@@ -675,7 +705,7 @@ window.openIntakeFromInbox = async function (intakeId) {
     const row = (qData?.rows || qData?.items || (Array.isArray(qData) ? qData : null) || [])[0];
     if (!row) {
       try { console.warn('[LCC-Intake] no queue row for intake_id', intakeId, qData); } catch (_) {}
-      if (typeof showToast === 'function') showToast('No matched property found for this intake.', 'warn');
+      await _intakeOfferCreateProperty(intakeId, 'No matched property for this intake.');
       return;
     }
 
@@ -687,7 +717,7 @@ window.openIntakeFromInbox = async function (intakeId) {
     const propertyId = m.property_id || m.matched_property_id || row.matched_property_id || null;
     const domain     = m.domain || m.matched_domain || row.matched_domain || null;
     if (!propertyId || !domain) {
-      if (typeof showToast === 'function') showToast('Intake has no matched property yet.', 'warn');
+      await _intakeOfferCreateProperty(intakeId, 'This intake has no matched property yet.');
       return;
     }
 
