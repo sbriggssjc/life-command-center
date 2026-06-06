@@ -1370,8 +1370,20 @@ async function handleDecisionVerdict(req, res) {
   // write). research_tasks.domain/workspace_id are NOT NULL; both are present
   // on every seeded decision.
   const createResearchTask = async ({ research_type, title, instructions }) => {
+    // research_tasks.workspace_id is NOT NULL. Most seeded decisions carry a
+    // workspace, but R8 producer lanes (llc_research_dead / botblock) emit with
+    // a null workspace — fall back to the operator's primary workspace, then the
+    // oldest workspace, so the task write never fails on a null.
+    let ws = decision.workspace_id;
+    if (!ws) { try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; } }
+    if (!ws) {
+      try {
+        const wr = await opsQuery('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+        if (wr.ok && Array.isArray(wr.data) && wr.data[0]) ws = wr.data[0].id;
+      } catch (_e) { /* leave null — the insert will surface the failure honestly */ }
+    }
     return opsQuery('POST', 'research_tasks', {
-      workspace_id: decision.workspace_id,
+      workspace_id: ws,
       created_by: user.id || null,
       research_type, title, instructions: instructions || null,
       entity_id: decision.subject_entity_id || null,
@@ -1811,6 +1823,109 @@ async function handleDecisionVerdict(req, res) {
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record(verdict, 'decided', payload, { research_task: true, research_task_id: rid });
         return res.status(200).json({ ok: true, verdict, research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- match_disambiguation (R8 — producer: intake matcher) ---------------
+    // "Multiple candidate properties matched — which one?" pick attaches the
+    // chosen property (mirrors the matcher matched-path so the existing promoter
+    // takes over); create_property hands off to the F4 create route; research.
+    if (decision.decision_type === 'match_disambiguation') {
+      const intakeId = c.intake_id
+        || (decision.subject_ref ? String(decision.subject_ref).replace(/^match_disambig:/, '') : null);
+      if (verdict === 'pick') {
+        const dom = payload.domain === 'dia' ? 'dialysis' : payload.domain === 'gov' ? 'government' : null;
+        const propId = payload.property_id != null ? String(payload.property_id) : null;
+        if (!intakeId || !dom || !propId) {
+          return res.status(400).json({ error: 'pick requires payload.domain (dia|gov) + payload.property_id' });
+        }
+        // Write the confirmed match exactly like the matcher's matched-path so the
+        // single-attach promoter picks it up, then flip the intake to matched.
+        const mw = await opsQuery('POST', 'staged_intake_matches', {
+          intake_id: intakeId, decision: 'manual_match', reason: 'decision_center_disambiguation',
+          domain: payload.domain, property_id: propId, confidence: 1.0,
+          match_result: { status: 'matched', reason: 'manual_disambiguation',
+            property_id: propId, domain: payload.domain, confidence: 1.0 },
+        });
+        if (!mw.ok) { await recordEffectFailure({ pick: false, error: mw.data }); return res.status(502).json({ error: 'pick_write_failed', detail: mw.data }); }
+        const sp = await opsQuery('PATCH', 'staged_intake_items?intake_id=eq.' + encodeURIComponent(intakeId),
+          { status: 'matched' });
+        if (!sp.ok) { await recordEffectFailure({ pick: 'match_written_status_patch_failed', error: sp.data }); return res.status(502).json({ error: 'pick_status_failed', detail: sp.data }); }
+        await record('pick', 'decided', { domain: payload.domain, property_id: propId },
+          { match: 'manual_disambiguation', domain: payload.domain, property_id: propId });
+        return res.status(200).json({ ok: true, verdict: 'pick',
+          next: { action: 'intake_promote', intake_id: intakeId, domain: payload.domain, property_id: propId } });
+      }
+      if (verdict === 'create_property') {
+        await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
+        return res.status(200).json({ ok: true, verdict: 'create_property',
+          next: { action: 'intake_create_property', intake_id: intakeId } });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'match_disambiguation',
+          title: 'Disambiguate intake match ' + (intakeId || ''),
+          instructions: 'Decision Center: the matcher found multiple candidate properties for this intake ('
+            + (c.address || '') + (c.tenant ? ', tenant ' + c.tenant : '')
+            + '). Pick the right property or create a new one.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- llc_research_dead (R8 — producer: llc-research tick dead-letter) ----
+    // "The automated LLC research dead-lettered." retry requeues the domain
+    // queue row; resolve_manually spawns a SOS research task; park skips. The
+    // source row lives in the domain DB so there is no refresh-sweep — verdicts
+    // close the decision (bounded by LLC_MAX_ATTEMPTS).
+    if (decision.decision_type === 'llc_research_dead') {
+      const dom = c.domain === 'dia' ? 'dialysis' : c.domain === 'gov' ? 'government' : null;
+      if (verdict === 'retry') {
+        if (!dom || c.queue_id == null) return res.status(400).json({ error: 'retry requires domain + queue_id in context' });
+        const pr = await domainQuery(dom, 'PATCH', 'llc_research_queue?queue_id=eq.' + encodeURIComponent(c.queue_id),
+          { status: 'queued', attempts: 0, last_error: null, resolved_at: null });
+        if (!pr.ok) { await recordEffectFailure({ retry: false, error: pr.data }); return res.status(502).json({ error: 'retry_failed', detail: pr.data }); }
+        await record('retry', 'decided', null, { llc: 'requeued', queue_id: c.queue_id });
+        return res.status(200).json({ ok: true, verdict: 'retry', queue_id: c.queue_id });
+      }
+      if (verdict === 'resolve_manually' || verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'llc_research_manual',
+          title: 'Manually research owner LLC: ' + (c.search_name || c.recorded_owner_id || ''),
+          instructions: 'Decision Center: automated LLC research dead-lettered after ' + (c.attempts || '?')
+            + ' attempts (' + (c.last_error || 'unknown error') + '). Look up "' + (c.search_name || '')
+            + '" in the ' + (c.guessed_state || '?') + ' Secretary of State business registry and record '
+            + 'manager / registered agent on the recorded_owner.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('resolve_manually', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'resolve_manually', research_task_id: rid });
+      }
+      if (verdict === 'park') {
+        await record('park', 'skipped', null, { llc: 'parked_dead' });
+        return res.status(200).json({ ok: true, verdict: 'park' });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- availability_checker_botblock (R8 — producer: health alert) --------
+    // "Availability-checker is being bot-blocked." verify deep-links to the
+    // listings for manual checking (record-only); acknowledge resolves the
+    // underlying alert (the refresh sweep then supersedes this decision too).
+    if (decision.decision_type === 'availability_checker_botblock') {
+      if (verdict === 'verify') {
+        await record('verify', 'decided', payload, { botblock: 'manual_verify_initiated' });
+        return res.status(200).json({ ok: true, verdict: 'verify',
+          next: { action: 'availability_verify', domain: c.domain } });
+      }
+      if (verdict === 'acknowledge') {
+        const ar = await opsQuery('PATCH', 'lcc_health_alerts?alert_kind=eq.availability_checker_botblock'
+          + '&resolved_at=is.null&source=eq.' + pgFilterVal(c.source || ''),
+          { resolved_at: new Date().toISOString(), resolved_note: 'acknowledged via Decision Center' });
+        await record('acknowledge', 'decided', payload, { botblock: 'acknowledged', alert_resolved: !!(ar && ar.ok) });
+        return res.status(200).json({ ok: true, verdict: 'acknowledge', alert_resolved: !!(ar && ar.ok) });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }
@@ -4686,6 +4801,28 @@ async function handleLlcResearchTick(req, res) {
       if (dead && dead.ok) {
         const n = dead.count || (Array.isArray(dead.data) ? dead.data.length : 0);
         if (n) { summary.dead_lettered = n; result.dead_lettered = (result.dead_lettered || 0) + n; }
+        // R8: funnel each dead-lettered row into the Decision Center
+        // (llc_research_dead lane) so capped dead work stays VISIBLE instead of
+        // dying silently. Idempotent on subject_ref; best-effort (a failed emit
+        // never fails the tick). The verdict (retry/resolve_manually/park)
+        // closes the decision.
+        if (Array.isArray(dead.data)) {
+          for (const row of dead.data) {
+            try {
+              await opsQuery('POST', 'rpc/lcc_open_decision', {
+                p_decision_type: 'llc_research_dead',
+                p_workspace_id: null,
+                p_question: 'Automated LLC research dead-lettered — resolve manually, retry, or park.',
+                p_context: { domain: target, queue_id: row.queue_id, recorded_owner_id: row.recorded_owner_id,
+                  property_id: row.property_id, search_name: row.search_name, guessed_state: row.guessed_state,
+                  attempts: row.attempts, last_error: row.last_error },
+                p_subject_domain: target,
+                p_subject_ref: 'llc_dead:' + target + ':' + row.queue_id,
+                p_rank_value: row.attempts != null ? Number(row.attempts) : null,
+              });
+            } catch (_e) { /* best-effort funnel — never fail the tick */ }
+          }
+        }
       }
       // 1b. Reclaim the rest (under the cap) back to queued.
       const reclaimed = await domainQuery(dom, 'PATCH',

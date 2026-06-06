@@ -904,6 +904,32 @@ async function bridgeInitiateCadence(req, res, user, workspaceId) {
     return res.status(400).json({ error: 'At least one of entity_id, contact_id, sf_contact_id is required' });
   }
 
+  // R8 Unit 2 (gate-predicate sweep): a repeat-buyer parent/SPE must NOT get a
+  // prospect/onboarding cadence — that's a buy-side relationship (it gets a
+  // 'buy_side' cadence via Open Government Buyer → Select prospecting contact).
+  // The R5 DB trigger only guards bd_opportunities; touchpoint_cadence has no
+  // such trigger, so this IS the gate for the cadence path (including Copilot /
+  // agent calls). Refuse the same shape as create_lead / open_opportunity and
+  // offer the Government Buyer path. Buy-side cadences (the legitimate route) set
+  // phase='buy_side' and pass through. Runs BEFORE getCadenceState so no cadence
+  // row is created on refusal.
+  const _wantPhaseGate = phase || 'onboarding';
+  if (entity_id && _wantPhaseGate !== 'buy_side') {
+    const parent = await resolveBuyerParent(entity_id);
+    if (parent) {
+      return res.status(200).json({
+        ok: true, blocked: 'repeat_buyer_spe', cadence_id: null,
+        parent_entity_id: parent.parent_entity_id, parent_name: parent.parent_name,
+        message: 'This entity reconciles to repeat-buyer parent "'
+          + (parent.parent_name || parent.parent_entity_id)
+          + '". Repeat buyers are a buy-side relationship — open a Government Buyer '
+          + 'opportunity on the parent and add a buy-side cadence via the '
+          + 'prospecting-contact step, not an onboarding cadence.',
+        next: { action: 'open_government_buyer', entity_id: parent.parent_entity_id },
+      });
+    }
+  }
+
   const state = await getCadenceState(
     { entity_id, contact_id, sf_contact_id },
     { property_id, property_address, domain }

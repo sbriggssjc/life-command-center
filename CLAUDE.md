@@ -1397,3 +1397,57 @@ merge / retype). Junk lane went 41 → 1,050. Idempotent; preserves metadata.
 - Implement the `find_contacts_by_account` SF flow op (preferred — the real Boyd
   humans + activity history live in SF); until then the picker says so and offers
   manual add. Order: related → SF → name-matches → add new.
+
+## R8 — dia owner-facts leg + Decision Center Phase 3 (2026-06-08)
+
+### Unit 1 — dia owner-facts leg (closes the R6 gap)
+R6 shipped tier-0 domain-truth resolution for gov only; dia is now wired the
+same way. dia `v_property_owner_facts_portfolio` anon view (names only — no PII,
+**no tenant/operator**) mirrors the gov view; `lcc_sync_property_owner_facts`
+gained the dia leg (**1000/page** — Supabase PostgREST caps responses at 1000
+rows regardless of `limit`, so any larger stride silently skips rows; this bit
+the first dia pull which loaded only 6,196 of 12,196), `lcc_finalize_property_
+owner_facts` is now domain-agnostic, cron syncs `'both'`.
+`v_lcc_ownership_chain_completeness` + `lcc_generate_chain_research_tasks` now
+cover dia AND gov. Migrations: dia `20260608130000_dia_v_property_owner_facts_
+portfolio.sql` (apply FIRST), LCC `20260608130000_lcc_r8_dia_owner_facts_leg.sql`.
+Verified live: dia mirror 12,196 rows (9,301 true_owner). **dia caveat:** dia
+`true_owner` frequently carries the dialysis OPERATOR (DaVita/Fresenius), which
+are correctly NOT registered buyer parents (no spurious P-BUYER promotions), and
+dia "owners" are often multi-property developers — so tier-0 yields only a few
+dia SPE→parent links (Choice One Development / Incommercial → Elliott Bay;
+EIG Wadsworth → Massmutual). Membership shift is small + conservative by design.
+Follow-up: the resolver's tier-0 `LIMIT 1` picks one of a multi-property
+developer's buyers somewhat arbitrarily — fine for gov (one property per SPE),
+noisier for dia developers; refine if dia P-BUYER mislabels developers.
+
+### Unit 3 — automation → decision-lane funnel (Decision Center Phase 3b)
+**Producer pattern (the rule):** when an engine can't decide, it calls
+`lcc_open_decision()` (idempotent on `subject_ref`) instead of parking work in a
+hidden status; `lcc_refresh_decisions()` auto-supersedes the decision when its
+predicate clears; verdicts ride existing machinery. Three bounded producers wired
+(migration `20260608140000_lcc_r8_decision_producers.sql`):
+- **`availability_checker_botblock`** — SEEDED from open `lcc_health_alerts`
+  (the Round 76ej.h RPC already opens/auto-resolves the alert); refresh sweep
+  supersedes when the alert clears. Verdicts: `verify` (deep-link, record-only) /
+  `acknowledge` (resolves the alert). Pure-DB; no RPC/Edge change.
+- **`match_disambiguation`** — producer is `intake-matcher.js`
+  (`collectAmbiguousCandidates` + `emitMatchDisambiguation`): on the UNMATCHED
+  single-address path, if ≥2 near-miss candidates (dist≤5) exist, emit instead of
+  parking unmatched (never touches confident matches). Refresh sweep supersedes
+  once the intake leaves `review_required`. Verdicts: `pick` (writes the
+  confirmed match so the existing promoter takes over) / `create_property`
+  (F4 hand-off) / `research`.
+- **`llc_research_dead`** — producer is the llc-research tick dead-letter block
+  (`handleLlcResearchTick`): each row parked `dead` (LLC_MAX_ATTEMPTS cap) emits a
+  decision. Source lives in the domain DB (not LCC Opps) so there is NO
+  refresh-sweep — verdict-driven (`retry` requeues the domain row / `resolve_
+  manually` spawns a SOS research task / `park`). Bounded by the dead-letter cap.
+`api/admin.js decision-verdict` gained the three dispatch branches (effect-first,
+outcome-truthful); `createResearchTask` now falls back to the primary/oldest
+workspace when a producer decision has a null workspace. `ops.js` renders the
+three lanes (seeded-style, `dcPickCandidate` for candidate picks). Verified live:
+botblock seed→sweep round-trip (open→superseded, 0 residue); match_disambiguation
+sweep (stays open for a live review_required intake, supersedes for a resolved
+one). New lane types are type-ready (0 open today — they appear when an engine
+hits ambiguity).
