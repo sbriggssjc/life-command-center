@@ -218,7 +218,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'oversight':   return await getOversight(req, res, user, workspaceId);
       case 'unassigned':  return await getUnassigned(req, res, user, workspaceId);
       case 'watchers':    return await getWatchers(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers' });
+      case 'buyer_contacts': return await getBuyerContacts(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts' });
     }
   }
 
@@ -238,6 +239,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'initiate_cadence':   return await bridgeInitiateCadence(req, res, user, workspaceId);
       case 'open_opportunity':   return await bridgeOpenOpportunity(req, res, user, workspaceId);
       case 'open_government_buyer': return await bridgeOpenGovernmentBuyer(req, res, user, workspaceId);
+      case 'select_buyer_contact': return await bridgeSelectBuyerContact(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
 
@@ -1048,6 +1050,177 @@ async function bridgeOpenGovernmentBuyer(req, res, user, workspaceId) {
     parent_entity_id: parentId,
     parent_name: parentName,
     needs_sf_mapping: needsSfMapping,
+  });
+}
+
+// ============================================================================
+// BUY-SIDE CONTACT STEP (R7 Phase 2.4)
+// ============================================================================
+// After a Government Buyer opp is open + the parent is SF-mapped, the next
+// action is selecting the prospecting CONTACT, then a buy-side cadence. The
+// account-level opp routes to the parent; the cadence carries the person.
+
+// GET ?action=buyer_contacts&entity_id=<parent> — candidate contacts for the
+// buy-side cadence, from three sources: (a) person entities already related to
+// the parent, (b) Salesforce contacts on the mapped account, (c) name-matched
+// person entities (e.g. the ~18 captured "Boyd" persons not yet linked).
+async function getBuyerContacts(req, res, user, workspaceId) {
+  const entityId = String(req.query.entity_id || '').trim();
+  if (!entityId) return res.status(400).json({ error: 'entity_id required' });
+
+  // Parent name + mapped SF account.
+  let parentName = null, sfAccountId = null;
+  try {
+    const pe = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(entityId) + '&select=name&limit=1');
+    if (pe.ok && Array.isArray(pe.data) && pe.data[0]) parentName = pe.data[0].name || null;
+    const bp = await opsQuery('GET', 'lcc_buyer_parents?parent_entity_id=eq.' + pgFilterVal(entityId)
+      + '&select=sf_account_id&limit=1');
+    if (bp.ok && Array.isArray(bp.data) && bp.data[0]) sfAccountId = bp.data[0].sf_account_id || null;
+  } catch (_e) { /* soft */ }
+
+  // (a) Related person entities (associated_with, either direction).
+  const related = [];
+  const relatedIds = new Set();
+  try {
+    const rel = await opsQuery('GET', 'entity_relationships?select=from_entity_id,to_entity_id,relationship_type'
+      + '&or=(from_entity_id.eq.' + pgFilterVal(entityId) + ',to_entity_id.eq.' + pgFilterVal(entityId) + ')&limit=100');
+    const otherIds = new Set();
+    if (rel.ok && Array.isArray(rel.data)) {
+      for (const r of rel.data) {
+        const other = r.from_entity_id === entityId ? r.to_entity_id : r.from_entity_id;
+        if (other && other !== entityId) otherIds.add(other);
+      }
+    }
+    if (otherIds.size) {
+      const ids = Array.from(otherIds).map(pgFilterVal).join(',');
+      const persons = await opsQuery('GET', 'entities?select=id,name,entity_type&entity_type=eq.person&id=in.(' + ids + ')&limit=50');
+      if (persons.ok && Array.isArray(persons.data)) {
+        for (const p of persons.data) { related.push({ entity_id: p.id, name: p.name }); relatedIds.add(p.id); }
+      }
+    }
+  } catch (_e) { /* soft */ }
+
+  // (b) Salesforce contacts on the mapped account (best-effort).
+  let sfContacts = [];
+  if (sfAccountId) {
+    try {
+      const { getSalesforceContactsByAccount } = await import('./_shared/salesforce.js');
+      const r = await getSalesforceContactsByAccount(sfAccountId);
+      if (r.ok && Array.isArray(r.contacts)) {
+        sfContacts = r.contacts.map(c => ({ sf_contact_id: c.Id, name: c.Name, title: c.Title, email: c.Email }));
+      }
+    } catch (_e) { /* soft */ }
+  }
+
+  // (c) Name-matched person entities not already related (the "Boyd" persons).
+  const nameMatches = [];
+  if (parentName) {
+    // Core token = first significant word of the parent name (e.g. "Boyd").
+    const core = String(parentName).replace(/[^A-Za-z0-9 ]/g, ' ').trim().split(/\s+/)[0] || '';
+    if (core.length >= 3) {
+      try {
+        const nm = await opsQuery('GET', 'entities?select=id,name&entity_type=eq.person'
+          + '&name=ilike.' + pgFilterVal('%' + core + '%') + '&limit=25');
+        if (nm.ok && Array.isArray(nm.data)) {
+          for (const p of nm.data) {
+            if (!relatedIds.has(p.id)) nameMatches.push({ entity_id: p.id, name: p.name });
+          }
+        }
+      } catch (_e) { /* soft */ }
+    }
+  }
+
+  return res.status(200).json({
+    ok: true, parent_entity_id: entityId, parent_name: parentName,
+    sf_account_id: sfAccountId, sf_configured: sfContacts.length > 0 || !!sfAccountId,
+    related, sf_contacts: sfContacts, name_matches: nameMatches,
+  });
+}
+
+// POST select_buyer_contact { entity_id, bd_opportunity_id, contact_entity_id?,
+//   sf_contact_id?, contact_name?, new_contact_name?, domain? }
+// Effect-first: resolve/create the person, link person→parent, seed the
+// buy-side cadence (lcc_seed_buyer_cadence), then record primary_contact on the
+// opportunity. Outcome-truthful: a failed cadence seed 502s and records nothing.
+async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const entityId = String(b.entity_id || '').trim();
+  const oppId = b.bd_opportunity_id ? String(b.bd_opportunity_id).trim() : null;
+  if (!entityId) return res.status(400).json({ error: 'entity_id (parent) is required' });
+
+  let contactEntityId = b.contact_entity_id ? String(b.contact_entity_id).trim() : null;
+  let sfContactId = b.sf_contact_id ? String(b.sf_contact_id).trim() : null;
+  let contactName = b.contact_name ? String(b.contact_name).trim() : null;
+  const newName = b.new_contact_name ? String(b.new_contact_name).trim() : null;
+  const domain = b.domain ? String(b.domain).trim() : null;
+
+  // Create a new person entity when requested.
+  if (!contactEntityId && !sfContactId && newName) {
+    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    const ins = await opsQuery('POST', 'entities',
+      { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
+    const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;
+    if (!ins.ok || !row) return res.status(502).json({ error: 'create_contact_failed', detail: ins.data });
+    contactEntityId = row.id; contactName = newName;
+  }
+  if (!contactEntityId && !sfContactId) {
+    return res.status(400).json({ error: 'Provide contact_entity_id, sf_contact_id, or new_contact_name' });
+  }
+
+  // Link person→parent (associated_with) — best-effort, guarded against dupes
+  // (no unique index on entity_relationships, so pre-check).
+  if (contactEntityId) {
+    try {
+      const exists = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
+        + '&from_entity_id=eq.' + pgFilterVal(entityId) + '&to_entity_id=eq.' + pgFilterVal(contactEntityId) + '&limit=1');
+      if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
+        await opsQuery('POST', 'entity_relationships', {
+          workspace_id: workspaceId, from_entity_id: entityId, to_entity_id: contactEntityId,
+          relationship_type: 'associated_with', metadata: { role: 'buy_side_contact', via: 'priority_queue' },
+        });
+      }
+    } catch (_e) { /* non-fatal */ }
+    // Pull the name if not supplied.
+    if (!contactName) {
+      try {
+        const ce = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(contactEntityId) + '&select=name&limit=1');
+        if (ce.ok && Array.isArray(ce.data) && ce.data[0]) contactName = ce.data[0].name || null;
+      } catch (_e) { /* soft */ }
+    }
+  }
+
+  // Effect FIRST: seed the buy-side cadence.
+  const seed = await opsQuery('POST', 'rpc/lcc_seed_buyer_cadence', {
+    p_bd_opportunity_id: oppId, p_entity_id: entityId,
+    p_contact_id: contactEntityId, p_sf_contact_id: sfContactId,
+    p_contact_name: contactName, p_owner_user_id: user.id, p_domain: domain,
+  });
+  if (!seed.ok) {
+    console.warn('[select_buyer_contact] cadence seed failed:', seed.status, seed.data);
+    return res.status(502).json({ error: 'cadence_seed_failed', detail: seed.data });
+  }
+  const cad = Array.isArray(seed.data) ? seed.data[0] : seed.data;
+
+  // Record primary_contact on the opportunity (display trail; best-effort).
+  if (oppId) {
+    try {
+      const cur = await opsQuery('GET', 'bd_opportunities?id=eq.' + pgFilterVal(oppId) + '&select=metadata&limit=1');
+      const meta = (cur.ok && Array.isArray(cur.data) && cur.data[0] && cur.data[0].metadata) ? cur.data[0].metadata : {};
+      const nextMeta = Object.assign({}, meta, {
+        primary_contact: { entity_id: contactEntityId, sf_contact_id: sfContactId, name: contactName, set_at: new Date().toISOString() },
+      });
+      await opsQuery('PATCH', 'bd_opportunities?id=eq.' + pgFilterVal(oppId), { metadata: nextMeta });
+    } catch (_e) { /* non-fatal */ }
+  }
+
+  // Staleness hook: the parent now lives in the cadence bands, not "to decide".
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+  return res.status(200).json({
+    ok: true, entity_id: entityId, bd_opportunity_id: oppId,
+    contact_entity_id: contactEntityId, sf_contact_id: sfContactId, contact_name: contactName,
+    cadence_id: cad ? cad.id : null, phase: cad ? cad.phase : 'buy_side',
+    next_touch_due: cad ? cad.next_touch_due : null,
   });
 }
 
