@@ -7707,6 +7707,25 @@ function _salesToggleForm() {
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+// C1 (2026-06-06): from the Overview "no sale recorded" banner, jump to the
+// Deal History tab and reveal the Add Transaction form. Deal History renders
+// async, so poll briefly for the form element before showing it.
+function _udAddFirstSale() {
+  if (typeof switchUnifiedTab === 'function') switchUnifiedTab('Deal History');
+  let tries = 0;
+  const iv = setInterval(function () {
+    const el = document.getElementById('salesAddForm');
+    if (el) {
+      el.style.display = 'block';
+      try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+      clearInterval(iv);
+    } else if (++tries > 40) {
+      clearInterval(iv);
+    }
+  }, 75);
+}
+window._udAddFirstSale = _udAddFirstSale;
+
 async function _salesSaveTransaction() {
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
   if (!propertyId) { alert('No property ID — cannot save transaction.'); return; }
@@ -10961,7 +10980,10 @@ async function _intelRenderPriorSaleSummaryAsync() {
   }
 
   if (!latest) {
-    slot.innerHTML = '<span class="t-muted3">No sale recorded for this property yet.</span>';
+    // C1 (2026-06-06): offer the next action instead of dead-ending — jump to
+    // the Deal History tab and open the Add Transaction form.
+    slot.innerHTML = '<span class="t-muted3">No sale recorded for this property yet.</span> '
+      + '<a href="javascript:void(0)" onclick="_udAddFirstSale()" style="color:var(--accent);font-weight:600">Add first sale →</a>';
     return;
   }
 
@@ -12641,11 +12663,20 @@ function _ownerDrawerCreateSfAccount() {
 async function _ownerDrawerAddContact() {
   const c = _ownerDrawerCache;
   if (!c) return;
-  const fullName = window.prompt('Contact full name:', '');
-  if (!fullName) return;
-  const email = window.prompt('Email (optional):', '') || '';
-  const phone = window.prompt('Phone (optional):', '') || '';
-  const title = window.prompt('Title (optional):', '') || '';
+  // A3 (2026-06-06): styled, escapable lccPrompt modals instead of native
+  // window.prompt — validated, themed, focus-trapped. Name is required; the
+  // rest are optional and Cancel on any optional step just leaves it blank.
+  const _ask = typeof lccPrompt === 'function'
+    ? (msg, def) => lccPrompt(msg, def)
+    : (msg, def) => window.prompt(msg, def);
+  const companyForCtx = c.parent_account_name || c.true_owner_name || c.recorded_owner_name || c.name || '';
+  const fullNameRaw = await _ask('Add a contact' + (companyForCtx ? ' at ' + companyForCtx : '') + '.\n\nFull name:', '');
+  if (fullNameRaw == null) return;
+  const fullName = String(fullNameRaw).trim();
+  if (!fullName) { showToast('Contact name is required.', 'error'); return; }
+  const email = (await _ask('Email (optional — leave blank to skip):', '')) || '';
+  const phone = (await _ask('Phone (optional — leave blank to skip):', '')) || '';
+  const title = (await _ask('Title (optional — leave blank to skip):', '')) || '';
 
   const parts = fullName.trim().split(/\s+/);
   const firstName = parts[0] || '';
@@ -13622,14 +13653,11 @@ async function _udExportLeaseComps(db, propertyId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Building...'; }
 
   try {
-    // Lazy-load ExcelJS in parallel with the comp data fetch — both are
-    // independent and the network round-trips cost the same when run side
-    // by side. ExcelJS is required for template-based output (style fidelity);
-    // without it we can't preserve the Briggs branding.
-    const [ExcelJS, comps] = await Promise.all([
-      _udLoadExcelJs(),
-      _udFetchLeaseCompCandidates(db, subject, count)
-    ]);
+    // C2 (2026-06-06): fetch comps FIRST so a CDN/ExcelJS failure can still
+    // deliver the data as CSV instead of a dead "try again". ExcelJS gives
+    // template/style fidelity (Briggs branding); CSV is the honest fallback
+    // when the CDN is blocked/offline.
+    const comps = await _udFetchLeaseCompCandidates(db, subject, count);
     if (!comps.length) {
       const universe = Number(window._udLastGeocodeUniverseSize || 0);
       const radius = Number(window._udLastGeocodeRadiusMi || 0);
@@ -13637,6 +13665,16 @@ async function _udExportLeaseComps(db, propertyId, btn) {
         ? `No geocoded properties found within ${radius} mi of the subject — coverage may be too sparse in this area for distance-ranked comps.`
         : 'No comparable properties with coordinates found nearby';
       showToast(msg, 'error');
+      return;
+    }
+
+    let ExcelJS = null;
+    try {
+      ExcelJS = await _udLoadExcelJs();
+    } catch (libErr) {
+      console.warn('[lease-comps] ExcelJS unavailable — falling back to CSV:', libErr?.message || libErr);
+      _udExportLeaseCompsCsv(db, subject, comps);
+      showToast(`ExcelJS/CDN unavailable — exported ${comps.length} comp${comps.length === 1 ? '' : 's'} as CSV instead.`, 'warn');
       return;
     }
     await _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps);
@@ -13648,6 +13686,55 @@ async function _udExportLeaseComps(db, propertyId, btn) {
     if (btn) { btn.disabled = false; btn.textContent = origText; }
   }
 }
+
+// C2 (2026-06-06): CSV fallback when ExcelJS can't load (CDN blocked/offline).
+// Style fidelity is lost, but the data ships. Generic: emits a curated set of
+// useful columns first, then any remaining scalar fields, so the export is
+// never empty regardless of the enriched comp shape.
+function _udCsvCell(v) {
+  if (v == null) return '';
+  let s = String(v);
+  if (/[",\n\r]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function _udExportLeaseCompsCsv(db, subject, comps) {
+  if (!Array.isArray(comps) || !comps.length) { showToast('No comps to export.', 'error'); return; }
+  // Prefer a human-meaningful column order; append any other scalar keys after.
+  const preferred = ['property_id', 'distance_miles', 'address', 'city', 'state', 'tenant',
+    'agency', 'sf_leased', 'rba', 'year_built', 'lease_commencement', 'lease_expiration',
+    'annual_rent', 'rent', 'base_rent', 'rent_per_sf', 'cap_rate', 'true_owner_name',
+    'recorded_owner_name'];
+  const seen = new Set();
+  const cols = [];
+  preferred.forEach(k => { if (comps.some(c => c && c[k] != null)) { cols.push(k); seen.add(k); } });
+  comps.forEach(c => {
+    if (!c) return;
+    Object.keys(c).forEach(k => {
+      if (seen.has(k)) return;
+      const v = c[k];
+      if (v == null || typeof v === 'object') return; // scalars only
+      cols.push(k); seen.add(k);
+    });
+  });
+  const lines = [cols.join(',')];
+  comps.forEach(c => { lines.push(cols.map(k => _udCsvCell(c ? c[k] : '')).join(',')); });
+  const csv = lines.join('\r\n');
+  try {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const subjId = (subject && (subject.property_id || subject.address)) || 'subject';
+    a.href = url;
+    a.download = `lease_comps_${db}_${String(subjId).replace(/[^a-z0-9]+/gi, '_')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  } catch (e) {
+    console.error('[lease-comps] CSV download failed:', e);
+    showToast('CSV fallback failed: ' + (e?.message || e), 'error');
+  }
+}
+window._udExportLeaseCompsCsv = _udExportLeaseCompsCsv;
 
 // Lazy-loads the ExcelJS UMD bundle on first export click. Adds the
 // stylepreserving Excel writer to window.ExcelJS without bloating the

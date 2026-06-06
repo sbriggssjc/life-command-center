@@ -17,6 +17,30 @@ async function _opsBtnGuard(btn, fn, ...args) {
   try { await fn(...args); } catch (e) { console.error('_opsBtnGuard error:', e); showToast(e.message || 'Action failed', 'error'); } finally { btn.disabled = false; btn.textContent = orig; btn.style.opacity = ''; }
 }
 
+// --- Detail-panel readiness gate (B10, 2026-06-06) ---
+// showDetail() lives in detail.js, which can finish loading after ops.js wires
+// up its click handlers (script-order race). Rather than dead-toast "Detail
+// panel unavailable" on an early click, queue the open and run it the moment
+// detail.js is ready. Resolves immediately when showDetail already exists.
+function _opsWhenDetailReady(fn, opts) {
+  opts = opts || {};
+  const timeoutMs = opts.timeoutMs || 8000;
+  const intervalMs = 120;
+  if (typeof showDetail === 'function') { fn(); return; }
+  const started = Date.now();
+  // One-time "loading" hint so the user knows the click registered.
+  if (typeof showToast === 'function') showToast('Opening detail panel…', 'info');
+  const timer = setInterval(function () {
+    if (typeof showDetail === 'function') {
+      clearInterval(timer);
+      try { fn(); } catch (e) { console.error('_opsWhenDetailReady fn error:', e); if (typeof showToast === 'function') showToast('Could not open detail: ' + (e?.message || e), 'error'); }
+    } else if (Date.now() - started > timeoutMs) {
+      clearInterval(timer);
+      if (typeof showToast === 'function') showToast('Detail panel failed to load — reload the page (Ctrl+Shift+R) and try again.', 'error');
+    }
+  }, intervalMs);
+}
+
 // --- Performance instrumentation ---
 const opsPerfLog = [];
 
@@ -63,7 +87,8 @@ let opsSyncData = null;
 
 let opsMyWorkFilter = 'all';      // all | open | in_progress | waiting | overdue
 let opsInboxFilter = 'new';       // new | triaged | all
-let opsEntityFilter = 'all';      // all | person | company | property | clinic
+let opsEntityFilter = 'all';      // all | person | organization | asset (server-side filter)
+let opsEntitySearch = '';         // backend name search term (B6, 2026-06-06)
 let opsResearchFilter = 'active'; // active | completed | all
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
@@ -313,6 +338,30 @@ function degradedBannerHTML(type, detail) {
   </div>`;
 }
 
+// --- Standardized error state (B7, 2026-06-06) ---
+// One component for widget + page-level + lane load failures: states WHAT
+// failed (label + status + short detail), offers Retry, and — when retry is
+// hopeless (4xx config/permission errors) — says so instead of looping a
+// button that can't succeed. `res` is an opsApi result ({ok,status,error}).
+function opsErrorState(res, retryExpr, label) {
+  const status = res && typeof res.status === 'number' ? res.status : null;
+  const detail = (res && res.error) || 'Unknown error';
+  // 4xx is a config/permission/not-found problem retrying won't fix (408/429
+  // are transient and DO warrant a retry).
+  const hopeless = status != null && status >= 400 && status < 500 && status !== 408 && status !== 429;
+  let h = '<div class="widget-error" role="alert">';
+  h += '<div class="err-msg">' + esc(label || 'Could not load') + (status ? ' (HTTP ' + status + ')' : '') + '</div>';
+  if (detail) h += '<div class="err-detail" style="font-size:12px;color:var(--text2);margin-top:4px">' + esc(String(detail).slice(0, 240)) + '</div>';
+  if (hopeless) {
+    h += '<div style="font-size:12px;color:var(--text3);margin-top:6px">This looks like a configuration or permission error — retrying won\'t help. Check your workspace / sign-in, or contact an admin.</div>';
+  } else if (retryExpr) {
+    h += '<button class="retry-btn" onclick="' + esc(retryExpr) + '">Retry</button>';
+  }
+  h += '</div>';
+  return h;
+}
+window.opsErrorState = opsErrorState;
+
 // --- Improved empty states ---
 function emptyStateHTML(icon, title, desc, actionLabel, actionFn) {
   return `<div class="ops-empty-detailed">
@@ -355,7 +404,7 @@ async function renderMyWork(page) {
   ]);
 
   if (!qRes.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load your work queue.<br><small>${esc(qRes.error)}</small></div>`;
+    el.innerHTML = opsErrorState(qRes, 'renderMyWork()', 'Could not load your work queue');
     perf.end();
     return;
   }
@@ -554,7 +603,7 @@ async function renderTeamQueue() {
   ]);
 
   if (!qRes.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load team queue.<br><small>${esc(qRes.error)}</small></div>`;
+    el.innerHTML = opsErrorState(qRes, 'renderTeamQueue()', 'Could not load team queue');
     perf.end();
     return;
   }
@@ -669,7 +718,7 @@ async function renderInboxTriage() {
   window._inboxCanonicalTotal = totalForFilter;
 
   if (!res.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load inbox.<br><small>${esc(res.error)}</small></div>`;
+    el.innerHTML = opsErrorState(res, 'renderInboxTriage()', 'Could not load inbox');
     perf.end();
     return;
   }
@@ -1140,6 +1189,11 @@ async function ocrReextractIntake(intakeId, btn) {
 // ============================================================================
 // ENTITIES — canonical model browser
 // ============================================================================
+// B6 (2026-06-06): the header used to read "All (25)" — the fetch slice
+// presented as the universe. Now: the entity_type filter + the optional name
+// search run SERVER-side, and the header shows the loaded count against the
+// real (estimated) total ("25 of ~16,400 — search to narrow"). Search hits
+// /api/entities?action=search&q= (name/canonical_name across the workspace).
 async function renderEntitiesPage(page = opsEntitiesPage) {
   const el = document.getElementById('entitiesContent');
   if (!el) return;
@@ -1147,37 +1201,59 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:entities');
 
-  const res = await opsApi(`/api/entities?page=${opsEntitiesPage}&per_page=25`);
+  const term = (opsEntitySearch || '').trim();
+  const typeParam = (opsEntityFilter && opsEntityFilter !== 'all') ? '&entity_type=' + encodeURIComponent(opsEntityFilter) : '';
+  const searching = term.length >= 2;
+  const reqPath = searching
+    ? `/api/entities?action=search&q=${encodeURIComponent(term)}${typeParam}`
+    : `/api/entities?page=${opsEntitiesPage}&per_page=25${typeParam}`;
+
+  const res = await opsApi(reqPath);
   if (!res.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load entities.<br><small>${esc(res.error)}</small></div>`;
+    el.innerHTML = opsErrorState(res, 'renderEntitiesPage()', 'Could not load entities');
     perf.end();
     return;
   }
 
   opsEntitiesData = res.data?.entities || res.data || [];
-  opsPagination['/api/entities'] = res.data?.pagination || null;
-  const counts = {};
-  opsEntitiesData.forEach(e => { counts[e.entity_type] = (counts[e.entity_type] || 0) + 1; });
+  opsPagination['/api/entities'] = searching ? null : (res.data?.pagination || null);
+  const shown = opsEntitiesData.length;
+  const total = res.data?.pagination?.total ?? res.data?.count ?? null;
+  const totalLabel = total != null
+    ? (searching ? `${shown} match${shown === 1 ? '' : 'es'}` : `${shown} of ~${Number(total).toLocaleString()}`)
+    : `${shown}`;
 
   let html = '';
   html += `<div class="ops-header">
-    <h2>Entities <span style="font-size:13px;color:var(--text2);font-weight:400">${opsEntitiesData.length}</span></h2>
+    <h2>Entities <span style="font-size:13px;color:var(--text2);font-weight:400">${esc(totalLabel)}${(!searching && total != null && shown < total) ? ' — search to narrow' : ''}</span></h2>
   </div>`;
 
+  // Search box (server-side). Enter or the button runs the search; Clear resets.
+  html += '<div class="ops-filters" style="gap:8px;align-items:center">';
+  html += `<input id="opsEntitySearchInput" type="text" value="${esc(term)}" placeholder="Search entities by name…"
+      onkeydown="if(event.key==='Enter'){opsEntityRunSearch();return false;}"
+      style="flex:1;min-width:200px;max-width:360px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s3);color:var(--text1);font-size:13px">`;
+  html += `<button class="ops-filter" onclick="opsEntityRunSearch()">Search</button>`;
+  if (searching) html += `<button class="ops-filter" onclick="opsEntityClearSearch()">Clear</button>`;
+  html += '</div>';
+
+  // Type filter — server-side over the FULL universe (not the loaded page).
   html += '<div class="ops-filters">';
-  html += `<button class="ops-filter ${opsEntityFilter === 'all' ? 'active' : ''}" onclick="opsEntityFilter='all';opsEntitiesPage=1;renderEntitiesPage()">All (${opsEntitiesData.length})</button>`;
-  Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, ct]) => {
-    html += `<button class="ops-filter ${opsEntityFilter === type ? 'active' : ''}" onclick="opsEntityFilter=decodeURIComponent('${encodeURIComponent(type)}');opsEntitiesPage=1;renderEntitiesPage()">${esc(type)} (${ct})</button>`;
+  const TYPES = ['all', 'person', 'organization', 'asset'];
+  TYPES.forEach(function (t) {
+    const lbl = t === 'all' ? 'All' : t.charAt(0).toUpperCase() + t.slice(1);
+    html += `<button class="ops-filter ${opsEntityFilter === t ? 'active' : ''}" onclick="opsEntityFilter='${t}';opsEntitiesPage=1;renderEntitiesPage()">${lbl}</button>`;
   });
   html += '</div>';
 
-  const filtered = opsEntityFilter === 'all' ? opsEntitiesData : opsEntitiesData.filter(e => e.entity_type === opsEntityFilter);
+  const filtered = opsEntitiesData; // filtering is server-side now
 
   if (!filtered.length) {
     html += emptyStateHTML(
       '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>',
-      opsEntityFilter === 'all' ? 'No entities yet' : 'No matching entities',
-      opsEntityFilter === 'all' ? 'Entities are created when you sync connectors or import data.' : 'Try selecting a different entity type.',
+      searching ? 'No matches' : (opsEntityFilter === 'all' ? 'No entities yet' : 'No matching entities'),
+      searching ? 'No entities match “' + esc(term) + '”' + (opsEntityFilter !== 'all' ? ' in ' + esc(opsEntityFilter) : '') + '. Try a different term or Clear the search.'
+        : (opsEntityFilter === 'all' ? 'Entities are created when you sync connectors or import data.' : 'Try a different entity type.'),
       null, null
     );
   } else {
@@ -1197,11 +1273,32 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
     });
   }
 
-  html += paginationHTML('/api/entities', 'renderEntitiesPage');
+  // Pagination only applies to the unfiltered/paginated list; search returns a
+  // single capped result set (top 50 by name), so no pager there.
+  if (!searching) html += paginationHTML('/api/entities', 'renderEntitiesPage');
 
   el.innerHTML = html;
+  // Keep focus in the search box after a search re-render.
+  if (searching) { const si = document.getElementById('opsEntitySearchInput'); if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); } }
   perf.end();
 }
+
+// B6 search helpers — read the input, validate (≥2 chars), re-render.
+function opsEntityRunSearch() {
+  const si = document.getElementById('opsEntitySearchInput');
+  const v = si ? String(si.value || '').trim() : '';
+  if (v && v.length < 2) { if (typeof showToast === 'function') showToast('Type at least 2 characters to search.', 'warn'); return; }
+  opsEntitySearch = v;
+  opsEntitiesPage = 1;
+  renderEntitiesPage();
+}
+window.opsEntityRunSearch = opsEntityRunSearch;
+function opsEntityClearSearch() {
+  opsEntitySearch = '';
+  opsEntitiesPage = 1;
+  renderEntitiesPage();
+}
+window.opsEntityClearSearch = opsEntityClearSearch;
 
 // ── Review Console (UX move #2b, 2026-05-31) ───────────────────────────────
 // Unified work-type review lanes. Reads /api/review-counts (one batched call)
@@ -1220,7 +1317,7 @@ async function renderOpsHealthPage() {
 
   const res = await opsApi('/api/ops-health');
   if (!res.ok) {
-    el.innerHTML = '<div class="ops-empty">Could not load Ops Health.<br><small>' + esc(res.error || '') + '</small></div>';
+    el.innerHTML = opsErrorState(res, 'renderOpsHealthPage()', 'Could not load Ops Health');
     perf.end();
     return;
   }
@@ -1368,10 +1465,27 @@ async function renderReviewConsolePage() {
   });
   html += '</div>';
 
+  // C3 (2026-06-06): cache lane counts so an emptied lane can point the user at
+  // the next busiest lane instead of dead-ending on a celebration.
+  _dcLaneSummary = DEFS.map(function (d) { return { label: d.label, open: d.open, n: d.n }; });
+
   el.innerHTML = html;
   perf.end();
 }
 window.renderReviewConsolePage = renderReviewConsolePage;
+
+// C3 helper: "Next: <busiest other lane> →" CTA for empty / cleared lane states.
+let _dcLaneSummary = [];
+let _dcCurrentOpenExpr = ''; // open-expr of the lane currently being worked
+function _dcNextLaneCTA(currentOpenExpr) {
+  const lanes = (_dcLaneSummary || []).filter(function (l) { return l.n > 0 && l.open !== currentOpenExpr; });
+  if (!lanes.length) return '';
+  lanes.sort(function (a, b) { return b.n - a.n; });
+  const top = lanes[0];
+  return '<div style="margin-top:12px"><button class="q-action primary" onclick="' + esc(top.open) + '">Next: '
+    + esc(top.label) + ' (' + top.n + ') →</button>'
+    + ' <button class="q-action" onclick="renderReviewConsolePage()">All lanes</button></div>';
+}
 
 // ── SOS owner-contact link worklist (Review Console lane, 2026-05-31) ───────
 // Opens inline in the Review Console: lists weak FL SOS->contact links with
@@ -1381,7 +1495,7 @@ async function renderSosLinkWorklist() {
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const res = await opsApi('/api/resolve-owner-link?limit=100');
-  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load owner-contact links.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderSosLinkWorklist()', 'Could not load owner-contact links'); return; }
   const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   let html = '<div class="ops-header"><h2>Owner-contact links to confirm</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Review Console</button></div>';
@@ -1511,17 +1625,33 @@ function _dcCardHTML(it, isNext) {
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
 }
-function dcJunkRename(id) {
-  const nm = (typeof prompt === 'function') ? prompt('New entity name:') : '';
-  if (nm == null) return;
-  const v = String(nm || '').trim(); if (!v) return;
+// A3 (2026-06-06): styled, validating modal (lccPrompt) instead of native
+// prompt() — shows the current flagged name as context + validates before POST.
+async function dcJunkRename(id) {
+  const it = _dcItems[id]; const cur = (it && it.context && it.context.entity_name) || '';
+  const ask = typeof lccPrompt === 'function'
+    ? await lccPrompt('Rename this flagged entity.\n\nCurrent (flagged) name: ' + (cur || '—') + '\n\nEnter the real name:', cur || '')
+    : (typeof prompt === 'function' ? prompt('New entity name:', cur || '') : '');
+  if (ask == null) return;
+  const v = String(ask || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Name cannot be empty.', 'error'); return; }
+  if (v === cur) { if (typeof showToast === 'function') showToast('Name unchanged — nothing to rename.', 'warn'); return; }
   dcVerdict(id, 'rename', { new_name: v });
 }
 window.dcJunkRename = dcJunkRename;
-function dcJunkMerge(id) {
-  const tgt = (typeof prompt === 'function') ? prompt('Merge INTO entity id (UUID of the real entity to keep):') : '';
-  if (tgt == null) return;
-  const v = String(tgt || '').trim(); if (!v) return;
+async function dcJunkMerge(id) {
+  const it = _dcItems[id]; const cur = (it && it.context && it.context.entity_name) || '';
+  const ask = typeof lccPrompt === 'function'
+    ? await lccPrompt('Merge "' + (cur || 'this entity') + '" INTO the real entity it duplicates.\n\nPaste the target entity UUID (the entity to KEEP):', '')
+    : (typeof prompt === 'function' ? prompt('Merge INTO entity id (UUID of the real entity to keep):') : '');
+  if (ask == null) return;
+  const v = String(ask || '').trim();
+  if (!v) return;
+  // Validate UUID shape before POST so a fat-fingered id doesn't reach the merge RPC.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    if (typeof showToast === 'function') showToast('That is not a valid entity UUID.', 'error');
+    return;
+  }
   dcVerdict(id, 'merge', { target_entity_id: v });
 }
 window.dcJunkMerge = dcJunkMerge;
@@ -1531,7 +1661,7 @@ async function renderDecisionLane(type) {
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50');
-  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load decisions.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  if (!res.ok) { el.innerHTML = opsErrorState(res, "renderDecisionLane('" + type + "')", 'Could not load decisions'); return; }
   const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   const total = res.data ? res.data.total : null;
   const titles = { confirm_true_owner: 'Confirm the true owner', junk_entity_name: 'Junk entity names' };
@@ -1542,7 +1672,8 @@ async function renderDecisionLane(type) {
   let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(intros[type] || '') + '</div>';
-  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓</div>'; el.innerHTML = html; return; }
+  _dcCurrentOpenExpr = "renderDecisionLane('" + type + "')";
+  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' in this lane' : '') + '</div>';
   _dcItems = {};
@@ -1565,6 +1696,7 @@ async function renderBuyerParentLane() {
   let html = '<div class="ops-header"><h2>Buyer parents &amp; SF mapping</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">Confirm controlling sponsors and map each repeat-buyer parent to its Salesforce parent account. One buyer, one account — the opportunity routes to the parent, never a subsidiary SPE.</div>';
+  _dcCurrentOpenExpr = 'renderBuyerParentLane()';
   if (!items.length) { html += '<div class="ops-empty">All buyer parents mapped &amp; confirmed. ✓</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> to decide</div>';
   _dcItems = {};
@@ -1684,13 +1816,14 @@ async function renderFederatedLane(type) {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const meta = _DC_FED_META[type] || { title: type, intro: '' };
   const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50');
-  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load this lane.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  if (!res.ok) { el.innerHTML = opsErrorState(res, "renderFederatedLane('" + type + "')", 'Could not load this lane'); return; }
   const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   const total = res.data ? res.data.total : null;
   let html = '<div class="ops-header"><h2>' + esc(meta.title) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(meta.intro) + '</div>';
-  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓</div>'; el.innerHTML = html; return; }
+  _dcCurrentOpenExpr = "renderFederatedLane('" + type + "')";
+  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
   _dcFedType = type;
@@ -1700,9 +1833,18 @@ async function renderFederatedLane(type) {
 }
 window.renderFederatedLane = renderFederatedLane;
 
-function dcImplausibleCorrect(i) {
+async function dcImplausibleCorrect(i) {
   const it = _dcFedArr[i]; if (!it) return;
-  const v = (typeof prompt === 'function') ? prompt('Corrected sale price (number):') : '';
+  const c = it.context || {};
+  const curStr = (isFinite(Number(c.sold_price)) && Number(c.sold_price) > 0)
+    ? '$' + Math.round(Number(c.sold_price)).toLocaleString() : '(none)';
+  const ceil = (isFinite(Number(c.ceiling)) && Number(c.ceiling) > 0)
+    ? '$' + Math.round(Number(c.ceiling)).toLocaleString() : '';
+  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
+    + 'recorded ' + curStr + (ceil ? ' (over the ' + ceil + ' ceiling)' : '');
+  const v = typeof lccPrompt === 'function'
+    ? await lccPrompt('Correct this sale price.\n\n' + ctx + '\n\nEnter the corrected price (numbers only):', '')
+    : (typeof prompt === 'function' ? prompt('Corrected sale price (number):') : '');
   if (v == null) return;
   const n = Number(String(v).replace(/[^0-9.]/g, ''));
   if (!isFinite(n) || n <= 0) { if (typeof showToast === 'function') showToast('Enter a valid price', 'error'); return; }
@@ -1765,17 +1907,21 @@ function _dcAdvanceFed() {
     pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   } else {
     const prog = scope.querySelector('.rc-progress');
-    if (prog) prog.innerHTML = 'All decided in this lane ✓';
+    if (prog) prog.innerHTML = 'All decided in this lane ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr);
     if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
   }
 }
 
-function dcStale(id) {
-  const name = (typeof prompt === 'function')
-    ? prompt('Current (new) owner name. Recorded now; the gov true_owner write-back applies once DECISION_GOV_WRITEBACK is enabled:')
-    : '';
+async function dcStale(id) {
+  const it = _dcItems[id]; const stale = (it && it.context && it.context.true_owner_name) || '';
+  const name = typeof lccPrompt === 'function'
+    ? await lccPrompt('Mark the domain owner as stale (pre-acquisition).\n\nStale owner on file: ' + (stale || '—')
+        + '\n\nEnter the CURRENT (new) owner name. Recorded now; the gov true_owner write-back applies once DECISION_GOV_WRITEBACK is enabled:', '')
+    : (typeof prompt === 'function' ? prompt('Current (new) owner name:') : '');
   if (name == null) return;
-  dcVerdict(id, 'stale', { proposed_owner_name: String(name || '').trim() || null });
+  const v = String(name || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Enter the new owner name (or Cancel).', 'error'); return; }
+  dcVerdict(id, 'stale', { proposed_owner_name: v });
 }
 window.dcStale = dcStale;
 
@@ -1912,7 +2058,7 @@ function _dcAdvance() {
     pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   } else {
     const prog = scope.querySelector('.rc-progress');
-    if (prog) prog.innerHTML = 'All decided in this lane ✓';
+    if (prog) prog.innerHTML = 'All decided in this lane ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr);
     if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
   }
 }
@@ -2002,7 +2148,7 @@ async function renderPriorityQueuePage(band) {
   var perf = opsPerf('render:priority_queue');
   var qs = '/api/priority-queue?limit=150' + (band ? '&band=' + encodeURIComponent(band) : '');
   var res = await opsApi(qs);
-  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load the priority queue.<br><small>' + esc(res.error || '') + '</small></div>'; perf.end(); return; }
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderPriorityQueuePage()', 'Could not load the priority queue'); perf.end(); return; }
   var data = res.data || {};
   var items = Array.isArray(data.items) ? data.items : [];
   var counts = Array.isArray(data.counts) ? data.counts : [];
@@ -2347,10 +2493,13 @@ function pqBuyerContactPick(kind, i) {
 }
 window.pqBuyerContactPick = pqBuyerContactPick;
 
-function pqBuyerContactAddNew() {
-  const nm = (typeof prompt === 'function') ? prompt('New contact name:') : '';
+async function pqBuyerContactAddNew() {
+  const nm = typeof lccPrompt === 'function'
+    ? await lccPrompt('Add a new prospecting contact at this buyer parent.\n\nFull name:', '')
+    : (typeof prompt === 'function' ? prompt('New contact name:') : '');
   if (nm == null) return;
-  const v = String(nm || '').trim(); if (!v) return;
+  const v = String(nm || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Enter the contact name.', 'error'); return; }
   _pqBuyerContactSubmit({ new_contact_name: v }, v);
 }
 window.pqBuyerContactAddNew = pqBuyerContactAddNew;
@@ -2723,12 +2872,12 @@ async function resolveProvConflictCustom(provenance_id, btn) {
   // Find the row to show its current values in the prompt
   const card = btn?.closest('[data-prov-row]');
   const helper = card ? card.querySelector('.q-item-meta')?.textContent : '';
-  const v = prompt(
-    `Enter the value to write. Numbers will be parsed as JSON (e.g. 3690000 not "3690000").` +
-    (helper ? '\n\nContext:\n' + helper.slice(0, 200) : ''),
-    ''
-  );
-  if (v === null) return;  // cancelled
+  const msg = 'Enter the value to write. Numbers will be parsed as JSON (e.g. 3690000 not "3690000").'
+    + (helper ? '\n\nContext:\n' + helper.slice(0, 200) : '');
+  const v = typeof lccPrompt === 'function'
+    ? await lccPrompt(msg, '')
+    : (typeof prompt === 'function' ? prompt(msg, '') : null);
+  if (v === null || v === undefined) return;  // cancelled
   let parsed;
   try { parsed = JSON.parse(v); }
   catch { parsed = v; }   // fall back to raw string
@@ -2860,14 +3009,15 @@ async function opsOpenDiaProperty(propertyId) {
       { filter: 'property_id=eq.' + propertyId, limit: 1 });
     const prop = rows?.[0];
     if (!prop) { showToast('Property ' + propertyId + ' not found in dialysis DB', 'error'); return; }
-    if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
-    showDetail({
-      property_id: prop.property_id,
-      address:     prop.address || '',
-      city:        prop.city || '',
-      state:       prop.state || '',
-      tenant:      prop.tenant || '',
-    }, 'dia-clinic');
+    _opsWhenDetailReady(function () {
+      showDetail({
+        property_id: prop.property_id,
+        address:     prop.address || '',
+        city:        prop.city || '',
+        state:       prop.state || '',
+        tenant:      prop.tenant || '',
+      }, 'dia-clinic');
+    });
   } catch (err) {
     console.error('opsOpenDiaProperty error:', err);
     showToast('Could not open property: ' + (err?.message || err), 'error');
@@ -2991,14 +3141,15 @@ async function opsOpenGovProperty(propertyId) {
     const prop = getRows(await govQuery('properties', 'property_id,address,city,state,agency',
       { filter: 'property_id=eq.' + propertyId, limit: 1 }))[0];
     if (!prop) { showToast('Property ' + propertyId + ' not found in government DB', 'error'); return; }
-    if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
-    showDetail({
-      property_id: prop.property_id,
-      address:     prop.address || '',
-      city:        prop.city || '',
-      state:       prop.state || '',
-      tenant:      prop.agency || '',
-    }, 'gov-asset');
+    _opsWhenDetailReady(function () {
+      showDetail({
+        property_id: prop.property_id,
+        address:     prop.address || '',
+        city:        prop.city || '',
+        state:       prop.state || '',
+        tenant:      prop.agency || '',
+      }, 'gov-asset');
+    });
   } catch (err) {
     console.error('opsOpenGovProperty error:', err);
     showToast('Could not open property: ' + (err?.message || err), 'error');
@@ -3125,11 +3276,7 @@ async function viewEntity(entityId) {
       entity_type: entity.entity_type || '',
       entity_id: entity.id
     };
-    if (typeof showDetail === 'function') {
-      showDetail(record, source);
-    } else {
-      showToast('Detail panel unavailable', 'error');
-    }
+    _opsWhenDetailReady(function () { showDetail(record, source); });
   } catch (err) {
     console.error('viewEntity error:', err);
     showToast('Could not load entity: ' + err.message, 'error');
@@ -3161,7 +3308,7 @@ async function renderResearchPage(page = opsResearchPage) {
     : '';
   const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}`);
   if (!res.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load research tasks.<br><small>${esc(res.error)}</small></div>`;
+    el.innerHTML = opsErrorState(res, 'renderResearchPage()', 'Could not load research tasks');
     perf.end();
     return;
   }
@@ -4010,26 +4157,46 @@ async function renderSyncHealthPage() {
       null, null
     );
   } else {
+    // A5 (2026-06-06): a disconnected/errored connector can't be fixed by
+    // "Sync Now" (it'll just fail). Give it the real next action \u2014 Reconnect
+    // (honest guidance, since auth is provisioned outside the app) \u2014 and let a
+    // stale duplicate be removed. Field names match the connector_accounts list
+    // payload (display_name / last_sync_at / last_error).
+    const _healthyStatuses = ['active', 'healthy', 'degraded'];
     connectors.forEach(conn => {
-      const statusCls = conn.status === 'active' ? 'healthy' : conn.status === 'degraded' ? 'degraded' : conn.status === 'error' ? 'error' : 'healthy';
+      const status = conn.status || 'unknown';
+      const isUsable = _healthyStatuses.indexOf(status) !== -1;
+      const statusCls = (status === 'active' || status === 'healthy') ? 'healthy'
+        : status === 'degraded' ? 'degraded'
+        : 'error';
       const icon = conn.connector_type === 'email' ? 'E'
         : conn.connector_type === 'calendar' ? 'C'
         : conn.connector_type === 'salesforce' ? 'SF'
         : conn.connector_type?.substring(0, 2).toUpperCase() || '?';
+      const label = conn.display_name || conn.label || '';
+      const lastSync = conn.last_sync_at || conn.last_synced_at || null;
+      const errMsg = conn.last_error || conn.error_message || '';
+      const cidEnc = encodeURIComponent(conn.id || '');
+      const typeEnc = encodeURIComponent(conn.connector_type || '');
+      const nameEnc = encodeURIComponent((conn.connector_type || 'connector') + (label ? ' (' + label + ')' : ''));
+
+      const actions = isUsable
+        ? `<button class="q-action" onclick="_opsBtnGuard(this, triggerSync, decodeURIComponent('${typeEnc}'))">Sync Now</button>`
+        : `<button class="q-action primary" onclick="reconnectConnector(decodeURIComponent('${typeEnc}'))">Reconnect \u2192</button>`
+          + (conn.id ? `<button class="q-action" onclick="removeConnector(decodeURIComponent('${cidEnc}'),decodeURIComponent('${nameEnc}'))">Remove</button>` : '');
 
       html += `<div class="sync-card ${statusCls}">
         <div class="sync-card-icon">${icon}</div>
         <div class="sync-card-info">
-          <div class="sync-card-name">${esc(conn.connector_type || 'Unknown')} ${conn.label ? '(' + esc(conn.label) + ')' : ''}</div>
+          <div class="sync-card-name">${esc(conn.connector_type || 'Unknown')} ${label ? '(' + esc(label) + ')' : ''}</div>
           <div class="sync-card-status">
-            Status: ${esc(conn.status || 'unknown')}
-            ${conn.last_synced_at ? ' \u00b7 Last sync: ' + freshnessHTML(conn.last_synced_at) : ''}
-            ${conn.error_message ? ' \u00b7 <span style="color:var(--red)">' + esc(conn.error_message) + '</span>' : ''}
+            Status: ${esc(status)}
+            ${lastSync ? ' \u00b7 Last sync: ' + freshnessHTML(lastSync) : ''}
+            ${errMsg ? ' \u00b7 <span style="color:var(--red)">' + esc(errMsg) + '</span>' : ''}
+            ${!isUsable ? ' \u00b7 <span style="color:var(--red)">needs reconnect</span>' : ''}
           </div>
         </div>
-        <div class="sync-card-actions">
-          <button class="q-action" onclick="_opsBtnGuard(this, triggerSync, decodeURIComponent('${encodeURIComponent(conn.connector_type)}'))">Sync Now</button>
-        </div>
+        <div class="sync-card-actions">${actions}</div>
       </div>`;
     });
   }
@@ -4123,6 +4290,39 @@ async function retrySync(errorId) {
   if (res.ok) showToast('Retry triggered', 'success');
   else showToast(res.error || 'Retry failed', 'error');
 }
+
+// A5 (2026-06-06): reconnect path for a disconnected/errored connector. Auth is
+// provisioned outside the app (Outlook/SF via Power Automate + admin setup),
+// so there is no in-app OAuth handshake to launch — give the user honest,
+// specific guidance instead of a button that silently does nothing.
+function reconnectConnector(connectorType) {
+  const t = (connectorType || 'this connector');
+  const how = t === 'salesforce'
+    ? 'Salesforce reconnects through the Power Automate flow + the SF connected app — re-authorize there, then the next sync will turn this green.'
+    : (t === 'email' || t === 'outlook')
+      ? 'Outlook reconnects through the Power Automate flow that owns the mailbox connection — re-authorize the flow, then run Sync Now.'
+      : 'Re-authorize this connector at its source (the Power Automate flow / admin setup that provisioned it), then run Sync Now.';
+  if (typeof showToast === 'function') showToast('Reconnect ' + t + ': ' + how, 'warn');
+}
+window.reconnectConnector = reconnectConnector;
+
+// Remove a connector account (used for stale/duplicate disconnected rows). The
+// API DELETE is owner-gated server-side; confirm first since it drops the row.
+async function removeConnector(connectorId, displayName) {
+  if (!connectorId) return;
+  const ok = typeof lccConfirm === 'function'
+    ? await lccConfirm('Remove the connector "' + (displayName || connectorId) + '"?\n\nThis deletes the connector account row. Use this for a stale duplicate — an active connector should be reconnected, not removed.', 'Remove')
+    : (typeof confirm === 'function' ? confirm('Remove connector "' + (displayName || connectorId) + '"?') : false);
+  if (!ok) return;
+  const res = await opsApi('/api/connectors?id=' + encodeURIComponent(connectorId), { method: 'DELETE' });
+  if (res.ok) {
+    if (typeof showToast === 'function') showToast('Connector removed.', 'success');
+    if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage();
+  } else {
+    if (typeof showToast === 'function') showToast('Could not remove connector: ' + (res.error || 'unknown'), 'error');
+  }
+}
+window.removeConnector = removeConnector;
 
 // ============================================================================
 // QUICK ACTIONS on queue items

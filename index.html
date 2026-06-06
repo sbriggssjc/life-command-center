@@ -517,6 +517,7 @@
     </div>
     <div class="modal-foot">
       <button class="btn-cancel" onclick="closeConsolidateModal()">Close</button>
+      <button class="btn-cancel" id="consolidateNotDupBtn" onclick="consolidateNotDuplicate()" title="Record that this property is NOT a duplicate so it stops surfacing in the merge lane">Not a duplicate</button>
     </div>
   </div>
 </div>
@@ -551,6 +552,40 @@
   window.closeConsolidateModal = function() {
     const modal = document.getElementById('consolidateModal');
     if (modal) modal.classList.remove('open');
+  };
+
+  // C6 (2026-06-06): explicit "Not a duplicate" so Close isn't the only (and
+  // ambiguous) way out. Records the dismissal via the same property_merge /
+  // not_duplicate decision the merge lane uses, so this property stops
+  // surfacing there. Record-only (no domain write).
+  window.consolidateNotDuplicate = async function() {
+    if (!_consDb || _consPid == null) { closeConsolidateModal(); return; }
+    const btn = document.getElementById('consolidateNotDupBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Recording...'; }
+    try {
+      const headers = { 'content-type': 'application/json' };
+      if (window.LCC_USER && LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      const r = await fetch('/api/decision-verdict', {
+        method: 'POST', credentials: 'include', headers,
+        body: JSON.stringify({
+          type: 'property_merge',
+          subject: { domain: _consDb, property_id: _consPid },
+          verdict: 'not_duplicate'
+        })
+      });
+      if (r.ok) {
+        if (typeof showToast === 'function') showToast('Recorded as not a duplicate.', 'success');
+        closeConsolidateModal();
+      } else {
+        const t = await r.text().catch(() => '');
+        if (btn) { btn.disabled = false; btn.textContent = 'Not a duplicate'; }
+        if (typeof showToast === 'function') showToast('Could not record: ' + r.status + ' ' + t.slice(0, 120), 'error');
+        else alert('Could not record: ' + r.status);
+      }
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Not a duplicate'; }
+      if (typeof showToast === 'function') showToast('Error: ' + (err?.message || err), 'error');
+    }
   };
 
   window.consolidateMerge = async function(keepId, dropId) {

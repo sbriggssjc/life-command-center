@@ -193,6 +193,18 @@ function buildContactCard(c) {
   const lastActivity = c.last_activity_date ? relativeDate(c.last_activity_date) : '';
   const touches = c.total_touches || 0;
 
+  // C5 (2026-06-06): a nameless contact should still be identifiable. Fall back
+  // to company / email / phone for the display line and flag it with a
+  // "needs name" chip instead of rendering bare punctuation ("? / —").
+  const hasName = !!((c.full_name && c.full_name.trim())
+    || (c.first_name && c.first_name.trim()) || (c.last_name && c.last_name.trim()));
+  const fallbackIdent = company || c.email || c.phone || c.mobile_phone || '';
+  const builtName = (c.full_name && c.full_name.trim())
+    || [c.first_name, c.last_name].filter(Boolean).join(' ').trim();
+  const displayName = hasName ? builtName : (fallbackIdent || 'Unnamed contact');
+  const needsNameChip = hasName ? ''
+    : ' <span class="uc-src-badge" style="background:var(--yellow);color:#191919" title="No name on file — from a connector/import">needs name</span>';
+
   let badges = '';
   if (c.sf_contact_id) badges += '<span class="uc-src-badge uc-src-sf" title="Salesforce">SF</span>';
   if (c.webex_person_id) badges += '<span class="uc-src-badge uc-src-webex" title="WebEx">WX</span>';
@@ -204,7 +216,7 @@ function buildContactCard(c) {
       <div class="uc-avatar ${heatClass}">${initials(c.first_name, c.last_name)}</div>
     </div>
     <div class="uc-card-center">
-      <div class="uc-card-name">${esc(c.full_name || '—')}</div>
+      <div class="uc-card-name">${esc(displayName)}${needsNameChip}</div>
       <div class="uc-card-meta">${esc(meta)}</div>
       <div class="uc-card-badges">${badges}</div>
     </div>

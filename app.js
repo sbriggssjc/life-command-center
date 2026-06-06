@@ -55,6 +55,18 @@ function checkFlag(flagName) {
   return LCC_FLAGS[flagName] === true;
 }
 
+// C4 (2026-06-06): a feature-flag-off state should tell the right person what
+// to do — admins where to enable it, everyone else who to ask — not just state
+// the fact. Returns an empty-state HTML string for the Team Queue.
+function _teamQueueDisabledHTML() {
+  const role = (LCC_USER.role || '').toLowerCase();
+  const isAdmin = role === 'owner' || role === 'manager';
+  const guidance = isAdmin
+    ? 'Enable it in <a href="javascript:void(0)" onclick="navTo(\'pageSettings\')" style="color:var(--accent)">Settings → workspace feature flags</a> (turn on <code>team_queue_enabled</code>).'
+    : 'Ask a workspace owner or manager to enable <code>team_queue_enabled</code> in workspace settings.';
+  return '<div class="ops-empty">Team Queue is not yet enabled for this workspace.<br><span style="font-size:12px;color:var(--text2)">' + guidance + '</span></div>';
+}
+
 /** Load feature flags from the server */
 async function loadFeatureFlags() {
   try {
@@ -476,9 +488,15 @@ if (typeof window !== 'undefined') window.buildCollateralIcons = buildCollateral
  * dialysis dashboard (and any future dashboard) can wire the same button
  * without duplicating the network plumbing.
  */
-window.openIntakeArtifact = async function(storagePath) {
+window.openIntakeArtifact = async function(storagePath, opts) {
   if (!storagePath) {
-    if (typeof showToast === 'function') showToast('No document linked to this listing', 'error');
+    // A2 (2026-06-06): no dead-end. There's no document on this listing yet —
+    // tell the user how to add one instead of a bare error. A listing gets an
+    // OM/flyer either by forwarding the deal email to intake (auto-links the
+    // artifact) or by capturing the CoStar/Crexi page with the sidebar.
+    if (typeof showToast === 'function') {
+      showToast('No document linked yet — forward the deal email to intake or capture the listing page to attach an OM/flyer.', 'warn');
+    }
     return;
   }
   try {
@@ -647,6 +665,36 @@ window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
 // property record from the appropriate domain DB, and hand it to
 // showDetail() with the Sales tab pre-selected so the user lands on the
 // listing+OM-artifact context for the email they were just looking at.
+// A1 (2026-06-06): no dead-end when an intake has no matched property. Offer
+// the real next action — create a property from the extraction and promote it
+// (the F4 machinery: /api/intake?_route=create-property, reused via
+// createPropertyFromIntakeUI). Falls back to deep-linking the Inbox so the user
+// can see the extraction + match-search affordances there.
+async function _intakeOfferCreateProperty(intakeId, reasonMsg) {
+  const canCreate = typeof createPropertyFromIntakeUI === 'function';
+  const msg = (reasonMsg || 'No matched property for this intake.')
+    + (canCreate ? '\n\nCreate a new property from this extraction and promote it?' : '');
+  let yes = false;
+  if (canCreate && typeof lccConfirm === 'function') {
+    yes = await lccConfirm(msg, 'Create property');
+  } else if (canCreate && typeof confirm === 'function') {
+    yes = confirm(msg);
+  }
+  if (yes && canCreate) {
+    try { await createPropertyFromIntakeUI(intakeId, null); return; }
+    catch (e) { if (typeof showToast === 'function') showToast('Create property failed: ' + (e?.message || e), 'error'); }
+  }
+  // Either declined or no create path — route to the Inbox where the extraction
+  // and match-search affordances live, instead of stranding the user.
+  if (typeof navTo === 'function') {
+    navTo('pageInbox');
+    if (typeof showToast === 'function') showToast(reasonMsg + ' Opened the Inbox — use the row to view the extraction or search for a match.', 'info');
+  } else if (typeof showToast === 'function') {
+    showToast(reasonMsg, 'warn');
+  }
+}
+window._intakeOfferCreateProperty = _intakeOfferCreateProperty;
+
 window.openIntakeFromInbox = async function (intakeId) {
   if (!intakeId) return;
   try {
@@ -657,7 +705,7 @@ window.openIntakeFromInbox = async function (intakeId) {
     const row = (qData?.rows || qData?.items || (Array.isArray(qData) ? qData : null) || [])[0];
     if (!row) {
       try { console.warn('[LCC-Intake] no queue row for intake_id', intakeId, qData); } catch (_) {}
-      if (typeof showToast === 'function') showToast('No matched property found for this intake.', 'warn');
+      await _intakeOfferCreateProperty(intakeId, 'No matched property for this intake.');
       return;
     }
 
@@ -669,7 +717,7 @@ window.openIntakeFromInbox = async function (intakeId) {
     const propertyId = m.property_id || m.matched_property_id || row.matched_property_id || null;
     const domain     = m.domain || m.matched_domain || row.matched_domain || null;
     if (!propertyId || !domain) {
-      if (typeof showToast === 'function') showToast('Intake has no matched property yet.', 'warn');
+      await _intakeOfferCreateProperty(intakeId, 'This intake has no matched property yet.');
       return;
     }
 
@@ -975,7 +1023,7 @@ document.getElementById('pipelineTabs')?.addEventListener('click', (e) => {
   if (currentPipelineTab === 'team' && typeof renderTeamQueue === 'function') {
     if (!checkFlag('team_queue_enabled')) {
       const el = document.getElementById('teamQueueContent');
-      if (el) el.innerHTML = '<div class="ops-empty">Team Queue is not yet enabled for this workspace.</div>';
+      if (el) el.innerHTML = _teamQueueDisabledHTML();
     } else {
       renderTeamQueue();
     }
@@ -997,7 +1045,7 @@ function handlePageLoad(pageId) {
       } else {
         if (!checkFlag('team_queue_enabled')) {
           const el = document.getElementById('teamQueueContent');
-          if (el) el.innerHTML = '<div class="ops-empty">Team Queue is not yet enabled for this workspace.</div>';
+          if (el) el.innerHTML = _teamQueueDisabledHTML();
         } else if (typeof renderTeamQueue === 'function') {
           renderTeamQueue();
         }
@@ -5444,7 +5492,12 @@ async function submitLogCall() {
     const data = await res.json();
     if (data.status === 'completed' || data.success) {
       showToast('Activity logged to Salesforce!', 'success');
+      // B8 (2026-06-06): advance the surface, don't just toast. Clear the form
+      // (so a reopened modal is fresh) and refresh the activity feed so the
+      // just-logged touch shows up without a manual reload.
+      if (notesEl) notesEl.value = '';
       closeLogCall();
+      if (typeof loadActivities === 'function') { try { loadActivities(); } catch (_) {} }
     } else if (data.warning) {
       showToast(`Warning: ${data.message || 'Recent activity detected'}`, 'error');
       btn.disabled = false; btn.textContent = 'Log Activity';
@@ -5462,7 +5515,7 @@ async function submitLogCall() {
 var _lrData = {};
 
 function openLogAndReschedule(sfContactId, sfCompanyId, contactName, taskSubject, currentDate) {
-  _lrData = { sfContactId: sfContactId, sfCompanyId: sfCompanyId, contactName: contactName, taskSubject: taskSubject, currentDate: currentDate };
+  _lrData = { sfContactId: sfContactId, sfCompanyId: sfCompanyId, contactName: contactName, taskSubject: taskSubject, currentDate: currentDate, logged: false };
   const ctxEl = document.getElementById('lrContext');
   const infoEl = document.getElementById('lrTaskInfo');
   const notesEl = document.getElementById('lrNotes');
@@ -5537,39 +5590,53 @@ async function submitLogReschedule() {
     return;
   }
 
+  // A4 (2026-06-06): two sequential effects (SF log → Supabase reschedule). If
+  // the second fails after the first succeeded, the user must NOT re-log on
+  // retry (double-logs SF). `_lrData.logged` latches once step 1 lands so a
+  // retry resumes at the failed step. Per-step feedback + reset only on full
+  // success.
+  var alreadyLogged = _lrData.logged === true;
+
   try {
-    // 1. Log the activity to Salesforce (non-blocking but we await for feedback)
-    var logPayload = {
-      sf_contact_id: _lrData.sfContactId || undefined,
-      sf_company_id: _lrData.sfCompanyId || undefined,
-      activity_type: actType,
-      activity_date: new Date().toISOString().split('T')[0],
-      notes: (_lrData.taskSubject ? '[' + _lrData.taskSubject + '] ' : '') + notes,
-      force: true
-    };
+    if (!alreadyLogged) {
+      // 1. Log the activity to Salesforce (non-blocking but we await for feedback)
+      var logPayload = {
+        sf_contact_id: _lrData.sfContactId || undefined,
+        sf_company_id: _lrData.sfCompanyId || undefined,
+        activity_type: actType,
+        activity_date: new Date().toISOString().split('T')[0],
+        notes: (_lrData.taskSubject ? '[' + _lrData.taskSubject + '] ' : '') + notes,
+        force: true
+      };
 
-    var logHeaders = { 'Content-Type': 'application/json' };
-    if (LCC_USER.workspace_id) logHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
-    var logRes = await fetch('/api/sync?action=outbound', {
-      method: 'POST',
-      headers: logHeaders,
-      body: JSON.stringify({ command: 'log_to_sf', payload: logPayload })
-    });
-    if (!logRes.ok) { showToast('Server error (' + logRes.status + ')', 'error'); btn.disabled = false; btn.textContent = 'Log & Reschedule'; return; }
-    var logData = await logRes.json();
+      var logHeaders = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) logHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
+      var logRes = await fetch('/api/sync?action=outbound', {
+        method: 'POST',
+        headers: logHeaders,
+        body: JSON.stringify({ command: 'log_to_sf', payload: logPayload })
+      });
+      if (!logRes.ok) { showToast('Activity log failed — server error (' + logRes.status + '). Nothing was logged; try again.', 'error'); btn.disabled = false; btn.textContent = 'Log & Reschedule'; return; }
+      var logData = await logRes.json();
 
-    if (logData.warning) {
-      showToast('Warning: ' + (logData.message || 'Recent activity detected'), 'error');
-      btn.disabled = false; btn.textContent = 'Log & Reschedule';
-      return;
-    }
-    if (!(logData.status === 'completed' || logData.success) && logData.error) {
-      showToast('SF log error: ' + logData.error, 'error');
-      btn.disabled = false; btn.textContent = 'Log & Reschedule';
-      return;
+      if (logData.warning) {
+        showToast('Warning: ' + (logData.message || 'Recent activity detected'), 'error');
+        btn.disabled = false; btn.textContent = 'Log & Reschedule';
+        return;
+      }
+      if (!(logData.status === 'completed' || logData.success) && logData.error) {
+        showToast('SF log error: ' + logData.error + ' — nothing was logged.', 'error');
+        btn.disabled = false; btn.textContent = 'Log & Reschedule';
+        return;
+      }
+
+      // Step 1 succeeded — latch it so a reschedule retry won't re-log.
+      _lrData.logged = true;
+      showToast('Activity logged ✓ — rescheduling…', 'success');
     }
 
     // 2. Reschedule the task date in Supabase (task stays open with new date)
+    btn.textContent = 'Rescheduling...';
     var rescheduleResult = await applyChangeWithFallback({
       proxyBase: '/api/dia-query',
       table: 'salesforce_activities',
@@ -5582,7 +5649,13 @@ async function submitLogReschedule() {
       propagation_scope: 'salesforce_activity_date'
     });
     if (!rescheduleResult.ok) {
-      throw new Error((rescheduleResult.errors || ['Unable to reschedule task']).join('; '));
+      // Step 1 stays done. Tell the user exactly that and let them retry only
+      // the reschedule — the button now says "Retry reschedule" and `logged`
+      // remains latched, so clicking again skips the SF log.
+      var why = (rescheduleResult.errors || ['Unable to reschedule task']).join('; ');
+      showToast('Activity logged ✓ but reschedule FAILED: ' + why + '. Click "Retry reschedule".', 'error');
+      btn.disabled = false; btn.textContent = 'Retry reschedule';
+      return;
     }
 
     // 3. Push the new date to the original SF task via Power Automate (non-blocking)
@@ -5609,11 +5682,19 @@ async function submitLogReschedule() {
     _updateTaskInAllStores(_lrData.sfContactId, _lrData.taskSubject, 'complete');
     _rerenderCurrentView();
 
+    _lrData.logged = false; // full success — clear the latch
     showToast('Logged to SF & rescheduled to ' + nextDate, 'success');
     closeLogReschedule();
   } catch (e) {
-    showToast('Error: ' + e.message, 'error');
-    btn.disabled = false; btn.textContent = 'Log & Reschedule';
+    // Unexpected throw. If step 1 already latched, preserve it so retry resumes
+    // at the reschedule; otherwise this is a clean failure.
+    if (_lrData.logged) {
+      showToast('Activity logged ✓ but reschedule FAILED: ' + e.message + '. Click "Retry reschedule".', 'error');
+      btn.disabled = false; btn.textContent = 'Retry reschedule';
+    } else {
+      showToast('Error: ' + e.message, 'error');
+      btn.disabled = false; btn.textContent = 'Log & Reschedule';
+    }
   }
 }
 
