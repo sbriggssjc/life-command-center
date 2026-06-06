@@ -141,6 +141,7 @@ app.all('/api/decisions', (req, res) => { req.query._route = 'decisions'; adminH
 app.all('/api/decision-verdict', (req, res) => { req.query._route = 'decision-verdict'; adminHandler(req, res); });
 app.all('/api/decision-sf-search', (req, res) => { req.query._route = 'decision-sf-search'; adminHandler(req, res); });
 app.all('/api/junk-bucket', (req, res) => { req.query._route = 'junk-bucket'; adminHandler(req, res); });
+app.all('/api/exact-merge', (req, res) => { req.query._route = 'exact-merge'; adminHandler(req, res); });
 // Round 77 (2026-05-21): SOS write-back (extension sidebar posts here via LCC_RAILWAY_URL) + research-task generator. Without these the Express server 404s them — vercel.json rewrites only apply on Vercel.
 app.all('/api/sos-writeback', (req, res) => { req.query._route = 'sos-writeback'; adminHandler(req, res); });
 app.all('/api/generate-research-tasks', (req, res) => { req.query._route = 'generate-research-tasks'; adminHandler(req, res); });
