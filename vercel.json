@@ -46,6 +46,7 @@
     { "source": "/api/decisions", "destination": "/api/admin?_route=decisions" },
     { "source": "/api/decision-verdict", "destination": "/api/admin?_route=decision-verdict" },
     { "source": "/api/decision-sf-search", "destination": "/api/admin?_route=decision-sf-search" },
+    { "source": "/api/junk-bucket", "destination": "/api/admin?_route=junk-bucket" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },

@@ -127,6 +127,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'decisions':                  return handleDecisionsList(req, res);
     case 'decision-verdict':           return handleDecisionVerdict(req, res);
     case 'decision-sf-search':         return handleDecisionSfSearch(req, res);
+    case 'junk-bucket':                return handleJunkBucket(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -976,6 +977,168 @@ async function handleDecisionsList(req, res) {
     total: (countR.ok && typeof countR.count === 'number') ? countR.count : null,
     items: Array.isArray(itemsR.data) ? itemsR.data : [],
   });
+}
+
+// ============================================================================
+// B9 (2026-06-06): Junk-entity bulk disposition by bucket.
+//
+// The junk_entity_name lane carries ~1,050 soft-flagged entities — too many to
+// work one-by-one. They fall into a few structural buckets, most of which are
+// capture artifacts (deal/attribution strings, embedded phone/email) that are
+// definitively NOT real entities, plus a "by <Broker>" bucket whose real name
+// is deterministically recoverable. This worker classifies the flagged set,
+// previews each bucket (count + samples), and applies ONE verdict to a bucket
+// at a time — batch-capped, effect-first, idempotent, recording the verdict on
+// each entity's existing seeded decision. The catch-all "other" bucket has NO
+// bulk verdict: it may contain real-but-mis-flagged orgs and stays manual.
+// ============================================================================
+
+const _JUNK_BROKER_SUFFIX_RE = /\s+by\s+(northmarq|cbre|jll|colliers( international)?|newmark|cushman( ?& ?wakefield)?|marcus ?& ?millichap|matthews( real estate)?|matthews|berkadia|hanley|capital pacific|nai( [a-z]+)?|stream realty|kw commercial|trinity|avison( young)?|stan johnson( company)?|grubb ?& ?ellis|sjc)\.?\s*$/i;
+
+function junkStripBrokerSuffix(name) {
+  return String(name || '').replace(_JUNK_BROKER_SUFFIX_RE, '').trim();
+}
+
+// Classify a flagged entity name into a structural bucket. Order matters:
+// phone/email first (hard junk), then deal strings, then broker-suffix, then
+// trust placeholders, else 'other' (stays manual).
+function classifyJunkName(name) {
+  const s = String(name || '');
+  // Embedded phone number / email / (p)(m)(c)(f) phone-type labels.
+  if (/\(\s*\d|\d{3}[)\s.\-]\s*\d{3}[\s.\-]\d{4}|\([pmcf]\)|[\w.+\-]+@[\w.\-]+\.\w{2,}/i.test(s)) return 'phone_or_email';
+  // Deal / attribution fragments: JV / OBO / CMBS-style codes / series / $amounts
+  // / approx / alloc'd / semicolon-joined deals.
+  if (/\bJV\b|\bOBO\b|\bCMBS\b|\bBBCMS\b|\bCDCMT\b|ML-?CFC|\b\d{4}-[A-Z]?\d|\$\s?\d|\bapprox\b|alloc'?d|;\s/i.test(s)) return 'deal_string';
+  // Real owner name with a " by <Broker>" attribution suffix (cleanable).
+  if (_JUNK_BROKER_SUFFIX_RE.test(s) && junkStripBrokerSuffix(s).length >= 3) return 'by_brokerage';
+  // Placeholder trust codes, e.g. "Trust 4230".
+  if (/^trust\s+\d+$/i.test(s.trim())) return 'trust_placeholder';
+  return 'other';
+}
+
+// Which bulk verdict a bucket supports. 'other' → none (manual only).
+const JUNK_BUCKET_VERDICT = {
+  phone_or_email:   'dismiss',
+  deal_string:      'dismiss',
+  trust_placeholder:'dismiss',
+  by_brokerage:     'clean_rename',
+  other:            null,
+};
+
+// GET  /api/junk-bucket            → classify + preview (counts + samples)
+// POST /api/junk-bucket  { bucket, verdict, limit } → apply one verdict to a bucket
+async function handleJunkBucket(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  let workspaceId = null;
+  try { workspaceId = req.headers['x-lcc-workspace'] || primaryWorkspace(user)?.workspace_id || null; } catch (_e) { workspaceId = null; }
+
+  // Pull the still-flagged (not-yet-reviewed) entities. Bounded; the universe
+  // is ~1k so 3000 is ample headroom.
+  const pull = async () => {
+    const r = await opsQuery('GET',
+      'entities?select=id,name,entity_type,metadata'
+      + (workspaceId ? '&workspace_id=eq.' + pgFilterVal(workspaceId) : '')
+      + '&metadata->>junk_name_flagged=eq.true&limit=3000');
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // Defensive: exclude any already marked reviewed (a re-run / race).
+    return rows.filter(e => !(e.metadata && e.metadata.junk_name_reviewed === true));
+  };
+
+  if (req.method === 'GET') {
+    const rows = await pull();
+    const buckets = {};
+    for (const e of rows) {
+      const b = classifyJunkName(e.name);
+      if (!buckets[b]) buckets[b] = { bucket: b, verdict: JUNK_BUCKET_VERDICT[b], count: 0, samples: [] };
+      buckets[b].count++;
+      if (buckets[b].samples.length < 8) {
+        const sample = { id: e.id, name: e.name };
+        if (b === 'by_brokerage') sample.cleaned_name = junkStripBrokerSuffix(e.name);
+        buckets[b].samples.push(sample);
+      }
+    }
+    const order = ['phone_or_email', 'deal_string', 'by_brokerage', 'trust_placeholder', 'other'];
+    const list = order.filter(b => buckets[b]).map(b => buckets[b]);
+    return res.status(200).json({ total_flagged: rows.length, buckets: list });
+  }
+
+  if (req.method === 'POST') {
+    if (!requireRole(user, 'operator', workspaceId)) {
+      return res.status(403).json({ error: 'Operator role required' });
+    }
+    const body = req.body || {};
+    const bucket = String(body.bucket || '').trim();
+    const verdict = String(body.verdict || '').trim();
+    const limit = Math.min(Math.max(parseInt(body.limit, 10) || 100, 1), 500);
+    if (!JUNK_BUCKET_VERDICT[bucket]) {
+      return res.status(400).json({ error: 'bucket has no bulk verdict (manual only)', bucket });
+    }
+    if (verdict !== JUNK_BUCKET_VERDICT[bucket]) {
+      return res.status(400).json({ error: 'verdict not allowed for bucket', bucket, allowed: JUNK_BUCKET_VERDICT[bucket] });
+    }
+
+    const rows = (await pull()).filter(e => classifyJunkName(e.name) === bucket).slice(0, limit);
+    if (!rows.length) return res.status(200).json({ bucket, verdict, attempted: 0, succeeded: 0, failed: 0, remaining_in_bucket: 0 });
+
+    // Batch-load the open seeded decision per entity so we record on the
+    // existing row instead of minting new ones (the bounded-lcc_decisions rule).
+    const ids = rows.map(e => e.id);
+    const inList = ids.map(id => pgFilterVal(id)).join(',');
+    const decR = await opsQuery('GET',
+      'lcc_decisions?select=id,subject_entity_id&decision_type=eq.junk_entity_name&status=eq.open'
+      + '&subject_entity_id=in.(' + inList + ')&limit=' + (ids.length + 50));
+    const decByEntity = {};
+    if (decR.ok && Array.isArray(decR.data)) for (const d of decR.data) if (d.subject_entity_id) decByEntity[d.subject_entity_id] = d.id;
+
+    let succeeded = 0, failed = 0;
+    const errors = [];
+    for (const e of rows) {
+      // Build the effect-first metadata patch (soft, reversible — never delete).
+      const meta = Object.assign({}, e.metadata || {});
+      delete meta.junk_name_flagged;             // drop out of the lane (seed predicate fails)
+      meta.junk_name_reviewed = true;
+      meta.junk_name_disposition = bucket + '_' + verdict;
+      meta.junk_name_reviewed_at = new Date().toISOString();
+      const patch = { metadata: meta, updated_at: new Date().toISOString() };
+      let recordVerdict = 'dismissed';
+      let recordStatus = 'skipped';
+
+      if (verdict === 'clean_rename') {
+        const cleaned = junkStripBrokerSuffix(e.name);
+        if (!cleaned || cleaned === e.name || cleaned.length < 3) { failed++; errors.push({ id: e.id, error: 'uncleanable_name' }); continue; }
+        patch.name = cleaned;
+        meta.junk_name_disposition = bucket + '_renamed';
+        recordVerdict = 'rename';
+        recordStatus = 'decided';
+      }
+
+      // Effect FIRST.
+      const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(e.id), patch);
+      if (!pr.ok) { failed++; errors.push({ id: e.id, error: pr.data }); continue; }
+
+      // Record the verdict on the existing seeded decision (best-effort — the
+      // entity effect is the source of truth; a missing decision row is rare).
+      const did = decByEntity[e.id];
+      if (did != null) {
+        await opsQuery('POST', 'rpc/lcc_record_decision_verdict', {
+          p_decision_id: did, p_verdict: recordVerdict, p_status: recordStatus,
+          p_verdict_payload: (verdict === 'clean_rename') ? { new_name: patch.name, bulk: true } : { bulk: true, bucket },
+          p_effects: { bulk_bucket: bucket, source: 'junk-bucket-worker' },
+          p_decided_by: user.id || null,
+        });
+      }
+      succeeded++;
+    }
+
+    return res.status(200).json({
+      bucket, verdict, attempted: rows.length, succeeded, failed,
+      errors: errors.slice(0, 10),
+      note: 'Re-run to process the next batch; idempotent (reviewed rows are excluded).',
+    });
+  }
+
+  return res.status(405).json({ error: 'GET or POST only' });
 }
 
 // SF account typeahead for the buyer-parent mapping verdict.

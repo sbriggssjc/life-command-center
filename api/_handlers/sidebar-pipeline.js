@@ -1551,15 +1551,38 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
       ? `Sale: ${pricePart} — ${partiesPart}`
       : `Sale: ${pricePart}`;
 
+    const occurredAt = saleDate || new Date().toISOString();
+    const srcType = `${source}_deed_record`;
+
+    // D1 idempotency (2026-06-06): a re-run / double-submit of the same capture
+    // used to re-insert an identical sale event (same entity/source/title/
+    // occurred_at, ~1s apart) because there was no idempotency key. Set a
+    // deterministic external_id AND skip the write when an identical sale event
+    // already exists for this property+source+title — so repeated captures of
+    // the same deal no longer pile up duplicate system events.
+    const idemKey = ('sale|' + propertyEntityId + '|' + String(occurredAt).slice(0, 10)
+      + '|' + (salePrice || '') + '|' + (sale.buyer || '') + '|' + (sale.seller || '')).slice(0, 480);
+    try {
+      const dupCheck = await opsQuery('GET',
+        'activity_events?category=eq.system&entity_id=eq.' + encodeURIComponent(propertyEntityId)
+        + '&source_type=eq.' + encodeURIComponent(srcType)
+        + '&title=eq.' + encodeURIComponent(title)
+        + '&select=id&limit=1');
+      if (dupCheck.ok && Array.isArray(dupCheck.data) && dupCheck.data.length) {
+        continue; // identical sale event already recorded — idempotent skip
+      }
+    } catch (_e) { /* non-fatal: fall through to insert */ }
+
     // Create activity_event
     const eventResult = await opsQuery('POST', 'activity_events', {
       workspace_id: workspaceId,
       actor_id: userId,
       entity_id: propertyEntityId,
       category: 'system',
-      source_type: `${source}_deed_record`,
+      source_type: srcType,
+      external_id: idemKey,
       title,
-      occurred_at: saleDate || new Date().toISOString(),
+      occurred_at: occurredAt,
       domain,
       visibility: 'shared',
       metadata: {
@@ -5515,6 +5538,12 @@ async function stageGovCompForSalesforce(propertyId, entity, metadata) {
   // Buyer + seller names stash in raw_row (jsonb) since the table
   // has no dedicated columns for them.
   await domainQuery('government', 'POST', 'sf_comps_staging', {
+    // D2 (2026-06-06): import_batch is NOT NULL with no default. The sidebar
+    // writer never set it, so EVERY costar_sidebar auto-stage insert 4xx'd on
+    // the constraint (verified: 0 costar_sidebar rows ever landed). Stamp a
+    // stable daily batch so the row inserts and the SF sync's
+    // (sf_id, source_system, import_batch) upsert key stays meaningful.
+    import_batch:       'costar_sidebar_' + new Date().toISOString().slice(0, 10),
     street:             entity.address || null,
     city:               entity.city    || null,
     state:              entity.state   || null,
