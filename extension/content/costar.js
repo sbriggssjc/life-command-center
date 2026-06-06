@@ -883,6 +883,33 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     return null;
   }
 
+  // Round 76ds + 76ff: section-context guard shared by both address finders.
+  // CoStar comp / owner pages embed a FOREIGN party's mailing address (the
+  // Buyer / Seller / Recorded Owner / Lender) in the body. On the Sale Comp
+  // Summary page the True Buyer's HQ ("1 N Wacker Dr, Suite 4000" /
+  // "Chicago, IL 60606") sits ~2 lines under the "True Buyer" label; the
+  // address walkers would otherwise grab it and overwrite the real subject
+  // property address (e.g. "312 Highway 11 E, International Falls, MN").
+  // Reject any street line that falls just below one of these section
+  // headers. Two label shapes are matched:
+  //   - explicit address sub-labels, anchored ^…$ (Round 76ds set)
+  //   - contact-block headers, start-anchored, because CoStar often renders
+  //     the label concatenated with its value
+  //     ("True Buyer Boyd Watterson Global").
+  const FOREIGN_ADDRESS_LABEL_RE = /^(mailing\s+address|buyer\s+address|seller\s+address|owner(?:'s)?\s+address|borrower\s+address|originator\s+address|contact\s+details|recorded\s+owner\s+mailing)$/i;
+  // No trailing \b: CoStar's two-column panels often render the label
+  // concatenated with its value ("True BuyerBoyd Watterson Global"), so a
+  // word-boundary after the header would miss the concatenated form.
+  const FOREIGN_PARTY_HEADER_RE = /^(recorded\s+buyer|true\s+buyer|recorded\s+seller|true\s+seller|recorded\s+owner|true\s+owner|current\s+owner|listing\s+broker|buyer\s+broker|lender|borrower|originator)/i;
+  function isInsideForeignAddressSection(lines, idx, lookback) {
+    const back = Math.max(0, idx - (lookback || 6));
+    for (let k = idx - 1; k >= back; k--) {
+      const ln = lines[k] || '';
+      if (FOREIGN_ADDRESS_LABEL_RE.test(ln) || FOREIGN_PARTY_HEADER_RE.test(ln)) return true;
+    }
+    return false;
+  }
+
   function findAddressInLines(lines) {
     // Round 76dl: try the split-line combiner FIRST. Returns the full
     // "Street, City, ST ZIP" form which is better for display + matching
@@ -891,8 +918,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const split = findSplitAddressInLines(lines);
     if (split) return split;
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       if (line.length > 120 || line.length < 5) continue;
+      // Round 76ff: same foreign-address-block guard the split-line walker
+      // uses — don't let a Buyer/Seller/Owner mailing address (e.g. the
+      // True Buyer's "1 N Wacker Dr, Suite 4000") win as the subject's
+      // street when no property heading was found.
+      if (isInsideForeignAddressSection(lines, i)) continue;
       const parsed = parseAddress(line);
       if (parsed) return parsed;
     }
@@ -918,23 +951,15 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // Verona, NJ 07044" appeared just below the page heading on
     // 5 Route 45 / Mannington NJ. The split-line walker found that
     // before any property-address line and combined them, overwriting
-    // the real subject property address. Reject streetLines that fall
-    // inside an Owner / Mailing / Buyer / Seller / Borrower / Originator
-    // address sub-block. Heuristic: scan back ≤6 lines for a section
-    // label; if found, skip this streetLine.
-    const SECTION_LABEL_RE = /^(mailing\s+address|buyer\s+address|seller\s+address|owner(?:'s)?\s+address|borrower\s+address|originator\s+address|contact\s+details|recorded\s+owner\s+mailing)$/i;
-    function isInsideForeignAddressSection(idx) {
-      const lookback = Math.max(0, idx - 6);
-      for (let k = idx - 1; k >= lookback; k--) {
-        if (SECTION_LABEL_RE.test(lines[k] || '')) return true;
-      }
-      return false;
-    }
+    // the real subject property address. Round 76ff extended the guard to
+    // the Sale Comp Summary "Recorded Buyer / True Buyer" contact-block
+    // headers (see isInsideForeignAddressSection above). Reject streetLines
+    // that fall inside an Owner / Buyer / Seller / Lender mailing sub-block.
     for (let i = 0; i < lines.length; i++) {
       const street = lines[i];
       if (!street || street.length > 120) continue;
       if (!STREET_RE.test(street)) continue;
-      if (isInsideForeignAddressSection(i)) continue;
+      if (isInsideForeignAddressSection(lines, i)) continue;
       for (let j = i + 1; j < Math.min(i + 25, lines.length); j++) {
         const cityLine = lines[j];
         if (!cityLine || !CITY_RE.test(cityLine)) continue;
