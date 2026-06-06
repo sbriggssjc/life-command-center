@@ -17,6 +17,30 @@ async function _opsBtnGuard(btn, fn, ...args) {
   try { await fn(...args); } catch (e) { console.error('_opsBtnGuard error:', e); showToast(e.message || 'Action failed', 'error'); } finally { btn.disabled = false; btn.textContent = orig; btn.style.opacity = ''; }
 }
 
+// --- Detail-panel readiness gate (B10, 2026-06-06) ---
+// showDetail() lives in detail.js, which can finish loading after ops.js wires
+// up its click handlers (script-order race). Rather than dead-toast "Detail
+// panel unavailable" on an early click, queue the open and run it the moment
+// detail.js is ready. Resolves immediately when showDetail already exists.
+function _opsWhenDetailReady(fn, opts) {
+  opts = opts || {};
+  const timeoutMs = opts.timeoutMs || 8000;
+  const intervalMs = 120;
+  if (typeof showDetail === 'function') { fn(); return; }
+  const started = Date.now();
+  // One-time "loading" hint so the user knows the click registered.
+  if (typeof showToast === 'function') showToast('Opening detail panel…', 'info');
+  const timer = setInterval(function () {
+    if (typeof showDetail === 'function') {
+      clearInterval(timer);
+      try { fn(); } catch (e) { console.error('_opsWhenDetailReady fn error:', e); if (typeof showToast === 'function') showToast('Could not open detail: ' + (e?.message || e), 'error'); }
+    } else if (Date.now() - started > timeoutMs) {
+      clearInterval(timer);
+      if (typeof showToast === 'function') showToast('Detail panel failed to load — reload the page (Ctrl+Shift+R) and try again.', 'error');
+    }
+  }, intervalMs);
+}
+
 // --- Performance instrumentation ---
 const opsPerfLog = [];
 
@@ -1511,17 +1535,33 @@ function _dcCardHTML(it, isNext) {
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
 }
-function dcJunkRename(id) {
-  const nm = (typeof prompt === 'function') ? prompt('New entity name:') : '';
-  if (nm == null) return;
-  const v = String(nm || '').trim(); if (!v) return;
+// A3 (2026-06-06): styled, validating modal (lccPrompt) instead of native
+// prompt() — shows the current flagged name as context + validates before POST.
+async function dcJunkRename(id) {
+  const it = _dcItems[id]; const cur = (it && it.context && it.context.entity_name) || '';
+  const ask = typeof lccPrompt === 'function'
+    ? await lccPrompt('Rename this flagged entity.\n\nCurrent (flagged) name: ' + (cur || '—') + '\n\nEnter the real name:', cur || '')
+    : (typeof prompt === 'function' ? prompt('New entity name:', cur || '') : '');
+  if (ask == null) return;
+  const v = String(ask || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Name cannot be empty.', 'error'); return; }
+  if (v === cur) { if (typeof showToast === 'function') showToast('Name unchanged — nothing to rename.', 'warn'); return; }
   dcVerdict(id, 'rename', { new_name: v });
 }
 window.dcJunkRename = dcJunkRename;
-function dcJunkMerge(id) {
-  const tgt = (typeof prompt === 'function') ? prompt('Merge INTO entity id (UUID of the real entity to keep):') : '';
-  if (tgt == null) return;
-  const v = String(tgt || '').trim(); if (!v) return;
+async function dcJunkMerge(id) {
+  const it = _dcItems[id]; const cur = (it && it.context && it.context.entity_name) || '';
+  const ask = typeof lccPrompt === 'function'
+    ? await lccPrompt('Merge "' + (cur || 'this entity') + '" INTO the real entity it duplicates.\n\nPaste the target entity UUID (the entity to KEEP):', '')
+    : (typeof prompt === 'function' ? prompt('Merge INTO entity id (UUID of the real entity to keep):') : '');
+  if (ask == null) return;
+  const v = String(ask || '').trim();
+  if (!v) return;
+  // Validate UUID shape before POST so a fat-fingered id doesn't reach the merge RPC.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    if (typeof showToast === 'function') showToast('That is not a valid entity UUID.', 'error');
+    return;
+  }
   dcVerdict(id, 'merge', { target_entity_id: v });
 }
 window.dcJunkMerge = dcJunkMerge;
@@ -1700,9 +1740,18 @@ async function renderFederatedLane(type) {
 }
 window.renderFederatedLane = renderFederatedLane;
 
-function dcImplausibleCorrect(i) {
+async function dcImplausibleCorrect(i) {
   const it = _dcFedArr[i]; if (!it) return;
-  const v = (typeof prompt === 'function') ? prompt('Corrected sale price (number):') : '';
+  const c = it.context || {};
+  const curStr = (isFinite(Number(c.sold_price)) && Number(c.sold_price) > 0)
+    ? '$' + Math.round(Number(c.sold_price)).toLocaleString() : '(none)';
+  const ceil = (isFinite(Number(c.ceiling)) && Number(c.ceiling) > 0)
+    ? '$' + Math.round(Number(c.ceiling)).toLocaleString() : '';
+  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
+    + 'recorded ' + curStr + (ceil ? ' (over the ' + ceil + ' ceiling)' : '');
+  const v = typeof lccPrompt === 'function'
+    ? await lccPrompt('Correct this sale price.\n\n' + ctx + '\n\nEnter the corrected price (numbers only):', '')
+    : (typeof prompt === 'function' ? prompt('Corrected sale price (number):') : '');
   if (v == null) return;
   const n = Number(String(v).replace(/[^0-9.]/g, ''));
   if (!isFinite(n) || n <= 0) { if (typeof showToast === 'function') showToast('Enter a valid price', 'error'); return; }
@@ -1770,12 +1819,16 @@ function _dcAdvanceFed() {
   }
 }
 
-function dcStale(id) {
-  const name = (typeof prompt === 'function')
-    ? prompt('Current (new) owner name. Recorded now; the gov true_owner write-back applies once DECISION_GOV_WRITEBACK is enabled:')
-    : '';
+async function dcStale(id) {
+  const it = _dcItems[id]; const stale = (it && it.context && it.context.true_owner_name) || '';
+  const name = typeof lccPrompt === 'function'
+    ? await lccPrompt('Mark the domain owner as stale (pre-acquisition).\n\nStale owner on file: ' + (stale || '—')
+        + '\n\nEnter the CURRENT (new) owner name. Recorded now; the gov true_owner write-back applies once DECISION_GOV_WRITEBACK is enabled:', '')
+    : (typeof prompt === 'function' ? prompt('Current (new) owner name:') : '');
   if (name == null) return;
-  dcVerdict(id, 'stale', { proposed_owner_name: String(name || '').trim() || null });
+  const v = String(name || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Enter the new owner name (or Cancel).', 'error'); return; }
+  dcVerdict(id, 'stale', { proposed_owner_name: v });
 }
 window.dcStale = dcStale;
 
@@ -2347,10 +2400,13 @@ function pqBuyerContactPick(kind, i) {
 }
 window.pqBuyerContactPick = pqBuyerContactPick;
 
-function pqBuyerContactAddNew() {
-  const nm = (typeof prompt === 'function') ? prompt('New contact name:') : '';
+async function pqBuyerContactAddNew() {
+  const nm = typeof lccPrompt === 'function'
+    ? await lccPrompt('Add a new prospecting contact at this buyer parent.\n\nFull name:', '')
+    : (typeof prompt === 'function' ? prompt('New contact name:') : '');
   if (nm == null) return;
-  const v = String(nm || '').trim(); if (!v) return;
+  const v = String(nm || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Enter the contact name.', 'error'); return; }
   _pqBuyerContactSubmit({ new_contact_name: v }, v);
 }
 window.pqBuyerContactAddNew = pqBuyerContactAddNew;
@@ -2723,12 +2779,12 @@ async function resolveProvConflictCustom(provenance_id, btn) {
   // Find the row to show its current values in the prompt
   const card = btn?.closest('[data-prov-row]');
   const helper = card ? card.querySelector('.q-item-meta')?.textContent : '';
-  const v = prompt(
-    `Enter the value to write. Numbers will be parsed as JSON (e.g. 3690000 not "3690000").` +
-    (helper ? '\n\nContext:\n' + helper.slice(0, 200) : ''),
-    ''
-  );
-  if (v === null) return;  // cancelled
+  const msg = 'Enter the value to write. Numbers will be parsed as JSON (e.g. 3690000 not "3690000").'
+    + (helper ? '\n\nContext:\n' + helper.slice(0, 200) : '');
+  const v = typeof lccPrompt === 'function'
+    ? await lccPrompt(msg, '')
+    : (typeof prompt === 'function' ? prompt(msg, '') : null);
+  if (v === null || v === undefined) return;  // cancelled
   let parsed;
   try { parsed = JSON.parse(v); }
   catch { parsed = v; }   // fall back to raw string
@@ -2860,14 +2916,15 @@ async function opsOpenDiaProperty(propertyId) {
       { filter: 'property_id=eq.' + propertyId, limit: 1 });
     const prop = rows?.[0];
     if (!prop) { showToast('Property ' + propertyId + ' not found in dialysis DB', 'error'); return; }
-    if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
-    showDetail({
-      property_id: prop.property_id,
-      address:     prop.address || '',
-      city:        prop.city || '',
-      state:       prop.state || '',
-      tenant:      prop.tenant || '',
-    }, 'dia-clinic');
+    _opsWhenDetailReady(function () {
+      showDetail({
+        property_id: prop.property_id,
+        address:     prop.address || '',
+        city:        prop.city || '',
+        state:       prop.state || '',
+        tenant:      prop.tenant || '',
+      }, 'dia-clinic');
+    });
   } catch (err) {
     console.error('opsOpenDiaProperty error:', err);
     showToast('Could not open property: ' + (err?.message || err), 'error');
@@ -2991,14 +3048,15 @@ async function opsOpenGovProperty(propertyId) {
     const prop = getRows(await govQuery('properties', 'property_id,address,city,state,agency',
       { filter: 'property_id=eq.' + propertyId, limit: 1 }))[0];
     if (!prop) { showToast('Property ' + propertyId + ' not found in government DB', 'error'); return; }
-    if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
-    showDetail({
-      property_id: prop.property_id,
-      address:     prop.address || '',
-      city:        prop.city || '',
-      state:       prop.state || '',
-      tenant:      prop.agency || '',
-    }, 'gov-asset');
+    _opsWhenDetailReady(function () {
+      showDetail({
+        property_id: prop.property_id,
+        address:     prop.address || '',
+        city:        prop.city || '',
+        state:       prop.state || '',
+        tenant:      prop.agency || '',
+      }, 'gov-asset');
+    });
   } catch (err) {
     console.error('opsOpenGovProperty error:', err);
     showToast('Could not open property: ' + (err?.message || err), 'error');
@@ -3125,11 +3183,7 @@ async function viewEntity(entityId) {
       entity_type: entity.entity_type || '',
       entity_id: entity.id
     };
-    if (typeof showDetail === 'function') {
-      showDetail(record, source);
-    } else {
-      showToast('Detail panel unavailable', 'error');
-    }
+    _opsWhenDetailReady(function () { showDetail(record, source); });
   } catch (err) {
     console.error('viewEntity error:', err);
     showToast('Could not load entity: ' + err.message, 'error');

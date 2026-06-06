@@ -12641,11 +12641,20 @@ function _ownerDrawerCreateSfAccount() {
 async function _ownerDrawerAddContact() {
   const c = _ownerDrawerCache;
   if (!c) return;
-  const fullName = window.prompt('Contact full name:', '');
-  if (!fullName) return;
-  const email = window.prompt('Email (optional):', '') || '';
-  const phone = window.prompt('Phone (optional):', '') || '';
-  const title = window.prompt('Title (optional):', '') || '';
+  // A3 (2026-06-06): styled, escapable lccPrompt modals instead of native
+  // window.prompt — validated, themed, focus-trapped. Name is required; the
+  // rest are optional and Cancel on any optional step just leaves it blank.
+  const _ask = typeof lccPrompt === 'function'
+    ? (msg, def) => lccPrompt(msg, def)
+    : (msg, def) => window.prompt(msg, def);
+  const companyForCtx = c.parent_account_name || c.true_owner_name || c.recorded_owner_name || c.name || '';
+  const fullNameRaw = await _ask('Add a contact' + (companyForCtx ? ' at ' + companyForCtx : '') + '.\n\nFull name:', '');
+  if (fullNameRaw == null) return;
+  const fullName = String(fullNameRaw).trim();
+  if (!fullName) { showToast('Contact name is required.', 'error'); return; }
+  const email = (await _ask('Email (optional — leave blank to skip):', '')) || '';
+  const phone = (await _ask('Phone (optional — leave blank to skip):', '')) || '';
+  const title = (await _ask('Title (optional — leave blank to skip):', '')) || '';
 
   const parts = fullName.trim().split(/\s+/);
   const firstName = parts[0] || '';
