@@ -234,6 +234,53 @@ export function isJunkEntityName(name) {
   return ENTITY_JUNK_PATTERNS.some((re) => re.test(trimmed));
 }
 
+// ---------------------------------------------------------------------------
+// Person-plausibility guard (R7 Phase 2.5, 2026-06-07)
+// ---------------------------------------------------------------------------
+// The sale-event/capture pipeline classified any buyer/seller string WITHOUT a
+// firm suffix as a PERSON, so deal-capture artifacts got minted as person
+// entities: "Boyd Watterson by NAI Capital" (broker attribution), "... JV ...",
+// "Heatwole Miller Cos CDCMT 2002-FX1 ($5.0m approx)" (CMBS), bare firm names
+// ("Townsend Capital", "Leibsohn Family Trust"). These pollute the buy-side
+// contact picker (no real human is selectable). Two checks:
+//   * isImplausiblePersonName — strong NEGATIVE signals a human name never has
+//     (deal tokens / firm suffixes / $ / amounts / "by <broker>"). Used to (a)
+//     stop minting such persons at the boundary, and (b) flag existing rows.
+//   * looksLikePersonName — strict POSITIVE first+last shape. Used by the picker
+//     so name-matched suggestions are only selectable humans.
+const PERSON_IMPLAUSIBLE_PATTERNS = [
+  /\bby\s+\w/i,                                                   // "... by Marcus & Millichap"
+  /\bJV\b/i,                                                      // joint-venture strings
+  /\b(?:CMBS|BBCMS|CDCMT|ML-?CFC)\b/i,                            // CMBS deal codes
+  /\b\d{4}-[A-Z]?\d/i,                                            // 2021-C10 / 2002-FX1 series
+  /\bapprox\b/i,
+  /\$/,                                                           // dollar amounts
+  /\([^)]*\d[^)]*\)/,                                             // parenthesized amount "(... )"
+  /\b(?:LLC|L\.L\.C|LP|LLP|Inc|Corp|Ltd|Trust|Fund|Holdings|Partners|Ptnrs|Capital|Advisors|Realty|Ventures|Cos|Company|Properties|Associates|Group|Management)\b/i,
+];
+
+export function isImplausiblePersonName(name) {
+  if (typeof name !== 'string') return false;
+  const t = name.trim();
+  if (!t) return false;
+  if (isJunkEntityName(t)) return true;
+  return PERSON_IMPLAUSIBLE_PATTERNS.some((re) => re.test(t));
+}
+
+// True only for a plausible human name: a first + last (+ optional middle/
+// initial/suffix), all alpha tokens, no digits, no firm/deal tokens.
+export function looksLikePersonName(name) {
+  if (typeof name !== 'string') return false;
+  const t = name.trim();
+  if (!t || t.length < 3 || t.length > 60) return false;
+  if (isImplausiblePersonName(t)) return false;
+  const tokens = t.split(/\s+/);
+  if (tokens.length < 2 || tokens.length > 5) return false;
+  // Each token: starts with a letter; letters/apostrophe/hyphen/period only
+  // (covers "O'Brien", "Jean-Luc", "T.", "Jr.").
+  return tokens.every((tok) => /^[A-Za-z][A-Za-z'.\-]*$/.test(tok));
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
@@ -394,6 +441,20 @@ export async function ensureEntityLink({
       return {
         ok: false,
         skipped: 'junk_entity_name',
+        junk: true,
+        candidateName,
+      };
+    }
+
+    // R7 Phase 2.5: person-plausibility guard. The capture pipeline mints a
+    // PERSON for any buyer/seller string without a firm suffix; reject the
+    // deal-capture artifacts ("X by <broker>", JV/CMBS strings, $ amounts) so
+    // they never become person entities (same junk-guard class as R4-A).
+    if (entityType === 'person' && isImplausiblePersonName(candidateName)) {
+      console.warn(`[ensureEntityLink] rejected implausible person name: "${String(candidateName).slice(0, 60)}"`);
+      return {
+        ok: false,
+        skipped: 'implausible_person_name',
         junk: true,
         candidateName,
       };

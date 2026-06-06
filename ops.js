@@ -2314,10 +2314,22 @@ function _pqBuyerContactHTML(d) {
     return s;
   };
   h += sec('Linked to this account', d.related, 'related');
-  h += sec('Salesforce contacts on the account', d.sf_contacts, 'sf');
-  h += sec('Name-matched (link on select)', d.name_matches, 'name');
+  // Salesforce section — honest about why it's empty (never a silent blank).
+  if (d.sf_contacts && d.sf_contacts.length) {
+    h += sec('Salesforce contacts on the account', d.sf_contacts, 'sf');
+  } else {
+    const msg = {
+      no_account: 'Parent not yet mapped to a Salesforce account — map it first to pull its contacts.',
+      not_configured: 'Salesforce lookup not configured in this environment.',
+      unavailable: 'Salesforce contact lookup unavailable (flow op <code>find_contacts_by_account</code> not implemented) — search SF manually, or add the contact here.',
+      no_contacts: 'No Salesforce contacts on this account yet.',
+    }[d.sf_status];
+    if (msg) h += '<div class="pq-bc-sec">Salesforce contacts on the account</div>'
+               + '<div class="q-item-meta">' + msg + '</div>';
+  }
+  h += sec('Name-matched humans (link on select)', d.name_matches, 'name');
   if (!(d.related && d.related.length) && !(d.sf_contacts && d.sf_contacts.length) && !(d.name_matches && d.name_matches.length)) {
-    h += '<div class="q-item-meta">No existing contacts found' + (d.sf_account_id ? '' : ' (parent not SF-mapped yet)') + '. Add one below.</div>';
+    h += '<div class="q-item-meta">No existing contacts to pick — add one below.</div>';
   }
   h += '<div class="pq-bc-row pq-bc-new"><button class="q-action" onclick="pqBuyerContactAddNew()">+ Add new contact…</button></div>';
   return h;
