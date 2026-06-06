@@ -1178,3 +1178,117 @@ manual_decision/gov_db, `ownership_history` manual_correction); idempotent
 re-run `already_applied`. **All test fixtures deleted (0 residue).** No real
 gov row (Shooshan/ARLINGTON included) was touched. `node --check` clean; 12
 functions.
+
+## R7 Phase 2 — convert the legacy lanes + surface the surfaceless (2026-06-07)
+
+Folds the remaining Review Console lanes into the Decision Center anatomy
+(question → subject+context card → 2-4 one-click verdicts) and adds the three
+decision types that had no surface. "More review work" is gone; every lane is a
+real decision lane. Builds on Phase 1's `lcc_decisions` + verdict recorder.
+
+### Two lane modes (the anti-bloat rule — decided first, applied consistently)
+- **Seeded** — bounded, stable universes where every row is a real ask and the
+  source won't retract it tomorrow. Seeded into `lcc_decisions` by
+  `lcc_refresh_decisions()` (cron */15). Lanes: `confirm_true_owner` (142),
+  buyer parents (18), **`junk_entity_name` (41, NEW this phase)**.
+- **List-federated** — large/churning universes. The lane LISTS top-N by value
+  straight from its source view; a `lcc_decisions` row is minted only at VERDICT
+  time (`lcc_open_decision` + record). `lcc_decisions` stays the bounded audit
+  trail of judgments MADE (201 open rows total — seeded only), never a 14k-row
+  mirror of the backlog (the disk-incident lesson). Lanes: `intake_disposition`
+  (542), `property_merge` (gov 6,914 + dia 42), `provenance_conflict`
+  (14,155 + dia xref 67), `pending_update` (gov 2,087), `cms_link_suspect`
+  (dia 269), `implausible_value` (gov 26 + dia 10). The deciding question isn't
+  count — it's "would seeding strand a stale row when the source self-resolves?"
+
+### Three invariants federated mode gets right (verified)
+1. **Idempotent on (decision_type, subject_ref)** — `lcc_open_decision` returns
+   the same open id on repeat (verified: two calls → 4853/4853); the verdict
+   path also short-circuits with `already_decided` (409) if a prior terminal
+   decision exists.
+2. **List excludes already-decided subjects** — `handleDecisionsList` anti-joins
+   `lcc_decisions` (status≠open) by `subject_ref`, so a verdict drops the item
+   out of top-N immediately (lane self-propels / drains). Verified: a decided
+   row's `subject_ref` is returned by the exact `fetchExcludedRefs` query.
+3. **Honest counts** — federated lanes report source-view workable count
+   (universe − decided); the summary payload labels each lane's `mode`.
+
+### Source-view artifacts (read-only, additive, applied live)
+- **LCC Opps** `20260607130000_lcc_r7_phase2_junk_entity_lane.sql` — extends
+  `lcc_refresh_decisions()` to seed + sweep the `junk_entity_name` lane (DROP +
+  CREATE because the return signature gains `seeded_junk_entity`).
+- **dia/gov** `20260607130000_*_r7_phase2_implausible_sale_values.sql` — new
+  `v_implausible_sale_values` view (sales over the $50M dia / $250M gov
+  magnitude soft-ceiling, retained for review — mirrors
+  `SALE_PRICE_BLEED_CEILING`). All other federated lanes reuse EXISTING source
+  views (`staged_intake_items`, `v_data_quality_issues`,
+  `v_field_provenance_actionable`, gov `pending_updates`,
+  `v_property_cms_link_suspect`) — no new domain artifacts.
+
+### API (`api/admin.js`, no new function files — still 12)
+- `GET /api/decisions?type=<federated>` lists from the source view (excluding
+  decided); `?summary=1` merges seeded open-counts + federated workable counts.
+- `POST /api/decision-verdict` accepts EITHER `{decision_id}` (seeded) OR
+  `{type, subject}` (federated — mints the decision at verdict time). Dispatch
+  by `(decision_type, verdict)`; every effect is effect-FIRST + outcome-truthful
+  (a failed write keeps the decision open + records `effects.*=false`, never a
+  false `decided`). Verdicts ride EXISTING machinery only:
+  - junk_entity_name: rename (entities PATCH, clears the flag) / merge
+    (`lcc_merge_entity`) / leave_flagged / research.
+  - intake_disposition: dismiss (safe) / create_property + reextract (hand-off
+    `next` → existing `/api/intake` routes) / research.
+  - property_merge: not_duplicate (safe) / merge (`dia_merge_property` /
+    `gov_merge_property`) / research. The UI's "Compare & merge →" opens the
+    existing consolidate surface (keep/drop is Scott's BD judgment).
+  - provenance_conflict: keep_current (safe) / accept_attempted (queues a
+    research task — no silent domain overwrite) / research / skip.
+  - pending_update: apply (→ status `approved`) / reject (→ `rejected`) —
+    the existing gov state-machine transitions, no new states / research.
+  - cms_link_suspect: link_correct (safe) / break_link (hand-off → existing
+    `/api/cms-match` DELETE) / research.
+  - implausible_value: confirm_as_is (safe) / correct (PATCH `sold_price`) /
+    void (queues a task — never a silent delete) / research.
+
+### UI (`ops.js`)
+- `renderReviewConsolePage` now renders ALL lanes as decision lanes (seeded +
+  federated + the existing SOS owner-contact worklist), ordered ownership-first
+  then by workable value. `renderFederatedLane(type)` + `_fedCardHTML` +
+  `dcFed(i, verdict)` post `{type, subject, verdict}`; self-propelling advance
+  (`_dcAdvanceFed`) mirrors the seeded `_dcAdvance`. `junk_entity_name` rides
+  the seeded `renderDecisionLane`/`_dcCardHTML` path.
+
+### Verified live (read-only + synthetic, 2026-06-07)
+- Seeded re-seed: 142 true_owner / 18 buyer / **41 junk_entity** / 0 superseded;
+  `lcc_decisions` = 201 open (seeded only — federated backlog NOT mirrored).
+- Federated invariants proven at the DB layer (idempotent mint 4853/4853;
+  decided `subject_ref` returned by the exclusion query). All synthetic test
+  rows deleted — **0 residue**.
+- Source views live: dia/gov `v_implausible_sale_values` = 10 / 26 rows.
+- Workable counts per lane (universe; minus decided once worked): intake 542,
+  property_merge 6,956 (gov 6,914 + dia 42), provenance 14,222 (LCC 14,155 +
+  dia xref 67), pending_update 2,087, cms_link_suspect 269, junk_entity 41,
+  implausible_value 36, owner-contact (SOS) 44.
+- `node --check` clean (admin.js, ops.js, server.js); `ls api/*.js | wc -l`=12.
+  No new routes (decisions / decision-verdict already routed in Phase 1).
+
+### Destructive verdicts — plumbing verified, real applies left to Scott
+Merge / Apply / Break-link / Keep-B(accept_attempted) / Correct / Void ride
+existing domain machinery and are wired, but were NOT exercised on real data
+this session (Scott is actively working the lanes). They are verified for
+plumbing correctness (the verdict reaches the right machinery and records
+honestly); the safe verdicts (research / dismiss / keep_current / not_duplicate
+/ confirm_as_is / link_correct) exercise the full record-the-decision path. Live
+applies are Scott's first real use — same posture as the gov true_owner
+write-back.
+
+### Follow-ups (NOT in this phase)
+- provenance `accept_attempted` queues a research task rather than writing
+  through `lcc_merge_field` + adjusting `field_source_priority` (the registry
+  "learning" loop) — deferred (touching the shared priority registry is its own
+  blessed change).
+- junk `leave_flagged` records `skipped` but re-surfaces on the next refresh
+  (the entity is still flagged) — same soft-disposition semantics as Phase-1
+  skip; a true "stop asking" would set `metadata.junk_name_reviewed` + exclude
+  it from the seed.
+- federated destructive verdicts have no preview/dry-run yet (except where the
+  underlying RPC provides one); add per-lane dry-run where the machinery allows.

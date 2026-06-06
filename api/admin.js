@@ -665,17 +665,268 @@ async function refreshQueueAfterDecision() {
   catch (e) { console.warn('[decision-verdict] queue refresh skipped:', e?.message || e); }
 }
 
+// ============================================================================
+// R7 Phase 2 — list-federated lanes (the anti-bloat rule).
+// ============================================================================
+// Large/churning universes (intake ~542, property merges ~6.9k, provenance
+// ~14k, pending updates ~2k, …) are NOT seeded into lcc_decisions — that would
+// mirror a 14k-row backlog into an auth-critical table and strand stale rows as
+// the source self-resolves (the disk-incident lesson). Instead each lane LISTS
+// top-N straight from its source view, and a decision row is minted only at
+// VERDICT time (lcc_open_decision + record). lcc_decisions stays the bounded
+// audit trail of judgments actually MADE, not a copy of the backlog.
+//
+// Three invariants (the Phase-2 acceptance checks):
+//  1. Idempotent on (decision_type, subject) — lcc_open_decision dedupes the
+//     open row; we also anti-join decided subjects out of the source list.
+//  2. The list EXCLUDES already-decided subjects, so a verdict drops the item
+//     out of top-N immediately (self-propelling; the lane drains).
+//  3. Counts are honest: federated lanes report the source-view workable count
+//     (universe − decided), each labeled with its mode.
+// ============================================================================
+const FEDERATED_DECISION_TYPES = new Set([
+  'intake_disposition', 'property_merge', 'provenance_conflict',
+  'pending_update', 'cms_link_suspect', 'implausible_value',
+]);
+
+// Canonical subject key for a federated decision (the dedupe + exclusion key).
+function federatedSubjectRef(type, s) {
+  s = s || {};
+  switch (type) {
+    case 'intake_disposition': return s.intake_id ? 'intake:' + s.intake_id : null;
+    case 'property_merge':     return (s.domain && s.property_id != null) ? 'merge:' + s.domain + ':' + s.property_id : null;
+    case 'provenance_conflict':return s.provenance_id != null ? 'prov:' + s.provenance_id
+                                     : (s.record_id != null ? 'prov:dia_xref:' + s.record_id : null);
+    case 'pending_update':     return s.pending_id != null ? 'pending:gov:' + s.pending_id : null;
+    case 'cms_link_suspect':   return (s.medicare_id != null && s.property_id != null) ? 'cms:dia:' + s.medicare_id + ':' + s.property_id : null;
+    case 'implausible_value':  return (s.domain && s.sale_id != null) ? 'implausible:' + s.domain + ':' + s.sale_id : null;
+  }
+  return null;
+}
+
+// Pull the small snapshot facts off a staged-intake raw_payload for the card.
+function _intakeSnap(rp) {
+  const ex = (rp && rp.extraction_result) || {};
+  const snap = ex.snapshot || ex.deal || {};
+  const askingRaw = snap.asking_price ?? snap.price ?? snap.list_price;
+  const asking = Number(String(askingRaw == null ? '' : askingRaw).replace(/[^0-9.]/g, ''));
+  return {
+    asking: Number.isFinite(asking) && asking > 0 ? asking : null,
+    tenant: snap.tenant_name || snap.tenant || null,
+    address: snap.address || snap.property_address || null,
+    doctype: ex.doc_type || snap.doc_type || null,
+  };
+}
+const _provImportance = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(String(f || '')) ? 1000
+  : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? 300 : 50;
+
+// Set of subject_refs already decided (decided/skipped/superseded) for a lane.
+async function fetchExcludedRefs(type) {
+  const set = new Set();
+  try {
+    const r = await opsQuery('GET', 'lcc_decisions?select=subject_ref&decision_type=eq.'
+      + pgFilterVal(type) + '&status=neq.open&subject_ref=not.is.null&limit=5000');
+    if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
+  } catch (_e) { /* soft-fail → no exclusion */ }
+  return set;
+}
+
+// Per-lane source fetch. Returns { items, total } where each item carries the
+// subject_ref + display context + rank_value. `cap` bounds the source pull
+// (top-of-funnel; exclusion + paging happen in JS).
+async function fetchFederatedSource(type, cap) {
+  const out = { items: [], total: null };
+  const domCnt = async (dom, path) => {
+    const r = await domainQuery(dom, 'GET',
+      path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', undefined, { 'Prefer': 'count=exact' });
+    return (r.ok && typeof r.count === 'number') ? r.count : null;
+  };
+  const opsCnt = async (path) => {
+    const r = await opsQuery('GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1',
+      undefined, { countMode: 'exact' });
+    return (r.ok && typeof r.count === 'number') ? r.count : null;
+  };
+
+  if (type === 'intake_disposition') {
+    const r = await opsQuery('GET', 'staged_intake_items?select=intake_id,source_type,status,created_at,raw_payload'
+      + '&status=in.(review_required,failed)&order=created_at.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => {
+      const snap = _intakeSnap(row.raw_payload);
+      return {
+        subject_ref: 'intake:' + row.intake_id,
+        subject_domain: null, subject_property_id: null, subject_entity_id: null,
+        rank_value: snap.asking || 0,
+        context: { intake_id: row.intake_id, source_type: row.source_type, status: row.status,
+          asking_price: snap.asking, tenant: snap.tenant, address: snap.address, doctype: snap.doctype },
+      };
+    }).sort((a, b) => (b.rank_value - a.rank_value));
+    out.total = await opsCnt('staged_intake_items?status=in.(review_required,failed)');
+    return out;
+  }
+
+  if (type === 'property_merge') {
+    const fetchDom = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
+        + '&issue_kind=eq.duplicate_property_address&order=severity.desc&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'merge:' + dom + ':' + row.record_id,
+        subject_domain: dom, subject_property_id: String(row.record_id), subject_entity_id: null,
+        rank_value: Number(row.severity) || 0,
+        context: { domain: dom, property_id: row.record_id, address: row.detail_1, state: row.detail_2,
+          label: row.detail_3, cluster_size: Number(row.severity) || null },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov'), fetchDom('dia'),
+      domCnt('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
+      domCnt('dia', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  if (type === 'provenance_conflict') {
+    // LCC field-provenance conflicts (the bulk) + dia sales-price xref conflicts.
+    const [pv, xr, pc, xc] = await Promise.all([
+      opsQuery('GET', 'v_field_provenance_actionable?select=provenance_id,target_database,target_table,'
+        + 'record_pk_value,field_name,attempted_value,attempted_source,current_value,current_source,'
+        + 'decision,enforce_mode,recorded_at&order=recorded_at.desc&limit=' + cap),
+      domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
+        + '&issue_kind=eq.sales_price_xref_conflict&order=severity.desc&limit=' + cap),
+      opsCnt('v_field_provenance_actionable'),
+      domCnt('dia', 'v_data_quality_issues?issue_kind=eq.sales_price_xref_conflict'),
+    ]);
+    const pvRows = (pv.ok && Array.isArray(pv.data)) ? pv.data : [];
+    const xrRows = (xr.ok && Array.isArray(xr.data)) ? xr.data : [];
+    const pvItems = pvRows.map((row) => ({
+      subject_ref: 'prov:' + row.provenance_id,
+      subject_domain: row.target_database || null, subject_property_id: null, subject_entity_id: null,
+      rank_value: _provImportance(row.field_name),
+      context: { kind: 'field_provenance', provenance_id: row.provenance_id,
+        target_database: row.target_database, target_table: row.target_table,
+        record_pk_value: row.record_pk_value, field_name: row.field_name,
+        attempted_value: row.attempted_value, attempted_source: row.attempted_source,
+        current_value: row.current_value, current_source: row.current_source,
+        decision: row.decision, enforce_mode: row.enforce_mode },
+    }));
+    const xrItems = xrRows.map((row) => ({
+      subject_ref: 'prov:dia_xref:' + row.record_id,
+      subject_domain: 'dia', subject_property_id: String(row.record_id), subject_entity_id: null,
+      rank_value: 1000 + (Number(row.severity) || 0),
+      context: { kind: 'sales_price_xref', record_id: row.record_id,
+        detail_1: row.detail_1, detail_2: row.detail_2, detail_3: row.detail_3, severity: row.severity },
+    }));
+    out.items = pvItems.concat(xrItems).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (pc == null && xc == null) ? null : (pc || 0) + (xc || 0);
+    return out;
+  }
+
+  if (type === 'pending_update') {
+    const r = await domainQuery('gov', 'GET', 'pending_updates?select=id,table_name,property_id,record_id,'
+      + 'field_name,old_value,new_value,reason,confidence,priority_score,created_at'
+      + '&status=eq.pending&order=priority_score.desc.nullslast,created_at.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'pending:gov:' + row.id,
+      subject_domain: 'gov', subject_property_id: row.property_id != null ? String(row.property_id) : null, subject_entity_id: null,
+      rank_value: Number(row.priority_score) || 0,
+      context: { pending_id: row.id, table_name: row.table_name, property_id: row.property_id,
+        record_id: row.record_id, field_name: row.field_name, old_value: row.old_value,
+        new_value: row.new_value, reason: row.reason, confidence: row.confidence },
+    }));
+    out.total = await domCnt('gov', 'pending_updates?status=eq.pending');
+    return out;
+  }
+
+  if (type === 'cms_link_suspect') {
+    // dia: order worst-first (state_diff, then street_looks_unrelated, then the rest).
+    const r = await domainQuery('dia', 'GET', 'v_property_cms_link_suspect?select=property_id,medicare_id,'
+      + 'suspect_kind,street_looks_unrelated,zip5_matches,cms_facility_name,cms_address,cms_city,cms_state,'
+      + 'property_address,property_city,property_state&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    const score = (row) => (row.suspect_kind === 'state_diff' ? 3000 : 1000)
+      + (row.street_looks_unrelated ? 500 : 0) - (row.zip5_matches ? 400 : 0);
+    out.items = rows.map((row) => ({
+      subject_ref: 'cms:dia:' + row.medicare_id + ':' + row.property_id,
+      subject_domain: 'dia', subject_property_id: String(row.property_id), subject_entity_id: null,
+      rank_value: score(row),
+      context: { property_id: row.property_id, medicare_id: row.medicare_id, suspect_kind: row.suspect_kind,
+        street_looks_unrelated: row.street_looks_unrelated, zip5_matches: row.zip5_matches,
+        cms_facility_name: row.cms_facility_name, cms_address: row.cms_address, cms_city: row.cms_city, cms_state: row.cms_state,
+        property_address: row.property_address, property_city: row.property_city, property_state: row.property_state },
+    })).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = await domCnt('dia', 'v_property_cms_link_suspect');
+    return out;
+  }
+
+  if (type === 'implausible_value') {
+    const fetchDom = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'v_implausible_sale_values?select=sale_id,property_id,sold_price,'
+        + 'sale_date,address,city,state,label,ceiling&order=sold_price.desc&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'implausible:' + dom + ':' + row.sale_id,
+        subject_domain: dom, subject_property_id: row.property_id != null ? String(row.property_id) : null, subject_entity_id: null,
+        rank_value: Number(row.sold_price) || 0,
+        context: { domain: dom, sale_id: row.sale_id, property_id: row.property_id, sold_price: row.sold_price,
+          sale_date: row.sale_date, address: row.address, city: row.city, state: row.state,
+          label: row.label, ceiling: row.ceiling },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov'), fetchDom('dia'),
+      domCnt('gov', 'v_implausible_sale_values'), domCnt('dia', 'v_implausible_sale_values'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? out.items.length : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  return out;
+}
+
+// List a federated lane: source top-N minus already-decided subjects.
+async function listFederatedLane(type, limit, offset) {
+  const cap = Math.min(400, (limit + offset) * 3 + 60);
+  const [src, excluded] = await Promise.all([fetchFederatedSource(type, cap), fetchExcludedRefs(type)]);
+  const workable = src.items.filter((it) => it.subject_ref && !excluded.has(it.subject_ref));
+  const total = (typeof src.total === 'number') ? Math.max(0, src.total - excluded.size) : workable.length;
+  const items = workable.slice(offset, offset + limit).map((it) => ({
+    id: null, decision_type: type, status: 'open', mode: 'federated',
+    subject_entity_id: it.subject_entity_id, subject_domain: it.subject_domain,
+    subject_property_id: it.subject_property_id, subject_ref: it.subject_ref,
+    context: it.context, rank_value: it.rank_value,
+  }));
+  return { type, mode: 'federated', total, items };
+}
+
 async function handleDecisionsList(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   const user = await authenticate(req, res);
   if (!user) return;
 
-  // Summary mode: open-decision counts per lane (the chip row).
+  // Summary mode: open-decision counts per lane (the chip row). Seeded lanes
+  // report their open-decision count; federated lanes report the source-view
+  // workable count (universe − decided), each labeled with its mode so the chip
+  // number means the same thing ("things to work") regardless of mode.
   if (req.query.summary) {
-    const r = await opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n');
-    const lanes = (r.ok && Array.isArray(r.data)) ? r.data : [];
-    const total = lanes.reduce((s, l) => s + (Number(l.n) || 0), 0);
-    return res.status(200).json({ lanes, total });
+    const seededR = await opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n');
+    const seeded = (seededR.ok && Array.isArray(seededR.data)) ? seededR.data : [];
+    const lanes = seeded.map((l) => ({ decision_type: l.decision_type, n: Number(l.n) || 0, mode: 'seeded' }));
+    const fed = await Promise.all([...FEDERATED_DECISION_TYPES].map(async (t) => {
+      try {
+        const [src, excl] = await Promise.all([fetchFederatedSource(t, 1), fetchExcludedRefs(t)]);
+        const n = (typeof src.total === 'number') ? Math.max(0, src.total - excl.size)
+                : Math.max(0, src.items.length - excl.size);
+        return { decision_type: t, n, mode: 'federated' };
+      } catch (_e) { return { decision_type: t, n: 0, mode: 'federated' }; }
+    }));
+    const all = lanes.concat(fed);
+    const total = all.reduce((s, l) => s + (Number(l.n) || 0), 0);
+    return res.status(200).json({ lanes: all, total });
   }
 
   const type = req.query.type ? String(req.query.type) : null;
@@ -683,8 +934,19 @@ async function handleDecisionsList(req, res) {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
   const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
 
-  // Workable top-N ranked by $ value; universe count returned separately so the
-  // UI can demote it to a subtitle.
+  // Federated lane: list from the source view, excluding decided subjects.
+  if (FEDERATED_DECISION_TYPES.has(type)) {
+    try {
+      const out = await listFederatedLane(type, limit, offset);
+      return res.status(200).json(out);
+    } catch (e) {
+      console.error('[decisions:federated]', type, e?.message || e);
+      return res.status(502).json({ error: 'federated_list_failed', message: e?.message });
+    }
+  }
+
+  // Seeded lane: workable top-N from lcc_decisions ranked by $ value; universe
+  // count returned separately so the UI can demote it to a subtitle.
   const selectCols = 'id,decision_type,status,subject_entity_id,subject_domain,'
     + 'subject_property_id,subject_ref,question,context,rank_value,created_at';
   const itemsPath = 'lcc_decisions?select=' + selectCols
@@ -698,7 +960,7 @@ async function handleDecisionsList(req, res) {
   ]);
   if (!itemsR.ok) return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
   return res.status(200).json({
-    type,
+    type, mode: 'seeded',
     total: (countR.ok && typeof countR.count === 'number') ? countR.count : null,
     items: Array.isArray(itemsR.data) ? itemsR.data : [],
   });
@@ -726,18 +988,68 @@ async function handleDecisionVerdict(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
   const body = req.body || {};
-  const decisionId = Number(body.decision_id);
   const verdict = String(body.verdict || '').toLowerCase();
   const payload = (body.payload && typeof body.payload === 'object') ? body.payload : {};
-  if (!Number.isFinite(decisionId)) return res.status(400).json({ error: 'decision_id (number) required' });
   if (!verdict) return res.status(400).json({ error: 'verdict required' });
 
-  // Load the decision so we can dispatch on its type + subject.
-  const dR = await opsQuery('GET', 'lcc_decisions?id=eq.' + decisionId + '&select=*&limit=1');
-  const decision = (dR.ok && Array.isArray(dR.data)) ? dR.data[0] : null;
-  if (!decision) return res.status(404).json({ error: 'decision_not_found' });
-  if (decision.status !== 'open') {
-    return res.status(409).json({ error: 'decision_not_open', status: decision.status });
+  // Two entry shapes:
+  //  * Seeded lane: { decision_id, verdict } — load the existing lcc_decisions row.
+  //  * Federated lane: { type, subject, verdict } — mint the decision at VERDICT
+  //    time (the anti-bloat rule), idempotent on (decision_type, subject_ref).
+  let decisionId = null;
+  let decision = null;
+  const rawId = Number(body.decision_id);
+  if (Number.isFinite(rawId)) {
+    const dR = await opsQuery('GET', 'lcc_decisions?id=eq.' + rawId + '&select=*&limit=1');
+    decision = (dR.ok && Array.isArray(dR.data)) ? dR.data[0] : null;
+    if (!decision) return res.status(404).json({ error: 'decision_not_found' });
+    if (decision.status !== 'open') {
+      return res.status(409).json({ error: 'decision_not_open', status: decision.status });
+    }
+    decisionId = rawId;
+  } else {
+    const dtype = String(body.type || body.decision_type || '').trim();
+    const subject = (body.subject && typeof body.subject === 'object') ? body.subject : null;
+    if (!FEDERATED_DECISION_TYPES.has(dtype) || !subject) {
+      return res.status(400).json({ error: 'decision_id, or (federated type + subject), required' });
+    }
+    const subjectRef = federatedSubjectRef(dtype, Object.assign({}, subject, subject.context || {}));
+    if (!subjectRef) return res.status(400).json({ error: 'subject missing identifying fields for ' + dtype });
+    // Idempotent guard: a subject already decided is not re-minted (a double-
+    // click or a re-surfaced row is a no-op, not a duplicate row).
+    const prior = await opsQuery('GET', 'lcc_decisions?select=id,status&decision_type=eq.'
+      + pgFilterVal(dtype) + '&subject_ref=eq.' + pgFilterVal(subjectRef)
+      + '&status=neq.open&order=decided_at.desc&limit=1');
+    if (prior.ok && Array.isArray(prior.data) && prior.data[0]) {
+      return res.status(409).json({ error: 'already_decided', status: prior.data[0].status, decision_id: prior.data[0].id });
+    }
+    let ws = null; try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
+    const ctx = (subject.context && typeof subject.context === 'object') ? subject.context : subject;
+    const subjProp = subject.subject_property_id != null ? String(subject.subject_property_id)
+      : (ctx.property_id != null ? String(ctx.property_id) : null);
+    const mint = await opsQuery('POST', 'rpc/lcc_open_decision', {
+      p_decision_type: dtype, p_workspace_id: ws || null,
+      p_question: subject.question || ctx.question || null,
+      p_context: ctx, p_subject_entity_id: subject.subject_entity_id || null,
+      p_subject_domain: subject.subject_domain || ctx.domain || null,
+      p_subject_property_id: subjProp, p_subject_ref: subjectRef,
+      p_rank_value: subject.rank_value != null ? Number(subject.rank_value) : null,
+    });
+    let mintedId = null;
+    if (mint.ok) {
+      if (typeof mint.data === 'number') mintedId = mint.data;
+      else if (Array.isArray(mint.data) && mint.data[0] != null) {
+        const f = mint.data[0];
+        mintedId = (typeof f === 'number') ? f : (f.lcc_open_decision ?? f.id ?? null);
+      } else if (mint.data && typeof mint.data === 'object') {
+        mintedId = mint.data.lcc_open_decision ?? mint.data.id ?? null;
+      }
+    }
+    if (mintedId == null) return res.status(502).json({ error: 'mint_failed', detail: mint.data });
+    decisionId = Number(mintedId);
+    const dR = await opsQuery('GET', 'lcc_decisions?id=eq.' + decisionId + '&select=*&limit=1');
+    decision = (dR.ok && Array.isArray(dR.data)) ? dR.data[0] : null;
+    if (!decision) return res.status(502).json({ error: 'mint_reload_failed' });
   }
 
   const record = async (v, status, verdictPayload, effects) => {
@@ -956,6 +1268,246 @@ async function handleDecisionVerdict(req, res) {
       if (verdict === 'skip') {
         await record('skip', 'skipped', null, null);
         return res.status(200).json({ ok: true, verdict: 'skip' });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- junk_entity_name (seeded) -----------------------------------------
+    // "What should this entity be?" Verdicts ride existing entity machinery:
+    // rename (entities PATCH), merge (lcc_merge_entity), leave flagged, research.
+    if (decision.decision_type === 'junk_entity_name') {
+      const eid = decision.subject_entity_id;
+      if (verdict === 'rename') {
+        const newName = String(payload.new_name || '').trim();
+        if (!newName) return res.status(400).json({ error: 'payload.new_name required' });
+        // Clear the junk flag while renaming (read-modify-write the small jsonb).
+        let meta = {};
+        try {
+          const er = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(eid) + '&select=metadata&limit=1');
+          meta = (er.ok && Array.isArray(er.data) && er.data[0] && er.data[0].metadata) ? er.data[0].metadata : {};
+        } catch (_e) { meta = {}; }
+        const nextMeta = Object.assign({}, meta); delete nextMeta.junk_name_flagged;
+        nextMeta.junk_name_resolved = 'renamed';
+        const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(eid),
+          { name: newName, metadata: nextMeta, updated_at: new Date().toISOString() });
+        if (!pr.ok) { await recordEffectFailure({ rename: false, error: pr.data }); return res.status(502).json({ error: 'rename_failed', detail: pr.data }); }
+        await record('rename', 'decided', { new_name: newName }, { entity: 'renamed' });
+        return res.status(200).json({ ok: true, verdict: 'rename', entity_id: eid, new_name: newName });
+      }
+      if (verdict === 'merge') {
+        const target = String(payload.target_entity_id || '').trim();
+        if (!target) return res.status(400).json({ error: 'payload.target_entity_id required' });
+        // The junk entity is the loser, the chosen real entity the winner.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: eid, p_winner: target });
+        if (!mr.ok) { await recordEffectFailure({ merge: false, error: mr.data }); return res.status(502).json({ error: 'merge_failed', detail: mr.data }); }
+        await record('merge', 'decided', { target_entity_id: target }, { lcc_merge_entity: 'merged' });
+        return res.status(200).json({ ok: true, verdict: 'merge', loser: eid, winner: target });
+      }
+      if (verdict === 'leave_flagged' || verdict === 'skip') {
+        await record('leave_flagged', 'skipped', null, { entity: 'left_flagged' });
+        return res.status(200).json({ ok: true, verdict: 'leave_flagged' });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'junk_entity_name',
+          title: 'Resolve junk entity name: ' + (decision.context?.entity_name || eid),
+          instructions: 'Decision Center: decide whether to rename this entity, merge it into a real one, or leave it flagged.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    const c = decision.context || {};
+
+    // ---- intake_disposition (federated) ------------------------------------
+    // Staged-intake review. The heavy actions (create property / re-extract)
+    // ride the existing intake routes via a hand-off; dismiss/research are safe.
+    if (decision.decision_type === 'intake_disposition') {
+      if (verdict === 'dismiss') {
+        await record('dismiss', 'decided', null, { intake: 'dismissed_from_lane' });
+        return res.status(200).json({ ok: true, verdict: 'dismiss' });
+      }
+      if (verdict === 'create_property') {
+        await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
+        return res.status(200).json({ ok: true, verdict: 'create_property',
+          next: { action: 'intake_create_property', intake_id: c.intake_id } });
+      }
+      if (verdict === 'reextract') {
+        await record('reextract', 'decided', payload, { handoff: 'intake_reextract' });
+        return res.status(200).json({ ok: true, verdict: 'reextract',
+          next: { action: 'intake_reextract', intake_id: c.intake_id } });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'intake_disposition',
+          title: 'Triage staged intake ' + (c.intake_id || ''),
+          instructions: 'Decision Center: review this staged-intake item (' + (c.doctype || 'unknown doctype')
+            + (c.tenant ? ', tenant ' + c.tenant : '') + ') and decide create-property / re-extract / dismiss.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- property_merge (federated) ----------------------------------------
+    // "Are these the same property?" merge rides the existing consolidate
+    // machinery (dia_merge_property / gov_merge_property); not_duplicate +
+    // research are safe (record-only / task).
+    if (decision.decision_type === 'property_merge') {
+      const dom = c.domain === 'dia' ? 'dialysis' : c.domain === 'gov' ? 'government' : null;
+      if (verdict === 'not_duplicate') {
+        await record('not_duplicate', 'decided', null, { merge: 'suppressed_pair' });
+        return res.status(200).json({ ok: true, verdict: 'not_duplicate' });
+      }
+      if (verdict === 'merge') {
+        const keepId = parseInt(payload.keep_id, 10);
+        const dropId = parseInt(payload.drop_id, 10);
+        if (!dom || !Number.isFinite(keepId) || !Number.isFinite(dropId) || keepId === dropId) {
+          return res.status(400).json({ error: 'merge requires payload.keep_id, drop_id (distinct) on a dia/gov subject' });
+        }
+        const fn = c.domain === 'dia' ? 'rpc/dia_merge_property' : 'rpc/gov_merge_property';
+        const mr = await domainQuery(dom, 'POST', fn, { p_keep_id: keepId, p_drop_id: dropId });
+        if (!mr.ok) { await recordEffectFailure({ merge: false, error: mr.data }); return res.status(502).json({ error: 'merge_failed', detail: mr.data }); }
+        await record('merge', 'decided', { keep_id: keepId, drop_id: dropId }, { merge: 'consolidated' });
+        return res.status(200).json({ ok: true, verdict: 'merge', keep_id: keepId, drop_id: dropId });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'property_merge',
+          title: 'Confirm property merge: ' + (c.address || c.property_id || ''),
+          instructions: 'Decision Center: confirm whether ' + (c.domain || '') + ' property ' + (c.property_id || '')
+            + ' (' + (c.address || '') + ') is a duplicate to be merged, or a distinct property.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- provenance_conflict (federated) -----------------------------------
+    // "Which value is right?" keep_current confirms the standing value (safe);
+    // accept_attempted defers the domain write to a research task (no silent
+    // overwrite — the manual-edit machinery applies it); research/skip.
+    if (decision.decision_type === 'provenance_conflict') {
+      if (verdict === 'keep_current') {
+        await record('keep_current', 'decided', null, { provenance: 'current_confirmed' });
+        return res.status(200).json({ ok: true, verdict: 'keep_current' });
+      }
+      if (verdict === 'accept_attempted') {
+        const where = (c.target_database || c.kind || '') + '.' + (c.target_table || '') + '.' + (c.field_name || '');
+        const rt = await createResearchTask({ research_type: 'provenance_conflict',
+          title: 'Apply attempted value to ' + where,
+          instructions: 'Decision Center: apply the attempted value (' + JSON.stringify(c.attempted_value ?? c.detail_2 ?? null)
+            + ') over the current value (' + JSON.stringify(c.current_value ?? c.detail_1 ?? null) + ') on '
+            + where + ' record ' + (c.record_pk_value || c.record_id || '') + ' via the manual-edit path.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('accept_attempted', 'decided', payload, { provenance: 'apply_queued', research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'accept_attempted', research_task_id: rid });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'provenance_conflict',
+          title: 'Resolve data conflict on ' + (c.field_name || c.kind || 'field'),
+          instructions: 'Decision Center: resolve which value is authoritative for this field-provenance conflict.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      if (verdict === 'skip') { await record('skip', 'skipped', null, null); return res.status(200).json({ ok: true, verdict: 'skip' }); }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- pending_update (federated, gov state machine) ----------------------
+    // Advance the existing pending_updates state machine (approved | rejected —
+    // the existing terminal transitions; no new states invented). reject is
+    // safe; apply hands the approved row to the gov pipeline consumer.
+    if (decision.decision_type === 'pending_update') {
+      const pid = c.pending_id;
+      const stamp = { resolved_at: new Date().toISOString(),
+        resolution_notes: 'Decision Center (' + (user.email || user.id || 'lcc') + ')' };
+      if (verdict === 'apply' || verdict === 'reject') {
+        const status = verdict === 'apply' ? 'approved' : 'rejected';
+        const pr = await domainQuery('gov', 'PATCH', 'pending_updates?id=eq.' + encodeURIComponent(pid),
+          Object.assign({ status }, stamp));
+        if (!pr.ok) { await recordEffectFailure({ pending_update: false, error: pr.data }); return res.status(502).json({ error: 'pending_update_failed', detail: pr.data }); }
+        await record(verdict, 'decided', payload, { pending_update: status });
+        return res.status(200).json({ ok: true, verdict, pending_id: pid, status });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'pending_update',
+          title: 'Review gov pending update #' + pid,
+          instructions: 'Decision Center: decide whether to apply the proposed update to '
+            + (c.table_name || '') + '.' + (c.field_name || '') + ' (' + JSON.stringify(c.old_value)
+            + ' → ' + JSON.stringify(c.new_value) + ').' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- cms_link_suspect (federated, dia) ---------------------------------
+    // "Is this clinic linked to the right property?" link_correct is safe;
+    // break_link hands off to the existing cms-match DELETE route; research.
+    if (decision.decision_type === 'cms_link_suspect') {
+      if (verdict === 'link_correct') {
+        await record('link_correct', 'decided', null, { cms_link: 'confirmed' });
+        return res.status(200).json({ ok: true, verdict: 'link_correct' });
+      }
+      if (verdict === 'break_link') {
+        await record('break_link', 'decided', payload, { handoff: 'cms_unlink' });
+        return res.status(200).json({ ok: true, verdict: 'break_link',
+          next: { action: 'cms_unlink', domain: 'dia', property_id: c.property_id, medicare_id: c.medicare_id } });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'cms_link_suspect',
+          title: 'Verify CMS link for property ' + (c.property_id || ''),
+          instructions: 'Decision Center: verify whether medicare clinic ' + (c.medicare_id || '')
+            + ' (' + (c.cms_facility_name || '') + ') is correctly linked to this property.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- implausible_value (federated) -------------------------------------
+    // "Is this value real?" confirm_as_is is safe (the price was retained, the
+    // human blesses it); correct writes the corrected price; void defers to a
+    // research task (never a silent delete); research.
+    if (decision.decision_type === 'implausible_value') {
+      const dom = c.domain === 'dia' ? 'dialysis' : c.domain === 'gov' ? 'government' : null;
+      if (verdict === 'confirm_as_is') {
+        await record('confirm_as_is', 'decided', null, { sale: 'confirmed_legitimate' });
+        return res.status(200).json({ ok: true, verdict: 'confirm_as_is' });
+      }
+      if (verdict === 'correct') {
+        const corrected = Number(payload.corrected_price);
+        if (!dom || !Number.isFinite(corrected) || corrected <= 0) {
+          return res.status(400).json({ error: 'correct requires payload.corrected_price (>0) on a dia/gov subject' });
+        }
+        const pr = await domainQuery(dom, 'PATCH', 'sales_transactions?sale_id=eq.' + encodeURIComponent(c.sale_id),
+          { sold_price: corrected });
+        if (!pr.ok) { await recordEffectFailure({ correct: false, error: pr.data }); return res.status(502).json({ error: 'correct_failed', detail: pr.data }); }
+        await record('correct', 'decided', { corrected_price: corrected }, { sale: 'price_corrected' });
+        return res.status(200).json({ ok: true, verdict: 'correct', sale_id: c.sale_id, corrected_price: corrected });
+      }
+      if (verdict === 'void' || verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'implausible_value',
+          title: (verdict === 'void' ? 'Void implausible sale ' : 'Review implausible sale ') + (c.sale_id || ''),
+          instructions: 'Decision Center: ' + (verdict === 'void' ? 'void/remove' : 'review')
+            + ' the $' + Number(c.sold_price || 0).toLocaleString() + ' sale (' + (c.domain || '')
+            + ' sale_id ' + (c.sale_id || '') + ', address ' + (c.address || '') + ') flagged over the magnitude ceiling.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record(verdict, 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict, research_task_id: rid });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }
