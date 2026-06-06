@@ -59,7 +59,7 @@
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
-import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById } from './_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
@@ -1093,37 +1093,60 @@ async function getBuyerContacts(req, res, user, workspaceId) {
     }
     if (otherIds.size) {
       const ids = Array.from(otherIds).map(pgFilterVal).join(',');
-      const persons = await opsQuery('GET', 'entities?select=id,name,entity_type&entity_type=eq.person&id=in.(' + ids + ')&limit=50');
+      const persons = await opsQuery('GET', 'entities?select=id,name,entity_type,metadata&entity_type=eq.person&id=in.(' + ids + ')&limit=50');
       if (persons.ok && Array.isArray(persons.data)) {
-        for (const p of persons.data) { related.push({ entity_id: p.id, name: p.name }); relatedIds.add(p.id); }
+        for (const p of persons.data) {
+          // Skip rows already flagged junk; a related person should still be a
+          // plausible human (a mistyped firm linked here is not a contact).
+          if (p.metadata && p.metadata.junk_name_flagged === true) continue;
+          related.push({ entity_id: p.id, name: p.name }); relatedIds.add(p.id);
+        }
       }
     }
   } catch (_e) { /* soft */ }
 
-  // (b) Salesforce contacts on the mapped account (best-effort).
+  // (b) Salesforce contacts on the mapped account. sf_status is honest about
+  // WHY a section is empty (never a silent blank): no_account / not_configured /
+  // unavailable (flow op missing) / no_contacts / ok.
   let sfContacts = [];
+  let sfStatus = sfAccountId ? 'unknown' : 'no_account';
   if (sfAccountId) {
     try {
       const { getSalesforceContactsByAccount } = await import('./_shared/salesforce.js');
       const r = await getSalesforceContactsByAccount(sfAccountId);
       if (r.ok && Array.isArray(r.contacts)) {
         sfContacts = r.contacts.map(c => ({ sf_contact_id: c.Id, name: c.Name, title: c.Title, email: c.Email }));
+        sfStatus = sfContacts.length ? 'ok' : 'no_contacts';
+      } else {
+        sfStatus = r.reason === 'sf_not_configured' ? 'not_configured'
+                 : r.reason === 'bad_account_id'    ? 'no_account'
+                 : 'unavailable';   // flow op missing / lookup failed
       }
-    } catch (_e) { /* soft */ }
+    } catch (_e) { sfStatus = 'unavailable'; }
   }
 
-  // (c) Name-matched person entities not already related (the "Boyd" persons).
+  // (c) Name-matched PLAUSIBLE-HUMAN person entities not already related (the
+  // real "Boyd" people), excluding capture artifacts + junk-flagged rows.
   const nameMatches = [];
   if (parentName) {
-    // Core token = first significant word of the parent name (e.g. "Boyd").
+    const pnLower = String(parentName).toLowerCase().trim();
     const core = String(parentName).replace(/[^A-Za-z0-9 ]/g, ' ').trim().split(/\s+/)[0] || '';
     if (core.length >= 3) {
       try {
-        const nm = await opsQuery('GET', 'entities?select=id,name&entity_type=eq.person'
-          + '&name=ilike.' + pgFilterVal('%' + core + '%') + '&limit=25');
+        const nm = await opsQuery('GET', 'entities?select=id,name,metadata&entity_type=eq.person'
+          + '&name=ilike.' + pgFilterVal('%' + core + '%') + '&limit=60');
         if (nm.ok && Array.isArray(nm.data)) {
           for (const p of nm.data) {
-            if (!relatedIds.has(p.id)) nameMatches.push({ entity_id: p.id, name: p.name });
+            if (relatedIds.has(p.id)) continue;
+            if (p.metadata && p.metadata.junk_name_flagged === true) continue;
+            if (!looksLikePersonName(p.name)) continue;   // only selectable humans
+            // Exclude the firm name itself mistyped as a person ("Boyd Watterson"
+            // / "Boyd Watterson Global" both ⊆/⊇ the parent name) — a contact is
+            // a human, not the company.
+            const cn = String(p.name).toLowerCase().trim();
+            if (pnLower && (pnLower.indexOf(cn) !== -1 || cn.indexOf(pnLower) !== -1)) continue;
+            nameMatches.push({ entity_id: p.id, name: p.name });
+            if (nameMatches.length >= 15) break;
           }
         }
       } catch (_e) { /* soft */ }
@@ -1132,7 +1155,7 @@ async function getBuyerContacts(req, res, user, workspaceId) {
 
   return res.status(200).json({
     ok: true, parent_entity_id: entityId, parent_name: parentName,
-    sf_account_id: sfAccountId, sf_configured: sfContacts.length > 0 || !!sfAccountId,
+    sf_account_id: sfAccountId, sf_status: sfStatus,
     related, sf_contacts: sfContacts, name_matches: nameMatches,
   });
 }

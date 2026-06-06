@@ -1354,3 +1354,46 @@ rows; tick gains a `LLC_MAX_ATTEMPTS=8` dead-letter cap. Ops Health now shows a
 `lcc_check_write_failures()` + cron `lcc-write-failure-check` (hourly :55) opens a
 `write_failure_spike` alert per over-threshold path (and prunes >30d). Migrations:
 LCC `20260607140000`, dia/gov `20260607140000`.
+
+## R7 Phase 2.5 — buyer contact picker: person-plausibility + honest SF (2026-06-07)
+
+Two bugs Scott hit on the Boyd buy-side picker: the name-match source surfaced
+18 capture artifacts as "persons" ("Boyd Watterson by NAI Capital", "... JV
+...", "... BBCMS 2021-C10 ($5.0m approx)", "... GSA Fund", bare "Boyd"), and the
+Salesforce section was silently empty (the real Boyd humans live in SF).
+
+### Root cause + writer fix (the data, not just the view)
+The sale-event/capture writer (`sidebar-pipeline.js` buyer/seller) classifies
+any owner string WITHOUT a firm suffix as a PERSON, so attribution/deal strings
+got minted as person entities. New guards in `api/_shared/entity-link.js`:
+- **`isImplausiblePersonName(name)`** — strong negative signals a human name
+  never has: `by <broker>`, `JV`, CMBS codes (CMBS/BBCMS/CDCMT/ML-CFC), series
+  (`2021-C10`), `$`/`approx`/parenthesized amounts, firm suffixes (LLC/LP/Inc/
+  Trust/Fund/Capital/Partners/…). Wired into **`ensureEntityLink`** (the choke
+  point, beside the R4-A junk guard): an inferred `person` whose name is
+  implausible is rejected (`skipped:'implausible_person_name'`), so the artifacts
+  never become person entities going forward.
+- **`looksLikePersonName(name)`** — strict positive first+last shape (2-5 alpha
+  tokens, no digits/firm/deal tokens). Used by the picker so name-matches are
+  only selectable humans.
+
+### Existing rows → junk lane (don't hard-delete)
+Migration `20260607160000` soft-flags the ~1,009 mistyped person rows
+(`metadata.junk_name_flagged=true`, `junk_name_source=r7_phase2_5_*`) → they
+enter the **junk_entity_name** Decision Center lane for disposition (rename /
+merge / retype). Junk lane went 41 → 1,050. Idempotent; preserves metadata.
+
+### Picker (`api/operations.js` getBuyerContacts)
+- name_matches: `looksLikePersonName` + exclude junk-flagged + exclude the firm
+  name itself mistyped as a person (candidate ⊆/⊇ parent name — drops "Boyd
+  Watterson"/"Boyd Watterson Global"). Related persons also drop junk-flagged.
+- **`sf_status`** is honest: `no_account` / `not_configured` / `unavailable`
+  (flow op `find_contacts_by_account` not implemented) / `no_contacts` / `ok`.
+  `ops.js` renders the truthful message — never a silent empty SF section.
+- Ordering: related → SF → plausible name-matches → Add new. "Add new" is always
+  a selectable path, so the list is never zero actionable.
+
+### Follow-up
+- Implement the `find_contacts_by_account` SF flow op (preferred — the real Boyd
+  humans + activity history live in SF); until then the picker says so and offers
+  manual add. Order: related → SF → name-matches → add new.
