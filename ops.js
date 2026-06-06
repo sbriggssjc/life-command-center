@@ -1240,8 +1240,23 @@ async function renderOpsHealthPage() {
   html += metricCardHTML('Workers Stuck', s.workers_stuck == null ? '—' : s.workers_stuck, 'queues degrading', (s.workers_stuck > 0) ? 'red' : 'green');
   html += metricCardHTML('Flow Failures', s.open_flow_failures == null ? '—' : s.open_flow_failures, 'Power Automate', (s.open_flow_failures > 0) ? 'yellow' : 'green');
   html += metricCardHTML('Cron Issues', s.open_cron_issues == null ? '—' : s.open_cron_issues, 'unresolved', (s.open_cron_issues > 0) ? 'yellow' : 'green');
-  html += metricCardHTML('Write Failures', s.write_failures_recent == null ? '—' : s.write_failures_recent, 'recent', (s.write_failures_recent > 0) ? 'yellow' : 'green');
+  const wf24 = s.write_failures_24h;
+  const wfSub = (s.write_failures_7d != null) ? ('last 24h · ' + Number(s.write_failures_7d).toLocaleString() + ' in 7d') : 'last 24h';
+  html += metricCardHTML('Write Failures', wf24 == null ? '—' : Number(wf24).toLocaleString(), wfSub, (wf24 > 0) ? 'yellow' : 'green');
   html += '</div>';
+
+  // Top write-failure offender (24h) — names the single worst path so a storm
+  // can't hide in a 7-day total (the LLC 23514 regression signature).
+  if (s.write_failures_top && s.write_failures_top.count_24h) {
+    const t = s.write_failures_top;
+    html += '<div class="widget"><div class="widget-title">Top write-failure path (24h)</div>'
+      + '<div class="q-item"><div class="q-item-header"><span class="q-item-title">'
+      + esc((t.domain || '?') + ' ' + (t.method || '') + ' ' + (t.path || '')) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge pri-high">' + Number(t.count_24h).toLocaleString() + '</span>'
+      + (t.http_status ? '<span class="q-badge">http ' + esc(String(t.http_status)) + '</span>' : '') + '</div></div>'
+      + (t.sample_error ? '<div class="q-item-meta">' + esc(String(t.sample_error).slice(0, 200)) + '</div>' : '')
+      + '</div></div>';
+  }
 
   // Workers.
   html += '<div class="widget"><div class="widget-title">Background Workers</div>';
@@ -2213,8 +2228,10 @@ async function pqOpenGovernmentBuyer(entityId, parentName, btn) {
       // would just redraw the same row (the parent stays in P-BUYER), so the
       // operator would see no progress — mutate the card instead. When the parent
       // still needs a Salesforce mapping, route straight to the Decision Center
-      // map card so it can be finished now, not only logged for later.
-      _pqAdvanceGovBuyerCard(card, pname, needsMap);
+      // map card so it can be finished now, not only logged for later. When
+      // mapped, advance to the CONTACT step (select prospecting contact → buy-side
+      // cadence) — the account-level opp is open; the next action is the person.
+      _pqAdvanceGovBuyerCard(card, pname, needsMap, entityId, d.bd_opportunity_id || null);
     } else {
       showToast((res.data && res.data.error) || res.error || 'Could not open Government Buyer opportunity', 'error');
       if (btn) { btn.disabled = false; btn.textContent = origText || 'Open Government Buyer opportunity →'; }
@@ -2230,7 +2247,7 @@ window.pqOpenGovernmentBuyer = pqOpenGovernmentBuyer;
 // mapped parent settles to "open · SF mapped"; an unmapped parent advances to a
 // "finish SF mapping" state whose CTA jumps to the Decision Center map lane
 // (map_sf_parent_account), where the mapping can be completed immediately.
-function _pqAdvanceGovBuyerCard(card, parentName, needsMap) {
+function _pqAdvanceGovBuyerCard(card, parentName, needsMap, entityId, oppId) {
   if (!card) { renderPriorityQueuePage(window._pqCurrentBand || undefined); return; }
   card.classList.add('resolved');
   const actions = card.querySelector('.q-actions');
@@ -2243,10 +2260,108 @@ function _pqAdvanceGovBuyerCard(card, parentName, needsMap) {
     if (actions) actions.innerHTML =
       '<button class="q-action primary" onclick="navTo(\'pageReviewConsole\');setTimeout(renderBuyerParentLane,400)">Map SF parent now →</button>';
   } else if (actions) {
-    actions.innerHTML = '<span class="q-badge">✓ Government Buyer open · SF mapped</span>';
+    // Mapped: the next action is selecting the prospecting contact (the opp is
+    // account-level; opportunities are tied to a specific person at the company).
+    const safeName = String(parentName || '').replace(/'/g, '’');
+    actions.innerHTML = '<span class="q-badge">✓ Government Buyer open · SF mapped</span>'
+      + ' <button class="q-action primary" onclick="pqSelectBuyerContact('
+      + (entityId ? '\'' + esc(String(entityId)) + '\'' : 'null') + ', '
+      + (oppId ? '\'' + esc(String(oppId)) + '\'' : 'null') + ', \'' + esc(safeName) + '\', this)">Select prospecting contact →</button>';
   }
 }
 window._pqAdvanceGovBuyerCard = _pqAdvanceGovBuyerCard;
+
+// Buy-side contact step: pick the prospecting contact for a mapped buyer parent,
+// then seed the buy-side cadence. Sources: person entities related to the
+// parent, Salesforce contacts on the mapped account, name-matched persons, or a
+// new contact. On select → POST select_buyer_contact → the card settles to
+// "On buy-side cadence with <name> — next touch <date>" (the parent then lives
+// in the cadence bands like any relationship).
+let _pqBuyerCtx = {};
+async function pqSelectBuyerContact(entityId, oppId, parentName, btn) {
+  if (!entityId) { showToast('No parent entity for the contact step', 'error'); return; }
+  const card = (btn && btn.closest) ? btn.closest('.q-item') : null;
+  _pqBuyerCtx = { entityId: entityId, oppId: oppId, parentName: parentName, card: card };
+  let host = card ? card.querySelector('.pq-buyer-contact') : null;
+  if (card && !host) {
+    host = document.createElement('div');
+    host.className = 'pq-buyer-contact';
+    const actions = card.querySelector('.q-actions');
+    if (actions) card.insertBefore(host, actions); else card.appendChild(host);
+  }
+  if (host) host.innerHTML = '<div class="q-item-meta"><span class="spinner"></span> loading contacts…</div>';
+  const res = await opsApi('/api/operations?action=buyer_contacts&entity_id=' + encodeURIComponent(entityId));
+  if (!res.ok || !res.data || !res.data.ok) {
+    if (host) host.innerHTML = '<div class="q-item-meta">Could not load contacts: ' + esc((res.data && res.data.error) || res.error || 'unknown') + '</div>';
+    return;
+  }
+  _pqBuyerCtx.candidates = res.data;
+  if (host) host.innerHTML = _pqBuyerContactHTML(res.data);
+}
+window.pqSelectBuyerContact = pqSelectBuyerContact;
+
+function _pqBuyerContactHTML(d) {
+  let h = '<div class="pq-bc-head">Who is the prospecting contact at ' + esc(d.parent_name || 'this account') + '?</div>';
+  const sec = (title, rows, kind) => {
+    if (!rows || !rows.length) return '';
+    let s = '<div class="pq-bc-sec">' + esc(title) + '</div>';
+    rows.forEach(function (c, i) {
+      const sub = [c.title, c.email].filter(Boolean).join(' · ');
+      s += '<div class="pq-bc-row"><div class="pq-bc-main"><b>' + esc(c.name || 'Unnamed') + '</b>'
+        + (sub ? ' <span class="pq-bc-meta">' + esc(sub) + '</span>' : '') + '</div>'
+        + '<button class="q-action primary" onclick="pqBuyerContactPick(\'' + kind + '\',' + i + ')">Select</button></div>';
+    });
+    return s;
+  };
+  h += sec('Linked to this account', d.related, 'related');
+  h += sec('Salesforce contacts on the account', d.sf_contacts, 'sf');
+  h += sec('Name-matched (link on select)', d.name_matches, 'name');
+  if (!(d.related && d.related.length) && !(d.sf_contacts && d.sf_contacts.length) && !(d.name_matches && d.name_matches.length)) {
+    h += '<div class="q-item-meta">No existing contacts found' + (d.sf_account_id ? '' : ' (parent not SF-mapped yet)') + '. Add one below.</div>';
+  }
+  h += '<div class="pq-bc-row pq-bc-new"><button class="q-action" onclick="pqBuyerContactAddNew()">+ Add new contact…</button></div>';
+  return h;
+}
+
+function pqBuyerContactPick(kind, i) {
+  const d = _pqBuyerCtx.candidates || {};
+  const arr = kind === 'related' ? d.related : kind === 'sf' ? d.sf_contacts : d.name_matches;
+  const c = (arr || [])[i];
+  if (!c) return;
+  const payload = (kind === 'sf')
+    ? { sf_contact_id: c.sf_contact_id, contact_name: c.name }
+    : { contact_entity_id: c.entity_id, contact_name: c.name };
+  _pqBuyerContactSubmit(payload, c.name);
+}
+window.pqBuyerContactPick = pqBuyerContactPick;
+
+function pqBuyerContactAddNew() {
+  const nm = (typeof prompt === 'function') ? prompt('New contact name:') : '';
+  if (nm == null) return;
+  const v = String(nm || '').trim(); if (!v) return;
+  _pqBuyerContactSubmit({ new_contact_name: v }, v);
+}
+window.pqBuyerContactAddNew = pqBuyerContactAddNew;
+
+async function _pqBuyerContactSubmit(payload, displayName) {
+  const ctx = _pqBuyerCtx;
+  const body = Object.assign({ entity_id: ctx.entityId, bd_opportunity_id: ctx.oppId }, payload);
+  const res = await opsPost('/api/operations?action=select_buyer_contact', body);
+  if (res.ok && res.data && res.data.ok) {
+    const due = res.data.next_touch_due ? new Date(res.data.next_touch_due).toLocaleDateString() : 'now';
+    const name = res.data.contact_name || displayName || 'contact';
+    const card = ctx.card;
+    if (card) {
+      const host = card.querySelector('.pq-buyer-contact'); if (host) host.remove();
+      const actions = card.querySelector('.q-actions');
+      if (actions) actions.innerHTML = '<span class="q-badge">✓ On buy-side cadence with ' + esc(name) + ' — next touch ' + esc(due) + '</span>';
+      card.classList.add('resolved');
+    }
+    showToast('Buy-side cadence started with ' + name, 'success');
+  } else {
+    showToast('Could not start cadence: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
 
 // R6 — owner-level "Resolve owner →" for a P0.4 row that has no representative
 // property to route through. The control structure must be resolved + connected

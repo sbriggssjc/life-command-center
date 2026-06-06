@@ -1292,3 +1292,65 @@ write-back.
   it from the seed.
 - federated destructive verdicts have no preview/dry-run yet (except where the
   underlying RPC provides one); add per-lane dry-run where the machinery allows.
+
+## R7 Phase 2.4 — P-BUYER contact step + buy-side cadence (2026-06-07)
+
+After "Open Government Buyer" succeeds on a mapped parent the P-BUYER card used
+to dead-end at a badge. Doctrine: an opportunity is tied to a specific CONTACT
+at the company — the account-level opp is fine, but the next action is selecting
+the prospecting contact, then a BUY-SIDE cadence (showings + buy-side outreach),
+NOT the onboarding ladder (R5 deliberately excludes buyer opps from the prospect
+auto-seed trigger).
+
+### DB (LCC Opps, migration `20260607150000`, applied live)
+- `touchpoint_cadence.phase` CHECK widened with **`buy_side`** (widening only).
+- **`lcc_seed_buyer_cadence(opp, entity, contact_id, sf_contact_id, name, owner,
+  domain, interval)`** — seeds a `phase='buy_side'`, `priority_tier='A'`,
+  `next_touch_type='outreach'` row. ON CONFLICTs on the **uq_cadence_contact_property
+  INDEX expression** (the E2E#6 rule — index-inference form, not a constraint
+  name) so re-selecting a contact relinks the existing row instead of 23505'ing.
+  Verified: two calls on one parent (no sf id) → 1 row, contact swapped, phase
+  buy_side; synthetic fixtures deleted (0 residue).
+
+### SF (`api/_shared/salesforce.js`)
+- `getSalesforceContactsByAccount(accountId)` — `find_contacts_by_account` flow
+  op; tolerant of flows that don't implement it (falls back to entity-graph
+  candidates).
+
+### API (`api/operations.js`, no new function files)
+- `GET ?action=buyer_contacts&entity_id=<parent>` — candidate contacts from three
+  sources: (a) person entities related to the parent (`entity_relationships`
+  associated_with), (b) Salesforce contacts on the mapped account, (c)
+  name-matched person entities (core token, e.g. the captured "Boyd" persons).
+- `POST ?action=select_buyer_contact` — resolve/create the person, link
+  person→parent (`associated_with`, dupe-guarded — no unique index), seed the
+  buy-side cadence (effect-first; a failed seed 502s + records nothing), record
+  `metadata.primary_contact` on the opp, refresh the queue cache.
+
+### UI (`ops.js`)
+- `_pqAdvanceGovBuyerCard` mapped branch → **"Select prospecting contact →"** CTA
+  (was a terminal badge). `pqSelectBuyerContact` opens an inline picker
+  (related / SF / name-matched / + Add new); on select the card settles to
+  **"✓ On buy-side cadence with <name> — next touch <date>"** and the parent ages
+  out of "to decide" into the cadence bands. Boyd Watterson Global is already
+  SF-mapped, so the contact step is its live next action.
+
+### Follow-ups (NOT in this phase)
+- The buy-side cadence row is the truth; rendering that state in the entity
+  detail Next-Step banner + the Decision Center buyer lane (the full "one truth,
+  three renderings") is deferred — the queue card flow is the surface Scott hit.
+- Unmapped parents still route to the map card first; the contact step appears on
+  the next P-BUYER open (already_open + mapped).
+
+## R7 Phase 2.3 — LLC-tick 23514 storm + honest write-failure health (2026-06-07)
+
+Covered in the commit log; summary: the llc-research tick wrote `status='deferred'`
+(no-handler cap, 2026-05-31) but `llc_research_queue_status_check` lacked it →
+23514 on every such PATCH, row stuck `in_progress`, reclaimed every 15min, each
+cycle logging an `ingest_write_failures` row (100% of recent failures; 2,350/24h
+per domain). Fix: widen the CHECK (+`deferred`,`dead`) on dia+gov + park stranded
+rows; tick gains a `LLC_MAX_ATTEMPTS=8` dead-letter cap. Ops Health now shows a
+**24h** window + the top offender path (was a 7d total mislabeled "recent");
+`lcc_check_write_failures()` + cron `lcc-write-failure-check` (hourly :55) opens a
+`write_failure_spike` alert per over-threshold path (and prunes >30d). Migrations:
+LCC `20260607140000`, dia/gov `20260607140000`.

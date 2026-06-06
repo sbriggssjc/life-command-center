@@ -2042,6 +2042,14 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .dcsf-input:focus { border-color: var(--accent); }
 .dcsf-input::placeholder { color: var(--text3); }
 .dc-collapsed { font-size: 13px; color: var(--text2); padding: 6px 2px; display: flex; align-items: center; gap: 8px; }
+/* Buy-side contact picker (R7 Phase 2.4) */
+.pq-buyer-contact { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--s1); }
+.pq-bc-head { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.pq-bc-sec { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text3); margin: 8px 0 4px; }
+.pq-bc-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 4px 0; }
+.pq-bc-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pq-bc-meta { font-size: 11px; color: var(--text3); }
+.pq-bc-new { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 8px; }
 .dcsf-manual { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; }
 .dcsf-results { display: flex; flex-direction: column; gap: 4px; }
 .dcsf-hint { font-size: 12px; color: var(--text3); margin: 4px 0; }

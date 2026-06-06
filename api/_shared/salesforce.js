@@ -238,3 +238,31 @@ export async function findSalesforceContactByEmail(email) {
     reason:  picked ? undefined : 'no_match',
   };
 }
+
+/**
+ * List Salesforce Contacts on a given Account (the mapped buyer-parent account),
+ * so the buy-side cadence can be attached to the right person. Uses the
+ * `find_contacts_by_account` flow op; tolerant of flows that don't implement it
+ * (returns ok:false so the caller can fall back to entity-graph candidates).
+ *
+ * @param {string} accountId — 15/18-char SF Account Id
+ * @returns {Promise<{ok:boolean, contacts?:Array<{Id,Name,Title,Email}>, reason?:string}>}
+ */
+export async function getSalesforceContactsByAccount(accountId) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const id = String(accountId || '').trim();
+  if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(id)) return { ok: false, reason: 'bad_account_id' };
+  const result = await callSfLookupFlow({ operation: 'find_contacts_by_account', value: id });
+  if (!result || result.ok !== true) return { ok: false, reason: result?.reason || 'lookup_failed' };
+  const rows = Array.isArray(result.contacts) ? result.contacts
+            : Array.isArray(result.candidates) ? result.candidates : [];
+  const contacts = rows
+    .map((c) => ({
+      Id: c?.Id || c?.id || null,
+      Name: c?.Name || c?.name || null,
+      Title: c?.Title || c?.title || null,
+      Email: c?.Email || c?.email || null,
+    }))
+    .filter((c) => c.Id && c.Name);
+  return { ok: true, contacts };
+}

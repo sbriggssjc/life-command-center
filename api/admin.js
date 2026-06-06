@@ -161,13 +161,15 @@ async function handleOpsHealth(req, res) {
 
   const [
     openAlerts, openFlowFailures, cronSummary,
-    writeFailRecent,
+    writeFail24h, writeFailTop, writeFail7d,
     diaLlcQueued, diaLlcInProgress, govLlcQueued, govLlcInProgress,
   ] = await Promise.all([
     opsRead('v_lcc_health_alerts_open?select=alert_kind,source,severity,summary,detected_at,age_hours&order=detected_at.desc&limit=50'),
     opsRead('v_flow_run_failures_open?select=flow_name,failed_action,error_kind,error_detail_short,severity,detected_at&order=detected_at.desc&limit=50'),
     opsRead('v_cron_health_summary?select=alert_kind,source,severity,summary,detected_at,resolved_at&order=detected_at.desc&limit=50'),
-    opsCount('v_ingest_write_failures_recent'),
+    opsCount('v_ingest_write_failures_24h'),
+    opsRead('v_ingest_write_failures_top_24h?select=domain,method,http_status,path_norm,failures_24h,sample_error&order=failures_24h.desc&limit=5'),
+    opsCount('v_ingest_write_failures_recent'),  // 7d, kept as context only
     domCount('dia', 'llc_research_queue?status=eq.queued'),
     domCount('dia', 'llc_research_queue?status=eq.in_progress'),
     domCount('gov', 'llc_research_queue?status=eq.queued'),
@@ -186,16 +188,26 @@ async function handleOpsHealth(req, res) {
   const flows = openFlowFailures || [];
   const crons = (cronSummary || []).filter(r => !r.resolved_at);
 
+  const topFail = (Array.isArray(writeFailTop) && writeFailTop[0]) ? writeFailTop[0] : null;
   return res.status(200).json({
     generated_at: new Date().toISOString(),
     summary: {
       open_alerts: alerts.length,
       open_flow_failures: flows.length,
       open_cron_issues: crons.length,
-      write_failures_recent: writeFailRecent,
+      // Honest window (R7 Phase 2.3): 24h count + the single worst path, with
+      // the 7d figure demoted to context. The old "write_failures_recent" was a
+      // 7d total mislabeled "recent" and hid the LLC 23514 storm in the noise.
+      write_failures_24h: writeFail24h,
+      write_failures_7d: writeFail7d,
+      write_failures_top: topFail ? {
+        domain: topFail.domain, method: topFail.method, http_status: topFail.http_status,
+        path: topFail.path_norm, count_24h: topFail.failures_24h, sample_error: topFail.sample_error,
+      } : null,
       workers_stuck: workers.filter(w => w.status === 'stuck').length,
     },
     alerts, flow_failures: flows, cron_issues: crons, workers,
+    write_failures_top_24h: Array.isArray(writeFailTop) ? writeFailTop : [],
   });
 }
 
@@ -4376,9 +4388,24 @@ async function handleLlcResearchTick(req, res) {
     // re-enters the working set. Window via LLC_INPROGRESS_STALE_MIN (default 15).
     const _staleMin = parseInt(process.env.LLC_INPROGRESS_STALE_MIN || '15', 10);
     const _staleCut = new Date(Date.now() - _staleMin * 60000).toISOString();
+    // Hard dead-letter cap (2026-06-07): a row that has burned through this many
+    // attempts and is still stranded in_progress is parked 'dead' (terminal,
+    // never reclaimed) instead of cycling forever — backoff so one permanently-
+    // failing row can't flood ingest_write_failures (the 23514 storm signature).
+    const _maxAttempts = parseInt(process.env.LLC_MAX_ATTEMPTS || '8', 10);
     try {
+      // 1a. Dead-letter the truly-stuck: stale in_progress AND over the cap.
+      const dead = await domainQuery(dom, 'PATCH',
+        `llc_research_queue?status=eq.in_progress&last_attempt_at=lt.${_staleCut}&attempts=gte.${_maxAttempts}`,
+        { status: 'dead', last_error: 'max_attempts_exhausted', resolved_at: new Date().toISOString() },
+        { 'Prefer': 'return=representation,count=exact' });
+      if (dead && dead.ok) {
+        const n = dead.count || (Array.isArray(dead.data) ? dead.data.length : 0);
+        if (n) { summary.dead_lettered = n; result.dead_lettered = (result.dead_lettered || 0) + n; }
+      }
+      // 1b. Reclaim the rest (under the cap) back to queued.
       const reclaimed = await domainQuery(dom, 'PATCH',
-        `llc_research_queue?status=eq.in_progress&last_attempt_at=lt.${_staleCut}`,
+        `llc_research_queue?status=eq.in_progress&last_attempt_at=lt.${_staleCut}&attempts=lt.${_maxAttempts}`,
         { status: 'queued' }, { 'Prefer': 'return=representation,count=exact' });
       if (reclaimed && reclaimed.ok) {
         const n = reclaimed.count || (Array.isArray(reclaimed.data) ? reclaimed.data.length : 0);
