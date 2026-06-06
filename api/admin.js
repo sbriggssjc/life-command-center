@@ -36,7 +36,7 @@ import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
   snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES,
 } from './_shared/intake-classify.js';
-import { normalizeState } from './_shared/entity-link.js';
+import { normalizeState, parseContactFromJunk } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 
 // Default flag values — safe defaults for gradual rollout
@@ -128,6 +128,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'decision-verdict':           return handleDecisionVerdict(req, res);
     case 'decision-sf-search':         return handleDecisionSfSearch(req, res);
     case 'junk-bucket':                return handleJunkBucket(req, res);
+    case 'exact-merge':                return handleExactMerge(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -1017,13 +1018,16 @@ function classifyJunkName(name) {
 }
 
 // Which bulk verdict a bucket supports. 'other' → none (manual only).
+// phone_or_email rows are real people (panel-header bleed-through) — they get
+// PARSED into a clean contact, never dismissed.
 const JUNK_BUCKET_VERDICT = {
-  phone_or_email:   'dismiss',
+  phone_or_email:   'parse_contact',
   deal_string:      'dismiss',
   trust_placeholder:'dismiss',
   by_brokerage:     'clean_rename',
   other:            null,
 };
+
 
 // GET  /api/junk-bucket            → classify + preview (counts + samples)
 // POST /api/junk-bucket  { bucket, verdict, limit } → apply one verdict to a bucket
@@ -1055,6 +1059,10 @@ async function handleJunkBucket(req, res) {
       if (buckets[b].samples.length < 8) {
         const sample = { id: e.id, name: e.name };
         if (b === 'by_brokerage') sample.cleaned_name = junkStripBrokerSuffix(e.name);
+        if (b === 'phone_or_email') {
+          const p = parseContactFromJunk(e.name);
+          sample.parsed = p ? { name: p.name, phone: p.phone, email: p.email, role: p.role } : null;
+        }
         buckets[b].samples.push(sample);
       }
     }
@@ -1111,6 +1119,26 @@ async function handleJunkBucket(req, res) {
         meta.junk_name_disposition = bucket + '_renamed';
         recordVerdict = 'rename';
         recordStatus = 'decided';
+      } else if (verdict === 'parse_contact') {
+        // Parse a real person out of the panel-header bleed-through. Rows the
+        // parser can't confidently split STAY flagged (never guessed/dismissed).
+        const c = parseContactFromJunk(e.name);
+        if (!c) { failed++; errors.push({ id: e.id, error: 'unparseable_contact' }); continue; }
+        patch.name = c.name;
+        const toks = c.name.split(/\s+/);
+        patch.first_name = toks[0] || null;
+        patch.last_name = toks.length > 1 ? toks.slice(1).join(' ') : null;
+        if (c.phone) patch.phone = c.phone;
+        if (c.email) patch.email = c.email;
+        if (c.title) patch.title = c.title;
+        // Person stays a person; the entity IS the contact record on LCC (the
+        // P-BUYER picker name-match reads person entities — clearing the junk
+        // flag + a plausible name makes this row eligible).
+        meta.junk_name_disposition = 'phone_or_email_parsed';
+        meta.contact_role = c.role;
+        meta.parsed_from_capture = true;
+        recordVerdict = 'parse_contact';
+        recordStatus = 'decided';
       }
 
       // Effect FIRST.
@@ -1123,7 +1151,9 @@ async function handleJunkBucket(req, res) {
       if (did != null) {
         await opsQuery('POST', 'rpc/lcc_record_decision_verdict', {
           p_decision_id: did, p_verdict: recordVerdict, p_status: recordStatus,
-          p_verdict_payload: (verdict === 'clean_rename') ? { new_name: patch.name, bulk: true } : { bulk: true, bucket },
+          p_verdict_payload: (verdict === 'clean_rename' || verdict === 'parse_contact')
+            ? { new_name: patch.name, phone: patch.phone || null, email: patch.email || null, role: meta.contact_role || null, bulk: true }
+            : { bulk: true, bucket },
           p_effects: { bulk_bucket: bucket, source: 'junk-bucket-worker' },
           p_decided_by: user.id || null,
         });
@@ -1135,6 +1165,97 @@ async function handleJunkBucket(req, res) {
       bucket, verdict, attempted: rows.length, succeeded, failed,
       errors: errors.slice(0, 10),
       note: 'Re-run to process the next batch; idempotent (reviewed rows are excluded).',
+    });
+  }
+
+  return res.status(405).json({ error: 'GET or POST only' });
+}
+
+// ============================================================================
+// Exact-name auto-merge (the rename aftermath of the B9 clean-renames).
+//
+// A clean-renamed junk entity often now carries the EXACT name of an
+// established canonical entity (e.g. a renamed "SMBC Leasing and Finance"
+// beside the real one). v_lcc_exact_name_merge_candidates classifies those
+// collisions SAFE vs REVIEW. This worker previews them and applies the SAFE
+// ones via the proven lcc_merge_entity machinery — always junk → canonical
+// (the renamed artifact is the loser; the established entity is the winner),
+// never the reverse. REVIEW pairs (multi-match / domain mismatch / both-SF)
+// stay for the per-item junk "Merge into…" lane.
+// ============================================================================
+async function handleExactMerge(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  let workspaceId = null;
+  try { workspaceId = req.headers['x-lcc-workspace'] || primaryWorkspace(user)?.workspace_id || null; } catch (_e) { workspaceId = null; }
+  const wsFilter = workspaceId ? '&workspace_id=eq.' + pgFilterVal(workspaceId) : '';
+  const sel = 'select=junk_id,junk_name,junk_domain,tgt_id,tgt_name,tgt_domain,n_tgt,classification,review_reason';
+
+  if (req.method === 'GET') {
+    const [safeR, revR] = await Promise.all([
+      opsQuery('GET', 'v_lcc_exact_name_merge_candidates?' + sel + '&classification=eq.safe' + wsFilter + '&limit=2000'),
+      opsQuery('GET', 'v_lcc_exact_name_merge_candidates?' + sel + '&classification=eq.review' + wsFilter + '&limit=2000'),
+    ]);
+    if (!safeR.ok) return res.status(safeR.status || 502).json({ error: 'preview_failed', detail: safeR.data });
+    const safe = Array.isArray(safeR.data) ? safeR.data : [];
+    const review = (revR.ok && Array.isArray(revR.data)) ? revR.data : [];
+    const reviewBreakdown = {};
+    review.forEach(r => { const k = r.review_reason || 'other'; reviewBreakdown[k] = (reviewBreakdown[k] || 0) + 1; });
+    return res.status(200).json({
+      safe_count: safe.length,
+      review_count: review.length,
+      review_breakdown: reviewBreakdown,
+      safe_samples: safe.slice(0, 10).map(r => ({ junk_id: r.junk_id, junk_name: r.junk_name, tgt_id: r.tgt_id, tgt_name: r.tgt_name, domain: r.tgt_domain || r.junk_domain })),
+      review_samples: review.slice(0, 10).map(r => ({ junk_name: r.junk_name, tgt_name: r.tgt_name, reason: r.review_reason, n_tgt: r.n_tgt })),
+    });
+  }
+
+  if (req.method === 'POST') {
+    if (!requireRole(user, 'operator', workspaceId)) {
+      return res.status(403).json({ error: 'Operator role required' });
+    }
+    const limit = Math.min(Math.max(parseInt((req.body || {}).limit, 10) || 50, 1), 200);
+    const r = await opsQuery('GET', 'v_lcc_exact_name_merge_candidates?' + sel
+      + '&classification=eq.safe' + wsFilter + '&limit=' + limit);
+    if (!r.ok) return res.status(r.status || 502).json({ error: 'load_failed', detail: r.data });
+    const pairs = Array.isArray(r.data) ? r.data : [];
+    if (!pairs.length) return res.status(200).json({ attempted: 0, merged: 0, failed: 0, remaining_safe: 0 });
+
+    let merged = 0, failed = 0;
+    const errors = [];
+    for (const p of pairs) {
+      // Effect FIRST: merge junk (loser) INTO canonical (winner).
+      const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: p.junk_id, p_winner: p.tgt_id });
+      if (!mr.ok) { failed++; errors.push({ junk_id: p.junk_id, error: mr.data }); continue; }
+      // Record the decision per pair (audit trail; mint→record, idempotent on
+      // the open-subject key). Best-effort — the merge is the source of truth.
+      try {
+        const mint = await opsQuery('POST', 'rpc/lcc_open_decision', {
+          p_decision_type: 'exact_name_merge', p_workspace_id: workspaceId || null,
+          p_question: 'Exact-name collision after clean-rename — merge artifact into canonical?',
+          p_context: { junk_name: p.junk_name, tgt_id: p.tgt_id, tgt_name: p.tgt_name, domain: p.tgt_domain || p.junk_domain },
+          p_subject_entity_id: p.junk_id, p_subject_ref: 'exact_merge:' + p.junk_id,
+        });
+        let did = null;
+        if (mint.ok) {
+          if (typeof mint.data === 'number') did = mint.data;
+          else if (Array.isArray(mint.data) && mint.data[0] != null) { const f = mint.data[0]; did = (typeof f === 'number') ? f : (f.lcc_open_decision ?? f.id ?? null); }
+          else if (mint.data && typeof mint.data === 'object') did = mint.data.lcc_open_decision ?? mint.data.id ?? null;
+        }
+        if (did != null) {
+          await opsQuery('POST', 'rpc/lcc_record_decision_verdict', {
+            p_decision_id: Number(did), p_verdict: 'merged', p_status: 'decided',
+            p_verdict_payload: { winner: p.tgt_id, loser: p.junk_id, name: p.tgt_name },
+            p_effects: { lcc_merge_entity: 'merged', source: 'exact-merge-worker' },
+            p_decided_by: user.id || null,
+          });
+        }
+      } catch (_e) { /* audit record is best-effort; merge already applied */ }
+      merged++;
+    }
+    return res.status(200).json({
+      attempted: pairs.length, merged, failed, errors: errors.slice(0, 10),
+      note: 'Re-run for the next batch; idempotent (merged losers drop out of the candidate view).',
     });
   }
 

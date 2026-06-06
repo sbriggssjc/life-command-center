@@ -1675,11 +1675,11 @@ async function renderDecisionLane(type) {
   _dcCurrentOpenExpr = "renderDecisionLane('" + type + "')";
   // B9 (2026-06-06): the junk lane has ~1,050 rows — too many to work one at a
   // time. Mount a bulk-by-bucket panel above the per-item cards.
-  if (type === 'junk_entity_name') html += '<div id="junkBucketPanel"></div>';
+  if (type === 'junk_entity_name') html += '<div id="exactMergePanel"></div><div id="junkBucketPanel"></div>';
   if (!items.length) {
     html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>';
     el.innerHTML = html;
-    if (type === 'junk_entity_name') renderJunkBucketPanel();
+    if (type === 'junk_entity_name') { renderExactMergePanel(); renderJunkBucketPanel(); }
     return;
   }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
@@ -1687,7 +1687,7 @@ async function renderDecisionLane(type) {
   _dcItems = {};
   items.forEach(function (it, ix) { _dcItems[it.id] = it; html += _dcCardHTML(it, ix === 0); });
   el.innerHTML = html;
-  if (type === 'junk_entity_name') renderJunkBucketPanel();
+  if (type === 'junk_entity_name') { renderExactMergePanel(); renderJunkBucketPanel(); }
 }
 window.renderDecisionLane = renderDecisionLane;
 
@@ -1706,15 +1706,20 @@ async function renderJunkBucketPanel() {
     by_brokerage: '“… by <Broker>” suffix', trust_placeholder: 'Trust placeholder codes',
     other: 'Other (possibly real — manual)',
   };
-  const VERB = { dismiss: 'Dismiss', clean_rename: 'Clean rename' };
+  const VERB = { dismiss: 'Dismiss', clean_rename: 'Clean rename', parse_contact: 'Parse contacts' };
   let h = '<div class="widget" style="margin-bottom:14px"><div class="widget-title">⚡ Bulk by bucket ('
     + Number(res.data.total_flagged || 0).toLocaleString() + ' flagged)</div>'
-    + '<div class="q-item-meta" style="padding:0 0 8px">Capture artifacts can be cleared in bulk. “Dismiss” soft-marks reviewed (reversible, never deleted); “Clean rename” strips the broker suffix. “Other” stays manual.</div>';
+    + '<div class="q-item-meta" style="padding:0 0 8px">Capture artifacts can be cleared in bulk. “Parse contacts” turns phone/email rows into clean people (name + phone + role); “Dismiss” soft-marks reviewed (reversible, never deleted); “Clean rename” strips the broker suffix. “Other” stays manual.</div>';
   buckets.forEach(function (b) {
     const samples = (b.samples || []).map(function (s) {
-      return b.bucket === 'by_brokerage' && s.cleaned_name
-        ? esc(s.name) + ' <span style="color:var(--text3)">→</span> ' + esc(s.cleaned_name)
-        : esc(s.name);
+      if (b.bucket === 'by_brokerage' && s.cleaned_name) {
+        return esc(s.name) + ' <span style="color:var(--text3)">→</span> ' + esc(s.cleaned_name);
+      }
+      if (b.bucket === 'phone_or_email' && s.parsed) {
+        return esc(s.name) + ' <span style="color:var(--text3)">→</span> ' + esc(s.parsed.name)
+          + (s.parsed.phone ? ' <span style="color:var(--text3)">' + esc(s.parsed.phone) + '</span>' : '');
+      }
+      return esc(s.name);
     }).join(' · ');
     h += '<div class="q-item" style="margin-bottom:8px"><div class="q-item-header">'
       + '<span class="q-item-title">' + esc(LABELS[b.bucket] || b.bucket) + '</span>'
@@ -1733,12 +1738,14 @@ async function renderJunkBucketPanel() {
 window.renderJunkBucketPanel = renderJunkBucketPanel;
 
 async function applyJunkBucket(bucket, verdict, btn) {
-  const verb = verdict === 'clean_rename' ? 'clean-rename' : 'dismiss';
+  const verb = verdict === 'clean_rename' ? 'clean-rename' : verdict === 'parse_contact' ? 'parse contacts in' : 'dismiss';
+  const detail = verdict === 'dismiss'
+    ? 'They will be soft-marked reviewed (reversible) and drop out of the junk lane.'
+    : verdict === 'parse_contact'
+      ? 'Each row becomes a clean person (name + phone + role). Rows the parser can’t confidently split stay flagged.'
+      : 'Each name will have its broker-attribution suffix stripped.';
   const ok = typeof lccConfirm === 'function'
-    ? await lccConfirm('Bulk ' + verb + ' up to 200 entities in the “' + bucket + '” bucket?\n\n'
-        + (verdict === 'dismiss'
-            ? 'They will be soft-marked reviewed (reversible) and drop out of the junk lane.'
-            : 'Each name will have its broker-attribution suffix stripped.'), 'Apply')
+    ? await lccConfirm('Bulk ' + verb + ' up to 200 entities in the “' + bucket + '” bucket?\n\n' + detail, 'Apply')
     : true;
   if (!ok) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
@@ -1754,6 +1761,58 @@ async function applyJunkBucket(bucket, verdict, btn) {
   }
 }
 window.applyJunkBucket = applyJunkBucket;
+
+// Unit-1: exact-name auto-merge panel (the clean-rename aftermath). Renames
+// often collide exactly with an established entity; SAFE collisions auto-merge
+// junk → canonical via lcc_merge_entity. REVIEW collisions stay for the per-item
+// "Merge into…" cards below.
+async function renderExactMergePanel() {
+  const host = document.getElementById('exactMergePanel');
+  if (!host) return;
+  host.innerHTML = '<div class="ops-empty" style="padding:8px">Finding exact-name collisions…</div>';
+  const res = await opsApi('/api/exact-merge');
+  if (!res.ok) { host.innerHTML = opsErrorState(res, 'renderExactMergePanel()', 'Could not load exact-name candidates'); return; }
+  const d = res.data || {};
+  const safe = Number(d.safe_count || 0), review = Number(d.review_count || 0);
+  if (!safe && !review) { host.innerHTML = ''; return; } // nothing to show
+  const samples = (d.safe_samples || []).slice(0, 6).map(function (s) {
+    return esc(s.junk_name) + ' <span style="color:var(--text3)">→ merge into</span> ' + esc(s.tgt_name);
+  }).join(' · ');
+  const rb = d.review_breakdown || {};
+  const rbStr = Object.keys(rb).map(function (k) { return rb[k] + ' ' + k.replace(/_/g, ' '); }).join(', ');
+  let h = '<div class="widget" style="margin-bottom:14px"><div class="widget-title">⚡ Exact-name auto-merge</div>'
+    + '<div class="q-item-meta" style="padding:0 0 8px">A clean-renamed artifact now shares an exact name with an established entity. SAFE = single match, domain-compatible, no SF conflict — merges the artifact INTO the canonical entity (never the reverse). REVIEW collisions stay for the “Merge into…” cards below.</div>'
+    + '<div class="q-item"><div class="q-item-header"><span class="q-item-title">Exact-name collisions</span>'
+    + '<div class="q-item-badges"><span class="q-badge">' + safe + ' safe</span>'
+    + (review ? '<span class="q-badge">' + review + ' review</span>' : '') + '</div></div>'
+    + (samples ? '<div class="q-item-meta" style="opacity:.8">' + samples + '</div>' : '')
+    + (review ? '<div class="q-item-meta">' + esc(rbStr) + ' → work below</div>' : '')
+    + '<div class="q-actions">'
+    + (safe ? '<button class="q-action primary" onclick="applyExactMerge(this)">Merge ' + Math.min(safe, 200) + ' safe →</button>'
+            : '<span class="q-item-meta">No safe auto-merges right now.</span>')
+    + '</div></div></div>';
+  host.innerHTML = h;
+}
+window.renderExactMergePanel = renderExactMergePanel;
+
+async function applyExactMerge(btn) {
+  const ok = typeof lccConfirm === 'function'
+    ? await lccConfirm('Apply up to 200 SAFE exact-name merges?\n\nEach renamed artifact is merged INTO its established canonical entity (portfolio facts + identities move to the canonical; the artifact is retired). Idempotent.', 'Merge safe')
+    : true;
+  if (!ok) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+  const res = await opsApi('/api/exact-merge', { method: 'POST', body: JSON.stringify({ limit: 200 }) });
+  if (res.ok && res.data) {
+    const d = res.data;
+    if (typeof showToast === 'function') showToast('Exact-merge: ' + (d.merged || 0) + ' merged'
+      + (d.failed ? ', ' + d.failed + ' failed' : '') + '.', d.failed ? 'warn' : 'success');
+    renderDecisionLane('junk_entity_name'); // refresh (merged losers drop out)
+  } else {
+    if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+    if (typeof showToast === 'function') showToast('Exact-merge failed: ' + (res.error || (res.data && res.data.error) || 'unknown'), 'error');
+  }
+}
+window.applyExactMerge = applyExactMerge;
 
 async function renderBuyerParentLane() {
   const el = document.getElementById('reviewConsoleContent');
