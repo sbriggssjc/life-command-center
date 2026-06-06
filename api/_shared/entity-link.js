@@ -281,6 +281,61 @@ export function looksLikePersonName(name) {
   return tokens.every((tok) => /^[A-Za-z][A-Za-z'.\-]*$/.test(tok));
 }
 
+// Title tokens that can be glued to a captured name with no delimiter
+// ("John CarverExecutive Vice President", "Steve MoormannAgent").
+const CONTACT_TITLE_WORDS = new Set([
+  'agent', 'president', 'vice', 'executive', 'director', 'manager', 'broker', 'officer',
+  'principal', 'partner', 'associate', 'associates', 'senior', 'sr', 'jr', 'vp', 'evp', 'svp',
+  'ceo', 'cfo', 'coo', 'chairman', 'owner', 'founder', 'counsel', 'realtor', 'advisor', 'analyst',
+  'managing', 'regional', 'national', 'first', 'chief',
+]);
+
+// Parse a phone/email panel-header bleed-through junk name into a clean contact.
+// "Seller ContactsCraig Burrows(916) 768-5544 (p)" →
+//   { name:'Craig Burrows', phone:'(916) 768-5544', role:'seller_contact', title:null }
+// Returns null when it can't confidently isolate a plausible person name with
+// at least one contact datum (those rows stay flagged — never guessed).
+export function parseContactFromJunk(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  // 1) Strip + capture the panel-header role prefix.
+  let role = 'contact';
+  // No \b after "contacts?": the header is glued to the name with no delimiter
+  // ("Buyer ContactsAlex Lyman"), so there's no word boundary to anchor on.
+  const pre = s.match(/^(seller|buyer|listing|tenant|owner)\s*contacts?\s*/i);
+  if (pre) { role = pre[1].toLowerCase() + '_contact'; s = s.slice(pre[0].length).trim(); }
+  // 2) Email + phone (first phone only — some rows carry two).
+  const emailM = s.match(/[A-Za-z0-9._+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/);
+  const email = emailM ? emailM[0] : null;
+  const phoneM = s.match(/\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/);
+  const phone = phoneM ? phoneM[0].trim() : null;
+  // 3) Name = the run before the first phone / paren / digit / email.
+  let namePart = s;
+  const cut = s.search(/[(\d]/);
+  if (cut > 0) namePart = s.slice(0, cut);
+  if (email) namePart = namePart.split(email)[0];
+  namePart = namePart.replace(/[,;|]+$/, '').trim();
+  if (!namePart) return null;
+  // 4) Split a glued title: insert a space at a camelCase boundary, then cut at
+  //    the first title word. Only adopt the split when a title word is actually
+  //    found, so plain names ("McDonald") are never corrupted.
+  let title = null;
+  const spaced = namePart.replace(/([a-z])([A-Z])/g, '$1 $2');
+  const toks = spaced.split(/\s+/);
+  const titleIdx = toks.findIndex((t) => CONTACT_TITLE_WORDS.has(t.toLowerCase().replace(/\.$/, '')));
+  let name;
+  if (titleIdx > 0) {
+    name = toks.slice(0, titleIdx).join(' ').trim();
+    title = toks.slice(titleIdx).join(' ').trim() || null;
+  } else {
+    name = namePart.trim();
+  }
+  // 5) Confidence gate — must be a plausible human name, and worth a contact.
+  if (!looksLikePersonName(name)) return null;
+  if (!phone && !email) return null;
+  return { name, phone, email, role, title };
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
