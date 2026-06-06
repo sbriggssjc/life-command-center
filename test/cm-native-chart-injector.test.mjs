@@ -4771,6 +4771,47 @@ test('R55+R62: market_turnover renders 2-bar+1-line combo with monthly-pace help
   assert.match(out.spec.yRightAxisTitle, /Months/i);
 });
 
+test('R69 G25: market_turnover gov renders the FULL 3-series combo (was R66s single bar)', () => {
+  // Gov view shape (cm_gov_market_turnover_m): 9 cols incl. monthly_sales_count.
+  // R66s stripped the universe for gov; R69 re-enables it (Scott: "we are
+  // missing total available and monthly clearance rate"). Gov must now produce
+  // the same combo as dia: 2 bars (active + monthly pace) + months-of-supply line.
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'subspecialty',       col: 'B' },
+    { key: 'ttm_sales_count',    col: 'C' },
+    { key: 'market_universe',    col: 'D' },
+    { key: 'turnover_rate',      col: 'E' },
+    { key: 'active_count',       col: 'F' },
+    { key: 'annual_sales_rate',  col: 'G' },
+    { key: 'months_of_supply',   col: 'H' },
+    { key: 'monthly_sales_count',col: 'I' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'market_turnover',
+    tabName: 'Data_Market_Turnover',
+    cols, dataStart: 5, dataEnd: 60,
+    vertical: 'gov',
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'combo');
+  // Two bars: Total Available (active_count, col F, pale sky) + monthly clear pace
+  assert.equal(out.spec.barSeries.length, 2, 'gov no longer stripped to a single bar');
+  assert.equal(out.spec.barSeries[0].valCol, 'F', 'back bar = active_count (Total Available)');
+  assert.equal(out.spec.barSeries[0].color, '#E0E8F4');
+  // Front bar reads the monthly_clear_pace helper (one past the 9 regular cols → 'J')
+  assert.equal(out.spec.barSeries[1].valCol, 'J', 'front bar = monthly_clear_pace helper');
+  assert.equal(out.spec.barSeries[1].color, '003DA5');
+  // Months-to-clear line (col H, gray, right axis)
+  assert.equal(out.spec.lineSeries.length, 1, 'gov now carries the Months of Supply line');
+  assert.equal(out.spec.lineSeries[0].valCol, 'H');
+  assert.equal(out.spec.lineSeries[0].color, '6A748C');
+  // Right axis is the months-of-supply axis (no longer a single shared axis)
+  assert.match(out.spec.yRightAxisTitle, /Months/i);
+  assert.equal(out.spec.sharedAxis, false, 'gov universe restored → dual axis');
+  assert.ok(out.helperCols && out.helperCols.some(h => h.key === 'monthly_clear_pace'));
+});
+
 test('R55: market_turnover falls back to R50 shape when R55 cols missing (back-compat)', () => {
   // Pre-R55 view shape: only 5 cols, no active_count/annual_sales_rate/months_of_supply
   const cols = [

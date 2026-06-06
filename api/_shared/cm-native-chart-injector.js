@@ -2800,14 +2800,18 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // figures available. Front bar reads from the helper col.
       const pale = '#E0E8F4';
       const monthlyPaceCol = String.fromCharCode(65 + cols.length);
-      // R66s — gov-only strip. The gov active-universe / months-of-supply is
-      // built from listing-window data covering only ~11% of sales (the
-      // listing-history capture pass hit a data-availability ceiling), so the
-      // Active Listings bar and Months of Supply line are unreliable on the gov
-      // chart. Drop them for gov and keep only the reliable Monthly Sales Rate
-      // bar (TTM sales / 12) on a single axis. dia keeps the full 3-series combo
-      // (its active inventory has real coverage — ~700 active listings).
-      const stripUniverse = (vertical !== 'dialysis');
+      // R66s STRIPPED the gov active-universe / months-of-supply ("~11% listing
+      // coverage"). R69 (G25) RE-ENABLES them: Scott's 2026-06-05 note — "we are
+      // missing total available and monthly clearance rate." Live receipts
+      // (2026-06-06) show gov active_count is stable from 2012 on (20-98 active,
+      // 4-8 months of supply), and cm_gov_market_turnover_m now NULLs the
+      // pre-2012 head (no listing history) so the universe series start cleanly
+      // where the data is real. Gov now gets the full 3-series combo at parity
+      // with dia and the master deck: Total Available bar + Monthly Sales Rate
+      // bar + Months-to-clear line. (The gov universe is ~80% synthetic_from_sale
+      // — a relative inventory-vs-pace indicator, not an organic on-market count;
+      // it self-heals as organic page-marker capture accrues.)
+      const stripUniverse = false;
       return {
         tabName,
         spec: {

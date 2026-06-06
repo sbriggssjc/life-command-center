@@ -2328,11 +2328,19 @@ function buildChartConfig(chart, brand) {
     // ─────────────────────────────────────────────────────────────────
 
     case 'market_turnover': {
-      // R66s — gov turnover_rate is unreliable (active-universe built on ~11%
-      // listing coverage), so for gov plot the reliable Monthly Sales Rate
-      // (TTM sales / 12) instead. dia keeps the turnover_rate line.
-      const stripUniverse = chart.vertical === 'gov' || chart.vertical === 'government_leased';
-      if (stripUniverse) {
+      // R69 (G25) — gov re-enabled. R66s plotted gov as a single Monthly-Sales-
+      // Rate bar (it had stripped the active-universe / months-of-supply citing
+      // thin listing coverage). Scott 2026-06-05: "we are missing total available
+      // and monthly clearance rate." Gov now renders the full 3-series combo at
+      // parity with the native-chart injector + the master deck:
+      //   Bar (pale sky): Total Available (active_count)  [left axis, count]
+      //   Bar (navy):     Monthly Sales Rate (TTM/12)     [left axis, count]
+      //   Line (gray):    Months of Supply                [right axis, months]
+      // cm_gov_market_turnover_m NULLs active_count/months_of_supply before
+      // listing coverage exists (pre-2012) so those series start where the data
+      // is real; the Monthly Sales Rate bar keeps the full 2005+ sales history.
+      const isGov = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+      if (isGov) {
         const paceData = rows.map(r => {
           const c = r.annual_sales_rate ?? r.ttm_sales_count;
           return c == null ? null : Number(c) / 12;
@@ -2341,15 +2349,26 @@ function buildChartConfig(chart, brand) {
           type: 'bar',
           data: {
             labels,
-            datasets: [{
-              label: 'Monthly Sales Rate',
-              data: paceData,
-              backgroundColor: palette[0],
-              borderColor: palette[0],
-              borderRadius: 1,
-            }],
+            datasets: [
+              { type: 'bar', label: 'Total Available',
+                data: rows.map(r => r.active_count == null ? null : Number(r.active_count)),
+                backgroundColor: '#E0E8F4', borderColor: palette[1],
+                borderWidth: 1, borderRadius: 1, yAxisID: 'y', order: 3 },
+              { type: 'bar', label: 'Monthly Sales Rate',
+                data: paceData,
+                backgroundColor: palette[0], borderColor: palette[0],
+                borderRadius: 1, yAxisID: 'y', order: 2 },
+              { type: 'line', label: 'Months of Supply',
+                data: rows.map(r => r.months_of_supply == null ? null : Number(r.months_of_supply)),
+                borderColor: '#6A748C', backgroundColor: 'transparent',
+                tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y1', order: 1 },
+            ],
           },
-          options: commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER }),
+          options: comboOpts({
+            yLeftFormat: AXIS_FORMAT_INTEGER,
+            yRightFormat: { format: { style: 'decimal', maximumFractionDigits: 1 } },
+            yRightRange: { min: 0 },
+          }),
         };
       }
       // Single-line time series — turnover_rate (TTM sales / market universe).
