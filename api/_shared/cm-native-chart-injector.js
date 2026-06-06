@@ -408,9 +408,13 @@ ${lbls}
     const numFmtFrag = spec.numFmt
       ? `<c:numFmt formatCode="${escapeXml(spec.numFmt)}" sourceLinked="0"/>`
       : '';
+    // R69 Task 5 — optional per-series label position (t/b/l/r/ctr). Lets the
+    // firm-term-bucket combo (G23/D9) spread its 4 overlapping cap labels
+    // around their diamonds instead of stacking them all above (default 't').
+    const pos = ['t', 'b', 'l', 'r', 'ctr'].includes(spec.pos) ? spec.pos : 't';
     return `        <c:dLbls>
           ${numFmtFrag}
-          <c:dLblPos val="t"/>
+          <c:dLblPos val="${pos}"/>
           <c:showLegendKey val="0"/>
           <c:showVal val="1"/>
           <c:showCatName val="0"/>
@@ -1754,6 +1758,11 @@ ${rentBar}
 ${quartileSer(spec.upperCol, 1)}
 ${quartileSer(spec.lowerCol, 2)}
         <c:hiLowLines><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>
+        <c:upDownBars>
+          <c:gapWidth val="150"/>
+          <c:upBars><c:spPr><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill></a:ln></c:spPr></c:upBars>
+          <c:downBars><c:spPr><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill></a:ln></c:spPr></c:downBars>
+        </c:upDownBars>
         <c:marker val="1"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
@@ -4290,7 +4299,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           title: 'Renewal Rent and its Growth Rate Over Time',
           leftRange:   { min: 0, max: 45 },
           leftNumFmt:  VAL_FMT_CURRENCY,
-          rightRange:  { min: -0.04, max: 0.08 },
+          // R69 Task 5 — the per-lease renewal CAGR runs ~0.1-1.5% (gov live
+          // 2026-06: min 0.11%, max 1.52%, p05-p95 0.60-1.38%), but the old
+          // -4%..+8% (1200bps) axis crushed it into ~3% of the height so the
+          // line looked flat. Pin 0-2% (200bps) so the movement is visible.
+          rightRange:  { min: 0, max: 0.02 },
           rightNumFmt: VAL_FMT_PERCENT_1DP,
           rentColor:     'BBDDF2',
           quartileColor: '003DA5',
@@ -4611,7 +4624,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // spans 800bps but the actual dia term-bucket caps cluster
       // 5.5-8% — a 250bps spread crushed into 28% of the chart height.
       // 5-9% pin (400bps span) doubles the visible vertical resolution.
-      const dotLabelsAll = { showVal: true, numFmt: VAL_FMT_PERCENT_2DP };
+      // R69 Task 5 — the 4 cap diamonds per bucket (avg/upper/lower/median)
+      // cluster within ~200bps, so a single 't' label position stacked all four
+      // labels on top of each other ("still cramped", Scott's G23/D9 note).
+      // Spread them around each diamond: avg→right, upper→top, lower→bottom,
+      // median→left. Four distinct positions => no overlap, axis range unchanged.
+      const capLbl = (pos) => ({ showVal: true, numFmt: VAL_FMT_PERCENT_2DP, pos });
       return {
         tabName,
         spec: {
@@ -4636,16 +4654,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // palette is brand-compliant. User feedback 2026-05-23 batch 6.
             { titleCol: avgCapCol,  titleRow: headerRow, valCol: avgCapCol,
               color: '003DA5', showMarker: true, markerShape: 'diamond', markerSize: 7,
-              dataLabels: dotLabelsAll },
+              dataLabels: capLbl('r') },
             { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
               color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7,
-              dataLabels: dotLabelsAll },
+              dataLabels: capLbl('t') },
             { titleCol: lowerQCol,  titleRow: headerRow, valCol: lowerQCol,
               color: '62B5E5', showMarker: true, markerShape: 'diamond', markerSize: 7,
-              dataLabels: dotLabelsAll },
+              dataLabels: capLbl('b') },
             { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
               color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7,
-              dataLabels: dotLabelsAll },
+              dataLabels: capLbl('l') },
           ],
           anchor: standardAnchor,
         },
