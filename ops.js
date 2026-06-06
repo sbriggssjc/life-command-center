@@ -1310,7 +1310,9 @@ async function renderReviewConsolePage() {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = (typeof opsPerf === 'function') ? opsPerf('render:review_console') : { end() {} };
 
-  // Decision-lane counts (top) + legacy review-count lanes (below), in parallel.
+  // R7 Phase 2: every lane is now a real decision lane (no more "More review
+  // work" deep-links). Decision-lane counts (seeded + federated, each labeled
+  // with its mode) + the SOS owner-contact count, in parallel.
   const [decR, res] = await Promise.all([
     opsApi('/api/decisions?summary=1'),
     opsApi('/api/review-counts'),
@@ -1319,50 +1321,37 @@ async function renderReviewConsolePage() {
   let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
   html += '<div class="rc-intro">Every manual decision in one place, organized by the question being asked. Pick a lane, work the top items by value, and record a verdict to move each subject to the next bucket.</div>';
 
-  // ---- Decision lanes (lcc_decisions) ----
   const dc = {};
   if (decR.ok && decR.data && Array.isArray(decR.data.lanes)) {
     decR.data.lanes.forEach(function (l) { dc[l.decision_type] = Number(l.n) || 0; });
   }
-  const trueOwnerN = dc['confirm_true_owner'] || 0;
-  const buyerN = (dc['confirm_buyer_parent'] || 0) + (dc['map_sf_parent_account'] || 0);
-  html += '<div class="rc-lanes">';
-  html += _dcLaneCard(trueOwnerN, 'Confirm the true owner', 'Stale-vs-current domain owner verdicts',
-    "renderDecisionLane('confirm_true_owner')", trueOwnerN > 0 ? 'rc-lane-red' : '');
-  html += _dcLaneCard(buyerN, 'Buyer parents & SF mapping', 'Confirm sponsors · map to Salesforce parent',
-    'renderBuyerParentLane()', buyerN > 0 ? 'rc-lane-yellow' : '');
-  html += '</div>';
-
-  // ---- Legacy review-count lanes (Phase 2 will convert these) ----
-  const lanes = (res.ok && res.data && Array.isArray(res.data.lanes)) ? res.data.lanes : [];
-  if (lanes.length) {
-    html += '<div class="rc-subhead" style="margin:18px 0 8px;font-weight:600;color:var(--text2)">More review work</div>';
-    html += '<div class="rc-lanes">';
-    lanes.forEach(function (ln) {
-      const c = ln.count;
-      const countStr = (typeof c === 'number') ? c.toLocaleString() : '—';
-      const toneClass = ln.tone === 'red' ? 'rc-lane-red' : ln.tone === 'yellow' ? 'rc-lane-yellow' : '';
-      const href = ln.href || 'pageResearch';
-      // Build the parts sub-line from the parts object (skip nulls).
-      let parts = '';
-      if (ln.parts && typeof ln.parts === 'object') {
-        const bits = Object.keys(ln.parts)
-          .filter(function (k) { return typeof ln.parts[k] === 'number'; })
-          .map(function (k) { return esc(k.replace(/_/g, ' ')) + ': ' + ln.parts[k].toLocaleString(); });
-        parts = bits.join(' · ');
-      }
-      const laneClick = (ln.key === 'sos_owner_links')
-        ? 'renderSosLinkWorklist()'
-        : "navTo('" + esc(href) + "')";
-      html += '<button type="button" class="rc-lane ' + toneClass + '" onclick="' + laneClick + '">'
-            + '<div class="rc-lane-count">' + countStr + '</div>'
-            + '<div class="rc-lane-label">' + esc(ln.label || ln.key || '') + '</div>'
-            + (parts ? '<div class="rc-lane-parts">' + parts + '</div>' : '')
-            + '<div class="rc-lane-cta">Open →</div>'
-            + '</button>';
-    });
-    html += '</div>';
+  // SOS owner-contact links keep their own (already-decision-shaped) worklist.
+  let sosN = 0;
+  if (res.ok && res.data && Array.isArray(res.data.lanes)) {
+    const s = res.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
+    if (s && typeof s.count === 'number') sosN = s.count;
   }
+
+  // Lane order: the two Phase-1 ownership lanes first, then the converted lanes
+  // by typical workable value, then the small surfaceless ones.
+  const buyerN = (dc['confirm_buyer_parent'] || 0) + (dc['map_sf_parent_account'] || 0);
+  const DEFS = [
+    { n: dc['confirm_true_owner'] || 0, label: 'Confirm the true owner', sub: 'Stale-vs-current domain owner verdicts', open: "renderDecisionLane('confirm_true_owner')", tone: 'red' },
+    { n: buyerN, label: 'Buyer parents & SF mapping', sub: 'Confirm sponsors · map to Salesforce parent', open: 'renderBuyerParentLane()', tone: 'yellow' },
+    { n: dc['intake_disposition'] || 0, label: 'Staged intake — needs review', sub: 'Create property · re-extract · dismiss', open: "renderFederatedLane('intake_disposition')", tone: 'yellow' },
+    { n: dc['property_merge'] || 0, label: 'Property merges & duplicates', sub: 'Same property? merge or keep distinct', open: "renderFederatedLane('property_merge')", tone: 'yellow' },
+    { n: dc['provenance_conflict'] || 0, label: 'Data conflicts & provenance', sub: 'Which value is right?', open: "renderFederatedLane('provenance_conflict')", tone: 'yellow' },
+    { n: dc['pending_update'] || 0, label: 'Pending updates (Gov)', sub: 'Apply or reject proposed updates', open: "renderFederatedLane('pending_update')", tone: '' },
+    { n: dc['cms_link_suspect'] || 0, label: 'CMS ↔ property link suspects', sub: 'Right clinic for this property?', open: "renderFederatedLane('cms_link_suspect')", tone: '' },
+    { n: dc['junk_entity_name'] || 0, label: 'Junk entity names', sub: 'Rename · merge · leave flagged', open: "renderDecisionLane('junk_entity_name')", tone: '' },
+    { n: dc['implausible_value'] || 0, label: 'Implausible values', sub: 'Is this sale price real?', open: "renderFederatedLane('implausible_value')", tone: '' },
+    { n: sosN, label: 'Owner-contact links to confirm', sub: 'Confirm or reject SOS weak links', open: 'renderSosLinkWorklist()', tone: '' },
+  ];
+  html += '<div class="rc-lanes">';
+  DEFS.forEach(function (d) {
+    html += _dcLaneCard(d.n, d.label, d.sub, d.open, (d.n > 0 && d.tone) ? ('rc-lane-' + d.tone) : '');
+  });
+  html += '</div>';
 
   el.innerHTML = html;
   perf.end();
@@ -1487,10 +1476,34 @@ function _dcCardHTML(it, isNext) {
     actions = '<button class="q-action primary" onclick="dcFindSf(' + id + ')">Find SF account →</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_later\')">No account — hold</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'skip\')">Skip</button>';
+  } else if (it.decision_type === 'junk_entity_name') {
+    const idc = Number(c.identity_count) || 0;
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.entity_name || 'Entity') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.entity_type || '?') + '</span>'
+      + (idc ? '<span class="q-badge">' + idc + ' identit' + (idc === 1 ? 'y' : 'ies') + '</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">Structural-garbage name flagged at the entity boundary. Rename it, merge it into the real entity, or leave it flagged.</div>';
+    actions = '<button class="q-action primary" onclick="dcJunkRename(' + id + ')">Rename…</button>'
+      + '<button class="q-action" onclick="dcJunkMerge(' + id + ')">Merge into…</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'leave_flagged\')">Leave flagged</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
 }
+function dcJunkRename(id) {
+  const nm = (typeof prompt === 'function') ? prompt('New entity name:') : '';
+  if (nm == null) return;
+  const v = String(nm || '').trim(); if (!v) return;
+  dcVerdict(id, 'rename', { new_name: v });
+}
+window.dcJunkRename = dcJunkRename;
+function dcJunkMerge(id) {
+  const tgt = (typeof prompt === 'function') ? prompt('Merge INTO entity id (UUID of the real entity to keep):') : '';
+  if (tgt == null) return;
+  const v = String(tgt || '').trim(); if (!v) return;
+  dcVerdict(id, 'merge', { target_entity_id: v });
+}
+window.dcJunkMerge = dcJunkMerge;
 
 async function renderDecisionLane(type) {
   const el = document.getElementById('reviewConsoleContent');
@@ -1500,8 +1513,11 @@ async function renderDecisionLane(type) {
   if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load decisions.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
   const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   const total = res.data ? res.data.total : null;
-  const titles = { confirm_true_owner: 'Confirm the true owner' };
-  const intros = { confirm_true_owner: 'The domain true owner may be stale (pre-acquisition). Confirm it’s current and connect, mark it stale with the new owner (recorded now; write-back ships in Slice 3), or send to research.' };
+  const titles = { confirm_true_owner: 'Confirm the true owner', junk_entity_name: 'Junk entity names' };
+  const intros = {
+    confirm_true_owner: 'The domain true owner may be stale (pre-acquisition). Confirm it’s current and connect, mark it stale with the new owner (recorded now; write-back ships in Slice 3), or send to research.',
+    junk_entity_name: 'Entities soft-flagged with structural-garbage names (phone/email/panel-header bleed-through). Rename to the real name, merge into the correct entity, or leave flagged.',
+  };
   let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(intros[type] || '') + '</div>';
@@ -1535,6 +1551,197 @@ async function renderBuyerParentLane() {
   el.innerHTML = html;
 }
 window.renderBuyerParentLane = renderBuyerParentLane;
+
+// ── Federated decision lanes (R7 Phase 2) ─────────────────────────────────
+// List-federated lanes read top-N straight from a source view; a decision row
+// is minted at verdict time. Same card anatomy + self-propelling advance as the
+// seeded lanes; verdicts post {type, subject, verdict} to /api/decision-verdict.
+let _dcFedArr = [];
+let _dcFedType = null;
+const _DC_FED_META = {
+  intake_disposition: { title: 'Staged intake — needs review',
+    intro: 'Staged-intake items awaiting review, top by extracted asking price. Create the property, re-extract (OCR), dismiss, or send to research.' },
+  property_merge: { title: 'Property merges & duplicates',
+    intro: 'Properties sharing a normalized address. Are they the same property? Compare & merge via the consolidate flow, mark “Not a duplicate”, or send to research.' },
+  provenance_conflict: { title: 'Data conflicts & provenance',
+    intro: 'Cross-table field-write conflicts (price/rent/cap fields first) + sales-price xref conflicts. Keep the current value, accept the attempted value (queued to the manual-edit path), or research.' },
+  pending_update: { title: 'Pending updates (Gov)',
+    intro: 'Proposed gov field updates awaiting a decision. Apply (→ approved, the gov pipeline applies it) or reject (→ rejected), or send to research.' },
+  cms_link_suspect: { title: 'CMS ↔ property link suspects',
+    intro: 'Clinic↔property links the un-truncation pass flagged (state mismatch worst-first). Confirm the link is correct, break it (via the cms-match unlink), or research.' },
+  implausible_value: { title: 'Implausible values',
+    intro: 'Sales over the per-domain magnitude soft-ceiling, retained for review. Confirm the price as real, correct it, void it (queued), or research.' },
+};
+
+function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
+
+function _fedCardHTML(it, i, isNext) {
+  const c = it.context || {};
+  let body = '', actions = '';
+  if (_dcFedType === 'intake_disposition') {
+    const ask = _fedMoney(c.asking_price);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.tenant || c.address || ('Intake ' + (c.intake_id || '').slice(0, 8))) + '</span>'
+      + '<div class="q-item-badges">' + (ask ? '<span class="q-badge">' + ask + '</span>' : '')
+      + '<span class="q-badge">' + esc(c.status || '') + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(c.doctype || 'unknown doctype') + (c.address ? ' · ' + esc(c.address) : '')
+      + ' · source ' + esc(c.source_type || '') + '</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'create_property\')">Create property →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reextract\')">Re-extract (OCR)</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'property_merge') {
+    const dom = c.domain, pid = c.property_id;
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(dom || '') + '</span>'
+      + (c.cluster_size ? '<span class="q-badge">' + c.cluster_size + ' share this address</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc(c.state || '') + (c.label ? ' · ' + esc(c.label) : '')
+      + ' · property ' + esc(String(pid)) + ' — same property as its address-mates, or distinct?</div>';
+    // Merge is destructive (keep/drop is a BD judgment) → route to the existing
+    // consolidate surface; the inline verdicts are the safe ones.
+    const openDetail = (dom && pid != null && typeof openUnifiedDetail === 'function')
+      ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(pid)) + '}, {}, \'Overview\')">Compare &amp; merge →</button>' : '';
+    actions = openDetail
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_duplicate\')">Not a duplicate</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'provenance_conflict') {
+    if (c.kind === 'sales_price_xref') {
+      body = '<div class="q-item-header"><span class="q-item-title">Sales-price xref conflict</span>'
+        + '<div class="q-item-badges"><span class="q-badge">dia</span></div></div>'
+        + '<div class="q-item-meta">' + esc(c.detail_1 || '') + (c.detail_2 ? ' vs ' + esc(c.detail_2) : '')
+        + (c.detail_3 ? ' · ' + esc(c.detail_3) : '') + '</div>';
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'keep_current\')">Keep current</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'accept_attempted\')">Accept attempted</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    } else {
+      body = '<div class="q-item-header"><span class="q-item-title">' + esc((c.target_table || '') + '.' + (c.field_name || '')) + '</span>'
+        + '<div class="q-item-badges"><span class="q-badge">' + esc(c.target_database || '') + '</span>'
+        + '<span class="q-badge">' + esc(c.enforce_mode || '') + '</span></div></div>'
+        + '<div class="q-item-meta">record ' + esc(String(c.record_pk_value || '')) + '</div>'
+        + '<div class="q-item-meta">Current (<b>' + esc(c.current_source || '?') + '</b>): ' + esc(JSON.stringify(c.current_value)) + '</div>'
+        + '<div class="q-item-meta">Attempted (<b>' + esc(c.attempted_source || '?') + '</b>): ' + esc(JSON.stringify(c.attempted_value)) + '</div>';
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'keep_current\')">Keep current</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'accept_attempted\')">Accept attempted</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'skip\')">Skip</button>';
+    }
+  } else if (_dcFedType === 'pending_update') {
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc((c.table_name || '') + '.' + (c.field_name || '')) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">gov</span>'
+      + (c.confidence != null ? '<span class="q-badge">conf ' + esc(String(c.confidence)) + '</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">property ' + esc(String(c.property_id || '')) + (c.reason ? ' · ' + esc(c.reason) : '') + '</div>'
+      + '<div class="q-item-meta">' + esc(JSON.stringify(c.old_value)) + ' → <b>' + esc(JSON.stringify(c.new_value)) + '</b></div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'apply\')">Apply</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'cms_link_suspect') {
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.cms_facility_name || ('Clinic ' + c.medicare_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.suspect_kind || '') + '</span>'
+      + (c.street_looks_unrelated ? '<span class="q-badge pri-high">street differs</span>' : '')
+      + (c.zip5_matches ? '<span class="q-badge">zip matches</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">CMS: ' + esc(c.cms_address || '') + ', ' + esc(c.cms_city || '') + ' ' + esc(c.cms_state || '') + '</div>'
+      + '<div class="q-item-meta">Property ' + esc(String(c.property_id)) + ': ' + esc(c.property_address || '') + ', ' + esc(c.property_city || '') + ' ' + esc(c.property_state || '') + '</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'link_correct\')">Link is correct</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'break_link\')">Break link</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'implausible_value') {
+    body = '<div class="q-item-header"><span class="q-item-title">' + _fedMoney(c.sold_price) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge">ceiling ' + _fedMoney(c.ceiling) + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(c.address || '') + (c.city ? ', ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '')
+      + (c.label ? ' · ' + esc(c.label) : '') + ' · ' + esc(String(c.sale_date || '')) + '</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_as_is\')">Confirm as-is</button>'
+      + '<button class="q-action" onclick="dcImplausibleCorrect(' + i + ')">Correct value…</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'void\')">Void</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  }
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
+    + '<div class="q-actions">' + actions + '</div></div>';
+}
+
+async function renderFederatedLane(type) {
+  const el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const meta = _DC_FED_META[type] || { title: type, intro: '' };
+  const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50');
+  if (!res.ok) { el.innerHTML = '<div class="ops-empty">Could not load this lane.<br><small>' + esc(res.error || '') + '</small></div>'; return; }
+  const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  const total = res.data ? res.data.total : null;
+  let html = '<div class="ops-header"><h2>' + esc(meta.title) + '</h2>'
+    + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
+  html += '<div class="rc-intro">' + esc(meta.intro) + '</div>';
+  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
+    + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
+  _dcFedType = type;
+  _dcFedArr = items.slice();
+  items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
+  el.innerHTML = html;
+}
+window.renderFederatedLane = renderFederatedLane;
+
+function dcImplausibleCorrect(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const v = (typeof prompt === 'function') ? prompt('Corrected sale price (number):') : '';
+  if (v == null) return;
+  const n = Number(String(v).replace(/[^0-9.]/g, ''));
+  if (!isFinite(n) || n <= 0) { if (typeof showToast === 'function') showToast('Enter a valid price', 'error'); return; }
+  dcFed(i, 'correct', { corrected_price: n });
+}
+window.dcImplausibleCorrect = dcImplausibleCorrect;
+
+async function dcFed(i, verdict, payload) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const res = await opsApi('/api/decision-verdict', {
+    method: 'POST', body: JSON.stringify({ type: _dcFedType, subject: it, verdict: verdict, payload: payload || {} }),
+  });
+  const row = document.getElementById('dc-f' + i);
+  if (res.ok && res.data && res.data.ok) {
+    if (row) {
+      row.classList.add('resolved');
+      row.style.opacity = '0.5';
+      let fwd = '';
+      const nx = res.data.next;
+      if (nx && nx.action === 'cms_unlink') {
+        fwd = '<button class="q-action primary" onclick="dcCmsUnlink(' + esc(String(nx.property_id)) + ')">Break link in cms-match →</button>';
+      } else if (nx && (nx.action === 'intake_create_property' || nx.action === 'intake_reextract')) {
+        fwd = '<button class="q-action primary" onclick="navTo(\'pageInbox\')">Finish in Inbox →</button>';
+      }
+      const qa = row.querySelector('.q-actions');
+      if (qa) qa.innerHTML = '<span class="q-badge">✓ ' + esc(res.data.verdict || verdict) + '</span>' + fwd;
+    }
+    if (typeof showToast === 'function') showToast('Recorded', 'success');
+    _dcAdvanceFed();
+  } else {
+    const err = (res.data && (res.data.error || res.data.message)) || res.error || 'unknown';
+    if (typeof showToast === 'function') showToast('Action failed: ' + err, 'error');
+  }
+}
+window.dcFed = dcFed;
+
+// cms break-link hands off to the existing cms-match DELETE route (Scott's call).
+async function dcCmsUnlink(propertyId) {
+  const res = await opsApi('/api/cms-match?action=link&property_id=' + encodeURIComponent(propertyId), { method: 'DELETE' });
+  if (res.ok) { if (typeof showToast === 'function') showToast('CMS link broken', 'success'); }
+  else { if (typeof showToast === 'function') showToast('Unlink failed: ' + (res.error || 'unknown'), 'error'); }
+}
+window.dcCmsUnlink = dcCmsUnlink;
+
+function _dcAdvanceFed() {
+  const scope = document.getElementById('reviewConsoleContent');
+  if (!scope) return;
+  const pending = scope.querySelectorAll('.q-item[id^="dc-f"]:not(.resolved)');
+  const rem = document.getElementById('dcRemaining');
+  if (rem) rem.textContent = pending.length;
+  scope.querySelectorAll('.q-item.pq-next').forEach(function (n) { n.classList.remove('pq-next'); });
+  if (pending.length) {
+    pending[0].classList.add('pq-next');
+    pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else {
+    const prog = scope.querySelector('.rc-progress');
+    if (prog) prog.innerHTML = 'All decided in this lane ✓';
+    if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
+  }
+}
 
 function dcStale(id) {
   const name = (typeof prompt === 'function')
