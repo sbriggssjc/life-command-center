@@ -971,11 +971,18 @@ async function handleDecisionSfSearch(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   const user = await authenticate(req, res);
   if (!user) return;
+  const id = String(req.query.id || '').trim();
   const name = String(req.query.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'name required' });
+  if (!id && !name) return res.status(400).json({ error: 'name or id required' });
   try {
-    const { findSalesforceAccountByName } = await import('./_shared/salesforce.js');
-    const r = await findSalesforceAccountByName(name);
+    const sf = await import('./_shared/salesforce.js');
+    // Manual-entry confirmation path: validate the Id + fetch its name.
+    if (id) {
+      const r = await sf.getSalesforceAccountById(id);
+      return res.status(200).json(r);
+    }
+    // Name search: returns the best auto-pick AND the full scored candidate list.
+    const r = await sf.findSalesforceAccountByName(name);
     return res.status(200).json(r);
   } catch (err) {
     console.error('[decision-sf-search]', err?.message || err);
