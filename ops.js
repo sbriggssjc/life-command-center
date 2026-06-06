@@ -1673,14 +1673,87 @@ async function renderDecisionLane(type) {
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(intros[type] || '') + '</div>';
   _dcCurrentOpenExpr = "renderDecisionLane('" + type + "')";
-  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
+  // B9 (2026-06-06): the junk lane has ~1,050 rows — too many to work one at a
+  // time. Mount a bulk-by-bucket panel above the per-item cards.
+  if (type === 'junk_entity_name') html += '<div id="junkBucketPanel"></div>';
+  if (!items.length) {
+    html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>';
+    el.innerHTML = html;
+    if (type === 'junk_entity_name') renderJunkBucketPanel();
+    return;
+  }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' in this lane' : '') + '</div>';
   _dcItems = {};
   items.forEach(function (it, ix) { _dcItems[it.id] = it; html += _dcCardHTML(it, ix === 0); });
   el.innerHTML = html;
+  if (type === 'junk_entity_name') renderJunkBucketPanel();
 }
 window.renderDecisionLane = renderDecisionLane;
+
+// B9 bulk-by-bucket panel: classify the flagged set, preview each bucket with
+// samples, and apply ONE verdict to a bucket at a time. 'other' (possibly-real
+// orgs) has no bulk button — those stay manual in the per-item cards below.
+async function renderJunkBucketPanel() {
+  const host = document.getElementById('junkBucketPanel');
+  if (!host) return;
+  host.innerHTML = '<div class="ops-empty" style="padding:8px">Classifying junk buckets…</div>';
+  const res = await opsApi('/api/junk-bucket');
+  if (!res.ok) { host.innerHTML = opsErrorState(res, 'renderJunkBucketPanel()', 'Could not classify junk buckets'); return; }
+  const buckets = (res.data && Array.isArray(res.data.buckets)) ? res.data.buckets : [];
+  const LABELS = {
+    phone_or_email: 'Phone/email embedded', deal_string: 'Deal / attribution strings',
+    by_brokerage: '“… by <Broker>” suffix', trust_placeholder: 'Trust placeholder codes',
+    other: 'Other (possibly real — manual)',
+  };
+  const VERB = { dismiss: 'Dismiss', clean_rename: 'Clean rename' };
+  let h = '<div class="widget" style="margin-bottom:14px"><div class="widget-title">⚡ Bulk by bucket ('
+    + Number(res.data.total_flagged || 0).toLocaleString() + ' flagged)</div>'
+    + '<div class="q-item-meta" style="padding:0 0 8px">Capture artifacts can be cleared in bulk. “Dismiss” soft-marks reviewed (reversible, never deleted); “Clean rename” strips the broker suffix. “Other” stays manual.</div>';
+  buckets.forEach(function (b) {
+    const samples = (b.samples || []).map(function (s) {
+      return b.bucket === 'by_brokerage' && s.cleaned_name
+        ? esc(s.name) + ' <span style="color:var(--text3)">→</span> ' + esc(s.cleaned_name)
+        : esc(s.name);
+    }).join(' · ');
+    h += '<div class="q-item" style="margin-bottom:8px"><div class="q-item-header">'
+      + '<span class="q-item-title">' + esc(LABELS[b.bucket] || b.bucket) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + Number(b.count || 0).toLocaleString() + '</span></div></div>'
+      + '<div class="q-item-meta" style="opacity:.8">' + samples + '</div>'
+      + '<div class="q-actions">'
+      + (b.verdict
+          ? '<button class="q-action primary" onclick="applyJunkBucket(decodeURIComponent(\'' + encodeURIComponent(b.bucket) + '\'),decodeURIComponent(\'' + encodeURIComponent(b.verdict) + '\'),this)">'
+            + (VERB[b.verdict] || b.verdict) + ' top ' + Math.min(Number(b.count || 0), 200) + ' →</button>'
+          : '<span class="q-item-meta">Manual only — work the cards below.</span>')
+      + '</div></div>';
+  });
+  h += '</div>';
+  host.innerHTML = h;
+}
+window.renderJunkBucketPanel = renderJunkBucketPanel;
+
+async function applyJunkBucket(bucket, verdict, btn) {
+  const verb = verdict === 'clean_rename' ? 'clean-rename' : 'dismiss';
+  const ok = typeof lccConfirm === 'function'
+    ? await lccConfirm('Bulk ' + verb + ' up to 200 entities in the “' + bucket + '” bucket?\n\n'
+        + (verdict === 'dismiss'
+            ? 'They will be soft-marked reviewed (reversible) and drop out of the junk lane.'
+            : 'Each name will have its broker-attribution suffix stripped.'), 'Apply')
+    : true;
+  if (!ok) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+  const res = await opsApi('/api/junk-bucket', { method: 'POST', body: JSON.stringify({ bucket: bucket, verdict: verdict, limit: 200 }) });
+  if (res.ok && res.data) {
+    const d = res.data;
+    if (typeof showToast === 'function') showToast('Bucket “' + bucket + '”: ' + (d.succeeded || 0) + ' applied'
+      + (d.failed ? ', ' + d.failed + ' failed' : '') + (d.attempted > d.succeeded + (d.failed || 0) ? '' : '') + '.', d.failed ? 'warn' : 'success');
+    renderDecisionLane('junk_entity_name'); // refresh lane + panel (drains the bucket)
+  } else {
+    if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+    if (typeof showToast === 'function') showToast('Bulk apply failed: ' + (res.error || (res.data && res.data.error) || 'unknown'), 'error');
+  }
+}
+window.applyJunkBucket = applyJunkBucket;
 
 async function renderBuyerParentLane() {
   const el = document.getElementById('reviewConsoleContent');
