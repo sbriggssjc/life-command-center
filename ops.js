@@ -1392,10 +1392,27 @@ async function renderReviewConsolePage() {
   });
   html += '</div>';
 
+  // C3 (2026-06-06): cache lane counts so an emptied lane can point the user at
+  // the next busiest lane instead of dead-ending on a celebration.
+  _dcLaneSummary = DEFS.map(function (d) { return { label: d.label, open: d.open, n: d.n }; });
+
   el.innerHTML = html;
   perf.end();
 }
 window.renderReviewConsolePage = renderReviewConsolePage;
+
+// C3 helper: "Next: <busiest other lane> →" CTA for empty / cleared lane states.
+let _dcLaneSummary = [];
+let _dcCurrentOpenExpr = ''; // open-expr of the lane currently being worked
+function _dcNextLaneCTA(currentOpenExpr) {
+  const lanes = (_dcLaneSummary || []).filter(function (l) { return l.n > 0 && l.open !== currentOpenExpr; });
+  if (!lanes.length) return '';
+  lanes.sort(function (a, b) { return b.n - a.n; });
+  const top = lanes[0];
+  return '<div style="margin-top:12px"><button class="q-action primary" onclick="' + esc(top.open) + '">Next: '
+    + esc(top.label) + ' (' + top.n + ') →</button>'
+    + ' <button class="q-action" onclick="renderReviewConsolePage()">All lanes</button></div>';
+}
 
 // ── SOS owner-contact link worklist (Review Console lane, 2026-05-31) ───────
 // Opens inline in the Review Console: lists weak FL SOS->contact links with
@@ -1582,7 +1599,8 @@ async function renderDecisionLane(type) {
   let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(intros[type] || '') + '</div>';
-  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓</div>'; el.innerHTML = html; return; }
+  _dcCurrentOpenExpr = "renderDecisionLane('" + type + "')";
+  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' in this lane' : '') + '</div>';
   _dcItems = {};
@@ -1605,6 +1623,7 @@ async function renderBuyerParentLane() {
   let html = '<div class="ops-header"><h2>Buyer parents &amp; SF mapping</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">Confirm controlling sponsors and map each repeat-buyer parent to its Salesforce parent account. One buyer, one account — the opportunity routes to the parent, never a subsidiary SPE.</div>';
+  _dcCurrentOpenExpr = 'renderBuyerParentLane()';
   if (!items.length) { html += '<div class="ops-empty">All buyer parents mapped &amp; confirmed. ✓</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> to decide</div>';
   _dcItems = {};
@@ -1730,7 +1749,8 @@ async function renderFederatedLane(type) {
   let html = '<div class="ops-header"><h2>' + esc(meta.title) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(meta.intro) + '</div>';
-  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓</div>'; el.innerHTML = html; return; }
+  _dcCurrentOpenExpr = "renderFederatedLane('" + type + "')";
+  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
   _dcFedType = type;
@@ -1814,7 +1834,7 @@ function _dcAdvanceFed() {
     pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   } else {
     const prog = scope.querySelector('.rc-progress');
-    if (prog) prog.innerHTML = 'All decided in this lane ✓';
+    if (prog) prog.innerHTML = 'All decided in this lane ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr);
     if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
   }
 }
@@ -1965,7 +1985,7 @@ function _dcAdvance() {
     pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   } else {
     const prog = scope.querySelector('.rc-progress');
-    if (prog) prog.innerHTML = 'All decided in this lane ✓';
+    if (prog) prog.innerHTML = 'All decided in this lane ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr);
     if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
   }
 }

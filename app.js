@@ -55,6 +55,18 @@ function checkFlag(flagName) {
   return LCC_FLAGS[flagName] === true;
 }
 
+// C4 (2026-06-06): a feature-flag-off state should tell the right person what
+// to do — admins where to enable it, everyone else who to ask — not just state
+// the fact. Returns an empty-state HTML string for the Team Queue.
+function _teamQueueDisabledHTML() {
+  const role = (LCC_USER.role || '').toLowerCase();
+  const isAdmin = role === 'owner' || role === 'manager';
+  const guidance = isAdmin
+    ? 'Enable it in <a href="javascript:void(0)" onclick="navTo(\'pageSettings\')" style="color:var(--accent)">Settings → workspace feature flags</a> (turn on <code>team_queue_enabled</code>).'
+    : 'Ask a workspace owner or manager to enable <code>team_queue_enabled</code> in workspace settings.';
+  return '<div class="ops-empty">Team Queue is not yet enabled for this workspace.<br><span style="font-size:12px;color:var(--text2)">' + guidance + '</span></div>';
+}
+
 /** Load feature flags from the server */
 async function loadFeatureFlags() {
   try {
@@ -981,7 +993,7 @@ document.getElementById('pipelineTabs')?.addEventListener('click', (e) => {
   if (currentPipelineTab === 'team' && typeof renderTeamQueue === 'function') {
     if (!checkFlag('team_queue_enabled')) {
       const el = document.getElementById('teamQueueContent');
-      if (el) el.innerHTML = '<div class="ops-empty">Team Queue is not yet enabled for this workspace.</div>';
+      if (el) el.innerHTML = _teamQueueDisabledHTML();
     } else {
       renderTeamQueue();
     }
@@ -1003,7 +1015,7 @@ function handlePageLoad(pageId) {
       } else {
         if (!checkFlag('team_queue_enabled')) {
           const el = document.getElementById('teamQueueContent');
-          if (el) el.innerHTML = '<div class="ops-empty">Team Queue is not yet enabled for this workspace.</div>';
+          if (el) el.innerHTML = _teamQueueDisabledHTML();
         } else if (typeof renderTeamQueue === 'function') {
           renderTeamQueue();
         }
