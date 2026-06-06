@@ -4064,26 +4064,46 @@ async function renderSyncHealthPage() {
       null, null
     );
   } else {
+    // A5 (2026-06-06): a disconnected/errored connector can't be fixed by
+    // "Sync Now" (it'll just fail). Give it the real next action \u2014 Reconnect
+    // (honest guidance, since auth is provisioned outside the app) \u2014 and let a
+    // stale duplicate be removed. Field names match the connector_accounts list
+    // payload (display_name / last_sync_at / last_error).
+    const _healthyStatuses = ['active', 'healthy', 'degraded'];
     connectors.forEach(conn => {
-      const statusCls = conn.status === 'active' ? 'healthy' : conn.status === 'degraded' ? 'degraded' : conn.status === 'error' ? 'error' : 'healthy';
+      const status = conn.status || 'unknown';
+      const isUsable = _healthyStatuses.indexOf(status) !== -1;
+      const statusCls = (status === 'active' || status === 'healthy') ? 'healthy'
+        : status === 'degraded' ? 'degraded'
+        : 'error';
       const icon = conn.connector_type === 'email' ? 'E'
         : conn.connector_type === 'calendar' ? 'C'
         : conn.connector_type === 'salesforce' ? 'SF'
         : conn.connector_type?.substring(0, 2).toUpperCase() || '?';
+      const label = conn.display_name || conn.label || '';
+      const lastSync = conn.last_sync_at || conn.last_synced_at || null;
+      const errMsg = conn.last_error || conn.error_message || '';
+      const cidEnc = encodeURIComponent(conn.id || '');
+      const typeEnc = encodeURIComponent(conn.connector_type || '');
+      const nameEnc = encodeURIComponent((conn.connector_type || 'connector') + (label ? ' (' + label + ')' : ''));
+
+      const actions = isUsable
+        ? `<button class="q-action" onclick="_opsBtnGuard(this, triggerSync, decodeURIComponent('${typeEnc}'))">Sync Now</button>`
+        : `<button class="q-action primary" onclick="reconnectConnector(decodeURIComponent('${typeEnc}'))">Reconnect \u2192</button>`
+          + (conn.id ? `<button class="q-action" onclick="removeConnector(decodeURIComponent('${cidEnc}'),decodeURIComponent('${nameEnc}'))">Remove</button>` : '');
 
       html += `<div class="sync-card ${statusCls}">
         <div class="sync-card-icon">${icon}</div>
         <div class="sync-card-info">
-          <div class="sync-card-name">${esc(conn.connector_type || 'Unknown')} ${conn.label ? '(' + esc(conn.label) + ')' : ''}</div>
+          <div class="sync-card-name">${esc(conn.connector_type || 'Unknown')} ${label ? '(' + esc(label) + ')' : ''}</div>
           <div class="sync-card-status">
-            Status: ${esc(conn.status || 'unknown')}
-            ${conn.last_synced_at ? ' \u00b7 Last sync: ' + freshnessHTML(conn.last_synced_at) : ''}
-            ${conn.error_message ? ' \u00b7 <span style="color:var(--red)">' + esc(conn.error_message) + '</span>' : ''}
+            Status: ${esc(status)}
+            ${lastSync ? ' \u00b7 Last sync: ' + freshnessHTML(lastSync) : ''}
+            ${errMsg ? ' \u00b7 <span style="color:var(--red)">' + esc(errMsg) + '</span>' : ''}
+            ${!isUsable ? ' \u00b7 <span style="color:var(--red)">needs reconnect</span>' : ''}
           </div>
         </div>
-        <div class="sync-card-actions">
-          <button class="q-action" onclick="_opsBtnGuard(this, triggerSync, decodeURIComponent('${encodeURIComponent(conn.connector_type)}'))">Sync Now</button>
-        </div>
+        <div class="sync-card-actions">${actions}</div>
       </div>`;
     });
   }
@@ -4177,6 +4197,39 @@ async function retrySync(errorId) {
   if (res.ok) showToast('Retry triggered', 'success');
   else showToast(res.error || 'Retry failed', 'error');
 }
+
+// A5 (2026-06-06): reconnect path for a disconnected/errored connector. Auth is
+// provisioned outside the app (Outlook/SF via Power Automate + admin setup),
+// so there is no in-app OAuth handshake to launch — give the user honest,
+// specific guidance instead of a button that silently does nothing.
+function reconnectConnector(connectorType) {
+  const t = (connectorType || 'this connector');
+  const how = t === 'salesforce'
+    ? 'Salesforce reconnects through the Power Automate flow + the SF connected app — re-authorize there, then the next sync will turn this green.'
+    : (t === 'email' || t === 'outlook')
+      ? 'Outlook reconnects through the Power Automate flow that owns the mailbox connection — re-authorize the flow, then run Sync Now.'
+      : 'Re-authorize this connector at its source (the Power Automate flow / admin setup that provisioned it), then run Sync Now.';
+  if (typeof showToast === 'function') showToast('Reconnect ' + t + ': ' + how, 'warn');
+}
+window.reconnectConnector = reconnectConnector;
+
+// Remove a connector account (used for stale/duplicate disconnected rows). The
+// API DELETE is owner-gated server-side; confirm first since it drops the row.
+async function removeConnector(connectorId, displayName) {
+  if (!connectorId) return;
+  const ok = typeof lccConfirm === 'function'
+    ? await lccConfirm('Remove the connector "' + (displayName || connectorId) + '"?\n\nThis deletes the connector account row. Use this for a stale duplicate — an active connector should be reconnected, not removed.', 'Remove')
+    : (typeof confirm === 'function' ? confirm('Remove connector "' + (displayName || connectorId) + '"?') : false);
+  if (!ok) return;
+  const res = await opsApi('/api/connectors?id=' + encodeURIComponent(connectorId), { method: 'DELETE' });
+  if (res.ok) {
+    if (typeof showToast === 'function') showToast('Connector removed.', 'success');
+    if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage();
+  } else {
+    if (typeof showToast === 'function') showToast('Could not remove connector: ' + (res.error || 'unknown'), 'error');
+  }
+}
+window.removeConnector = removeConnector;
 
 // ============================================================================
 // QUICK ACTIONS on queue items

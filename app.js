@@ -5450,7 +5450,12 @@ async function submitLogCall() {
     const data = await res.json();
     if (data.status === 'completed' || data.success) {
       showToast('Activity logged to Salesforce!', 'success');
+      // B8 (2026-06-06): advance the surface, don't just toast. Clear the form
+      // (so a reopened modal is fresh) and refresh the activity feed so the
+      // just-logged touch shows up without a manual reload.
+      if (notesEl) notesEl.value = '';
       closeLogCall();
+      if (typeof loadActivities === 'function') { try { loadActivities(); } catch (_) {} }
     } else if (data.warning) {
       showToast(`Warning: ${data.message || 'Recent activity detected'}`, 'error');
       btn.disabled = false; btn.textContent = 'Log Activity';
