@@ -559,8 +559,100 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
   const { match: resolved, primaryDomain } = await resolveAddressMatch({ address, state, city, tenant });
   const match = resolved || { status: 'unmatched', confidence: 0, property_id: null, domain: primaryDomain };
 
+  // R8: when no confident single match resolved, check whether MULTIPLE near-miss
+  // candidates exist (the case that currently parks as unmatched/review). If so,
+  // funnel it into the Decision Center (match_disambiguation lane) instead of
+  // letting it sit unmatched — the human picks the right property or creates a
+  // new one. Purely additive: confident matches never reach this branch.
+  if (match.status === 'unmatched' && address && state) {
+    const top = await collectAmbiguousCandidates(address, state, primaryDomain);
+    if (top.length >= DISAMBIG_MIN_CANDIDATES) {
+      await emitMatchDisambiguation(intakeId, address, tenant, top);
+      const ambiguous = {
+        status: 'review_required', reason: 'ambiguous_candidates', confidence: 0,
+        property_id: null, domain: null, candidate_count: top.length,
+        candidates: top,
+      };
+      await writeMatchResult(intakeId, ambiguous);
+      return ambiguous;
+    }
+  }
+
   await writeMatchResult(intakeId, match);
   return match;
+}
+
+// Looser than the auto-match dist<=3: a candidate that's a near-miss (not good
+// enough to auto-attach) but plausible enough that a human should choose.
+const DISAMBIG_MAX_DIST = 5;
+const DISAMBIG_MIN_CANDIDATES = 2;
+
+// Collect near-miss property candidates across both domains for a single
+// address. Returns up to 5 distinct candidates (domain+property_id), tightest
+// first. Used only on the unmatched path, so it never overrides a confident
+// match — it only enriches the "park in review" case into a disambiguation.
+async function collectAmbiguousCandidates(address, state, primaryDomain) {
+  const norm = normalizeAddress(address);
+  if (!norm) return [];
+  const secondary = primaryDomain === 'dialysis' ? 'government' : 'dialysis';
+  const fetchDom = async (domain) => {
+    const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+    const result = await domainQuery(domain, 'GET',
+      `properties?state=eq.${encodeURIComponent(state)}&select=${selectCols}&limit=80`);
+    if (!result.ok || !result.data?.length) return [];
+    const queryNoDir = stripDirectional(norm);
+    const out = [];
+    for (const prop of result.data) {
+      if (!prop.address) continue;
+      const propNorm = normalizeAddress(prop.address);
+      const dist = Math.min(levenshtein(norm, propNorm), levenshtein(queryNoDir, stripDirectional(propNorm)));
+      if (dist <= DISAMBIG_MAX_DIST) {
+        out.push({
+          domain: domain === 'dialysis' ? 'dia' : 'gov',
+          property_id: String(prop.property_id),
+          address: prop.address,
+          tenant: prop.tenant || prop.agency || prop.agency_full_name || null,
+          confidence: fuzzyConfidence(dist),
+          _dist: dist,
+        });
+      }
+    }
+    return out;
+  };
+  const all = (await Promise.all([fetchDom(primaryDomain), fetchDom(secondary)])).flat()
+    .sort((a, b) => a._dist - b._dist);
+  const seen = new Set();
+  const top = [];
+  for (const c of all) {
+    const k = c.domain + ':' + c.property_id;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    top.push({ domain: c.domain, property_id: c.property_id, address: c.address,
+      tenant: c.tenant, confidence: c.confidence });
+    if (top.length >= 5) break;
+  }
+  return top;
+}
+
+// Raise a match_disambiguation decision (Decision Center). Idempotent on
+// subject_ref; best-effort (a failed emit never breaks the matcher). context is
+// bounded (ids + scalar facts + ≤5 candidate summaries).
+async function emitMatchDisambiguation(intakeId, address, tenant, candidates) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_open_decision', {
+      p_decision_type: 'match_disambiguation',
+      p_workspace_id: null,
+      p_question: 'Multiple candidate properties matched this intake — which one (or create new)?',
+      p_context: {
+        intake_id: intakeId, address: address || null, tenant: tenant || null,
+        candidates: candidates,
+      },
+      p_subject_ref: 'match_disambig:' + intakeId,
+      p_rank_value: candidates.length,
+    });
+  } catch (e) {
+    console.warn('[intake-matcher] match_disambiguation emit skipped:', e?.message || e);
+  }
 }
 
 /**

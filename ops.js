@@ -1457,6 +1457,9 @@ async function renderReviewConsolePage() {
     { n: dc['cms_link_suspect'] || 0, label: 'CMS ↔ property link suspects', sub: 'Right clinic for this property?', open: "renderFederatedLane('cms_link_suspect')", tone: '' },
     { n: dc['junk_entity_name'] || 0, label: 'Junk entity names', sub: 'Rename · merge · leave flagged', open: "renderDecisionLane('junk_entity_name')", tone: '' },
     { n: dc['implausible_value'] || 0, label: 'Implausible values', sub: 'Is this sale price real?', open: "renderFederatedLane('implausible_value')", tone: '' },
+    { n: dc['match_disambiguation'] || 0, label: 'Intake match disambiguation', sub: 'Multiple candidate properties — pick one', open: "renderDecisionLane('match_disambiguation')", tone: 'yellow' },
+    { n: dc['llc_research_dead'] || 0, label: 'LLC research dead-letters', sub: 'Resolve manually · retry · park', open: "renderDecisionLane('llc_research_dead')", tone: '' },
+    { n: dc['availability_checker_botblock'] || 0, label: 'Availability bot-blocks', sub: 'Verify listings manually or acknowledge', open: "renderDecisionLane('availability_checker_botblock')", tone: 'yellow' },
     { n: sosN, label: 'Owner-contact links to confirm', sub: 'Confirm or reject SOS weak links', open: 'renderSosLinkWorklist()', tone: '' },
   ];
   html += '<div class="rc-lanes">';
@@ -1621,6 +1624,36 @@ function _dcCardHTML(it, isNext) {
       + '<button class="q-action" onclick="dcJunkMerge(' + id + ')">Merge into…</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'leave_flagged\')">Leave flagged</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
+  } else if (it.decision_type === 'match_disambiguation') {
+    const cands = Array.isArray(c.candidates) ? c.candidates : [];
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Intake ' + (c.intake_id || ''))) + '</span>'
+      + (c.tenant ? '<div class="q-item-badges"><span class="q-badge">' + esc(c.tenant) + '</span></div>' : '') + '</div>'
+      + '<div class="q-item-meta">The matcher found ' + cands.length + ' candidate propert' + (cands.length === 1 ? 'y' : 'ies')
+      + ' above threshold. Pick the right one, or create a new property.</div>';
+    cands.forEach(function (cand) {
+      const pid = String(cand.property_id == null ? '' : cand.property_id);
+      body += '<div class="q-item-meta">• <b>' + esc(cand.domain || '') + '</b> #' + esc(pid)
+        + ' — ' + esc(cand.address || '') + (cand.tenant ? ' (' + esc(cand.tenant) + ')' : '')
+        + ' <button class="q-action" onclick="dcPickCandidate(' + id + ',\'' + esc(cand.domain || '') + '\',\'' + esc(pid) + '\')">Pick this →</button></div>';
+    });
+    actions = '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_property\')">None — create property</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
+  } else if (it.decision_type === 'llc_research_dead') {
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.search_name || c.recorded_owner_id || 'Owner LLC') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '?') + '</span>'
+      + (c.attempts != null ? '<span class="q-badge">' + (Number(c.attempts) || 0) + ' attempts</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">Automated LLC research dead-lettered' + (c.last_error ? ' (' + esc(c.last_error) + ')' : '')
+      + '.' + (c.guessed_state ? ' State: ' + esc(c.guessed_state) + '.' : '') + ' Resolve via the Secretary of State, retry, or park.</div>';
+    actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'resolve_manually\')">Resolve manually (SOS)</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'retry\')">Retry</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'park\')">Park</button>';
+  } else if (it.decision_type === 'availability_checker_botblock') {
+    body = '<div class="q-item-header"><span class="q-item-title">Bot-block: ' + esc(c.domain || 'listings') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(String(c.unreachable == null ? '?' : c.unreachable))
+      + '/' + esc(String(c.scanned == null ? '?' : c.scanned)) + ' unreachable</span></div></div>'
+      + '<div class="q-item-meta">' + esc(c.summary || 'The availability-checker is being bot-blocked. Verify the top listings manually, or acknowledge.') + '</div>';
+    actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'verify\')">Verify top 5 manually</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'acknowledge\')">Acknowledge</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -1656,6 +1689,14 @@ async function dcJunkMerge(id) {
 }
 window.dcJunkMerge = dcJunkMerge;
 
+// R8: match_disambiguation — pick a specific candidate property. Rides dcVerdict
+// with the chosen {domain, property_id} payload (the verdict handler writes the
+// confirmed match so the existing promoter takes over).
+function dcPickCandidate(id, domain, propertyId) {
+  dcVerdict(id, 'pick', { domain: domain, property_id: propertyId });
+}
+window.dcPickCandidate = dcPickCandidate;
+
 async function renderDecisionLane(type) {
   const el = document.getElementById('reviewConsoleContent');
   if (!el) return;
@@ -1664,10 +1705,15 @@ async function renderDecisionLane(type) {
   if (!res.ok) { el.innerHTML = opsErrorState(res, "renderDecisionLane('" + type + "')", 'Could not load decisions'); return; }
   const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   const total = res.data ? res.data.total : null;
-  const titles = { confirm_true_owner: 'Confirm the true owner', junk_entity_name: 'Junk entity names' };
+  const titles = { confirm_true_owner: 'Confirm the true owner', junk_entity_name: 'Junk entity names',
+    match_disambiguation: 'Intake match disambiguation', llc_research_dead: 'LLC research dead-letters',
+    availability_checker_botblock: 'Availability bot-blocks' };
   const intros = {
     confirm_true_owner: 'The domain true owner may be stale (pre-acquisition). Confirm it’s current and connect, mark it stale with the new owner (recorded now; write-back ships in Slice 3), or send to research.',
     junk_entity_name: 'Entities soft-flagged with structural-garbage names (phone/email/panel-header bleed-through). Rename to the real name, merge into the correct entity, or leave flagged.',
+    match_disambiguation: 'The intake matcher found multiple candidate properties above threshold (rather than auto-attaching the wrong one). Pick the right property, or create a new one.',
+    llc_research_dead: 'Automated owner-LLC research dead-lettered after the attempt cap. Resolve it via the Secretary of State (research task), retry the lookup, or park it.',
+    availability_checker_botblock: 'The availability-checker is being bot-blocked (high unreachable share). Verify the top listings by hand, or acknowledge the alert (resolves it).',
   };
   let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
