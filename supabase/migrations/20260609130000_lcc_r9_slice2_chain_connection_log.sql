@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS public.lcc_chain_connection_log (
   entities_created    integer     NOT NULL DEFAULT 0,
   entities_linked     integer     NOT NULL DEFAULT 0,
   skipped_junk        integer     NOT NULL DEFAULT 0,
+  skipped_placeholder integer     NOT NULL DEFAULT 0,
   errored             integer     NOT NULL DEFAULT 0,
   -- ids + scalar facts only (the artifact-offload / disk-incident lesson):
   -- the per-owner names + outcomes for the most recent walk, bounded by the
@@ -34,6 +35,10 @@ CREATE TABLE IF NOT EXISTS public.lcc_chain_connection_log (
   detail              jsonb,
   PRIMARY KEY (source_domain, source_property_id)
 );
+
+-- Idempotent column add (the table may already exist from the initial apply).
+ALTER TABLE public.lcc_chain_connection_log
+  ADD COLUMN IF NOT EXISTS skipped_placeholder integer NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_lcc_chain_connection_log_processed
   ON public.lcc_chain_connection_log (processed_at);
