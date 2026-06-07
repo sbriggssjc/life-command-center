@@ -153,11 +153,22 @@ async function main() {
   }
 
   // 6. Bulk insert synthetic rows in batches. Price-less by construction.
+  // R70 D10 follow-up: defensively clamp the imputed window so a re-run can
+  // never reproduce the over-cap rows (8 rows carried 1,263-2,559d windows vs
+  // the cohort's ~175d median — the median-DOM subtraction mis-fired). The
+  // window (sale_date - listing_date) is bounded to the documented 1095d cap.
+  const SYNTH_WINDOW_CAP_DAYS = 1095;
+  const clampSynthListingDate = (saleDate, synthDate) => {
+    const sale = new Date(saleDate);
+    const earliest = new Date(sale.getTime() - SYNTH_WINDOW_CAP_DAYS * 86400 * 1000);
+    const synth = new Date(synthDate);
+    return (synth < earliest ? earliest : synth).toISOString().split('T')[0];
+  };
   let inserted = 0;
   for (let i = 0; i < cands.length; i += BATCH) {
     const slice = cands.slice(i, i + BATCH).map(c => ({
       property_id: c.property_id,
-      listing_date: c.synth_listing_date,
+      listing_date: clampSynthListingDate(c.sale_date, c.synth_listing_date),
       off_market_date: c.sale_date,
       sold_date: c.sale_date,
       sold_price: c.sold_price,
