@@ -157,7 +157,9 @@ BEGIN
   upd AS (
     UPDATE public.research_tasks t
     SET status = 'completed', completed_at = now(), updated_at = now(),
-        outcome = COALESCE(t.outcome, 'chain_complete: developer identified & connected (r9_slice3)')
+        outcome = COALESCE(t.outcome, jsonb_build_object(
+          'resolved_by', 'r9_slice3',
+          'note', 'chain_complete: developer identified & connected'))
     FROM target WHERE t.id = target.id
     RETURNING 1
   )
