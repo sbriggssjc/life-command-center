@@ -1451,3 +1451,68 @@ botblock seed→sweep round-trip (open→superseded, 0 residue); match_disambigu
 sweep (stays open for a live review_required intake, supersedes for a resolved
 one). New lane types are type-ready (0 open today — they appear when an engine
 hits ambiguity).
+
+## R10 — close the cadence → outreach loop (2026-06-07)
+
+The 2026-06-07 outreach audit found the cadence engine built but the loop had
+never closed once (392 rows, 383 overdue, `last_touch_at` NULL on every row).
+Five independent breaks. R10 fixes them unit by unit; Unit 1 ships first.
+
+### Unit 1 — fix the advance path (shipped)
+Three breaks, one surgical fix each:
+
+1. **Queue CTA hit the wrong router.** `ops.js pqLogTouch` POSTs
+   `/api/operations?action=advance_cadence`, but `advance_cadence` only existed
+   under the `?_route=draft` sub-router, so every "Log touch" 400'd. Fix:
+   `advance_cadence` is now a first-class case in the **main** POST action
+   router (`api/operations.js`), handled by **`bridgeAdvanceCadence`**. The
+   Copilot `?_route=draft&action=advance_cadence` alias still works (unchanged)
+   for the agent registry.
+
+2. **`advanceCadence` didn't reschedule.** `api/_shared/cadence-engine.js`
+   guarded the reschedule on `if (nextRec.template)` — but PROSPECTING_SEQUENCE
+   phone touches (2/4/6) carry a **null template**, so `next_touch_due` stayed
+   frozen and the card never left the band. Fix: reschedule on any non-blocked
+   recommendation (`if (!nextRec.blocked && nextRec.due_at)`), null template is
+   valid. Regression test: `test/cadence-advance.test.mjs` asserts
+   `next_touch_due > now()` after a null-template phone advance.
+
+3. **No activity row / double-advance risk.** `bridgeAdvanceCadence` now writes
+   an `activity_events` row with the **real category** (generic `touch` → `call`;
+   email/meeting pass through) and the cadence's `entity_id`, so the touch
+   renders in history. A successful advance also calls
+   `lcc_refresh_priority_queue_resolved()` so the card leaves its band within
+   the request (Slice-1 staleness contract).
+
+**Single advance owner (the doctrine — documented per the audit ask):** the JS
+`advanceCadence()` function is the **single owner** of the advance. Every JS
+human-touch writer that advances a cadence itself tags its `activity_events`
+row `metadata.skip_cadence_advance='true'`. The SQL AFTER-INSERT trigger
+`lcc_activity_event_advance_cadence` now **skips** those tagged rows (migration
+`20260608150000_lcc_r10_unit1_cadence_advance_skip_guard.sql`, applied live —
+safe DB-first, no deployed writer set the flag yet), so each activity advances
+the cadence **exactly once**: the JS path owns its own advance, and the trigger
+remains the advance owner only for **unflagged organic** activities (Unit 2 —
+calls/emails logged outside `bridgeAdvanceCadence`).
+
+**Vocabulary note (pre-existing dual system):** JS `advanceCadence` advances on
+the `PROSPECTING_SEQUENCE` (phases `prospecting`/`maintenance`, `T-*` templates);
+the trigger's organic path advances via SQL `lcc_advance_onboarding_cadence`
+(phases `onboarding`/`steady_state`, `onboarding_*` templates), so an organic
+touch on a `prospecting` row flips it to `onboarding`. Unifying the two
+vocabularies is a deferred follow-up; both reschedule correctly, so the loop
+closes either way.
+
+Verified live (synthetic rows, 0 residue): a `skip_cadence_advance` call left
+the cadence untouched (touch unchanged, due stays past); an unflagged email
+advanced it (touch +1, `next_touch_due` into the future). `node --check` clean;
+12 functions; full suite green except 2 pre-existing CM chart failures.
+
+### Units 2-4 (not yet shipped)
+- **Unit 2** — organic loop: asset→owner hop + sweep every human-touch writer to
+  emit real categories on the owner cadence.
+- **Unit 3** — cadence universe hygiene: park the ~381 contactless prospecting
+  rows (no reachable contact) out of P0/P6/P7 into a "select prospecting
+  contact" step; retype the person-typed firm entities.
+- **Unit 4** — minimum outreach surface: draft → mark-sent → record from the
+  queue/detail; render `v_bd_cadence_dashboard`.
