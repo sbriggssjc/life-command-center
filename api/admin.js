@@ -5292,14 +5292,19 @@ async function handleChainClassifyTick(req, res) {
         else if (link && link.skipped) { item.outcome = 'skipped_' + link.skipped; result.skipped_junk += 1; result.items.push(item); continue; }
         else { item.outcome = 'mint_error'; result.errored += 1; result.items.push(item); continue; }
       }
-      // Tag developer via the reversible behavioral_override machinery.
-      const patch = await opsQuery('PATCH', `entities?id=eq.${entityId}`,
-        { behavioral_override: 'developer',
-          behavioral_override_reason: 'r9_slice3 chain developer (' + r.signal + ')',
-          behavioral_override_at: new Date().toISOString() },
-        { 'Prefer': 'return=minimal' });
-      if (patch.ok) { item.outcome = 'tagged_developer'; result.tagged += 1; }
-      else { item.outcome = 'tag_error'; result.errored += 1; }
+      // Tag developer via the VERIFIED, atomic RPC: it writes the role +
+      // metadata marker AND logs the candidate norm in one statement, returning
+      // true only when the role write actually took. The ledger (keyed on the
+      // candidate norm, not the entity's canonical_name) makes the view exclude
+      // it next tick regardless of any normalizer mismatch -- so `tagged` is
+      // outcome-truthful and the candidate provably drains.
+      const tagRes = await opsQuery('POST', 'rpc/lcc_tag_developer',
+        { p_entity_id: entityId, p_signal: r.signal, p_norm: r.norm,
+          p_candidate_name: r.candidate_name, p_source_domain: r.source_domain });
+      const verified = tagRes.ok && (tagRes.data === true || tagRes.data === 't'
+        || (Array.isArray(tagRes.data) && tagRes.data[0] === true));
+      if (verified) { item.outcome = 'tagged_developer'; result.tagged += 1; }
+      else { item.outcome = 'tag_unverified'; result.errored += 1; }
     } catch (err) {
       item.outcome = 'error'; item.error = String(err?.message || err).slice(0, 160); result.errored += 1;
     }
