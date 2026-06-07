@@ -219,7 +219,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'unassigned':  return await getUnassigned(req, res, user, workspaceId);
       case 'watchers':    return await getWatchers(req, res, user, workspaceId);
       case 'buyer_contacts': return await getBuyerContacts(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts' });
+      case 'cadence_dashboard': return await getCadenceDashboard(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard' });
     }
   }
 
@@ -1384,6 +1385,25 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
     cadence_id: cad ? cad.id : null, phase: cad ? cad.phase : 'buy_side',
     next_touch_due: cad ? cad.next_touch_due : null,
   });
+}
+
+// ============================================================================
+// GET cadence_dashboard (R10 Unit 4) — render v_bd_cadence_dashboard
+//
+// One row per active cadence with phase, touch N, due/overdue, last outcome,
+// engagement counts, and the portfolio context. Drives the cadence tab + the
+// draft/mark-sent outreach surface. Ordered most-overdue first.
+// ============================================================================
+async function getCadenceDashboard(req, res, user, workspaceId) {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const phase = req.query.phase ? String(req.query.phase).trim() : null;
+  let path = 'v_bd_cadence_dashboard?workspace_id=eq.' + pgFilterVal(workspaceId)
+    + '&order=days_overdue.desc.nullslast,next_touch_due.asc.nullslast'
+    + '&limit=' + limit;
+  if (phase) path += '&phase=eq.' + pgFilterVal(phase);
+  const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load cadence dashboard', detail: r.data });
+  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
 }
 
 // ============================================================================

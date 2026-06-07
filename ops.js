@@ -2336,7 +2336,8 @@ async function renderPriorityQueuePage(band) {
   var items = Array.isArray(data.items) ? data.items : [];
   var counts = Array.isArray(data.counts) ? data.counts : [];
   var total = data.total || 0;
-  var html = '<div class="ops-header"><h2>Priority Queue</h2></div>';
+  var html = '<div class="ops-header"><h2>Priority Queue</h2>'
+    + '<button class="q-action" onclick="renderCadenceDashboard()">Cadence dashboard →</button></div>';
   html += '<div class="rc-intro">Start here. Your highest-leverage BD targets, most urgent band first. Each row routes straight to the property so you can resolve the owner, confirm the CRM link, and open a lead.</div>';
   // Band filter chips.
   html += '<div class="pq-chips">';
@@ -2761,6 +2762,166 @@ function pqResolveOwner(entityId, name) {
   try { if (typeof navTo === 'function') navTo('pageEntities'); } catch (_e) {}
 }
 window.pqResolveOwner = pqResolveOwner;
+
+// ============================================================================
+// R10 Unit 4 — Cadence dashboard + minimum outreach surface
+// Renders v_bd_cadence_dashboard (one row per active cadence) and gives each a
+// next action: "Draft email →" (generate inline → copy / open in mail / Mark
+// sent → record_send) for email-next rows, or "Log touch →" (the Unit-1 single
+// advance path) for call/vm-next rows. No sending integration — copy + mailto.
+// ============================================================================
+async function renderCadenceDashboard() {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/operations?action=cadence_dashboard&limit=200');
+  if (!res.ok || !res.data || !res.data.ok) {
+    el.innerHTML = opsErrorState(res, 'renderCadenceDashboard()', 'Could not load the cadence dashboard');
+    return;
+  }
+  var items = Array.isArray(res.data.items) ? res.data.items : [];
+  var total = res.data.total != null ? res.data.total : items.length;
+  var html = '<div class="ops-header"><h2>Cadence Dashboard</h2>'
+    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div>';
+  html += '<div class="rc-intro">Every active outreach cadence — phase, touch count, what is due, and the last outcome. '
+    + 'Work the overdue rows top-down: draft the next email or log the call; either advances the cadence.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No active cadences. ✓</div>'; el.innerHTML = html; return; }
+  html += '<div class="q-item-meta" style="margin:6px 0">' + esc(String(total)) + ' active cadence' + (total === 1 ? '' : 's') + '</div>';
+  items.forEach(function (it, ix) {
+    var cid = it.cadence_id == null ? '' : String(it.cadence_id);
+    var eid = it.entity_id == null ? '' : String(it.entity_id);
+    var overdue = Number(it.days_overdue);
+    var dueLbl = it.next_touch_due
+      ? (isFinite(overdue) && overdue > 0 ? esc(String(overdue)) + 'd overdue' : 'due ' + new Date(it.next_touch_due).toLocaleDateString())
+      : 'no next touch';
+    var nt = String(it.next_touch_type || '').toLowerCase();
+    var isEmail = (nt === 'email' || nt === '');
+    var stats = [];
+    if (it.emails_sent) stats.push(it.emails_sent + ' email' + (it.emails_sent === 1 ? '' : 's'));
+    if (it.calls_made) stats.push(it.calls_made + ' call' + (it.calls_made === 1 ? '' : 's'));
+    if (it.meetings_scheduled) stats.push(it.meetings_scheduled + ' mtg');
+    var lastOutcome = it.last_touch_type ? ('last: ' + esc(it.last_touch_type) + (it.last_touch_at ? ' ' + new Date(it.last_touch_at).toLocaleDateString() : '')) : 'never touched';
+    var ctx = [esc(it.phase || '—'), 'touch ' + esc(String(it.current_touch != null ? it.current_touch : 0)),
+               esc(dueLbl), lastOutcome];
+    if (stats.length) ctx.push(stats.join(', '));
+    if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + ' props');
+    var tmpl = it.next_touch_template ? String(it.next_touch_template) : '';
+    var action;
+    if (isEmail && cid && eid && tmpl) {
+      action = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
+        + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '') + ', this)">Draft email →</button>';
+    } else if (cid && eid) {
+      action = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
+        + ',' + jsStringArg(nt || 'call') + ', this)">Log touch →</button>';
+    } else {
+      action = '<span class="q-badge">no cadence id</span>';
+    }
+    html += '<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '" data-cad-id="' + esc(cid) + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.entity_name || 'Cadence') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(it.next_touch_type || 'email') + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(ctx.join(' · ')) + '</div>'
+      + '<div class="q-actions">' + action + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderCadenceDashboard = renderCadenceDashboard;
+
+// Generate the next-touch email inline (no sending — copy / mailto / mark sent).
+async function cadDraft(cadenceId, entityId, templateId, name, domain, btn) {
+  var card = (btn && btn.closest) ? btn.closest('.q-item') : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Drafting…'; }
+  var body = {
+    template_id: templateId,
+    context: { contact: { name: name || '' }, domain: domain || '' },
+    cadence_ids: { entity_id: entityId },
+    strict: false
+  };
+  var res = await opsPost('/api/operations?_route=draft&action=generate', body);
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast('Could not generate draft: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Draft email →'; }
+    return;
+  }
+  var subject = res.data.subject || res.data.rendered_subject || '';
+  var bodyText = res.data.body || res.data.rendered_body || res.data.text || '';
+  if (!card) { showToast('Draft ready (no card to render into)', 'info'); return; }
+  var host = card.querySelector('.cad-draft');
+  if (!host) { host = document.createElement('div'); host.className = 'cad-draft'; card.appendChild(host); }
+  // Stash the rendered draft on the card for record_send + edit capture.
+  card._cadDraft = { templateId: templateId, entityId: entityId, domain: domain || '', subject: subject, body: bodyText };
+  var mailto = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
+  host.innerHTML = '<div class="cad-draft-subj"><b>Subject:</b> ' + esc(subject) + '</div>'
+    + '<textarea class="cad-draft-body" rows="8" style="width:100%;margin:6px 0">' + esc(bodyText) + '</textarea>'
+    + '<div class="q-actions">'
+    + '<button class="q-action" onclick="cadCopyDraft(this)">Copy</button>'
+    + '<a class="q-action" href="' + esc(mailto) + '" target="_blank" rel="noopener">Open in mail</a>'
+    + '<button class="q-action primary" onclick="cadMarkSent(' + jsStringArg(String(cadenceId)) + ', this)">Mark sent →</button>'
+    + '</div>';
+  if (btn) { btn.disabled = false; btn.textContent = 'Re-draft'; }
+}
+window.cadDraft = cadDraft;
+
+function cadCopyDraft(btn) {
+  var card = btn.closest('.q-item');
+  var ta = card ? card.querySelector('.cad-draft-body') : null;
+  var d = card ? card._cadDraft : null;
+  var text = (d ? (d.subject ? d.subject + '\n\n' : '') : '') + (ta ? ta.value : '');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { showToast('Draft copied', 'success'); });
+    } else if (ta) { ta.select(); document.execCommand('copy'); showToast('Draft copied', 'success'); }
+  } catch (e) { showToast('Copy failed: ' + e.message, 'error'); }
+}
+window.cadCopyDraft = cadCopyDraft;
+
+// Mark sent → record_send (which advances via the Unit-1 single advance path).
+async function cadMarkSent(cadenceId, btn) {
+  var card = btn.closest('.q-item');
+  var d = card ? card._cadDraft : null;
+  if (!d) { showToast('No draft to record', 'error'); return; }
+  var ta = card ? card.querySelector('.cad-draft-body') : null;
+  var finalBody = ta ? ta.value : d.body;
+  if (btn) { btn.disabled = true; btn.textContent = 'Recording…'; }
+  var res = await opsPost('/api/operations?_route=draft&action=record_send', {
+    template_id: d.templateId, entity_id: d.entityId, domain: d.domain || null,
+    cadence_id: cadenceId,
+    rendered_subject: d.subject, rendered_body: d.body,
+    final_subject: d.subject, final_body: finalBody,
+    original_draft: d.body, sent_text: finalBody
+  });
+  if (res.ok && res.data) {
+    var advanced = res.data.cadence_advanced;
+    var host = card ? card.querySelector('.cad-draft') : null; if (host) host.remove();
+    var actions = card ? card.querySelector('.q-actions') : null;
+    if (actions) actions.innerHTML = '<span class="q-badge">✓ Sent & recorded' + (advanced ? ' — cadence advanced' : '') + '</span>';
+    if (card) card.classList.add('resolved');
+    showToast(advanced ? 'Sent — cadence advanced' : 'Sent & recorded', 'success');
+  } else {
+    showToast('Could not record send: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Mark sent →'; }
+  }
+}
+window.cadMarkSent = cadMarkSent;
+
+// Log a non-email touch from the dashboard — routes through the Unit-1 advance
+// endpoint (single advance owner), so the cadence advances + reschedules.
+async function cadLogTouch(cadenceId, entityId, touchType, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Logging…'; }
+  var res = await opsPost('/api/operations?action=advance_cadence', {
+    cadence_id: cadenceId, entity_id: entityId, type: touchType || 'call', outcome: 'logged_from_cadence_dashboard'
+  });
+  if (res.ok && res.data && (res.data.ok || res.data.next_touch_due)) {
+    var card = btn ? btn.closest('.q-item') : null;
+    var actions = card ? card.querySelector('.q-actions') : null;
+    if (actions) actions.innerHTML = '<span class="q-badge">✓ Touch logged — cadence advanced</span>';
+    if (card) card.classList.add('resolved');
+    showToast('Touch logged', 'success');
+  } else {
+    showToast('Could not log touch: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Log touch →'; }
+  }
+}
+window.cadLogTouch = cadLogTouch;
 
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');

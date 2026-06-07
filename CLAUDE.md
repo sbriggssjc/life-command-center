@@ -1593,7 +1593,43 @@ person-vs-org).
    (after P7). Verified live (synthetic, 0 residue): attaching a contact moved
    the row **P-CONTACT → P7**.
 
-### Unit 4 (not yet shipped — scoped)
-- **Unit 4** — minimum outreach surface: draft inline + copy/mailto + "Mark
-  sent" → `record_send` → the **Unit-1 single advance path** (no sending
-  integration, no new function files); render `v_bd_cadence_dashboard`.
+### Unit 4 — minimum outreach surface (shipped)
+The smallest loop that lets the operator work a touch end to end, with **no
+sending integration and no new function files** (scope floor):
+
+- **Cadence dashboard.** New GET `api/operations.js?action=cadence_dashboard`
+  reads `v_bd_cadence_dashboard` (workspace-scoped, most-overdue first). `ops.js`
+  `renderCadenceDashboard()` renders one row per active cadence (phase, touch N,
+  due/overdue, last outcome, engagement, portfolio context), reached from a
+  "Cadence dashboard →" button on the Priority Queue header. The view has **no
+  phase filter**, so it is also the visible home for the parked/contactless
+  prospecting rows AND any `buy_side` cadence the P-BUYER contact step seeds —
+  the dashboard renders those automatically once they exist.
+- **Draft → copy/mailto → Mark sent.** Email-next rows get **"Draft email →"**
+  (`cadDraft`) → POST `?_route=draft&action=generate` with the row's
+  `next_touch_template` + entity context → renders subject + editable body inline
+  with **Copy** (clipboard), **Open in mail** (`mailto:`), and **Mark sent →**.
+  `cadMarkSent` → POST `?_route=draft&action=record_send` → which advances the
+  cadence via **`advanceCadence` — the Unit-1 single advance owner** (record_send
+  writes no activity row, so there is no trigger double-advance). The card
+  settles to "✓ Sent & recorded — cadence advanced".
+- **Non-email touches.** call/vm-next rows get **"Log touch →"** (`cadLogTouch`)
+  → POST `?action=advance_cadence` (the Unit-1 endpoint) — same single advance
+  path, never a second owner.
+
+Verified: dashboard query returns real cadences with templates (Acquest
+Development / Duchene Family Trust …); `record_send` confirmed to advance through
+`advanceCadence` (no second advance owner); `node --check` clean; 12 functions;
+suite green except 2 pre-existing CM chart failures. The live end-to-end (draft →
+mark sent → cadence advances → card clears) is verified on the deployed app after
+merge (the draft/record_send routes need the running server).
+
+### Follow-ups (not in R10)
+- Unify the prospecting (`T-*`) and onboarding (`onboarding_*`) cadence
+  vocabularies (both reschedule correctly today; the trigger's organic path flips
+  prospecting→onboarding).
+- Resolve recipient email for the draft `mailto:` (entities carry no email; the
+  contact picker's SF path is the eventual source) — today `mailto:` opens with an
+  empty `to:` for the operator to fill, Copy is always available.
+- Render the cadence/buy-side state in the entity-detail Next-Step banner (the
+  full "one truth, three renderings").
