@@ -240,6 +240,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'open_opportunity':   return await bridgeOpenOpportunity(req, res, user, workspaceId);
       case 'open_government_buyer': return await bridgeOpenGovernmentBuyer(req, res, user, workspaceId);
       case 'select_buyer_contact': return await bridgeSelectBuyerContact(req, res, user, workspaceId);
+      case 'select_prospecting_contact': return await bridgeSelectProspectingContact(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
@@ -1382,6 +1383,88 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
     contact_entity_id: contactEntityId, sf_contact_id: sfContactId, contact_name: contactName,
     cadence_id: cad ? cad.id : null, phase: cad ? cad.phase : 'buy_side',
     next_touch_due: cad ? cad.next_touch_due : null,
+  });
+}
+
+// ============================================================================
+// BRIDGE: Select prospecting contact (R10 Unit 3) — P-CONTACT lane
+//
+// A prospecting cadence with no reachable contact is parked in P-CONTACT. This
+// attaches the chosen contact to the EXISTING active cadence (it does NOT seed a
+// new buy-side cadence — that is the P-BUYER path). Effect: resolve/create the
+// person, link person→entity (associated_with → makes the entity "connected"),
+// and stamp the contact onto the entity's active cadence (contact_id has no FK;
+// sf_contact_id is free text), so the reachability gate now passes and the row
+// leaves P-CONTACT for the cadence bands. Refreshes the queue cache.
+// ============================================================================
+async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const entityId = String(b.entity_id || '').trim();
+  if (!entityId) return res.status(400).json({ error: 'entity_id is required' });
+
+  let contactEntityId = b.contact_entity_id ? String(b.contact_entity_id).trim() : null;
+  let sfContactId = b.sf_contact_id ? String(b.sf_contact_id).trim() : null;
+  let contactName = b.contact_name ? String(b.contact_name).trim() : null;
+  const newName = b.new_contact_name ? String(b.new_contact_name).trim() : null;
+
+  // Create a new person entity when requested.
+  if (!contactEntityId && !sfContactId && newName) {
+    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    const ins = await opsQuery('POST', 'entities',
+      { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
+    const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;
+    if (!ins.ok || !row) return res.status(502).json({ error: 'create_contact_failed', detail: ins.data });
+    contactEntityId = row.id; contactName = newName;
+  }
+  if (!contactEntityId && !sfContactId) {
+    return res.status(400).json({ error: 'Provide contact_entity_id, sf_contact_id, or new_contact_name' });
+  }
+
+  // Link person→entity (associated_with) — dupe-guarded (no unique index).
+  if (contactEntityId) {
+    try {
+      const exists = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
+        + '&from_entity_id=eq.' + pgFilterVal(entityId) + '&to_entity_id=eq.' + pgFilterVal(contactEntityId) + '&limit=1');
+      if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
+        await opsQuery('POST', 'entity_relationships', {
+          workspace_id: workspaceId, from_entity_id: entityId, to_entity_id: contactEntityId,
+          relationship_type: 'associated_with', metadata: { role: 'prospecting_contact', via: 'priority_queue' },
+        });
+      }
+    } catch (_e) { /* non-fatal */ }
+    if (!contactName) {
+      try {
+        const ce = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(contactEntityId) + '&select=name&limit=1');
+        if (ce.ok && Array.isArray(ce.data) && ce.data[0]) contactName = ce.data[0].name || null;
+      } catch (_e) { /* soft */ }
+    }
+  }
+
+  // Stamp the contact onto the entity's active cadence (effect FIRST). Most
+  // overdue active cadence is the one driving the P-CONTACT card.
+  const patch = {};
+  if (contactEntityId) patch.contact_id = contactEntityId;
+  if (sfContactId) patch.sf_contact_id = sfContactId;
+  let cadenceId = null;
+  if (Object.keys(patch).length) {
+    const cadGet = await opsQuery('GET', 'touchpoint_cadence?entity_id=eq.' + pgFilterVal(entityId)
+      + '&phase=in.(prospecting,onboarding,steady_state,maintenance)'
+      + '&order=next_touch_due.asc.nullslast&select=id&limit=1');
+    const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
+    if (!cadRow) {
+      return res.status(404).json({ error: 'no_active_cadence', detail: 'No active cadence on this entity to attach the contact to' });
+    }
+    const upd = await opsQuery('PATCH', 'touchpoint_cadence?id=eq.' + pgFilterVal(cadRow.id), patch);
+    if (!upd.ok) return res.status(502).json({ error: 'cadence_attach_failed', detail: upd.data });
+    cadenceId = cadRow.id;
+  }
+
+  // Staleness hook: the entity is now reachable — it leaves P-CONTACT.
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+  return res.status(200).json({
+    ok: true, entity_id: entityId, contact_entity_id: contactEntityId,
+    sf_contact_id: sfContactId, contact_name: contactName, cadence_id: cadenceId,
   });
 }
 

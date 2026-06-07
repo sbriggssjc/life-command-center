@@ -2251,6 +2251,7 @@ function _pqBandColor(band) {
   if (b === 'P0.4') return '#B5651D';
   if (b === 'P0.5') return 'var(--red)';
   if (b === 'P-BUYER') return 'var(--purple)';
+  if (b === 'P-CONTACT') return '#8A6D1D';
   if (b === 'P1') return 'var(--yellow)';
   if (b === 'P2' || b === 'P3') return 'var(--purple)';
   if (b === 'P5') return 'var(--accent2)';
@@ -2274,6 +2275,7 @@ function _pqReason(reason) {
     lease_expiry_24mo: 'Lease expires within 24 months',
     resolve_ownership_control: 'Resolve ownership & control',
     open_bd_opportunity_needed: 'Needs a BD opportunity opened',
+    select_prospecting_contact: 'No reachable contact — select one',
     onboarding_cadence_due: 'Onboarding touch due',
     onboarding_step_due: 'Onboarding touch overdue',
     steady_state_cadence_due: 'Steady-state touch overdue',
@@ -2300,6 +2302,9 @@ function _pqCtaState(it) {
   // R6 doctrine: P0.4 owners aren't resolved+connected yet — resolve FIRST, the
   // opportunity is not the next action.
   if (band === 'P0.4' || reason === 'resolve_ownership_control') return 'resolve';
+  // R10 Unit 3: a cadence with no reachable contact is contact-resolution work,
+  // not a touch — find the person FIRST (the true next action).
+  if (band === 'P-CONTACT' || reason === 'select_prospecting_contact') return 'select_contact';
   // P0.5 doctrine: explicitly needs an opportunity opened (resolution-complete).
   if (band === 'P0.5' || reason === 'open_bd_opportunity_needed') return 'open_opp';
   // Bands that by definition carry an open opp + an overdue cadence touch.
@@ -2400,6 +2405,12 @@ async function renderPriorityQueuePage(band) {
       } else {
         _ownerAction = '<button class="q-action primary" onclick="pqResolveOwner(' + jsStringArg(_qid) + ', ' + jsStringArg(it.name || '') + ', this)">Resolve owner \u2192</button>';
       }
+    } else if (_state === 'select_contact' && _qid) {
+      // R10 Unit 3: P-CONTACT \u2014 the cadence has no reachable contact. The next
+      // action is finding the person, not "email a shell". Opens the same
+      // contact picker the P-BUYER lane uses (generalized), and on select links
+      // the contact so the row leaves P-CONTACT and re-enters the cadence bands.
+      _ownerAction = '<button class="q-action primary" onclick="pqSelectProspectingContact(' + jsStringArg(_qid) + ', ' + jsStringArg(it.name || '') + ', this)">Select prospecting contact \u2192</button>';
     } else if (!_qid) {
       _ownerAction = '<span class="q-badge" title="Owner-level priority \u2014 no single property to open">owner-level</span>';
     } else if (_state === 'log_touch') {
@@ -2624,6 +2635,32 @@ async function pqSelectBuyerContact(entityId, oppId, parentName, btn) {
 }
 window.pqSelectBuyerContact = pqSelectBuyerContact;
 
+// R10 Unit 3 — generalize the buyer-contact picker for the P-CONTACT lane: a
+// prospecting cadence with no reachable contact. Same candidate loader + picker
+// UI; on select it attaches the contact to the EXISTING prospecting cadence
+// (not a buy-side one), so the row becomes reachable and leaves P-CONTACT.
+async function pqSelectProspectingContact(entityId, name, btn) {
+  if (!entityId) { showToast('No entity for the contact step', 'error'); return; }
+  const card = (btn && btn.closest) ? btn.closest('.q-item') : null;
+  _pqBuyerCtx = { entityId: entityId, oppId: null, parentName: name, card: card, mode: 'prospecting' };
+  let host = card ? card.querySelector('.pq-buyer-contact') : null;
+  if (card && !host) {
+    host = document.createElement('div');
+    host.className = 'pq-buyer-contact';
+    const actions = card.querySelector('.q-actions');
+    if (actions) card.insertBefore(host, actions); else card.appendChild(host);
+  }
+  if (host) host.innerHTML = '<div class="q-item-meta"><span class="spinner"></span> loading contacts…</div>';
+  const res = await opsApi('/api/operations?action=buyer_contacts&entity_id=' + encodeURIComponent(entityId));
+  if (!res.ok || !res.data || !res.data.ok) {
+    if (host) host.innerHTML = '<div class="q-item-meta">Could not load contacts: ' + esc((res.data && res.data.error) || res.error || 'unknown') + '</div>';
+    return;
+  }
+  _pqBuyerCtx.candidates = res.data;
+  if (host) host.innerHTML = _pqBuyerContactHTML(res.data);
+}
+window.pqSelectProspectingContact = pqSelectProspectingContact;
+
 function _pqBuyerContactHTML(d) {
   let h = '<div class="pq-bc-head">Who is the prospecting contact at ' + esc(d.parent_name || 'this account') + '?</div>';
   const sec = (title, rows, kind) => {
@@ -2684,21 +2721,32 @@ window.pqBuyerContactAddNew = pqBuyerContactAddNew;
 
 async function _pqBuyerContactSubmit(payload, displayName) {
   const ctx = _pqBuyerCtx;
-  const body = Object.assign({ entity_id: ctx.entityId, bd_opportunity_id: ctx.oppId }, payload);
-  const res = await opsPost('/api/operations?action=select_buyer_contact', body);
+  // R10 Unit 3: the P-CONTACT lane attaches the contact to the existing
+  // prospecting cadence; P-BUYER seeds a buy-side cadence. Same picker, two
+  // endpoints — both ride the Unit-1 single advance owner downstream.
+  const isProspecting = ctx.mode === 'prospecting';
+  const action = isProspecting ? 'select_prospecting_contact' : 'select_buyer_contact';
+  const body = Object.assign({ entity_id: ctx.entityId }, isProspecting ? {} : { bd_opportunity_id: ctx.oppId }, payload);
+  const res = await opsPost('/api/operations?action=' + action, body);
   if (res.ok && res.data && res.data.ok) {
-    const due = res.data.next_touch_due ? new Date(res.data.next_touch_due).toLocaleDateString() : 'now';
     const name = res.data.contact_name || displayName || 'contact';
     const card = ctx.card;
     if (card) {
       const host = card.querySelector('.pq-buyer-contact'); if (host) host.remove();
       const actions = card.querySelector('.q-actions');
-      if (actions) actions.innerHTML = '<span class="q-badge">✓ On buy-side cadence with ' + esc(name) + ' — next touch ' + esc(due) + '</span>';
+      if (actions) {
+        if (isProspecting) {
+          actions.innerHTML = '<span class="q-badge">✓ Contact ' + esc(name) + ' linked — back in the cadence</span>';
+        } else {
+          const due = res.data.next_touch_due ? new Date(res.data.next_touch_due).toLocaleDateString() : 'now';
+          actions.innerHTML = '<span class="q-badge">✓ On buy-side cadence with ' + esc(name) + ' — next touch ' + esc(due) + '</span>';
+        }
+      }
       card.classList.add('resolved');
     }
-    showToast('Buy-side cadence started with ' + name, 'success');
+    showToast(isProspecting ? ('Contact ' + name + ' linked — cadence is now actionable') : ('Buy-side cadence started with ' + name), 'success');
   } else {
-    showToast('Could not start cadence: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    showToast('Could not select contact: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
   }
 }
 

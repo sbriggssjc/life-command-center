@@ -1540,10 +1540,60 @@ Verified live (synthetic, 0 residue): a **call logged on an asset** whose owner
 had an overdue email-next cadence advanced the **owner's** cadence (touch 2→3)
 and moved `next_touch_due` into the future.
 
-### Units 3-4 (not yet shipped — scoped)
-- **Unit 3** — cadence universe hygiene: park the ~381 contactless prospecting
-  rows (no reachable contact) out of P0/P6/P7 into a "select prospecting
-  contact" step; retype the person-typed firm entities. Touches the cached
-  `v_priority_queue` band gating — its own blessed change.
-- **Unit 4** — minimum outreach surface: draft → mark-sent → record from the
-  queue/detail; render `v_bd_cadence_dashboard`.
+### Unit 3 — cadence universe hygiene (shipped)
+Doctrine (Scott): a cadence without a reachable contact is not a next action —
+it is contact-resolution work. The 2026-06-07 audit found ~381 contactless
+`prospecting` cadences born overdue, flooding **P7** with "email a shell with no
+address" cards. Run order matters: **retype BEFORE the gate** (the gate's
+"person-contact relationship" predicate + the contact picker both key on
+person-vs-org).
+
+1. **Retype pass (Unit 3a, reversible).** Migration
+   `20260608152000_lcc_r10_unit3a_retype_firm_persons.sql` retypes cadence-bearing
+   `person` entities whose NAME carries a firm suffix (SQL mirror of
+   `entity-link.js` `ENTITY_FIRM_SUFFIX_RE`) → `organization`. Prior type stashed
+   in `metadata.retyped_from` / `retype_source='r10_unit3'` (soft, reversible, no
+   hard delete). **75 retyped** live. Names with no recognized suffix (e.g.
+   "Prologis") stay `person` — the gate parks them anyway and the picker offers
+   "add contact" regardless of type.
+
+2. **Reachability gate + P-CONTACT lane (Unit 3b).** Migration
+   `20260608153000_lcc_r10_unit3b_cadence_reachability_gate.sql` re-gates the
+   three cadence bands (P0 `developer_overdue`, P6 `onboarding_step_due`, P7
+   `steady_state_cadence_due`) in `v_priority_queue_live` on **reachability**:
+   `cadence has sf_contact_id OR contact_id OR the entity is "connected"
+   (Salesforce identity, or a relationship to a person-typed entity)`. Unreachable
+   overdue cadences move to a new **P-CONTACT** band (`select_prospecting_contact`).
+   **The gate lives in the VIEW, not a row mutation — so it is re-seed-proof by
+   construction**: a future cadence-seed pass cannot resurrect a contactless row
+   into P7; the live predicate always re-evaluates. P-CONTACT (and surviving
+   cards) rank by portfolio rent via the existing enriched rollup join.
+   - **Gotcha fixed:** the P-CONTACT branch first used `NOT IN (reachable)`, and
+     `reachable` can contain a NULL entity_id (one cadence has a null entity) →
+     `NOT IN` collapsed to zero rows. Switched to `NOT EXISTS` + `entity_id IS
+     NOT NULL`. The gated bands use `IN` (NULL-safe), so only P-CONTACT was hit.
+   - Verified live post-refresh: **P7 379→68** (the reachable set — the expected
+     honest collapse), **P6 4→1**, **P0 2→0**, **P-CONTACT = 314**. All
+     non-cadence bands byte-identical (P0.4=498, P0.5=74, P1–P8, P-BUYER) — no
+     collateral. Spot-checks: parked = 29th Street Capital / Acquest Development
+     (firms), Adelaide Polsinelli / AJ Tolbert / Akram A. Abdeljaber (people with
+     no contact info); survivors = Adam D. Portnoy / Adam Meyer (reachable via SF).
+
+3. **JS — the P-CONTACT CTA (generalizes the P-BUYER picker).** `ops.js`:
+   `_pqCtaState` → `select_contact` for P-CONTACT; **"Select prospecting contact
+   →"** opens the same contact picker the P-BUYER lane uses
+   (`pqSelectProspectingContact` reuses the `?action=buyer_contacts` candidate
+   loader + `_pqBuyerContactHTML`; `_pqBuyerContactSubmit` branches on
+   `ctx.mode`). New endpoint `api/operations.js` `select_prospecting_contact`
+   (`bridgeSelectProspectingContact`): resolve/create the person, link
+   person→entity (`associated_with` → makes the entity "connected"), stamp the
+   contact onto the entity's **existing** active cadence (`contact_id` has no FK;
+   `sf_contact_id` is free text) — does NOT seed a buy-side cadence (that's
+   P-BUYER) — then refresh the queue. `admin.js` `BAND_ORDER` adds `P-CONTACT`
+   (after P7). Verified live (synthetic, 0 residue): attaching a contact moved
+   the row **P-CONTACT → P7**.
+
+### Unit 4 (not yet shipped — scoped)
+- **Unit 4** — minimum outreach surface: draft inline + copy/mailto + "Mark
+  sent" → `record_send` → the **Unit-1 single advance path** (no sending
+  integration, no new function files); render `v_bd_cadence_dashboard`.
