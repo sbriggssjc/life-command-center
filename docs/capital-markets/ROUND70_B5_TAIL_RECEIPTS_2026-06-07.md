@@ -278,22 +278,39 @@ Candidate: `cm_gov_lease_termination_true_q` +
 |---|---|---|
 | G27 | genuine-thin (NM gov deal lull) | chart-note (no view change) |
 | G29 | fixable slice + genuine-sparse | **fixed live** (additive rent recovery) |
-| D13 | thin + back-cast pre-2010-Q2 | **gate applied live** (ttm_n≥30); dia-VI master splice = follow-up (source confirmed) |
+| D13 | thin + back-cast pre-2010-Q2 | **gate + master splice applied live** (starts 2009-Q1, seam 99.19→100.00) |
 | D11 (dia sold) | genuine-thin (12+ cohort collapse 2022+) | chart-note |
 | D12 (dia asking) | fixable (listing term-propagation, 83–145 lm/yr) | flag for listing-term propagation pass |
 | G37 (gov sold) | = G17 (universe + falling volume) | cross-ref G17, chart-note; 3–9/yr residual feeds 7d decision |
-| terminated | heuristic ≠ master by shape (flat 50 vs collapse 339→0) | **don't ship heuristic**; recommend master `Terminated Leases (ttm)` splice |
+| terminated | heuristic ≠ master by shape (flat 50 vs collapse 339→0) | **master `Terminated Leases (ttm)` splice applied live** (88/41/3/0 = anchors) |
 
 ### Applied live this session
 - gov `cm_gov_rent_by_year_built` — G29 rent-PSF recovery (additive).
-- dia `cm_dialysis_valuation_index_q` — D13 gate `ttm_n ≥ 30` (Scott-blessed;
-  drops the 7 thin/back-cast pre-2010-Q2 quarters incl. the n=0 2009-Q1 carry).
+- dia `cm_dialysis_valuation_index_q` — D13 gate `ttm_n ≥ 30`.
+- **dia `cm_dialysis_valuation_index_q` — D13 master splice** (round close): dia
+  master `Valuation Index` spliced as the pre-2010-Q2 `master_curated` segment,
+  k=0.4536 (2011 overlap), seam 99.19→100.00. Series now starts **2009-Q1**.
+  Base view `cm_dialysis_valuation_index_sales_q` holds the computed math.
+  Migration `dialysis/20260607_cm_round70_dia_vi_master_splice.sql`.
+- **gov `cm_gov_lease_renewal_rate_q.terminated_leases` — terminated master
+  splice** (round close): the deck's amber Terminated bar now reads the master
+  `Terminated Leases (ttm)` — **88/41/3/0** at Q2-2022/Q2-2023/Q2-2024/Q2-2025,
+  exactly the anchors. Other renewal series unchanged; `terminated_source`
+  appended. Migration `government/20260607_cm_round70_gov_terminated_master_splice.sql`.
+
+### Filed to other lanes (not this round)
+- **VA/Riverview duplicate property pollution (gov property-merge lane).** One
+  building — **12929 Summerfield Crossing Blvd, Riverview FL** (US Dept of
+  Veteran Affairs, RBA 63,737) — has **127 duplicate `properties` rows**
+  (`property_id` 16739–23257). Surfaced under G29 (inflated `n_props_total`,
+  all rent-NULL). Route through `gov_merge_property` + the R7 Decision Center
+  property-merge lane — NOT a CM-view fix. (Likely a broader GSA-inventory
+  duplicate class; the merge lane's `v_data_quality_issues`
+  `duplicate_property_address` detector should already surface the full set.)
 
 ### Held / follow-up (Scott's calls captured)
-- **dia VI master splice** — extend the index back to 2008 from
-  `scripts/dia_master_charts.json` `Valuation Index` (column confirmed present),
-  tagged `master_curated`, scaled for a continuous join at the 2010-Q2 base
-  (gov 1997-splice pattern). Build pending; the gate already removed the bad tail.
-- **gov terminated master splice** — replace the wrong firm-term-date count with
-  the master `Terminated Leases (ttm)` series (matches all anchors).
-- **D12 listing-term propagation** — data write, dry-run→gate, own round.
+- **D12 listing-term propagation** — data write, dry-run→gate, own mini-round
+  (the one remaining data write from this batch).
+- The R70 snapshot-disappearance heuristic (`cm_gov_lease_termination_true_q`
+  candidate) is retained as the starting point for a future native GSA-diff
+  termination reconstruction; superseded for the deck by the master splice.
