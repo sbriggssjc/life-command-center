@@ -159,6 +159,7 @@ app.all('/api/npi-registry-sync', (req, res) => { req.query._route = 'npi-regist
 app.all('/api/llc-research-queue',         (req, res) => { req.query._route = 'llc-research-queue';         adminHandler(req, res); });
 app.all('/api/resolve-llc-research',       (req, res) => { req.query._route = 'resolve-llc-research';       adminHandler(req, res); });
 app.all('/api/llc-research-tick',          (req, res) => { req.query._route = 'llc-research-tick';          adminHandler(req, res); });
+app.all('/api/chain-connect-tick',         (req, res) => { req.query._route = 'chain-connect-tick';         adminHandler(req, res); });
 app.all('/api/resolve-listing-confirmation', (req, res) => { req.query._route = 'resolve-listing-confirmation'; adminHandler(req, res); });
 app.all('/api/auto-scrape-listings',       (req, res) => { req.query._route = 'auto-scrape-listings';       adminHandler(req, res); });
 app.all('/api/artifact-offload',           (req, res) => { req.query._route = 'artifact-offload';           adminHandler(req, res); });

@@ -104,6 +104,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
+    case 'chain-connect-tick':      return handleChainConnectTick(req, res);
     case 'intake-rematch':         return handleIntakeRematch(req, res);
     case 'sf-link-tick':            return handleSfLinkTick(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
@@ -4967,6 +4968,217 @@ async function handleLlcResearchTick(req, res) {
         summary.failed += 1;
         result.failed += 1;
       }
+      summary.items.push(item);
+    }
+
+    result.by_domain[dom] = summary;
+  }
+
+  return res.status(200).json(result);
+}
+
+// ============================================================================
+// CHAIN-CONNECT-TICK (R9 Slice 2, 2026-06-09)
+// ============================================================================
+//
+// GET/POST /api/chain-connect-tick?domain=both&limit=25
+//   Unit 2 #1 (chain phase 3(c)): for each incomplete-chain property
+//   (v_lcc_ownership_chain_completeness WHERE chain_complete=false, value-
+//   prioritized by current_annual_rent), walk its HISTORICAL owners from the
+//   domain DB (gov ownership_history prior/new/recorded/true owner names +
+//   sales seller/buyer/developer; dia sales seller/buyer/recorded/true owner
+//   names) and ensure each is a real, non-junk LCC entity via the EXISTING
+//   ensureEntityLink path (canonical identity + R4-A junk + R7.5 person-
+//   plausibility guards baked in). Makes the ownership chain REAL in the entity
+//   graph so the P0/P5 developer bands have fuel.
+//
+//   GET  = dry-run (lists the properties + the owner names that WOULD be
+//          connected; NO writes, no ledger).
+//   POST = drain a batch (mint/find entities, record effects in
+//          lcc_chain_connection_log).
+//
+//   Idempotent: ensureEntityLink find-or-creates by canonical name (no dupes);
+//   the ledger is the batch cursor (properties already logged are skipped unless
+//   ?reprocess=1). Time-budgeted (CHAIN_TICK_BUDGET_MS, default 20s) so a batch
+//   never strands mid-property. NO classification, NO cron (Slice 3).
+//   Mirrors the llc-research-tick worker pattern.
+// ============================================================================
+
+// Collect the distinct historical-owner NAMES for one chain property from the
+// domain DB. Per-domain because the schemas differ: gov ownership_history
+// carries owner NAMES (prior_owner/new_owner/recorded_owner_name/
+// true_owner_name) while dia ownership_history carries only IDs (those owners
+// are already entities via the BD owner-sync), so dia draws names from sales.
+async function collectChainOwnerNames(shortDom, propertyId) {
+  const longDom = shortDom === 'dia' ? 'dialysis' : 'government';
+  const names = [];
+  const pid = encodeURIComponent(propertyId);
+  const push = (v) => { if (v != null) { const s = String(v).trim(); if (s) names.push(s); } };
+
+  if (shortDom === 'gov') {
+    const oh = await domainQuery(longDom, 'GET',
+      `ownership_history?property_id=eq.${pid}` +
+      `&select=prior_owner,new_owner,recorded_owner_name,true_owner_name&limit=200`);
+    if (oh.ok && Array.isArray(oh.data)) {
+      for (const r of oh.data) { push(r.prior_owner); push(r.new_owner); push(r.recorded_owner_name); push(r.true_owner_name); }
+    }
+    const sa = await domainQuery(longDom, 'GET',
+      `sales_transactions?property_id=eq.${pid}&select=seller,buyer,developer&limit=200`);
+    if (sa.ok && Array.isArray(sa.data)) {
+      for (const r of sa.data) { push(r.seller); push(r.buyer); push(r.developer); }
+    }
+  } else {
+    const sa = await domainQuery(longDom, 'GET',
+      `sales_transactions?property_id=eq.${pid}` +
+      `&select=seller_name,buyer_name,recorded_owner_name,true_owner_name&limit=200`);
+    if (sa.ok && Array.isArray(sa.data)) {
+      for (const r of sa.data) { push(r.seller_name); push(r.buyer_name); push(r.recorded_owner_name); push(r.true_owner_name); }
+    }
+  }
+
+  // Distinct, case-insensitively (preserve first-seen spelling).
+  const seen = new Set();
+  const out = [];
+  for (const n of names) {
+    const k = n.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(n); }
+  }
+  return out;
+}
+
+async function handleChainConnectTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia', 'gov', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia, gov, or both' });
+  }
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+  const reprocess = ['1', 'true', 'yes'].includes(String(req.query.reprocess || '').toLowerCase());
+  const dryRun = req.method === 'GET';
+  const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
+
+  const { ensureEntityLink } = await import('./_shared/entity-link.js');
+  let fallbackWs = null;
+  try { fallbackWs = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { fallbackWs = null; }
+
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: 0, owners_seen: 0, entities_created: 0, entities_linked: 0,
+    skipped_junk: 0, errored: 0, by_domain: {},
+  };
+  const deadline = Date.now() + parseInt(process.env.CHAIN_TICK_BUDGET_MS || '20000', 10);
+
+  for (const dom of targets) {
+    const longDom = dom === 'dia' ? 'dialysis' : 'government';
+    const summary = { scanned: 0, owners_seen: 0, entities_created: 0, entities_linked: 0,
+      skipped_junk: 0, errored: 0, items: [] };
+
+    // Ledger = batch cursor. Pull already-logged property ids for this domain
+    // (bounded by processed count) so we drain NOT-yet-walked properties.
+    let loggedIds = new Set();
+    if (!reprocess) {
+      const lg = await opsQuery('GET',
+        `lcc_chain_connection_log?source_domain=eq.${dom}&select=source_property_id&limit=5000`);
+      if (lg.ok && Array.isArray(lg.data)) loggedIds = new Set(lg.data.map(r => String(r.source_property_id)));
+    }
+
+    // Candidate chain properties, value-prioritized by rent. Fetch a window big
+    // enough to step past the already-logged head (capped) and filter in JS.
+    const fetchN = Math.min(2000, limit + loggedIds.size + 5);
+    const cand = await opsQuery('GET',
+      `v_lcc_ownership_chain_completeness?source_domain=eq.${dom}&chain_complete=eq.false` +
+      `&select=source_domain,source_property_id,workspace_id,current_owner_name,current_annual_rent` +
+      `&order=current_annual_rent.desc.nullslast&limit=${fetchN}`);
+    if (!cand.ok) {
+      summary.error = { stage: 'candidates', status: cand.status, detail: cand.data };
+      result.by_domain[dom] = summary;
+      continue;
+    }
+    const rows = (Array.isArray(cand.data) ? cand.data : [])
+      .filter(r => !loggedIds.has(String(r.source_property_id)))
+      .slice(0, limit);
+    summary.scanned = rows.length;
+    result.scanned += rows.length;
+
+    for (const row of rows) {
+      if (Date.now() > deadline) { summary.budget_stopped = true; result.budget_stopped = true; break; }
+      const pid = String(row.source_property_id);
+      const ws = row.workspace_id || fallbackWs;
+      const item = { property_id: pid, rent: row.current_annual_rent, owners: [] };
+
+      let ownerNames;
+      try {
+        ownerNames = await collectChainOwnerNames(dom, pid);
+      } catch (err) {
+        item.error = String(err?.message || err).slice(0, 200);
+        summary.items.push(item);
+        continue;
+      }
+      item.owners_seen = ownerNames.length;
+      summary.owners_seen += ownerNames.length;
+      result.owners_seen += ownerNames.length;
+
+      if (dryRun) {
+        item.owners = ownerNames.slice(0, 25);
+        summary.items.push(item);
+        continue;
+      }
+
+      if (!ws) {
+        // Can't mint without a workspace; record as errored, never guess.
+        item.error = 'no_workspace';
+        summary.errored += 1; result.errored += 1;
+        summary.items.push(item);
+        continue;
+      }
+
+      // Process this property's owners ATOMICALLY (the wall-clock is only
+      // checked between properties, above) so a logged property is always fully
+      // walked — a budget cut never marks a half-connected property as done.
+      let created = 0, linked = 0, junk = 0, errored = 0;
+      const detail = [];
+      for (const name of ownerNames) {
+        try {
+          const r = await ensureEntityLink({
+            workspaceId: ws,
+            userId: user.id || user.user_id || null,
+            sourceSystem: dom,            // 'dia'/'gov' (canonicalized inside)
+            domain: dom,
+            seedFields: { name, domain: dom,
+              metadata: { source: 'r9_chain_connect', source_property_id: pid } },
+          });
+          if (r && r.ok) {
+            if (r.createdEntity) { created++; detail.push({ name, outcome: 'created' }); }
+            else { linked++; detail.push({ name, outcome: 'linked' }); }
+          } else if (r && r.skipped) {
+            junk++; detail.push({ name, outcome: 'skipped_' + r.skipped });
+          } else {
+            errored++; detail.push({ name, outcome: 'error' });
+          }
+        } catch (err) {
+          errored++; detail.push({ name, outcome: 'error', error: String(err?.message || err).slice(0, 120) });
+        }
+      }
+
+      // Record effects + advance the cursor (idempotent upsert).
+      await opsQuery('POST',
+        'lcc_chain_connection_log?on_conflict=source_domain,source_property_id',
+        { source_domain: dom, source_property_id: pid, processed_at: new Date().toISOString(),
+          owners_seen: ownerNames.length, entities_created: created, entities_linked: linked,
+          skipped_junk: junk, errored, detail },
+        { 'Prefer': 'resolution=merge-duplicates,return=minimal' });
+
+      item.entities_created = created; item.entities_linked = linked;
+      item.skipped_junk = junk; item.errored = errored;
+      summary.entities_created += created; summary.entities_linked += linked;
+      summary.skipped_junk += junk; summary.errored += errored;
+      result.entities_created += created; result.entities_linked += linked;
+      result.skipped_junk += junk; result.errored += errored;
       summary.items.push(item);
     }
 
