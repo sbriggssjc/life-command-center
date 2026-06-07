@@ -1508,11 +1508,42 @@ the cadence untouched (touch unchanged, due stays past); an unflagged email
 advanced it (touch +1, `next_touch_due` into the future). `node --check` clean;
 12 functions; full suite green except 2 pre-existing CM chart failures.
 
-### Units 2-4 (not yet shipped)
-- **Unit 2** — organic loop: asset→owner hop + sweep every human-touch writer to
-  emit real categories on the owner cadence.
+### Unit 2 — close the organic loop (shipped)
+Two structural gaps that meant an organically-logged touch never advanced a
+cadence:
+
+1. **Asset→owner hop (the trigger).** A human touch logged from a property
+   detail page (`bridgeLogCall` etc.) resolves its entity to the **asset**
+   (`sourceType='asset'`), but cadences live on the **owner** (person/org) that
+   `owns` the asset. The advance trigger looked the cadence up on the asset,
+   found none, and no-op'd. Now, when no cadence is found on the activity's
+   entity directly, the trigger follows the `owns` relationship (owner =
+   `from_entity`, asset = `to_entity`) to an active owner cadence — implemented
+   in **one place** (the trigger), restricted to `owns` (true ownership, not
+   brokerage/sale-side edges). Migration
+   `20260608151000_lcc_r10_unit2_cadence_asset_owner_hop.sql` (live).
+
+2. **Off-sequence touches now advance.** The trigger previously only
+   rescheduled when the logged type matched `next_touch_type`; a mismatch
+   (e.g. a call against an email-next cadence) bumped counters only, so the
+   card stayed overdue. Doctrine: **any human touch is a touch** — the trigger
+   now always calls `lcc_advance_onboarding_cadence` (which reschedules +
+   handles counters) on email/call/meeting.
+
+Swept writers (emit real categories on the right entity): `bridgeLogCall`
+(`call`, asset entity → hop), `bridgeLogActivity` (passthrough
+`email`/`call`/`meeting`). The Today-page SF reschedule flow (`app.js`) advances
+directly via the draft route keyed by `sf_contact_id` — a separate path, left
+as-is.
+
+Verified live (synthetic, 0 residue): a **call logged on an asset** whose owner
+had an overdue email-next cadence advanced the **owner's** cadence (touch 2→3)
+and moved `next_touch_due` into the future.
+
+### Units 3-4 (not yet shipped — scoped)
 - **Unit 3** — cadence universe hygiene: park the ~381 contactless prospecting
   rows (no reachable contact) out of P0/P6/P7 into a "select prospecting
-  contact" step; retype the person-typed firm entities.
+  contact" step; retype the person-typed firm entities. Touches the cached
+  `v_priority_queue` band gating — its own blessed change.
 - **Unit 4** — minimum outreach surface: draft → mark-sent → record from the
   queue/detail; render `v_bd_cadence_dashboard`.
