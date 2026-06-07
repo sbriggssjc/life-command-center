@@ -105,6 +105,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
     case 'chain-connect-tick':      return handleChainConnectTick(req, res);
+    case 'chain-classify-tick':     return handleChainClassifyTick(req, res);
     case 'intake-rematch':         return handleIntakeRematch(req, res);
     case 'sf-link-tick':            return handleSfLinkTick(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
@@ -5207,6 +5208,112 @@ async function handleChainConnectTick(req, res) {
 
     result.by_domain[dom] = summary;
   }
+
+  return res.status(200).json(result);
+}
+
+// ============================================================================
+// CHAIN-CLASSIFY-TICK (R9 Slice 3, 2026-06-09)
+// ============================================================================
+//
+// GET/POST /api/chain-classify-tick?limit=25
+//   Unit 2 #2/#3: drains v_lcc_developer_classification_candidates (the
+//   conservative classifier rule — Signal A explicit developer_name + Signal B
+//   multi-property BTS org earliest owner; excludes registered parents, buyer-
+//   SPE shells, current operators/developers). For each candidate, value-
+//   prioritized by attributed rent then property count:
+//     1. mint-or-find the entity via the EXISTING ensureEntityLink path
+//        (junk/placeholder/person guards baked in) when it isn't one yet;
+//     2. set behavioral_override='developer' (reversible role-machinery write,
+//        records the signal in behavioral_override_reason).
+//   Then reconciles open trace_ownership_to_developer research_tasks whose
+//   property became chain_complete. Feeds the P0/P5 developer bands.
+//
+//   GET  = dry-run (lists candidates + the would-tag plan, NO writes).
+//   POST = drain a batch (mint+tag, then reconcile).
+//   Idempotent: the view self-excludes already-developer entities, so re-runs
+//   advance through the backlog. Time-budgeted (CHAIN_CLASSIFY_BUDGET_MS, 20s).
+//   NO cron here (registered separately, after Scott blesses the top-10 list).
+// ============================================================================
+async function handleChainClassifyTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+  const dryRun = req.method === 'GET';
+  const { ensureEntityLink } = await import('./_shared/entity-link.js');
+  let fallbackWs = null;
+  try { fallbackWs = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { fallbackWs = null; }
+
+  const cand = await opsQuery('GET',
+    'v_lcc_developer_classification_candidates' +
+    '?select=signal,source_domain,candidate_name,norm,props,attributed_rent,entity_id,cur_role' +
+    `&order=attributed_rent.desc.nullslast,props.desc&limit=${limit}`);
+  if (!cand.ok) {
+    return res.status(502).json({ error: 'candidate read failed', detail: cand.data });
+  }
+  const rows = Array.isArray(cand.data) ? cand.data : [];
+
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: rows.length, tagged: 0, minted: 0, skipped_junk: 0, errored: 0,
+    reconciled_tasks: 0, items: [],
+  };
+
+  if (dryRun) {
+    result.items = rows.map(r => ({
+      candidate_name: r.candidate_name, signal: r.signal, source_domain: r.source_domain,
+      props: r.props, attributed_rent: r.attributed_rent, already_entity: !!r.entity_id,
+    }));
+    // Preview the reconciliation count without writing (chain_complete rows that
+    // still have an open task).
+    return res.status(200).json(result);
+  }
+
+  const deadline = Date.now() + parseInt(process.env.CHAIN_CLASSIFY_BUDGET_MS || '20000', 10);
+  for (const r of rows) {
+    if (Date.now() > deadline) { result.budget_stopped = true; break; }
+    const item = { candidate_name: r.candidate_name, signal: r.signal, source_domain: r.source_domain };
+    try {
+      let entityId = r.entity_id;
+      if (!entityId) {
+        const ws = fallbackWs;
+        if (!ws) { item.outcome = 'no_workspace'; result.errored += 1; result.items.push(item); continue; }
+        const link = await ensureEntityLink({
+          workspaceId: ws, userId: user.id || user.user_id || null,
+          sourceSystem: r.source_domain, domain: r.source_domain,
+          seedFields: { name: r.candidate_name, domain: r.source_domain,
+            metadata: { source: 'r9_chain_classify', signal: r.signal } },
+        });
+        if (link && link.ok) { entityId = link.entityId; if (link.createdEntity) result.minted += 1; item.minted = !!link.createdEntity; }
+        else if (link && link.skipped) { item.outcome = 'skipped_' + link.skipped; result.skipped_junk += 1; result.items.push(item); continue; }
+        else { item.outcome = 'mint_error'; result.errored += 1; result.items.push(item); continue; }
+      }
+      // Tag developer via the reversible behavioral_override machinery.
+      const patch = await opsQuery('PATCH', `entities?id=eq.${entityId}`,
+        { behavioral_override: 'developer',
+          behavioral_override_reason: 'r9_slice3 chain developer (' + r.signal + ')',
+          behavioral_override_at: new Date().toISOString() },
+        { 'Prefer': 'return=minimal' });
+      if (patch.ok) { item.outcome = 'tagged_developer'; result.tagged += 1; }
+      else { item.outcome = 'tag_error'; result.errored += 1; }
+    } catch (err) {
+      item.outcome = 'error'; item.error = String(err?.message || err).slice(0, 160); result.errored += 1;
+    }
+    result.items.push(item);
+  }
+
+  // Close the loop: complete trace_ownership_to_developer tasks now chain_complete.
+  try {
+    const rec = await opsQuery('POST', 'rpc/lcc_reconcile_chain_research_tasks', { p_limit: 1000 });
+    if (rec.ok) result.reconciled_tasks = (typeof rec.data === 'number') ? rec.data : (rec.data ?? 0);
+  } catch (_e) { /* non-fatal */ }
+
+  // Band-moving: refresh the queue cache so newly-tagged developers surface.
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* non-fatal */ }
 
   return res.status(200).json(result);
 }
