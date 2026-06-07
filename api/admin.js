@@ -5009,8 +5009,22 @@ async function handleLlcResearchTick(req, res) {
 // carries owner NAMES (prior_owner/new_owner/recorded_owner_name/
 // true_owner_name) while dia ownership_history carries only IDs (those owners
 // are already entities via the BD owner-sync), so dia draws names from sales.
-async function collectChainOwnerNames(shortDom, propertyId) {
-  const longDom = shortDom === 'dia' ? 'dialysis' : 'government';
+// Literal placeholders that domain ownership/sales rows carry instead of a real
+// owner name. Categorically NOT entities, so the collector skips them BEFORE
+// ensureEntityLink (counted as skipped_placeholder for visibility). This is a
+// definitional skip, not a new guard class — a placeholder can never be an org.
+const PLACEHOLDER_OWNER_NAMES = new Set([
+  'previous owner', 'prior owner', 'current owner', 'owner', 'seller', 'buyer',
+  'unknown', 'n/a', 'tbd', 'none', 'various', 'private party', 'undisclosed',
+]);
+function isPlaceholderOwnerName(name) {
+  if (typeof name !== 'string') return true;
+  const t = name.trim();
+  if (t.length < 3) return true;                 // sub-3-char tokens ("na", "-")
+  return PLACEHOLDER_OWNER_NAMES.has(t.toLowerCase());
+}
+
+async function collectChainOwnerNames(shortDom, propertyId) {  const longDom = shortDom === 'dia' ? 'dialysis' : 'government';
   const names = [];
   const pid = encodeURIComponent(propertyId);
   const push = (v) => { if (v != null) { const s = String(v).trim(); if (s) names.push(s); } };
@@ -5069,14 +5083,14 @@ async function handleChainConnectTick(req, res) {
   const result = {
     mode: dryRun ? 'dry_run' : 'apply',
     scanned: 0, owners_seen: 0, entities_created: 0, entities_linked: 0,
-    skipped_junk: 0, errored: 0, by_domain: {},
+    skipped_junk: 0, skipped_placeholder: 0, errored: 0, by_domain: {},
   };
   const deadline = Date.now() + parseInt(process.env.CHAIN_TICK_BUDGET_MS || '20000', 10);
 
   for (const dom of targets) {
     const longDom = dom === 'dia' ? 'dialysis' : 'government';
     const summary = { scanned: 0, owners_seen: 0, entities_created: 0, entities_linked: 0,
-      skipped_junk: 0, errored: 0, items: [] };
+      skipped_junk: 0, skipped_placeholder: 0, errored: 0, items: [] };
 
     // Ledger = batch cursor. Pull already-logged property ids for this domain
     // (bounded by processed count) so we drain NOT-yet-walked properties.
@@ -5123,8 +5137,17 @@ async function handleChainConnectTick(req, res) {
       summary.owners_seen += ownerNames.length;
       result.owners_seen += ownerNames.length;
 
+      // Categorical placeholder skip (collector level): "Previous Owner" etc.
+      // are never entities — never reach ensureEntityLink, counted separately.
+      const placeholders = ownerNames.filter(isPlaceholderOwnerName);
+      const connectable = ownerNames.filter((n) => !isPlaceholderOwnerName(n));
+      item.skipped_placeholder = placeholders.length;
+      summary.skipped_placeholder += placeholders.length;
+      result.skipped_placeholder += placeholders.length;
+
       if (dryRun) {
-        item.owners = ownerNames.slice(0, 25);
+        item.owners = connectable.slice(0, 25);
+        if (placeholders.length) item.placeholders = placeholders.slice(0, 10);
         summary.items.push(item);
         continue;
       }
@@ -5141,8 +5164,8 @@ async function handleChainConnectTick(req, res) {
       // checked between properties, above) so a logged property is always fully
       // walked — a budget cut never marks a half-connected property as done.
       let created = 0, linked = 0, junk = 0, errored = 0;
-      const detail = [];
-      for (const name of ownerNames) {
+      const detail = placeholders.map((name) => ({ name, outcome: 'skipped_placeholder' }));
+      for (const name of connectable) {
         try {
           const r = await ensureEntityLink({
             workspaceId: ws,
@@ -5170,7 +5193,7 @@ async function handleChainConnectTick(req, res) {
         'lcc_chain_connection_log?on_conflict=source_domain,source_property_id',
         { source_domain: dom, source_property_id: pid, processed_at: new Date().toISOString(),
           owners_seen: ownerNames.length, entities_created: created, entities_linked: linked,
-          skipped_junk: junk, errored, detail },
+          skipped_junk: junk, skipped_placeholder: placeholders.length, errored, detail },
         { 'Prefer': 'resolution=merge-duplicates,return=minimal' });
 
       item.entities_created = created; item.entities_linked = linked;
