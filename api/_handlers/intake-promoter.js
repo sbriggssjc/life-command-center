@@ -190,9 +190,14 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
   // the capture date — same logic the sidebar writer uses. Previously this
   // hard-stamped today(), so OM-staged listings (incl. our own) all read as
   // listed "today", collapsing the recent edge of the supply-side charts.
-  const listingDate = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
-    ? omEst.om_created_estimate
-    : deriveListingDate(snapshot).listing_date;
+  // Round 70 B3/B4: STORE the derived source on listing_date_source so the
+  // supply-side charts can exclude capture-date fallbacks from new-to-market
+  // counts (a NULL source was the over-stamping signature). om_lease_inference
+  // = real evidence; capture_date_fallback = no on-market signal.
+  const ld = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+    ? { listing_date: omEst.om_created_estimate, source: 'om_lease_inference' }
+    : deriveListingDate(snapshot);
+  const listingDate = ld.listing_date;
 
   // Round 76ej.f (2026-05-04): capture the source listing URL on the
   // available_listings row so the LCC UI has a clickable "View Listing"
@@ -228,6 +233,7 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     is_northmarq:       isNorthmarq,
     listing_status:     'active',
     listing_date:       listingDate,
+    listing_date_source: ld.source,
     first_seen_at:      new Date().toISOString(),
     last_seen_at:       new Date().toISOString(),
     // Link back to the Supabase Storage object that seeded this listing
@@ -256,9 +262,11 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
   // Round 77d (2026-06-02): unknown inference now falls back to the snapshot's
   // on-market signal (deriveListingDate) before the capture date.
   const omEst = estimateOmCreatedDate(snapshot);
-  const listingDate = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
-    ? omEst.om_created_estimate
-    : deriveListingDate(snapshot).listing_date;
+  // Round 70 B3/B4: capture + store the derived source (see buildGovListingRow).
+  const ld = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+    ? { listing_date: omEst.om_created_estimate, source: 'om_lease_inference' }
+    : deriveListingDate(snapshot);
+  const listingDate = ld.listing_date;
 
   // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
   // so the Sales/Available table's Price/SF column populates without a
@@ -301,6 +309,7 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     initial_cap_rate:   capRateDecimal,
     status:             'active',
     listing_date:       listingDate,
+    listing_date_source: ld.source,
     last_seen:          new Date().toISOString().slice(0, 10),
     is_active:          true,
     seller_name:        firstOf(snapshot.seller_name) || null,
