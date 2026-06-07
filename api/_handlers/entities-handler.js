@@ -732,6 +732,9 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 property_id: Number(property_id),
                 is_active: true,
                 listing_date: new Date().toISOString().slice(0, 10),
+                // R70 B3/B4: no true list-date signal in the verify path —
+                // tag as capture-fallback so new-to-market counts can exclude it.
+                listing_date_source: 'capture_date_fallback',
                 last_price: Number(asking_price),
                 current_cap_rate: cap_rate != null ? Number(cap_rate) : null,
                 listing_url: safeSourceUrlForCreate,
@@ -743,6 +746,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 property_id: Number(property_id),
                 listing_status: 'active',
                 listing_date: new Date().toISOString().slice(0, 10),
+                listing_date_source: 'capture_date_fallback',
                 asking_price: Number(asking_price),
                 asking_cap_rate: cap_rate != null ? Number(cap_rate) : null,
                 source_url: safeSourceUrlForCreate,
