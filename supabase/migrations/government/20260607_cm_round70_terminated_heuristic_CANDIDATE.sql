@@ -1,14 +1,22 @@
 -- Round 70 B5 / A3 tail — TRUE early-termination heuristic (snapshot disappearance)
 --
--- *** CANDIDATE — NOT APPLIED LIVE, NOT wired into any chart. ***
--- Held for Scott's definitional call (see receipts §5). Two open questions:
---   1. Does "termination" exclude RELOCATIONS? This heuristic still counts a
---      lease that ended early because the agency moved to a NEW building (new
---      lease elsewhere, no old_lease_number / same-location link). The deck's
---      "~3 TTM at 2024-Q2" implies a narrower give-back definition.
---   2. The receipts series is a STEADY ~50 TTM (2024-Q2 TTM = 49, 5-yr avg ~49)
---      and does NOT reproduce the deck's "3 vs 107" swing. That swing likely
---      came from a different definition; this view will not fabricate it.
+-- *** CANDIDATE — NOT APPLIED LIVE, NOT wired into any chart. DO NOT SHIP. ***
+--
+-- CALIBRATION VERDICT (receipts §5d): this heuristic does NOT reproduce the
+-- master's Terminated Leases (ttm) series (scripts/gov_master_allcharts.json),
+-- which matches Scott's deck anchors exactly and COLLAPSES across 2021->2025:
+--     master:  Q1-2021 -339 · Q4-2021 -107 · Q2-2022 -88 · Q2-2023 -41 ·
+--              Q1/Q2-2024 -3 · Q2-2025 0
+--     this:    flat ~50 TTM (under-counts the 2021 give-back peak — those were
+--              non-renewals vanishing NEAR expiration, excluded by the >180d-early
+--              test — and over-counts 2024 churn/relocations).
+-- It diverges by SHAPE, not tuning. Per Scott's rule ("track the anchors or
+-- enumerate & gate"), it must not ship. The deck's termination series should be
+-- SPLICED from the master Terminated Leases (ttm) (source='master_curated'),
+-- the same doctrine as the dia/gov valuation-index splices. Reverse-engineering
+-- the GSA-monthly-diff "termination" definition so Supabase reproduces the
+-- collapse natively is a future round; this snapshot reconstruction is kept as a
+-- starting point for it, nothing more.
 --
 -- The live cm_gov_lease_termination_rate_q counts gsa_leases.termination_date
 -- (the GSA firm-term / termination-RIGHT date, ~1,614d before expiration) — not
