@@ -19,7 +19,7 @@
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
-import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType } from '../_shared/entity-link.js';
+import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
@@ -1266,7 +1266,9 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       entity_type,
       name: name.trim(),
       canonical_name,
-      domain: entityDomain || null,
+      // 5th dia/gov alias bug (2026-06-07): canonicalize entities.domain so a
+      // 'dialysis'/'government' body value writes the short form.
+      domain: canonicalEntityDomain(entityDomain) || null,
       created_by: user.id,
       metadata: metadata || {},
       ...pickedFields
@@ -1319,7 +1321,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         .replace(/\s+/g, ' ')
         .trim();
     }
-    if (entityDomain !== undefined) updates.domain = entityDomain;
+    if (entityDomain !== undefined) updates.domain = canonicalEntityDomain(entityDomain);
     if (tags !== undefined) updates.tags = tags;
     if (metadata !== undefined) updates.metadata = metadata;
 

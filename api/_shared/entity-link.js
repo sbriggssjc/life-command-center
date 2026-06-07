@@ -186,6 +186,33 @@ export function canonicalIdentitySystem(system) {
   return s;
 }
 
+// ---------------------------------------------------------------------------
+// entities.domain canonicalization (5th dia/gov alias bug, 2026-06-07)
+// ---------------------------------------------------------------------------
+// The CoStar sidebar entity bridge passed classifyDomain()'s long-form
+// 'government'/'dialysis' straight into entities.domain, so LCC Opps carried
+// BOTH spellings (gov 8,950 / dia 6,713 / government 871 / dialysis 142 / lcc
+// 35 / NULL 1,293). R4-A canonicalized external_identities.source_system but
+// entities.domain itself was never normalized at the writer. This is the 5th
+// instance of the alias class (after getDomainCredentials, QA#9, E2E#5, R4-A);
+// route every entities.domain writer through this so a 6th spelling is
+// structurally impossible (same playbook as R4-A's canonicalIdentitySystem).
+//
+// This is the SIBLING of canonicalIdentitySystem for the domain COLUMN, not
+// the source_system column. Identity-system semantics don't fit here: that
+// helper coerces null→'' and lower-cases/returns arbitrary vendor systems,
+// but entities.domain's vocabulary is exactly {dia, gov, lcc, NULL}. So this
+// one preserves null/undefined untouched (never coerces to '') and keeps
+// 'lcc' (a legit third value per the E2E#5 rule — never remap it).
+export function canonicalEntityDomain(domain) {
+  if (domain === null || domain === undefined) return domain;
+  const d = String(domain).trim().toLowerCase();
+  if (!d) return null;
+  if (d === 'dia' || d === 'dia_db' || d === 'dia_supabase' || d === 'dialysis') return 'dia';
+  if (d === 'gov' || d === 'gov_db' || d === 'gov_supabase' || d === 'government') return 'gov';
+  return d; // 'lcc' and anything else preserved (lower-cased)
+}
+
 // Property-anchor source_type synonyms — all collapse to the canonical 'asset'
 // for domain-DB identities (entity_type is 'asset', and the detail page /
 // property-handler query entity_type=eq.asset).
@@ -536,6 +563,17 @@ export async function ensureEntityLink({
   if (CANONICAL_DOMAIN_SYSTEMS.includes(sourceSystem)) {
     const ct = canonicalDomainSourceType(sourceType);
     if (ct) sourceType = ct;
+  }
+
+  // 5th dia/gov alias bug (2026-06-07): canonicalize the entity domain at the
+  // same choke point. The CoStar sidebar bridge passes classifyDomain()'s
+  // long-form 'government'/'dialysis'; without this they land verbatim in
+  // entities.domain (and the dedup lookup below would miss the canonical row).
+  // Covers every ensureEntityLink caller (sidebar bridge, bridgeCreateLead,
+  // composite-person attach). undefined/null pass through unchanged.
+  domain = canonicalEntityDomain(domain);
+  if (seedFields && seedFields.domain !== undefined) {
+    seedFields = { ...seedFields, domain: canonicalEntityDomain(seedFields.domain) };
   }
 
   if (entityId) {
