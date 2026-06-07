@@ -222,10 +222,96 @@ const ENTITY_JUNK_PATTERNS = [
   /\(\s*[pcmf]\s*\)/i,                                   // (p)/(c)/(m)/(f) phone-type label
 ];
 
+// ---------------------------------------------------------------------------
+// Bare street-address fragment guard (R9 follow-up, 2026-06-09)
+// ---------------------------------------------------------------------------
+// The chain-connect drain minted "West Mall Dr" (dia) as an ORGANIZATION — a
+// bare street fragment pulled from an ownership row. The sidebar's isJunkTenant()
+// already rejects these on the lease path (STREET_NAME_RE); port the shape to the
+// entity boundary. Conservative by construction: a name is a street fragment only
+// when it ENDS in an abbreviated road word (+ optional directional), carries NO
+// firm suffix, AND shows a STRONG street signal (a leading street number, a
+// leading directional word, or a trailing directional abbreviation). The strong-
+// signal gate is what keeps real businesses safe — "Parkway Properties" and
+// "Boulevard Capital LLC" don't end in a road word, "Broadway"/"Gateway" have no
+// word boundary before "way", and plausible surnames ending in a road word
+// ("John Way", "Mary Place") carry no street signal and so pass. The signal is
+// the directional/number shape, not the road word itself.
+//
+// Note: deliberately does NOT call looksLikePersonName() — that would recurse
+// (looksLikePersonName -> isImplausiblePersonName -> isJunkEntityName). The
+// strong-signal gate is the person-shape protection instead.
+const STREET_FRAGMENT_RE =
+  /\b(?:st|ave|avenue|blvd|dr|rd|ln|pkwy|hwy|way|ct|cir|ter|pl)\.?(?:\s+(?:n|s|e|w|ne|nw|se|sw))?$/i;
+const ENTITY_FIRM_SUFFIX_RE =
+  /\b(?:LLC|L\.L\.C|LP|LLP|Inc|Incorporated|Corp|Corporation|Ltd|Trust|Fund|Holdings|Partners|Ptnrs|Capital|Advisors|Realty|Ventures|Cos|Company|Properties|Property|Associates|Group|Management|Mgmt|Development|Developers|Investments|Investors|Enterprises|Bancorp|Bank|Co)\b/i;
+const STREET_LEAD_DIRECTIONAL_RE =
+  /^(?:n|s|e|w|ne|nw|se|sw|north|south|east|west|northeast|northwest|southeast|southwest)\b/i;
+const STREET_TRAIL_DIRECTIONAL_RE = /\s(?:n|s|e|w|ne|nw|se|sw)$/i;
+
+export function isStreetFragmentName(name) {
+  if (typeof name !== 'string') return false;
+  const t = name.trim();
+  if (!t) return false;
+  if (!STREET_FRAGMENT_RE.test(t)) return false;     // must end in a road word
+  if (ENTITY_FIRM_SUFFIX_RE.test(t)) return false;   // a real firm — never junk
+  // Only flag on a strong street signal (see comment above).
+  return /\d/.test(t)
+      || STREET_LEAD_DIRECTIONAL_RE.test(t)
+      || STREET_TRAIL_DIRECTIONAL_RE.test(t);
+}
+
+// ---------------------------------------------------------------------------
+// Pipe-delimited composite owner names (R9 follow-up, 2026-06-09)
+// ---------------------------------------------------------------------------
+// CoStar captures sometimes glue a contact and their firm with a pipe, e.g.
+// "Chad Middendorf | Green Rock USA" or "Vincent Curran | Palestra Real Estate
+// Partners, Inc". Minted whole, these become single junk entities whose person
+// and firm components often ALSO exist separately (both then drift into P0.4).
+// The convention is "<person> | <firm>". Returns:
+//   * { firm, person, ambiguous:false } for a clean two-part split (exactly one
+//     plausible person + the other carrying a firm suffix) — caller mints the
+//     FIRM and attaches the person as a related contact.
+//   * { firm, person:null, ambiguous:true } otherwise (both firms / 3+ segments
+//     / no clear person) — caller mints the firm-most segment (a firm-suffixed
+//     one, else the trailing segment per convention) and stashes the original.
+//   * null when there is no pipe / nothing to split.
+export function splitCompositeOwnerName(raw) {
+  if (typeof raw !== 'string' || raw.indexOf('|') === -1) return null;
+  const segments = raw.split('|').map((s) => s.replace(/,\s*$/, '').trim()).filter(Boolean);
+  if (segments.length < 2) return null;
+
+  // Clean "<person> | <firm>": exactly two parts, exactly one a plausible person
+  // (and not itself firm-suffixed), the other carrying a firm suffix.
+  if (segments.length === 2) {
+    const personIdx = segments.findIndex(
+      (s) => looksLikePersonName(s) && !ENTITY_FIRM_SUFFIX_RE.test(s));
+    if (personIdx !== -1) {
+      const otherIdx = personIdx === 0 ? 1 : 0;
+      if (ENTITY_FIRM_SUFFIX_RE.test(segments[otherIdx])) {
+        return { firm: segments[otherIdx], person: segments[personIdx], ambiguous: false, original: raw };
+      }
+    }
+  }
+
+  // Ambiguous: prefer a firm-suffixed segment, else the trailing segment (the
+  // capture convention is "<person> | <firm>", so the firm trails).
+  const firmSuffixed = segments.find((s) => ENTITY_FIRM_SUFFIX_RE.test(s));
+  const firm = firmSuffixed || segments[segments.length - 1];
+  return { firm, person: null, ambiguous: true, original: raw };
+}
+
 /**
  * True when an entity name is structurally junk (phone/email/contacts-header
  * bleed-through) and should not be minted as a canonical entity. Conservative:
  * returns false for ordinary org/person/asset names.
+ *
+ * NOTE: this stays ADDRESS-SAFE — it must return false for asset/property names
+ * (which ARE street addresses), because the ensureEntityLink creation boundary
+ * runs it for every entity type. The bare-street-fragment check lives in the
+ * standalone isStreetFragmentName() above and is applied type-gated (non-asset
+ * only) at the choke point, so an owner minted as "West Mall Dr" is rejected
+ * while the property "123 Main St" still mints.
  */
 export function isJunkEntityName(name) {
   if (typeof name !== 'string') return false;
@@ -471,10 +557,31 @@ export async function ensureEntityLink({
     }
   }
 
-  const candidateName = seedFields.name
+  let candidateName = seedFields.name
     || [seedFields.first_name, seedFields.last_name].filter(Boolean).join(' ').trim()
     || seedFields.address
     || `${sourceType || 'entity'} ${externalId || ''}`.trim();
+
+  // R9 follow-up: pipe-delimited composite owner names ("<person> | <firm>", a
+  // CoStar capture convention). Never mint the composite as one entity — resolve
+  // to the FIRM as the owner. For a clean split, attach the person as a related
+  // contact after the firm mints; ambiguous splits mint the firm-most segment
+  // and keep the original string in metadata.composite_source_name so nothing
+  // is lost. Only do this when the name wasn't already resolved by id/external
+  // id (a pre-resolved entity keeps its own identity).
+  let compositePerson = null;
+  if (!resolvedEntity) {
+    const composite = splitCompositeOwnerName(candidateName);
+    if (composite) {
+      compositePerson = composite.ambiguous ? null : composite.person;
+      candidateName = composite.firm;
+      seedFields = {
+        ...seedFields,
+        name: composite.firm,
+        metadata: { ...(seedFields.metadata || {}), composite_source_name: composite.original },
+      };
+    }
+  }
   const canonicalName = normalizeCanonicalName(candidateName);
   const entityType = inferEntityType(sourceType, seedFields);
 
@@ -496,6 +603,20 @@ export async function ensureEntityLink({
       return {
         ok: false,
         skipped: 'junk_entity_name',
+        junk: true,
+        candidateName,
+      };
+    }
+
+    // R9 follow-up: bare-street-fragment guard. The chain-connect drain minted
+    // "West Mall Dr" (an ownership-row street fragment) as an organization.
+    // Reject street fragments for owner orgs/persons — but NOT for assets, whose
+    // names ARE street addresses (so this is type-gated, unlike isJunkEntityName).
+    if (entityType !== 'asset' && isStreetFragmentName(candidateName)) {
+      console.warn(`[ensureEntityLink] rejected street-fragment entity name: "${String(candidateName).slice(0, 60)}"`);
+      return {
+        ok: false,
+        skipped: 'street_fragment_name',
         junk: true,
         candidateName,
       };
@@ -606,6 +727,47 @@ export async function ensureEntityLink({
     }
   }
 
+  // R9 follow-up: attach the composite person as a related contact of the firm
+  // (best-effort, never fails the firm mint). The person mints through this same
+  // path (junk/plausibility guards apply; the name has no pipe so it won't
+  // re-enter the composite branch). Mirrors the buyer-contact picker's
+  // person→org associated_with pattern.
+  let compositeContactId = null;
+  if (compositePerson && resolvedEntity && resolvedEntity.id) {
+    try {
+      const personDomain = domain || resolvedEntity.domain || null;
+      const personLink = await ensureEntityLink({
+        workspaceId,
+        userId,
+        domain: personDomain,
+        sourceType: 'person',
+        seedFields: {
+          name: compositePerson,
+          domain: personDomain,
+          metadata: { source: 'composite_owner_split' },
+        },
+      });
+      if (personLink && personLink.ok && personLink.entityId) {
+        const exists = await opsQuery('GET',
+          'entity_relationships?select=id&relationship_type=eq.associated_with'
+          + `&from_entity_id=eq.${pgFilterVal(resolvedEntity.id)}`
+          + `&to_entity_id=eq.${pgFilterVal(personLink.entityId)}&limit=1`);
+        if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
+          await opsQuery('POST', 'entity_relationships', {
+            workspace_id: workspaceId,
+            from_entity_id: resolvedEntity.id,
+            to_entity_id: personLink.entityId,
+            relationship_type: 'associated_with',
+            metadata: { role: 'contact', via: 'composite_owner_split' },
+          });
+        }
+        compositeContactId = personLink.entityId;
+      }
+    } catch (err) {
+      console.warn('[ensureEntityLink] composite person attach failed (non-fatal):', err?.message || err);
+    }
+  }
+
   return {
     ok: true,
     entity: resolvedEntity,
@@ -613,5 +775,6 @@ export async function ensureEntityLink({
     createdEntity,
     createdIdentity,
     salesforce,
+    compositeContactId,
   };
 }

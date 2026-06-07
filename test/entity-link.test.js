@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix } from '../api/_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix,
+  isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
 
@@ -107,6 +108,103 @@ describe('entity-link helper', () => {
     assert.equal(result.createdIdentity, true);
     assert.ok(calls.some(call => call.url.includes('/entities') && call.method === 'POST'));
     assert.ok(calls.some(call => call.url.includes('/external_identities') && call.method === 'POST'));
+  });
+
+  it('flags bare street-address fragments (R9 follow-up)', () => {
+    // The chain-connect drain minted these as organizations — must be rejected.
+    assert.equal(isStreetFragmentName('West Mall Dr'), true);
+    assert.equal(isStreetFragmentName('Foo Ave N'), true);
+    assert.equal(isStreetFragmentName('Bar St SW'), true);
+    assert.equal(isStreetFragmentName('123 Main St'), true);
+    // Real firms / surnames / no-signal names must survive.
+    assert.equal(isStreetFragmentName('Parkway Properties LLC'), false);
+    assert.equal(isStreetFragmentName('Parkway Properties'), false);
+    assert.equal(isStreetFragmentName('Boulevard Capital LLC'), false);
+    assert.equal(isStreetFragmentName('Broadway'), false);
+    assert.equal(isStreetFragmentName('Gateway'), false);
+    assert.equal(isStreetFragmentName('John Way'), false);
+    assert.equal(isStreetFragmentName('Green Rock USA'), false);
+  });
+
+  it('keeps isJunkEntityName address-safe (asset names are addresses)', () => {
+    // The street-fragment check is type-gated in ensureEntityLink, NOT folded
+    // into isJunkEntityName, so asset/property minting is never blocked.
+    assert.equal(isJunkEntityName('123 Main St'), false);
+    assert.equal(isJunkEntityName('West Mall Dr'), false);
+    // Existing structural junk still caught.
+    assert.equal(isJunkEntityName('Seller ContactsCraig Burrows(916) 768-5544 (p)'), true);
+  });
+
+  it('splits pipe-delimited composite owner names (R9 follow-up)', () => {
+    const clean = splitCompositeOwnerName('Vincent Curran | Palestra Real Estate Partners, Inc');
+    assert.equal(clean.ambiguous, false);
+    assert.equal(clean.firm, 'Palestra Real Estate Partners, Inc');
+    assert.equal(clean.person, 'Vincent Curran');
+
+    // No firm suffix on either side -> ambiguous, firm trails by convention.
+    const amb = splitCompositeOwnerName('Chad Middendorf | Green Rock USA');
+    assert.equal(amb.ambiguous, true);
+    assert.equal(amb.firm, 'Green Rock USA');
+    assert.equal(amb.person, null);
+
+    // Both firms -> ambiguous, first firm-suffixed segment wins.
+    const both = splitCompositeOwnerName('Acme LLC | Beta Holdings LLC');
+    assert.equal(both.ambiguous, true);
+    assert.equal(both.firm, 'Acme LLC');
+
+    assert.equal(splitCompositeOwnerName('No pipe here'), null);
+  });
+
+  it('mints the firm (not the composite) and attaches the person for "<person> | <firm>"', async () => {
+    const posts = [];
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      const method = opts.method || 'GET';
+      if (method === 'GET' && u.includes('/external_identities?')) {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (method === 'GET' && u.includes('/entities?')) {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (method === 'GET' && u.includes('/entity_relationships?')) {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (method === 'POST' && u.endsWith('/entities')) {
+        const body = JSON.parse(opts.body);
+        posts.push({ kind: 'entity', name: body.name, type: body.entity_type, metadata: body.metadata });
+        return jsonResponse([{ id: `entity-${posts.filter(p => p.kind === 'entity').length}`, ...body }]);
+      }
+      if (method === 'POST' && /\/entity_relationships(\?|$)/.test(u)) {
+        const body = JSON.parse(opts.body);
+        posts.push({ kind: 'relationship', type: body.relationship_type, metadata: body.metadata });
+        return jsonResponse([{ id: 'rel-1', ...body }]);
+      }
+      if (method === 'POST' && /\/external_identities(\?|$)/.test(u)) {
+        return jsonResponse([{ id: 'ext-1' }]);
+      }
+      // SF sync + any other path: benign empty.
+      return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+    };
+
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1',
+      userId: 'user-1',
+      domain: 'dia',
+      seedFields: { name: 'Vincent Curran | Palestra Real Estate Partners, Inc', domain: 'dia' },
+    });
+
+    assert.equal(result.ok, true);
+    const entityPosts = posts.filter(p => p.kind === 'entity');
+    // Firm entity minted with the firm name (NOT the composite), original stashed.
+    const firm = entityPosts[0];
+    assert.equal(firm.name, 'Palestra Real Estate Partners, Inc');
+    assert.equal(firm.type, 'organization');
+    assert.equal(firm.metadata.composite_source_name, 'Vincent Curran | Palestra Real Estate Partners, Inc');
+    // Person entity minted + associated_with relationship created.
+    assert.ok(entityPosts.some(p => p.name === 'Vincent Curran' && p.type === 'person'));
+    assert.ok(posts.some(p => p.kind === 'relationship' && p.type === 'associated_with'
+      && p.metadata && p.metadata.via === 'composite_owner_split'));
+    assert.ok(result.compositeContactId);
   });
 
   it('returns an error when external identity creation fails after entity creation', async () => {
