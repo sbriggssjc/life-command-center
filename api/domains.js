@@ -17,7 +17,7 @@
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
-import { canonicalIdentitySystem } from './_shared/entity-link.js';
+import { canonicalIdentitySystem, canonicalEntityDomain } from './_shared/entity-link.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -339,6 +339,10 @@ async function syncDomainEntities(req, res, user, workspaceId) {
         // R4-A: canonicalize the connector slug so dia/gov connectors resolve
         // under the single 'dia'/'gov' spelling (vendor slugs pass through).
         const canonSystem = canonicalIdentitySystem(domain.slug);
+        // 5th dia/gov alias bug (2026-06-07): canonicalize entities.domain too,
+        // not just source_system — a 'dialysis'/'government' connector slug must
+        // write the short form into entities.domain (vendor slugs pass through).
+        const canonDomain = canonicalEntityDomain(domain.slug);
         const externalId = mapped._external_id || record.id;
         const existingRes = await opsQuery('GET',
           `external_identities?source_system=eq.${pgFilterVal(canonSystem)}&external_id=eq.${pgFilterVal(externalId)}&select=entity_id&limit=1`
@@ -351,7 +355,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
             name: mapped.name,
             canonical_name: buildCanonicalName(mapped.name),
             entity_type: mapping.target_entity_type,
-            domain: domain.slug,
+            domain: canonDomain,
             status: mapped.status || 'active',
             city: mapped.city || null,
             state: mapped.state || null,
@@ -367,7 +371,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
             name: mapped.name,
             canonical_name: buildCanonicalName(mapped.name),
             entity_type: mapping.target_entity_type,
-            domain: domain.slug,
+            domain: canonDomain,
             status: mapped.status || 'active',
             city: mapped.city || null,
             state: mapped.state || null,

@@ -861,6 +861,96 @@ function selectPrimaryTenant(metadata, domain) {
     || null;
 }
 
+// ── Junk tenant filter (module-level; shared by the leases writer and the
+// entity bridge) ──────────────────────────────────────────────────────────
+// Hoisted from upsertDomainLeases (2026-06-07) so unpackTenant's entity-mint
+// boundary runs the exact same junk check the leases writer does — no drift.
+// Anchored ^...$ patterns so legitimate tenant names containing these words
+// still pass ("First National Bank" ok; bare "Financials" not).
+// ── Junk tenant filter (defense-in-depth against scraper bugs) ──────
+// Reject tenant names that are obviously demographics, traffic, street names,
+// OM table-of-contents headers, NAICS classifications, or CoStar UI
+// artifacts rather than real business/tenant names.
+//
+// Bug M (2026-04-25): the V2 sidebar OM intake on property 29237 wrote
+// tenant='Loan' / 'Financials' / 'Changes' / 'Health Care and Social
+// Assistance' (NAICS sector 62) into dialysis.leases. The first three
+// are OM table-of-contents headers picked up by the CoStar sidebar
+// parser; the last is a NAICS classification mislabeled as a tenant.
+// Extending the filter here so they're rejected at write time.
+const JUNK_TENANT_RE = /^(population|households|median\s+(age|hh\s+income)|daytime\s+employees|traffic(\s+vol)?|last\s+measured|collection\s+street|cross\s+street|distance|store\s+type|made\s+with\s+)/i;
+const STREET_NAME_RE = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
+const GROWTH_RE = /growth\s+'\d/i;
+// OM table-of-contents headers + section labels. Single-word ones first,
+// then multi-word phrases. Anchored ^...$ so they only match standalone
+// values, not real tenants whose names happen to contain these words
+// (e.g. "First National Bank" is fine; bare "Financials" is not).
+const OM_SECTION_RE = /^(loan|loans|financial|financials|changes|recent\s+changes|summary|executive\s+summary|investment\s+highlights|property\s+overview|location\s+overview|tenant\s+overview|lease\s+abstract|rent\s+roll|operating\s+statement|comparable\s+sales|sales\s+comps|lease\s+comps|disclaimer|confidentiality|table\s+of\s+contents|appendix|exhibits?)\s*$/i;
+// NAICS sector names (Census Bureau industry classifications). These
+// sometimes leak through CoStar's "industry" field into tenant.
+const NAICS_SECTOR_RE = /^(agriculture|mining|utilities|construction|manufacturing|wholesale\s+trade|retail\s+trade|transportation\s+and\s+warehousing|information|finance\s+and\s+insurance|real\s+estate(\s+and\s+rental(\s+and\s+leasing)?)?|professional(,?\s+scientific(,?\s+and\s+technical\s+services)?)?|management\s+of\s+companies|administrative(\s+and\s+support)?|educational\s+services|health\s+care(\s+and\s+social\s+assistance)?|arts(,?\s+entertainment(,?\s+and\s+recreation)?)?|accommodation(\s+and\s+food\s+services)?|other\s+services|public\s+administration)\s*$/i;
+// Bug N (2026-04-25): CoStar's "For Lease at Sale" / "Tenants" panels
+// contain availability metric labels ("Smallest Space", "Max Contiguous",
+// "Office Avail", "Retail Avail" etc.) that the sidebar parser was
+// reading as tenant names with associated SF values. The sidebar wrote
+// 22+ junk lease rows across 5 properties on 2026-04-21 → 2026-04-25.
+// Add anchored matchers for these CoStar UI artifacts plus tenancy
+// metadata lines that show up in the same panel.
+const COSTAR_PANEL_RE = /^(smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|vacant\s+space|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied|for\s+lease(\s+at\s+sale)?|(office|retail|industrial|warehouse|flex|medical|r\&d|land|other)\s+(avail(able)?|sf))\s*$/i;
+// Bug V (2026-04-25): cleanup of 947 lease_no_dates rows surfaced
+// additional junk-tenant patterns the existing filters missed. These
+// are OM/CoStar UI labels and lease-type values being misread as
+// tenant names (audit deactivated 69 rows with these).
+const COSTAR_EXTRA_JUNK_RE = /^(triple\s+net|double\s+net|absolute\s+net|anchor|anchors|anchored|asking|starting|withheld|analytics|store\s+type|store\s+layout|cam|cam\s+(charges|recovery)|public\s+transportation|commuter\s+rail|highway\s+access|about\s+the\s+(architect|developer|owner)|united\s+states|investment\s+grade|credit\s+rating|net\s+(operating\s+income|leasable\s+area)|gross\s+leasable\s+area|nra|gla|noi|rba|year\s+(built|renovated)|building\s+(class|size|type)|lot\s+size)\s*$/i;
+// Round 76ej.l (2026-05-04): more CoStar UI labels and detail-page
+// column headers caught landing as tenant rows on the 250 Pettit Ave
+// Sale Comp ingestion. Junk values seen in dia.leases for property
+// 35836: 'Medical', 'M Ford Mcneil' (Architect-section person), 'Since
+// Jun 23, 2009' (CoStar 'On Market Since' date), 'Unkwn' / 'Unknown'
+// (CoStar placeholder), and bare CoStar lease-history column headers
+// ('Lease Activity', 'Sign Date', 'Leased', 'Use', 'Services',
+// 'Rent Type', 'Rent Schedule'). Anchored ^...$ so legitimate names
+// containing these words still pass.
+const COSTAR_LABEL_JUNK_RE = /^(lease\s+activity|sign\s+date|leased|use|services|rent\s+type|rent\s+schedule|rent\s+steps|rent\s+(adjust(ment)?s?|escalation\s+type)|use\s+type|space\s+(use|type|category)|space\s+id|building\s+id|tenant\s+id|tenant\s+type|status|expense\s+type|expenses?|source|listing\s+(id|type|status)|lease\s+(type|status)|on\s+market\s+(since|date)|on\s+market|days?\s+on\s+market|move[-\s]?in\s+ready|brand|brand\/tenant|tenant\/brand|condition|class|grade|industry)\s*$/i;
+// Bare property-use / asset-type categories — landed as 'Medical' /
+// 'Office' / 'Retail' on Pettit Ave. NOT a substring match — those
+// would false-positive on real medical-tenant names. Anchored.
+const COSTAR_USE_CATEGORY_RE = /^(medical|office|retail|industrial|warehouse|flex|mixed[-\s]?use|residential|hospitality|specialty|land|other)\s*$/i;
+// Round 76ek.g (2026-05-08): bare industry-role labels CoStar surfaces in
+// its tenant-mix column ("Retailer", "Wholesaler", "Operator", etc.). On
+// 38275 W Twelve Mile Rd the tenant list dropped a bare "Retailer" row.
+// These are role classifications, never tenant names. Anchored — won't
+// false-positive on real names like "Joe's Retailer LLC".
+const COSTAR_INDUSTRY_ROLE_RE = /^(retailer|wholesaler|distributor|operator|manufacturer|supplier|service\s+provider|landlord|owner\s+occupier|owner[-\s]?occupied)\s*$/i;
+// 'Unkwn' / 'Unknown' / 'N/A' / 'TBD' / '--' / dashes — CoStar
+// placeholder values for unknown-yet fields.
+const COSTAR_PLACEHOLDER_RE = /^(unkwn|unknown|n\/?a|tbd|none|null|-+|—+|\.{2,})\s*$/i;
+// Date strings landing as tenants — 'Since Jun 23, 2009',
+// 'Mar 26, 2026', 'Q2 2026', 'Jan 2024 - Dec 2028' etc.
+const COSTAR_DATE_RE = /^(since\s+)?((?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2},?\s+\d{4}|q[1-4]\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{4}\s*-\s*\d{4})\s*$/i;
+function isJunkTenant(name) {
+  if (!name || name.trim().length < 3) return true;
+  const n = name.trim();
+  if (JUNK_TENANT_RE.test(n)) return true;
+  if (STREET_NAME_RE.test(n)) return true;
+  if (GROWTH_RE.test(n)) return true;
+  if (OM_SECTION_RE.test(n)) return true;
+  if (NAICS_SECTOR_RE.test(n)) return true;
+  if (COSTAR_PANEL_RE.test(n)) return true;
+  if (COSTAR_EXTRA_JUNK_RE.test(n)) return true;
+  // Round 76ej.l: additional CoStar Sale Comp / Lease detail-page
+  // labels and CoStar placeholder values + date-string residue.
+  if (COSTAR_LABEL_JUNK_RE.test(n)) return true;
+  if (COSTAR_USE_CATEGORY_RE.test(n)) return true;
+  if (COSTAR_INDUSTRY_ROLE_RE.test(n)) return true;
+  if (COSTAR_PLACEHOLDER_RE.test(n)) return true;
+  if (COSTAR_DATE_RE.test(n)) return true;
+  // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
+  if (/^[a-z\s]+,\s*[a-z]{2}(\s+\d{5}(-\d{4})?)?$/i.test(n)) return true;
+  return false;
+}
+
+
 /**
  * Wrapper around domainQuery for PATCH calls that surfaces silent failures
  * (column mismatches, CHECK constraint violations, etc.) in Vercel logs.
@@ -1456,78 +1546,76 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
 // ── Step 1b: Unpack Tenant → Entity + Lease Relationship ────────────────────
 
 async function unpackTenant(propertyEntityId, metadata, workspaceId, userId, domain) {
-  // Round 76ej.q (2026-05-05): seamless multi-tenant propagation.
-  // Build the working tenant list from BOTH sources so neither
-  // single-tenant captures (metadata.tenant_name) nor multi-tenant
-  // captures (metadata.tenants[] from CREXi prose mining) are dropped.
-  // De-dup by lower-cased name. Pre-existing behaviour for the
-  // single-tenant case is preserved verbatim — this just additionally
-  // walks the array.
-  const tenantInputs = [];
-  const seen = new Set();
-  const pushTenant = (name, extra) => {
-    if (!name || typeof name !== 'string') return;
-    const trimmed = name.trim();
-    if (trimmed.length < 3) return;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    tenantInputs.push({ name: trimmed, ...(extra || {}) });
-  };
-  pushTenant(metadata.tenant_name);
-  pushTenant(metadata.primary_tenant);
-  if (Array.isArray(metadata.tenants)) {
-    for (const t of metadata.tenants) {
-      if (t && typeof t === 'object') pushTenant(t.name, { sf: t.sf, location: t.location });
-      else if (typeof t === 'string') pushTenant(t);
-    }
+  // Tenant-mix bleed guard (2026-06-07): the entity bridge must NOT mint the
+  // CoStar tenant-MIX list as first-class org entities. A multi-tenant capture
+  // (property 31457, Delano CA) leaked co-tenant labels ("Massage Therapist",
+  // "Wing King Express", "Chicago Steak House") into the entity graph — role
+  // labels are junk everywhere, and real-but-irrelevant co-tenants don't
+  // warrant a BD entity. Doctrine: mint an org entity (+ lease relationship)
+  // for ONLY the PRIMARY tenant; the full mix list lives in metadata.tenants on
+  // the asset (and the domain leases table, junk-filtered by upsertDomainLeases)
+  // and is NOT minted here. owners/buyers/sellers/brokers mint via
+  // unpackContacts / unpackSalesHistory. (Previously this walked tenant_name +
+  // primary_tenant + the whole tenants[] array, minting one org per entry.)
+  const primaryName = selectPrimaryTenant(metadata, domain);
+  if (!primaryName || typeof primaryName !== 'string') return 0;
+  const tenantName = primaryName.trim();
+  if (tenantName.length < 3) return 0;
+
+  // Run the SAME junk check the leases writer uses (hoisted to module scope),
+  // so a primary tenant that's actually a role label / use-category /
+  // placeholder / demographic never mints an entity.
+  if (isJunkTenant(tenantName)) {
+    console.warn(`[unpackTenant] skipped junk primary tenant: "${tenantName.slice(0, 60)}"`);
+    return 0;
   }
-  if (tenantInputs.length === 0) return 0;
+
+  // Recover the per-tenant SF / suite from the mix list when the primary
+  // appears there (multi-tenant captures), so the lease relationship keeps
+  // that scalar even though we only mint the primary.
+  let sf = null, location = null;
+  if (Array.isArray(metadata.tenants)) {
+    const m = metadata.tenants.find(
+      (t) => t && typeof t === 'object' && typeof t.name === 'string'
+        && t.name.trim().toLowerCase() === tenantName.toLowerCase());
+    if (m) { sf = m.sf || null; location = m.location || null; }
+  }
 
   const source = metadata.source || 'costar';
-  let createdCount = 0;
+  const tenantLink = await ensureEntityLink({
+    workspaceId,
+    userId,
+    sourceSystem: source,
+    sourceType: 'company',
+    externalId: normalizeCanonicalName(tenantName),
+    domain,
+    seedFields: { name: tenantName, org_type: 'tenant' },
+  });
 
-  for (const t of tenantInputs) {
-    const tenantName = t.name;
-    const tenantLink = await ensureEntityLink({
-      workspaceId,
-      userId,
-      sourceSystem: source,
-      sourceType: 'company',
-      externalId: normalizeCanonicalName(tenantName),
-      domain,
-      seedFields: { name: tenantName, org_type: 'tenant' },
-    });
+  if (!tenantLink.ok) return 0;
 
-    if (!tenantLink.ok) continue;
+  // Lease relationship for the primary tenant. Carries the lease scalars from
+  // metadata when available (lease_term / occupancy / lease_type) plus the
+  // per-tenant SF / suite when the page surfaced it.
+  await opsQuery('POST', 'entity_relationships', {
+    workspace_id: workspaceId,
+    from_entity_id: tenantLink.entityId,
+    to_entity_id: propertyEntityId,
+    relationship_type: 'leases',
+    metadata: {
+      role: 'tenant',
+      source: `${source}_sidebar`,
+      lease_term: metadata.lease_term || null,
+      lease_type: metadata.lease_type || null,
+      occupancy: metadata.occupancy || null,
+      sf_leased: sf,
+      suite_or_location: location,
+      is_primary_tenant: true,
+      extracted_at: metadata.extracted_at || new Date().toISOString(),
+    },
+  }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
 
-    // Lease relationship — per-tenant. Carries the lease scalars from
-    // metadata when available (lease_term / occupancy / lease_type),
-    // plus the per-tenant SF / suite when the page surfaced it.
-    await opsQuery('POST', 'entity_relationships', {
-      workspace_id: workspaceId,
-      from_entity_id: tenantLink.entityId,
-      to_entity_id: propertyEntityId,
-      relationship_type: 'leases',
-      metadata: {
-        role: 'tenant',
-        source: `${source}_sidebar`,
-        lease_term: metadata.lease_term || null,
-        lease_type: metadata.lease_type || null,
-        occupancy: metadata.occupancy || null,
-        sf_leased: t.sf || null,
-        suite_or_location: t.location || null,
-        is_primary_tenant: tenantInputs.length > 1
-          ? (t.name === (metadata.tenant_name || metadata.primary_tenant))
-          : true,
-        extracted_at: metadata.extracted_at || new Date().toISOString(),
-      },
-    }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
-
-    if (tenantLink.createdEntity) createdCount++;
-  }
-
-  return createdCount;
+  return tenantLink.createdEntity ? 1 : 0;
 }
 
 // ── Step 2: Unpack Sales History ────────────────────────────────────────────
@@ -8349,87 +8437,9 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     : 'inferred';
 
   // ── Junk tenant filter (defense-in-depth against scraper bugs) ──────
-  // Reject tenant names that are obviously demographics, traffic, street names,
-  // OM table-of-contents headers, NAICS classifications, or CoStar UI
-  // artifacts rather than real business/tenant names.
-  //
-  // Bug M (2026-04-25): the V2 sidebar OM intake on property 29237 wrote
-  // tenant='Loan' / 'Financials' / 'Changes' / 'Health Care and Social
-  // Assistance' (NAICS sector 62) into dialysis.leases. The first three
-  // are OM table-of-contents headers picked up by the CoStar sidebar
-  // parser; the last is a NAICS classification mislabeled as a tenant.
-  // Extending the filter here so they're rejected at write time.
-  const JUNK_TENANT_RE = /^(population|households|median\s+(age|hh\s+income)|daytime\s+employees|traffic(\s+vol)?|last\s+measured|collection\s+street|cross\s+street|distance|store\s+type|made\s+with\s+)/i;
-  const STREET_NAME_RE = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
-  const GROWTH_RE = /growth\s+'\d/i;
-  // OM table-of-contents headers + section labels. Single-word ones first,
-  // then multi-word phrases. Anchored ^...$ so they only match standalone
-  // values, not real tenants whose names happen to contain these words
-  // (e.g. "First National Bank" is fine; bare "Financials" is not).
-  const OM_SECTION_RE = /^(loan|loans|financial|financials|changes|recent\s+changes|summary|executive\s+summary|investment\s+highlights|property\s+overview|location\s+overview|tenant\s+overview|lease\s+abstract|rent\s+roll|operating\s+statement|comparable\s+sales|sales\s+comps|lease\s+comps|disclaimer|confidentiality|table\s+of\s+contents|appendix|exhibits?)\s*$/i;
-  // NAICS sector names (Census Bureau industry classifications). These
-  // sometimes leak through CoStar's "industry" field into tenant.
-  const NAICS_SECTOR_RE = /^(agriculture|mining|utilities|construction|manufacturing|wholesale\s+trade|retail\s+trade|transportation\s+and\s+warehousing|information|finance\s+and\s+insurance|real\s+estate(\s+and\s+rental(\s+and\s+leasing)?)?|professional(,?\s+scientific(,?\s+and\s+technical\s+services)?)?|management\s+of\s+companies|administrative(\s+and\s+support)?|educational\s+services|health\s+care(\s+and\s+social\s+assistance)?|arts(,?\s+entertainment(,?\s+and\s+recreation)?)?|accommodation(\s+and\s+food\s+services)?|other\s+services|public\s+administration)\s*$/i;
-  // Bug N (2026-04-25): CoStar's "For Lease at Sale" / "Tenants" panels
-  // contain availability metric labels ("Smallest Space", "Max Contiguous",
-  // "Office Avail", "Retail Avail" etc.) that the sidebar parser was
-  // reading as tenant names with associated SF values. The sidebar wrote
-  // 22+ junk lease rows across 5 properties on 2026-04-21 → 2026-04-25.
-  // Add anchored matchers for these CoStar UI artifacts plus tenancy
-  // metadata lines that show up in the same panel.
-  const COSTAR_PANEL_RE = /^(smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|vacant\s+space|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied|for\s+lease(\s+at\s+sale)?|(office|retail|industrial|warehouse|flex|medical|r\&d|land|other)\s+(avail(able)?|sf))\s*$/i;
-  // Bug V (2026-04-25): cleanup of 947 lease_no_dates rows surfaced
-  // additional junk-tenant patterns the existing filters missed. These
-  // are OM/CoStar UI labels and lease-type values being misread as
-  // tenant names (audit deactivated 69 rows with these).
-  const COSTAR_EXTRA_JUNK_RE = /^(triple\s+net|double\s+net|absolute\s+net|anchor|anchors|anchored|asking|starting|withheld|analytics|store\s+type|store\s+layout|cam|cam\s+(charges|recovery)|public\s+transportation|commuter\s+rail|highway\s+access|about\s+the\s+(architect|developer|owner)|united\s+states|investment\s+grade|credit\s+rating|net\s+(operating\s+income|leasable\s+area)|gross\s+leasable\s+area|nra|gla|noi|rba|year\s+(built|renovated)|building\s+(class|size|type)|lot\s+size)\s*$/i;
-  // Round 76ej.l (2026-05-04): more CoStar UI labels and detail-page
-  // column headers caught landing as tenant rows on the 250 Pettit Ave
-  // Sale Comp ingestion. Junk values seen in dia.leases for property
-  // 35836: 'Medical', 'M Ford Mcneil' (Architect-section person), 'Since
-  // Jun 23, 2009' (CoStar 'On Market Since' date), 'Unkwn' / 'Unknown'
-  // (CoStar placeholder), and bare CoStar lease-history column headers
-  // ('Lease Activity', 'Sign Date', 'Leased', 'Use', 'Services',
-  // 'Rent Type', 'Rent Schedule'). Anchored ^...$ so legitimate names
-  // containing these words still pass.
-  const COSTAR_LABEL_JUNK_RE = /^(lease\s+activity|sign\s+date|leased|use|services|rent\s+type|rent\s+schedule|rent\s+steps|rent\s+(adjust(ment)?s?|escalation\s+type)|use\s+type|space\s+(use|type|category)|space\s+id|building\s+id|tenant\s+id|tenant\s+type|status|expense\s+type|expenses?|source|listing\s+(id|type|status)|lease\s+(type|status)|on\s+market\s+(since|date)|on\s+market|days?\s+on\s+market|move[-\s]?in\s+ready|brand|brand\/tenant|tenant\/brand|condition|class|grade|industry)\s*$/i;
-  // Bare property-use / asset-type categories — landed as 'Medical' /
-  // 'Office' / 'Retail' on Pettit Ave. NOT a substring match — those
-  // would false-positive on real medical-tenant names. Anchored.
-  const COSTAR_USE_CATEGORY_RE = /^(medical|office|retail|industrial|warehouse|flex|mixed[-\s]?use|residential|hospitality|specialty|land|other)\s*$/i;
-  // Round 76ek.g (2026-05-08): bare industry-role labels CoStar surfaces in
-  // its tenant-mix column ("Retailer", "Wholesaler", "Operator", etc.). On
-  // 38275 W Twelve Mile Rd the tenant list dropped a bare "Retailer" row.
-  // These are role classifications, never tenant names. Anchored — won't
-  // false-positive on real names like "Joe's Retailer LLC".
-  const COSTAR_INDUSTRY_ROLE_RE = /^(retailer|wholesaler|distributor|operator|manufacturer|supplier|service\s+provider|landlord|owner\s+occupier|owner[-\s]?occupied)\s*$/i;
-  // 'Unkwn' / 'Unknown' / 'N/A' / 'TBD' / '--' / dashes — CoStar
-  // placeholder values for unknown-yet fields.
-  const COSTAR_PLACEHOLDER_RE = /^(unkwn|unknown|n\/?a|tbd|none|null|-+|—+|\.{2,})\s*$/i;
-  // Date strings landing as tenants — 'Since Jun 23, 2009',
-  // 'Mar 26, 2026', 'Q2 2026', 'Jan 2024 - Dec 2028' etc.
-  const COSTAR_DATE_RE = /^(since\s+)?((?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2},?\s+\d{4}|q[1-4]\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{4}\s*-\s*\d{4})\s*$/i;
-  function isJunkTenant(name) {
-    if (!name || name.trim().length < 3) return true;
-    const n = name.trim();
-    if (JUNK_TENANT_RE.test(n)) return true;
-    if (STREET_NAME_RE.test(n)) return true;
-    if (GROWTH_RE.test(n)) return true;
-    if (OM_SECTION_RE.test(n)) return true;
-    if (NAICS_SECTOR_RE.test(n)) return true;
-    if (COSTAR_PANEL_RE.test(n)) return true;
-    if (COSTAR_EXTRA_JUNK_RE.test(n)) return true;
-    // Round 76ej.l: additional CoStar Sale Comp / Lease detail-page
-    // labels and CoStar placeholder values + date-string residue.
-    if (COSTAR_LABEL_JUNK_RE.test(n)) return true;
-    if (COSTAR_USE_CATEGORY_RE.test(n)) return true;
-    if (COSTAR_INDUSTRY_ROLE_RE.test(n)) return true;
-    if (COSTAR_PLACEHOLDER_RE.test(n)) return true;
-    if (COSTAR_DATE_RE.test(n)) return true;
-    // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
-    if (/^[a-z\s]+,\s*[a-z]{2}(\s+\d{5}(-\d{4})?)?$/i.test(n)) return true;
-    return false;
-  }
+  // isJunkTenant() + its regex battery were hoisted to module scope (2026-06-07)
+  // so the entity bridge (unpackTenant) reuses the SAME definition instead of
+  // a drifting copy. See the module-level isJunkTenant above.
 
   // ── Derive annual_rent from NOI for NNN/absolute leases ──────────────
   // On absolute NNN leases, the tenant pays all expenses, so NOI ≈ annual_rent.
