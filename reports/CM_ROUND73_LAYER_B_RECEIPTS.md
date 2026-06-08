@@ -49,6 +49,37 @@ the "still-open-today" subset. The 2025-H2 residual (active 273/307) is the
 
 Migration: `supabase/migrations/20260715_cm_round73_b_dia_market_turnover_active_universe.sql`.
 
+### #9 follow-up — the 196d synthetic-start leak (Scott re-check, 2026-06-08)
+
+Scott re-checked: active_count still read **308 at 2025-12** (vs ~87
+genuinely-active). Diagnosis traced to the **`eff_start` 196d fallback**, NOT
+the 540d backstop (which works — of the 295 null-off_market rows >540d old, **0**
+were counted). Decomposition at 2025-12: of the 308, **222 have a NULL
+`listing_date` + a future (2026) off_market_date** — the availability-checker
+over-stamp wall. For those, `eff_start = off_market − 196d` (~2025-08), a
+fake-recent start that passes the 540d test, and "off_market wins" exempts it
+from any cap. **308 − 222 = 86 ≈ the ~87 genuinely-active.**
+
+Fix (`…require_real_listing_date.sql`): the point-in-time **active count
+requires a real `listing_date`** — the 196d synthetic start is valid for the
+historical *added-to-market* series but not for asserting a listing was live at
+an arbitrary past quarter-end (a null-`listing_date` row carries no live-at-pe
+evidence, only an over-stamped end date). Variant testing showed essentially
+**zero** null-`listing_date` + null-end rows, so this drops only the artifacts.
+Landed: 2025-12 **308→86**, 2024-09 239→187, 2023-03 185→142.
+
+**CAVEAT for Scott (one number to weigh):** the same definition lands **2026-03
+= 59** (was 166), and the recent run reads 2025-09 99 / 2025-12 86 / 2026-03 59
+— below the ~130–150 you eyeballed. This is a **genuine capture-coverage limit**,
+not a formula gap: recent CoStar/availability captures increasingly arrive
+*without* a `listing_date`, so fewer rows are confirmable-active at the data
+edge, which makes the last ~2 quarters' months-of-supply read artificially tight
+(2026-03 mos 3.8). The fix is the consistent, defensible "genuinely-tracked
+active" definition; if you'd rather treat recent null-`listing_date` captures as
+genuine active inventory (trading consistency for a higher recent count), that's
+a separate call. Migration:
+`supabase/migrations/20260716_cm_round73_b_dia_market_turnover_require_real_listing_date.sql`.
+
 ---
 
 ## #20 gov NM-vs-Market — is_northmarq contamination ✅ FLAG FIXED · ⚠️ spread is a cap-basis follow-up
