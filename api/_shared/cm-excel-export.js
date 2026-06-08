@@ -1240,8 +1240,19 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       continue;
     }
 
-    const cols    = CHART_COLUMNS[chart.chart_template_id];
+    let cols      = CHART_COLUMNS[chart.chart_template_id];
     if (!tabName || !cols) continue;
+
+    // R73 #22 — seller_sentiment's long-term cohort is vertical-specific: gov is
+    // now the 6+ firm-yr CORE (Round 73), dia stays 10+. CHART_COLUMNS headers
+    // are the static "10+ yr"; relabel the gov copy to "6+ yr" so the data-sheet
+    // headers AND the injector chart series titles (which reference these header
+    // cells) match the gov cohort. Non-mutating copy; dia keeps "10+ yr".
+    if (chart.chart_template_id === 'seller_sentiment' && vertical === 'gov') {
+      cols = cols.map(c => /_long_term$/.test(c.key)
+        ? { ...c, header: c.header.replace('10+ yr', '6+ yr') }
+        : c);
+    }
 
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
