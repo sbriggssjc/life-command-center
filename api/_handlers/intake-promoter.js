@@ -2747,7 +2747,16 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // empty forever. The inserted row carries the full pipeline_result blob
   // so the briefing / audit queries can unpack without re-joining.
   // Best-effort: a failure here never breaks the caller's response.
-  if (listingResult.ok) {
+  //
+  // R14 (2026-06-08): gate on result.ok (listing OR dia-lease OR contact
+  // landed), NOT just listingResult.ok. dia OMs are NNN — the deal data
+  // lands in `leases`, not `available_listings`, so listingResult.ok was
+  // false while result.ok was true. The old narrow gate left ~247 fully-
+  // promoted dia intakes stranded at status='matched' forever (invisible to
+  // every operator surface). The BD-pipeline trigger below keeps its own
+  // `_wasInsert` (listingResult.ok && !updated && !merged) gate — it
+  // legitimately needs a brand-new listing row.
+  if (result.ok) {
     try {
       await opsQuery('POST',
         'staged_intake_promotions',
@@ -2771,7 +2780,9 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     // linked, broker contact created, activity event logged — but the
     // top-level status never moved off 'review_required', leaving stale
     // badges in the dashboard's triage views. Best-effort: failure here
-    // doesn't break the caller's response shape.
+    // doesn't break the caller's response shape. (R14: now fires on
+    // result.ok, so dia lease-only promotions finalize too — see the
+    // broadened gate comment above.)
     try {
       await opsQuery('PATCH',
         `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
