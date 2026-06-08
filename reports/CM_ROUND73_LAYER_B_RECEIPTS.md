@@ -145,3 +145,60 @@ on the cap-basis question.
 ## Still open in Layer B (later sessions)
 #8/#24 on-market 2025+ over-stamping verification, #13 gov credit-tier render,
 #21 rent-growth, #1 dia bid-ask legend dedup. Layers C/D unchanged.
+
+---
+
+## Layer B completion (2026-06-08, branch `claude/beautiful-hopper-j0he60`)
+
+All four remaining Layer B singles closed. Two were real code fixes (both
+render paths); two were verifications grounded in live data.
+
+### #13 gov Cap by Credit Tier — markers on sparse cohorts (CODE FIX)
+Per Scott's directive, checked the feed BEFORE calling it render-only. The feed
+is healthy: gov sales carry `government_type` (10,805 rows) + `agency` (12,202);
+the R66e classifier folds local/state/federal + agency-regex fallbacks, and the
+live `cm_gov_cap_by_credit_q` populates **federal 101 / state 91 / municipal 46
+quarters** (state 44, muni 35 since 2015). The earlier "0 state/muni rows" note
+was wrong. The real defect is sparseness: municipal (46/101 quarters) and
+state's few gaps leave isolated non-null quarters that a `pointRadius:0` line
+cannot draw. Fix: small markers on the state + municipal cohorts (federal is
+dense -> plain line), markers only -- **no spanGaps** (`dispBlanksAs="gap"`
+stays), so we never fabricate a connection across a multi-year hole.
+- renderer: `cap_rate_by_credit` state/muni get `pointRadius:3, pointStyle:circle`.
+- injector: added per-series marker support to `buildMultiLineChartXml`
+  (markers + line, line kept), enabled `showMarker` on state/muni.
+- Genuine-thin floor documented: the gov portfolio is ~95% federal, so state
+  (296 cap rows) / muni (77) are sparse by nature -- markers make the real points
+  visible; fuller lines need more state/local comps at intake.
+
+### #1 dia Bid-Ask — duplicate legend entry (CODE FIX, injector-only)
+"Multiple category titles at the bottom for the same data" = the native
+injector's bid-ask combo used `avg_last_ask_cap` as the title for BOTH the
+invisible noFill base bar AND the sky marker line -> two identical "Last Asking
+Cap" legend entries. The PNG renderer was already clean (3 distinct labels).
+Fix: `buildComboChartXml` now emits `<c:legendEntry><c:delete val="1"/>` for
+every `noFill` base bar -- structural helpers that shouldn't be in the legend.
+Removes the bid-ask duplicate AND the spurious "lower_quartile" entry on
+volume_cap. Outliers: the axis is already banded 5.5-10% (clips extreme
+spreads from view), same treatment as the other cap series.
+
+### #21 gov Rent Growth — VERIFIED populates (no change)
+`cm_gov_renewal_rent_growth_m`: 158 rows, **158** `ttm_avg_renewal_rent_psf`
+populated, **157** `cagr_per_lease`, 27 since 2024, through 2026-03-31. The R72
+CAGR perf fix cleared the FETCH-FAILED sentinel -- the view returns fully-
+populated rows.
+
+### #8/#24 Market Turnover — VERIFIED honest floors (no change)
+gov `active_count` declines naturally toward the present (Oct'25->Mar'26:
+35->28->22->20->18->11); dia likewise (91->89->79->76->63). Over-stamping would
+keep `active_count` inflated (sold listings never flipped); instead both decline
+to a small genuinely-available floor. The R70/R73 listing_date gate holds. gov
+2-year-window interim is as previously documented; deeper listing_date backfill
+is R74 Task 6c.
+
+### Verification
+`test/cm-native-chart-injector.test.mjs` 180 pass / 0 fail / 1 skip (added R73
+B13 marker test + R73 B1 legend-dedup test; scoped the "series idx unique"
+assertions to `<c:ser>` blocks so a valid `<c:legendEntry><c:idx>` isn't
+miscounted). Other CM test files green. `node --check` clean; 12 functions.
+JS-only -> ships on the Railway redeploy.
