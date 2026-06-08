@@ -102,6 +102,92 @@ call sites. Add a new operator/agency by extending the arrays + a unit test.
 
 ---
 
+## 3.5 REALITY CHECK — the PA flow + staging table ALREADY EXIST (2026-06-08, verified live in PA + Supabase)
+
+Task 6a was written as "Scott builds a new PA flow." On inspection of the live
+Power Automate environment, **the flow and the staging table already exist** —
+the contract below is largely already implemented. Findings:
+
+- **Flow `SF -> LCC: Object Sync`** (PA, owner Scott, Scheduled **hourly**,
+  ~30s/run, healthy run history). Steps: Recurrence → Initialize
+  BatchId/Mode/Watermark/Objects → Get/POST {Properties, Comps, Companies,
+  Listings, **Deals**} → POST Crawl Complete → PostDeadLetter. So closed-won
+  **Deals already sync hourly**, incrementally by a `LastModifiedDate >
+  {Watermark}` high-water mark.
+- **`Get Deals`** = Salesforce object **Deals** (their relabeled `Opportunity`;
+  `StageName` is the native stage field). **Select Query is empty → ALL fields
+  flow** (the §4 NM-classification fields are all present — see field map below).
+- **`POST Deals`** → `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-salesforce?action=objects`
+  (the **dia** project hosts this edge fn), header `X-PA-Webhook-Secret`, body
+  `{payload_version:"sf-2026-05-v1", batch_id, object_type:"Deals", records:[...]}`.
+- **Landing table = `public.sf_deal_staging`** on the **dia** project
+  (`zqzrriwuavgrquhisnoa`), 41 MB. Parsed columns (`stage`, `deal_cap_rate`,
+  `expected_close_date`, `property_city/state`, `tenant_names`, …) PLUS the full
+  raw SF record in **`raw_row` jsonb**. `stage='Closed IS'` = closed-won
+  (**3,316 rows**, IsClosed=true, close dates 2017→2025; `StageName`="Closed IS",
+  NOT "CM-Closed IS"). Other stages present: Terminated IS (2,041), Final (720),
+  Listing Signed/LOI/Closed Lost/Off-Market/Non-refundable.
+
+**THE bug (root cause of Scott's "not all the dialysis sales are included"):**
+`Get Deals`'s **Filter Query was a NAME-KEYWORD filter** —
+`(contains(Name,'Dialysis') or 'DaVita' or … 'GSA' or 'Federal' or …) and
+LastModifiedDate gt {Watermark}`. Every one of the 3,316 staged Closed IS rows
+matches that regex → **`sf_deal_staging` only ever received name-matched deals**;
+any dia/gov closed deal NOT spelled out in the deal Name (multi-tenant,
+address-named) never entered our system at all. This is exactly the
+single-strategy filter §2/§3 say not to use.
+
+**FIX APPLIED & VERIFIED LIVE (2026-06-08, by the verification-gate assistant):**
+the `Get Deals` Filter Query was broadened **additively** to
+`(StageName eq 'Closed IS' or <the existing name keywords>) and LastModifiedDate
+gt {Watermark}`. Strictly additive (no object/feature loses data), still
+watermark-gated. Saved (PA "ready to go") and a manual run **Succeeded in 29s**
+(no volume spike → watermark gating confirmed). Going forward the **full
+closed-won universe** stays fresh in `sf_deal_staging`, and LCC classifies our
+way per §3.
+
+**Two consequences for the rest of R74:**
+
+1. **The "complete unfiltered export" Scott was going to pull is no longer the
+   blocker for the bulk of the work** — the dia + gov **closed deals we care
+   about are already staged** in `sf_deal_staging` (name-matched set = ~3,316
+   Closed IS, which already contains the dialysis + government deals worked so
+   far). CC's classifier (`sf-nm-classifier.js`) should run **directly against
+   `sf_deal_staging`** (Task 6b) for the authoritative dia de-contamination +
+   gov cross-check — no manual re-export required. The genuinely-missing
+   non-name-matched closed deals are a smaller long-tail.
+2. **The long-tail historical backfill** (non-name-matched Closed IS deals
+   modified before the watermark — the go-forward filter won't retroactively
+   pull them) is a **one-time, parameterized run of the existing
+   `SF -> LCC: On-demand Backfill` flow** (its `Get Backfill Records` step takes
+   Object Type + Filter Query as trigger inputs; Top Count 500/page → needs
+   paging for a large pull). **Gated on Scott** — it's volume-significant (full
+   Closed IS across ALL property types, not just dia/gov) and the LCC Opps
+   disk-pressure history (sf_sync_log) warrants awareness before a big pull.
+
+### Field map (from `sf_deal_staging.raw_row`, for the classifier/matcher)
+
+| §3/§4 concept | SF raw field (`raw_row->>`) |
+|---|---|
+| stable SF id | `id18_sjc__c` / `Legacy_ID_sjc__c` / `AccountId` |
+| stage (closed-won) | **`StageName`** = `'Closed IS'` (+ `IsClosed`) |
+| NM listing side | **`Direct_Co_Broke_sjc__c`** (`Direct (Both)` / `Co-Broke (Seller)` / `Co-Broke (Buyer)`) |
+| NM team (authoritative) | **`SJC_Broker_Team_Name_sjc__c`**, `SJC_Broker_Team_sjc__c`, `Broker_Name__c` |
+| co-broke / referral | `Co_Broke_Teams_sjc__c`, `Co_Broke_Internal_sjc__c`, `Referral_Type__c`, `External_Referral_Share_sjc__c` |
+| cap rate | `Closing_Cap_Rate_sjc__c` / `CapRate_sjc__c` / `Deal_Cap_Rate__c`; `Marketing_Cap_Rate_sjc__c` (asking) |
+| price | `Sale_Price_Report_sjc__c`; `Asking_List_Price_sjc__c` |
+| location | `City_sjc__c`, `State_sjc__c`, `CBSA_Title_sjc__c` |
+| tenant(s) | `Tenant_Names_sjc__c`, `Tenants_sjc__c` |
+| gov signal | tenant/name/seller patterns (`GOV_AGENCY_PATTERNS`) — **NOT** `Agency_sjc__c`, which is the listing-agreement type ("Exclusive"/"Non-Exclusive"), a red herring |
+| asset | `Building_Size_SF_sjc__c`, `Property_Type_Subtype__c`, `Year_Built_sjc__c`, `Land_Ownership_Type_sjc__c` |
+| timing | `Close_Date_sjc__c`/`CloseDate`, `Time_on_Market_Days_sjc__c`, `Lease_Term_Remaining_sjc__c`, `Lease_Term_years_sjc__c` |
+| counterparties | `Seller_Company_sjc__c`/`_City`/`_State`/`Seller_Org_Type_sjc__c`; `Buyer_Company_*`/`Buyer_Org_Type_sjc__c` |
+
+So Task 6b's classifier reads `raw_row` from `sf_deal_staging` (no new PA push,
+no new staging table needed). The §4 JSON contract below is retained as the
+reference shape; the live channel is the `intake-salesforce?action=objects` POST
+already in production.
+
 ## 4. The Power Automate flow contract (Task 6a — Scott builds to this)
 
 `POST <SF_BULK_WEBHOOK_URL>` (a NEW signed PA HTTP-trigger URL; treat as secret —
