@@ -419,6 +419,9 @@ async function handlePriorityBand(req, res) {
     'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
     'total_property_count', 'current_property_count', 'next_touch_due',
     'days_overdue', 'source_domain', 'source_property_id', 'source_property_address',
+    // R11 Unit 2: coalesced rank value (portfolio rollup, else representative-
+    // property rent) so the detail banner can show the same $ value the queue ranks on.
+    'current_annual_rent_total', 'source_property_rent', 'rank_annual_rent',
     // R6: ownership-resolution context so the detail Next-Step banner stays
     // consistent with the queue's P0.4 verdict (same state source).
     'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
@@ -576,6 +579,10 @@ async function handlePriorityQueueList(req, res) {
     'entity_id', 'name', 'vertical', 'priority_band', 'reason', 'days_overdue',
     'next_touch_due', 'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
     'total_property_count', 'current_property_count', 'current_annual_rent_total', 'avg_cap_rate',
+    // R11 Unit 2: representative-property rent + the coalesced rank value the
+    // items page now orders by (rollup rent, else representative-property rent,
+    // else the P-BUYER SPE rollup) so property-backed rows out-rank $0 rows.
+    'source_property_rent', 'rank_annual_rent',
     'source_domain', 'source_property_id', 'source_property_address',
     'source_property_city', 'source_property_state', 'source_property_lease_expiration',
     'source_property_firm_term_remaining',
@@ -589,9 +596,13 @@ async function handlePriorityQueueList(req, res) {
   // Items page: most-urgent band first, then most-overdue within band, then
   // by portfolio value so the rows worth the most rank above no-value rows
   // (R4-C §2: P0.5 had 488 identical rows with no-value items sorting above
-  // $385K-rent ones). current_annual_rent_total breaks the within-band tie.
+  // $385K-rent ones). rank_annual_rent breaks the within-band tie — R11 Unit 2
+  // made it the coalesced value (portfolio rollup, else the representative
+  // property's rent, else the P-BUYER SPE rollup) so the dia book (whose
+  // portfolio rollup was $0 pre-R11) and the gov P0.4 resolution band (which
+  // carry a representative property but no rollup) rank on real money, not noise.
   let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
-    + '&order=priority_band.asc,days_overdue.desc.nullslast,current_annual_rent_total.desc.nullslast'
+    + '&order=priority_band.asc,days_overdue.desc.nullslast,rank_annual_rent.desc.nullslast'
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
 

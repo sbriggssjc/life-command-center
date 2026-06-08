@@ -2370,7 +2370,15 @@ async function renderPriorityQueuePage(band) {
     } else {
       if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + (Number(it.total_property_count) === 1 ? ' property' : ' properties'));
       var money = _pqMoney(it.current_annual_rent_total);
-      if (money) ctx.push(money + ' rent');
+      if (money) {
+        ctx.push(money + ' rent');
+      } else {
+        // R11 Unit 2: no portfolio rollup (P0.4 resolution rows, the dia book) —
+        // fall back to the subject/representative property's rent, labeled so it
+        // isn't read as portfolio rent.
+        var smoney = _pqMoney(it.source_property_rent);
+        if (smoney) ctx.push(smoney + ' rent (subject property)');
+      }
       if (it.is_cross_vertical) ctx.push('cross-vertical');
     }
     // R6 P0.4: surface the resolution state so the row is truthful about WHY the

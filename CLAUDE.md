@@ -1633,3 +1633,82 @@ merge (the draft/record_send routes need the running server).
   empty `to:` for the operator to fill, Copy is always available.
 - Render the cadence/buy-side state in the entity-detail Next-Step banner (the
   full "one truth, three renderings").
+
+## R11 — value-ranking integrity (the queue was ranking on missing rent, 2026-06-08)
+
+The priority queue, P-CONTACT lane, Decision Center, and buyer rollups all rank
+on `current_annual_rent_total` — which was **$0 on the entire dia book** and on
+the gov ownership-resolution band, so "work the highest-value first" was ordering
+by noise. Grounded live 2026-06-08: dia 0/887 current portfolio edges carried
+rent (gov 2,700/3,324); P-CONTACT 304/306, P0.4 415/499, P0.5 70/73 rank-zero.
+
+### Unit 1 — dia portfolio rent (the rollup rank)
+Root cause: the portfolio sync's dia leg pulled the **raw** `dia.ownership_history`
+table and read its `rent` column — NULL on all 7,772 rows (no writer ever
+populated it). dia rent lives in `leases.annual_rent`, projected to CURRENT_DATE
+per the dia doctrine.
+- **dia `v_ownership_history_portfolio`** (dia `20260608170000`, apply FIRST) —
+  mirrors the gov anon view; joins the property's **primary lease** rent
+  (active → largest `leased_area` → most recent `lease_start`) projected to
+  CURRENT_DATE via `dia_project_rent_at_date` (same math as `v_sales_comps`).
+  Exposes `ownership_end_date` too — dia uses **explicit** start/end dates and
+  44% of dia rows have a NULL `transfer_date`, so gov's "latest transfer =
+  current" window would misclassify dia. **The branches were deliberately NOT
+  collapsed**: dia keeps its explicit-end aggregation, so the round ADDS rent and
+  reclassifies NOTHING.
+- **LCC sync repoint** (`20260608170000`) — dia leg → the view; dia finalize
+  reads the gov-aligned column names; **gov branch byte-identical** (no
+  regression). Verified live: dia current edges held at 887 (no reclassification),
+  `current_with_rent` **0 → 614**; gov unchanged (3,324/2,700). End-to-end traced
+  (AEI Capital Corp / dia prop 26955: lease $2.27M → view → portfolio fact →
+  rollup $5.80M → P-BUYER card). Bands that rank on the rollup improved
+  (P-BUYER rank-zero 18→9, P5 21→9, P4 2→0).
+
+### Unit 2 — representative-property rent (the fallback rank)
+P0.4 resolution entities carry no portfolio edge — they have a single
+**representative property** instead. 102 gov P0.4 rows (the audit's "117 $0 rows
+that are NOT dia") + 1 dia ranked $0 for this reason; `lcc_property_attributes`
+had no rent column.
+- **gov `v_property_attributes_portfolio`** (gov `20260608170000`) — append
+  `annual_rent` (= `gross_rent`) + `noi`. **dia `v_property_attributes_portfolio`**
+  (dia `20260608171000`) — NEW view (projected primary-lease rent + raw
+  attributes; replaces the raw-`properties` pull the audit flagged as wrong PII
+  posture; `noi` NULL — dia is NNN).
+- **LCC** (`20260608171000`) — `lcc_property_attributes` gains `annual_rent`/`noi`;
+  dia attributes leg repointed to the view; both finalize legs write rent;
+  `v_priority_queue_enriched` **appends** `source_property_rent`,
+  `source_property_noi`, and **`rank_annual_rent` = COALESCE(NULLIF(rollup,0),
+  representative-property rent, P-BUYER SPE rollup)** — the column the operator
+  console now orders by. The pa join already existed, so the fallback is free on
+  the hot path (the Slice-1 "push into the refresh" contingency was not needed;
+  items-page ~1.0–1.3s, dominated by the **pre-existing** `rs` connection-check
+  LATERAL — R11 adds ~0).
+- **JS** (Railway redeploy): `admin.js` orders the items page + band detail by
+  `rank_annual_rent`, selects `source_property_rent`/`rank_annual_rent`; `ops.js`
+  card falls back to "$X rent (subject property)" when the rollup is $0.
+- Verified live: band rank-zero on the coalesced value — **P0.4 415→298**
+  (the 102 gov repr-property rows now ranked), **P-BUYER 18→1**, **P1/P2/P3/P5/P8
+  → 0**. Remaining zeros (P0.4 298 owner-level, P0.5 70, P-CONTACT 304, P7 68)
+  are genuinely **property-less** — honest zeros / Unit 3.
+
+### Unit 3 — the orphan persons (the audit premise didn't hold)
+The audit expected ~99 dia P-CONTACT persons with **no** linkage to flag as
+import residue. Live data refuted it: of the 304 property-less P-CONTACT rows,
+**0** are strict residue — 303 carry asset relationships (`owns`/`purchases`/
+`brokers`/`associated_with`), just not to persons/SF (which is exactly why the
+R10 reachability gate parks them). The named examples (Jim Colburn, Scott E.
+Elliott) both have asset edges. So they are **real CoStar-captured
+contacts/brokers, not residue** — flagging them junk would be wrong. They already
+rank LAST via `rank_annual_rent … NULLS LAST` (no rank faked), and the 41
+junk-NAMED ones already route through the existing `junk_entity_name` Decision
+Center lane. **No new bucket, no migration, no hard-deletes** — classify, don't
+bury. Follow-up for Scott: optionally exclude `junk_name_flagged` entities from
+the P-CONTACT band so the contact worklist is cleaner (the junk lane handles
+their disposition either way).
+
+### Deploy / ranking note
+DB applied live in filename order (domain views BEFORE the LCC sync repoints).
+The `*/4h` portfolio + `daily` attribute crons keep both fresh; band-moving
+verdicts already call `lcc_refresh_priority_queue_resolved()`. The JS rank switch
+(`current_annual_rent_total` → `rank_annual_rent`) ships on the Railway redeploy;
+until then the live app keeps the old ordering — graceful, deploy-order safe.
