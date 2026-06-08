@@ -82,6 +82,45 @@ presentation window with an ±2mo smooth as a continuity stopgap; on the
 curated-comp basis re-evaluate 1yr vs 2yr so the NM line is both continuous AND
 below market). Gate the recompute; document the window in the view header.
 
+## Task 6 — backfill real listing_date + stop the over-stamp wall (from R73 #9)
+
+R73 #9 tightened the dia Market Turnover active count to require a real
+`listing_date` (the 196d synthetic start is for the added-to-market series
+only). That correctly drops **~222 dia listings** with a NULL `listing_date` +
+a **future off_market_date** (the availability-checker over-stamp wall), but it
+also pushes the recent active count below the ~130 it should be — because those
+222 are real listings missing only their start date. Two halves:
+
+### 6a — backfill the real `listing_date` (dry-run → gate → commit)
+For the ~222 dia rows (NULL `listing_date` AND `off_market_date` in the future
+relative to capture) — and **audit gov for the same pattern** — recover a real
+listing_date via this **evidence ladder** (highest-confidence first), tagging
+the chosen source in a new **`listing_date_source`** column:
+1. **availability-checker page markers** — `last_checked` / the raw capture
+   (`listing_verification_history` / response snapshot) for an on-page listed/
+   posted date.
+2. **CoStar capture date** — the date the sidebar/CoStar pipeline first captured
+   the listing.
+3. **sale-anchor fallback** — `sale_date − median DOM` (use the domain's
+   measured median: dia ~196d) when nothing better exists; tag it as estimated.
+Flag-/date-column work only (never touch price/cap). Dry-run the recovered set,
+bring the counts to the gate (expected: recent dia active rises toward ~130 on
+real dates), then commit. After backfill, re-verify `cm_dialysis_market_turnover_m`.
+
+### 6b — fix the writer that stamps a FUTURE off_market_date on undated rows
+Root cause of the artifact: a writer sets `off_market_date` to a future date on
+listings that have **no `listing_date`** (likely the availability-checker /
+auto-scrape off-market path, or an over-stamp sweep). Find the path and fix it so
+it (a) does not write an off_market_date that post-dates the run, and (b) does
+not leave a row with an off_market_date but no listing_date. **This stops the
+over-stamp wall from regenerating** — without 6b, 6a's backfill re-accumulates.
+Cross-check the Round 76ej.g/h availability-checker + `lcc-auto-scrape-listings`
+writers and the `lcc_record_listing_check` path.
+
+**Expected combined effect:** the recent dia active count rises toward ~130 on
+recovered real dates, and the over-stamp wall clears at the source. Receipts:
+`reports/CM_ROUND73_LAYER_B_RECEIPTS.md` (#9 follow-up section).
+
 ---
 
 ## R73 #20 carry-over state (already live)
