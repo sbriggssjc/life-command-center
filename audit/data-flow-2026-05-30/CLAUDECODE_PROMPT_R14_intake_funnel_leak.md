@@ -1,5 +1,52 @@
 # Claude Code prompt — R14: intake funnel — the stranded 'matched' state
 
+> **ADDENDUM (2026-06-08, post-INTAKE_AUTOCREATE-enable) — Unit 4: fix the
+> rematch/auto-create SCAN STARVATION. Add this to the SAME branch as the R14
+> work (it's the same `handleIntakeRematch` worker) so it ships in one redeploy,
+> if not yet merged; otherwise its own quick round.**
+>
+> Grounded live after Scott set `INTAKE_AUTOCREATE=1`: a real POST tick returned
+> `scanned=400, skipped_no_address=167, skipped_cooldown=233, rematched=0,
+> auto_created=0`. The flag is live (`auto_create_enabled:true`) but produces
+> zero because the scan window is starved:
+> - The worker fetches the OLDEST review_required by `created_at.asc`, `limit*4`
+>   (= 400 with the default limit=100). The backlog is 651, so ~251 newer items
+>   are **never scanned**.
+> - **167 address-less items permanently squat the front of every scan**: they
+>   can't match, can't auto-create (auto-create requires an address), and aren't
+>   being discarded (they carry deal signal, so the `dispositioned_non_deal`
+>   path skips them). They consume 167/400 slots every tick, forever.
+> - The remaining 233 are in the 168h (7-day) cooldown.
+> - Net: the auto-create-eligible items (cooldown-expired + full signature) are
+>   never reached, so the flag can't drain the address-bearing review tail it
+>   was enabled for.
+>
+> **Fix (Unit 4):**
+> 1. **Stop the address-less squatters from consuming the scan.** Either exclude
+>    `review_required` items with no parseable address from the rematch fetch
+>    (they can never match/auto-create), OR give them a proper disposition: an
+>    address-less item that DOES carry deal signal (tenant/price) but no address
+>    is a real triage item — surface it (keep in review with an `needs_address`
+>    flag the inbox shows) rather than silently re-skipping it every tick. An
+>    address-less NON-deal item should `dispositioned_non_deal` → discarded.
+>    Decide per signal; the rule is "never re-skip the same dead row forever."
+> 2. **Cover the whole backlog.** Order the fetch by cooldown-eligibility
+>    (oldest `last rematch` / never-rematched first), not raw `created_at.asc`,
+>    and/or raise the fetch cap so the full review_required set is reachable
+>    across a few ticks. The goal: an auto-create-eligible item is actually
+>    reached within a bounded number of ticks, not starved behind dead rows.
+> 3. Verify live: a dry-run GET shows `eligible > 0` (or a POST shows
+>    `auto_created > 0`) once the scan reaches full-signature cooldown-expired
+>    items; the 167 address-less items no longer appear as `skipped_no_address`
+>    every tick (they're excluded or dispositioned once). Report the new split.
+>
+> The flag does no harm while starved (it no-ops) — but it won't deliver the
+> intended review-tail drain until the scan reaches eligible items. Keep the
+> conservative cap (`INTAKE_AUTOCREATE_CAP`, Scott set 5) intact.
+
+---
+
+
 Audit grounded live 2026-06-08 (LCC Opps). The intake funnel has a silent
 leak: a whole status bucket that is neither auto-promoted nor surfaced for
 human action. Resolve severity FIRST (cosmetic-label vs real-data-leak), then
