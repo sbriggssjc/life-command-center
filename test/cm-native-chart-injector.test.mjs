@@ -808,7 +808,7 @@ test('injectNativeCharts: bar + 4-scatter composite renders diamond markers acro
   assert.equal(valAxCount, 2);
 
   // 5 series total (1 bar + 4 lines), unique idx 0..4
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3, 4]);
 
   // 4 diamond markers, NO circles or other shapes
@@ -1140,6 +1140,52 @@ test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band 
     'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
 });
 
+test('R73 B13: cap_rate_by_credit gives sparse state+municipal cohorts markers (federal stays a plain line)', () => {
+  const cols = [
+    { key: 'period_end',   col: 'A' },
+    { key: 'federal_cap',  col: 'B' },
+    { key: 'state_cap',    col: 'C' },
+    { key: 'municipal_cap', col: 'D' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_credit',
+    tabName: 'Data_Cap_Credit', cols, dataStart: 5, dataEnd: 60, vertical: 'gov',
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'multi-line');
+  const [fed, state, muni] = out.spec.series;
+  assert.ok(!fed.showMarker, 'federal is dense -> plain line, no markers');
+  assert.equal(state.showMarker, true, 'state sparse -> markers so isolated quarters show');
+  assert.equal(muni.showMarker, true, 'municipal sparse -> markers');
+  // The builder keeps the line stroke AND emits a real marker symbol (markers + line).
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'a real circle marker is emitted');
+  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal still markerless');
+  assert.match(xml, /<c:marker val="1"\/>/, 'chart-level markers enabled');
+});
+
+test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the legend (no duplicate Last-Ask entry)', () => {
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'avg_last_ask_cap',   col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_Bid_Ask',
+    cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis',
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // barSeries[0] is the invisible (noFill) base that reuses the Last-Ask title.
+  assert.equal(out.spec.barSeries[0].noFill, true, 'base bar is noFill');
+  const xml = buildComboChartXml(out.spec);
+  // The noFill base (idx 0) gets a legend delete -> the Last-Ask label is not
+  // duplicated between the base bar and the sky marker line.
+  assert.match(xml, /<c:legendEntry><c:idx val="0"\/><c:delete val="1"\/><\/c:legendEntry>/,
+    'noFill base bar (idx 0) is deleted from the legend');
+  assert.equal((xml.match(/<c:legendEntry>/g) || []).length, 1,
+    'exactly one legend entry deleted (the single noFill base)');
+});
+
 test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
   const wb = new ExcelJS.Workbook();
   wb.addWorksheet('Index').getCell('A1').value = 'Test';
@@ -1216,7 +1262,7 @@ test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart
   assert.match(barBlock, /<a:alpha val="25000"\/>/, '25% alpha on visible band');
 
   // 4 series total — area(0) + bar(1) + bar(2) + line(3)
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3], 'series idx unique across area+bar+line blocks');
 
   // Each series references its own column
@@ -3462,7 +3508,7 @@ test('injectNativeCharts: combo chart renders correct dual-axis XML', async () =
   assert.match(rightAx[0], /<c:crosses val="max"\/>/, 'right axis crosses at max');
 
   // One bar series + one line series, with unique idx values across both
-  const idxValues = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxValues = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxValues, [0, 1], 'series idx 0 (bar) + 1 (line) — unique across chart');
 
   // Series reference correct cells
@@ -3732,7 +3778,7 @@ test('injectNativeCharts: line series with showMarker renders correct XML (P9)',
   const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
   assert.match(barBlock, /<c:grouping val="stacked"\/>/);
   // 4 series total — unique idx values across both blocks
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3], 'series idx unique across blocks');
 });
 
@@ -3872,7 +3918,7 @@ test('injectNativeCharts: stacked-combo box-whisker (P8.5) renders correct XML',
   assert.match(ser2, /srgbClr val="003DA5"/, 'median = navy');
 
   // 3 series total, unique idx values (0/1/2)
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2], 'series idx unique across bar+line blocks');
 
   // Each series points at the right cell range

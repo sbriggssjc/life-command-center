@@ -802,6 +802,13 @@ function buildMultiLineChartXml(spec) {
       : '';
     // R37 P3 — per-series data labels
     const dLblsFrag = dLblsXml(s.dataLabels);
+    // R73 B13 — optional per-series markers (line KEPT). Sparse cohorts
+    // (gov state/municipal cap) have isolated non-null points between gaps
+    // that a markerless line cannot draw; a small circle marker makes single
+    // points visible without fabricating connections across the gaps.
+    const markerFrag = s.showMarker
+      ? `<c:marker><c:symbol val="${s.markerShape || 'circle'}"/><c:size val="${s.markerSize || 5}"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln></c:spPr></c:marker>`
+      : `<c:marker><c:symbol val="none"/></c:marker>`;
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -809,7 +816,7 @@ function buildMultiLineChartXml(spec) {
           <c:spPr>
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
-          <c:marker><c:symbol val="none"/></c:marker>
+          ${markerFrag}
 ${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
@@ -853,7 +860,7 @@ ${dLblsFrag}
 ${seriesXml}
 ${hiLowLinesFrag}
 ${upDownBarsFrag}
-        <c:marker val="0"/>
+        <c:marker val="${spec.series.some(s => s.showMarker) ? 1 : 0}"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
       </c:lineChart>
@@ -1010,6 +1017,18 @@ ${dLblsFrag}
         </c:ser>`;
   }).join('\n');
 
+  // R73 B1 — suppress invisible (noFill) base bars from the legend. They are
+  // structural helpers that lift a floating bar off zero, not real series, so
+  // they must not get a legend entry. This fixes the dia Bid-Ask "two category
+  // titles for the same data" report (the noFill base reused the Last-Ask
+  // title col, duplicating its legend entry) and removes the spurious
+  // "lower_quartile" entry on volume_cap. CT_Legend order: legendPos then
+  // legendEntry* then overlay.
+  const legendDeleteFrag = barSeries
+    .map((s, i) => s.noFill ? `      <c:legendEntry><c:idx val="${i}"/><c:delete val="1"/></c:legendEntry>` : '')
+    .filter(Boolean)
+    .join('\n');
+
   // Line series idx continues from where bar series ended so each
   // series in the chart has a unique index (Excel relies on this).
   //
@@ -1129,6 +1148,7 @@ ${lineXml}
     </c:plotArea>
     <c:legend>
       <c:legendPos val="b"/>
+${legendDeleteFrag}
       <c:overlay val="0"/>
     </c:legend>
     <c:plotVisOnly val="1"/>
@@ -3734,10 +3754,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     case 'cap_rate_by_credit': {
       // 3-line: Federal navy bold / State sky / Municipal sage.
-      // Note: state + municipal series will be empty for gov data per
-      // the 2026-05-06 audit (0 state and ~5 municipal sales with caps),
-      // but the chart shape is correct — series will fill in once the
-      // data feed exists.
+      // R73 B13 — the feed IS populated (verified live 2026-06-08:
+      // cm_gov_cap_by_credit_q has federal in 101 quarters, state 91, muni
+      // 46). gov sales carry government_type (10,805) + agency (12,202); the
+      // R66e classifier folds local/state/federal + agency-regex fallbacks.
+      // The "missing data for a smooth line" symptom is sparseness, not an
+      // empty feed: state/muni have isolated non-null quarters between gaps
+      // that a markerless line can't draw. Fix = small markers on the sparse
+      // state + municipal cohorts so single points show (federal is dense ->
+      // stays a plain line). Markers only; NO spanGaps (don't connect across
+      // multi-year gaps -> honest). Mirrors the renderer.
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -3753,8 +3779,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy   },
-            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky    },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582' },  // sage
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
           ],
           anchor: standardAnchor,
         },

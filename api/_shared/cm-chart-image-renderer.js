@@ -1556,15 +1556,20 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
+            // R73 B13 — federal is dense (101 quarters) -> plain line. State (91q)
+            // and municipal (46q) are sparse with isolated non-null quarters
+            // between gaps that a markerless line can't draw -> give them markers
+            // so single points show. Markers only; gaps stay broken (no spanGaps)
+            // so we never fabricate a connection across a multi-year hole.
             { label: 'Federal',   data: rows.map(r => r.federal_cap),
               borderColor: PDF_COLORS.cap_short,    backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
             { label: 'State',     data: rows.map(r => r.state_cap),
-              borderColor: PDF_COLORS.cap_mid,      backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              borderColor: PDF_COLORS.cap_mid,      backgroundColor: PDF_COLORS.cap_mid,
+              tension: 0.3, pointRadius: 3, pointStyle: 'circle', borderWidth: 2 },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
-              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2 },
+              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: PDF_COLORS.cap_mid_long,
+              tension: 0.3, pointRadius: 3, pointStyle: 'circle', borderWidth: 2 },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
