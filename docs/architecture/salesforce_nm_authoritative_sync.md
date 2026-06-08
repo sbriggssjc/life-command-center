@@ -102,6 +102,67 @@ call sites. Add a new operator/agency by extending the arrays + a unit test.
 
 ---
 
+## 3.5 The already-staged universe (`sf_deal_staging`) — verified state 2026-06-08
+
+The hourly `SF → LCC: Object Sync` PA flow already lands closed deals in
+`public.sf_deal_staging` on **both** domain projects (dia
+`zqzrriwuavgrquhisnoa`, gov `scknotsqkcheojiaewwh`). Each row carries parsed
+columns + the full SF record in `raw_row` jsonb. SF API field map (confirmed
+live, all present):
+
+| concept | `raw_row->>'…'` |
+|---|---|
+| NM side | `Direct_Co_Broke_sjc__c` (Direct (Both)/Co-Broke (Seller)=listed; Co-Broke (Buyer)=buy-side) |
+| NM team | `SJC_Broker_Team_Name_sjc__c` → `SJC_Broker_Team_sjc__c` → `Broker_Name__c` |
+| tenant (multi) | `Tenant_Names_sjc__c` / `Tenants_sjc__c` (`|`-joined) |
+| subtype/type | `Property_Type_Subtype__c` / `Property_Type_Sub_Type__c`, `Property_Type__c` |
+| price / cap | `Sale_Price_Report_sjc__c` / `Final_Sale_Price__c`; `Closing_Cap_Rate_sjc__c`/`Deal_Cap_Rate__c` |
+| loc / date | `City_sjc__c`/`State_sjc__c`; `Close_Date_sjc__c`/`CloseDate` |
+| **SF id** | `sf_deal_id` (staging col) — the idempotency key the export lacked |
+
+⚠️ **`Agency_sjc__c` is NOT a gov signal** — it is the listing-agreement type
+("Exclusive"/"Non-Exclusive"). Gov membership uses `GOV_AGENCY_PATTERNS` on
+tenant/name/seller.
+
+### 3.5.1 The staged universe is NOT yet a fuller superset (the R74b blocker)
+
+Re-derivation cannot run authoritatively on the staged data **today**:
+
+- **dia**: 3,320 `'Closed IS'` rows = **only 61 distinct deals** (each staged
+  40–208×, avg 54×). Incl. `'Final'` → **79 distinct closed deals / 57
+  NM-listed**. Scott's `data.xlsx` export had **285 closed / 234 NM-listed** —
+  so staging is a ~28% **subset**, not a superset.
+- **gov**: 2,747 rows = **66 distinct deals** (34 closed). Same pattern.
+- The staged NM-listed set fingerprint-matched **88 already-flagged** dia sales
+  and yielded **0 city-confirmed and 0 post-cutoff net-new adds**; the 55 loose
+  "candidates" were wrong-city false matches (several to *competitor*-listed
+  sales — `M&M; Glass`, `Colliers; Patel`). A full re-derivation would have
+  **removed ~348 of 436** correctly-flagged sales (only 88 matched). **Verdict:
+  do not re-derive from the staged subset** — the R74 `data.xlsx`-based fix
+  (+96/−34, applied 2026-06-08) remains the best available state.
+
+### 3.6 Two blockers to fix before the staged loop can drive de-contamination
+
+1. **PA Get Deals filter misses the bulk stage label.** dia closed deals
+   historically carry **`'CM - Closed IS'`** (per the `data.xlsx` footer:
+   *"STAGENAME is CM - Closed IS or Closed IS"*) — a label that does **not**
+   exist in staging at all (staging has only `'Closed IS'`/`'Final'`). Broaden
+   the filter to `StageName IN ('Closed IS','CM - Closed IS','Final')`. The
+   filter is also **additive + watermark-gated**, so it only pulls newly-modified
+   deals — the historical closed book needs a **one-time backfill** (the real
+   prerequisite for dia, not a deferred long-tail).
+2. **Staging upsert duplication bug.** The sync **INSERTs** a new row per pull
+   instead of upserting on `sf_deal_id` → 40–208× duplication (dia 3,320 rows /
+   61 deals). This bloats the table and trends toward the `sf_sync_log`
+   disk-pressure incident. Fix: upsert on `sf_deal_id` (keep latest
+   `sf_last_modified`), or a retention prune.
+
+Until both land, the matcher also needs **city/address confirmation** — the
+tolerant state+price+date gate over-matches badly on clustered dialysis (0/55
+city-confirmed in the 2026-06-08 staged run).
+
+---
+
 ## 4. The Power Automate flow contract (Task 6a — Scott builds to this)
 
 `POST <SF_BULK_WEBHOOK_URL>` (a NEW signed PA HTTP-trigger URL; treat as secret —
