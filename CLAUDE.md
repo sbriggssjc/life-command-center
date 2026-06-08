@@ -1712,3 +1712,74 @@ The `*/4h` portfolio + `daily` attribute crons keep both fresh; band-moving
 verdicts already call `lcc_refresh_priority_queue_resolved()`. The JS rank switch
 (`current_annual_rent_total` → `rank_annual_rent`) ships on the Railway redeploy;
 until then the live app keeps the old ordering — graceful, deploy-order safe.
+
+## R13 — Decision Center lane health (2026-06-08)
+
+Audit grounded live 2026-06-08. The verdict/effect machinery is healthy (all 13
+`decision_type` branches present, effect-first/outcome-truthful, idempotent mint
++ `already_decided` 409, honest federated counts). This round is one high-value
+de-noise + two follow-ups. JS ships on the Railway redeploy; DB applied live.
+
+### Unit 1 — de-noise the provenance_conflict lane (the headline)
+`provenance_conflict` reported 14,742, but `v_field_provenance_actionable` by
+decision is **78% `skip`** (11,518: registry correctly chose a higher-priority
+source and skipped a lower-priority write — that is warn/strict-mode TELEMETRY,
+not a human decision). Only `decision='conflict'` (3,163 — same-priority
+disagreements) needs Scott's judgment. **94% of those conflicts are same-source**
+(costar/costar 2,785, rca/rca 187), 6% different-source equal-priority ties.
+
+Fix (`api/admin.js` `fetchFederatedSource`): the `provenance_conflict` lane pull
++ `opsCnt` now filter `v_field_provenance_actionable?decision=eq.conflict`. The
+dia `sales_price_xref_conflict` leg is kept (genuine). Lane drops 14,742 →
+~3,163 (+ ~67 dia xref). The skip telemetry stays available via the view /
+provenance panels — just not in the operator decision lane. Verified live:
+`decision='conflict'` = 3,163; 5 spot-checks are real same-priority ties
+(current_source vs attempted_source at equal priority). Read-only filter,
+cache-or-live safe.
+
+### Unit 2 — registry learning loop for accept_attempted (BLESSED, flag-gated)
+Even on genuine conflicts, `accept_attempted` only queued a research task — it
+never taught the registry, so the same field re-litigates forever. Now, gated on
+env **`DECISION_PROVENANCE_LEARN`** (default OFF ⇒ unchanged research-task
+behavior), on a field-provenance conflict the verdict:
+1. **Registry learning FIRST** — upserts a per-`(target_table, field_name)`
+   `field_source_priority` rule for `source='manual_decision'` at **priority 1**
+   (idempotent on the unique key). Scoped to the exact field — it NEVER re-ranks
+   the aggregator sources (costar/rca/om) against each other, so there is **no
+   mass re-ranking** (and a re-rank couldn't break a same-source tie anyway).
+2. **Applies the attempted value** as that manual authority via the existing
+   `lcc_merge_field` path (`source='manual_decision'`, confidence 1, effect-first;
+   gated on the actual `decision='write'` — a non-write keeps the decision open
+   + 502). dia xref / non-field-provenance subjects fall through to the
+   research-task path. `keep_current`/`skip` unchanged.
+
+Why this drains the class: after a manual resolution, a future capture to that
+record+field resolves to `'skip'` (lower-priority source can't override
+`manual_decision@1`), **not `'conflict'`** — so Unit 1's filter hides it and the
+field stops re-surfacing. JS-only (no migration — the rule is minted on demand;
+`lcc_merge_field` already exists). Exercised live on ONE real conflict
+(`gov.tax_records.assessed_value`): `lcc_merge_field` → `write` (manual@1 beats
+costar@55); current authoritative became the manual value; a simulated future
+costar write returned `skip` ("cannot override manual_decision (1)"); aggregator
+priorities unchanged (only `manual_decision@1` added). **Fully reverted — 0
+residue** (original value 739396 restored, conflicts back to 3,163). Activation
+is Scott's: set `DECISION_PROVENANCE_LEARN` when ready.
+
+### Unit 3 — junk 'leave_flagged' stops re-surfacing
+`junk_entity_name` had 747 open decisions, but `leave_flagged` recorded
+`skipped` while the entity stayed `metadata.junk_name_flagged=true`, so
+`lcc_refresh_decisions` re-seeded a fresh open decision every */15 — the operator
+re-saw dismissed rows. Fix (the "stop asking" hook):
+- `api/admin.js` — `leave_flagged` now sets `metadata.junk_name_reviewed=true`
+  on the entity (effect-first; failed write keeps the decision open) before
+  recording `skipped`. `skip` stays a transient re-surfacing dismissal.
+- Migration `20260609190000_lcc_r13_unit3_junk_reviewed_stop_asking.sql` (LCC
+  Opps, applied live) — `lcc_refresh_decisions` SEED excludes reviewed entities;
+  SWEEP also supersedes any still-open junk decision whose entity is now reviewed
+  (robustness). The entity stays `junk_name_flagged` (its name IS junk);
+  `junk_name_reviewed` records the orthogonal "keep it, don't re-ask" judgment.
+  `CREATE OR REPLACE` (OUT-row signature unchanged) → keeps the cron binding.
+  Verified live: the 1 pre-existing reviewed entity's stale open decision swept
+  (747→746); synthetic round-trip (seed→open, leave_flagged→reviewed+skipped,
+  re-refresh→no re-mint), 0 residue. `node --check` clean; 12 functions; suite
+  green except the 2 pre-existing CM chart failures.
