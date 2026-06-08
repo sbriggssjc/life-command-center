@@ -2366,15 +2366,34 @@ const MIN_YEAR_BY_TEMPLATE = {
   // R66cc — floor at 2017: the 10+ cohort (now gated n>=3) is clean from 2017, but
   // 2015-2016 (n=3-4) carry cap inversions. Starting 2017 shows the continuous 10+
   // series without the early noise.
-  seller_sentiment:             (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2017),
-  seller_sentiment_monthly:     (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2017),
+  // R73 D-list — seller_sentiment hard cap lowered 2017 -> 2016. dia n_all
+  // reaches 15 at 2016 (5/8 in 2014/15 — held back as the thin edge), so the
+  // chart now honestly reaches one year earlier. gov self-floors at its own
+  // dense year (findFirstDenseYear) capped at 2016. Density-gated (Scott R73).
+  seller_sentiment:             (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2016),
+  seller_sentiment_monthly:     (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2016),
   // R66aa — start 2018 (was 2013). Pre-2018 TTM months are thin and volatile even
   // after the n>=10 gate; deck's DOM chart also starts 2018. With the gate+smoothing
   // the 2018+ window lands DOM 168-290 (0-300 axis) / % ask 86.9-95.8% (84-96% axis).
-  dom_and_pct_of_ask:           2018,
-  dom_and_pct_of_ask_monthly:   2018,
-  bid_ask_spread:               2014,
-  bid_ask_spread_monthly:       2014,
+  // R73 D-list — dom_and_pct_of_ask was a static 2018 for both verticals.
+  // Now per-vertical density-gated: dia carries n_sales (TTM) per row, so the
+  // floor drops to the first year with 4 consecutive months of n>=15 — dia
+  // reaches 2016 (n 14/16/30 in 2015/16/17; 2014 n=10 + 2013 4-mo partial held
+  // back as the thin edge). The gov view has NO n_sales column, so
+  // findFirstDenseYear returns null and gov falls back to 2018 unchanged
+  // (gov dom density not separately confirmed this round). Density-gated.
+  dom_and_pct_of_ask:           (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
+  dom_and_pct_of_ask_monthly:   (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
+  // R73 D-#12 — per-vertical bid-ask floor. The view has no sample-count
+  // column, but a real Last-Ask cap (~0.05-0.10) is only present once listing/
+  // ask data begins, so "4 consecutive months of a non-null avg_last_ask_cap"
+  // is an exact presence gate for when the bid-ask visual has continuous data.
+  // Verified live 2026-06-08: gov reaches 2008 (0 paired ask months pre-2008,
+  // 12/12 from 2008 — extends from the old static 2014); dia self-floors ~2015
+  // (2/2/10 paired in 2012/13/14, 12/12 from 2015 — dia listings genuinely thin
+  // pre-2015, so it does NOT over-extend). Density-gated (Scott R73).
+  bid_ask_spread:               (rows) => findFirstDenseYear(rows, 'avg_last_ask_cap', 0.0001) ?? 2014,
+  bid_ask_spread_monthly:       (rows) => findFirstDenseYear(rows, 'avg_last_ask_cap', 0.0001) ?? 2014,
   // Pace recipe inherits dia/gov coverage; safe to skip 2003-2004 here too
   pace_of_cap_rate_expansion:   2005,
   // R62 — Val_Index 2010-12 swings and YOY 2002-2004 swings are both
@@ -2396,6 +2415,15 @@ const MIN_YEAR_BY_TEMPLATE = {
   // 2026-05-29 - start the credit-tier chart ~2000 (pre-2000 gov cap data
   // is sparse/noisy). User: "stop the x-axis around 2000".
   cap_rate_by_credit:           2000,
+  // R73 D-#19 — net-lease spread reaches the earliest CONSISTENT treasury
+  // data. economic_indicators DGS10 (the spread's treasury leg) starts
+  // 2002-01; cap data reaches 2001-01 but the spread = cap - treasury is NULL
+  // through 2001 (no treasury), so 2002 is the honest start, not 2001. No FRED
+  // backfill needed — the data already exists back to 2002 (294 months). The
+  // spread is an average-based line (robust to moderate n), unlike the
+  // quartile bands, so 2002 is sound. Verified live 2026-06-08.
+  net_lease_spread:             2002,
+  net_lease_spread_q:           2002,
   yoy_volume_change:            2005,
   // R51 — active-listings family (user notes 2026-05-21 sparseness items
   // that R47 didn't sweep up). Each is a TRUE-gap: the active_listings

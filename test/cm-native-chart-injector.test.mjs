@@ -2914,6 +2914,62 @@ test('R66aa: dom_and_pct_of_ask trims to 2018', () => {
   assert.equal(spec.spec.dataStart, 5 + 204, 'dataStart at first 2018 row');
 });
 
+// ── R73 Layer D — x-axis reach (density-gated floors) ───────────────────────
+// The above R66aa test now also proves the GOV path of dom_and_pct_of_ask:
+// gov rows carry no n_sales, so the per-vertical function falls back to 2018.
+
+test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', () => {
+  // dia carries n_sales (TTM). Thin (<15) through 2015, dense (>=15) from 2016
+  // -> the function returns the first year with 4 consecutive n>=15 = 2016.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
+    rows.push({ period_end: `${y}-${String(m).padStart(2,'0')}-28`,
+      avg_dom: 120, pct_of_ask: 0.93, n_sales: y < 2016 ? 8 : 16 });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask', tabName: 'Data_DOM_Ask',
+    cols: [{key:'period_end',col:'A'},{key:'subspecialty',col:'B'},{key:'avg_dom',col:'C'},{key:'pct_of_ask',col:'D'},{key:'n_sales',col:'E'}],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
+  // 2001-01 .. 2015-12 = 180 rows before 2016-01.
+  assert.equal(spec.spec.dataStart, 5 + 180, 'dia dom floors at first 2016 row');
+});
+
+test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), dia self-floors later', () => {
+  const mk = (askStartYear) => {
+    const rows = [];
+    for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
+      rows.push({ period_end: `${y}-${String(m).padStart(2,'0')}-28`,
+        avg_bid_ask_spread: 0.004,
+        avg_last_ask_cap: y < askStartYear ? null : 0.07 });
+    }
+    return buildInjectionSpec({
+      chart_template_id: 'bid_ask_spread', tabName: 'Data_Bid_Ask',
+      cols: [{key:'period_end',col:'A'},{key:'subspecialty',col:'B'},{key:'avg_bid_ask_spread',col:'C'},{key:'avg_last_ask_cap',col:'D'}],
+      dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+    });
+  };
+  // gov: ask present from 2008 -> 2001-01..2007-12 = 84 rows trimmed.
+  assert.equal(mk(2008).spec.dataStart, 5 + 84, 'gov bid-ask floors at first 2008 row');
+  // dia: ask thin until 2015 -> floors later (2014-12 = 168 rows trimmed).
+  assert.equal(mk(2015).spec.dataStart, 5 + 168, 'dia bid-ask self-floors at 2015 (no over-extend)');
+});
+
+test('R73 D-#19: net_lease_spread floors at 2002 (earliest consistent treasury)', () => {
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
+    rows.push({ period_end: `${y}-${String(m).padStart(2,'0')}-28`,
+      treasury_10y_yield: 0.04, avg_cap_rate: 0.075, market_spread: 0.035, nm_spread: 0.03, non_nm_spread: 0.04 });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'net_lease_spread', tabName: 'Data_NL_Spread',
+    cols: [{key:'period_end',col:'A'},{key:'subspecialty',col:'B'},{key:'treasury_10y_yield',col:'C'},{key:'avg_cap_rate',col:'D'},{key:'market_spread',col:'E'},{key:'nm_spread',col:'F'},{key:'non_nm_spread',col:'G'}],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
+  // 2001-01..2001-12 = 12 rows before 2002-01.
+  assert.equal(spec.spec.dataStart, 5 + 12, 'net-lease-spread floors at first 2002 row');
+});
+
 test('R66o: nm_vs_market_cap trims to 2020 (Value Proposition window)', () => {
   const rows = mkRows(2001, 2024, 'nm_cap_rate');
   for (const r of rows) r.market_cap_rate = 0.07;
