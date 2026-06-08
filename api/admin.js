@@ -5468,7 +5468,10 @@ async function handleIntakeRematch(req, res) {
     newly_matched: 0,
     promoted: 0,
     still_unmatched: 0,
-    skipped_no_address: 0,
+    skipped_no_address: 0,        // retired by Unit 4 (stays 0; no-address rows
+                                  // now → flagged_needs_address, see below)
+    flagged_needs_address: 0,     // no-address but deal-signal → surfaced once
+    needs_address_pending: 0,     // already flagged needs_address (not re-skipped)
     skipped_cooldown: 0,
     // Disposition pass (2026-06-04):
     dispositioned_non_deal: 0,   // no-address non-deal → discarded
@@ -5480,19 +5483,67 @@ async function handleIntakeRematch(req, res) {
     items: [],
   };
 
-  // Pull a generous candidate window — we filter out cooldown'd + no-address
-  // rows in JS, so fetch more than `limit` to keep each tick productive.
-  const fetchLimit = Math.min(1000, limit * 4);
+  // Pull the candidate window. Unit 4 (R14 addendum, 2026-06-08): the old
+  // `order=created_at.asc&limit=400` STARVED the scan. The auto-create /
+  // rematch-eligible items (never-rematched, address-bearing) are the NEWEST
+  // rows, but created_at.asc filled every tick's window with the oldest
+  // cooldown'd + dead rows and never reached a workable item (grounded live: 0
+  // of 227 eligible rows fell inside the oldest-400 window). Fix: fetch
+  // NEWEST-first up to the PostgREST 1000-row page cap (covers the full
+  // review_required backlog in one page today, ~650) so the eligible tail is
+  // always in-page, then sort the page eligibility-first below so it is
+  // processed first regardless of created_at.
+  const fetchLimit = Math.min(1000, Math.max(limit * 4,
+    parseInt(process.env.REMATCH_FETCH_CAP || '1000', 10)));
   const listRes = await opsQuery('GET',
     `staged_intake_items?status=eq.review_required` +
     `&select=intake_id,workspace_id,raw_payload,created_at` +
-    `&order=created_at.asc&limit=${fetchLimit}`
+    `&order=created_at.desc&limit=${fetchLimit}`
   );
   if (!listRes.ok) {
     return res.status(502).json({ error: 'list_failed', detail: listRes.data });
   }
   const rows = Array.isArray(listRes.data) ? listRes.data : [];
   result.scanned = rows.length;
+
+  // Eligibility-first ordering (Unit 4). Process the most productive rows before
+  // the dead/cooldown'd ones so a real rematch happens every tick instead of the
+  // budget being spent re-grinding the same front-of-queue rows. Tiers:
+  //   0 — address-bearing + cooldown expired → rematch-eligible (the starved set)
+  //   1 — cooldown'd                          → cheap skip / guarded auto-create
+  //   2 — address-less                        → one-time disposition (discard /
+  //                                             needs_address flag), lowest value
+  // Within a tier: never-rematched first, then oldest rematch (closest to cooldown
+  // expiry), then oldest created_at — fully deterministic. The `processed>=limit`
+  // break never increments on tiers 1/2, so when tier-0 exceeds the per-tick limit
+  // the eligible set drains first and auto-create/disposition follow within a
+  // bounded number of ticks once tier-0 pressure drops.
+  const rowHasAddress = (p) => {
+    const e = (p && p.extraction_result) || {};
+    return !!(e.address || (Array.isArray(e.addresses) && e.addresses.length));
+  };
+  const cooldownActive = (p) => {
+    const la = p && p.rematch && p.rematch.last_at;
+    return !!(la && la > cooldownCut);
+  };
+  const tierOf = (row) => {
+    const p = row.raw_payload || {};
+    if (!rowHasAddress(p)) return 2;
+    if (cooldownActive(p)) return 1;
+    return 0;
+  };
+  rows.sort((a, b) => {
+    const ta = tierOf(a), tb = tierOf(b);
+    if (ta !== tb) return ta - tb;
+    const la = (a.raw_payload && a.raw_payload.rematch && a.raw_payload.rematch.last_at) || '';
+    const lb = (b.raw_payload && b.raw_payload.rematch && b.raw_payload.rematch.last_at) || '';
+    if (la !== lb) {
+      if (!la) return -1;            // never-rematched ahead of any rematched row
+      if (!lb) return 1;
+      return la < lb ? -1 : 1;       // ISO timestamps: oldest rematch first
+    }
+    return String(a.created_at).localeCompare(String(b.created_at));
+  });
 
   // Time budget so we never strand a half-processed batch (Vercel/Railway wall).
   const tickDeadline = Date.now() + parseInt(process.env.REMATCH_TICK_BUDGET_MS || '22000', 10);
@@ -5561,7 +5612,30 @@ async function handleIntakeRematch(req, res) {
       continue;
     }
 
-    if (!hasAddress) { result.skipped_no_address += 1; continue; }
+    if (!hasAddress) {
+      // No parseable address, but it survived the non-deal disposition above —
+      // so it carries deal signal (price/tenant) and is a real triage item that
+      // just needs a human to supply the address. Unit 4: flag it ONCE
+      // (`needs_address`, surfaced by the inbox) instead of silently re-skipping
+      // the same dead row as `skipped_no_address` every tick forever. Already
+      // flagged rows are counted separately and never re-written, so the row is
+      // dispositioned once, not re-skipped.
+      if (payload.needs_address === true) {
+        result.needs_address_pending += 1;
+        if (result.items.length < 100) result.items.push({ intake_id: intakeId, action: 'needs_address_pending' });
+        continue;
+      }
+      result.flagged_needs_address += 1;
+      if (!dryRun) {
+        await opsQuery('PATCH',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+          { raw_payload: { ...payload, needs_address: true },
+            updated_at: new Date().toISOString() }
+        ).catch(() => {});
+      }
+      if (result.items.length < 100) result.items.push({ intake_id: intakeId, action: 'flagged_needs_address' });
+      continue;
+    }
 
     // Cooldown: skip rows we already re-matched recently and that stayed
     // unmatched — but this is exactly the set the guarded AUTO create acts on
