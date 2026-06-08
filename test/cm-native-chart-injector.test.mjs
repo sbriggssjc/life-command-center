@@ -1116,6 +1116,30 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.ok(Math.abs(v - 0.027) < 1e-9, `getValue returns ${v}, expected ~0.027`);
 });
 
+test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band off the volume', () => {
+  // Scott: "adjust the y-axis on cap rate so the volume portion isn't hidden."
+  // Lowering the cap-axis MIN lifts the Q1-Q3 band into the upper frame so the
+  // volume area reads in the lower ~45%. gov keeps max 10.5% (upper-q ~10.08%);
+  // dia caps at 9.0% (dia top-q ~7.7%).
+  const cols = [
+    { key: 'period_end',     col: 'A' },
+    { key: 'subspecialty',   col: 'B' },
+    { key: 'volume_dollars', col: 'C' },
+    { key: 'cap_rate',       col: 'D' },
+    { key: 'upper_quartile', col: 'E' },
+    { key: 'lower_quartile', col: 'F' },
+  ];
+  const mk = (vertical) => buildInjectionSpec({
+    chart_template_id: 'volume_cap_quartile_combo',
+    tabName: 'Data_Vol_Cap_Combo', cols, dataStart: 5, dataEnd: 60, vertical,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5', nm_pale: '#E0E8F4' } },
+  });
+  assert.deepEqual(mk('gov').spec.yRightRange, { min: 0.020, max: 0.105 },
+    'gov cap axis min lowered to 2.0% (band lifts; 10.5% top keeps ~10.08% upper-q)');
+  assert.deepEqual(mk('dialysis').spec.yRightRange, { min: 0.030, max: 0.090 },
+    'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
+});
+
 test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
   const wb = new ExcelJS.Workbook();
   wb.addWorksheet('Index').getCell('A1').value = 'Test';
@@ -3122,6 +3146,26 @@ test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axe
   assert.equal(out.spec.lineSeries.length, 1);
   assert.equal(out.spec.lineSeries[0].valCol, 'F', 'line = valuation_index');
   assert.equal(out.spec.lineSeries[0].color, '003DA5', 'navy');
+});
+
+test('R73 C3: valuation_index left axis re-pinned per vertical (gov 150-420, dia 90-165)', () => {
+  // The R66 gov pin (210-350) clipped the post-R70-A4 gov index (~161..410)
+  // off the top of the frame — the "axis not rendering" report. gov now
+  // frames 150-420; dia (94-149) keeps its 90-165 pin.
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'valuation_index', col: 'F' },
+    { key: 'yoy_change',      col: 'G' },
+  ];
+  const mk = (vertical) => buildInjectionSpec({
+    chart_template_id: 'valuation_index',
+    tabName: 'Data_Val_Index', cols, dataStart: 5, dataEnd: 60, vertical,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.deepEqual(mk('gov').spec.yLeftRange, { min: 150, max: 420 },
+    'gov index axis frames the full 161..410 rendered series (no top clip)');
+  assert.deepEqual(mk('dialysis').spec.yLeftRange, { min: 90, max: 165 },
+    'dia index axis unchanged');
 });
 
 test('buildInjectionSpec: rent_by_year_built builds IQR + median + avg combo (P9)', () => {

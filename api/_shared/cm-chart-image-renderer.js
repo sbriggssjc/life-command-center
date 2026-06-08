@@ -1108,9 +1108,16 @@ function buildChartConfig(chart, brand) {
       // legible (2026-05-31 export feedback): dia 75-250, gov 210-350 ($/SF
       // dollar axis on gov, not a percent).
       const govLikeVi = chart.vertical === 'gov' || chart.vertical === 'government_leased';
+      // R73 C3 — gov index axis re-pinned 210-350 -> 150-420. The R66 pin
+      // predated R70-A4 (unsmooth + master-splice), which raised the gov
+      // index to ~161 (2009 trough) .. 410 (2020 peak); 350 was clipping the
+      // whole post-2018 climb off the top of the frame (the "axis not
+      // rendering" report). 150-420 frames the full rendered series with no
+      // clip — the dense 2013-2025 band lands ~41-96% of frame. dia (94-149,
+      // pin 90-165) already frames cleanly, left unchanged.
       const opts = comboOpts({
         yLeftFormat:  AXIS_FORMAT_INTEGER,
-        yLeftRange:   (govLikeVi ? { min: 210, max: 350 } : { min: 90, max: 165 }),  // R66dd dia index 98-157
+        yLeftRange:   (govLikeVi ? { min: 150, max: 420 } : { min: 90, max: 165 }),  // R66dd dia index 98-157
         yRightFormat: AXIS_FORMAT_PERCENT_1DP,
         yRightRange:  { min: -yoyMax, max: yoyMax },
       });
@@ -1490,16 +1497,20 @@ function buildChartConfig(chart, brand) {
           ],
         },
         options: (() => {
+          const govLikeVC = chart.vertical === 'gov' || chart.vertical === 'government_leased';
           const o = comboOpts({
             yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
             yRightFormat: AXIS_FORMAT_PERCENT_2DP,
-            // Round 17 — widened from 5.0–9.0% to 5.0–10.5%. Gov
-            // upper-quartile hits 10.08% and dialysis upper hits
-            // ~9.5%; the prior 9.0% cap was clipping the top of the
-            // Q1–Q3 floating bars off the chart. User: "needs to
-            // have the y-axis looked at and adjusted so all the data
-            // in cap rates are visible."
-            yRightRange:  { min: 0.050, max: 0.105 },
+            // Round 17 widened the cap (right) axis to 5.0–10.5% so the Q1–Q3
+            // band wasn't clipped. R73 C4 — Scott: "adjust the y-axis on cap
+            // rate so the volume portion isn't hidden behind the cap-rate
+            // data." The band was sitting low on its axis (gov 5.82–9.57% →
+            // ~15–83% of frame; dia 5.70–7.70% → ~13–49%), overlaying the
+            // volume area. Lowering the cap-axis MIN per vertical lifts the
+            // whole band into the upper frame, clearing the lower ~45% for the
+            // volume area — without clipping the top (gov upper-q ~10.08% stays
+            // under 10.5%). Two lanes: volume bottom, cap band top.
+            yRightRange:  govLikeVC ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 },
           });
           // Annotations on Avg Cap Rate (the primary line — peak/trough/last).
           // Round 24 — pin to right axis ('y1' = % axis). Default was 'y'
@@ -1621,17 +1632,21 @@ function buildChartConfig(chart, brand) {
       // riding the bars. The series→sign map is CONFIG (not hard-coded)
       // so a PDF-reconciliation mismatch is a one-line flip. Mirrored in
       // cm-native-chart-injector.js (keep the two in sync). pdf_reconcile.
-      // R70 G25 — per Scott's deck design, all five categories stack POSITIVE
-      // so total bar height = total TTM actions (category-shaded). This
-      // supersedes R68-E's diverging (expired/terminated below zero) for this
-      // chart; the sign map stays CONFIG so a future flip is one line. The
-      // overlay line is now "Total Actions" (= stack height), not signed net.
+      // R70 G25 stacked all five categories POSITIVE (total bar height = total
+      // TTM actions). Round 73 C1 — Scott reverts to the deck p28 DIVERGING
+      // design: additive outcomes (first-gen / renewed / succeeding) stack
+      // ABOVE zero; expired + terminated plot as NEGATIVE bars BELOW zero, and
+      // a gray NET CHANGE line (signed sum of every series) rides the stack.
+      // Mixed-sign stacking on a shared count axis gives the single zero-
+      // crossing axis automatically. The series→sign map is CONFIG so a future
+      // PDF-reconciliation flip is one line. Mirrored in
+      // cm-native-chart-injector.js (keep the two in sync). pdf_reconcile.
       const LEASE_RENEWAL_SERIES = [
         { key: 'first_generation_commencements', label: 'First Generation Commencements', color: palette[3],           sign: +1 },
         { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
         { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
-        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: +1 },
-        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: +1 },
+        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: -1 },
+        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
       ];
       const netData = rows.map(r => {
         let net = 0; let seen = false;
@@ -1656,9 +1671,10 @@ function buildChartConfig(chart, brand) {
               backgroundColor: s.color,
               stack: 'leases',
             })),
-            // Total-actions line on the SAME count axis; its own stack so it
-            // plots at the summed total (= stack height), not onto the bars.
-            { type: 'line', label: 'Total Actions',
+            // Net-change line on the SAME count axis; its own stack so it
+            // plots at the signed sum (additions − subtractions), not onto the
+            // bars. With expired/terminated negative this reads the net trend.
+            { type: 'line', label: 'Net Change',
               data: netData,
               borderColor: '#191919', backgroundColor: 'transparent',
               tension: 0.2, pointRadius: 2, borderWidth: 2.5,
