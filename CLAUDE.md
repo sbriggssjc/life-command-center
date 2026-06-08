@@ -1827,16 +1827,29 @@ FROM public.staged_intake_artifacts;
 VACUUM FULL public.staged_intake_artifacts;   -- ACCESS EXCLUSIVE; ~minutes on ~9.5 GB
 ```
 
-Ordering nuance (grounded 2026-06-08, DB at ~12.6 GB): physical table 9.5 GB vs
-~6.8 GB live inline ⇒ **~2.7 GB is already dead/reclaimable NOW** (the rows the
-cron has already offloaded), so a VACUUM FULL today drops the DB ~12.6 → ~10 GB
-(below warn) even before the backlog fully drains. Running it again AFTER the
-full drain (all `inline_data` nulled) reclaims the rest, taking the DB to ~3-4
-GB. Inflow is heavy (~1.5 GB/day, ~330 large files/day), so the steady-state
-cron mostly keeps pace with NEW arrivals while the 1,400-row backlog drains
-slowly — if faster relief is wanted, a one-shot higher-budget drain from a
-workstation (then a single VACUUM FULL) shrinks the DB sooner than the
-time-budgeted Vercel ticks.
+**Ordering is mandatory — drain FIRST, then VACUUM FULL (proven 2026-06-08).**
+A VACUUM FULL run BEFORE the backlog drains is a NO-OP. Empirically: at DB
+12.631 GB a VACUUM FULL reclaimed ~0 (table stayed 9514 MB) because the ~9 GB
+is **live** base64 `inline_data`, not dead space — the 1,411 rows still holding
+`inline_data` measured **8,972 MB on disk** (`sum(pg_column_size(inline_data))`),
+i.e. essentially the whole table. The 708 already-offloaded rows had their
+`inline_data` nulled but were the SMALL tail and freed almost nothing. (A naive
+`pg_total_relation_size` 9.5 GB vs `sum(size_bytes)` 6.8 GB comparison looks
+like 2.7 GB is reclaimable, but that gap is just **base64 inflation** —
+`size_bytes` is the binary artifact size; the stored base64 is ~1.33× = ~9 GB.
+Don't size the reclaim off `size_bytes`.) So the disk does not drop until the
+LARGE `inline_data` rows are actually offloaded to Storage and nulled, and only
+THEN does VACUUM FULL return the ~9 GB to the OS (DB → ~3-4 GB).
+
+Inflow is heavy (~1.5 GB/day, ~330 large files/day) and the gentle cron's
+per-tick time budget (~7s ⇒ ~2-3 large files/tick × 6 ticks/hr ≈ 290-430
+large/day) is roughly **break-even with inflow** — so the cron holds the
+backlog steady but won't drain it quickly. For real relief, do a **one-shot
+higher-budget drain from a workstation** (Scott's DIA/GOV/LCC service keys,
+controlling concurrency so it stays gentle on the 60-connection tier), then a
+SINGLE VACUUM FULL. Do NOT raise the cron frequency to drain faster — the
+every-5-min variant is exactly what caused the 2026-05-29 connection-exhaustion
+incident.
 
 ### Unit 2 — gov `mv_gov_overview_stats` stale (CONCURRENTLY needs a unique index)
 The gov cron `refresh-gov-overview-stats` (daily 01:00) ran `REFRESH
