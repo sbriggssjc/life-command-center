@@ -393,9 +393,15 @@ export async function advanceCadence(cadenceId, touchData) {
   // Compute next recommended touch
   const updatedCadence = { ...cadence, ...update };
   const nextRec = recommendNextTouch(updatedCadence);
-  if (nextRec.template) {
-    update.next_touch_template = nextRec.template;
-    update.next_touch_type = nextRec.type;
+  // R10 Unit 1 — ALWAYS reschedule after a touch. The previous guard keyed on
+  // `nextRec.template`, but phone/vm touches legitimately carry a null template
+  // (PROSPECTING_SEQUENCE touches 2/4/6 are phone). That left next_touch_due
+  // frozen at the prior value, so the row stayed overdue and the card never
+  // left the band — the #2 break in the 2026-06-07 cadence audit. Reschedule on
+  // any non-blocked recommendation; a null template is valid (phone/vm).
+  if (!nextRec.blocked && nextRec.due_at) {
+    update.next_touch_template = nextRec.template || null;
+    update.next_touch_type = nextRec.type || null;
     update.next_touch_due = nextRec.due_at;
   }
 

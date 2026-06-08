@@ -644,7 +644,7 @@ async function handlePriorityQueueList(req, res) {
     }
   }
   // Stable doctrinal order for the chips.
-  const BAND_ORDER = ['P0','P0.4','P0.5','P-BUYER','P1','P2','P3','P4','P5','P6','P7','P8'];
+  const BAND_ORDER = ['P0','P0.4','P0.5','P-BUYER','P1','P2','P3','P4','P5','P6','P7','P-CONTACT','P8'];
   const counts = Object.keys(countMap)
     .sort((a, b) => (BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b)))
     .map(b => ({ band: b, n: countMap[b] }));
