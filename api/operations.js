@@ -219,7 +219,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'unassigned':  return await getUnassigned(req, res, user, workspaceId);
       case 'watchers':    return await getWatchers(req, res, user, workspaceId);
       case 'buyer_contacts': return await getBuyerContacts(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts' });
+      case 'cadence_dashboard': return await getCadenceDashboard(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard' });
     }
   }
 
@@ -240,8 +241,10 @@ export default withErrorHandler(async function handler(req, res) {
       case 'open_opportunity':   return await bridgeOpenOpportunity(req, res, user, workspaceId);
       case 'open_government_buyer': return await bridgeOpenGovernmentBuyer(req, res, user, workspaceId);
       case 'select_buyer_contact': return await bridgeSelectBuyerContact(req, res, user, workspaceId);
+      case 'select_prospecting_contact': return await bridgeSelectProspectingContact(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
+      case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
 
       // Workflow actions
       case 'promote_to_shared':  return await promoteToShared(req, res, user, workspaceId);
@@ -256,7 +259,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity, advance_cadence. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
         });
     }
   }
@@ -425,6 +428,117 @@ async function bridgeLogCall(req, res, user, workspaceId) {
   return res.status(201).json({
     activity: Array.isArray(result.data) ? result.data[0] : result.data,
     entity_id: resolvedEntityId
+  });
+}
+
+// ============================================================================
+// BRIDGE: Advance cadence (manual "Log touch" from the priority queue) → R10
+//
+// The single advance owner is the JS advanceCadence() function. This endpoint:
+//   1. resolves the active cadence for the entity (or an explicit cadence_id),
+//   2. advances it (advanceCadence ALWAYS reschedules now — R10 Unit 1),
+//   3. writes an activity_events row with the REAL category so history renders
+//      and downstream consumers see the touch. That row is tagged
+//      metadata.skip_cadence_advance='true' so the AFTER-INSERT trigger
+//      lcc_activity_event_advance_cadence does NOT double-advance,
+//   4. refreshes the materialized priority queue so the card leaves its band.
+//
+// Reached via the main action router (POST /api/operations?action=advance_cadence).
+// The Copilot draft-route alias (?_route=draft&action=advance_cadence) still
+// advances but does not log an activity — see handleDraftRoute.
+// ============================================================================
+
+// Map a logged touch type to a canonical activity_events category.
+// Generic 'touch' (the priority-queue "Log touch" CTA) → 'call' per doctrine:
+// the category describes WHAT HAPPENED, and a manual touch is, by default, a
+// human reach-out. email/phone/vm/meeting pass through to their categories.
+function touchTypeToActivityCategory(touchType) {
+  switch ((touchType || '').toLowerCase()) {
+    case 'email':   return 'email';
+    case 'meeting': return 'meeting';
+    case 'phone':
+    case 'vm':
+    case 'call':
+    case 'touch':
+    default:        return 'call';
+  }
+}
+
+async function bridgeAdvanceCadence(req, res, user, workspaceId) {
+  const { cadence_id, sf_contact_id, entity_id, contact_id,
+          type, template_id, outcome, opened } = req.body || {};
+
+  // 1. Resolve the cadence to advance. Prefer an explicit cadence_id; otherwise
+  //    find the active, most-overdue cadence for the entity. We fetch (never
+  //    create) — a "Log touch" only makes sense against an existing cadence.
+  let cadence = null;
+  if (cadence_id) {
+    const r = await opsQuery('GET', `touchpoint_cadence?id=eq.${pgFilterVal(cadence_id)}&limit=1`);
+    cadence = r.ok ? (r.data?.[0] || null) : null;
+  } else if (entity_id || sf_contact_id || contact_id) {
+    const filters = [];
+    if (entity_id) filters.push(`entity_id=eq.${pgFilterVal(entity_id)}`);
+    if (sf_contact_id) filters.push(`sf_contact_id=eq.${pgFilterVal(sf_contact_id)}`);
+    if (contact_id) filters.push(`contact_id=eq.${pgFilterVal(contact_id)}`);
+    // Active phases only; most-overdue first (the row driving the queue band).
+    const path = `touchpoint_cadence?${filters.join('&')}`
+      + `&phase=in.(prospecting,onboarding,steady_state,maintenance,buy_side)`
+      + `&order=next_touch_due.asc.nullslast&limit=1`;
+    const r = await opsQuery('GET', path);
+    cadence = r.ok ? (r.data?.[0] || null) : null;
+  }
+
+  if (!cadence) {
+    return res.status(404).json({ error: 'No active cadence found to advance (provide cadence_id, or an entity with an open cadence)' });
+  }
+
+  // 2. Advance — advanceCadence reschedules next_touch_due into the future.
+  const advanceResult = await advanceCadence(cadence.id, { type, template_id, outcome, opened });
+  if (!advanceResult.ok) {
+    return res.status(500).json(advanceResult);
+  }
+  const advanced = advanceResult.cadence || cadence;
+
+  // 3. Log the touch as an activity_events row (real category; skip-tagged so
+  //    the advance trigger does not double-advance). Best-effort: a failed log
+  //    must not fail the advance, but we report it.
+  let activityLogged = false;
+  if (cadence.entity_id) {
+    const category = touchTypeToActivityCategory(type);
+    const actMeta = {
+      skip_cadence_advance: 'true',
+      bridge_source: 'advance_cadence',
+      touch_type: type || 'touch',
+      cadence_id: cadence.id
+    };
+    if (outcome) actMeta.outcome = outcome;
+    const actRow = {
+      workspace_id: workspaceId, actor_id: user.id,
+      category, title: `Touch logged (${type || 'touch'})`,
+      body: null, entity_id: cadence.entity_id,
+      source_type: 'system', domain: cadence.domain || null,
+      visibility: 'shared', metadata: actMeta,
+      occurred_at: new Date().toISOString()
+    };
+    if (cadence.bd_opportunity_id) actRow.bd_opportunity_id = cadence.bd_opportunity_id;
+    const actResult = await opsQuery('POST', 'activity_events', actRow);
+    activityLogged = !!actResult.ok;
+    if (!activityLogged) {
+      console.warn('[advance_cadence] activity log failed (non-blocking):', actResult.status);
+    }
+  }
+
+  // 4. Refresh the materialized queue so the card leaves its band immediately
+  //    (Slice-1 staleness contract). Soft — a stale cache only costs latency.
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+  return res.status(200).json({
+    ok: true,
+    cadence_id: cadence.id,
+    cadence: advanced,
+    next_touch_due: advanced.next_touch_due,
+    activity_logged: activityLogged,
+    recommendation: advanceResult.recommendation
   });
 }
 
@@ -1270,6 +1384,107 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
     contact_entity_id: contactEntityId, sf_contact_id: sfContactId, contact_name: contactName,
     cadence_id: cad ? cad.id : null, phase: cad ? cad.phase : 'buy_side',
     next_touch_due: cad ? cad.next_touch_due : null,
+  });
+}
+
+// ============================================================================
+// GET cadence_dashboard (R10 Unit 4) — render v_bd_cadence_dashboard
+//
+// One row per active cadence with phase, touch N, due/overdue, last outcome,
+// engagement counts, and the portfolio context. Drives the cadence tab + the
+// draft/mark-sent outreach surface. Ordered most-overdue first.
+// ============================================================================
+async function getCadenceDashboard(req, res, user, workspaceId) {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const phase = req.query.phase ? String(req.query.phase).trim() : null;
+  let path = 'v_bd_cadence_dashboard?workspace_id=eq.' + pgFilterVal(workspaceId)
+    + '&order=days_overdue.desc.nullslast,next_touch_due.asc.nullslast'
+    + '&limit=' + limit;
+  if (phase) path += '&phase=eq.' + pgFilterVal(phase);
+  const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load cadence dashboard', detail: r.data });
+  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
+}
+
+// ============================================================================
+// BRIDGE: Select prospecting contact (R10 Unit 3) — P-CONTACT lane
+//
+// A prospecting cadence with no reachable contact is parked in P-CONTACT. This
+// attaches the chosen contact to the EXISTING active cadence (it does NOT seed a
+// new buy-side cadence — that is the P-BUYER path). Effect: resolve/create the
+// person, link person→entity (associated_with → makes the entity "connected"),
+// and stamp the contact onto the entity's active cadence (contact_id has no FK;
+// sf_contact_id is free text), so the reachability gate now passes and the row
+// leaves P-CONTACT for the cadence bands. Refreshes the queue cache.
+// ============================================================================
+async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const entityId = String(b.entity_id || '').trim();
+  if (!entityId) return res.status(400).json({ error: 'entity_id is required' });
+
+  let contactEntityId = b.contact_entity_id ? String(b.contact_entity_id).trim() : null;
+  let sfContactId = b.sf_contact_id ? String(b.sf_contact_id).trim() : null;
+  let contactName = b.contact_name ? String(b.contact_name).trim() : null;
+  const newName = b.new_contact_name ? String(b.new_contact_name).trim() : null;
+
+  // Create a new person entity when requested.
+  if (!contactEntityId && !sfContactId && newName) {
+    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    const ins = await opsQuery('POST', 'entities',
+      { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
+    const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;
+    if (!ins.ok || !row) return res.status(502).json({ error: 'create_contact_failed', detail: ins.data });
+    contactEntityId = row.id; contactName = newName;
+  }
+  if (!contactEntityId && !sfContactId) {
+    return res.status(400).json({ error: 'Provide contact_entity_id, sf_contact_id, or new_contact_name' });
+  }
+
+  // Link person→entity (associated_with) — dupe-guarded (no unique index).
+  if (contactEntityId) {
+    try {
+      const exists = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
+        + '&from_entity_id=eq.' + pgFilterVal(entityId) + '&to_entity_id=eq.' + pgFilterVal(contactEntityId) + '&limit=1');
+      if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
+        await opsQuery('POST', 'entity_relationships', {
+          workspace_id: workspaceId, from_entity_id: entityId, to_entity_id: contactEntityId,
+          relationship_type: 'associated_with', metadata: { role: 'prospecting_contact', via: 'priority_queue' },
+        });
+      }
+    } catch (_e) { /* non-fatal */ }
+    if (!contactName) {
+      try {
+        const ce = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(contactEntityId) + '&select=name&limit=1');
+        if (ce.ok && Array.isArray(ce.data) && ce.data[0]) contactName = ce.data[0].name || null;
+      } catch (_e) { /* soft */ }
+    }
+  }
+
+  // Stamp the contact onto the entity's active cadence (effect FIRST). Most
+  // overdue active cadence is the one driving the P-CONTACT card.
+  const patch = {};
+  if (contactEntityId) patch.contact_id = contactEntityId;
+  if (sfContactId) patch.sf_contact_id = sfContactId;
+  let cadenceId = null;
+  if (Object.keys(patch).length) {
+    const cadGet = await opsQuery('GET', 'touchpoint_cadence?entity_id=eq.' + pgFilterVal(entityId)
+      + '&phase=in.(prospecting,onboarding,steady_state,maintenance)'
+      + '&order=next_touch_due.asc.nullslast&select=id&limit=1');
+    const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
+    if (!cadRow) {
+      return res.status(404).json({ error: 'no_active_cadence', detail: 'No active cadence on this entity to attach the contact to' });
+    }
+    const upd = await opsQuery('PATCH', 'touchpoint_cadence?id=eq.' + pgFilterVal(cadRow.id), patch);
+    if (!upd.ok) return res.status(502).json({ error: 'cadence_attach_failed', detail: upd.data });
+    cadenceId = cadRow.id;
+  }
+
+  // Staleness hook: the entity is now reachable — it leaves P-CONTACT.
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+  return res.status(200).json({
+    ok: true, entity_id: entityId, contact_entity_id: contactEntityId,
+    sf_contact_id: sfContactId, contact_name: contactName, cadence_id: cadenceId,
   });
 }
 

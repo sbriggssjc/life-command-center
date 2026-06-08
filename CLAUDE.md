@@ -1451,3 +1451,185 @@ botblock seed→sweep round-trip (open→superseded, 0 residue); match_disambigu
 sweep (stays open for a live review_required intake, supersedes for a resolved
 one). New lane types are type-ready (0 open today — they appear when an engine
 hits ambiguity).
+
+## R10 — close the cadence → outreach loop (2026-06-07)
+
+The 2026-06-07 outreach audit found the cadence engine built but the loop had
+never closed once (392 rows, 383 overdue, `last_touch_at` NULL on every row).
+Five independent breaks. R10 fixes them unit by unit; Unit 1 ships first.
+
+### Unit 1 — fix the advance path (shipped)
+Three breaks, one surgical fix each:
+
+1. **Queue CTA hit the wrong router.** `ops.js pqLogTouch` POSTs
+   `/api/operations?action=advance_cadence`, but `advance_cadence` only existed
+   under the `?_route=draft` sub-router, so every "Log touch" 400'd. Fix:
+   `advance_cadence` is now a first-class case in the **main** POST action
+   router (`api/operations.js`), handled by **`bridgeAdvanceCadence`**. The
+   Copilot `?_route=draft&action=advance_cadence` alias still works (unchanged)
+   for the agent registry.
+
+2. **`advanceCadence` didn't reschedule.** `api/_shared/cadence-engine.js`
+   guarded the reschedule on `if (nextRec.template)` — but PROSPECTING_SEQUENCE
+   phone touches (2/4/6) carry a **null template**, so `next_touch_due` stayed
+   frozen and the card never left the band. Fix: reschedule on any non-blocked
+   recommendation (`if (!nextRec.blocked && nextRec.due_at)`), null template is
+   valid. Regression test: `test/cadence-advance.test.mjs` asserts
+   `next_touch_due > now()` after a null-template phone advance.
+
+3. **No activity row / double-advance risk.** `bridgeAdvanceCadence` now writes
+   an `activity_events` row with the **real category** (generic `touch` → `call`;
+   email/meeting pass through) and the cadence's `entity_id`, so the touch
+   renders in history. A successful advance also calls
+   `lcc_refresh_priority_queue_resolved()` so the card leaves its band within
+   the request (Slice-1 staleness contract).
+
+**Single advance owner (the doctrine — documented per the audit ask):** the JS
+`advanceCadence()` function is the **single owner** of the advance. Every JS
+human-touch writer that advances a cadence itself tags its `activity_events`
+row `metadata.skip_cadence_advance='true'`. The SQL AFTER-INSERT trigger
+`lcc_activity_event_advance_cadence` now **skips** those tagged rows (migration
+`20260608150000_lcc_r10_unit1_cadence_advance_skip_guard.sql`, applied live —
+safe DB-first, no deployed writer set the flag yet), so each activity advances
+the cadence **exactly once**: the JS path owns its own advance, and the trigger
+remains the advance owner only for **unflagged organic** activities (Unit 2 —
+calls/emails logged outside `bridgeAdvanceCadence`).
+
+**Vocabulary note (pre-existing dual system):** JS `advanceCadence` advances on
+the `PROSPECTING_SEQUENCE` (phases `prospecting`/`maintenance`, `T-*` templates);
+the trigger's organic path advances via SQL `lcc_advance_onboarding_cadence`
+(phases `onboarding`/`steady_state`, `onboarding_*` templates), so an organic
+touch on a `prospecting` row flips it to `onboarding`. Unifying the two
+vocabularies is a deferred follow-up; both reschedule correctly, so the loop
+closes either way.
+
+Verified live (synthetic rows, 0 residue): a `skip_cadence_advance` call left
+the cadence untouched (touch unchanged, due stays past); an unflagged email
+advanced it (touch +1, `next_touch_due` into the future). `node --check` clean;
+12 functions; full suite green except 2 pre-existing CM chart failures.
+
+### Unit 2 — close the organic loop (shipped)
+Two structural gaps that meant an organically-logged touch never advanced a
+cadence:
+
+1. **Asset→owner hop (the trigger).** A human touch logged from a property
+   detail page (`bridgeLogCall` etc.) resolves its entity to the **asset**
+   (`sourceType='asset'`), but cadences live on the **owner** (person/org) that
+   `owns` the asset. The advance trigger looked the cadence up on the asset,
+   found none, and no-op'd. Now, when no cadence is found on the activity's
+   entity directly, the trigger follows the `owns` relationship (owner =
+   `from_entity`, asset = `to_entity`) to an active owner cadence — implemented
+   in **one place** (the trigger), restricted to `owns` (true ownership, not
+   brokerage/sale-side edges). Migration
+   `20260608151000_lcc_r10_unit2_cadence_asset_owner_hop.sql` (live).
+
+2. **Off-sequence touches now advance.** The trigger previously only
+   rescheduled when the logged type matched `next_touch_type`; a mismatch
+   (e.g. a call against an email-next cadence) bumped counters only, so the
+   card stayed overdue. Doctrine: **any human touch is a touch** — the trigger
+   now always calls `lcc_advance_onboarding_cadence` (which reschedules +
+   handles counters) on email/call/meeting.
+
+Swept writers (emit real categories on the right entity): `bridgeLogCall`
+(`call`, asset entity → hop), `bridgeLogActivity` (passthrough
+`email`/`call`/`meeting`). The Today-page SF reschedule flow (`app.js`) advances
+directly via the draft route keyed by `sf_contact_id` — a separate path, left
+as-is.
+
+Verified live (synthetic, 0 residue): a **call logged on an asset** whose owner
+had an overdue email-next cadence advanced the **owner's** cadence (touch 2→3)
+and moved `next_touch_due` into the future.
+
+### Unit 3 — cadence universe hygiene (shipped)
+Doctrine (Scott): a cadence without a reachable contact is not a next action —
+it is contact-resolution work. The 2026-06-07 audit found ~381 contactless
+`prospecting` cadences born overdue, flooding **P7** with "email a shell with no
+address" cards. Run order matters: **retype BEFORE the gate** (the gate's
+"person-contact relationship" predicate + the contact picker both key on
+person-vs-org).
+
+1. **Retype pass (Unit 3a, reversible).** Migration
+   `20260608152000_lcc_r10_unit3a_retype_firm_persons.sql` retypes cadence-bearing
+   `person` entities whose NAME carries a firm suffix (SQL mirror of
+   `entity-link.js` `ENTITY_FIRM_SUFFIX_RE`) → `organization`. Prior type stashed
+   in `metadata.retyped_from` / `retype_source='r10_unit3'` (soft, reversible, no
+   hard delete). **75 retyped** live. Names with no recognized suffix (e.g.
+   "Prologis") stay `person` — the gate parks them anyway and the picker offers
+   "add contact" regardless of type.
+
+2. **Reachability gate + P-CONTACT lane (Unit 3b).** Migration
+   `20260608153000_lcc_r10_unit3b_cadence_reachability_gate.sql` re-gates the
+   three cadence bands (P0 `developer_overdue`, P6 `onboarding_step_due`, P7
+   `steady_state_cadence_due`) in `v_priority_queue_live` on **reachability**:
+   `cadence has sf_contact_id OR contact_id OR the entity is "connected"
+   (Salesforce identity, or a relationship to a person-typed entity)`. Unreachable
+   overdue cadences move to a new **P-CONTACT** band (`select_prospecting_contact`).
+   **The gate lives in the VIEW, not a row mutation — so it is re-seed-proof by
+   construction**: a future cadence-seed pass cannot resurrect a contactless row
+   into P7; the live predicate always re-evaluates. P-CONTACT (and surviving
+   cards) rank by portfolio rent via the existing enriched rollup join.
+   - **Gotcha fixed:** the P-CONTACT branch first used `NOT IN (reachable)`, and
+     `reachable` can contain a NULL entity_id (one cadence has a null entity) →
+     `NOT IN` collapsed to zero rows. Switched to `NOT EXISTS` + `entity_id IS
+     NOT NULL`. The gated bands use `IN` (NULL-safe), so only P-CONTACT was hit.
+   - Verified live post-refresh: **P7 379→68** (the reachable set — the expected
+     honest collapse), **P6 4→1**, **P0 2→0**, **P-CONTACT = 314**. All
+     non-cadence bands byte-identical (P0.4=498, P0.5=74, P1–P8, P-BUYER) — no
+     collateral. Spot-checks: parked = 29th Street Capital / Acquest Development
+     (firms), Adelaide Polsinelli / AJ Tolbert / Akram A. Abdeljaber (people with
+     no contact info); survivors = Adam D. Portnoy / Adam Meyer (reachable via SF).
+
+3. **JS — the P-CONTACT CTA (generalizes the P-BUYER picker).** `ops.js`:
+   `_pqCtaState` → `select_contact` for P-CONTACT; **"Select prospecting contact
+   →"** opens the same contact picker the P-BUYER lane uses
+   (`pqSelectProspectingContact` reuses the `?action=buyer_contacts` candidate
+   loader + `_pqBuyerContactHTML`; `_pqBuyerContactSubmit` branches on
+   `ctx.mode`). New endpoint `api/operations.js` `select_prospecting_contact`
+   (`bridgeSelectProspectingContact`): resolve/create the person, link
+   person→entity (`associated_with` → makes the entity "connected"), stamp the
+   contact onto the entity's **existing** active cadence (`contact_id` has no FK;
+   `sf_contact_id` is free text) — does NOT seed a buy-side cadence (that's
+   P-BUYER) — then refresh the queue. `admin.js` `BAND_ORDER` adds `P-CONTACT`
+   (after P7). Verified live (synthetic, 0 residue): attaching a contact moved
+   the row **P-CONTACT → P7**.
+
+### Unit 4 — minimum outreach surface (shipped)
+The smallest loop that lets the operator work a touch end to end, with **no
+sending integration and no new function files** (scope floor):
+
+- **Cadence dashboard.** New GET `api/operations.js?action=cadence_dashboard`
+  reads `v_bd_cadence_dashboard` (workspace-scoped, most-overdue first). `ops.js`
+  `renderCadenceDashboard()` renders one row per active cadence (phase, touch N,
+  due/overdue, last outcome, engagement, portfolio context), reached from a
+  "Cadence dashboard →" button on the Priority Queue header. The view has **no
+  phase filter**, so it is also the visible home for the parked/contactless
+  prospecting rows AND any `buy_side` cadence the P-BUYER contact step seeds —
+  the dashboard renders those automatically once they exist.
+- **Draft → copy/mailto → Mark sent.** Email-next rows get **"Draft email →"**
+  (`cadDraft`) → POST `?_route=draft&action=generate` with the row's
+  `next_touch_template` + entity context → renders subject + editable body inline
+  with **Copy** (clipboard), **Open in mail** (`mailto:`), and **Mark sent →**.
+  `cadMarkSent` → POST `?_route=draft&action=record_send` → which advances the
+  cadence via **`advanceCadence` — the Unit-1 single advance owner** (record_send
+  writes no activity row, so there is no trigger double-advance). The card
+  settles to "✓ Sent & recorded — cadence advanced".
+- **Non-email touches.** call/vm-next rows get **"Log touch →"** (`cadLogTouch`)
+  → POST `?action=advance_cadence` (the Unit-1 endpoint) — same single advance
+  path, never a second owner.
+
+Verified: dashboard query returns real cadences with templates (Acquest
+Development / Duchene Family Trust …); `record_send` confirmed to advance through
+`advanceCadence` (no second advance owner); `node --check` clean; 12 functions;
+suite green except 2 pre-existing CM chart failures. The live end-to-end (draft →
+mark sent → cadence advances → card clears) is verified on the deployed app after
+merge (the draft/record_send routes need the running server).
+
+### Follow-ups (not in R10)
+- Unify the prospecting (`T-*`) and onboarding (`onboarding_*`) cadence
+  vocabularies (both reschedule correctly today; the trigger's organic path flips
+  prospecting→onboarding).
+- Resolve recipient email for the draft `mailto:` (entities carry no email; the
+  contact picker's SF path is the eventual source) — today `mailto:` opens with an
+  empty `to:` for the operator to fill, Copy is always available.
+- Render the cadence/buy-side state in the entity-detail Next-Step banner (the
+  full "one truth, three renderings").
