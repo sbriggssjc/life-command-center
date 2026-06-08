@@ -28,7 +28,7 @@ import { domainQuery } from './_shared/domain-db.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
-import { findSalesforceAccountByName, isSalesforceConfigured } from './_shared/salesforce.js';
+import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceOpportunity } from './_shared/salesforce.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
@@ -108,6 +108,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'chain-classify-tick':     return handleChainClassifyTick(req, res);
     case 'intake-rematch':         return handleIntakeRematch(req, res);
     case 'sf-link-tick':            return handleSfLinkTick(req, res);
+    case 'gov-buyer-sync':          return handleGovBuyerSync(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
@@ -5876,6 +5877,122 @@ async function handleSfLinkTick(req, res) {
     result.by_domain[dom] = summary;
   }
 
+  return res.status(200).json(result);
+}
+
+// ============================================================================
+// GOVERNMENT-BUYER → SALESFORCE OPPORTUNITY PUSH (R12 Unit 2, 2026-06-08)
+// GET/POST /api/gov-buyer-sync
+//   Closes the loop R5 left open: `v_lcc_government_buyer_sync_health` reported
+//   `ready_to_sync` government_buyer opps (mapped PARENT sf_account_id, but
+//   sf_opp_id still NULL) and NOTHING consumed it. This worker reads those rows
+//   and creates the Salesforce Opportunity on the mapped PARENT account
+//   (never a subsidiary SPE — R5 doctrine), then writes the returned SF id back
+//   to bd_opportunities.sf_opp_id.
+//
+//   GET  = dry-run (lists what would be pushed; NO writes, NO SF calls).
+//   POST = push. Effect-first + outcome-truthful: on SF failure the opp stays
+//          `ready_to_sync` and the item records why; sf_opp_id is only written
+//          after SF returns an id.
+//   Idempotency: rows already carrying sf_opp_id never resync (the view already
+//   classifies them `synced`, so they don't appear; the worker double-guards).
+//   `hold_unmapped` rows are reported but never pushed (they surface in the
+//   Decision Center `map_sf_parent_account` lane until mapped).
+//
+//   Until the Power Automate flow implements a `create_opportunity` case,
+//   createSalesforceOpportunity returns ok:false reason='unsupported'/'unavailable'
+//   and every row stays ready_to_sync — honest no-op, no false sf_opp_id. See the
+//   flow-contract spec in api/_shared/salesforce.js::createSalesforceOpportunity.
+// ============================================================================
+async function handleGovBuyerSync(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '25', 10)));
+
+  // Read the readiness view — the single source of truth for what to push.
+  const hr = await opsQuery('GET',
+    'v_lcc_government_buyer_sync_health?select=opportunity_id,parent_entity_id,parent_name,'
+    + 'vertical,sf_account_id,sf_opp_id,sync_status&order=opened_at.asc');
+  if (!hr.ok) return res.status(502).json({ error: 'health_read_failed', detail: hr.data });
+  const rows = Array.isArray(hr.data) ? hr.data : [];
+
+  const ready   = rows.filter(r => r.sync_status === 'ready_to_sync' && !r.sf_opp_id);
+  const held    = rows.filter(r => r.sync_status === 'hold_unmapped');
+  const already = rows.filter(r => r.sync_status === 'synced' || r.sf_opp_id);
+
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    handler_configured: isSalesforceConfigured(),
+    ready_to_sync: ready.length,
+    hold_unmapped: held.length,
+    already_synced: already.length,
+    pushed: 0,
+    failed: 0,
+    items: [],
+  };
+
+  if (dryRun) {
+    result.items = ready.slice(0, limit).map(r => ({
+      opportunity_id: r.opportunity_id, parent_name: r.parent_name,
+      sf_account_id: r.sf_account_id, outcome: 'would_push',
+    }));
+    result.held = held.map(r => ({ parent_name: r.parent_name, parent_entity_id: r.parent_entity_id }));
+    return res.status(200).json(result);
+  }
+
+  if (!isSalesforceConfigured()) {
+    return res.status(200).json(Object.assign(result, {
+      note: 'Salesforce flow not configured (SF_LOOKUP_WEBHOOK_URL unset); nothing pushed.',
+    }));
+  }
+
+  for (const r of ready.slice(0, limit)) {
+    const item = { opportunity_id: r.opportunity_id, parent_name: r.parent_name, sf_account_id: r.sf_account_id };
+    try {
+      // Double-guard idempotency: re-read this opp's sf_opp_id right before the
+      // write so two overlapping ticks can't double-create.
+      const cur = await opsQuery('GET',
+        'bd_opportunities?select=sf_opp_id&id=eq.' + pgFilterVal(r.opportunity_id) + '&limit=1');
+      if (cur.ok && Array.isArray(cur.data) && cur.data[0] && cur.data[0].sf_opp_id) {
+        item.outcome = 'already_synced'; item.sf_opp_id = cur.data[0].sf_opp_id;
+        result.items.push(item); continue;
+      }
+
+      // Effect FIRST: create the SF Opportunity on the mapped PARENT account.
+      const sf = await createSalesforceOpportunity({
+        accountId: r.sf_account_id,
+        name: (r.parent_name || 'Buyer') + ' — Government Buyer',
+        stageName: 'Prospecting',
+        idempotencyKey: String(r.opportunity_id),
+      });
+      if (!sf.ok || !sf.opportunity || !sf.opportunity.Id) {
+        item.outcome = 'failed'; item.reason = sf.reason || 'sf_create_failed';
+        result.failed += 1; result.items.push(item); continue;
+      }
+
+      // Only after SF returns an id: write it back. Stays ready_to_sync if this
+      // PATCH fails (no false 'synced').
+      const pr = await opsQuery('PATCH', 'bd_opportunities?id=eq.' + pgFilterVal(r.opportunity_id),
+        { sf_opp_id: sf.opportunity.Id, updated_at: new Date().toISOString() });
+      if (!pr.ok) {
+        item.outcome = 'sf_created_writeback_failed';
+        item.sf_opp_id = sf.opportunity.Id; item.reason = pr.data;
+        result.failed += 1; result.items.push(item); continue;
+      }
+      item.outcome = 'pushed'; item.sf_opp_id = sf.opportunity.Id;
+      result.pushed += 1; result.items.push(item);
+    } catch (err) {
+      item.outcome = 'error'; item.reason = String(err?.message || err).slice(0, 300);
+      result.failed += 1; result.items.push(item);
+    }
+  }
+
+  result.held = held.map(r => ({ parent_name: r.parent_name, parent_entity_id: r.parent_entity_id }));
   return res.status(200).json(result);
 }
 
