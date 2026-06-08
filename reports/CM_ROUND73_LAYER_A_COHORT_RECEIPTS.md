@@ -120,24 +120,89 @@ the lever is the Phase-1 rent work, not more pooling.
 
 ---
 
-## What shipped this session
+---
 
-- **Live (gov DB `scknotsqkcheojiaewwh`):** `cm_gov_cap_by_term_m` + `_q` TTM
-  1yr→2yr (and `_q` gate 3→5). Migration tracked at
-  `supabase/migrations/20260715_cm_round73_a_gov_cap_by_term_2yr_ttm.sql`.
-  No JS/Railway deploy required — the chart reads the view per request.
-- This receipts doc.
+## Layer A completion — the other five charts (session 2, 2026-06-08)
 
-## Scoped follow-ups (NOT done this session)
+Finished the full Layer A theme so the next export doesn't read "fixed on one of
+six." Each applied live + verified before/after; sold-side kept separate from the
+asking-side pool throughout (per directive).
 
-- **gov #22** seller_sentiment: confirm the cohort is **6+yr** (R70 A1 "core")
-  and fix the LABELS (`cm_gov_seller_sentiment_m` currently splits "all" vs a
-  "long_term" cohort — verify the threshold and relabel).
-- **dia #5 / #11** Asking Cap by term / buckets: listings-based asking views,
-  not yet investigated — apply the same gate+pool discipline if they cross.
-- **dia #10 / gov #25** dot charts: individual-sale scatters; verify both read
-  the canonical gated dot series (dia does post-66x).
-- The stale **`public/reports/cm_chart_catalog.json`** should be re-exported
-  from the live `cm_chart_catalog` (it still lists `_q` for cap_rate_by_lease_term).
-- **Layers B (data/logic bugs), C (chart design), D (x-axis reach)** — untouched;
-  each is its own session per the Round 73 prompt ("A alone is a full session").
+### #11 dia Asking Cap Ranges by Term Buckets — `cm_dialysis_asking_cap_by_term_m`
+Same disease as #14 (1yr TTM + n≥3); the sparse **6-8yr** asking cohort sat at
+n=4–17 in 2020 and spiked to 7.6–7.8%. **Fix:** TTM 1yr→2yr, gate 3→5. 2019 and
+2023–2026 order cleanly. The residual **2020–2022 6-8 elevation survives 2yr
+pooling at n=26–105 → genuine** asking-side behavior (asking caps are broker
+theater, don't obey the term premium), documented not smoothed away.
+*Asking-only view; the sold dot is untouched.*
+
+### #5 dia Asking Cap Quartiles — Active Listings — `cm_dialysis_asking_cap_quartiles_active_m`
+Was **point-in-time, no TTM**: core-10+ band rode n_core=**2–8** listings/month
+(quartiles of 2–4 points = noise); total upper-Q spiked when n_total fell to
+12–17. **Fix:** pool quartiles over a trailing 2yr window → n_total 317–1249,
+n_core 108–212; bands stable, core sits cleanly inside/below total. *Caveat:
+quartile-over-listing-months weights by time-on-market — an honest reading of
+"asking caps visible over the window"; documented.*
+
+### #22 gov Seller Sentiment — `cm_gov_seller_sentiment_m` + labels
+Cohort was 10+yr ("long-term"); R70 A1 deliberately left it there, **Scott now
+overrides** → gov 6+yr **core**. **Fix:** threshold 10→6 (column names kept).
+The 10+ cohort was near-empty in the tail (R70 A1: n=0–2 in 2024–25); **6+ carries
+n=5–17** and the long-term sentiment line now renders where it was NULL —
+resolving the "missing data" half too. **Labels made vertical-aware** (gov "6+
+yr" / dia "10+ yr", which also corrects a stale "8+ Yr" mislabel in the PNG
+renderer) in `cm-excel-export.js` (data-sheet headers → injector series titles)
+and `cm-chart-image-renderer.js` (PDF). dia's cohort is unchanged (stays 10+).
+
+### #25 gov Closed-Sales-by-Term dot — `cm_gov_sold_cap_by_term_dot`
+The "_dot" view emits per-period cohort AVERAGES — the SAME closed-sales cohort
+as #14, just markers — and carried the identical 1yr-TTM + n≥3 bug. **Same fix**
+(TTM 1yr→2yr, gate 3→5) so the line (#14) and its dot twin can't disagree.
+Result mirrors #14: ordered 2018–2023, genuine 2024+ inversion.
+
+### #10 dia Closed-Sales-by-Term dot — `cm_dialysis_sold_cap_by_term_dot` — NO CHANGE
+Cross-check only: this IS the canonical Round-66x sold series (cap_rate_final,
+n≥3, 9-month smoothing). **Left untouched per directive** — sold-side stays
+separate from the asking-side 2yr pool; its residual is the documented Phase-1
+broker-cap structural item, not a crossing bug.
+
+### Catalog drift fix
+Reconciled `public/reports/cm_chart_catalog.json` `view_name` fields to the live
+`cm_chart_catalog` table — **9 of 25** were stale (incl. cap_rate_by_lease_term
+`_q`→`_m`, plus volume/count/cap-ttm/quartile/avg-deal/nm-vs-market/macro). The
+JSON is documentation-only (runtime reads the table), but the drift could have
+misled a future round into editing the wrong object.
+
+---
+
+## What shipped (both sessions)
+
+**Live DB views (no Railway deploy needed — read per request):**
+| # | View | DB | Change |
+|---|---|---|---|
+| 14 | `cm_gov_cap_by_term_m` (+`_q`) | gov | TTM 1yr→2yr, gate 3→5 |
+| 25 | `cm_gov_sold_cap_by_term_dot` | gov | TTM 1yr→2yr, gate 3→5 |
+| 22 | `cm_gov_seller_sentiment_m` | gov | cohort 10+→6+ core |
+| 11 | `cm_dialysis_asking_cap_by_term_m` | dia | TTM 1yr→2yr, gate 3→5 |
+| 5 | `cm_dialysis_asking_cap_quartiles_active_m` | dia | 2yr quartile pool |
+| 10 | `cm_dialysis_sold_cap_by_term_dot` | dia | **unchanged** (canonical 66x) |
+
+Migrations tracked at `supabase/migrations/20260715_cm_round73_a_*.sql`.
+
+**JS (ships on Railway redeploy of merged `main`):** vertical-aware seller-sentiment
+labels in `api/_shared/cm-excel-export.js` + `api/_shared/cm-chart-image-renderer.js`
+(`node --check` clean). The DB cohort change (#22) is live now; the label text
+updates land with the deploy — graceful, deploy-order safe.
+
+**Docs:** this receipts file; `public/reports/cm_chart_catalog.json` drift fix.
+
+## Honest residuals (genuine, documented — not bugs)
+- gov #14/#25: 2024–2026 term-premium **inversion** is real post-2023 repricing.
+- dia #11: 2020–2022 **6-8 elevation** is genuine asking-side broker-theater.
+- dia #5: quartiles pool over listing-months (time-on-market weighting).
+- dia sold fan compression (#10): the Phase-1 rent_at_sale item (unchanged here).
+
+## Still open (next sessions, per the Round 73 prompt)
+- **Layer B** (data/logic bugs — #9 active-universe over-count, #20 NM-vs-Market,
+  #8/#24 on-market storage, #13 credit tier, #21/#1), **Layer C** (chart design —
+  #17/#18/#23/#26), **Layer D** (x-axis reach). Each is its own session.
