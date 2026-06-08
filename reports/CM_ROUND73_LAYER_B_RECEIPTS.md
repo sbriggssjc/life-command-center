@@ -86,11 +86,28 @@ and sits **above** our market (6.76%) — wrong direction. dia's cap-rate basis
 diverges from the deck even more than gov's. **Not committed** — awaiting Scott
 on the cap-basis question.
 
-**Open question for Scott (back through the gate):** the flag cleaning is done
-and correct, but the NM-below-market value-prop spread needs the cap-rate basis
-addressed (repoint the chart to master-curated NM/market caps?), OR a decision
-on the gov view window (1yr = NM below but blanks recently / 2yr = continuous but
-NM-above). The flag fix stands regardless; dia flag commit is held.
+**RESOLUTION (Scott, 2026-06-08) — splits by vertical, spawns Round 74:**
+- **Gov flag: committed and final.** NM 6.79% ≈ deck 6.78%, NM below market on the
+  1yr basis — directionally correct, the value-prop point. The residual spread gap
+  (our market 6.87% vs deck's non-NM ~7.35%) is the documented **curated-vs-market
+  cap-basis** difference (deck on master-curated/broker-confirmed caps; our
+  broad-DB `sold_cap_rate` runs lower on the non-NM side) — resolved in Round 74
+  Task 5, NOT by forcing the flag. Gov view left on the 2yr/±2mo continuity
+  stopgap; Round 74 Task 5 finalizes the window on the curated-comp basis.
+- **Dia flag: NOT committed (held).** Master re-derivation regressed (clean NM
+  7.29% > market, worse than the contaminated 6.59%). A Salesforce spot-check
+  showed the master **under-covers dia** — ~50 real NM listing deals were never in
+  it. Dia NM identity can't come from the master; it waits for the authoritative
+  source.
+- **Round 74 — `CLAUDE_CODE_PROMPT_round74_salesforce_authoritative_nm.md`:** make
+  Salesforce the live authoritative source for `is_northmarq` on both verticals,
+  via a **multi-signal OR'd classifier** (tenant/operator dictionaries, agency
+  patterns, lease-ID format, property linkage, NM-broker signal) — NOT a single SF
+  subtype/checkbox (Scott: SF entered by many hands; "Is Government"/"Dialysis"
+  often unset, esp. multi-tenant). Build on the existing `intake-salesforce`
+  plumbing. Task 5 recomputes the value-prop chart on the curated-comp cap basis
+  (gov post-7d curated caps; dia via the master) to reproduce the deck's full
+  spread.
 
 ---
 
