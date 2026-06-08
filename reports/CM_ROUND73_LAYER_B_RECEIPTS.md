@@ -51,31 +51,46 @@ Migration: `supabase/migrations/20260715_cm_round73_b_dia_market_turnover_active
 
 ---
 
-## #20 gov NM-vs-Market — is_northmarq contamination 🔄 IN PROGRESS (dry-run → gate)
+## #20 gov NM-vs-Market — is_northmarq contamination ✅ FLAG FIXED · ⚠️ spread is a cap-basis follow-up
 
-**The premise was inverted, and the root cause is a data bug, not the chart
-method.** Receipt: the view shows NM cap **ABOVE** non-NM market for ~90% of the
-series (2019–22 NM ~7.0–7.3% vs market ~6.6–6.9%), labels correct, method sound.
+**Premise was inverted; root cause was a data bug (the flag), not the chart
+method.** The view showed NM cap **ABOVE** non-NM market for ~90% of the series
+(2019–22 NM ~7.0–7.3% vs market ~6.6–6.9%), labels correct, method sound.
 
-**Root cause (Scott-confirmed):** `is_northmarq` is contaminated by the loose R23
-broker-string backfill + 20 mis-flagged 7d rows, so the NM cohort averages
-~7.92% vs the deck's real NM 6.78% (~57bps *below* non-NM). Authoritative rule:
-a gov sale is Northmarq iff its **LISTING** broker is Stan Johnson Company
-("SJC") or Northmarq (Team Briggs + individuals sit under the SJC prefix). Source
-of truth: master Sold sheet **L. BROKER** column (`staging.gov_master_sold`,
-116 NM-listed deals).
+**Root cause (Scott-confirmed):** `is_northmarq` contaminated by the loose R23
+broker-string backfill — 169 flagged, NM cohort averaged 7.92% vs the deck's
+real NM 6.78%. Rule: NM iff the **LISTING** broker is SJC ("SJC; Briggs/…") or
+Northmarq. Source: master `L. BROKER` (`staging.gov_master_sold`, 116 NM-listed).
 
-**Plan (dry-run → Scott's gate → commit; flag column only, no price/term):**
-1. For gov sales matched to a master row, set `is_northmarq` from master
-   `L. BROKER ~ '^(SJC|Stan Johnson|Northmarq)'`; unmatched sales fall back to
-   our own `listing_broker` on the same pattern (NOT purchasing broker, NOT a
-   generic contains).
-2. Audit the current 141 flags — report which lose the flag (competitor-listed
-   contaminants) and which are added.
-3. Recompute `cm_gov_nm_vs_market_m`; verify NM lands near the deck's 6.78% /
-   ~40–57bps below non-NM at 2024-Q2.
-4. Confirm the chart now shows the NM line below market; provenance-tag the
-   re-derivation.
+**Shipped (gated, live):**
+- **Flag re-derivation** (`…_gov_is_northmarq_rederive.sql`): **169 → 66**.
+  96 removed = **92 with no NM broker at all** + **4 NM-as-buyer**; **0 false
+  drops**. Clean NM 2024-Q2 (1yr TTM) = **6.79%** (deck 6.78%). ✓
+- **View window** (`…_gov_nm_vs_market_2yr_window.sql`): 2yr TTM both lines,
+  n≥3, smoothing ±4mo→±2mo (keeps the thin clean NM line continuous).
+
+**The spread did NOT flip to the deck's ~50–72bps — and it's the MARKET line,
+not the flag.** Reconciled to the view's exact `NOT is_nm AND brokered`: it
+computes **6.87%** at 2024-Q2 (1yr; banded/unbanded/all-deals all ≈ 6.87%, only
+raw-incl-implausible reaches 7.33%) — **not** the 7.50% in Scott's receipt. So
+the deck's wide spread depends on the deck's **cap-rate basis (master-curated
+caps)**, which our transaction `sold_cap_rate` doesn't reproduce. On 1yr, clean
+NM (6.79%) is ~8bps below market (6.87%); the 2yr window keeps NM continuous but
+its lagging 2yr market avg reads NM slightly *above* in recent quarters.
+
+**dia parallel — DRY-RUN ONLY, held (does not reproduce the deck):** master NM
+= **184** (Scott's 183 ✓; `staging.dia_master_sales` listing_broker; the
+referenced `scripts/dia_master_nm_listings.json` does not exist in the repo).
+Re-derivation → **128** (not ~185); clean dia NM 2024-Q2 = **7.29%** (deck 6.38%)
+and sits **above** our market (6.76%) — wrong direction. dia's cap-rate basis
+diverges from the deck even more than gov's. **Not committed** — awaiting Scott
+on the cap-basis question.
+
+**Open question for Scott (back through the gate):** the flag cleaning is done
+and correct, but the NM-below-market value-prop spread needs the cap-rate basis
+addressed (repoint the chart to master-curated NM/market caps?), OR a decision
+on the gov view window (1yr = NM below but blanks recently / 2yr = continuous but
+NM-above). The flag fix stands regardless; dia flag commit is held.
 
 ---
 
