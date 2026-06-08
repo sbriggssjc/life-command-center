@@ -818,13 +818,19 @@ async function fetchFederatedSource(type, cap) {
 
   if (type === 'provenance_conflict') {
     // LCC field-provenance conflicts (the bulk) + dia sales-price xref conflicts.
+    // R13 Unit 1: surface ONLY decision='conflict' (same-priority disagreements
+    // that need Scott's judgment). decision='skip' rows (~78% of the view) are
+    // the registry working as designed — a higher-priority source correctly beat
+    // a lower-priority write — i.e. warn/strict-mode TELEMETRY, not a human
+    // decision. They stay available for audit via the view / provenance panels,
+    // just not in this operator decision lane.
     const [pv, xr, pc, xc] = await Promise.all([
       opsQuery('GET', 'v_field_provenance_actionable?select=provenance_id,target_database,target_table,'
         + 'record_pk_value,field_name,attempted_value,attempted_source,current_value,current_source,'
-        + 'decision,enforce_mode,recorded_at&order=recorded_at.desc&limit=' + cap),
+        + 'decision,enforce_mode,recorded_at&decision=eq.conflict&order=recorded_at.desc&limit=' + cap),
       domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
         + '&issue_kind=eq.sales_price_xref_conflict&order=severity.desc&limit=' + cap),
-      opsCnt('v_field_provenance_actionable'),
+      opsCnt('v_field_provenance_actionable?decision=eq.conflict'),
       domCnt('dia', 'v_data_quality_issues?issue_kind=eq.sales_price_xref_conflict'),
     ]);
     const pvRows = (pv.ok && Array.isArray(pv.data)) ? pv.data : [];
@@ -1632,7 +1638,26 @@ async function handleDecisionVerdict(req, res) {
         await record('merge', 'decided', { target_entity_id: target }, { lcc_merge_entity: 'merged' });
         return res.status(200).json({ ok: true, verdict: 'merge', loser: eid, winner: target });
       }
-      if (verdict === 'leave_flagged' || verdict === 'skip') {
+      if (verdict === 'leave_flagged') {
+        // R13 Unit 3 — "stop asking". Mark the entity reviewed so the
+        // lcc_refresh_decisions seed excludes it going forward (it stays
+        // junk_name_flagged — the name IS junk — but junk_name_reviewed records
+        // the operator's "keep it, don't re-surface" judgment). Effect-first: on
+        // a failed metadata write keep the decision open, never a false 'skipped'.
+        let meta = {};
+        try {
+          const er = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(eid) + '&select=metadata&limit=1');
+          meta = (er.ok && Array.isArray(er.data) && er.data[0] && er.data[0].metadata) ? er.data[0].metadata : {};
+        } catch (_e) { meta = {}; }
+        const nextMeta = Object.assign({}, meta, { junk_name_reviewed: true });
+        const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(eid),
+          { metadata: nextMeta, updated_at: new Date().toISOString() });
+        if (!pr.ok) { await recordEffectFailure({ junk_name_reviewed: false, error: pr.data }); return res.status(502).json({ error: 'leave_flagged_failed', detail: pr.data }); }
+        await record('leave_flagged', 'skipped', null, { entity: 'left_flagged', junk_name_reviewed: true });
+        return res.status(200).json({ ok: true, verdict: 'leave_flagged', junk_name_reviewed: true });
+      }
+      if (verdict === 'skip') {
+        // Transient skip (re-surfaces on the next refresh) — use leave_flagged to stop asking.
         await record('leave_flagged', 'skipped', null, { entity: 'left_flagged' });
         return res.status(200).json({ ok: true, verdict: 'leave_flagged' });
       }
@@ -1727,6 +1752,53 @@ async function handleDecisionVerdict(req, res) {
       }
       if (verdict === 'accept_attempted') {
         const where = (c.target_database || c.kind || '') + '.' + (c.target_table || '') + '.' + (c.field_name || '');
+        // R13 Unit 2 — registry learning loop (BLESSED, flag-gated on
+        // DECISION_PROVENANCE_LEARN). Default OFF ⇒ unchanged behavior (queue a
+        // research task for the manual-edit machinery). When enabled on a
+        // field-provenance conflict, apply the attempted value as a MANUAL
+        // authority through lcc_merge_field AND teach the registry by registering
+        // a per-(table,field) manual_decision priority-1 rule. The rule is scoped
+        // to the exact field — it NEVER re-ranks the aggregator sources
+        // (costar/rca/om) against each other, so there is no mass re-ranking. (94%
+        // of conflicts are same-source, where a re-rank couldn't break the tie
+        // anyway; the manual authority resolves all cases uniformly.) Future
+        // captures to a manually-resolved field then resolve to 'skip', not
+        // 'conflict', so the class drains instead of re-litigating.
+        const learnOn = /^(on|1|true|yes|enabled)$/i.test(String(process.env.DECISION_PROVENANCE_LEARN || ''));
+        const isFieldProv = c.kind === 'field_provenance' && c.target_database && c.target_table
+          && c.field_name && c.record_pk_value != null;
+        if (learnOn && isFieldProv) {
+          // 1) Registry learning FIRST: manual_decision is the top authority for
+          //    this (table, field). Idempotent upsert on the unique key
+          //    (target_table, field_name, source).
+          const ruleR = await opsQuery('POST', 'field_source_priority',
+            { target_table: c.target_table, field_name: c.field_name, source: 'manual_decision',
+              priority: 1, min_confidence: 0, enforce_mode: 'record_only',
+              notes: 'R13: operator accept_attempted on a Decision Center conflict.' },
+            { headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+          if (!ruleR.ok) { await recordEffectFailure({ registry_rule: false, error: ruleR.data }); return res.status(502).json({ error: 'registry_rule_failed', detail: ruleR.data }); }
+          // 2) Apply the attempted value as that manual authority (effect-first;
+          //    gate on the actual merge decision — only 'write' counts).
+          const mf = await opsQuery('POST', 'rpc/lcc_merge_field', {
+            p_workspace_id: decision.workspace_id || null,
+            p_target_database: c.target_database, p_target_table: c.target_table,
+            p_record_pk: String(c.record_pk_value), p_field_name: c.field_name,
+            p_value: c.attempted_value === undefined ? null : c.attempted_value,
+            p_source: 'manual_decision', p_source_run_id: 'decision:' + decisionId,
+            p_confidence: 1, p_recorded_by: user.id || null });
+          const mrow = (mf.ok && Array.isArray(mf.data)) ? mf.data[0] : null;
+          if (!mf.ok || !mrow || mrow.decision !== 'write') {
+            await recordEffectFailure({ provenance_write: false, merge_decision: mrow ? mrow.decision : null, error: mf.data });
+            return res.status(502).json({ error: 'provenance_write_failed', detail: mrow || mf.data });
+          }
+          await record('accept_attempted', 'decided', payload,
+            { provenance: 'manual_authority_written', merge_field_decision: mrow.decision,
+              provenance_id: mrow.provenance_id, registry_rule: 'manual_decision@1' });
+          return res.status(200).json({ ok: true, verdict: 'accept_attempted',
+            applied: 'manual_authority', provenance_id: mrow.provenance_id, where });
+        }
+        // Default (flag off, or dia xref / non-field-provenance subject): queue a
+        // research task for the manual-edit machinery — no silent domain write.
         const rt = await createResearchTask({ research_type: 'provenance_conflict',
           title: 'Apply attempted value to ' + where,
           instructions: 'Decision Center: apply the attempted value (' + JSON.stringify(c.attempted_value ?? c.detail_2 ?? null)
