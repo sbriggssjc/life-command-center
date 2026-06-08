@@ -36,6 +36,7 @@
     { "source": "/api/llc-research-queue", "destination": "/api/admin?_route=llc-research-queue" },
     { "source": "/api/resolve-llc-research", "destination": "/api/admin?_route=resolve-llc-research" },
     { "source": "/api/sf-link-tick", "destination": "/api/admin?_route=sf-link-tick" },
+    { "source": "/api/gov-buyer-sync", "destination": "/api/admin?_route=gov-buyer-sync" },
     { "source": "/api/sos-writeback", "destination": "/api/admin?_route=sos-writeback" },
     { "source": "/api/generate-research-tasks", "destination": "/api/admin?_route=generate-research-tasks" },
     { "source": "/api/geocode-tick", "destination": "/api/admin?_route=geocode-tick" },

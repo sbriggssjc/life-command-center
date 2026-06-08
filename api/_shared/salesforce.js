@@ -266,3 +266,50 @@ export async function getSalesforceContactsByAccount(accountId) {
     .filter((c) => c.Id && c.Name);
   return { ok: true, contacts };
 }
+
+/**
+ * Create a Salesforce Opportunity on a given Account (the mapped buyer-PARENT
+ * account — never a subsidiary SPE; R5 doctrine). This is a WRITE op: unlike the
+ * other helpers in this file it mutates Salesforce, so the Power Automate flow
+ * needs a `create_opportunity` case. Tolerant of flows that don't implement it
+ * yet — returns ok:false reason='unavailable' so the worker can leave the
+ * opportunity `ready_to_sync` and report honestly (mirrors the
+ * `find_contacts_by_account` rollout: SPEC the PA case, don't assume it exists).
+ *
+ * FLOW CONTRACT (what LCC posts / what PA returns):
+ *   POST <SF_LOOKUP_WEBHOOK_URL>
+ *   { "operation": "create_opportunity",
+ *     "account_id": "0018W00002X08rlQAB",   // the mapped PARENT Account Id
+ *     "name": "Boyd Watterson Global — Government Buyer",
+ *     "stage_name": "Prospecting",          // optional; PA may default
+ *     "close_date": "2026-12-31",           // optional; PA may default (e.g. +90d)
+ *     "idempotency_key": "<lcc bd_opportunity id>" }  // PA SHOULD upsert on this
+ *   Success: { "ok": true, "opportunity": { "Id": "006...", "Name": "..." } }
+ *   Not implemented: { "ok": false, "reason": "unsupported" } (or HTTP 4xx)
+ *
+ * @param {{accountId:string, name:string, stageName?:string, closeDate?:string,
+ *          amount?:number, idempotencyKey?:string}} opp
+ * @returns {Promise<{ok:boolean, opportunity?:{Id,Name}|null, reason?:string}>}
+ */
+export async function createSalesforceOpportunity(opp) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const accountId = String(opp?.accountId || '').trim();
+  const name = String(opp?.name || '').trim();
+  if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(accountId)) return { ok: false, reason: 'bad_account_id' };
+  if (!name) return { ok: false, reason: 'no_name' };
+
+  const body = { operation: 'create_opportunity', account_id: accountId, name };
+  if (opp.stageName)      body.stage_name = String(opp.stageName);
+  if (opp.closeDate)      body.close_date = String(opp.closeDate);
+  if (opp.amount != null) body.amount = Number(opp.amount);
+  if (opp.idempotencyKey) body.idempotency_key = String(opp.idempotencyKey);
+
+  const result = await callSfLookupFlow(body);
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const o = result.opportunity || result.record || null;
+  const id = o ? (o.Id || o.id) : null;
+  if (!id) return { ok: false, reason: result.reason || 'no_opportunity_returned' };
+  return { ok: true, opportunity: { Id: id, Name: o.Name || o.name || name } };
+}
