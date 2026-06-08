@@ -141,25 +141,61 @@ Re-derivation cannot run authoritatively on the staged data **today**:
   do not re-derive from the staged subset** — the R74 `data.xlsx`-based fix
   (+96/−34, applied 2026-06-08) remains the best available state.
 
-### 3.6 Two blockers to fix before the staged loop can drive de-contamination
+### 3.6 Change specs — trustworthy staged loop
 
-1. **PA Get Deals filter misses the bulk stage label.** dia closed deals
-   historically carry **`'CM - Closed IS'`** (per the `data.xlsx` footer:
-   *"STAGENAME is CM - Closed IS or Closed IS"*) — a label that does **not**
-   exist in staging at all (staging has only `'Closed IS'`/`'Final'`). Broaden
-   the filter to `StageName IN ('Closed IS','CM - Closed IS','Final')`. The
-   filter is also **additive + watermark-gated**, so it only pulls newly-modified
-   deals — the historical closed book needs a **one-time backfill** (the real
-   prerequisite for dia, not a deferred long-tail).
-2. **Staging upsert duplication bug.** The sync **INSERTs** a new row per pull
-   instead of upserting on `sf_deal_id` → 40–208× duplication (dia 3,320 rows /
-   61 deals). This bloats the table and trends toward the `sf_sync_log`
-   disk-pressure incident. Fix: upsert on `sf_deal_id` (keep latest
-   `sf_last_modified`), or a retention prune.
+**(A) Get Deals filter — broaden the closed-stage set (PA-side, Scott applies).**
+dia closed deals historically carry **`'CM - Closed IS'`** (per the `data.xlsx`
+footer: *"STAGENAME is CM - Closed IS or Closed IS"*) — a label that does **not**
+exist in staging at all (staging has only `'Closed IS'`/`'Final'`). In the PA
+flow's *Get Deals* (SF connector / SOQL) step, change the filter from
+`StageName eq 'Closed IS'` to:
 
-Until both land, the matcher also needs **city/address confirmation** — the
-tolerant state+price+date gate over-matches badly on clustered dialysis (0/55
-city-confirmed in the 2026-06-08 staged run).
+```
+StageName IN ('Closed IS', 'CM - Closed IS', 'Final')
+```
+
+Reconcile the exact label set against the complete unfiltered export (gov uses
+both `'Closed IS'` and `'Final'`; `'CM - Closed IS'` is the dia historical
+label). The filter is **additive + watermark-gated**, so it only pulls
+newly-modified deals — the **historical closed book needs a one-time backfill**
+(reset/clear the watermark for one full pull). This backfill is the real
+prerequisite for the staged loop to drive dia de-contamination, *not* a deferred
+long-tail.
+
+**(B) Staging duplication — APPLIED (mitigation) + the permanent fix.**
+Root cause: the edge fn `supabase/functions/intake-salesforce/index.ts` *already*
+upserts, but on `on_conflict=(sfIdColumn, source_system, import_batch)`. Because
+`import_batch` is unique per hourly run, the conflict key never matches across
+runs → every run INSERTs a fresh row (dia 7,222 rows / 142 distinct; gov 2,747 /
+66; all four `sf_*_staging` tables affected — comp peaked at 23,688/221).
+
+- **Applied live 2026-06-08** (the `sf_sync_log`-precedent disk-safety fix,
+  reversible, no edge-fn/sync risk): `public.sf_staging_dedup_prune()` +
+  autovacuum hardening + cron **`sf-staging-dedup-prune`** (hourly :17) on **dia
+  + gov**. One-time reclaim: ~56k → ~662 rows on dia (~99%), similar on gov.
+  Migrations `…/dialysis/20260608210000_*` + `…/government/20260608210000_*`.
+- **Permanent fix (coordinated deploy — drops the prune's reason to exist):**
+  remove `import_batch` from the conflict key. Verified safe: `import_batch` is
+  otherwise only used by `linkProbe` (by-batch lookup — survives, since the
+  merge-update sets `import_batch` to the latest run) and the `processed` flag
+  (not in the upsert payload → unchanged on merge). Two coordinated steps,
+  **deploy order: migration FIRST, edge fn immediately after** (between them the
+  old edge fn's 3-col upsert errors on the new 2-col index — one hourly run, then
+  it recovers):
+  1. Migration (dia + gov): `sf_staging_dedup_prune()` then
+     `DROP INDEX uq_sf_deal_staging_dedup; CREATE UNIQUE INDEX
+     uq_sf_deal_staging_dedup ON sf_deal_staging (sf_deal_id, source_system);`
+     (repeat per `sf_*_staging` table on its `(sf_<obj>_id, source_system)`).
+  2. Edge fn `index.ts` (two occurrences, ~L182 + ~L389):
+     `const onConflict = ` `${cfg.sfIdColumn},source_system,import_batch`
+     → `${cfg.sfIdColumn},source_system` ; deploy to whichever project hosts
+     `intake-salesforce`.
+
+**(C) Matcher needs city/address confirmation.** Even once the universe is
+complete, the tolerant state+price+date gate over-matches badly on clustered
+dialysis (0/55 city-confirmed in the 2026-06-08 staged run). The live re-derivation
+must require a city (or address) match for an auto-add, exactly as the
+`data.xlsx` Task-3 fix did (city-confirmed adds only).
 
 ---
 
