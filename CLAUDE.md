@@ -1783,3 +1783,76 @@ re-saw dismissed rows. Fix (the "stop asking" hook):
   (747→746); synthetic round-trip (seed→open, leave_flagged→reviewed+skipped,
   re-refresh→no re-mint), 0 residue. `node --check` clean; 12 functions; suite
   green except the 2 pre-existing CM chart failures.
+
+## R15 — cron/automation health sweep + artifact-offload disk runbook (2026-06-08)
+
+Audit grounded live across all three DBs: the automation layer is healthy
+(~120 crons, pg_net 201/201 = HTTP 200 in 12h; "server restarted" entries are
+Supabase infra noise). The health-alert pipeline surfaced three real issues.
+
+### Unit 1 (HIGH) — artifact-offload cron + the disk-pressure runbook
+The `lcc-artifact-offload` cron was **deliberately disabled** by migration
+`20260529160000_lcc_disable_artifact_offload_crons.sql` after the every-5-minute
+variant (migration `…150000`) exhausted the LCC Opps connection budget (small
+tier, `max_connections=60`) during a CoStar burst and took the origin
+read-unavailable. With no offload running, `staged_intake_artifacts` grew to
+~9.5 GB (86% of the DB), 1,400+ artifacts still holding ~9 GB of base64
+`inline_data`, **0 offloaded**, and the DB crossed the disk-pressure warn
+threshold toward the ~13 GB read-only ceiling. **Auth lives on LCC Opps — a
+disk-full read-only here locks out ALL sign-in.**
+
+Durably fixed by `20260608210000_lcc_r15_reenable_artifact_offload_cron.sql`:
+re-enables `lcc-artifact-offload` at the **gentle** cadence (`2-59/10 * * * *`,
+limit 15, grace 15) — NOT every-5-min — and keeps the finalize-watch /
+vacuum-run jobs OFF (the every-5-min jobs that caused the incident). Idempotent
+(unschedule-then-schedule); supersedes the disable migration as the live source
+of truth, so a future replay/rebuild can't silently leave the offload off.
+
+**VACUUM FULL reclamation — MANUAL, Scott, low-traffic window.** Nulling
+`inline_data` is a LOGICAL clear; the TOAST bytes are not returned to the OS
+until `VACUUM FULL`. The `disk_pressure` alert reads physical
+`pg_database_size`, so it will NOT drop until the VACUUM FULL runs.
+`VACUUM FULL` can't run in a migration/transaction and takes an ACCESS EXCLUSIVE
+lock on `staged_intake_artifacts` (blocks OM intake to that table for the few
+minutes of the rewrite — auth is unaffected, it's a different schema), so it is
+a manual op, not an auto-fired cron.
+
+```sql
+-- Optional: confirm how much is reclaimable right now
+SELECT pg_size_pretty(pg_total_relation_size('public.staged_intake_artifacts')) AS physical,
+       pg_size_pretty(coalesce(sum(size_bytes) FILTER (WHERE inline_data IS NOT NULL AND storage_path IS NULL),0)) AS live_inline
+FROM public.staged_intake_artifacts;
+
+-- The reclamation (low-traffic window):
+VACUUM FULL public.staged_intake_artifacts;   -- ACCESS EXCLUSIVE; ~minutes on ~9.5 GB
+```
+
+Ordering nuance (grounded 2026-06-08, DB at ~12.6 GB): physical table 9.5 GB vs
+~6.8 GB live inline ⇒ **~2.7 GB is already dead/reclaimable NOW** (the rows the
+cron has already offloaded), so a VACUUM FULL today drops the DB ~12.6 → ~10 GB
+(below warn) even before the backlog fully drains. Running it again AFTER the
+full drain (all `inline_data` nulled) reclaims the rest, taking the DB to ~3-4
+GB. Inflow is heavy (~1.5 GB/day, ~330 large files/day), so the steady-state
+cron mostly keeps pace with NEW arrivals while the 1,400-row backlog drains
+slowly — if faster relief is wanted, a one-shot higher-budget drain from a
+workstation (then a single VACUUM FULL) shrinks the DB sooner than the
+time-budgeted Vercel ticks.
+
+### Unit 2 — gov `mv_gov_overview_stats` stale (CONCURRENTLY needs a unique index)
+The gov cron `refresh-gov-overview-stats` (daily 01:00) ran `REFRESH
+MATERIALIZED VIEW CONCURRENTLY` on an MV with only a non-unique index →
+errored every run → stale stats. `mv_gov_overview_stats` is a single-row MV;
+gov migration `sql/20260608_gov_mv_overview_stats_unique_index.sql` drops the
+non-unique `computed_at` index and adds a UNIQUE one (no WHERE). Verified live:
+CONCURRENTLY refresh now succeeds and the MV is current.
+
+### Unit 3 — stale benign flow_failure alert (single-failure TTL)
+`lcc_autoresolve_recovered_flow_failures()` only closed a flow_failure alert
+after an 18h quiet window, so a one-off benign failure (e.g. a single
+"HTTP-Switch" run) sat open up to 18h and trained the operator to ignore the
+panel. Migration `20260608210500_lcc_r15_flow_failure_single_ttl.sql` adds a
+6h **single-failure TTL** path (≤1 failure in the 18h window AND none in the
+last 6h ⇒ resolve) alongside the existing full-recovery path. Recurring
+failures (≥2 in the window) still only clear via full recovery, so genuinely-
+broken flows stay alerted. Same signature ⇒ cron unchanged. Verified live: the
+stuck HTTP-Switch alert (id 531) cleared with the TTL note.
