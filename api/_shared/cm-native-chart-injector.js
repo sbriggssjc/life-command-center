@@ -2875,17 +2875,19 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // one-line flip. Stacked combo on a shared count axis (same machinery
       // as inventory_backlog's negative-bar + net-line visual). pdf_reconcile.
       const periodCol = findCol('period_end');
-      // R70 G25 — all five categories stack POSITIVE (total height = total TTM
-      // actions, category-shaded), per Scott's deck design; supersedes R68-E's
-      // diverging for this chart. Sign map stays CONFIG. With all signs +1 the
-      // negSeries set is empty (no negated helper cols) and the helper "total"
-      // col equals the stack height -> rendered as a "Total Actions" line.
+      // R70 G25 stacked all five POSITIVE. Round 73 C1 — Scott reverts to the
+      // deck p28 DIVERGING design: additive outcomes (sign +1) stack above
+      // zero; expired + terminated (sign -1) plot as negated helper cols BELOW
+      // zero, and the net helper col (signed sum) drives a gray NET CHANGE
+      // line. The negSeries machinery below (negated helper cols + below-zero
+      // stacking) reactivates automatically off the sign map. Mirrors the
+      // renderer (cm-chart-image-renderer.js lease_renewal_rate). pdf_reconcile.
       const RENEWAL_SERIES = [
         { key: 'first_generation_commencements', color: 'E0E8F4', sign: +1 },  // pale
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
-        { key: 'expired_leases',                 color: '62B5E5', sign: +1 },  // sky
-        { key: 'terminated_leases',              color: 'D97706', sign: +1 },  // amber
+        { key: 'expired_leases',                 color: '62B5E5', sign: -1 },  // sky
+        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -2919,7 +2921,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       }));
       helperCols.push({
         key: 'net_movement',
-        header: 'Total Actions',
+        header: 'Net Change',
         format: 'integer_count',
         width: 16,
         getValue: (row) => {
@@ -3666,8 +3668,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // gov ~198-310, dia ~76-215.
           // R66dd — dia index now sits 98-157 (post-R66r gate+smooth), so the prior
           // 75-250 axis showed it in the lower third (~30% fill). Tighten to 90-165 so
-          // the index movement fills the frame. gov 210-350 unchanged.
-          yLeftRange: (vertical === 'gov' ? { min: 210, max: 350 } : { min: 90, max: 165 }),
+          // the index movement fills the frame.
+          // R73 C3 — gov re-pinned 210-350 -> 150-420 (mirrors the renderer): the
+          // R66 pin predated R70-A4, which raised the gov index to ~161..410, so
+          // 350 was clipping the post-2018 climb off the top ("axis not
+          // rendering"). 150-420 frames the full series with no clip.
+          yLeftRange: ((vertical === 'gov' || vertical === 'government_leased') ? { min: 150, max: 420 } : { min: 90, max: 165 }),
           // R37 P2 — formats: LEFT integer (valuation index 200-400),
           // RIGHT percent (YoY %). Renderer auto-pins right to ±yoyMax
           // dynamically per dataset; native leaves auto-scale so the
@@ -4443,11 +4449,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — LEFT axis = volume $ (compact M format); RIGHT axis
-          // = cap rate 5.0-10.5% (renderer line ~1481, widened from 5-9%
-          // because gov upper-q hits 10.08%).
+          // R37 P2 — LEFT axis = volume $ (compact M format); RIGHT axis = cap
+          // rate. R73 C4 — lower the cap-axis MIN per vertical (gov 5.0->2.0%,
+          // dia 5.0->3.0%) to lift the Q1-Q3 band into the upper frame so the
+          // volume area reads in the lower ~45% (Scott: "adjust the y-axis on
+          // cap rate so the volume portion isn't hidden"). gov keeps max 10.5%
+          // for the ~10.08% upper-q; dia caps at 9.0% (dia top-q ~7.7%).
+          // Mirrors the renderer.
           yLeftNumFmt:  VAL_FMT_CURRENCY_M,
-          yRightRange:  { min: 0.050, max: 0.105 },
+          yRightRange:  ((vertical === 'gov' || vertical === 'government_leased') ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           areaSeries: {
             titleCol: volCol, titleRow: headerRow, valCol: volCol,
