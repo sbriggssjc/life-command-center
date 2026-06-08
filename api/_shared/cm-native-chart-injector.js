@@ -802,6 +802,13 @@ function buildMultiLineChartXml(spec) {
       : '';
     // R37 P3 — per-series data labels
     const dLblsFrag = dLblsXml(s.dataLabels);
+    // R73 B13 — optional per-series markers (line KEPT). Sparse cohorts
+    // (gov state/municipal cap) have isolated non-null points between gaps
+    // that a markerless line cannot draw; a small circle marker makes single
+    // points visible without fabricating connections across the gaps.
+    const markerFrag = s.showMarker
+      ? `<c:marker><c:symbol val="${s.markerShape || 'circle'}"/><c:size val="${s.markerSize || 5}"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln></c:spPr></c:marker>`
+      : `<c:marker><c:symbol val="none"/></c:marker>`;
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -809,7 +816,7 @@ function buildMultiLineChartXml(spec) {
           <c:spPr>
             <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
           </c:spPr>
-          <c:marker><c:symbol val="none"/></c:marker>
+          ${markerFrag}
 ${dLblsFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
@@ -853,7 +860,7 @@ ${dLblsFrag}
 ${seriesXml}
 ${hiLowLinesFrag}
 ${upDownBarsFrag}
-        <c:marker val="0"/>
+        <c:marker val="${spec.series.some(s => s.showMarker) ? 1 : 0}"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
       </c:lineChart>
@@ -1010,6 +1017,18 @@ ${dLblsFrag}
         </c:ser>`;
   }).join('\n');
 
+  // R73 B1 — suppress invisible (noFill) base bars from the legend. They are
+  // structural helpers that lift a floating bar off zero, not real series, so
+  // they must not get a legend entry. This fixes the dia Bid-Ask "two category
+  // titles for the same data" report (the noFill base reused the Last-Ask
+  // title col, duplicating its legend entry) and removes the spurious
+  // "lower_quartile" entry on volume_cap. CT_Legend order: legendPos then
+  // legendEntry* then overlay.
+  const legendDeleteFrag = barSeries
+    .map((s, i) => s.noFill ? `      <c:legendEntry><c:idx val="${i}"/><c:delete val="1"/></c:legendEntry>` : '')
+    .filter(Boolean)
+    .join('\n');
+
   // Line series idx continues from where bar series ended so each
   // series in the chart has a unique index (Excel relies on this).
   //
@@ -1129,6 +1148,7 @@ ${lineXml}
     </c:plotArea>
     <c:legend>
       <c:legendPos val="b"/>
+${legendDeleteFrag}
       <c:overlay val="0"/>
     </c:legend>
     <c:plotVisOnly val="1"/>
@@ -2346,15 +2366,34 @@ const MIN_YEAR_BY_TEMPLATE = {
   // R66cc — floor at 2017: the 10+ cohort (now gated n>=3) is clean from 2017, but
   // 2015-2016 (n=3-4) carry cap inversions. Starting 2017 shows the continuous 10+
   // series without the early noise.
-  seller_sentiment:             (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2017),
-  seller_sentiment_monthly:     (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2017),
+  // R73 D-list — seller_sentiment hard cap lowered 2017 -> 2016. dia n_all
+  // reaches 15 at 2016 (5/8 in 2014/15 — held back as the thin edge), so the
+  // chart now honestly reaches one year earlier. gov self-floors at its own
+  // dense year (findFirstDenseYear) capped at 2016. Density-gated (Scott R73).
+  seller_sentiment:             (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2016),
+  seller_sentiment_monthly:     (rows) => Math.max(findFirstDenseYear(rows, 'n_all', 5) ?? 2014, 2016),
   // R66aa — start 2018 (was 2013). Pre-2018 TTM months are thin and volatile even
   // after the n>=10 gate; deck's DOM chart also starts 2018. With the gate+smoothing
   // the 2018+ window lands DOM 168-290 (0-300 axis) / % ask 86.9-95.8% (84-96% axis).
-  dom_and_pct_of_ask:           2018,
-  dom_and_pct_of_ask_monthly:   2018,
-  bid_ask_spread:               2014,
-  bid_ask_spread_monthly:       2014,
+  // R73 D-list — dom_and_pct_of_ask was a static 2018 for both verticals.
+  // Now per-vertical density-gated: dia carries n_sales (TTM) per row, so the
+  // floor drops to the first year with 4 consecutive months of n>=15 — dia
+  // reaches 2016 (n 14/16/30 in 2015/16/17; 2014 n=10 + 2013 4-mo partial held
+  // back as the thin edge). The gov view has NO n_sales column, so
+  // findFirstDenseYear returns null and gov falls back to 2018 unchanged
+  // (gov dom density not separately confirmed this round). Density-gated.
+  dom_and_pct_of_ask:           (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
+  dom_and_pct_of_ask_monthly:   (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
+  // R73 D-#12 — per-vertical bid-ask floor. The view has no sample-count
+  // column, but a real Last-Ask cap (~0.05-0.10) is only present once listing/
+  // ask data begins, so "4 consecutive months of a non-null avg_last_ask_cap"
+  // is an exact presence gate for when the bid-ask visual has continuous data.
+  // Verified live 2026-06-08: gov reaches 2008 (0 paired ask months pre-2008,
+  // 12/12 from 2008 — extends from the old static 2014); dia self-floors ~2015
+  // (2/2/10 paired in 2012/13/14, 12/12 from 2015 — dia listings genuinely thin
+  // pre-2015, so it does NOT over-extend). Density-gated (Scott R73).
+  bid_ask_spread:               (rows) => findFirstDenseYear(rows, 'avg_last_ask_cap', 0.0001) ?? 2014,
+  bid_ask_spread_monthly:       (rows) => findFirstDenseYear(rows, 'avg_last_ask_cap', 0.0001) ?? 2014,
   // Pace recipe inherits dia/gov coverage; safe to skip 2003-2004 here too
   pace_of_cap_rate_expansion:   2005,
   // R62 — Val_Index 2010-12 swings and YOY 2002-2004 swings are both
@@ -2376,6 +2415,15 @@ const MIN_YEAR_BY_TEMPLATE = {
   // 2026-05-29 - start the credit-tier chart ~2000 (pre-2000 gov cap data
   // is sparse/noisy). User: "stop the x-axis around 2000".
   cap_rate_by_credit:           2000,
+  // R73 D-#19 — net-lease spread reaches the earliest CONSISTENT treasury
+  // data. economic_indicators DGS10 (the spread's treasury leg) starts
+  // 2002-01; cap data reaches 2001-01 but the spread = cap - treasury is NULL
+  // through 2001 (no treasury), so 2002 is the honest start, not 2001. No FRED
+  // backfill needed — the data already exists back to 2002 (294 months). The
+  // spread is an average-based line (robust to moderate n), unlike the
+  // quartile bands, so 2002 is sound. Verified live 2026-06-08.
+  net_lease_spread:             2002,
+  net_lease_spread_q:           2002,
   yoy_volume_change:            2005,
   // R51 — active-listings family (user notes 2026-05-21 sparseness items
   // that R47 didn't sweep up). Each is a TRUE-gap: the active_listings
@@ -2875,17 +2923,19 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // one-line flip. Stacked combo on a shared count axis (same machinery
       // as inventory_backlog's negative-bar + net-line visual). pdf_reconcile.
       const periodCol = findCol('period_end');
-      // R70 G25 — all five categories stack POSITIVE (total height = total TTM
-      // actions, category-shaded), per Scott's deck design; supersedes R68-E's
-      // diverging for this chart. Sign map stays CONFIG. With all signs +1 the
-      // negSeries set is empty (no negated helper cols) and the helper "total"
-      // col equals the stack height -> rendered as a "Total Actions" line.
+      // R70 G25 stacked all five POSITIVE. Round 73 C1 — Scott reverts to the
+      // deck p28 DIVERGING design: additive outcomes (sign +1) stack above
+      // zero; expired + terminated (sign -1) plot as negated helper cols BELOW
+      // zero, and the net helper col (signed sum) drives a gray NET CHANGE
+      // line. The negSeries machinery below (negated helper cols + below-zero
+      // stacking) reactivates automatically off the sign map. Mirrors the
+      // renderer (cm-chart-image-renderer.js lease_renewal_rate). pdf_reconcile.
       const RENEWAL_SERIES = [
         { key: 'first_generation_commencements', color: 'E0E8F4', sign: +1 },  // pale
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
-        { key: 'expired_leases',                 color: '62B5E5', sign: +1 },  // sky
-        { key: 'terminated_leases',              color: 'D97706', sign: +1 },  // amber
+        { key: 'expired_leases',                 color: '62B5E5', sign: -1 },  // sky
+        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -2919,7 +2969,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       }));
       helperCols.push({
         key: 'net_movement',
-        header: 'Total Actions',
+        header: 'Net Change',
         format: 'integer_count',
         width: 16,
         getValue: (row) => {
@@ -3666,8 +3716,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // gov ~198-310, dia ~76-215.
           // R66dd — dia index now sits 98-157 (post-R66r gate+smooth), so the prior
           // 75-250 axis showed it in the lower third (~30% fill). Tighten to 90-165 so
-          // the index movement fills the frame. gov 210-350 unchanged.
-          yLeftRange: (vertical === 'gov' ? { min: 210, max: 350 } : { min: 90, max: 165 }),
+          // the index movement fills the frame.
+          // R73 C3 — gov re-pinned 210-350 -> 150-420 (mirrors the renderer): the
+          // R66 pin predated R70-A4, which raised the gov index to ~161..410, so
+          // 350 was clipping the post-2018 climb off the top ("axis not
+          // rendering"). 150-420 frames the full series with no clip.
+          yLeftRange: ((vertical === 'gov' || vertical === 'government_leased') ? { min: 150, max: 420 } : { min: 90, max: 165 }),
           // R37 P2 — formats: LEFT integer (valuation index 200-400),
           // RIGHT percent (YoY %). Renderer auto-pins right to ±yoyMax
           // dynamically per dataset; native leaves auto-scale so the
@@ -3728,10 +3782,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     case 'cap_rate_by_credit': {
       // 3-line: Federal navy bold / State sky / Municipal sage.
-      // Note: state + municipal series will be empty for gov data per
-      // the 2026-05-06 audit (0 state and ~5 municipal sales with caps),
-      // but the chart shape is correct — series will fill in once the
-      // data feed exists.
+      // R73 B13 — the feed IS populated (verified live 2026-06-08:
+      // cm_gov_cap_by_credit_q has federal in 101 quarters, state 91, muni
+      // 46). gov sales carry government_type (10,805) + agency (12,202); the
+      // R66e classifier folds local/state/federal + agency-regex fallbacks.
+      // The "missing data for a smooth line" symptom is sparseness, not an
+      // empty feed: state/muni have isolated non-null quarters between gaps
+      // that a markerless line can't draw. Fix = small markers on the sparse
+      // state + municipal cohorts so single points show (federal is dense ->
+      // stays a plain line). Markers only; NO spanGaps (don't connect across
+      // multi-year gaps -> honest). Mirrors the renderer.
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -3747,8 +3807,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy   },
-            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky    },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582' },  // sage
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
           ],
           anchor: standardAnchor,
         },
@@ -4443,11 +4503,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           catCol: periodCol,
           dataStart, dataEnd,
-          // R37 P2 — LEFT axis = volume $ (compact M format); RIGHT axis
-          // = cap rate 5.0-10.5% (renderer line ~1481, widened from 5-9%
-          // because gov upper-q hits 10.08%).
+          // R37 P2 — LEFT axis = volume $ (compact M format); RIGHT axis = cap
+          // rate. R73 C4 — lower the cap-axis MIN per vertical (gov 5.0->2.0%,
+          // dia 5.0->3.0%) to lift the Q1-Q3 band into the upper frame so the
+          // volume area reads in the lower ~45% (Scott: "adjust the y-axis on
+          // cap rate so the volume portion isn't hidden"). gov keeps max 10.5%
+          // for the ~10.08% upper-q; dia caps at 9.0% (dia top-q ~7.7%).
+          // Mirrors the renderer.
           yLeftNumFmt:  VAL_FMT_CURRENCY_M,
-          yRightRange:  { min: 0.050, max: 0.105 },
+          yRightRange:  ((vertical === 'gov' || vertical === 'government_leased') ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           areaSeries: {
             titleCol: volCol, titleRow: headerRow, valCol: volCol,

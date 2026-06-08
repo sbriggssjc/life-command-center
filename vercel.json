@@ -33,6 +33,7 @@
     { "source": "/api/chain-connect-tick", "destination": "/api/admin?_route=chain-connect-tick" },
     { "source": "/api/chain-classify-tick", "destination": "/api/admin?_route=chain-classify-tick" },
     { "source": "/api/intake-rematch", "destination": "/api/admin?_route=intake-rematch" },
+    { "source": "/api/intake-promote-drain", "destination": "/api/admin?_route=intake-promote-drain" },
     { "source": "/api/llc-research-queue", "destination": "/api/admin?_route=llc-research-queue" },
     { "source": "/api/resolve-llc-research", "destination": "/api/admin?_route=resolve-llc-research" },
     { "source": "/api/sf-link-tick", "destination": "/api/admin?_route=sf-link-tick" },

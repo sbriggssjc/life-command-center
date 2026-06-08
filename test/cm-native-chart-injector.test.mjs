@@ -808,7 +808,7 @@ test('injectNativeCharts: bar + 4-scatter composite renders diamond markers acro
   assert.equal(valAxCount, 2);
 
   // 5 series total (1 bar + 4 lines), unique idx 0..4
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3, 4]);
 
   // 4 diamond markers, NO circles or other shapes
@@ -1116,6 +1116,76 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.ok(Math.abs(v - 0.027) < 1e-9, `getValue returns ${v}, expected ~0.027`);
 });
 
+test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band off the volume', () => {
+  // Scott: "adjust the y-axis on cap rate so the volume portion isn't hidden."
+  // Lowering the cap-axis MIN lifts the Q1-Q3 band into the upper frame so the
+  // volume area reads in the lower ~45%. gov keeps max 10.5% (upper-q ~10.08%);
+  // dia caps at 9.0% (dia top-q ~7.7%).
+  const cols = [
+    { key: 'period_end',     col: 'A' },
+    { key: 'subspecialty',   col: 'B' },
+    { key: 'volume_dollars', col: 'C' },
+    { key: 'cap_rate',       col: 'D' },
+    { key: 'upper_quartile', col: 'E' },
+    { key: 'lower_quartile', col: 'F' },
+  ];
+  const mk = (vertical) => buildInjectionSpec({
+    chart_template_id: 'volume_cap_quartile_combo',
+    tabName: 'Data_Vol_Cap_Combo', cols, dataStart: 5, dataEnd: 60, vertical,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5', nm_pale: '#E0E8F4' } },
+  });
+  assert.deepEqual(mk('gov').spec.yRightRange, { min: 0.020, max: 0.105 },
+    'gov cap axis min lowered to 2.0% (band lifts; 10.5% top keeps ~10.08% upper-q)');
+  assert.deepEqual(mk('dialysis').spec.yRightRange, { min: 0.030, max: 0.090 },
+    'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
+});
+
+test('R73 B13: cap_rate_by_credit gives sparse state+municipal cohorts markers (federal stays a plain line)', () => {
+  const cols = [
+    { key: 'period_end',   col: 'A' },
+    { key: 'federal_cap',  col: 'B' },
+    { key: 'state_cap',    col: 'C' },
+    { key: 'municipal_cap', col: 'D' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_credit',
+    tabName: 'Data_Cap_Credit', cols, dataStart: 5, dataEnd: 60, vertical: 'gov',
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.equal(out.spec.type, 'multi-line');
+  const [fed, state, muni] = out.spec.series;
+  assert.ok(!fed.showMarker, 'federal is dense -> plain line, no markers');
+  assert.equal(state.showMarker, true, 'state sparse -> markers so isolated quarters show');
+  assert.equal(muni.showMarker, true, 'municipal sparse -> markers');
+  // The builder keeps the line stroke AND emits a real marker symbol (markers + line).
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'a real circle marker is emitted');
+  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal still markerless');
+  assert.match(xml, /<c:marker val="1"\/>/, 'chart-level markers enabled');
+});
+
+test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the legend (no duplicate Last-Ask entry)', () => {
+  const cols = [
+    { key: 'period_end',         col: 'A' },
+    { key: 'avg_last_ask_cap',   col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_Bid_Ask',
+    cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis',
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  // barSeries[0] is the invisible (noFill) base that reuses the Last-Ask title.
+  assert.equal(out.spec.barSeries[0].noFill, true, 'base bar is noFill');
+  const xml = buildComboChartXml(out.spec);
+  // The noFill base (idx 0) gets a legend delete -> the Last-Ask label is not
+  // duplicated between the base bar and the sky marker line.
+  assert.match(xml, /<c:legendEntry><c:idx val="0"\/><c:delete val="1"\/><\/c:legendEntry>/,
+    'noFill base bar (idx 0) is deleted from the legend');
+  assert.equal((xml.match(/<c:legendEntry>/g) || []).length, 1,
+    'exactly one legend entry deleted (the single noFill base)');
+});
+
 test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
   const wb = new ExcelJS.Workbook();
   wb.addWorksheet('Index').getCell('A1').value = 'Test';
@@ -1192,7 +1262,7 @@ test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart
   assert.match(barBlock, /<a:alpha val="25000"\/>/, '25% alpha on visible band');
 
   // 4 series total — area(0) + bar(1) + bar(2) + line(3)
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3], 'series idx unique across area+bar+line blocks');
 
   // Each series references its own column
@@ -2844,6 +2914,62 @@ test('R66aa: dom_and_pct_of_ask trims to 2018', () => {
   assert.equal(spec.spec.dataStart, 5 + 204, 'dataStart at first 2018 row');
 });
 
+// ── R73 Layer D — x-axis reach (density-gated floors) ───────────────────────
+// The above R66aa test now also proves the GOV path of dom_and_pct_of_ask:
+// gov rows carry no n_sales, so the per-vertical function falls back to 2018.
+
+test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', () => {
+  // dia carries n_sales (TTM). Thin (<15) through 2015, dense (>=15) from 2016
+  // -> the function returns the first year with 4 consecutive n>=15 = 2016.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
+    rows.push({ period_end: `${y}-${String(m).padStart(2,'0')}-28`,
+      avg_dom: 120, pct_of_ask: 0.93, n_sales: y < 2016 ? 8 : 16 });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask', tabName: 'Data_DOM_Ask',
+    cols: [{key:'period_end',col:'A'},{key:'subspecialty',col:'B'},{key:'avg_dom',col:'C'},{key:'pct_of_ask',col:'D'},{key:'n_sales',col:'E'}],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
+  // 2001-01 .. 2015-12 = 180 rows before 2016-01.
+  assert.equal(spec.spec.dataStart, 5 + 180, 'dia dom floors at first 2016 row');
+});
+
+test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), dia self-floors later', () => {
+  const mk = (askStartYear) => {
+    const rows = [];
+    for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
+      rows.push({ period_end: `${y}-${String(m).padStart(2,'0')}-28`,
+        avg_bid_ask_spread: 0.004,
+        avg_last_ask_cap: y < askStartYear ? null : 0.07 });
+    }
+    return buildInjectionSpec({
+      chart_template_id: 'bid_ask_spread', tabName: 'Data_Bid_Ask',
+      cols: [{key:'period_end',col:'A'},{key:'subspecialty',col:'B'},{key:'avg_bid_ask_spread',col:'C'},{key:'avg_last_ask_cap',col:'D'}],
+      dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+    });
+  };
+  // gov: ask present from 2008 -> 2001-01..2007-12 = 84 rows trimmed.
+  assert.equal(mk(2008).spec.dataStart, 5 + 84, 'gov bid-ask floors at first 2008 row');
+  // dia: ask thin until 2015 -> floors later (2014-12 = 168 rows trimmed).
+  assert.equal(mk(2015).spec.dataStart, 5 + 168, 'dia bid-ask self-floors at 2015 (no over-extend)');
+});
+
+test('R73 D-#19: net_lease_spread floors at 2002 (earliest consistent treasury)', () => {
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
+    rows.push({ period_end: `${y}-${String(m).padStart(2,'0')}-28`,
+      treasury_10y_yield: 0.04, avg_cap_rate: 0.075, market_spread: 0.035, nm_spread: 0.03, non_nm_spread: 0.04 });
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'net_lease_spread', tabName: 'Data_NL_Spread',
+    cols: [{key:'period_end',col:'A'},{key:'subspecialty',col:'B'},{key:'treasury_10y_yield',col:'C'},{key:'avg_cap_rate',col:'D'},{key:'market_spread',col:'E'},{key:'nm_spread',col:'F'},{key:'non_nm_spread',col:'G'}],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
+  // 2001-01..2001-12 = 12 rows before 2002-01.
+  assert.equal(spec.spec.dataStart, 5 + 12, 'net-lease-spread floors at first 2002 row');
+});
+
 test('R66o: nm_vs_market_cap trims to 2020 (Value Proposition window)', () => {
   const rows = mkRows(2001, 2024, 'nm_cap_rate');
   for (const r of rows) r.market_cap_rate = 0.07;
@@ -3122,6 +3248,26 @@ test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axe
   assert.equal(out.spec.lineSeries.length, 1);
   assert.equal(out.spec.lineSeries[0].valCol, 'F', 'line = valuation_index');
   assert.equal(out.spec.lineSeries[0].color, '003DA5', 'navy');
+});
+
+test('R73 C3: valuation_index left axis re-pinned per vertical (gov 150-420, dia 90-165)', () => {
+  // The R66 gov pin (210-350) clipped the post-R70-A4 gov index (~161..410)
+  // off the top of the frame — the "axis not rendering" report. gov now
+  // frames 150-420; dia (94-149) keeps its 90-165 pin.
+  const cols = [
+    { key: 'period_end',      col: 'A' },
+    { key: 'valuation_index', col: 'F' },
+    { key: 'yoy_change',      col: 'G' },
+  ];
+  const mk = (vertical) => buildInjectionSpec({
+    chart_template_id: 'valuation_index',
+    tabName: 'Data_Val_Index', cols, dataStart: 5, dataEnd: 60, vertical,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.deepEqual(mk('gov').spec.yLeftRange, { min: 150, max: 420 },
+    'gov index axis frames the full 161..410 rendered series (no top clip)');
+  assert.deepEqual(mk('dialysis').spec.yLeftRange, { min: 90, max: 165 },
+    'dia index axis unchanged');
 });
 
 test('buildInjectionSpec: rent_by_year_built builds IQR + median + avg combo (P9)', () => {
@@ -3418,7 +3564,7 @@ test('injectNativeCharts: combo chart renders correct dual-axis XML', async () =
   assert.match(rightAx[0], /<c:crosses val="max"\/>/, 'right axis crosses at max');
 
   // One bar series + one line series, with unique idx values across both
-  const idxValues = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxValues = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxValues, [0, 1], 'series idx 0 (bar) + 1 (line) — unique across chart');
 
   // Series reference correct cells
@@ -3688,7 +3834,7 @@ test('injectNativeCharts: line series with showMarker renders correct XML (P9)',
   const barBlock = chartXml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
   assert.match(barBlock, /<c:grouping val="stacked"\/>/);
   // 4 series total — unique idx values across both blocks
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3], 'series idx unique across blocks');
 });
 
@@ -3828,7 +3974,7 @@ test('injectNativeCharts: stacked-combo box-whisker (P8.5) renders correct XML',
   assert.match(ser2, /srgbClr val="003DA5"/, 'median = navy');
 
   // 3 series total, unique idx values (0/1/2)
-  const idxs = Array.from(chartXml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
+  const idxs = Array.from(chartXml.matchAll(/<c:ser>\s*<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2], 'series idx unique across bar+line blocks');
 
   // Each series points at the right cell range

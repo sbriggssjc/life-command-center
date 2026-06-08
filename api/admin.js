@@ -107,6 +107,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'chain-connect-tick':      return handleChainConnectTick(req, res);
     case 'chain-classify-tick':     return handleChainClassifyTick(req, res);
     case 'intake-rematch':         return handleIntakeRematch(req, res);
+    case 'intake-promote-drain':   return handleIntakePromoteDrain(req, res);
     case 'sf-link-tick':            return handleSfLinkTick(req, res);
     case 'gov-buyer-sync':          return handleGovBuyerSync(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
@@ -5467,7 +5468,10 @@ async function handleIntakeRematch(req, res) {
     newly_matched: 0,
     promoted: 0,
     still_unmatched: 0,
-    skipped_no_address: 0,
+    skipped_no_address: 0,        // retired by Unit 4 (stays 0; no-address rows
+                                  // now → flagged_needs_address, see below)
+    flagged_needs_address: 0,     // no-address but deal-signal → surfaced once
+    needs_address_pending: 0,     // already flagged needs_address (not re-skipped)
     skipped_cooldown: 0,
     // Disposition pass (2026-06-04):
     dispositioned_non_deal: 0,   // no-address non-deal → discarded
@@ -5479,19 +5483,67 @@ async function handleIntakeRematch(req, res) {
     items: [],
   };
 
-  // Pull a generous candidate window — we filter out cooldown'd + no-address
-  // rows in JS, so fetch more than `limit` to keep each tick productive.
-  const fetchLimit = Math.min(1000, limit * 4);
+  // Pull the candidate window. Unit 4 (R14 addendum, 2026-06-08): the old
+  // `order=created_at.asc&limit=400` STARVED the scan. The auto-create /
+  // rematch-eligible items (never-rematched, address-bearing) are the NEWEST
+  // rows, but created_at.asc filled every tick's window with the oldest
+  // cooldown'd + dead rows and never reached a workable item (grounded live: 0
+  // of 227 eligible rows fell inside the oldest-400 window). Fix: fetch
+  // NEWEST-first up to the PostgREST 1000-row page cap (covers the full
+  // review_required backlog in one page today, ~650) so the eligible tail is
+  // always in-page, then sort the page eligibility-first below so it is
+  // processed first regardless of created_at.
+  const fetchLimit = Math.min(1000, Math.max(limit * 4,
+    parseInt(process.env.REMATCH_FETCH_CAP || '1000', 10)));
   const listRes = await opsQuery('GET',
     `staged_intake_items?status=eq.review_required` +
     `&select=intake_id,workspace_id,raw_payload,created_at` +
-    `&order=created_at.asc&limit=${fetchLimit}`
+    `&order=created_at.desc&limit=${fetchLimit}`
   );
   if (!listRes.ok) {
     return res.status(502).json({ error: 'list_failed', detail: listRes.data });
   }
   const rows = Array.isArray(listRes.data) ? listRes.data : [];
   result.scanned = rows.length;
+
+  // Eligibility-first ordering (Unit 4). Process the most productive rows before
+  // the dead/cooldown'd ones so a real rematch happens every tick instead of the
+  // budget being spent re-grinding the same front-of-queue rows. Tiers:
+  //   0 — address-bearing + cooldown expired → rematch-eligible (the starved set)
+  //   1 — cooldown'd                          → cheap skip / guarded auto-create
+  //   2 — address-less                        → one-time disposition (discard /
+  //                                             needs_address flag), lowest value
+  // Within a tier: never-rematched first, then oldest rematch (closest to cooldown
+  // expiry), then oldest created_at — fully deterministic. The `processed>=limit`
+  // break never increments on tiers 1/2, so when tier-0 exceeds the per-tick limit
+  // the eligible set drains first and auto-create/disposition follow within a
+  // bounded number of ticks once tier-0 pressure drops.
+  const rowHasAddress = (p) => {
+    const e = (p && p.extraction_result) || {};
+    return !!(e.address || (Array.isArray(e.addresses) && e.addresses.length));
+  };
+  const cooldownActive = (p) => {
+    const la = p && p.rematch && p.rematch.last_at;
+    return !!(la && la > cooldownCut);
+  };
+  const tierOf = (row) => {
+    const p = row.raw_payload || {};
+    if (!rowHasAddress(p)) return 2;
+    if (cooldownActive(p)) return 1;
+    return 0;
+  };
+  rows.sort((a, b) => {
+    const ta = tierOf(a), tb = tierOf(b);
+    if (ta !== tb) return ta - tb;
+    const la = (a.raw_payload && a.raw_payload.rematch && a.raw_payload.rematch.last_at) || '';
+    const lb = (b.raw_payload && b.raw_payload.rematch && b.raw_payload.rematch.last_at) || '';
+    if (la !== lb) {
+      if (!la) return -1;            // never-rematched ahead of any rematched row
+      if (!lb) return 1;
+      return la < lb ? -1 : 1;       // ISO timestamps: oldest rematch first
+    }
+    return String(a.created_at).localeCompare(String(b.created_at));
+  });
 
   // Time budget so we never strand a half-processed batch (Vercel/Railway wall).
   const tickDeadline = Date.now() + parseInt(process.env.REMATCH_TICK_BUDGET_MS || '22000', 10);
@@ -5560,7 +5612,30 @@ async function handleIntakeRematch(req, res) {
       continue;
     }
 
-    if (!hasAddress) { result.skipped_no_address += 1; continue; }
+    if (!hasAddress) {
+      // No parseable address, but it survived the non-deal disposition above —
+      // so it carries deal signal (price/tenant) and is a real triage item that
+      // just needs a human to supply the address. Unit 4: flag it ONCE
+      // (`needs_address`, surfaced by the inbox) instead of silently re-skipping
+      // the same dead row as `skipped_no_address` every tick forever. Already
+      // flagged rows are counted separately and never re-written, so the row is
+      // dispositioned once, not re-skipped.
+      if (payload.needs_address === true) {
+        result.needs_address_pending += 1;
+        if (result.items.length < 100) result.items.push({ intake_id: intakeId, action: 'needs_address_pending' });
+        continue;
+      }
+      result.flagged_needs_address += 1;
+      if (!dryRun) {
+        await opsQuery('PATCH',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+          { raw_payload: { ...payload, needs_address: true },
+            updated_at: new Date().toISOString() }
+        ).catch(() => {});
+      }
+      if (result.items.length < 100) result.items.push({ intake_id: intakeId, action: 'flagged_needs_address' });
+      continue;
+    }
 
     // Cooldown: skip rows we already re-matched recently and that stayed
     // unmatched — but this is exactly the set the guarded AUTO create acts on
@@ -5699,6 +5774,216 @@ async function handleIntakeRematch(req, res) {
           }
         );
       } catch (_e) { /* stamp is best-effort */ }
+    } catch (err) {
+      result.errored += 1;
+      item.error = String(err?.message || err).slice(0, 300);
+    }
+    if (result.items.length < 100) result.items.push(item);
+  }
+
+  return res.status(200).json(result);
+}
+
+// ============================================================================
+// INTAKE-PROMOTE-DRAIN (R14, 2026-06-08)
+// ============================================================================
+//
+// GET/POST /api/intake-promote-drain?limit=100&workspace_id=<uuid>
+//
+// Closes the "stranded matched" leak. The matcher sets status='matched'; the
+// promoter flips it to 'finalized' only when a promotion actually lands. But
+// no automation ever re-touched the 'matched' bucket and no operator surface
+// listed it — items whose first promotion attempt skipped (stale
+// domain_not_supported before the R4-A bridge fix, lease-only dia OMs the old
+// narrow flip-gate missed, low-confidence, non-listing docs) sat invisible
+// forever (1,266 live as of the R14 audit).
+//
+// This drain re-runs the EXACT downstream pipeline a fresh intake uses
+// (runDownstreamPipeline → matcher → the now-fixed promoter), which is
+// idempotent (the promoter fills-blanks / dedups / merges). Outcomes:
+//   - promotion succeeds → the promoter flips status to 'finalized'   (drained)
+//   - still 'matched' after PROMOTE_DRAIN_MAX_ATTEMPTS (default 2)    →
+//     surfaced to 'review_required' so it enters the inbox + the Decision
+//     Center intake_disposition lane (matched is never silent again)
+//   - still 'matched' under the attempt cap → stamped + left for the next
+//     tick (gives a transient bridge/extraction issue a retry)
+//   - matcher itself moved it (e.g. ambiguous → review_required)      → already
+//     surfaced
+// Cooldown + time-budget + batch-cap mirror handleIntakeRematch so a tick
+// never strands a half-processed batch.
+//
+//   GET  = dry-run (list candidates, no writes)
+//   POST = drain
+async function handleIntakePromoteDrain(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '100', 10)));
+  const dryRun = req.method === 'GET';
+  const maxAttempts = Math.max(1, parseInt(process.env.PROMOTE_DRAIN_MAX_ATTEMPTS || '2', 10));
+  const cooldownHours = Math.max(0, parseInt(process.env.PROMOTE_DRAIN_COOLDOWN_HOURS || '24', 10));
+  const cooldownCut = new Date(Date.now() - cooldownHours * 3600 * 1000).toISOString();
+  const wsFallback = req.query.workspace_id
+    || req.headers['x-lcc-workspace']
+    || process.env.LCC_DEFAULT_WORKSPACE_ID
+    || null;
+
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: 0,
+    eligible: 0,
+    repromoted: 0,        // promotion attempt run this tick
+    finalized: 0,         // promotion succeeded → status flipped to finalized
+    surfaced: 0,          // moved to review_required (attempt cap or matcher-moved)
+    still_matched: 0,     // left matched, stamped for retry
+    skipped_cooldown: 0,
+    errored: 0,
+    items: [],
+  };
+
+  // Pull a generous candidate window; cooldown'd rows are filtered in JS.
+  const fetchLimit = Math.min(1000, limit * 4);
+  const listRes = await opsQuery('GET',
+    `staged_intake_items?status=eq.matched` +
+    `&select=intake_id,workspace_id,raw_payload,created_at` +
+    `&order=created_at.asc&limit=${fetchLimit}`
+  );
+  if (!listRes.ok) {
+    return res.status(502).json({ error: 'list_failed', detail: listRes.data });
+  }
+  const rows = Array.isArray(listRes.data) ? listRes.data : [];
+  result.scanned = rows.length;
+
+  const tickDeadline = Date.now() + parseInt(process.env.PROMOTE_DRAIN_TICK_BUDGET_MS || '22000', 10);
+  let processed = 0;
+
+  for (const row of rows) {
+    if (processed >= limit) break;
+    if (Date.now() > tickDeadline) { result.budget_stopped = true; break; }
+
+    const intakeId = row.intake_id;
+    const payload = row.raw_payload || {};
+    const ext = payload.extraction_result || {};
+
+    // Cooldown: skip rows drained recently that stayed matched.
+    const lastAt = payload.promote_drain?.last_at || null;
+    if (lastAt && lastAt > cooldownCut) { result.skipped_cooldown += 1; continue; }
+
+    result.eligible += 1;
+    if (dryRun) {
+      if (result.items.length < 50) {
+        result.items.push({
+          intake_id: intakeId,
+          match_domain: ext.match_domain || null,
+          last_skip: ext.promotion_skipped || null,
+          promotion_ok: ext.promotion_ok ?? null,
+          attempts: payload.promote_drain?.attempts || 0,
+        });
+      }
+      continue;
+    }
+
+    processed += 1;
+    const item = { intake_id: intakeId };
+    try {
+      // Full extraction snapshot (carries city/state/addresses[] etc.); fall
+      // back to the trimmed summary so the promoter still has deal fields.
+      const exRes = await opsQuery('GET',
+        `staged_intake_extractions?intake_id=eq.${encodeURIComponent(intakeId)}` +
+        `&select=extraction_snapshot&order=created_at.desc&limit=1`
+      );
+      const snapshot = (exRes.ok && Array.isArray(exRes.data) && exRes.data.length)
+        ? exRes.data[0].extraction_snapshot
+        : null;
+      const effectiveSnapshot = (snapshot && typeof snapshot === 'object')
+        ? snapshot
+        : {
+            address: ext.address || null,
+            addresses: Array.isArray(ext.addresses) ? ext.addresses : null,
+            city: ext.city || null,
+            state: ext.state || null,
+            tenant_name: ext.tenant_name || null,
+            document_type: ext.document_type || null,
+          };
+
+      // Re-run the proven downstream pipeline (idempotent). The fixed promoter
+      // flips status to 'finalized' itself on result.ok.
+      const downstream = await runDownstreamPipeline(intakeId, effectiveSnapshot, {
+        workspaceId: row.workspace_id || wsFallback,
+        actorId: user.id,
+        seedData: payload.seed_data || null,
+      });
+      result.repromoted += 1;
+      item.match_status = downstream?.match_result?.status || null;
+      item.promotion_ok = downstream?.promotion_result?.ok ?? null;
+      const skip = downstream?.promotion_result?.skipped
+        || ext.promotion_skipped || null;
+
+      // Re-read the authoritative current status (the promoter may have flipped
+      // it; the matcher may have moved it to review_required).
+      const stRes = await opsQuery('GET',
+        `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}&select=status,raw_payload&limit=1`
+      );
+      const curStatus = stRes.ok && stRes.data?.[0] ? stRes.data[0].status : 'matched';
+      const curPayload = stRes.ok && stRes.data?.[0] ? (stRes.data[0].raw_payload || payload) : payload;
+
+      if (curStatus === 'finalized') {
+        result.finalized += 1;
+        item.outcome = 'finalized';
+      } else if (curStatus === 'matched') {
+        const attempts = (curPayload.promote_drain?.attempts || 0) + 1;
+        if (attempts >= maxAttempts) {
+          // Surface — make it visible. review_required enters the inbox triage
+          // UI + the Decision Center intake_disposition lane.
+          await opsQuery('PATCH',
+            `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+            {
+              status: 'review_required',
+              raw_payload: {
+                ...curPayload,
+                promote_drain: {
+                  last_at: new Date().toISOString(),
+                  outcome: 'surfaced',
+                  attempts,
+                  last_skip: skip,
+                },
+                _surfaced_reason: 'promote_drain_unpromotable:' + (skip || 'unknown'),
+              },
+              updated_at: new Date().toISOString(),
+            }
+          ).catch(() => {});
+          result.surfaced += 1;
+          item.outcome = 'surfaced_to_review';
+          item.skip = skip;
+        } else {
+          // Under the cap — stamp the attempt and leave matched for a retry.
+          await opsQuery('PATCH',
+            `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+            {
+              raw_payload: {
+                ...curPayload,
+                promote_drain: {
+                  last_at: new Date().toISOString(),
+                  outcome: 'retry',
+                  attempts,
+                  last_skip: skip,
+                },
+              },
+            }
+          ).catch(() => {});
+          result.still_matched += 1;
+          item.outcome = 'retry';
+          item.skip = skip;
+        }
+      } else {
+        // Matcher moved it (e.g. ambiguous → review_required) — already surfaced.
+        result.surfaced += 1;
+        item.outcome = 'matcher_moved:' + curStatus;
+      }
     } catch (err) {
       result.errored += 1;
       item.error = String(err?.message || err).slice(0, 300);

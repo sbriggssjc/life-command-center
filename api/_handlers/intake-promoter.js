@@ -2133,19 +2133,44 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       let domainProp = ent.metadata?.domain_property_id || null;
       let domain = ent.domain;
 
+      // R14 hotfix (2026-06-08): `entities.domain` is the R4-A canonical SHORT
+      // form ('gov'/'dia'), but every domain check + `domainQuery()` in this
+      // file uses the LONG form ('government'/'dialysis'). Without this map, a
+      // clean lcc→asset bridge (entity.domain='gov', asset ext_id=8885) loaded
+      // `domainProp` correctly but then fell through the
+      // `domain==='government'||'dialysis'` guard below as
+      // `domain_not_supported` — the dominant stranded 'matched' class (851 of
+      // 964 live). Map up front so BOTH the address fallback and the guard
+      // recognize it. 'lcc'/anything else falls through unchanged and correctly
+      // does NOT promote (genuinely unrecoverable → surfaced after the cap).
+      if (domain === 'gov') domain = 'government';
+      else if (domain === 'dia') domain = 'dialysis';
+
       if (!domainProp) {
+        // R14 hotfix: the domain properties.property_id rides on the ASSET
+        // identity (R4-A canonical: source_type='asset', external_id=property_id).
+        // Restrict to asset/property rows so a true_owner identity
+        // (external_id=UUID) can never be mistaken for a property id, fetch a
+        // handful, and pick the first NUMERIC external_id deterministically —
+        // a few dia entities carry >1 asset identity, and 3 carry a non-numeric
+        // external_id that would otherwise break the property lookup.
         const idLookup = await opsQuery('GET',
           `external_identities?entity_id=eq.${encodeURIComponent(match.property_id)}` +
           // R4-A: canonical 'gov'/'dia' first; accept the deprecated spellings
           // during the transition window (pre-redeploy rows may linger).
           `&source_system=in.(gov,dia,gov_db,dia_db,gov_supabase,dia_supabase)` +
-          `&select=source_system,external_id&limit=1`
+          `&source_type=in.(asset,property)` +
+          `&select=source_system,source_type,external_id&order=external_id.asc&limit=10`
         );
         if (idLookup.ok && Array.isArray(idLookup.data) && idLookup.data.length) {
-          const row = idLookup.data[0];
-          domainProp = row.external_id;
+          const rows = idLookup.data;
+          const picked = rows.find(r => /^[0-9]+$/.test(String(r.external_id))) || rows[0];
+          domainProp = picked.external_id;
           if (!domain || domain === 'lcc') {
-            domain = String(row.source_system).startsWith('gov') ? 'government' : 'dialysis';
+            domain = String(picked.source_system).startsWith('gov') ? 'government' : 'dialysis';
+          }
+          if (rows.length > 1) {
+            console.log(`[intake-promoter] LCC-bridge: ${rows.length} domain identities for entity=${match.property_id}, picked ${picked.source_system}:${picked.external_id}`);
           }
         }
       }
@@ -2747,7 +2772,16 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // empty forever. The inserted row carries the full pipeline_result blob
   // so the briefing / audit queries can unpack without re-joining.
   // Best-effort: a failure here never breaks the caller's response.
-  if (listingResult.ok) {
+  //
+  // R14 (2026-06-08): gate on result.ok (listing OR dia-lease OR contact
+  // landed), NOT just listingResult.ok. dia OMs are NNN — the deal data
+  // lands in `leases`, not `available_listings`, so listingResult.ok was
+  // false while result.ok was true. The old narrow gate left ~247 fully-
+  // promoted dia intakes stranded at status='matched' forever (invisible to
+  // every operator surface). The BD-pipeline trigger below keeps its own
+  // `_wasInsert` (listingResult.ok && !updated && !merged) gate — it
+  // legitimately needs a brand-new listing row.
+  if (result.ok) {
     try {
       await opsQuery('POST',
         'staged_intake_promotions',
@@ -2771,7 +2805,9 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     // linked, broker contact created, activity event logged — but the
     // top-level status never moved off 'review_required', leaving stale
     // badges in the dashboard's triage views. Best-effort: failure here
-    // doesn't break the caller's response shape.
+    // doesn't break the caller's response shape. (R14: now fires on
+    // result.ok, so dia lease-only promotions finalize too — see the
+    // broadened gate comment above.)
     try {
       await opsQuery('PATCH',
         `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
