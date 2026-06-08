@@ -1,15 +1,31 @@
 # Claude Code prompt — Round 74: Salesforce as authoritative source for is_northmarq (both verticals) + #20 cap-basis resolution
 
-> Scott's directive: make a LIVE Salesforce connector the authoritative source
-> for `is_northmarq` on BOTH dialysis and government, replacing the unreliable
+> Scott's directive: make Salesforce the LIVE authoritative source for
+> `is_northmarq` on BOTH dialysis and government, replacing the unreliable
 > R23 broker-string backfill. CRITICAL CONSTRAINT (Scott): Salesforce data is
 > entered by many people, so single SF fields are NOT trustworthy — "Is
 > Government" is not always checked, "Dialysis" subtype is not always set
 > (especially multi-tenant deals), so a subtype/flag filter MISSES deals we
 > want. The sync must use MULTIPLE search/pull strategies, not one field.
-> Existing plumbing to build on: LCC already has Salesforce integration
-> (`intake-salesforce` edge function, `sf_sync_log`, object_intake). Verify
-> what SF objects/fields are reachable before designing.
+>
+> ARCHITECTURE CONSTRAINT (confirmed in repo, Scott-confirmed): ALL Salesforce
+> access goes through POWER AUTOMATE — Scott's SF org requires SSO and he has no
+> admin rights to register a Connected App for direct OAuth. `api/_shared/
+> salesforce.js` documents this: it's a PA webhook proxy (`SF_LOOKUP_WEBHOOK_URL`)
+> doing single-record lookups only (`find_account_by_name`, `find_contact_by_email`).
+> A bulk channel also exists: the `intake-salesforce` edge function +
+> `sf_comps_staging` + `sf_sync_log` (the May 126k-row backfill) and a healthy
+> SF identity map (1,910 entities mapped via `external_identities`
+> source_system=salesforce). So "make it LIVE" is NOT a new direct connector —
+> it is a POWER AUTOMATE FLOW that Scott builds (he has PA access) which pushes
+> the closed-won deal universe into a staging table on a cadence, with the
+> classifier + matcher running LCC-side. CC's deliverable: define the PA flow
+> CONTRACT (the exact JSON shape + fields PA must return — model it on the
+> `data.xlsx` columns + the existing PA proxy pattern) AND build the LCC-side
+> ingestion → classify → match → flag. CC does NOT stand up direct SF auth.
+> Scott's action item out of this round: build/extend the PA flow to that
+> contract. Reuse `sf_comps_staging` if its shape fits; else define a sibling
+> staging table.
 
 ```
 CONTEXT — the spot-check that motivated this (dia, 286 SF "dialysis" deals):
@@ -92,13 +108,43 @@ TASK 5 — #20 value-prop chart cap basis (resolves the spread)
   Recommend (A) for this specific flagship chart (it IS the deck). Keep the 2yr
   TTM window (thin NM cohort, Layer-A precedent) on both lines.
 
-TASK 6 — make it LIVE (the durable fix)
-  Wire a scheduled SF sync (reuse the intake-salesforce edge function / a new
-  cron) that re-derives is_northmarq from the SF closed-won universe on a
-  cadence (e.g., weekly), so the flag stays correct as new deals close and as
-  SF data is corrected — no manual re-curation each quarter. The multi-strategy
-  classifier (Task 2) runs in the sync. Document the cadence + the config
-  dictionaries.
+TASK 6 — make it LIVE (the durable fix, via Power Automate)
+  The sync is a PA-push → LCC-ingest loop (NOT a direct SF query — see the
+  architecture constraint at top):
+    (a) PA flow (Scott builds, to CC's contract): on a cadence (weekly), query
+        SF closed-won deals and POST the universe to an LCC HTTP endpoint /
+        Supabase Edge Function, landing rows in a staging table (sf_comps_staging
+        or a sibling). Contract = the data.xlsx field set (Deal Name, Sales
+        Price, Cap Rate, Close Date, Lead Broker, Team, Deal Type, Direct/
+        Co-Broke, City, State, Tenant, Property Type, Subtype, Is Government,
+        Building SF, ELA) + a stable SF record Id for idempotency.
+    (b) LCC ingest (CC builds): on each push, run the Task-2 multi-strategy
+        classifier (dia/gov membership) + the Task-3 matcher + flag re-derivation
+        over the staged universe, idempotently (upsert on SF Id; re-derive
+        is_northmarq from scratch each run so corrected SF data propagates).
+        Log to sf_sync_log; surface adds/removes per run. The multi-strategy
+        classifier + operator/agency dictionaries (Task 2) are the durable
+        config — version them in the repo.
+  Until the PA flow exists, the one-shot path (Tasks 1-4 run over the data.xlsx
+  Scott exported + a manual re-export) delivers the fix now; Task 6 makes it
+  self-maintaining. CC defines the contract + builds (b); Scott builds (a).
+  Cross-reference R12 audit: the existing `intake-salesforce` / `autoCreateProperty`
+  path has a known cross-domain misroute (dia property → gov table,
+  government_type='Healthcare' → 23514) — do NOT reuse that writer's domain
+  routing; the dia/gov split must come from the Task-2 classifier, not a single
+  SF field.
+
+TASK 6c — listing_date backfill for the over-stamp wall (from R73 #9 follow-up)
+  ~222 dia listings have NULL listing_date + a FUTURE off_market_date (the
+  availability-checker over-stamp artifact that inflated the active count).
+  Backfill a real listing_date via the evidence ladder: (1) availability-checker
+  page markers (last_checked / raw capture), (2) CoStar capture date, (3)
+  sale-anchor (sale_date − median DOM, dia ~196d); tag listing_date_source;
+  dry-run → gate → commit; re-verify cm_dialysis_market_turnover_m (recent
+  active should rise toward ~130 on REAL dates). Audit gov for the same pattern.
+  6c-ROOT: find the writer stamping a FUTURE off_market_date on undated rows
+  (check availability-checker / lcc-auto-scrape-listings / lcc_record_listing_check)
+  and stop it — without this the backfill re-accumulates.
 
 ORDER: 1 (SF reachability) → 2 (classifier) → 3 (flag re-derivation, gated,
 both verticals) → 5 (cap basis, Scott's call) → 4 (missing-deal import, separate
