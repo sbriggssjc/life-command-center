@@ -102,91 +102,66 @@ call sites. Add a new operator/agency by extending the arrays + a unit test.
 
 ---
 
-## 3.5 REALITY CHECK — the PA flow + staging table ALREADY EXIST (2026-06-08, verified live in PA + Supabase)
+## 3.5 The already-staged universe (`sf_deal_staging`) — verified state 2026-06-08
 
-Task 6a was written as "Scott builds a new PA flow." On inspection of the live
-Power Automate environment, **the flow and the staging table already exist** —
-the contract below is largely already implemented. Findings:
+The hourly `SF → LCC: Object Sync` PA flow already lands closed deals in
+`public.sf_deal_staging` on **both** domain projects (dia
+`zqzrriwuavgrquhisnoa`, gov `scknotsqkcheojiaewwh`). Each row carries parsed
+columns + the full SF record in `raw_row` jsonb. SF API field map (confirmed
+live, all present):
 
-- **Flow `SF -> LCC: Object Sync`** (PA, owner Scott, Scheduled **hourly**,
-  ~30s/run, healthy run history). Steps: Recurrence → Initialize
-  BatchId/Mode/Watermark/Objects → Get/POST {Properties, Comps, Companies,
-  Listings, **Deals**} → POST Crawl Complete → PostDeadLetter. So closed-won
-  **Deals already sync hourly**, incrementally by a `LastModifiedDate >
-  {Watermark}` high-water mark.
-- **`Get Deals`** = Salesforce object **Deals** (their relabeled `Opportunity`;
-  `StageName` is the native stage field). **Select Query is empty → ALL fields
-  flow** (the §4 NM-classification fields are all present — see field map below).
-- **`POST Deals`** → `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-salesforce?action=objects`
-  (the **dia** project hosts this edge fn), header `X-PA-Webhook-Secret`, body
-  `{payload_version:"sf-2026-05-v1", batch_id, object_type:"Deals", records:[...]}`.
-- **Landing table = `public.sf_deal_staging`** on the **dia** project
-  (`zqzrriwuavgrquhisnoa`), 41 MB. Parsed columns (`stage`, `deal_cap_rate`,
-  `expected_close_date`, `property_city/state`, `tenant_names`, …) PLUS the full
-  raw SF record in **`raw_row` jsonb**. `stage='Closed IS'` = closed-won
-  (**3,316 rows**, IsClosed=true, close dates 2017→2025; `StageName`="Closed IS",
-  NOT "CM-Closed IS"). Other stages present: Terminated IS (2,041), Final (720),
-  Listing Signed/LOI/Closed Lost/Off-Market/Non-refundable.
-
-**THE bug (root cause of Scott's "not all the dialysis sales are included"):**
-`Get Deals`'s **Filter Query was a NAME-KEYWORD filter** —
-`(contains(Name,'Dialysis') or 'DaVita' or … 'GSA' or 'Federal' or …) and
-LastModifiedDate gt {Watermark}`. Every one of the 3,316 staged Closed IS rows
-matches that regex → **`sf_deal_staging` only ever received name-matched deals**;
-any dia/gov closed deal NOT spelled out in the deal Name (multi-tenant,
-address-named) never entered our system at all. This is exactly the
-single-strategy filter §2/§3 say not to use.
-
-**FIX APPLIED & VERIFIED LIVE (2026-06-08, by the verification-gate assistant):**
-the `Get Deals` Filter Query was broadened **additively** to
-`(StageName eq 'Closed IS' or <the existing name keywords>) and LastModifiedDate
-gt {Watermark}`. Strictly additive (no object/feature loses data), still
-watermark-gated. Saved (PA "ready to go") and a manual run **Succeeded in 29s**
-(no volume spike → watermark gating confirmed). Going forward the **full
-closed-won universe** stays fresh in `sf_deal_staging`, and LCC classifies our
-way per §3.
-
-**Two consequences for the rest of R74:**
-
-1. **The "complete unfiltered export" Scott was going to pull is no longer the
-   blocker for the bulk of the work** — the dia + gov **closed deals we care
-   about are already staged** in `sf_deal_staging` (name-matched set = ~3,316
-   Closed IS, which already contains the dialysis + government deals worked so
-   far). CC's classifier (`sf-nm-classifier.js`) should run **directly against
-   `sf_deal_staging`** (Task 6b) for the authoritative dia de-contamination +
-   gov cross-check — no manual re-export required. The genuinely-missing
-   non-name-matched closed deals are a smaller long-tail.
-2. **The long-tail historical backfill** (non-name-matched Closed IS deals
-   modified before the watermark — the go-forward filter won't retroactively
-   pull them) is a **one-time, parameterized run of the existing
-   `SF -> LCC: On-demand Backfill` flow** (its `Get Backfill Records` step takes
-   Object Type + Filter Query as trigger inputs; Top Count 500/page → needs
-   paging for a large pull). **Gated on Scott** — it's volume-significant (full
-   Closed IS across ALL property types, not just dia/gov) and the LCC Opps
-   disk-pressure history (sf_sync_log) warrants awareness before a big pull.
-
-### Field map (from `sf_deal_staging.raw_row`, for the classifier/matcher)
-
-| §3/§4 concept | SF raw field (`raw_row->>`) |
+| concept | `raw_row->>'…'` |
 |---|---|
-| stable SF id | `id18_sjc__c` / `Legacy_ID_sjc__c` / `AccountId` |
-| stage (closed-won) | **`StageName`** = `'Closed IS'` (+ `IsClosed`) |
-| NM listing side | **`Direct_Co_Broke_sjc__c`** (`Direct (Both)` / `Co-Broke (Seller)` / `Co-Broke (Buyer)`) |
-| NM team (authoritative) | **`SJC_Broker_Team_Name_sjc__c`**, `SJC_Broker_Team_sjc__c`, `Broker_Name__c` |
-| co-broke / referral | `Co_Broke_Teams_sjc__c`, `Co_Broke_Internal_sjc__c`, `Referral_Type__c`, `External_Referral_Share_sjc__c` |
-| cap rate | `Closing_Cap_Rate_sjc__c` / `CapRate_sjc__c` / `Deal_Cap_Rate__c`; `Marketing_Cap_Rate_sjc__c` (asking) |
-| price | `Sale_Price_Report_sjc__c`; `Asking_List_Price_sjc__c` |
-| location | `City_sjc__c`, `State_sjc__c`, `CBSA_Title_sjc__c` |
-| tenant(s) | `Tenant_Names_sjc__c`, `Tenants_sjc__c` |
-| gov signal | tenant/name/seller patterns (`GOV_AGENCY_PATTERNS`) — **NOT** `Agency_sjc__c`, which is the listing-agreement type ("Exclusive"/"Non-Exclusive"), a red herring |
-| asset | `Building_Size_SF_sjc__c`, `Property_Type_Subtype__c`, `Year_Built_sjc__c`, `Land_Ownership_Type_sjc__c` |
-| timing | `Close_Date_sjc__c`/`CloseDate`, `Time_on_Market_Days_sjc__c`, `Lease_Term_Remaining_sjc__c`, `Lease_Term_years_sjc__c` |
-| counterparties | `Seller_Company_sjc__c`/`_City`/`_State`/`Seller_Org_Type_sjc__c`; `Buyer_Company_*`/`Buyer_Org_Type_sjc__c` |
+| NM side | `Direct_Co_Broke_sjc__c` (Direct (Both)/Co-Broke (Seller)=listed; Co-Broke (Buyer)=buy-side) |
+| NM team | `SJC_Broker_Team_Name_sjc__c` → `SJC_Broker_Team_sjc__c` → `Broker_Name__c` |
+| tenant (multi) | `Tenant_Names_sjc__c` / `Tenants_sjc__c` (`|`-joined) |
+| subtype/type | `Property_Type_Subtype__c` / `Property_Type_Sub_Type__c`, `Property_Type__c` |
+| price / cap | `Sale_Price_Report_sjc__c` / `Final_Sale_Price__c`; `Closing_Cap_Rate_sjc__c`/`Deal_Cap_Rate__c` |
+| loc / date | `City_sjc__c`/`State_sjc__c`; `Close_Date_sjc__c`/`CloseDate` |
+| **SF id** | `sf_deal_id` (staging col) — the idempotency key the export lacked |
 
-So Task 6b's classifier reads `raw_row` from `sf_deal_staging` (no new PA push,
-no new staging table needed). The §4 JSON contract below is retained as the
-reference shape; the live channel is the `intake-salesforce?action=objects` POST
-already in production.
+⚠️ **`Agency_sjc__c` is NOT a gov signal** — it is the listing-agreement type
+("Exclusive"/"Non-Exclusive"). Gov membership uses `GOV_AGENCY_PATTERNS` on
+tenant/name/seller.
+
+### 3.5.1 The staged universe is NOT yet a fuller superset (the R74b blocker)
+
+Re-derivation cannot run authoritatively on the staged data **today**:
+
+- **dia**: 3,320 `'Closed IS'` rows = **only 61 distinct deals** (each staged
+  40–208×, avg 54×). Incl. `'Final'` → **79 distinct closed deals / 57
+  NM-listed**. Scott's `data.xlsx` export had **285 closed / 234 NM-listed** —
+  so staging is a ~28% **subset**, not a superset.
+- **gov**: 2,747 rows = **66 distinct deals** (34 closed). Same pattern.
+- The staged NM-listed set fingerprint-matched **88 already-flagged** dia sales
+  and yielded **0 city-confirmed and 0 post-cutoff net-new adds**; the 55 loose
+  "candidates" were wrong-city false matches (several to *competitor*-listed
+  sales — `M&M; Glass`, `Colliers; Patel`). A full re-derivation would have
+  **removed ~348 of 436** correctly-flagged sales (only 88 matched). **Verdict:
+  do not re-derive from the staged subset** — the R74 `data.xlsx`-based fix
+  (+96/−34, applied 2026-06-08) remains the best available state.
+
+### 3.6 Two blockers to fix before the staged loop can drive de-contamination
+
+1. **PA Get Deals filter misses the bulk stage label.** dia closed deals
+   historically carry **`'CM - Closed IS'`** (per the `data.xlsx` footer:
+   *"STAGENAME is CM - Closed IS or Closed IS"*) — a label that does **not**
+   exist in staging at all (staging has only `'Closed IS'`/`'Final'`). Broaden
+   the filter to `StageName IN ('Closed IS','CM - Closed IS','Final')`. The
+   filter is also **additive + watermark-gated**, so it only pulls newly-modified
+   deals — the historical closed book needs a **one-time backfill** (the real
+   prerequisite for dia, not a deferred long-tail).
+2. **Staging upsert duplication bug.** The sync **INSERTs** a new row per pull
+   instead of upserting on `sf_deal_id` → 40–208× duplication (dia 3,320 rows /
+   61 deals). This bloats the table and trends toward the `sf_sync_log`
+   disk-pressure incident. Fix: upsert on `sf_deal_id` (keep latest
+   `sf_last_modified`), or a retention prune.
+
+Until both land, the matcher also needs **city/address confirmation** — the
+tolerant state+price+date gate over-matches badly on clustered dialysis (0/55
+city-confirmed in the 2026-06-08 staged run).
+
+---
 
 ## 3.6 Historical-pull scope + gov staleness root-cause (2026-06-08, read-only)
 
