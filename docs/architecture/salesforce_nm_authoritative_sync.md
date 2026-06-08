@@ -188,6 +188,48 @@ no new staging table needed). The §4 JSON contract below is retained as the
 reference shape; the live channel is the `intake-salesforce?action=objects` POST
 already in production.
 
+## 3.6 Historical-pull scope + gov staleness root-cause (2026-06-08, read-only)
+
+Captured base in SF staging (name-matched only, pre-broadening):
+
+| Vertical | Closed-won staged | Freshness | Stage labels |
+|---|---|---|---|
+| **dia** (`zqzrriwuavgrquhisnoa.sf_deal_staging`) | **3,320** Closed IS | fresh → Dec 2025 | `Closed IS` only |
+| **gov** (`scknotsqkcheojiaewwh.sf_deal_staging`) | **560** Closed IS + **800** Final | **stale → 2021 (CIS) / 2023 (Final)** | `Closed IS` AND `Final` |
+
+**Edge-function self-filters by vertical (verified):** after the Object Sync
+broadening, the deals that landed in dia `sf_deal_staging` were 100% dia-classified
+(0 retail/office). The `intake-salesforce` edge fn classifies each posted deal and
+**routes dia→dia / gov→gov staging and DROPS other verticals** — so pulling the
+whole Closed IS universe never pollutes the vertical staging tables. A backfill is
+therefore constraint-safe with the simplest SOQL filter (`StageName eq 'Closed IS'`);
+no risky `contains(Tenant_…)` filter needed (and `Tenant_Names_sjc__c` may be a
+long-text-area = not SOQL-LIKE-filterable anyway).
+
+**Gov staleness root-cause:** (1) gov closed deals use **two** stage labels —
+`Closed IS` AND `Final` — so a `StageName eq 'Closed IS'`-only filter under-covers
+gov; (2) only `Terminated IS` stays fresh (terminations get re-modified often;
+closed deals don't, so the May-17 seed of Closed IS/Final never refreshes); (3) the
+2024-26 gov-closed gap is **partly real** (federal repricing froze gov sales →
+terminations not closes — Terminated IS runs to 2026-04) and partly the
+name-filter miss. Gov charts are unaffected (they read the master import, not this
+SF channel).
+
+**Reframe — the backfill is a long-tail refinement, not the primary lever.** The
+dia de-contamination cohort the #20 chart needs is **already staged** (3,320 dia
+Closed IS); CC's classifier should run against that **now** (Task 6b / the held
+removes+adds), which is the real path to dia 6.38% — not the backfill. The
+backfill recovers only the non-name-matched long-tail (~300-400 dia est) + the
+stale recent-gov set, and requires paging the full closed book (500/page, SF query
+not vertical-filterable) — worth doing for completeness, after the classifier pass.
+
+Backfill mechanics (verified): `SF -> LCC: On-demand Backfill` (Instant) →
+`Get Backfill Records` (Object Type + Filter Query as trigger inputs, Top Count
+500) → `POST Backfill Objects` to the **same** `intake-salesforce?action=objects`
+endpoint → same vertical routing. Run params: Object Type `Deals`, Filter
+`StageName eq 'Closed IS' or StageName eq 'Final'`, paged via Skip (needs a Skip
+trigger input added, or repeat with a date-window filter).
+
 ## 4. The Power Automate flow contract (Task 6a — Scott builds to this)
 
 `POST <SF_BULK_WEBHOOK_URL>` (a NEW signed PA HTTP-trigger URL; treat as secret —
