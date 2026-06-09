@@ -2,6 +2,40 @@
 
 **Date:** 2026-06-09 · **Status:** dry-run complete, **awaiting Scott's gate** (no production flags flipped) · dia first, gov report-only.
 
+> ## v2 update — side reconciliation + proximity (the binding fix)
+>
+> The Comp object alone is **not** sufficient: Internal = "NM touched the deal" but not
+> *which side*. v2 reconciles every Comp match against the **SF Deal object's
+> `Direct_Co_Broke`** (loaded from the `data.xlsx` Deal export → `sf_deal_export`,
+> 271 rows; 229 listing-side / 41 buyer). Rule: `is_northmarq=true` **only** for
+> `Direct (Both)` / `Co-Broke (Seller)`; `Co-Broke (Buyer)` → **`is_northmarq_buyside`**;
+> **side absent → HOLD** (no flip). The city test is loosened to **≤25 mi geocoded
+> proximity** (city-centroid gazetteer from 10,556 geocoded properties); the Deal→sale
+> side is identified at a **tight ±1.5 %** price so dense metros (Houston/San Antonio)
+> don't cross-attribute a neighbor's side.
+>
+> **dia v2 result:** 243 Comp-matched sales → **listing 199** (6 new adds, 193 no-op),
+> **buyer 25** (15 flip OFF + set buyside, 10 new buyside), **19 held** (no Deal side).
+> Confident competitor removes unchanged: `1065, 5004, 8327, 13137`.
+> Net `is_northmarq` true **436 → 423**; `is_northmarq_buyside` true **25**.
+>
+> **Key correction over v1:** v1 (Comp-only) wanted to RE-ADD `5359, 5489, 6375, 8347`
+> (R74 removes). The Deal side **refutes** them — `5359`+`5489` exact-price-match a
+> **Co-Broke (Buyer)** deal → buy-side; `6375`+`8347` have **no Deal side** → held.
+> R74 was right to remove them from the listing set. Only the Deal layer surfaces this.
+>
+> **#20 holds:** side-reconciled NM **listing** median **6.40 %** (n=190) ≈ deck 6.38 %;
+> buy-side runs tighter (6.10 %) and is correctly excluded.
+>
+> **Apply (gated):** `scripts/applied/sf-nm-dia-r74c-staged.sql` (v2, explicit IDs +
+> `is_northmarq_buyside` column). gov stays report-only — no gov Deal export exists yet,
+> so it cannot be side-reconciled (reinforces HOLD).
+>
+> The original Comp-only analysis below is retained for the audit trail.
+
+---
+
+
 ## Source
 
 Scott's freshly-exported SF **Comp object** (not the Deal/Opportunity object), staged
