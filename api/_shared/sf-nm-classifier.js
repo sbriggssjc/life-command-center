@@ -365,3 +365,57 @@ export function classifyDeal(raw) {
     is_northmarq_source: 'salesforce',
   };
 }
+
+// ── Staging raw_row → canonical deal (the SF API field map) ───────────────────
+// Maps a sf_deal_staging.raw_row jsonb (full SF Opportunity record, _sjc__c
+// managed-package field names) onto the canonical deal shape classifyDeal reads.
+// Single versioned source of truth for the field map documented in
+// docs/architecture/salesforce_nm_authoritative_sync.md §3.5.
+const pickRaw = (raw, names) => {
+  for (const n of names) {
+    const v = raw?.[n];
+    if (v !== null && v !== undefined && String(v).trim() !== '') return v;
+  }
+  return null;
+};
+
+export function mapStagingRawRow(raw, sfDealId = null) {
+  if (!raw || typeof raw !== 'object') return normalizeDealRow({});
+  return {
+    sf_id:           sfDealId || pickRaw(raw, ['id18_sjc__c', 'Legacy_ID_sjc__c', 'Id']),
+    deal_name:       pickRaw(raw, ['Name']),
+    direct_co_broke: pickRaw(raw, ['Direct_Co_Broke_sjc__c']),
+    broker_team:     pickRaw(raw, ['SJC_Broker_Team_Name_sjc__c', 'SJC_Broker_Team_sjc__c', 'Broker_Name__c']),
+    tenant:          pickRaw(raw, ['Tenant_Names_sjc__c', 'Tenants_sjc__c']),
+    specific_use:    pickRaw(raw, ['Property_Type_Subtype__c', 'Property_Type_Sub_Type__c']),
+    property_type:   pickRaw(raw, ['Property_Type__c']),
+    property_use:    pickRaw(raw, ['Property_Type_Subtype__c', 'Property_Type_Sub_Type__c']),
+    seller_company:  pickRaw(raw, ['Seller_Company_sjc__c']),
+    cap_rate:        pickRaw(raw, ['Closing_Cap_Rate_sjc__c', 'Deal_Cap_Rate__c', 'Override_Closing_Cap_Rate_sjc__c']),
+    sale_price:      pickRaw(raw, ['Sale_Price_Report_sjc__c', 'Final_Sale_Price__c']),
+    city:            pickRaw(raw, ['City_sjc__c']),
+    state:           pickRaw(raw, ['State_sjc__c']),
+    close_date:      (() => { const d = pickRaw(raw, ['Close_Date_sjc__c', 'CloseDate', 'Est_Actual_Close_Date_sjc__c']); return d ? String(d).slice(0, 10) : null; })(),
+    // Optional gov signals if SF ever carries them on the deal:
+    is_government:   pickRaw(raw, ['Is_Government__c', 'Government__c']),
+    lease_number:    pickRaw(raw, ['Lease_Number__c', 'GSA_Lease_Number__c']),
+  };
+}
+
+// Closed-sale stage labels the PA Get Deals filter should pull (§3.6).
+export const CLOSED_STAGE_LABELS = ['Closed IS', 'CM - Closed IS', 'Final'];
+
+// ── Broker-string classifiers (used by the de-derivation remove logic) ────────
+// A named NATIONAL competitor brokerage → the deal was definitively NOT NM-listed
+// (safe to un-flag regardless of SF export completeness). Unambiguous majors only.
+export const COMPETITOR_BROKER_RE = /(cushman|wakefield|c&w|colliers|cbre|newmark|\bjll\b|marcus\s*&\s*millichap|\bm&m\b|\bmmi\b|institutional property advisors|\bipa\b|\bsrs\b|avison young|\bay\b|\bnai\b|matthews|flagship|\bsvn\b|keller williams|\bkw\b)/i;
+export function isCompetitorBroker(name) {
+  return !!name && COMPETITOR_BROKER_RE.test(String(name));
+}
+
+// A Northmarq / Stan Johnson listing-broker string → keep flagged even if absent
+// from a (date-filtered) SF export. Team surnames mirror the live broker_team set.
+export const NM_LISTING_BROKER_RE = /\b(sjc|stan johnson|northmarq|briggs|scrivner|feller|hughes|brett|duff|powell|tomlinson|maier|corriston|butler|cornell|hedrick|van dresser)\b/i;
+export function isNorthmarqListingBroker(name) {
+  return !!name && NM_LISTING_BROKER_RE.test(String(name));
+}

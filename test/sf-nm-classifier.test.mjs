@@ -132,3 +132,42 @@ describe('classifyDeal — merged verdict + header normalization', () => {
     assert.equal(v.sale_price, 7120503);
   });
 });
+
+describe('mapStagingRawRow — SF API field map (Round 74b)', () => {
+  it('maps a staged raw_row to the canonical deal + classifies dia NM-listed', async () => {
+    const { mapStagingRawRow, classifyDeal, isCompetitorBroker, isNorthmarqListingBroker } =
+      await import('../api/_shared/sf-nm-classifier.js');
+    const raw = {
+      StageName: 'Closed IS', Name: 'DaVita Dialysis - Auburn - WA',
+      Direct_Co_Broke_sjc__c: 'Co-Broke (Seller)', SJC_Broker_Team_Name_sjc__c: 'Team Briggs',
+      Tenant_Names_sjc__c: 'DaVita Dialysis', Property_Type__c: 'Healthcare',
+      Sale_Price_Report_sjc__c: '7120503', City_sjc__c: 'Auburn', State_sjc__c: 'WA',
+      Close_Date_sjc__c: '2025-06-23', id18_sjc__c: '0068W00000jeeXDQAY',
+    };
+    const v = classifyDeal(mapStagingRawRow(raw, '0068W00000jeeXDQAY'));
+    assert.equal(v.vertical, 'dia');
+    assert.equal(v.is_northmarq, true);
+    assert.equal(v.is_comp, true);
+    assert.equal(v.sf_id, '0068W00000jeeXDQAY');
+    assert.equal(v.sale_price, 7120503);
+    // broker classifiers used by the remove logic
+    assert.equal(isCompetitorBroker('C&W; Patel'), true);
+    assert.equal(isCompetitorBroker('Colliers'), true);
+    assert.equal(isCompetitorBroker('Team Briggs'), false);
+    assert.equal(isNorthmarqListingBroker('SJC; Briggs'), true);
+    assert.equal(isNorthmarqListingBroker('Scott Briggs'), true);
+    assert.equal(isNorthmarqListingBroker('C&W; Patel'), false);
+  });
+
+  it('splits a multi-tenant string and tags a Co-Broke (Buyer) as buy-side', async () => {
+    const { mapStagingRawRow, classifyDeal } = await import('../api/_shared/sf-nm-classifier.js');
+    const v = classifyDeal(mapStagingRawRow({
+      StageName: 'Closed IS', Name: 'X', Direct_Co_Broke_sjc__c: 'Co-Broke (Buyer)',
+      SJC_Broker_Team_Name_sjc__c: 'Team Briggs', Tenant_Names_sjc__c: 'Total Renal Care|Mi Bandera|DaVita Dialysis',
+      Sale_Price_Report_sjc__c: '1078752', State_sjc__c: 'IL', Close_Date_sjc__c: '2023-12-29',
+    }));
+    assert.equal(v.vertical, 'dia');
+    assert.equal(v.is_northmarq, false);
+    assert.equal(v.is_northmarq_buyside, true);
+  });
+});

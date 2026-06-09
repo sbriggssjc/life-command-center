@@ -197,6 +197,21 @@ dialysis (0/55 city-confirmed in the 2026-06-08 staged run). The live re-derivat
 must require a city (or address) match for an auto-add, exactly as the
 `data.xlsx` Task-3 fix did (city-confirmed adds only).
 
+**Staging-sourced de-contamination dry-run (wired now).**
+`scripts/sf-nm-decontam-dryrun.mjs --domain dia|gov --out plan.json` reads the
+deduped closed deals straight from `sf_deal_staging` (via the SF field map
+`mapStagingRawRow` + the durable classifier — no manual export step), matches
+the NM-listed comps to `sales_transactions` (state + close_date ±120d +
+sold_price ±6%, **city-confirmed adds only**), and emits the add/remove plan:
+ADD = city-confirmed + not flagged, REMOVE = flagged + no NM match + explicit
+competitor broker (`isCompetitorBroker`), HOLD = null/personal-broker removes +
+SJC/NM-broker removes (`isNorthmarqListingBroker`, keep flagged) +
+non-city-confirmed adds + Task-4 no-match. Read-only (env carries
+`DIA_/GOV_SUPABASE_URL` + `…_SERVICE_KEY`). Once the §3.6(A) filter + backfill
+land the complete deduped set, this resolves the held buckets against
+authoritative CRM data → dry-run → Scott's gate → commit. **Until then dia flags
+stay at +96/−34 = 436 (no regression).**
+
 ---
 
 ## 3.6 Historical-pull scope + gov staleness root-cause (2026-06-08, read-only)
