@@ -1364,15 +1364,55 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
   }
   const cad = Array.isArray(seed.data) ? seed.data[0] : seed.data;
 
-  // Record primary_contact on the opportunity (display trail; best-effort).
+  // R16: fire the SF Task at contact-selection time (WhoId is now known). A
+  // government buyer is a plain buy-side touchpoint → NMType BLANK (never
+  // "Opportunity"). Best-effort + outcome-truthful: a missing sf_contact_id is
+  // recorded as `sf_task_pending_contact` (we do NOT invent a WhoId), and a
+  // failed SF write never fails the selection and never fabricates an sf_opp_id.
+  let sfTaskId = null;
+  let sfTaskStatus = sfContactId ? null : 'sf_task_pending_contact';
+  let parentName = null;
+  let sfAccountId = null;
+  if (sfContactId) {
+    try {
+      try {
+        const pe = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(entityId) + '&select=name&limit=1');
+        if (pe.ok && Array.isArray(pe.data) && pe.data[0]) parentName = pe.data[0].name || null;
+      } catch (_e) { /* soft */ }
+      try {
+        const bp = await opsQuery('GET', 'lcc_buyer_parents?parent_entity_id=eq.' + pgFilterVal(entityId) + '&select=sf_account_id&limit=1');
+        if (bp.ok && Array.isArray(bp.data) && bp.data[0]) sfAccountId = bp.data[0].sf_account_id || null;
+      } catch (_e) { /* soft */ }
+      const { createSalesforceTask } = await import('./_shared/salesforce.js');
+      const sf = await createSalesforceTask({
+        whoId: sfContactId,
+        subject: (parentName || contactName || 'Buyer') + ' — Government Buyer',
+        nmType: null,            // buyer = blank NMType
+        status: 'Open',
+        whatId: sfAccountId,
+        idempotencyKey: oppId || undefined,
+      });
+      if (sf.ok && sf.task && sf.task.Id) { sfTaskId = sf.task.Id; sfTaskStatus = 'created'; }
+      else { sfTaskStatus = 'sf_task_failed:' + (sf.reason || 'unknown'); }
+    } catch (_e) { sfTaskStatus = 'sf_task_error'; }
+  }
+
+  // Record primary_contact (+ the SF task id) on the opportunity. On a
+  // successful SF Task create, also stamp sf_opp_id (the 00T id) so the
+  // gov-buyer sync sees it `synced` and never double-creates.
   if (oppId) {
     try {
       const cur = await opsQuery('GET', 'bd_opportunities?id=eq.' + pgFilterVal(oppId) + '&select=metadata&limit=1');
       const meta = (cur.ok && Array.isArray(cur.data) && cur.data[0] && cur.data[0].metadata) ? cur.data[0].metadata : {};
       const nextMeta = Object.assign({}, meta, {
-        primary_contact: { entity_id: contactEntityId, sf_contact_id: sfContactId, name: contactName, set_at: new Date().toISOString() },
+        primary_contact: {
+          entity_id: contactEntityId, sf_contact_id: sfContactId, name: contactName,
+          sf_task_id: sfTaskId, set_at: new Date().toISOString(),
+        },
       });
-      await opsQuery('PATCH', 'bd_opportunities?id=eq.' + pgFilterVal(oppId), { metadata: nextMeta });
+      const patch = { metadata: nextMeta };
+      if (sfTaskId) patch.sf_opp_id = sfTaskId;
+      await opsQuery('PATCH', 'bd_opportunities?id=eq.' + pgFilterVal(oppId), patch);
     } catch (_e) { /* non-fatal */ }
   }
 
@@ -1384,6 +1424,7 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
     contact_entity_id: contactEntityId, sf_contact_id: sfContactId, contact_name: contactName,
     cadence_id: cad ? cad.id : null, phase: cad ? cad.phase : 'buy_side',
     next_touch_due: cad ? cad.next_touch_due : null,
+    sf_task_id: sfTaskId, sf_task_status: sfTaskStatus,
   });
 }
 
@@ -1466,10 +1507,11 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
   if (contactEntityId) patch.contact_id = contactEntityId;
   if (sfContactId) patch.sf_contact_id = sfContactId;
   let cadenceId = null;
+  let cadenceOppId = null;
   if (Object.keys(patch).length) {
     const cadGet = await opsQuery('GET', 'touchpoint_cadence?entity_id=eq.' + pgFilterVal(entityId)
       + '&phase=in.(prospecting,onboarding,steady_state,maintenance)'
-      + '&order=next_touch_due.asc.nullslast&select=id&limit=1');
+      + '&order=next_touch_due.asc.nullslast&select=id,bd_opportunity_id&limit=1');
     const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
     if (!cadRow) {
       return res.status(404).json({ error: 'no_active_cadence', detail: 'No active cadence on this entity to attach the contact to' });
@@ -1477,6 +1519,39 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
     const upd = await opsQuery('PATCH', 'touchpoint_cadence?id=eq.' + pgFilterVal(cadRow.id), patch);
     if (!upd.ok) return res.status(502).json({ error: 'cadence_attach_failed', detail: upd.data });
     cadenceId = cadRow.id;
+    cadenceOppId = cadRow.bd_opportunity_id || null;
+  }
+
+  // R16: fire the SF Task at contact-selection time (WhoId is now known). A
+  // seller prospect carries NMType="Opportunity". Best-effort + outcome-
+  // truthful: no sf_contact_id → `sf_task_pending_contact` (no invented WhoId);
+  // a failed SF write never fails the selection. When the cadence is tied to a
+  // bd_opportunity and the task is created, stamp sf_opp_id (the 00T id).
+  let sfTaskId = null;
+  let sfTaskStatus = sfContactId ? null : 'sf_task_pending_contact';
+  if (sfContactId) {
+    try {
+      let entityName = contactName;
+      try {
+        const ee = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(entityId) + '&select=name&limit=1');
+        if (ee.ok && Array.isArray(ee.data) && ee.data[0]) entityName = ee.data[0].name || entityName;
+      } catch (_e) { /* soft */ }
+      const { createSalesforceTask } = await import('./_shared/salesforce.js');
+      const sf = await createSalesforceTask({
+        whoId: sfContactId,
+        subject: (entityName || contactName || 'Prospect') + ' — Prospect',
+        nmType: 'Opportunity',   // seller prospect
+        status: 'Open',
+        idempotencyKey: cadenceOppId || undefined,
+      });
+      if (sf.ok && sf.task && sf.task.Id) { sfTaskId = sf.task.Id; sfTaskStatus = 'created'; }
+      else { sfTaskStatus = 'sf_task_failed:' + (sf.reason || 'unknown'); }
+    } catch (_e) { sfTaskStatus = 'sf_task_error'; }
+    if (sfTaskId && cadenceOppId) {
+      try {
+        await opsQuery('PATCH', 'bd_opportunities?id=eq.' + pgFilterVal(cadenceOppId), { sf_opp_id: sfTaskId });
+      } catch (_e) { /* non-fatal */ }
+    }
   }
 
   // Staleness hook: the entity is now reachable — it leaves P-CONTACT.
@@ -1485,6 +1560,7 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
   return res.status(200).json({
     ok: true, entity_id: entityId, contact_entity_id: contactEntityId,
     sf_contact_id: sfContactId, contact_name: contactName, cadence_id: cadenceId,
+    sf_task_id: sfTaskId, sf_task_status: sfTaskStatus,
   });
 }
 
