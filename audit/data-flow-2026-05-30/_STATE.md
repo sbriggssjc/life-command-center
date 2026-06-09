@@ -23,11 +23,38 @@ live immediately; constraints/crons apply AFTER the writer/route deploys.
 ## Active files (this folder)
 - `ARCHITECTURE_intelligence_hub.md` — the forward design: LCC as the centralized
   brain (5 layers, cross-platform consistency, vertical-agnostic, 6-phase roadmap).
-- `CLAUDECODE_PROMPT_PHASE1_storage_adapter.md` — **current actionable**: move OM
-  ingestion storage to SharePoint (Team Briggs Documents library) via Power
-  Automate — Graph-free. Library synced locally at `C:\Users\scott\NorthMarq
-  Capital, LLC\Team Briggs - Documents`.
+- `CLAUDECODE_PROMPT_PHASE1_storage_adapter.md` — the Phase 1 build prompt
+  (IMPLEMENTED — see below; keep until shipped + flipped, then archive).
+- `PHASE1_SHAREPOINT_PA_FLOW_CONTRACT.md` — **Scott's next action**: the PA HTTP
+  flow contracts (Save / Get / Link) + env vars + staged cutover for the
+  SharePoint storage backend.
 - `archive/` — every completed round's prompt + historical audit artifacts.
+
+## Phase 1 — storage adapter (IMPLEMENTED 2026-06-09, on branch
+`claude/inspiring-shannon-3fdqs7`; awaiting merge + redeploy, then the SharePoint flip)
+- New `api/_shared/storage-adapter.js` — pluggable backend (`supabase` default |
+  `sharepoint_pa`) behind one interface (`putArtifact` / `fetchSharepointBytes` /
+  `resolveArtifactDownload` / `getConfiguredStorageBackend`); wraps the existing
+  `artifact-storage.js` so supabase mode is byte-identical. `sharepoint_pa` posts
+  to PA flows; degrades to supabase (one-time warn) if `SHAREPOINT_SAVE_URL`
+  unset → flipping the flag early can't break ingest.
+- Ingest (`intake-om-pipeline.js`) routes uploads through `putArtifact` + records
+  `storage_backend`/`storage_ref`. Extractor (`intake-extractor.js`) gained a
+  Path-3 `sharepoint_pa` read branch (Paths 1/2 untouched). Download
+  (`intake-artifact-download.js`) delegates to the adapter (ref-shape sniff:
+  `bucket/obj`→Supabase signing unchanged, `/sites/...`→PA link).
+- DB: migration `20260717120000_lcc_phase1_storage_adapter_columns.sql` —
+  additive nullable `storage_backend`+`storage_ref` on `staged_intake_artifacts`.
+  **APPLIED LIVE to LCC Opps** (metadata-only, safe) + committed.
+- `node --check` clean (4 files); 12 functions. **Next:** Scott verifies
+  `STORAGE_BACKEND=supabase` no-regression on the redeploy → builds PA Flows 1+2
+  (contract doc) → sets `SHAREPOINT_SAVE_URL`/`SHAREPOINT_FETCH_URL` →
+  `STORAGE_BACKEND=sharepoint_pa`. Download link = optional Flow 3.
+- Deferred-within-scope (honest): SharePoint *download* fully works once Flow 3
+  + `SHAREPOINT_LINK_URL` exist AND promoted listings carry the SharePoint ref in
+  `intake_artifact_path` (the adapter sniffs ref shape, so no listing backend
+  column is needed — the ref is self-describing). Until then SharePoint downloads
+  return a clean 501; Supabase downloads unchanged.
 
 ## Shipped & verified (detail in CLAUDE.md)
 R4 identity/UX · R5 SPE→parent buyer doctrine · R6 ownership-resolution gating ·

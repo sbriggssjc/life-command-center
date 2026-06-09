@@ -17,6 +17,7 @@
 
 import { fetchWithTimeout } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
+import { resolveArtifactDownload } from '../_shared/storage-adapter.js';
 
 const SIGNED_URL_TTL_SECONDS = 3600;   // 1 hour
 
@@ -69,71 +70,36 @@ export async function handleIntakeArtifactDownload({ inputs, authContext }) {
     };
   }
 
-  const supabaseUrl = process.env.OPS_SUPABASE_URL;
-  const serviceKey  = process.env.OPS_SUPABASE_KEY;
-  if (!supabaseUrl || !serviceKey) {
+  // Resolve a download URL through the storage adapter. It sniffs the ref shape:
+  //   "<bucket>/<path>"      -> Supabase signed URL (unchanged behavior)
+  //   "/sites/.../<file>"    -> SharePoint sharing link via the PA flow
+  const resolved = await resolveArtifactDownload({
+    storageRef: storagePath,
+    opsUrl:     process.env.OPS_SUPABASE_URL,
+    opsKey:     process.env.OPS_SUPABASE_KEY,
+    fetchImpl:  (u, opts) => fetchWithTimeout(u, opts, 8000),
+  });
+
+  if (!resolved.ok) {
     return {
-      status: 503,
+      status: resolved.status || 500,
       body: {
-        error: 'storage_not_configured',
-        detail: 'OPS_SUPABASE_URL / OPS_SUPABASE_KEY missing from environment.',
-      },
-    };
-  }
-
-  // Supabase Storage signed-URL endpoint: POST /storage/v1/object/sign/{bucket}/{path}
-  // with body { expiresIn }. storage_path = "{bucket}/{path}" — split on first /.
-  const firstSlash = storagePath.indexOf('/');
-  if (firstSlash < 1) {
-    return {
-      status: 400,
-      body: { error: 'invalid_storage_path', detail: 'Expected bucket/path shape.' },
-    };
-  }
-  const bucket     = storagePath.slice(0, firstSlash);
-  const objectPath = storagePath.slice(firstSlash + 1);
-  const fileName   = objectPath.split('/').pop() || 'document.pdf';
-
-  const signEndpoint = `${supabaseUrl}/storage/v1/object/sign/${bucket}/${objectPath}`;
-  const signRes = await fetchWithTimeout(signEndpoint, {
-    method: 'POST',
-    headers: {
-      'apikey':        serviceKey,
-      'Authorization': `Bearer ${serviceKey}`,
-      'Content-Type':  'application/json',
-    },
-    body: JSON.stringify({ expiresIn: SIGNED_URL_TTL_SECONDS }),
-  }, 8000);
-
-  const signText = await signRes.text();
-  let signJson = null;
-  try { signJson = signText ? JSON.parse(signText) : null; } catch { /* keep text */ }
-
-  if (!signRes.ok || !signJson?.signedURL) {
-    return {
-      status: signRes.status || 500,
-      body: {
-        error: 'signed_url_mint_failed',
-        detail: signJson?.message || signJson?.error || signText?.slice(0, 300) || 'Supabase returned no signed URL',
+        error:        resolved.error || 'signed_url_mint_failed',
+        detail:       resolved.detail || 'Could not resolve a download URL for this artifact.',
         storage_path: storagePath,
       },
     };
   }
 
-  // signJson.signedURL is relative ("/object/sign/bucket/path?token=...") —
-  // absolutize it.
-  const signedUrl = `${supabaseUrl}/storage/v1${signJson.signedURL}`;
-  const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString();
-
   return {
     status: 200,
     body: {
-      ok:             true,
-      signed_url:     signedUrl,
-      expires_at:     expiresAt,
-      storage_path:   storagePath,
-      file_name:      resolvedFileName || fileName,
-      ttl_seconds:    SIGNED_URL_TTL_SECONDS,
+      ok:           true,
+      signed_url:   resolved.signed_url,
+      expires_at:   resolved.expires_at,
+      storage_path: storagePath,
+      file_name:    resolvedFileName || resolved.file_name,
+      ttl_seconds:  resolved.ttl_seconds || SIGNED_URL_TTL_SECONDS,
     },
   };
 }
