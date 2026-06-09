@@ -1,0 +1,89 @@
+{
+  "round": "74c",
+  "title": "De-contaminate is_northmarq against the SF Internal Comp export",
+  "generated_at": "2026-06-09",
+  "source": "public.sf_internal_comp_export (per-project), status='Sold' = closed NM universe",
+  "nm_signal": "Comp Type = Internal = a Northmarq/SJC-brokered sale (Scott-confirmed). No broker/Direct-Co-Broke columns on the Comp object; buy-side cannot be split (minor population caveat).",
+  "provenance_tag": "is_northmarq_source = 'salesforce_comp'",
+  "match_rule": "vertical-scoped: state + sold_date +/-120d + sold_price +/-6%; confirm with city OR tenant(agency); best-per-comp then dedup to one comp per sale (1:1).",
+  "status": "DRY-RUN — no production flag writes performed. Awaiting Scott's gate.",
+
+  "dia": {
+    "universe": { "export_total": 280, "internal_sold": 262, "sold_with_price": 253, "all_internal_type": true },
+    "matching": {
+      "confirmed_comps_matched": 244,
+      "distinct_matched_sales": 242,
+      "sale_collisions_resolved": 2,
+      "confirmation_mix": { "city_and_tenant": 184, "tenant_only": 18, "city_only": 35, "other_edge": 5 },
+      "match_rate_of_priced_sold": "242/253 = 95.7%"
+    },
+    "rederive_is_northmarq": {
+      "current_flagged": 436,
+      "matched_and_already_flagged_noop": 220,
+      "new_adds_confident": 22,
+      "flagged_unmatched_total": 216,
+      "proposed_apply": {
+        "adds": 22,
+        "confident_removes_competitor_broker": 4,
+        "net_flagged_after_apply": 454,
+        "staged_removes_held_for_gate": 212
+      }
+    },
+    "confident_removes_competitor_broker": [
+      { "sale_id": 1065, "broker": "Encore", "state": "MI", "city": "Detroit", "tenant": "Wayne County Dialysis", "sold_price": 1545000 },
+      { "sale_id": 5004, "broker": "Colliers", "state": "TX", "city": "San Antonio", "tenant": "Fresenius Medical Care", "sold_price": 3300000 },
+      { "sale_id": 8327, "broker": "M&M; Glass", "state": "OH", "city": "Youngstown", "tenant": "Fresenius Medical Care", "sold_price": 3360000, "note": "R74 M&M contradiction — Comp object EXCLUDES it from Internal set; resolves to REMOVE" },
+      { "sale_id": 13137, "broker": "M&M; Glass", "state": "WV", "city": "Ripley", "tenant": "Fresenius Medical Care", "sold_price": 1525000, "note": "R74 M&M contradiction — resolves to REMOVE" }
+    ],
+    "staged_removes_held_for_gate": {
+      "total": 212,
+      "buckets": {
+        "nm_broker_keep": { "count": 75, "action": "KEEP flagged — independent NM/SJC/Briggs/Stinson broker evidence; Comp DB is incomplete so absence != not-NM" },
+        "null_broker_hold": { "count": 66, "action": "HOLD — no broker evidence either way; do not strip (resolves R74's held ~84 null-broker removes)" },
+        "other_named_broker_hold": { "count": 71, "action": "HOLD — individual names / garbage strings ('None','M') / small firms; none clearly competitor megafirm, none clearly NM; needs Scott judgment" }
+      },
+      "provenance_origin": { "src_salesforce_R74": 55, "src_null_R23_heuristic": 161 }
+    },
+    "r74_reversals": {
+      "note": "R74 (Deal-object export) REMOVED these; the more-authoritative Comp object confirms them NM (exact price+date, city+tenant confirmed; co-broked with C&W/Flagship/Matthews). R74c RE-ADDS.",
+      "sale_ids": [5359, 5489, 6375, 8347]
+    },
+    "held_R74_buckets_resolution": {
+      "held_84_null_broker_removes": "Now 66 null-broker in the flagged-unmatched set -> HOLD (not stripped). Conservative per guardrail.",
+      "held_144_non_city_confirmed_adds": "Superseded by R74c authoritative matching. Net only 22 NEW confident adds beyond current flags; the rest were already flagged or are not in the Internal set.",
+      "M&M_contradictions_8327_13137": "Resolved -> REMOVE (excluded from Internal set + competitor broker).",
+      "task4_no_match_4": "Subsumed into the 18 import candidates below."
+    },
+    "import_candidates_report_only": { "comps": 18, "priced": 9, "volume_usd_mm_priced": 116.2, "avg_cap_pct": 7.59, "note": "Internal Sold comps matching NOTHING in dia sales_transactions; 9 of 18 carry no price (un-fingerprintable). Do NOT import here." },
+    "topic20_value_prop": {
+      "deck_target_nm_cap_pct": 6.38,
+      "nm_internal_export_alltime": { "n": 252, "avg_pct": 6.64, "median_pct": 6.34 },
+      "nm_matched_db_cap_alltime": { "n": 230, "avg_pct": 6.64, "median_pct": 6.40 },
+      "nm_internal_export_2yr_ttm": { "n": 20, "avg_pct": 6.80, "median_pct": 6.78 },
+      "market_nonnm_alltime": { "n": 2924, "avg_pct": 6.91, "median_pct": 6.63 },
+      "market_nonnm_2yr_ttm": { "n": 292, "avg_pct": 7.29, "median_pct": 7.15 },
+      "conclusion": "REPRODUCES: the deck's dia NM 6.38% is the curated Internal-comp median over the LONG (all-time) window (export 6.34% / matched-DB 6.40%), NOT the 2yr set (6.78%). Resolves Task 5 for dia: window+cohort answer on the curated comps. NM trades ~25bps tighter than market all-time, ~37bps tighter 2yr."
+    }
+  },
+
+  "gov": {
+    "status": "REPORT-ONLY — do NOT switch gov basis or re-flag in this round (guardrail). Gov has no is_northmarq_source column yet.",
+    "universe": { "export_total": 127, "internal_sold": 113, "sold_with_price": 108, "all_internal_type": true },
+    "matching": { "matched_sales": 103, "new_adds_if_applied": 80, "matched_already_flagged": 23, "current_flagged": 66, "flagged_unmatched": 43 },
+    "import_candidates_report_only": { "comps": 10, "priced": 5, "volume_usd_mm_priced": 155.6, "avg_cap_pct": 5.83 },
+    "cap_discrepancy_investigation": {
+      "export_internal_sold_alltime": { "n": 104, "avg_pct": 8.22, "median_pct": 8.00 },
+      "matched_sales_db_cap_alltime": { "n": 100, "avg_pct": 8.20, "median_pct": 8.00 },
+      "current_flagged_db_cap_alltime": { "n": 66, "avg_pct": 8.14, "median_pct": 7.90 },
+      "finding": "NO Internal-vs-DB basis contradiction. The Internal export (8.00%), the matched sales' own DB sold_cap_rate (8.00%), AND the current flagged set (7.90%) ALL agree at ~8%. The deck's ~6.78% gov NM figure is therefore NOT the raw sold_cap_rate of the flag set — it is a different cohort/aggregation (likely NOI-derived cap_rate_history, or a federal/term sub-cut, or the capital_markets_quarterly rollup).",
+      "recommendation": "Do not change gov is_northmarq off this set yet. Gov flags ARE badly incomplete (80 Internal comps unflagged) and re-flagging would NOT move the raw ~8% NM cap — but first reconcile which gov cohort/basis the deck's 6.78% comes from, since that is the number gov reproduction depends on. Separate gated step; add is_northmarq_source to gov at that time."
+    }
+  },
+
+  "guardrails_honored": [
+    "Flag-column + is_northmarq_source only. No price/term/cap writes.",
+    "Idempotent on the SF Comp Id / sale_id.",
+    "Removes staged for the gate with competitor-broker spot-check; not bulk-stripped.",
+    "dia first (flagship #20 lever); gov report-only pending deck-basis reconciliation."
+  ]
+}
