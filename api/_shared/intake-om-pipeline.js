@@ -21,13 +21,25 @@
 //        entity_match_status, matched_entity_id, message }
 // ============================================================================
 
-import { opsQuery, pgFilterVal } from './ops-db.js';
+import { opsQuery, pgFilterVal, fetchWithTimeout } from './ops-db.js';
 import { logCopilotInteraction } from './memory.js';
 import { processIntakeExtraction } from '../_handlers/intake-extractor.js';
 import { ensureEntityLink } from './entity-link.js';
+import { uploadArtifactToStorage, artifactObjectPath, ARTIFACT_BUCKET } from './artifact-storage.js';
 
 const BRIGGSLAND_WORKSPACE_ID = 'a0000000-0000-0000-0000-000000000001';
 const OM_INLINE_MAX_BYTES     = 25 * 1024 * 1024; // 25 MB (PVA + Copilot Chat cap)
+// R15 (2026-06-08) root-cause disk fix: write inline OM payloads larger than
+// this straight to Supabase Storage at ingest instead of base64 inline_data.
+// Multi-MB base64 in staged_intake_artifacts.inline_data was bloating LCC Opps
+// (the auth DB) toward its read-only disk ceiling and forced a perpetual
+// offload backlog. Small text/email-body artifacts stay inline (cheap; the
+// extractor caps text at 80K chars). Override with OM_INGEST_STORAGE_MIN_BYTES.
+const OM_INGEST_STORAGE_MIN_BYTES = (() => {
+  const raw = parseInt(process.env.OM_INGEST_STORAGE_MIN_BYTES || '', 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 256 * 1024; // 256 KB
+})();
 // Round 76cb: env-tunable race timeout. Default 25000ms (25s) lets most OM
 // extractions complete inline (typical pdf-parse + AI takes 15-30s) so the
 // caller gets immediate classification instead of always seeing 'processing'
@@ -420,14 +432,51 @@ export async function stageOmIntake(input, auth, workspaceId) {
 
   // The artifact row carries EITHER inline_data (small inline payload) or
   // storage_path (reference to bytes in Supabase Storage). The extractor
-  // handles both paths; having both is redundant but safe.
+  // handles both paths.
+  //
+  // R15 (2026-06-08): for large inline payloads, write the bytes straight to
+  // Storage at ingest (instead of base64 inline_data) so they never bloat the
+  // auth DB. Best-effort — any upload failure falls back to inline so ingestion
+  // is never blocked; the offload worker moves it later.
+  let ingestStoragePath = hasStoragePath ? input.storage_path : null;
+  let storeInline       = hasStoragePath ? null : input.bytes_base64;
+  if (!hasStoragePath && bytesLen > OM_INGEST_STORAGE_MIN_BYTES) {
+    const opsUrlEnv = process.env.OPS_SUPABASE_URL;
+    const opsKeyEnv = process.env.OPS_SUPABASE_KEY;
+    if (opsUrlEnv && opsKeyEnv) {
+      try {
+        const buffer = Buffer.from(input.bytes_base64, 'base64');
+        if (buffer.length) {
+          const objectPath = artifactObjectPath({
+            key: inboxItemId, fileName: input.file_name, mimeType, createdAt: nowIso,
+          });
+          const up = await uploadArtifactToStorage({
+            opsUrl: opsUrlEnv, opsKey: opsKeyEnv, bucket: ARTIFACT_BUCKET,
+            objectPath, mimeType, buffer,
+            fetchImpl: (u, opts) => fetchWithTimeout(u, opts, 20000),
+          });
+          if (up.ok) {
+            ingestStoragePath = up.storage_path;
+            storeInline       = null;
+          } else {
+            console.warn('[intake-om-pipeline] ingest storage upload failed, falling back to inline:',
+              inboxItemId, up.status, up.detail);
+          }
+        }
+      } catch (err) {
+        console.warn('[intake-om-pipeline] ingest storage upload error, falling back to inline:',
+          inboxItemId, err?.message);
+      }
+    }
+  }
+
   const artRes = await opsQuery('POST', 'staged_intake_artifacts', {
     intake_id:    inboxItemId,
     file_name:    input.file_name,
     file_type:    fileExt,
     mime_type:    mimeType,
-    inline_data:  hasStoragePath ? null : input.bytes_base64,
-    storage_path: hasStoragePath ? input.storage_path : null,
+    inline_data:  storeInline,
+    storage_path: ingestStoragePath,
     size_bytes:   bytesLen || null,
     sha256:       input.sha256 ?? null,
   });
