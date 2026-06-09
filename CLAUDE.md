@@ -1808,7 +1808,34 @@ vacuum-run jobs OFF (the every-5-min jobs that caused the incident). Idempotent
 (unschedule-then-schedule); supersedes the disable migration as the live source
 of truth, so a future replay/rebuild can't silently leave the offload off.
 
-**VACUUM FULL reclamation — MANUAL, Scott, low-traffic window.** Nulling
+**Accelerated DB-local drain + ingest-to-Storage root-cause fix (2026-06-09).**
+The Railway-round-trip cron (above) only does ~2 large files/tick and, run
+frequently, caused the connection incident — so two follow-ups:
+
+1. **Edge drainer.** `supabase/functions/artifact-offload` (Deno) does the same
+   offload but IN-REGION (DB + Storage both on Supabase; multi-MB bytes never
+   leave the Supabase network). Cron `lcc-artifact-offload-edge` (`*/10`,
+   `limit=10`) replaces the Railway-round-trip cron (migration
+   `20260609200000`). Per-tick limit is bounded by the Edge ~256 MB MEMORY cap,
+   not time: each ~8 MB OM decodes through base64+binary strings (~40 MB
+   transient/file), so batches > ~12 hit a 546 memory kill (verified: limit 10 →
+   clean 200 in ~19s; ~14-16 → 546). 10/tick × 6/hr = 60/hr outpaces the
+   ~14/hr inflow, drains the backlog AND keeps the TOAST free-list populated so
+   new inflow reuses freed space — **this halts physical growth even before the
+   (deferred) VACUUM FULL.** For a faster one-shot drain, invoke the function
+   directly more often, keeping each call's `limit ≤ 12`.
+2. **Ingest-to-Storage (root cause).** `intake-om-pipeline.js` now writes inline
+   OM payloads > `OM_INGEST_STORAGE_MIN_BYTES` (256 KB) straight to the
+   `lcc-om-uploads` bucket at ingest (`storage_path`, no `inline_data`), so new
+   OMs never re-form the backlog. Best-effort with inline fallback so ingestion
+   is never blocked. Shared `api/_shared/artifact-storage.js` builds the
+   deterministic object path used by both the ingest and offload paths; the
+   extractor reads `storage_path` transparently. Ships on the Railway redeploy.
+
+**VACUUM FULL reclamation — MANUAL, Scott, low-traffic window.** Per Scott's
+R15 direction, **do NOT VACUUM FULL until the disk is provisioned and the
+backlog is offloaded** — the edge cron is draining the backlog; the manual
+VACUUM is the final reclamation step once provisioning lands. Nulling
 `inline_data` is a LOGICAL clear; the TOAST bytes are not returned to the OS
 until `VACUUM FULL`. The `disk_pressure` alert reads physical
 `pg_database_size`, so it will NOT drop until the VACUUM FULL runs.
