@@ -46,10 +46,18 @@ live immediately; constraints/crons apply AFTER the writer/route deploys.
 - DB: migration `20260717120000_lcc_phase1_storage_adapter_columns.sql` —
   additive nullable `storage_backend`+`storage_ref` on `staged_intake_artifacts`.
   **APPLIED LIVE to LCC Opps** (metadata-only, safe) + committed.
-- `node --check` clean (4 files); 12 functions. **Next:** Scott verifies
-  `STORAGE_BACKEND=supabase` no-regression on the redeploy → builds PA Flows 1+2
-  (contract doc) → sets `SHAREPOINT_SAVE_URL`/`SHAREPOINT_FETCH_URL` →
-  `STORAGE_BACKEND=sharepoint_pa`. Download link = optional Flow 3.
+- `node --check` clean (4 files); 12 functions.
+- **PA Flows 1+2 BUILT + TESTED LIVE 2026-06-09** (Save id
+  `4bebbeff-3049-4f4d-ba5d-f900490f0db5`, Get id
+  `c63003a0-5d08-4b08-93cb-ad0eecfa2ae3`; both On). Full round-trip proven
+  (save → read-back → base64 decode = "LCC SharePoint flow test").
+  `SHAREPOINT_SAVE_URL` set. **Only remaining for full cutover:** Scott sets
+  `SHAREPOINT_FETCH_URL` (Flow 2 trigger URL) in Railway + keeps
+  `STORAGE_BACKEND=sharepoint_pa`; until FETCH_URL is set keep `supabase` to
+  avoid a read-back gap. Download link = optional Flow 3 (`SHAREPOINT_LINK_URL`).
+  Gotcha: SharePoint OAuth token had expired (90-day inactivity, `AADSTS700082`)
+  — reauth fixed it; watch for periodic reauth. Recipe + self-tests in
+  `PHASE1_SHAREPOINT_PA_FLOW_CONTRACT.md`.
 - Deferred-within-scope (honest): SharePoint *download* fully works once Flow 3
   + `SHAREPOINT_LINK_URL` exist AND promoted listings carry the SharePoint ref in
   `intake_artifact_path` (the adapter sniffs ref shape, so no listing backend

@@ -39,6 +39,25 @@ same gotcha as the email-intake PUT) → Response.
 LCC records `storage_backend='sharepoint_pa'`, `storage_ref=server_relative_url`,
 `storage_path=NULL`.
 
+## ✅ Flow 1 TESTED LIVE 2026-06-09 — confirmed Path format
+
+After reauthenticating the SharePoint connection (its OAuth refresh token had
+expired after 90 days inactivity — `AADSTS700082`; the flow design was correct,
+only the connection was stale), a test POST returned:
+```
+ok                  : True
+server_relative_url : /Shared Documents/Storage OM's/Intake/_flowtest-2026-06-09.txt
+item_id             : (empty)
+```
+**Key learning:** `outputs('Create_file')?['body/Path']` returns a **site/
+library-relative** path (`/Shared Documents/...`) — NOT the full
+`/sites/TeamBriggs20/...` server-relative form. So **Flow 2 can pass
+`server_relative_url` straight into "Get file content using path"** with NO
+prefix-stripping, and the empty `item_id` is a non-issue. The flow flattens any
+date-subfolder in the adapter's `path` to the bare filename (File Name =
+`last(split(path,'/'))`) into the flat `Storage OM's/Intake` folder, so the
+stored ref is always `/Shared Documents/Storage OM's/Intake/<key-prefixed-file>`.
+
 ## Flow 2 — "LCC → SharePoint: Get Artifact"  (REQUIRED to extract sharepoint rows)
 
 HTTP-triggered (POST). URL → `SHAREPOINT_FETCH_URL`. The extractor calls this to
@@ -127,6 +146,65 @@ the real test runs through LCC:
    capture the **exact `Path` format** (e.g. whether it includes the
    `/sites/TeamBriggs20/Shared Documents/…` prefix). That value is the input that
    makes Flow 2 ("Get file content using path") correct on the first build.
+
+## Flow 2 finish recipe (clone already exists — 3 mechanical edits)
+
+The clone **"Http -> Get file (LCC Get Artifact)"** (flow id
+`c63003a0-5d08-4b08-93cb-ad0eecfa2ae3`, currently **Off**) was made via Save As
+of Flow 1, so it already has the working HTTP trigger + the reauthed SharePoint
+connection. The new PA designer kept freezing mid-edit on 2026-06-09; finish
+these 3 edits when it's responsive (native browser is more stable than CDP):
+
+1. **Replace the action.** Delete the **Create file** action; add SharePoint
+   **Get file content using path** in its place (between manual and Response).
+   - Site Address: `Team Briggs - https://northmarq.sharepoint.com/sites/TeamBriggs20`
+   - File Path (expression): `triggerBody()?['server_relative_url']`
+     *(the stored ref is already site-relative `/Shared Documents/Storage OM's/
+     Intake/<file>` — pass it straight through, NO prefix-stripping, confirmed
+     by the Flow 1 live test).*
+2. **Trigger schema** (optional but tidy): change the manual trigger's Request
+   Body JSON Schema to `{"type":"object","properties":{"server_relative_url":
+   {"type":"string"}}}`. (Leaving the old 3-prop schema also works — the File
+   Path expression reads `server_relative_url` regardless.)
+3. **Response body** → replace with:
+   ```json
+   { "ok": true,
+     "content_base64": "@{base64(body('Get_file_content_using_path'))}",
+     "content_type": "application/pdf" }
+   ```
+   (If the action's internal name differs, use its real name in
+   `body('...')` — the dynamic-content picker's "File Content" token is safest.)
+4. **Turn the flow On**, Save, copy the trigger URL → `SHAREPOINT_FETCH_URL`.
+
+Quick self-test (reuses the file Flow 1 already wrote):
+```powershell
+$b = @{ server_relative_url = "/Shared Documents/Storage OM's/Intake/_flowtest-2026-06-09.txt" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "<SHAREPOINT_FETCH_URL>" -ContentType "application/json" -Body $b
+```
+Expect `ok=True` + a `content_base64` that decodes to "LCC SharePoint flow test".
+
+## Cutover state (2026-06-09 — both flows BUILT)
+- Flow 1 (Save): **built, tested, working, On.** `SHAREPOINT_SAVE_URL` set.
+- Flow 2 (Get): **built, saved, On, TESTED WORKING** (2026-06-09 self-test read
+  back the file Flow 1 wrote; base64 decoded to "LCC SharePoint flow test") —
+  id `c63003a0-5d08-4b08-93cb-ad0eecfa2ae3`.
+  manual → Get file content using path (Team Briggs, File Path =
+  `triggerBody()?['server_relative_url']`) → Response
+  `{"ok":true,"content_base64":"@{base64(body('Get_file_content_using_path'))}",
+  "content_type":"application/pdf"}`. **Remaining: Scott copies its trigger URL
+  → `SHAREPOINT_FETCH_URL` in Railway**, then the self-test below.
+- `STORAGE_BACKEND`: currently `sharepoint_pa`. **Until `SHAREPOINT_FETCH_URL`
+  is set + redeployed, large OMs save to SharePoint but can't be read back** —
+  either set FETCH_URL promptly, or revert `STORAGE_BACKEND=supabase` in the
+  interim (0 stranded as of build time). Once FETCH_URL is live, `sharepoint_pa`
+  is full end-to-end.
+- Self-test Flow 2 (reuses the file Flow 1 wrote):
+  ```powershell
+  $b = @{ server_relative_url = "/Shared Documents/Storage OM's/Intake/_flowtest-2026-06-09.txt" } | ConvertTo-Json
+  Invoke-RestMethod -Method Post -Uri "<SHAREPOINT_FETCH_URL>" -ContentType "application/json" -Body $b
+  ```
+  Expect `ok=True` + `content_base64` decoding to "LCC SharePoint flow test"
+  (`[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($r.content_base64))`).
 
 ## Env vars (Railway)
 
