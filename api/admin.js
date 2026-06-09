@@ -29,6 +29,7 @@ import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceOpportunity } from './_shared/salesforce.js';
+import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
@@ -4498,26 +4499,6 @@ async function handleStorageCleanup(req, res) {
 // Auth: standard X-LCC-Key + workspace membership (via authenticate()).
 // ============================================================================
 
-const ARTIFACT_OFFLOAD_MIME_EXT = {
-  'application/pdf':                                                          '.pdf',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':        '.xlsx',
-  'application/vnd.ms-excel':                                                 '.xls',
-  'application/msword':                                                       '.doc',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':  '.docx',
-  'text/plain':                                                               '.txt',
-  'message/rfc822':                                                           '.eml',
-};
-
-function artifactOffloadSafeName(fileName, mimeType) {
-  const fallbackExt = ARTIFACT_OFFLOAD_MIME_EXT[(mimeType || 'application/pdf').toLowerCase()] || '.bin';
-  let safe = String(fileName || 'upload')
-    .replace(/[^\w.\-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 120) || 'upload';
-  if (!/\.[a-z0-9]{2,6}$/i.test(safe)) safe += fallbackExt;
-  return safe;
-}
-
 async function handleArtifactOffload(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'GET (dry-run) or POST (offload) only' });
@@ -4585,7 +4566,7 @@ async function handleArtifactOffload(req, res) {
 
       // 2b. Deterministic object path keyed by row id (re-tick-safe).
       const datePart   = new Date(row.created_at || Date.now()).toISOString().slice(0, 10);
-      const safeName   = artifactOffloadSafeName(row.file_name, row.mime_type);
+      const safeName   = artifactSafeName(row.file_name, row.mime_type);
       const objectPath = `${datePart}/${row.id}-${safeName}`;
       const fullPath   = `${bucket}/${objectPath}`;
       const encodedPath = objectPath.split('/').map(encodeURIComponent).join('/');

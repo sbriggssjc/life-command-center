@@ -81,3 +81,40 @@ property** and promote THERE — not re-match to lcc and skip.
   '15,45 * * * *', …)`).
 - House rules: `node --check`; 12 functions; effect-first; report the recovered
   count — that's the number of real deals that were silently stranded.
+
+---
+
+## FOLLOW-UP (live verification 2026-06-08, post-hotfix-deploy)
+
+The hotfix is CONFIRMED WORKING live: 8 lcc→domain recoveries finalized in 30
+min, traced to real targets (dia:26793, gov:30389, gov:16560, dia:35724, …) —
+the deal data lands at the domain property, not just a label flip. The cron
+`lcc-intake-promote-drain` has been **re-armed** (15,45 * * * *) to drain the
+~520 recoverable backlog over the next 24-48h as cooldowns expire.
+
+Two residual items found during verification:
+
+1. **NULL `entities.domain` gap (9 items).** The hotfix normalizes
+   `entities.domain` short→long, but some lcc asset entities have
+   `entities.domain = NULL` while carrying a perfectly valid dia/gov
+   `external_identities` row (e.g. lcc entity 67f65207 "990 W 41st St, Hibbing
+   MN" → `source_system='gov', source_type='asset', external_id='31523'`).
+   These 9 won't recover (guard fails on NULL) and will wrongly surface to
+   `review_required` after the attempt cap. **Robust fix: derive the target
+   domain from the bridge row's `source_system` (the authoritative signal),
+   not from `entities.domain`.** `external_identities.source_system` is always
+   present for a bridged entity and already canonical (`dia`/`gov`); map it →
+   long form for the promoter guard. This both closes the 9-item gap and is
+   strictly more correct than relying on `entities.domain` (which is nullable).
+2. **Cooldown contamination (my diagnostic artifact, self-clearing).** My
+   pre-hotfix + post-hotfix diagnostic drain ticks left 24h `promote_drain`
+   cooldown stamps on ~126 recoverable items, so a clean full-rate measurement
+   wasn't possible this session (eligible pool was small + skewed). Not a code
+   issue — the stamps expire in 24h and the re-armed cron will then drain them.
+   No action needed unless you want an immediate clean measure (then clear the
+   promote_drain cooldown stamps on `status='matched'` rows).
+
+Re-check after ~48h: `matched` should fall from ~877 toward the genuine
+residual (~77 no-numeric-asset + the 9 NULL-domain if unfixed + real inflow),
+and `finalized` should climb by ~500. If `matched` isn't dropping, investigate
+before assuming the cron is draining.

@@ -1783,3 +1783,116 @@ re-saw dismissed rows. Fix (the "stop asking" hook):
   (747→746); synthetic round-trip (seed→open, leave_flagged→reviewed+skipped,
   re-refresh→no re-mint), 0 residue. `node --check` clean; 12 functions; suite
   green except the 2 pre-existing CM chart failures.
+
+## R15 — cron/automation health sweep + artifact-offload disk runbook (2026-06-08)
+
+Audit grounded live across all three DBs: the automation layer is healthy
+(~120 crons, pg_net 201/201 = HTTP 200 in 12h; "server restarted" entries are
+Supabase infra noise). The health-alert pipeline surfaced three real issues.
+
+### Unit 1 (HIGH) — artifact-offload cron + the disk-pressure runbook
+The `lcc-artifact-offload` cron was **deliberately disabled** by migration
+`20260529160000_lcc_disable_artifact_offload_crons.sql` after the every-5-minute
+variant (migration `…150000`) exhausted the LCC Opps connection budget (small
+tier, `max_connections=60`) during a CoStar burst and took the origin
+read-unavailable. With no offload running, `staged_intake_artifacts` grew to
+~9.5 GB (86% of the DB), 1,400+ artifacts still holding ~9 GB of base64
+`inline_data`, **0 offloaded**, and the DB crossed the disk-pressure warn
+threshold toward the ~13 GB read-only ceiling. **Auth lives on LCC Opps — a
+disk-full read-only here locks out ALL sign-in.**
+
+Durably fixed by `20260608210000_lcc_r15_reenable_artifact_offload_cron.sql`:
+re-enables `lcc-artifact-offload` at the **gentle** cadence (`2-59/10 * * * *`,
+limit 15, grace 15) — NOT every-5-min — and keeps the finalize-watch /
+vacuum-run jobs OFF (the every-5-min jobs that caused the incident). Idempotent
+(unschedule-then-schedule); supersedes the disable migration as the live source
+of truth, so a future replay/rebuild can't silently leave the offload off.
+
+**Accelerated DB-local drain + ingest-to-Storage root-cause fix (2026-06-09).**
+The Railway-round-trip cron (above) only does ~2 large files/tick and, run
+frequently, caused the connection incident — so two follow-ups:
+
+1. **Edge drainer.** `supabase/functions/artifact-offload` (Deno) does the same
+   offload but IN-REGION (DB + Storage both on Supabase; multi-MB bytes never
+   leave the Supabase network). Cron `lcc-artifact-offload-edge` (`*/10`,
+   `limit=10`) replaces the Railway-round-trip cron (migration
+   `20260609200000`). Per-tick limit is bounded by the Edge ~256 MB MEMORY cap,
+   not time: each ~8 MB OM decodes through base64+binary strings (~40 MB
+   transient/file), so batches > ~12 hit a 546 memory kill (verified: limit 10 →
+   clean 200 in ~19s; ~14-16 → 546). 10/tick × 6/hr = 60/hr outpaces the
+   ~14/hr inflow, drains the backlog AND keeps the TOAST free-list populated so
+   new inflow reuses freed space — **this halts physical growth even before the
+   (deferred) VACUUM FULL.** For a faster one-shot drain, invoke the function
+   directly more often, keeping each call's `limit ≤ 12`.
+2. **Ingest-to-Storage (root cause).** `intake-om-pipeline.js` now writes inline
+   OM payloads > `OM_INGEST_STORAGE_MIN_BYTES` (256 KB) straight to the
+   `lcc-om-uploads` bucket at ingest (`storage_path`, no `inline_data`), so new
+   OMs never re-form the backlog. Best-effort with inline fallback so ingestion
+   is never blocked. Shared `api/_shared/artifact-storage.js` builds the
+   deterministic object path used by both the ingest and offload paths; the
+   extractor reads `storage_path` transparently. Ships on the Railway redeploy.
+
+**VACUUM FULL reclamation — MANUAL, Scott, low-traffic window.** Per Scott's
+R15 direction, **do NOT VACUUM FULL until the disk is provisioned and the
+backlog is offloaded** — the edge cron is draining the backlog; the manual
+VACUUM is the final reclamation step once provisioning lands. Nulling
+`inline_data` is a LOGICAL clear; the TOAST bytes are not returned to the OS
+until `VACUUM FULL`. The `disk_pressure` alert reads physical
+`pg_database_size`, so it will NOT drop until the VACUUM FULL runs.
+`VACUUM FULL` can't run in a migration/transaction and takes an ACCESS EXCLUSIVE
+lock on `staged_intake_artifacts` (blocks OM intake to that table for the few
+minutes of the rewrite — auth is unaffected, it's a different schema), so it is
+a manual op, not an auto-fired cron.
+
+```sql
+-- Optional: confirm how much is reclaimable right now
+SELECT pg_size_pretty(pg_total_relation_size('public.staged_intake_artifacts')) AS physical,
+       pg_size_pretty(coalesce(sum(size_bytes) FILTER (WHERE inline_data IS NOT NULL AND storage_path IS NULL),0)) AS live_inline
+FROM public.staged_intake_artifacts;
+
+-- The reclamation (low-traffic window):
+VACUUM FULL public.staged_intake_artifacts;   -- ACCESS EXCLUSIVE; ~minutes on ~9.5 GB
+```
+
+**Ordering is mandatory — drain FIRST, then VACUUM FULL (proven 2026-06-08).**
+A VACUUM FULL run BEFORE the backlog drains is a NO-OP. Empirically: at DB
+12.631 GB a VACUUM FULL reclaimed ~0 (table stayed 9514 MB) because the ~9 GB
+is **live** base64 `inline_data`, not dead space — the 1,411 rows still holding
+`inline_data` measured **8,972 MB on disk** (`sum(pg_column_size(inline_data))`),
+i.e. essentially the whole table. The 708 already-offloaded rows had their
+`inline_data` nulled but were the SMALL tail and freed almost nothing. (A naive
+`pg_total_relation_size` 9.5 GB vs `sum(size_bytes)` 6.8 GB comparison looks
+like 2.7 GB is reclaimable, but that gap is just **base64 inflation** —
+`size_bytes` is the binary artifact size; the stored base64 is ~1.33× = ~9 GB.
+Don't size the reclaim off `size_bytes`.) So the disk does not drop until the
+LARGE `inline_data` rows are actually offloaded to Storage and nulled, and only
+THEN does VACUUM FULL return the ~9 GB to the OS (DB → ~3-4 GB).
+
+Inflow is heavy (~1.5 GB/day, ~330 large files/day) and the gentle cron's
+per-tick time budget (~7s ⇒ ~2-3 large files/tick × 6 ticks/hr ≈ 290-430
+large/day) is roughly **break-even with inflow** — so the cron holds the
+backlog steady but won't drain it quickly. For real relief, do a **one-shot
+higher-budget drain from a workstation** (Scott's DIA/GOV/LCC service keys,
+controlling concurrency so it stays gentle on the 60-connection tier), then a
+SINGLE VACUUM FULL. Do NOT raise the cron frequency to drain faster — the
+every-5-min variant is exactly what caused the 2026-05-29 connection-exhaustion
+incident.
+
+### Unit 2 — gov `mv_gov_overview_stats` stale (CONCURRENTLY needs a unique index)
+The gov cron `refresh-gov-overview-stats` (daily 01:00) ran `REFRESH
+MATERIALIZED VIEW CONCURRENTLY` on an MV with only a non-unique index →
+errored every run → stale stats. `mv_gov_overview_stats` is a single-row MV;
+gov migration `sql/20260608_gov_mv_overview_stats_unique_index.sql` drops the
+non-unique `computed_at` index and adds a UNIQUE one (no WHERE). Verified live:
+CONCURRENTLY refresh now succeeds and the MV is current.
+
+### Unit 3 — stale benign flow_failure alert (single-failure TTL)
+`lcc_autoresolve_recovered_flow_failures()` only closed a flow_failure alert
+after an 18h quiet window, so a one-off benign failure (e.g. a single
+"HTTP-Switch" run) sat open up to 18h and trained the operator to ignore the
+panel. Migration `20260608210500_lcc_r15_flow_failure_single_ttl.sql` adds a
+6h **single-failure TTL** path (≤1 failure in the 18h window AND none in the
+last 6h ⇒ resolve) alongside the existing full-recovery path. Recurring
+failures (≥2 in the window) still only clear via full recovery, so genuinely-
+broken flows stay alerted. Same signature ⇒ cron unchanged. Verified live: the
+stuck HTTP-Switch alert (id 531) cleared with the TTL note.
