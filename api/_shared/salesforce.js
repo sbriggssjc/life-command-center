@@ -268,48 +268,81 @@ export async function getSalesforceContactsByAccount(accountId) {
 }
 
 /**
- * Create a Salesforce Opportunity on a given Account (the mapped buyer-PARENT
- * account — never a subsidiary SPE; R5 doctrine). This is a WRITE op: unlike the
- * other helpers in this file it mutates Salesforce, so the Power Automate flow
- * needs a `create_opportunity` case. Tolerant of flows that don't implement it
- * yet — returns ok:false reason='unavailable' so the worker can leave the
- * opportunity `ready_to_sync` and report honestly (mirrors the
- * `find_contacts_by_account` rollout: SPEC the PA case, don't assume it exists).
+ * Create a Salesforce Task (Activity) on a Contact — NOT a standard SF
+ * Opportunity record (R16, 2026-06-09). In NorthMarq's org there is no
+ * Opportunity object: an "opportunity" is an OPEN Task on a Contact whose
+ * custom NMType picklist = "Opportunity" (signals a seller prospect). Buyers /
+ * brokers / to-dos are a Task with NMType blank or another value. This matches
+ * the codebase's ORIGINAL design — migration
+ * `20260423250000_sf_sync_queue_expand_kinds.sql` documents `create_opportunity
+ * = create a Task with NMType=Opportunity`. The R5/R7 helper had drifted to a
+ * real-Opportunity payload (account_id / stage_name / amount); it never
+ * succeeded live (no matching PA case), so this is a clean correction.
+ *
+ * This is a WRITE op, so the Power Automate flow needs a `create_opportunity`
+ * case (the operation string is kept so the PA Switch + the sf_sync_queue enum
+ * — which already use it — don't need to change). Tolerant of flows that don't
+ * implement it yet — returns ok:false reason='unsupported'/'unavailable' so the
+ * caller can leave the work pending and report honestly.
  *
  * FLOW CONTRACT (what LCC posts / what PA returns):
  *   POST <SF_LOOKUP_WEBHOOK_URL>
  *   { "operation": "create_opportunity",
- *     "account_id": "0018W00002X08rlQAB",   // the mapped PARENT Account Id
- *     "name": "Boyd Watterson Global — Government Buyer",
- *     "stage_name": "Prospecting",          // optional; PA may default
- *     "close_date": "2026-12-31",           // optional; PA may default (e.g. +90d)
+ *     "who_id": "003...",            // SF Contact Id (WhoId) — REQUIRED
+ *     "subject": "Boyd Watterson Global — Government Buyer",
+ *     "nm_type": "Opportunity",      // seller prospect; OMITTED for buyers
+ *     "status": "Open",
+ *     "activity_date": "2026-09-07", // optional; PA defaults to today
+ *     "what_id": "001...",           // optional Account (WhatId) for context
  *     "idempotency_key": "<lcc bd_opportunity id>" }  // PA SHOULD upsert on this
- *   Success: { "ok": true, "opportunity": { "Id": "006...", "Name": "..." } }
+ *   Success: { "ok": true, "task": { "Id": "00T..." } }  // accepts opportunity{Id} too
  *   Not implemented: { "ok": false, "reason": "unsupported" } (or HTTP 4xx)
  *
- * @param {{accountId:string, name:string, stageName?:string, closeDate?:string,
- *          amount?:number, idempotencyKey?:string}} opp
- * @returns {Promise<{ok:boolean, opportunity?:{Id,Name}|null, reason?:string}>}
+ * @param {{whoId?:string, who_id?:string, subject:string, nmType?:string|null,
+ *          status?:string, activityDate?:string, whatId?:string,
+ *          idempotencyKey?:string}} task
+ * @returns {Promise<{ok:boolean, task?:{Id}|null, reason?:string, detail?:any}>}
  */
-export async function createSalesforceOpportunity(opp) {
+export async function createSalesforceTask(task) {
   if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
-  const accountId = String(opp?.accountId || '').trim();
-  const name = String(opp?.name || '').trim();
-  if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(accountId)) return { ok: false, reason: 'bad_account_id' };
-  if (!name) return { ok: false, reason: 'no_name' };
+  const whoId = String(task?.whoId || task?.who_id || '').trim();
+  const subject = String(task?.subject || '').trim();
+  if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(whoId)) return { ok: false, reason: 'bad_who_id' };
+  if (!subject) return { ok: false, reason: 'no_subject' };
 
-  const body = { operation: 'create_opportunity', account_id: accountId, name };
-  if (opp.stageName)      body.stage_name = String(opp.stageName);
-  if (opp.closeDate)      body.close_date = String(opp.closeDate);
-  if (opp.amount != null) body.amount = Number(opp.amount);
-  if (opp.idempotencyKey) body.idempotency_key = String(opp.idempotencyKey);
+  const body = { operation: 'create_opportunity', who_id: whoId, subject };
+  // NMType: "Opportunity" for seller prospects; OMIT/empty for buyers (a blank
+  // NMType is a plain buy-side touchpoint, never an "Opportunity").
+  const nmType = (task?.nmType != null) ? String(task.nmType).trim() : '';
+  if (nmType) body.nm_type = nmType;
+  body.status = task?.status ? String(task.status) : 'Open';
+  if (task?.activityDate) body.activity_date = String(task.activityDate);
+  const whatId = task?.whatId ? String(task.whatId).trim() : '';
+  if (whatId && /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(whatId)) body.what_id = whatId;
+  if (task?.idempotencyKey) body.idempotency_key = String(task.idempotencyKey);
 
   const result = await callSfLookupFlow(body);
   if (!result || result.ok !== true) {
     return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
   }
-  const o = result.opportunity || result.record || null;
-  const id = o ? (o.Id || o.id) : null;
-  if (!id) return { ok: false, reason: result.reason || 'no_opportunity_returned' };
-  return { ok: true, opportunity: { Id: id, Name: o.Name || o.name || name } };
+  // Accept the Task shape {task:{Id}} and the legacy {opportunity:{Id}} for
+  // back-compat while the PA flow case is being built.
+  const t = result.task || result.opportunity || result.record || null;
+  const id = t ? (t.Id || t.id) : null;
+  if (!id) return { ok: false, reason: result.reason || 'no_task_returned' };
+  return { ok: true, task: { Id: id } };
+}
+
+/**
+ * Back-compat thin alias: seller-prospect convenience that defaults
+ * `nmType:'Opportunity'`. Prefer calling createSalesforceTask directly with an
+ * explicit nmType. Returns the same `{ok, task:{Id}}` shape.
+ *
+ * @param {{whoId?:string, who_id?:string, subject:string, nmType?:string|null,
+ *          status?:string, activityDate?:string, whatId?:string,
+ *          idempotencyKey?:string}} task
+ */
+export async function createSalesforceOpportunity(task) {
+  const nmType = (task && task.nmType !== undefined) ? task.nmType : 'Opportunity';
+  return createSalesforceTask(Object.assign({}, task, { nmType }));
 }
