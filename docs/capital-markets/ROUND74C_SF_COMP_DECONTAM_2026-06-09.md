@@ -35,6 +35,38 @@
 
 ---
 
+> ## v3 — NM-broker GUARD + Scott-gated APPLY (live 2026-06-09)
+>
+> Scott caught the same error class in the other direction: the Deal-export side
+> lookup was **demoting genuine NM-listed deals**. Doctrine added (the binding
+> guard): **the Deal side may only PROMOTE or resolve ambiguity — never override an
+> explicit NM listing-broker string.** Never demote-to-buyside or remove a sale
+> whose own `listing_broker` matches the NM/SJC/Stan Johnson/Briggs token; a
+> conflicting Deal "buyer" tag on such a row is a ±1.5 % cross-attribution to a
+> same-metro neighbor, not ground truth.
+>
+> **Applied live (Scott-gated):**
+> - **6 listing adds → true:** 163, 635, 6435, 6864, 9341, 10085.
+> - **1065 → false** (Encore competitor, not in Comp set, old R23 guess).
+> - **12 buyside flips** (currently-flagged, Deal=Buyer, **non-NM broker**) → `is_northmarq=false` + `is_northmarq_buyside=true`: 17,53,83,162,698,5387,5420,5527,5761,5933,8850,8864.
+> - **10 new buyside tags** (matched Comp, Deal=Buyer, not flagged, non-NM broker): 4977,5359,5364,5489,5523,9147,12896,13915,14456,14482.
+> - **8327 / 13137 protected** — confirmed NM comps (Austintown 0.15 %/5d; Ripley **city-confirmed** 0.05 %/13d) + R74 Deal Co-Broke(Seller). Kept `true`, retagged. **Not removed.** Both had been starved by the strict 1:1 resolution (their comp was claimed by a higher-ranked sale) → wrongly bucketed as removes in v2.
+>
+> **Result:** `is_northmarq` **436 → 429**; `is_northmarq_buyside` **22**; 31 rows tagged `salesforce_comp`. #20 listing median **6.40 %** (n=190) ≈ deck 6.38 %.
+>
+> **Held (NM-broker guard / pending):**
+> - **422 (SJC; Butler), 8858 (SJC; Scrivner), 5191 (Will Lightfoot)** — NM-listed, kept `true`. 8858 was surfaced by the guard (not in Scott's named list). 5191 is a named NM individual the token can't encode.
+> - **5004 (Colliers)** — verified a genuine non-match (only candidate = a Round Rock Satellite Healthcare deal ~80 mi away, different tenant). Removal **recommended, held for Scott's explicit nod**.
+> - **5420 (Peranich & Huffman)** — flipped to buyside as a non-NM firm; flagged for objection.
+> - ~211 flagged-comp-unmatched non-competitor — not stripped.
+>
+> **gov:** `is_northmarq_source` + `is_northmarq_buyside` columns **added** (no flips).
+> Needs a gov Deal/Opportunity export to do the same listing-vs-buyside split.
+>
+> Applied SQL of record: `scripts/applied/sf-nm-dia-r74c-applied-2026-06-09.sql`.
+
+---
+
 
 ## Source
 
