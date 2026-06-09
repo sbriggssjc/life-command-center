@@ -58,7 +58,9 @@ const DEFAULT_BUCKET = "lcc-om-uploads";
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 200;
 const DEFAULT_GRACE_MIN = 15;
-const TIME_BUDGET_MS = 60_000; // edge wall-clock headroom; well under the platform cap
+const TIME_BUDGET_MS = 45_000; // return BEFORE lcc_cron_post's 60s pg_net timeout
+                               // so the cron captures the 200 + telemetry
+                               // (~16 large files/tick at the in-region rate)
 const PER_ROW_PAUSE_MS = 150;  // gentle on the small-tier DB (serial + paced)
 
 const MIME_EXT: Record<string, string> = {
