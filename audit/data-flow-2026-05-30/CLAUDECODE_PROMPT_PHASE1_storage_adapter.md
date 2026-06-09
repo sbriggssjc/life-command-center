@@ -1,81 +1,94 @@
-# Claude Code prompt — Phase 1: company-storage adapter for OM ingestion
+# Claude Code prompt — Phase 1: company-storage adapter (SharePoint, Graph-free)
 
-Context: see `ARCHITECTURE_intelligence_hub.md` (same folder) for the full
-vision. This is Phase 1 — the storage on-ramp. It solves the recurring Supabase
-disk-pressure problem (the auth-DB nearly hit the read-only lockout on
-2026-06-08) by moving large intake artifacts OUT of personal Supabase storage
-and into the company's paid file platform, while keeping the DB lean (references
-+ extracted data only). It is also the foundation for the Phase-2 folder-feed.
+Context: see `ARCHITECTURE_intelligence_hub.md` (same folder). Phase 1 is the
+storage on-ramp: get large intake artifacts OUT of personal Supabase storage
+(the auth-DB nearly hit the read-only lockout 2026-06-08) and into the company's
+**Microsoft SharePoint** — the **Team Briggs Documents** library the team
+already lives in — while keeping the DB lean (references + extracted data only).
+Also the foundation for the Phase-2 folder-feed.
+
+## Grounded target (confirmed from the team's "Export to Excel" .iqy)
+
+- **Site:** `https://northmarq.sharepoint.com/sites/TeamBriggs20`
+- **Library:** Shared Documents ("Team Briggs - Documents"), list GUID
+  `996f9e8b-7d99-457a-a762-afa66303a36d`
+- **Synced locally** at `C:\Users\scott\NorthMarq Capital, LLC\Team Briggs - Documents`
+  (also under `OneDrive - NorthMarq Capital, LLC\…`). Top level includes
+  `PROPERTIES`, `Storage OM's`, `Lease Comps`, `Sales Comps`, `Memos`,
+  `Templates`, and per-vertical research folders.
+
+## Access reality — DO NOT depend on Microsoft Graph
+
+Graph app-registration has been troublesome historically — **do not make Graph
+the integration path.** Two Graph-free routes, in order of preference:
+
+1. **Power Automate SharePoint connector (primary for cloud LCC).** PA already
+   bridges M365 ↔ LCC (the email-intake flows) and handles file bytes
+   (`contentBytes`/`base64ToBinary`). A new HTTP-triggered PA flow saves an
+   artifact into the SharePoint library and returns its server-relative URL /
+   item id — the exact inverse of the email-intake flow. This needs no custom
+   Graph app registration. **This is the cloud write/read path.**
+2. **Local synced folder (for local agents + bulk reads / Phase 2).** The
+   library is on disk via the OneDrive sync client, so anything running on
+   Scott's machine (Cowork/Claude, a local script, Power Automate Desktop) reads
+   it directly with zero API. Not usable by cloud LCC (Railway/Supabase Edge
+   can't see a local path) — reserve it for local processing and the Phase-2
+   folder-feed.
 
 ## Goal
 
-Add a **pluggable storage backend** to the OM/large-artifact ingest path so big
-files (PDFs, Excel) are written to **company storage** instead of the Supabase
-`lcc-om-uploads` bucket. The DB keeps only a `storage_path`/reference + the
-extracted text/structured data — never `inline_data`.
-
-## Platform decision (Scott to confirm before build)
-
-Two candidate backends — pick ONE canonical store:
-- **OneDrive / SharePoint via Microsoft Graph** — *recommended default*. You're
-  already deep in Microsoft 365 + Power Automate (the email-intake channel runs
-  through it), so Graph auth + file ops are the lower-friction path, and it sets
-  up the Phase-2 folder-feed against the same store your team already uses.
-- **Citrix ShareFile API** — if ShareFile is where the *authoritative* team
-  files live and OneDrive isn't.
-
-Build the adapter behind an interface so the backend is config-selectable
-(`STORAGE_BACKEND = supabase | graph | sharefile`), defaulting to `supabase`
-until the new backend is verified — so this ships dark and cuts over by config.
+Add a **pluggable storage backend** so big OM/Excel artifacts are stored in the
+SharePoint library via Power Automate instead of the Supabase `lcc-om-uploads`
+bucket. The DB keeps only a reference + extracted data — never `inline_data`.
 
 ## Design requirements
 
-1. **Interface, not a fork.** Define a small storage-adapter interface
-   (`putObject(path, bytes, contentType) -> {storage_ref}`,
-   `getObject(storage_ref) -> bytes`, `exists(storage_ref)`). Implement
-   `supabase` (the current behavior, refactored behind the interface) and the
-   chosen company backend. The ingest + extractor + download paths call the
-   interface, never a specific backend. Mirror the existing
-   `api/_shared/artifact-storage.js` shape if present.
-2. **Reference, not blob, in the DB.** `staged_intake_artifacts.storage_path`
-   (or a new `storage_backend` + `storage_ref` pair) records WHERE the file
-   lives; `inline_data` stays null for adapter-stored files. The extractor and
-   the download handler resolve bytes via the adapter from the ref.
-3. **Hot-path rule.** Store the raw file once at ingest, extract once, and never
-   make the extraction hot path re-fetch a multi-MB blob synchronously. If the
-   backend is slow/rate-limited (external SaaS), the upload is async/queued
-   (the existing edge-offload pattern is the model), not on the request's
-   critical path.
-4. **Auth + security.** OAuth app registration with token refresh (Graph: an
-   app registration with `Files.ReadWrite.All` or a scoped site/drive;
-   ShareFile: an OAuth client). Least-privilege: a dedicated service identity
-   scoped to the ingestion area only — the brain must not read what a given
-   team member shouldn't. Store secrets in the existing vault/env pattern, never
-   in code.
-5. **Deterministic paths.** Keep a deterministic object path per artifact (the
-   existing `artifact-storage.js` path builder) so re-ingest/re-tick is
-   idempotent and a file is findable by convention.
-6. **Cutover safety.** Keep Supabase as fallback during cutover: new writes go
-   to the company backend; reads try the recorded backend first, fall back to
-   the Supabase bucket for already-stored files. No big-bang migration of
-   existing files required — the existing offload cron continues draining the
-   Supabase backlog; new files just land in the company store.
+1. **Interface, not a fork.** Storage-adapter interface
+   (`putObject(path,bytes,contentType) -> {backend, ref, url}`,
+   `getObject(ref) -> bytes`, `exists(ref)`). Implement `supabase` (current
+   behavior, refactored behind the interface) and `sharepoint_pa`. Ingest +
+   extractor + download paths call the interface, never a backend directly.
+   Reuse `api/_shared/artifact-storage.js` path-builder if present.
+2. **`sharepoint_pa.putObject`** POSTs the file (base64) + a deterministic
+   relative path to a new PA HTTP flow **"LCC → SharePoint: Save Artifact"**,
+   which uses the SharePoint "Create file" action to write under a designated
+   intake folder in the Team Briggs library (e.g. `Storage OM's/Intake/<path>`)
+   and returns `{server_relative_url, item_id}`. Record that as the artifact's
+   `storage_backend` + `storage_ref` (+ url). **This PA flow is a dependency** —
+   spec its contract in the prompt (trigger body `{path, content_base64,
+   content_type}`; response `{ok, server_relative_url, item_id}`), mirroring the
+   email-intake flow. Scott (or the operator) builds it in PA; do not assume it
+   exists — feature-flag the backend so it no-ops to `supabase` until the flow
+   is live (the `find_contacts_by_account` rollout pattern).
+3. **Reference, not blob, in the DB.** Add `storage_backend` + `storage_ref`
+   (keep `storage_path` for back-compat); `inline_data` stays null for
+   adapter-stored files. Extractor + download resolve bytes via the adapter.
+4. **Hot-path rule.** Store the raw file once at ingest, extract once; never
+   re-fetch a multi-MB blob synchronously. The PA round-trip is async/queued
+   (the edge-offload pattern is the model), off the request critical path. Mind
+   PA/SharePoint file-size limits (OMs ~5-20 MB are fine; guard >~45 MB).
+5. **Auth + security.** No Graph app registration. PA authenticates to
+   SharePoint with the existing M365 connection; the HTTP trigger is secured
+   (SAS/key) the same way the email-intake flow is. Least-privilege: the flow
+   writes only to the designated intake folder.
+6. **Cutover safety.** Config flag `STORAGE_BACKEND = supabase | sharepoint_pa`,
+   default `supabase`. New writes go to the selected backend; reads try the
+   recorded backend, fall back to Supabase for already-stored files. No bulk
+   migration of existing files — the offload cron keeps draining the Supabase
+   backlog; new files land in SharePoint once flipped.
 
 ## Verify + ship
-
-- Dry-run: a synthetic large OM ingests → lands in the company store →
-  `inline_data` null, `storage_path` set → the extractor reads it back via the
-  adapter → extraction succeeds.
-- The download/view path resolves a company-stored artifact.
-- Backend is config-flippable; with `STORAGE_BACKEND=supabase` behavior is
-  byte-identical to today (no regression).
-- Secrets via vault/env; least-privilege identity confirmed.
-- House rules: `node --check`; 12 functions; idempotent; effect-first; report
-  per-requirement status. Ships on the Railway redeploy; the config flip is the
-  cutover.
+- With the PA flow live + `STORAGE_BACKEND=sharepoint_pa`: a synthetic large OM
+  ingests → lands in the Team Briggs library (visible in `Storage OM's/Intake`)
+  → `inline_data` null, `storage_ref`/url set → extractor reads it back →
+  extraction succeeds → download/view resolves it.
+- With `STORAGE_BACKEND=supabase`: byte-identical to today (no regression).
+- House rules: `node --check`; 12 functions; idempotent; effect-first; secrets
+  via vault/env; report per-requirement. Ships on the Railway redeploy; the
+  config flip + the PA flow are the cutover.
 
 ## Out of scope (later phases)
-- Reading existing property folders (Phase 2 folder-feed).
-- Correspondence/notes enrichment (Phase 3).
-- The shared context service + standards syndication (Phases 4–5).
-This prompt is ONLY the storage backend swap for the ingest path.
+Reading the property folders (Phase 2 folder-feed) · correspondence/notes
+enrichment (Phase 3) · the shared context service + standards syndication
+(Phases 4-5). This prompt is ONLY the SharePoint storage backend for the ingest
+path. (The local synced folder is noted for Phase 2, not used here.)

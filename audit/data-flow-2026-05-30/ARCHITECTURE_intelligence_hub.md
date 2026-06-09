@@ -77,7 +77,7 @@ that to **every** channel:
 |---|---|---|
 | Email OMs / flyers | live | deal docs |
 | CoStar / public data | live | market + reference data |
-| **ShareFile / OneDrive folders** | **to build** | leases, DD, master sheets, comps, OMs, BOVs — the richest source |
+| **SharePoint — Team Briggs Documents** | **to build** | leases, DD, master sheets, comps, OMs, BOVs — the richest source |
 | **Outlook email + correspondence** | **to build** | not just OMs — every email as relationship + deal signal |
 | **Call / conversation notes** | **to build** | phone notes, meeting notes (transcribe → notes → enrichment) |
 | **Salesforce notes** | **to build** | the relationship history already captured in SF |
@@ -199,22 +199,35 @@ ingestion. Emails, call notes, and decisions are not exhaust — they are fuel.
 Today's storage pain is the natural on-ramp. The recent ingest-to-Storage change
 already writes large files to a bucket and keeps only a reference + extracted
 data in the DB. **Slice 1 is repointing that storage adapter from the Supabase
-bucket to your company-paid ShareFile (or OneDrive/SharePoint via Microsoft
-Graph).**
+bucket to the company's Microsoft SharePoint — the Team Briggs Documents library
+the team already lives in.**
 
-- Solves the cost/limit problem immediately (files live in company storage, the
-  DB keeps only references + extracted data).
-- Respect the hot-path rule: store the raw file once, extract once, never make
-  the extraction path re-fetch a multi-MB blob synchronously.
-- **Platform choice:** you're already deep in Microsoft 365 + Power Automate
-  (your whole email-intake channel runs through it), so **OneDrive/SharePoint
-  via Graph is likely the lower-friction integration than Citrix ShareFile's
-  API** — but where the *authoritative* team files live should decide it. Pick
-  one canonical store or the integration doubles.
+**Confirmed target** (from the team's Export-to-Excel `.iqy`): site
+`https://northmarq.sharepoint.com/sites/TeamBriggs20`, Shared Documents library
+(list GUID `996f9e8b-7d99-457a-a762-afa66303a36d`). **Synced locally** at
+`C:\Users\scott\NorthMarq Capital, LLC\Team Briggs - Documents` — top level
+already holds `PROPERTIES`, `Storage OM's`, `Lease Comps`, `Sales Comps`,
+`Memos`, `Templates`, and per-vertical research folders (`Childcare`, `Dental`,
+`Dialysis`, `Medical`, `Gv't Leased`). The team's file tree already mirrors the
+multi-vertical, property-centric model this architecture targets.
 
-Critically, this same adapter is the foundation for Layer 2's folder-feed: once
-LCC can read/write the company store, ingesting the property folders
-(leases/DD/master sheets/comps/OMs/BOVs) is the next, higher-value slice.
+**Access reality — do NOT depend on Microsoft Graph** (app-registration has been
+troublesome). Two Graph-free routes:
+
+- **Power Automate SharePoint connector** — the cloud bridge. PA already
+  connects M365 ↔ LCC (the email-intake flows) and handles file bytes; a new
+  HTTP-triggered "save artifact to SharePoint" flow is the inverse of the
+  email-intake flow and needs no custom Graph app. **This is the cloud
+  read/write path for LCC.**
+- **Local synced folder** — for local agents (Cowork/Claude, local scripts,
+  Power Automate Desktop) and bulk reads / the Phase-2 folder-feed. Zero API,
+  already on disk; not usable by cloud LCC (it can't see a local path).
+
+Respect the hot-path rule: store the raw file once, extract once, never re-fetch
+a multi-MB blob synchronously. Critically, this same SharePoint integration is
+the foundation for Layer 2's folder-feed: once LCC can read/write the Team
+Briggs library, ingesting the property folders (leases/DD/master sheets/comps/
+OMs/BOVs) is the next, higher-value slice.
 
 ---
 
@@ -222,7 +235,7 @@ LCC can read/write the company store, ingesting the property folders
 
 | Phase | What | Value | Build size |
 |---|---|---|---|
-| **1. Storage adapter** | Repoint ingest-storage at ShareFile/OneDrive; DB keeps references only | Solves storage limit now; foundation for everything | Small (adapter swap) |
+| **1. Storage adapter** | Repoint ingest-storage at SharePoint (Team Briggs lib) via Power Automate; DB keeps references only | Solves storage limit now; foundation for everything | Small (adapter swap) |
 | **2. Folder-feed intake** | Property folders → existing extract/match/promote pipeline; per-file-type extractors (lease, master sheet, comp export) | Data quality jumps a tier; folder path = strong match anchor | Medium |
 | **3. Correspondence + notes enrichment** | Outlook email, call/meeting notes, SF notes → entity enrichment with provenance | Relationship intelligence; the brain "remembers" every interaction | Medium |
 | **4. Context layer as shared service** | Harden the context-assembly service; expose as MCP + REST for all tools | "Every agent fully informed" becomes real cross-tool | Medium |
@@ -236,9 +249,12 @@ finale. Phase 1 is a concrete next prompt; Phases 2–5 are deliberate designs.
 
 ## 8. Honest caveats / risks
 
-- **Storage API reality.** ShareFile/Graph are external SaaS APIs (slower,
-  rate-limited, OAuth token refresh). Use async/queued offload, never a
-  synchronous hot path — the same lesson as the Railway-vs-edge offload.
+- **Storage API reality.** SharePoint via Power Automate is an external bridge
+  (rate-limited, file-size limits, the M365 connection's token). Use
+  async/queued offload, never a synchronous hot path — the same lesson as the
+  Railway-vs-edge offload. **Graph is explicitly NOT a dependency** (past
+  app-registration trouble); Power Automate is the proven, already-wired bridge,
+  and the local synced folder covers local/bulk reads.
 - **Permissions.** Company files carry access controls; the integration's
   service identity needs proper, least-privilege scoping. Don't let the brain
   read what a given team member shouldn't.
@@ -260,18 +276,15 @@ finale. Phase 1 is a concrete next prompt; Phases 2–5 are deliberate designs.
 
 ## 9. Slice 1 — the actionable next step
 
-Storage adapter, as a concrete prompt for Claude Code (drafted separately when
-you're ready):
+**Ready now:** `CLAUDECODE_PROMPT_PHASE1_storage_adapter.md` (this folder) — a
+pluggable storage backend that writes large OM artifacts to the **SharePoint
+Team Briggs Documents library via Power Automate** (Graph-free) instead of the
+Supabase bucket, keeping only a reference + extracted data in the DB. Config-
+flagged (`STORAGE_BACKEND`), Supabase fallback during cutover. It carries one
+dependency — a Power Automate "save artifact to SharePoint" flow (the inverse of
+the email-intake flow) — which Scott builds in PA (or I edit via the browser, as
+with the `find_contacts_by_account` flow).
 
-> Add a pluggable storage backend to the OM ingest path so large artifacts
-> write to **company storage (OneDrive/SharePoint via Microsoft Graph, or
-> ShareFile)** instead of the Supabase `lcc-om-uploads` bucket. The DB keeps
-> only `storage_path`/reference + extracted data — never `inline_data`.
-> Async/queued, OAuth with token refresh, least-privilege identity, idempotent,
-> with the existing offload pattern as the model. Keep the Supabase bucket as a
-> fallback during cutover. This both eliminates the storage-limit problem and
-> lays the foundation for the Phase-2 folder-feed.
-
-When you're ready, I'll turn Phase 1 into that paste-ready prompt and sketch the
+When you're ready, I'll sketch the
 Phase 2 folder-feed (the matching anchor + the per-file-type extractor design)
 in detail.

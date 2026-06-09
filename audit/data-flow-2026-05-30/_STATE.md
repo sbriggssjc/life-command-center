@@ -5,6 +5,15 @@
 > round). This file tracks status + what's open + what's next so a new session
 > picks up without re-exploring. Last updated 2026-06-08.
 
+## File hygiene convention (applies to every workstream — personal + business)
+Latest-only at the surface: a workstream folder shows only what's CURRENT — a
+`_STATE.md` index, the live design/plan docs, and the active prompt(s).
+Everything completed/superseded moves to `archive/` (git mv — preserve history,
+don't delete). Consolidate older plans into the latest rather than leaving
+parallel versions. Goal: any future chat reads `_STATE.md` first and resumes
+without re-exploring. Apply the same pattern to other repos/working folders as
+they're touched.
+
 ## How we work
 Audit-and-fix loop: ground findings live (Supabase MCP + the deployed Railway
 app) → write a grounded Claude Code prompt → Scott merges PR + redeploys → verify
@@ -15,7 +24,9 @@ live immediately; constraints/crons apply AFTER the writer/route deploys.
 - `ARCHITECTURE_intelligence_hub.md` — the forward design: LCC as the centralized
   brain (5 layers, cross-platform consistency, vertical-agnostic, 6-phase roadmap).
 - `CLAUDECODE_PROMPT_PHASE1_storage_adapter.md` — **current actionable**: move OM
-  ingestion storage to company storage (OneDrive/Graph or ShareFile).
+  ingestion storage to SharePoint (Team Briggs Documents library) via Power
+  Automate — Graph-free. Library synced locally at `C:\Users\scott\NorthMarq
+  Capital, LLC\Team Briggs - Documents`.
 - `archive/` — every completed round's prompt + historical audit artifacts.
 
 ## Shipped & verified (detail in CLAUDE.md)
