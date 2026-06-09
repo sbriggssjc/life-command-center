@@ -30,3 +30,7 @@ audit/edit-tool-test.*
 # may contain PII; produced by scripts/audit/snapshots/snapshot-take.mjs).
 scripts/audit/snapshots/*.sql
 scripts/audit/snapshots/*.sql.gz
+
+# SF deal-level exports (do not commit — PII/deal data)
+docs/capital-markets/sf-exports/
+*.xlsx
