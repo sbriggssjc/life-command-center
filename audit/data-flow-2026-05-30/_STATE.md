@@ -84,9 +84,18 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
 2. **R14 follow-up (9 items):** promote-drain should derive target domain from
    the bridge `source_system`, not `entities.domain` (NULL-domain lcc entities
    with valid bridges). In `CLAUDECODE_PROMPT_R14_HOTFIX...` (archived).
-3. **R12 PA flow pieces (Scott, in Power Automate):** the `create_opportunity`
-   Switch case (spec in `salesforce.js`; gov-buyer-sync cron live + waiting on it)
-   and the Unit-1 `autoCreateProperty` domain-gate + enum-map (a gov DB guard
+3. **R16 — `create_opportunity` is an SF TASK, not an Opportunity object**
+   (Scott corrected 2026-06-09): NorthMarq has no Opportunity object; an
+   "opportunity" = an **open Task on a Contact**, custom **NMType**='Opportunity'
+   (seller prospect) / blank (buyer). The R5/R7 `createSalesforceOpportunity`
+   helper drifted to a real-Opportunity shape — never succeeded live, so a clean
+   fix. **Claude Code prompt ready:** `CLAUDECODE_PROMPT_R16_sf_task_not_opportunity.md`
+   (salesforce.js→Task helper; fire at contact-selection in operations.js; gov-
+   buyer sync→retry safety-net w/ `hold_no_contact`). **PA case:** build Task in
+   the CLASSIC designer per `PA_FLOW_create_opportunity_case_recipe.md` (new
+   designer froze on SF metadata; the first attempt saved NOTHING — prod intact).
+   Open: confirm exact NMType API name (PA Task field picker / Scott).
+   Also still pending: the Unit-1 `autoCreateProperty` domain-gate + enum-map (a gov DB guard
    trigger is already live as a stopgap).
 4. **Env flags (Scott, Railway), enable when ready:** `DECISION_GOV_WRITEBACK`
    (stale-owner write-back), `DECISION_PROVENANCE_LEARN` (registry learning loop).
