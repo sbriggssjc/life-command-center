@@ -55,12 +55,17 @@ const SHARED_SECRET =
   "";
 
 const DEFAULT_BUCKET = "lcc-om-uploads";
-const DEFAULT_LIMIT = 40;
-const MAX_LIMIT = 200;
+// Per-tick batch is bounded by the Edge runtime's ~256 MB memory cap, NOT by
+// time: each ~8 MB OM decodes through a base64 string + binary string +
+// Uint8Array (~40 MB transient/file), so batches above ~12 risk a 546 memory
+// kill (verified live: limit 10 → clean 200 in ~19s; ~14-16 → 546). Keep the
+// default + max conservative; throughput comes from cron frequency, not batch.
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 25;
 const DEFAULT_GRACE_MIN = 15;
 const TIME_BUDGET_MS = 45_000; // return BEFORE lcc_cron_post's 60s pg_net timeout
-                               // so the cron captures the 200 + telemetry
-                               // (~16 large files/tick at the in-region rate)
+                               // (memory, not time, is the binding constraint at
+                               // the recommended limit ≤ 12)
 const PER_ROW_PAUSE_MS = 150;  // gentle on the small-tier DB (serial + paced)
 
 const MIME_EXT: Record<string, string> = {

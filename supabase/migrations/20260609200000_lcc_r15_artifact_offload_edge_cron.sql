@@ -22,10 +22,16 @@
 -- extending the table — it halts physical growth even before the (deferred,
 -- manual) VACUUM FULL returns the space to the OS.
 --
--- Cadence: every 10 minutes, limit 40 (the 60s edge budget caps it at ~20 large
--- files/tick regardless). For a faster ONE-SHOT backlog drain, invoke the
--- function directly with a higher cadence under monitoring — do NOT make the
--- steady cron more frequent (the every-5-min Railway variant is what caused the
+-- Cadence: every 10 minutes, limit 10. The per-tick limit is bounded by the
+-- Edge runtime's ~256 MB memory cap — each ~8 MB OM decodes through a base64
+-- string + binary string + Uint8Array (~40 MB transient/file), so batches above
+-- ~12 risk a 546 memory kill (verified live: limit 10 → clean 200 in ~19s;
+-- limit ~14-16 → 546). 10 files/tick × 6 ticks/hr = 60/hr, comfortably above the
+-- ~14/hr inflow, so it drains the backlog AND keeps the TOAST free-list populated
+-- so new inflow reuses freed space (halts physical growth pre-VACUUM). For a
+-- faster ONE-SHOT drain, invoke the function directly more frequently under
+-- monitoring — keep each call's limit ≤ ~12 (memory), and do NOT make the steady
+-- cron more frequent (the every-5-min Railway variant is what caused the
 -- connection incident; this edge path is gentler but the cadence rule stands).
 --
 -- The legacy Railway handler (api/admin.js handleArtifactOffload,
@@ -51,7 +57,7 @@ begin
     perform cron.schedule(
       'lcc-artifact-offload-edge',
       '*/10 * * * *',
-      $cmd$select public.lcc_cron_post('/artifact-offload', '{"limit":40}'::jsonb, 'edge')$cmd$
+      $cmd$select public.lcc_cron_post('/artifact-offload', '{"limit":10}'::jsonb, 'edge')$cmd$
     );
 
     -- Keep the every-5-min-incident jobs OFF; VACUUM FULL stays manual.
