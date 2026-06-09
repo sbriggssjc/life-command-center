@@ -15,18 +15,27 @@ The R5/R7 helper `api/_shared/salesforce.js::createSalesforceOpportunity` **drif
 to a real-Opportunity shape (`account_id` / `stage_name` / `amount`) — that's the
 bug. Both the LCC helper AND the PA flow case must target a **Task**.
 
-## Scott's mapping decisions (2026-06-09)
+## Scott's mapping decisions (2026-06-09) — confirmed against the SF UI
+The SF surface is the Contact quick action **"Follow Up Only"** (screenshot
+2026-06-09): it creates a follow-up **Task** on the contact with fields Subject*,
+Due Date*, **NM Type**, Reminder (date/time), Comments. Status is set by the
+action (no field in the modal). The PA `create_opportunity` case replicates this
+Task.
+
 | Field | Value |
 |---|---|
-| SF object | **Task** (Activity) |
+| SF object | **Task** (Activity) — the "Follow Up Only" record |
 | Linked to | **Contact** via `WhoId` (the person to call) |
-| Status | **"Open"** (open = touchpoint still owed) |
-| Type field | custom **NMType** picklist (confirm exact API name in the PA field picker — likely `NMType__c`) |
-| NMType — seller prospect | **"Opportunity"** |
-| NMType — government buyer (P-BUYER path) | **blank/none** (a plain to-do touchpoint, NOT "Opportunity") |
-| Subject | the touchpoint name LCC passes |
-| ActivityDate | due date (close_date if sent, else today/+Nd) |
-| Drop | `StageName`, `Amount` (Opportunity-only fields) |
+| Status | **"Open"** (confirm the Task Status picklist has "Open"; else "Not Started") |
+| Type field | label **"NM Type"**, API name almost certainly **`NM_Type__c`** (confirm in the PA Task field picker) |
+| NM Type picklist values | `Opportunity`, `Prospect`, `Execution`, `Client Management`, `Other`, (`--None--`) |
+| NM Type — seller prospect | **"Opportunity"** |
+| NM Type — government buyer (P-BUYER path) | **--None-- (blank)** per Scott (NOT "Opportunity"). `Prospect`/`Client Management` are available if buyers should later be categorized. |
+| Subject | the touchpoint name LCC passes (required) |
+| Due Date → ActivityDate | required; close_date if sent, else today/+Nd |
+| Comments → Description | optional |
+| Reminder | optional (`IsReminderSet` + `ReminderDateTime`) — skip for v1 |
+| Drop | `StageName`, `Amount` (real-Opportunity fields, not on Task) |
 
 ## Part A — LCC code change (Claude Code; `api/_shared/salesforce.js` + caller)
 
@@ -73,8 +82,9 @@ browser**, not the remote-driven new designer.
    - **WhoId** = `triggerBody()?['who_id']`
    - **Subject** = `triggerBody()?['subject']`
    - **Status** = `coalesce(triggerBody()?['status'], 'Open')`
-   - **NMType** (custom) = `triggerBody()?['nm_type']` (leave blank when not sent —
-     do NOT default to 'Opportunity', or buyer tasks get mistyped)
+   - **NM Type** (`NM_Type__c`) = `triggerBody()?['nm_type']` (leave blank when not
+     sent — do NOT default to 'Opportunity', or buyer tasks get mistyped). Valid
+     values: Opportunity / Prospect / Execution / Client Management / Other.
    - **ActivityDate** = `if(empty(triggerBody()?['activity_date']), utcNow('yyyy-MM-dd'), triggerBody()?['activity_date'])`
    - **WhatId** (optional) = `triggerBody()?['what_id']`
 3. **Response** 200:

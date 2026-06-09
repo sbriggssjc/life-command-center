@@ -81,14 +81,18 @@ at the **account** level with no contact. Change it to:
   any opp that has a contact but missed the inline create (retry/idempotent).
 
 ## Unit 4 — PA flow case (Scott, classic designer — NOT the remote new designer)
-Build the `create_opportunity` Switch case on the live SF lookup flow
-`c3744e93-…` per `PA_FLOW_create_opportunity_case_recipe.md` Part B: Salesforce
-**Create record → Task** (WhoId, Subject, Status=coalesce(…, 'Open'), **NMType**
+Confirmed against the SF UI 2026-06-09: the surface is the Contact **"Follow Up
+Only"** quick action → a **Task** with **Subject***, **Due Date*** (→ActivityDate),
+**NM Type** (`NM_Type__c`, values Opportunity/Prospect/Execution/Client
+Management/Other), Reminder, Comments. Build the `create_opportunity` Switch case
+on the live SF lookup flow `c3744e93-…` per
+`PA_FLOW_create_opportunity_case_recipe.md` Part B: Salesforce **Create record →
+Task** (WhoId, Subject, Status=coalesce(…, 'Open'), **NM_Type__c**
 = `triggerBody()?['nm_type']` with NO default, ActivityDate, optional WhatId) →
-Response `{ ok:true, task:{ Id:@{outputs('Create_record')?['body/Id']} } }`. The
-Task field picker reveals the exact **NMType** API name (confirm — Scott's note
-~`NM_Type__c`; codebase calls it NMType). **Production flow — Save only when the
-case is complete; the new designer froze on the SF metadata fetch, use classic.**
+Response `{ ok:true, task:{ Id:@{outputs('Create_record')?['body/Id']} } }`.
+Confirm `NM_Type__c` exactly in the Task field picker. **Production flow — Save
+only when the case is complete; the new designer froze on the SF metadata fetch,
+use classic.**
 
 ## House rules
 `node --check` on every touched file; keep `ls api/*.js | wc -l` ≤ 12 (no new
