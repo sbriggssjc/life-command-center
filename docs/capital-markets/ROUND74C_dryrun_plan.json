@@ -1,68 +1,57 @@
 {
   "round": "74c",
-  "version": 2,
-  "title": "De-contaminate is_northmarq — SIDE-RECONCILED (SF Comp universe x SF Deal side)",
+  "version": 3,
+  "title": "De-contaminate is_northmarq — SIDE-RECONCILED + NM-broker guard (APPLIED dia)",
   "generated_at": "2026-06-09",
-  "status": "DRY-RUN — no production flags flipped. Awaiting Scott's re-gate.",
+  "status": "dia: Scott-gated subset APPLIED live 2026-06-09. gov: report-only (columns added, no flips).",
+
+  "guard_doctrine": "The SF Deal 'side' may only PROMOTE (competitor/ambiguous -> NM) or resolve a genuinely-ambiguous row. It must NEVER override an explicit NM listing-broker string: never demote-to-buyside or remove a sale whose own listing_broker matches the NM/SJC/Stan Johnson/Briggs/Stinson/Gartman token (or a known NM individual). A conflicting Deal 'buyer' tag on such a row is a +/-1.5% cross-attribution to a same-metro neighbor, not ground truth.",
 
   "method": {
-    "step1_nm_universe": "public.sf_internal_comp_export status='Sold'. Comp Type=Internal = a Northmarq/SJC sale (Scott-confirmed). Fingerprint-matches a domain sale.",
-    "step2_side": "public.sf_deal_export (from data.xlsx Deal export, 271 rows w/ Direct_Co_Broke). is_northmarq=true ONLY for 'Direct (Both)' / 'Co-Broke (Seller)'. 'Co-Broke (Buyer)' -> is_northmarq_buyside. Side ABSENT -> HOLD (no flip).",
-    "matcher": "Comp->sale: state + sold_date +/-120d + sold_price +/-6%, confirm city OR tenant OR <=25mi geocoded proximity (city-centroid gazetteer from 10,556 geocoded properties). Deal->sale side identified at a TIGHT +/-1.5% price to avoid dense-metro cross-attribution.",
-    "provenance_tag": "is_northmarq_source='salesforce_comp'; new column is_northmarq_buyside.",
-    "buyside_caveat": "The Comp object carries no broker/side columns, so buy-side is recoverable ONLY via the Deal object. Where the Deal export lacks a row, the sale is held, not flipped."
+    "step1_nm_universe": "sf_internal_comp_export status='Sold' (Internal = a Northmarq/SJC sale).",
+    "step2_side": "sf_deal_export (data.xlsx Direct_Co_Broke). Listing = Direct(Both)/Co-Broke(Seller); buy-side = Co-Broke(Buyer); absent = HOLD.",
+    "step3_guard": "Apply the NM-broker guard AFTER the side lookup — it overrides a 'buyer'/competitor verdict for NM-listed sales.",
+    "matcher": "Comp->sale: state + date +/-120d + price +/-6%, confirm city OR tenant OR <=25mi geocoded proximity. Deal->sale side at tight +/-1.5% price."
   },
 
-  "dia": {
-    "universe": { "export_total": 280, "internal_sold": 262, "with_price": 253 },
-    "matching": {
-      "matched_sales": 243,
-      "proximity_only_new_vs_v1": 1,
-      "note": "proximity adds little because same-operator tenant matching (Fresenius/DaVita) already catches metro-split pairs (Youngstown/Austintown both Fresenius)."
+  "dia_applied_2026_06_09": {
+    "listing_adds_true": [163, 635, 6435, 6864, 9341, 10085],
+    "removes_false": [1065],
+    "buyside_flips_demote": [17,53,83,162,698,5387,5420,5527,5761,5933,8850,8864],
+    "buyside_new_tag": [4977,5359,5364,5489,5523,9147,12896,13915,14456,14482],
+    "protected_nm_comp_keep_true_retag": [8327, 13137],
+    "result": { "is_northmarq_true": "436 -> 429", "is_northmarq_buyside_true": 22, "tagged_salesforce_comp": 31 }
+  },
+
+  "dia_held": {
+    "nm_broker_guard_keep_true": {
+      "422": "SJC; Butler — NM-listed; Deal Buyer tag = cross-attribution (exact-matches Comp Fresenius-Birmingham-AL $1.37M).",
+      "8858": "SJC; Scrivner — NM-listed (surfaced by the guard; not in Scott's named list).",
+      "5191": "Will Lightfoot = NM/SJC broker (named, not a token) — matches Comp Fresenius-Edmond-OK $2.67M."
     },
-    "side_reconciliation": {
-      "listing_direct_or_seller": { "total": 199, "already_flagged_noop": 193, "new_adds": 6 },
-      "buyer_only": { "total": 25, "currently_flagged_flip_off": 15, "new_buyside": 10 },
-      "no_deal_side_found_HELD": 19
+    "verified_removal_pending_nod": {
+      "5004": "Colliers (competitor). Verified genuine non-match: only Comp candidate was a Round Rock Satellite Healthcare deal (~80mi, different tenant). Removal recommended; held for Scott's explicit nod."
     },
-    "proposed_apply": {
-      "listing_adds": [163, 635, 6435, 6864, 9341, 10085],
-      "buyer_flagged_flip_off_set_buyside": [17,53,83,162,422,698,5191,5387,5420,5527,5761,5933,8850,8858,8864],
-      "buyer_new_set_buyside": [4977,5359,5364,5489,5523,9147,12896,13915,14456,14482],
-      "confident_competitor_removes": [1065,5004,8327,13137],
-      "net_is_northmarq_true": "436 -> 423",
-      "net_is_northmarq_buyside_true": 25
+    "flag_for_objection": {
+      "5420": "PH: Peranich & Huffman — flipped to buyside as a non-NM firm; revert if it is in fact NM."
     },
-    "held_for_gate": {
-      "matched_no_deal_side": 19,
-      "flagged_comp_unmatched_non_competitor": "~211 (75 NM/SJC broker keep / 66 null / ~70 other) — not stripped"
-    },
-    "v1_correction": {
-      "note": "v1 (Comp-only) claimed 4 R74-removes should be RE-ADDED as listing comps. The Deal side REFUTES 3 of them: 5359 + 5489 exact-price-match a Co-Broke(Buyer) deal -> buy-side; 6375 + 8347 have no Deal side -> held. R74 was RIGHT to remove them from the listing set. Only the Deal layer surfaces this — the v2 fix.",
-      "still_listing": [],
-      "now_buyside": [5359, 5489],
-      "now_held_no_deal": [6375, 8347]
-    },
-    "m&m_contradictions": "8327 / 13137: not in the Internal set + M&M broker -> confident REMOVE (unchanged from v1).",
-    "topic20_value_prop": {
-      "deck_target": 6.38,
-      "nm_listing_final_alltime": { "n": 190, "avg_pct": 6.59, "median_pct": 6.40 },
-      "nm_buyer_final_alltime": { "n": 23, "avg_pct": 6.46, "median_pct": 6.10 },
-      "market_nonnm_alltime_median_pct": 6.63,
-      "conclusion": "REPRODUCES: deck 6.38% = the side-reconciled NM LISTING median over the all-time window (6.40%). Excluding buy-side (median 6.10%, the deals NM negotiated tighter) is the correct treatment and #20 still lands at 6.40%."
-    }
+    "flagged_comp_unmatched_non_competitor": "~211 (75 NM/SJC/Briggs broker KEEP / 66 null / ~70 other) — not stripped."
+  },
+
+  "matcher_weakness_found": "The strict 1:1 resolution (one comp per sale) starved 8327/13137 of their true NM comp (claimed by a higher-ranked sale), wrongly bucketing them as competitor removes in v2. Caught by Scott + the targeted re-match. The guard + per-sale verification now prevent NM comps from being removed.",
+
+  "topic20_value_prop": {
+    "deck_target": 6.38,
+    "nm_listing_final_median_pct": 6.40,
+    "nm_listing_final_n": 190,
+    "nm_buyer_median_pct": 6.10,
+    "market_nonnm_median_pct": 6.63,
+    "conclusion": "Reproduces deck 6.38% on the side-reconciled NM listing set (6.40%); buy-side (6.10%) correctly excluded."
   },
 
   "gov": {
-    "status": "REPORT-ONLY — cannot be side-reconciled this round: no gov Deal export (data.xlsx is dia-only) and no is_northmarq_source/is_northmarq_buyside columns. Reinforces HOLD.",
-    "comp_match": { "internal_sold": 113, "matched_sales": 103, "would_be_adds": 80, "already_flagged": 23, "current_flagged": 66, "flagged_unmatched": 43 },
-    "cap_finding": "No Internal-vs-DB basis contradiction (export 8.00% = matched DB 8.00% = current flags 7.90%). The deck's ~6.78% is a different cohort/aggregation. Get the gov Deal export (Direct_Co_Broke) before any gov re-flag, same as dia."
-  },
-
-  "guardrails_honored": [
-    "Two-source: Comp universe AND Deal side. Listing-only -> is_northmarq; Buyer -> is_northmarq_buyside; side absent -> hold.",
-    "Flag-column + is_northmarq_source + is_northmarq_buyside only. No price/term/cap writes.",
-    "City test loosened to metro/proximity via geocoding (<=25mi).",
-    "Removes staged (competitor-broker spot-check); not bulk-stripped. Idempotent. dia first; gov report-only."
-  ]
+    "status": "REPORT-ONLY. is_northmarq_source + is_northmarq_buyside columns ADDED (no flips). Awaiting a gov Deal/Opportunity export (companion to the gov Comp file) to do the same listing-vs-buyside reconciliation.",
+    "comp_match": { "internal_sold": 113, "matched_sales": 103, "would_be_adds": 80, "current_flagged": 66, "flagged_unmatched": 43 },
+    "cap_finding": "No Internal-vs-DB basis contradiction (export 8.00% = matched DB 8.00% = current flags 7.90%); deck 6.78% is a different cohort/aggregation."
+  }
 }

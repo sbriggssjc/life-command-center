@@ -58,7 +58,12 @@ const VERTICALS = {
 };
 
 const COMPETITOR_RE = /(marcus|millichap|m&m|cbre|jll|colliers|cushman|newmark|stan johnson|sands inv|encore|matthews|sab capital|capital pacific|b\+e)/i;
-const NM_RE = /(northmarq|briggs|sjc|stinson|gartman)/i;
+const NM_RE = /(northmarq|stan johnson|briggs|sjc|stinson|gartman)/i;
+// Guard (Scott's doctrine): a sale whose own listing-broker is an NM token is
+// NM-LISTED by rule. The Deal side may PROMOTE or resolve ambiguity, never demote
+// such a row to buy-side, and it must never be removed. (Named NM individuals not
+// in the token list — e.g. "Will Lightfoot" — still need a manual hold.)
+const isNmBroker = (sale) => NM_RE.test(`${sale.brokers[0] || ''} ${sale.brokers[1] || ''}`);
 const LISTING_SIDES = new Set(['Direct (Both)', 'Co-Broke (Seller)']);
 
 const num = (x) => (x == null || x === '' ? null : +x);
@@ -162,6 +167,8 @@ async function runVertical(name) {
       if (!ok) continue;
       if (LISTING_SIDES.has(d.side)) hasListing = true; else if (d.side === 'Co-Broke (Buyer)') hasBuyer = true;
     }
+    // GUARD: never let a "buyer" Deal tag demote a sale whose own listing-broker is NM.
+    if (hasBuyer && !hasListing && isNmBroker(m.sale)) { dealSide.set(m.sale_id, 'listing'); continue; }
     dealSide.set(m.sale_id, hasListing ? 'listing' : hasBuyer ? 'buyer' : 'none');
   }
 
@@ -174,7 +181,9 @@ async function runVertical(name) {
   const flaggedUnmatched = sales.filter((s) => s.is_northmarq && !matchedIds.has(s.sale_id));
   const brokerStr = (s) => `${s.brokers[0] || ''} ${s.brokers[1] || ''}`;
   const removeBuckets = { competitor: [], nm: [], null: [], other: [] };
-  for (const s of flaggedUnmatched) removeBuckets[COMPETITOR_RE.test(brokerStr(s)) ? 'competitor' : NM_RE.test(brokerStr(s)) ? 'nm' : (!String(s.brokers[0] || '').trim() && !String(s.brokers[1] || '').trim()) ? 'null' : 'other'].push(s.sale_id);
+  // NM-token guard takes precedence: an NM listing broker is KEEP even on a
+  // competitor co-broke string ("M&M; Glass"-style) — never a competitor remove.
+  for (const s of flaggedUnmatched) removeBuckets[isNmBroker(s) ? 'nm' : COMPETITOR_RE.test(brokerStr(s)) ? 'competitor' : (!String(s.brokers[0] || '').trim() && !String(s.brokers[1] || '').trim()) ? 'null' : 'other'].push(s.sale_id);
 
   const out = {
     vertical: name, project: cfg.project, side_reconciled: cfg.hasDeals,
