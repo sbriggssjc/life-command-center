@@ -25,7 +25,7 @@ import { opsQuery, pgFilterVal, fetchWithTimeout } from './ops-db.js';
 import { logCopilotInteraction } from './memory.js';
 import { processIntakeExtraction } from '../_handlers/intake-extractor.js';
 import { ensureEntityLink } from './entity-link.js';
-import { uploadArtifactToStorage, artifactObjectPath, ARTIFACT_BUCKET } from './artifact-storage.js';
+import { putArtifact } from './storage-adapter.js';
 
 const BRIGGSLAND_WORKSPACE_ID = 'a0000000-0000-0000-0000-000000000001';
 const OM_INLINE_MAX_BYTES     = 25 * 1024 * 1024; // 25 MB (PVA + Copilot Chat cap)
@@ -438,8 +438,16 @@ export async function stageOmIntake(input, auth, workspaceId) {
   // Storage at ingest (instead of base64 inline_data) so they never bloat the
   // auth DB. Best-effort — any upload failure falls back to inline so ingestion
   // is never blocked; the offload worker moves it later.
-  let ingestStoragePath = hasStoragePath ? input.storage_path : null;
-  let storeInline       = hasStoragePath ? null : input.bytes_base64;
+  //
+  // Phase 1 (2026-06-09): the upload now routes through the pluggable storage
+  // adapter (putArtifact) so the bytes can land in Supabase Storage (default)
+  // OR the company SharePoint library (STORAGE_BACKEND=sharepoint_pa). The DB
+  // records storage_backend + storage_ref; storage_path stays set for the
+  // supabase backend (back-compat with the existing readers).
+  let ingestStoragePath    = hasStoragePath ? input.storage_path : null;
+  let ingestStorageBackend = hasStoragePath ? 'supabase' : null;
+  let ingestStorageRef     = hasStoragePath ? input.storage_path : null;
+  let storeInline          = hasStoragePath ? null : input.bytes_base64;
   if (!hasStoragePath && bytesLen > OM_INGEST_STORAGE_MIN_BYTES) {
     const opsUrlEnv = process.env.OPS_SUPABASE_URL;
     const opsKeyEnv = process.env.OPS_SUPABASE_KEY;
@@ -447,20 +455,19 @@ export async function stageOmIntake(input, auth, workspaceId) {
       try {
         const buffer = Buffer.from(input.bytes_base64, 'base64');
         if (buffer.length) {
-          const objectPath = artifactObjectPath({
+          const put = await putArtifact({
             key: inboxItemId, fileName: input.file_name, mimeType, createdAt: nowIso,
-          });
-          const up = await uploadArtifactToStorage({
-            opsUrl: opsUrlEnv, opsKey: opsKeyEnv, bucket: ARTIFACT_BUCKET,
-            objectPath, mimeType, buffer,
+            buffer, opsUrl: opsUrlEnv, opsKey: opsKeyEnv,
             fetchImpl: (u, opts) => fetchWithTimeout(u, opts, 20000),
           });
-          if (up.ok) {
-            ingestStoragePath = up.storage_path;
-            storeInline       = null;
+          if (put.ok) {
+            ingestStoragePath    = put.storage_path;   // null for sharepoint_pa
+            ingestStorageBackend = put.backend;
+            ingestStorageRef     = put.storage_ref;
+            storeInline          = null;
           } else {
             console.warn('[intake-om-pipeline] ingest storage upload failed, falling back to inline:',
-              inboxItemId, up.status, up.detail);
+              inboxItemId, put.status, put.detail);
           }
         }
       } catch (err) {
@@ -471,14 +478,16 @@ export async function stageOmIntake(input, auth, workspaceId) {
   }
 
   const artRes = await opsQuery('POST', 'staged_intake_artifacts', {
-    intake_id:    inboxItemId,
-    file_name:    input.file_name,
-    file_type:    fileExt,
-    mime_type:    mimeType,
-    inline_data:  storeInline,
-    storage_path: ingestStoragePath,
-    size_bytes:   bytesLen || null,
-    sha256:       input.sha256 ?? null,
+    intake_id:       inboxItemId,
+    file_name:       input.file_name,
+    file_type:       fileExt,
+    mime_type:       mimeType,
+    inline_data:     storeInline,
+    storage_path:    ingestStoragePath,
+    storage_backend: ingestStorageBackend,
+    storage_ref:     ingestStorageRef,
+    size_bytes:      bytesLen || null,
+    sha256:          input.sha256 ?? null,
   });
   if (!artRes.ok) {
     await opsQuery('DELETE', `staged_intake_items?intake_id=eq.${pgFilterVal(inboxItemId)}`);

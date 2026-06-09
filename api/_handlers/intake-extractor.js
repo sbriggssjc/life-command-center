@@ -21,6 +21,7 @@ import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractio
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
 import { isNonDealSnapshot, normalizeCapRate, firstOf } from '../_shared/intake-classify.js';
+import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { createRequire } from 'module';
@@ -225,6 +226,49 @@ async function fetchArtifactData(artifact) {
     return {
       base64,
       media_type: inferMediaType(res.headers.get('content-type')),
+    };
+  }
+
+  // Path 3: SharePoint (Power Automate) — storage_backend='sharepoint_pa'.
+  // These rows carry storage_ref (server-relative URL) and NULL storage_path,
+  // so Path 2 is skipped. Fetch the bytes via the PA "Get Artifact" flow, then
+  // run the same defensive base64-unwrap as the storage path.
+  if (artifact.storage_backend === 'sharepoint_pa' && artifact.storage_ref) {
+    const sp = await fetchSharepointBytes({
+      storageRef: artifact.storage_ref,
+      fetchImpl: (u, opts) => fetchWithTimeout(u, opts, 30000),
+    });
+    if (!sp.ok) {
+      globalThis.__lastStorageFetchInfo = {
+        backend: 'sharepoint_pa',
+        status:  sp.status || null,
+        ref:     artifact.storage_ref,
+        body_snippet: (sp.detail || '').slice(0, 200),
+      };
+      throw new Error(
+        `SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''} — ref=${artifact.storage_ref}`
+      );
+    }
+    const rawBuffer   = sp.buffer;
+    const recovery    = recoverIfBase64Wrapped(rawBuffer);
+    const finalBuffer = recovery.recovered ? recovery.buffer : rawBuffer;
+    if (recovery.recovered) {
+      console.warn('[intake-extractor] base64-wrapped sharepoint object detected and unwrapped:',
+        artifact.storage_ref, `kind=${recovery.kind} raw=${rawBuffer.length} decoded=${finalBuffer.length}`);
+    }
+    globalThis.__lastStorageFetchInfo = {
+      backend:            'sharepoint_pa',
+      status:             200,
+      content_type:       sp.contentType,
+      actual_bytes:       rawBuffer.length,
+      decoded_bytes:      recovery.recovered ? finalBuffer.length : null,
+      base64_unwrapped:   recovery.recovered,
+      base64_unwrap_kind: recovery.recovered ? recovery.kind : null,
+      ref:                artifact.storage_ref,
+    };
+    return {
+      base64: Buffer.from(finalBuffer).toString('base64'),
+      media_type: inferMediaType(sp.contentType),
     };
   }
 
