@@ -239,14 +239,65 @@ The 4-cohort dia fan first becomes continuous at **2014-06-30** (since then
 142/147 months carry all 4 cohorts; pre-2014 = 156 partial months where ≤5 / 6-8
 don't exist). So the pre-2014 tangle is structural sparsity, not a bug.
 
-### Recommendation (Layer-D / B1 gate decision for Scott)
-The dia cap-by-term x-axis currently reaches back to 2001/2005 and shows the
-structurally-incomplete pre-2014 fan (tangled/partial lines = the "conflict").
-Per Scott's standing rule ("extend only where consistent; gate + annotate
-genuine thinning"), the fix is to **floor the dia cap-by-term x-axis to ~2014-06**
-(where all 4 cohorts are continuous) and/or annotate the thin pre-2014 region —
-NOT a data/propagation change. Decide at the gate. (The same eligible-rows check
-still owes the gov cap-by-term + cap-by-credit cohorts — A3 continues.)
+### CORRECTION — there is already a 2015 floor, and the crossing persists to 2018
+The dia cohort charts (`cap_rate_by_lease_term`, `sold_cap_by_term_dot_plot`,
+`asking_cap_by_term_dot_plot`) **already floor at static year 2015** in
+`cm-native-chart-injector.js MIN_YEAR_BY_TEMPLATE` (added 2026-05-29 for exactly
+this "conflicts prior to 2018" note). So the chart Scott sees starts at 2015, not
+2001 — and his note is still accurate because the crossing PERSISTS past 2015.
+Dia dot view ordering at year-ends (smoothed, what the chart shows):
+
+| yr | 12+ | 8-12 | 6-8 | ≤5 | ordering |
+|---|---|---|---|---|---|
+| 2014 | 6.82 | 7.02 | 6.71 | 7.67 | CROSS |
+| 2015 | 6.52 | 7.02 | 6.96 | 7.03 | CROSS |
+| 2016 | 6.54 | 6.60 | 6.99 | 7.31 | ordered |
+| 2017 | 6.19 | 7.12 | 6.78 | 6.96 | CROSS |
+| 2018 | 6.24 | 6.81 | 7.07 | 6.92 | CROSS |
+| 2019 | 6.18 | 6.60 | 6.94 | 7.11 | ordered |
+
+The 8-12 cohort is volatile through 2018; ordering only settles ~2019. This is
+because the ≤5 cohort (n=2/4/4/10/21 in 2015-18) and 8-12 stay modest-n, and dia
+is on **mean** (Scott's confirmed call — median rejected). So:
+- **Pre-2014 is genuine sparsity** (≤5/6-8 absent) — the existing 2015 floor
+  already crops most of it.
+- **2014 is NOT the right floor** — it's thinner than 2015 (would reintroduce
+  crossing, exactly what Scott warned against).
+- **The residual 2015-2018 crossing is modest-n noise on the mean**, not a bug,
+  and only fully clears ~2019.
+
+### RESOLVED — floor dia cap-by-term at 2019 + annotate (Scott 2026-06-10, APPLIED)
+Scott's call: floor at the earliest quarter the series stays consistent (doctrine:
+"floor where consistent; gate + annotate genuine thinning"). For dia that's **2019**
+(2015-2018 cross on small-sample noise; ordering only settles 2019). 2014 ruled out
+(thinner). No added smoothing (Scott's gov-#20 over-smoothing objection).
+
+**Pre-apply check (Scott asked): is the master/PDF dia cap-by-term richer than ours?**
+NO — the **master Excel carries no cap-by-term tab at all** (`audit/cm-style-audit/
+dia-diff.md`: "Data_Sold_Cap_by_Term / Data_Ask_Cap_by_Term — master does not
+include this tab"). The chart is LCC-built from `master_m`, which == the
+sales-computed dot view byte-for-byte (0.00 bps, proven above). So there are **no
+curated comps we're not pulling** → this is a floor decision, NOT a propagation
+finding. (The deck p.22 PDF itself isn't in the repo to read a start year, but the
+data evidence is conclusive; dia firm-term IS well-captured — 97% — unlike gov,
+whose cap-by-term thinness is a real firm-term coverage gap per
+`CAPITAL_MARKETS_CAP_BY_TERM_RECONCILIATION_2026-05-29.md`.)
+
+**Applied (Railway redeploy ships it; DB unaffected):**
+- `cm-native-chart-injector.js` — replaced the three cohort templates' static
+  `2015` floor with `capByTermFloor(rows)`: returns **2019 for dia** (detected by
+  its exclusive `cap_8to12`/`cap_5orless` cohort columns), **2015 for gov**
+  (unchanged — gov's own A3 classification is pending). The floor crops only the
+  charted x-axis; the Data_* tab keeps full history.
+- `cm-excel-export.js` — appended the annotation to the `cap_rate_by_lease_term`
+  description: "Dialysis starts 2019: before then the ≤5- and 8-12-year cohorts
+  carry too few comps per TTM window to hold a stable ordered premium… Gov starts
+  2015."
+- Verified: `node --check` clean (both files); chart suite 183/0; full suite 555/0;
+  12 functions. capByTermFloor → 2019 on dia rows / 2015 on gov rows.
+
+(gov cap-by-term + #13 cap-by-credit + gov sentiment-10+ A3 classification still
+owed — next A3 targets.)
 
 ---
 

@@ -2300,6 +2300,26 @@ function findFirstDenseYear(rows, fieldKey, minN, consecutive = 4) {
   return null;
 }
 
+// R76 Layer A3 (2026-06-10) — dia cap-by-term cohort floor. The dia 4-cohort
+// fan only settles into a clean, ordered firm-term premium at ~2019: the ≤5 and
+// 8-12 cohorts stay modest-n through 2018 (≤5 n=2/4/4/10/21 across 2015-18) and
+// dia is on MEAN (Scott's confirmed call — median rejected), so 2015-2018 lines
+// cross on small-sample noise (2015 CROSS, 2016 ordered, 2017 CROSS, 2018 CROSS,
+// 2019 ordered). The chart data source (master_m) matches the sales-computed dot
+// view byte-for-byte, and the master Excel carries NO cap-by-term tab, so this is
+// genuine sparsity, NOT a propagation gap — floor the display where the premium
+// is consistent and annotate the thin pre-floor tail (Scott 2026-06-10).
+// gov is LEFT at its 2015 trim (its cause is a firm-term coverage gap, per
+// docs CAPITAL_MARKETS_CAP_BY_TERM_RECONCILIATION_2026-05-29.md; its own A3
+// classification is pending). Detect dia by its EXCLUSIVE cohort columns
+// (cap_8to12 / cap_5orless — gov uses cap_6to10 / cap_less5 / cap_outside_firm),
+// so one map entry serves both verticals without touching gov.
+function capByTermFloor(rows) {
+  const isDia = Array.isArray(rows) && rows.some(r => r &&
+    (r.cap_8to12 != null || r.cap_5orless != null));
+  return isDia ? 2019 : 2015;
+}
+
 const MIN_YEAR_BY_TEMPLATE = {
   // R47 → R69. cap_rate_ttm_by_quarter and the two charts that share
   // its baseline (cash_leveraged_returns, cost_of_capital) now use a
@@ -2338,13 +2358,14 @@ const MIN_YEAR_BY_TEMPLATE = {
   // for the longer-term buckets (12+ year had <5 samples per quarter
   // until ~2014). 2015 is the first year where all 4 cohorts have
   // dense, comparable coverage and the lines stop crossing erratically.
-  sold_cap_by_term_dot_plot:    2015,
-  asking_cap_by_term_dot_plot:  2015,
+  // R76 A3 — dia floors at 2019 (ordering stabilizes there); gov stays 2015.
+  sold_cap_by_term_dot_plot:    capByTermFloor,
+  asking_cap_by_term_dot_plot:  capByTermFloor,
   // 2026-05-29 - the cap-by-term LINE chart was untrimmed (307 monthly
   // points from 2001): thin pre-2015 cohorts made the lines erratic AND
   // the 25-yr category count crowded out the quarterly x-axis labels.
   // Match the dot-plot term variants (2015) so cohorts are dense + labels show.
-  cap_rate_by_lease_term:       2015,
+  cap_rate_by_lease_term:       capByTermFloor,  // R76 A3 — dia 2019 / gov 2015
   // 2026-05-29 - bumped 2006 -> 2011. NM-tagged gov sales are absent in
   // 2008-2009 and sparse in 2003/2007/2010, so the line rendered with
   // gaps + erratic jumps. From 2011 it's continuous and the 9-mo MA reads

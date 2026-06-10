@@ -155,7 +155,7 @@ const CHART_FOOTER_CAPTIONS = {
   nm_vs_market_cap:
     'Northmarq-brokered cap rates vs. broader market average. Persistent inside-the-market prints quantify the firm execution premium.',
   cap_rate_by_lease_term:
-    'Cap-rate cohorts by remaining lease term (TTM). Dialysis chart uses the PDF p.22 cohorts (12+/8-12/6-8/≤5); gov uses 10+/6-10/<5/outside. Term premium (longest minus shortest) is the discount investors apply for shorter-dated assets.',
+    'Cap-rate cohorts by remaining lease term (TTM). Dialysis chart uses the PDF p.22 cohorts (12+/8-12/6-8/≤5); gov uses 10+/6-10/<5/outside. Term premium (longest minus shortest) is the discount investors apply for shorter-dated assets. Dialysis starts 2019: before then the ≤5- and 8-12-year cohorts carry too few comps per TTM window to hold a stable ordered premium, so the early lines cross on small-sample noise. Gov starts 2015.',
   dom_and_pct_of_ask:
     'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line). Improving % of ask + flat/falling DOM signals tightening bid/ask.',
   dom_and_pct_of_ask_monthly:
