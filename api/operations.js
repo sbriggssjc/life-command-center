@@ -1238,7 +1238,8 @@ async function getBuyerContacts(req, res, user, workspaceId) {
         for (const p of persons.data) {
           // Skip rows already flagged junk; a related person should still be a
           // plausible human (a mistyped firm linked here is not a contact).
-          if (p.metadata && p.metadata.junk_name_flagged === true) continue;
+          // R17 Unit 3: also skip orphan-flagged entities (dead-weight graph rows).
+          if (p.metadata && (p.metadata.junk_name_flagged === true || p.metadata.orphan_flagged === true)) continue;
           related.push({ entity_id: p.id, name: p.name }); relatedIds.add(p.id);
         }
       }
@@ -1278,7 +1279,8 @@ async function getBuyerContacts(req, res, user, workspaceId) {
         if (nm.ok && Array.isArray(nm.data)) {
           for (const p of nm.data) {
             if (relatedIds.has(p.id)) continue;
-            if (p.metadata && p.metadata.junk_name_flagged === true) continue;
+            // R17 Unit 3: drop junk-named AND orphan-flagged entities from the picker.
+            if (p.metadata && (p.metadata.junk_name_flagged === true || p.metadata.orphan_flagged === true)) continue;
             if (!looksLikePersonName(p.name)) continue;   // only selectable humans
             // Exclude the firm name itself mistyped as a person ("Boyd Watterson"
             // / "Boyd Watterson Global" both ⊆/⊇ the parent name) — a contact is

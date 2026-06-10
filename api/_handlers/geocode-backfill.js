@@ -238,6 +238,9 @@ export async function handleGeocodeTick(req, res) {
 
   for (const short of targets) {
     const domain = DOMAIN_KEY_MAP[short];
+    // R17 Unit 1: don't geocode gov rows archived as backfill junk (gov has a
+    // status column; dia has none, so the filter is gov-only).
+    const archivedFilter = short === 'gov' ? '&status=not.eq.archived' : '';
     const stats = {
       scanned: 0, patched: 0, patched_census: 0, patched_geocodio: 0, patched_google: 0,
       missed: 0, skipped: 0, errored: 0,
@@ -277,6 +280,7 @@ export async function handleGeocodeTick(req, res) {
     const batchPath = `properties`
       + `?select=property_id,address,city,state,zip_code`
       + `&latitude=is.null`
+      + archivedFilter
       + `&property_id=gt.${cursor}`
       + `&order=property_id.asc`
       + `&limit=${limit}`;
@@ -310,6 +314,7 @@ export async function handleGeocodeTick(req, res) {
           'GET',
           `properties?select=property_id,address,city,state,zip_code`
             + `&latitude=is.null&property_id=gt.0`
+            + archivedFilter
             + `&order=property_id.asc&limit=${limit}`
         );
         if (refetch.ok && Array.isArray(refetch.data)) rows = refetch.data;

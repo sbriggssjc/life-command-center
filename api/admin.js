@@ -324,7 +324,10 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(domCount('gov', 'ownership_research_queue', 'estimated')),
     withLaneTimeout(domCount('dia', 'llc_research_queue?status=eq.queued')),
     withLaneTimeout(domCount('gov', 'llc_research_queue?status=eq.queued')),
-    withLaneTimeout(domCount('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address')),
+    // R17 Unit 4: count GROUPS of true-duplicate candidates, not per-property
+    // rows. v_property_merge_lane excludes legit multi-lease GSA buildings and
+    // archived junk (R17 Unit 1), so a 6,914-row count collapses to ~51 groups.
+    withLaneTimeout(domCount('gov', 'v_property_merge_lane')),
     withLaneTimeout(domCount('gov', 'pending_updates?status=eq.pending')),
     withLaneTimeout(domCount('gov', 'v_recorded_owner_link_review')),
     // R4-C §3: the round-3 staged-intake review queue had no console surface.
@@ -717,6 +720,10 @@ async function refreshQueueAfterDecision() {
 const FEDERATED_DECISION_TYPES = new Set([
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
+  // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
+  // 430 auto_mergeable groups was drained live; new auto_mergeable groups
+  // surface here as a one-click operator merge (human-in-the-loop, NOT a cron).
+  'merge_duplicate_entities',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -730,6 +737,7 @@ function federatedSubjectRef(type, s) {
     case 'pending_update':     return s.pending_id != null ? 'pending:gov:' + s.pending_id : null;
     case 'cms_link_suspect':   return (s.medicare_id != null && s.property_id != null) ? 'cms:dia:' + s.medicare_id + ':' + s.property_id : null;
     case 'implausible_value':  return (s.domain && s.sale_id != null) ? 'implausible:' + s.domain + ':' + s.sale_id : null;
+    case 'merge_duplicate_entities': return s.winner_id ? 'mergegrp:' + s.winner_id : null;
   }
   return null;
 }
@@ -797,8 +805,9 @@ async function fetchFederatedSource(type, cap) {
 
   if (type === 'property_merge') {
     const fetchDom = async (dom) => {
-      const r = await domainQuery(dom, 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
-        + '&issue_kind=eq.duplicate_property_address&order=severity.desc&limit=' + cap);
+      // R17 Unit 4: group-level true-duplicate candidates (de-noised lane source).
+      const r = await domainQuery(dom, 'GET', 'v_property_merge_lane?select=record_id,detail_1,detail_2,detail_3,severity'
+        + '&order=severity.desc&limit=' + cap);
       const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
       return rows.map((row) => ({
         subject_ref: 'merge:' + dom + ':' + row.record_id,
@@ -810,11 +819,28 @@ async function fetchFederatedSource(type, cap) {
     };
     const [g, d, gc, dc] = await Promise.all([
       fetchDom('gov'), fetchDom('dia'),
-      domCnt('gov', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
-      domCnt('dia', 'v_data_quality_issues?issue_kind=eq.duplicate_property_address'),
+      domCnt('gov', 'v_property_merge_lane'),
+      domCnt('dia', 'v_property_merge_lane'),
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  if (type === 'merge_duplicate_entities') {
+    // R17 Unit 2: high-confidence auto_mergeable duplicate-entity groups. One
+    // row per surviving (winner) entity; merging collapses the loser_ids into it.
+    const r = await opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count'
+      + '&auto_mergeable=eq.true&order=member_count.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'mergegrp:' + row.winner_id,
+      subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
+      rank_value: Number(row.member_count) || 0,
+      context: { winner_id: row.winner_id, winner_name: row.winner_name, norm_name: row.norm_name,
+        loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0 },
+    }));
+    out.total = await opsCnt('v_lcc_merge_candidates?auto_mergeable=eq.true');
     return out;
   }
 
@@ -1735,6 +1761,49 @@ async function handleDecisionVerdict(req, res) {
           title: 'Confirm property merge: ' + (c.address || c.property_id || ''),
           instructions: 'Decision Center: confirm whether ' + (c.domain || '') + ' property ' + (c.property_id || '')
             + ' (' + (c.address || '') + ') is a duplicate to be merged, or a distinct property.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- merge_duplicate_entities (federated) ------------------------------
+    // R17 Unit 2: collapse an auto_mergeable duplicate-entity group into its
+    // winner. 'merge' rides lcc_merge_entity (DELETE-then-UPDATE PK-safe);
+    // 'keep_separate' is record-only; 'research' queues a task. Effect-first:
+    // a failed merge keeps the decision open + records merge:false.
+    if (decision.decision_type === 'merge_duplicate_entities') {
+      const winnerId = c.winner_id || decision.subject_entity_id;
+      if (verdict === 'keep_separate') {
+        await record('keep_separate', 'decided', null, { merge: 'suppressed_group' });
+        return res.status(200).json({ ok: true, verdict: 'keep_separate' });
+      }
+      if (verdict === 'merge') {
+        if (!winnerId) return res.status(400).json({ error: 'merge requires a winner entity' });
+        // Re-fetch the CURRENT group (fresh loser set; no-op if already drained).
+        const gr = await opsQuery('GET', 'v_lcc_merge_candidates?select=loser_ids&auto_mergeable=eq.true&winner_id=eq.'
+          + pgFilterVal(winnerId) + '&limit=1');
+        const losers = (gr.ok && Array.isArray(gr.data) && gr.data[0] && Array.isArray(gr.data[0].loser_ids))
+          ? gr.data[0].loser_ids : [];
+        let merged = 0;
+        for (const loser of losers) {
+          const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: loser, p_winner: winnerId });
+          if (!mr.ok) { await recordEffectFailure({ merge: false, merged, error: mr.data }); return res.status(502).json({ error: 'merge_failed', detail: mr.data }); }
+          merged += 1;
+        }
+        // Merges change entity membership (SPE/parent + queue) — refresh caches.
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        await record('merge', 'decided', { winner_id: winnerId, merged }, { merge: 'collapsed', merged });
+        return res.status(200).json({ ok: true, verdict: 'merge', merged });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'merge_duplicate_entities',
+          title: 'Review duplicate entity group: ' + (c.winner_name || c.norm_name || winnerId || ''),
+          instructions: 'Decision Center: confirm whether the ' + (c.member_count || '?') + '-member group around "'
+            + (c.winner_name || c.norm_name || '') + '" is the same entity (merge) or distinct entities (keep separate).' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
