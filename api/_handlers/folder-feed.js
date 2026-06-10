@@ -190,6 +190,16 @@ export async function handleFolderFeedTick(req, res) {
     .map(realServerRelative).filter(Boolean);
 
   const limitFolders = Math.min(20, Math.max(1, parseInt(req.query.limit_folders || '8', 10)));
+
+  // Per-tick stage cap (POST/drain only — GET never stages). Absent → Infinity
+  // (unbounded, current behavior). 0 is allowed and means "stage nothing this
+  // tick" — every OM-eligible file is recorded 'seen' (known-but-deferred) for a
+  // later uncapped tick to pick up. `stagedThisTick` is a running count across
+  // the WHOLE walk (all folders this tick), not per-folder.
+  const maxStage = req.query.max_stage != null
+    ? Math.max(0, parseInt(req.query.max_stage, 10) || 0)
+    : Infinity;
+  let stagedThisTick = 0;
   // Walk breadth-first from the roots, bounded by limitFolders per tick.
   // Subfolders discovered in a listing are enqueued to recurse; a within-tick
   // guard prevents revisiting. (Cross-tick progress is by design re-listed —
@@ -211,10 +221,12 @@ export async function handleFolderFeedTick(req, res) {
     files_seen: 0,
     files_new: 0,
     files_staged: 0,
+    files_deferred: 0,     // OM-eligible but skipped this tick (max_stage cap) → 'seen'
     files_skipped: 0,
     files_stale: 0,
     files_error: 0,
     files_unresolved: 0,   // staged but the matcher could not resolve a property
+    max_stage: Number.isFinite(maxStage) ? maxStage : null,  // effective cap; null = unbounded
     by_type: {},
     folders: [],
   };
@@ -226,7 +238,7 @@ export async function handleFolderFeedTick(req, res) {
     walkedFolders.add(folder);
     report.folders_walked++;
 
-    const folderRep = { folder, listed: 0, new: 0, staged: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
+    const folderRep = { folder, listed: 0, new: 0, staged: 0, deferred: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
     const listing = await listFolder(folder);
     if (!listing.ok) {
       folderRep.error_detail = listing.detail || `status ${listing.status}`;
@@ -265,11 +277,21 @@ export async function handleFolderFeedTick(req, res) {
           `folder_feed_seen?server_relative_path=eq.${pgFilterVal(item.path)}` +
           `&content_hash=eq.${pgFilterVal(hash)}&select=id,status&limit=1`);
         if (seen.ok && seen.data?.length) {
-          alreadySeen = true;
-          // Touch last_seen_at so the stale-sweep knows it's still present.
-          await opsQuery('PATCH',
-            `folder_feed_seen?id=eq.${pgFilterVal(seen.data[0].id)}`,
-            { last_seen_at: new Date().toISOString() }).catch(() => {});
+          // A 'seen' row was recorded as known-but-DEFERRED (max_stage cap hit on
+          // a prior tick) — it was NOT staged, so it stays eligible: fall through
+          // and (re)attempt it now, subject to this tick's cap. Every other status
+          // (staged/promoted/skipped/error/stale) is terminal for this (path,hash)
+          // and short-circuits as already-handled.
+          if (seen.data[0].status === 'seen') {
+            alreadySeen = false;
+            // re-staging below will refresh last_seen_at via upsertSeen
+          } else {
+            alreadySeen = true;
+            // Touch last_seen_at so the stale-sweep knows it's still present.
+            await opsQuery('PATCH',
+              `folder_feed_seen?id=eq.${pgFilterVal(seen.data[0].id)}`,
+              { last_seen_at: new Date().toISOString() }).catch(() => {});
+          }
         }
       }
       if (alreadySeen) continue; // idempotent — unchanged file, no re-stage
@@ -297,6 +319,21 @@ export async function handleFolderFeedTick(req, res) {
         continue;
       }
 
+      // ---- Per-tick cap: once maxStage OM files are staged this tick, record
+      // the rest as 'seen' (known-but-deferred) so a later uncapped tick
+      // re-attempts them. Only OM-eligible files reach here, so skipped/unknown
+      // types never consume the cap. ----
+      if (stagedThisTick >= maxStage) {
+        await upsertSeen({
+          path: item.path, hash, item, status: 'seen',
+          vertical: subjectHint.vertical, detectedType: cls.type,
+          subjectHint, intakeId: null,
+        });
+        report.files_deferred++;
+        folderRep.deferred++;
+        continue;
+      }
+
       // ---- OM/flyer: stage through the SAME promoter as the email channel ----
       if (!callerEmail) {
         await upsertSeen({ path: item.path, hash, item, status: 'error',
@@ -305,6 +342,11 @@ export async function handleFolderFeedTick(req, res) {
         folderRep.error++;
         continue;
       }
+
+      // Count the attempt against the cap (success or stage-error both count —
+      // it was an OM-eligible file we tried to stage). The no-callerEmail error
+      // above is NOT an attempt and does not consume the cap.
+      stagedThisTick++;
 
       let stageRes;
       try {
