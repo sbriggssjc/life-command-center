@@ -133,6 +133,41 @@ Expect `ok=True` + `task.Id` (00T…). Confirm in SF it's an **open Task on the
 contact with NMType=Opportunity**. Then run once with `nm_type` omitted → confirm a
 blank-NMType task (the buyer shape). Delete both.
 
+## Follow-up — R16b: re-add the Task Due Date (`activity_date`) — 2026-06-10
+
+The R16 build **omitted ActivityDate** because PA's date field rejected a typed
+default expression (`if(empty(...), utcNow(...), ...)` saved as literal text →
+runtime failure). R16b fixes this from the **LCC side** so the value is always a
+clean date string and the PA field becomes a simple click-to-insert token. An
+open touchpoint without a due date never surfaces on the rep's "due" worklist —
+this closes that gap.
+
+**LCC side (shipped, Railway redeploy):** `createSalesforceTask` now **always**
+sends `activity_date` as a clean `YYYY-MM-DD` (never null). Callers pass the
+touchpoint's true due date — the cadence's `next_touch_due` (date portion):
+`select_buyer_contact` + `select_prospecting_contact` (the row they
+seed/attach) and the gov-buyer sync (the opp's buy-side cadence). When a caller
+has no date the helper defaults to **today (UTC)**. So PA always receives a
+valid date.
+
+**Two PA edits on flow `c3744e93-…` (classic / native designer):**
+
+1. **Trigger** ("When an HTTP request is received") → extend the **Request Body
+   JSON Schema** to include `who_id, subject, nm_type, status, activity_date,
+   what_id` (additive — keep all existing properties so the other operations'
+   tokens still resolve). This makes each a **Dynamic content token**.
+2. **Create record** → re-add **Task Due Date Only** and set it by **clicking the
+   `activity_date` dynamic-content token** — **NOT** a typed expression (the
+   typed `if()` is exactly what failed before). Since LCC now always sends a
+   valid `YYYY-MM-DD`, the field is never null and the date-format validation
+   passes.
+
+No other PA changes. After these two edits, created Tasks carry **Due Date =
+the cadence's `next_touch_due`** (or today when none). Test: run
+`select_buyer_contact` (or the gov-buyer sync) → confirm the Task's Due Date on
+the contact's open activities; re-run = `already_synced` (idempotent, no
+duplicate).
+
 ## Open question for Scott
 - Confirm the exact **NMType** field API name (the PA Task field picker will show
   it). "Custom field, ~NM_Type__c" per your note; codebase calls it **NMType**.
