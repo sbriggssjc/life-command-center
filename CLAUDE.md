@@ -2045,3 +2045,92 @@ disambiguation, creates nothing; ingest writes a listing) + `test/folder-feed-
 enrich-channel.test.mjs` (mode tagging on `folder_feed_seen`; enrich inert when
 the env is unset). `node --check` clean; `ls api/*.js | wc -l`=12; full suite 576
 pass / 0 fail / 6 skipped.
+
+## Phase 2 Slice 2b — write LCC-generated docs back into property folders (2026-06-10)
+
+The WRITE side of the PROPERTIES channel (Slice 2a was the READ side). An
+LCC-generated deliverable (BOV / OM / client memo / master sheet) is written
+INTO the matched property's own SharePoint folder, tagged `[LCC]` so re-ingest
+knows it's our authoritative work, and linked to the property record — the
+folder + the DB become one connected object. Built as the **mechanism** (one
+entrypoint any producer calls), not a specific producer integration. DB-only
+tracking unchanged — nothing else is written into the tree.
+
+### Doctrine / safety
+- **Tag every LCC-authored file** `… [LCC].<ext>` AND link a `property_documents`
+  row with `source='lcc_generated'` (top-trust). The folder-feed read path SKIPS
+  re-ingesting `[LCC]`-tagged files (`classifyFile` returns
+  `{type:'lcc_generated',isOm:false}` FIRST, before the OM branch, so an
+  `… OM [LCC].pdf` is recorded `status='skipped'`/`detected_type='lcc_generated'`,
+  never re-extracted).
+- **Never overwrite** — `dedupeFileName` appends ` (YYYY-MM-DD)` (then `-N`) on a
+  name collision in the destination folder; write-back is additive.
+- **Resolve the folder confidently or REFUSE** (422 `folder_unresolved`) — no
+  guessed writes into the wrong property folder.
+- **Feature-flagged on `SHAREPOINT_UPLOAD_URL`** — clear 503 until the PA upload
+  flow is wired (storage-adapter / find_contacts_by_account rollout pattern).
+
+### What shipped
+- **PA flow (Scott, native browser):** "Http -> Upload file (LCC Put Artifact)"
+  — HTTP trigger body `{folder_path, file_name, content_base64}` → SharePoint
+  **Create file** (Folder Path = `triggerBody()?['folder_path']`, File Content =
+  `base64ToBinary(triggerBody()?['content_base64'])`) → response wraps
+  `body('Create_file')?['Path']` into `{ok:true, server_relative_url}`. URL →
+  `SHAREPOINT_UPLOAD_URL` env.
+- **`api/_shared/storage-adapter.js` `uploadDocToFolder({folderPath, fileName,
+  bytes, fetchImpl})`** → POSTs `SHAREPOINT_UPLOAD_URL`; returns `{ok,
+  server_relative_url, status, detail}`. 503 when env unset; never throws (a
+  failure ⇒ caller writes nothing to the DB).
+- **`api/_shared/property-folder-resolver.js`** — resolve `(domain, property_id)`
+  → PROPERTIES folder. **Priority:** (1) KNOWN — parent dir of the most recent
+  `property_documents.source_url` under a case-sensitive `/PROPERTIES/` subtree
+  (Slice 2a populates these; absolute vendor URLs like crexi `/properties/` are
+  rejected); (2) DERIVED — `PROPERTIES/<bucket>/<tenant>/<City, ST>` (bucket =
+  first alnum of tenant, A–Z else digit; dia tenant / gov agency), used ONLY
+  when verified to exist via the List flow; (3) UNRESOLVED → refuse. Pure helpers
+  (`bucketOf`/`deriveFolderCandidates`/`parentOfPropertiesUrl`) + an injectable-
+  deps `resolvePropertyFolder` for testing.
+- **`api/_handlers/property-doc-writeback.js` → `POST /api/property-doc-writeback`**
+  (sub-route of intake.js, `?_route=property-doc-writeback` + vercel rewrite — no
+  new api/*.js, still 12). Body `{domain, property_id, file_name, doc_type,
+  content_base64}`. Flow: resolve folder → `[LCC]` tag + de-dup → `uploadDocToFolder`
+  (502 + no DB write on failure) → insert `property_documents`
+  (`source='lcc_generated'`, `source_url`=returned path) + `field_provenance`
+  (`source='lcc_generated'`, confidence 1.0). **Effect-first / outcome-truthful:**
+  a DB-link failure AFTER a successful upload returns **207** with the uploaded
+  path so the file isn't lost. Core extracted to `performDocWriteback(args, deps)`
+  for unit testing.
+- **`[LCC]` marker single source of truth** in `folder-feed-classify.js`
+  (`LCC_TAG`/`hasLccTag`/`ensureLccTag`/`dedupeFileName`) so the re-ingest guard
+  and the tagger can't diverge.
+- **Migration** `20260718125000_lcc_phase2_slice2b_lcc_generated_priority.sql`
+  (LCC Opps, additive) — `field_source_priority` rows for `source='lcc_generated'`
+  on gov/dia `property_documents` (file_name/document_type/source_url) at
+  **priority 1** (top — our own work product; else `v_field_provenance_unranked`
+  flags drift). `record_only` mode, idempotent.
+
+### Env
+- `SHAREPOINT_UPLOAD_URL` — PA "LCC Put Artifact" upload flow (NEW; write-back is
+  a 503 no-op without it). `SHAREPOINT_LIST_URL` (existing) — used to verify a
+  derived folder exists + to list names for de-dup. `FOLDER_FEED_PROPERTIES_ROOT`
+  (optional) — derived-fallback PROPERTIES root override.
+
+### Verified (headless 2026-06-10)
+`test/property-folder-resolver.test.mjs` (bucket/derive/parent helpers; resolver
+known-path / derived-verified / refusal / missing-input) +
+`test/property-doc-writeback.test.mjs` (tag idempotency; de-dup dated+counter;
+re-ingest guard classifies `[LCC]` as skipped; `performDocWriteback` 200 / 422
+refuse-no-write / 502 upload-fail-no-DB / 207 upload-ok+DB-fail). `node --check`
+clean; `ls api/*.js | wc -l`=12; vercel.json valid; full suite 607 pass / 0 fail
+/ 6 skipped. Ships on the Railway redeploy.
+
+### After deploy
+Once `SHAREPOINT_UPLOAD_URL` is set, Scott calls `/api/property-doc-writeback`
+with a small test doc against the already-mapped DaVita Chilton property (29841):
+confirm it lands in that property's folder as `… [LCC].pdf`, links an
+`lcc_generated` property_documents row, and is NOT re-ingested by the next enrich
+tick.
+
+### Out of scope (Slice 3, later)
+The context layer — linking property + docs to email / SF notes / conversation
+notes / LLC research (the shared-context service). Separate prompt.
