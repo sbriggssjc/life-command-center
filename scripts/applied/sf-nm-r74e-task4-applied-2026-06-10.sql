@@ -1,0 +1,55 @@
+-- =============================================================================
+-- R74e Task 4 — APPLIED LIVE 2026-06-10 (Scott-approved 8-row import + 1 correction).
+-- Record of the writes actually executed via MCP (data, not a tracked migration).
+-- Idempotent guards used: dia -> notes LIKE 'sf_comp_id:<id>'; gov -> (data_source,
+-- state, sale_date, sold_price). Re-running is a no-op.
+--
+-- is_northmarq gotcha (both verticals): the BEFORE-INSERT broker-derived triggers
+-- (dia cm_dialysis_compute_is_northmarq / sales_set_is_northmarq; gov equivalent)
+-- force is_northmarq=false on insert when listing_broker/procuring_broker are null.
+-- It is set true with a follow-up UPDATE that touches ONLY is_northmarq (the
+-- triggers are UPDATE OF listing_broker/procuring_broker/sale_date, so they do not
+-- re-fire) -- same pattern the R74c/d de-contam scripts used.
+-- =============================================================================
+
+-- ---- dia (Dialysis_DB zqzrriwuavgrquhisnoa) -- 6 inserts ----
+-- New thin properties (44671 Indianapolis, 44672 SA-Knollwood, 44673 Live Oak,
+--   44674 Fairfax SC) + attaches to existing 36316 (Apopka) / 38130 (Waycross).
+-- sale_ids 14712-14717. cap_rate from comp sold_cap_rate; data_source='sf_internal_comp_r74e'.
+--   14712 DaVita+BOA Indianapolis IN      $2,450,000 2020-08-24 cap 0.0701  (create)
+--   14713 US Renal (Knollwood) San Antonio $3,150,000 2018-04-03 cap 0.0649 (create)
+--   14714 US Renal Live Oak TX            $4,469,698 2020-12-15 cap 0.0560  (create; candidates 22800/39392, confirm addr before merge)
+--   14715 DaVita Allendale (Fairfax) SC   $1,675,000 2021-02-18 cap 0.0706  (create)
+--   14716 DaVita Apopka FL                $3,729,640 2021-08-25 cap 0.0500  (attach 36316)
+--   14717 DaVita Waycross GA              $1,226,000 2021-08-06 cap 0.1062  (attach 38130)
+-- All 6: is_northmarq=true, is_northmarq_source='salesforce_comp', exclude_from_market_metrics=false.
+
+-- ---- dia correction: DaVita HQ2 Federal Way (sale 5436) ----
+-- UPDATE sales_transactions SET sold_price=93527390, cap_rate=0.0429,
+--   exclude_from_market_metrics=true, is_northmarq=true, is_northmarq_source='salesforce_comp'
+--  WHERE sale_id=5436;   -- $160K placeholder corrected; excluded (HQ office, not a clinic comp).
+
+-- ---- gov (government scknotsqkcheojiaewwh) -- 2 inserts ----
+-- New thin properties (31661 La Porte, 31662 El Dorado Hills) + sales.
+--   La Porte: State of Texas, 11807 North D St   $660,000 2020-01-16 cap 0.08  gov_type State
+--   El Dorado Hills: GSA-BLM, 5152 Hillsdale Cir  $6,750,000 2019-07-18 cap 0.057 gov_type Federal
+-- Both: is_northmarq=true, is_northmarq_source='salesforce_comp', is_northmarq_buyside=false,
+--   data_source='sf_internal_comp_r74e'. La Porte deliberately NOT attached to the existing
+--   GSA property 13449 (different building/agency). gov cap-rate triggers fired but wrote no
+--   cap_rate_history (thin properties carry no lease for gov_compute_cap_rate to anchor; the
+--   ingested sold_cap_rate is preserved on the sale).
+
+-- ---- HELD (not imported), per Scott ----
+--   Fresenius Hillsboro TX (comp $1.23M vs DB $1.59M, same property+date) -- reconcile authoritative
+--     price first; do NOT clobber curated. NOT touched.
+--   Fresenius Waco TX $1.862M -- exact-price match to a Seguin sale ~150mi away (likely same deal
+--     mis-cited). NOT imported.
+--   GSA-USDA South San Francisco $47.1M -- DB match is a 2-property portfolio sale that likely
+--     already contains it (double-count risk). NOT imported.
+
+-- ---- ACCEPTANCE (verified live 2026-06-10) ----
+--   dia: 6/6 market-eligible NM comps (is_northmarq, not excluded, live, price>0, cap set),
+--        avg cap 6.96%, 2018-2021 -> flow into NM cap-by-period.
+--   gov: 2/2 NM comps eligible.
+--   #20 dia listing (asking-cap) median: a listing metric over available_listings; sales-only
+--        inserts leave it structurally unchanged (~6.0-7.0% quartiles). No double-count.

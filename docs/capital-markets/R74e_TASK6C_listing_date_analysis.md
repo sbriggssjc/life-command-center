@@ -120,6 +120,18 @@ gov `available_listings`: **12** undated rows, **0** with a future off_market_da
 The NULL-date + future-off_market pattern effectively does **not** exist on gov.
 Phase A's clamp is still mirrored to gov to keep the shared writer in lock-step.
 
+## APPLIED 2026-06-10 (Scott-approved: Phase A + Phase B Option A)
+
+- **Phase A: APPLIED LIVE** to dia + gov (`LEAST(..., CURRENT_DATE)` clamp on
+  `lcc_record_listing_check`). Migrations also committed.
+- **Phase B Option A: 0 listing_date writes** — the eligible set is empty. The 49
+  genuinely-active undated dia rows have **no** capture date; the only undated
+  rows that carry a capture date are `is_active=false` limbo rows (dating those
+  would falsely resurrect dead listings into the active count). So there is
+  nothing to safely backfill — consistent with "no evidence ⇒ leave null." The
+  recent active count stays ~125 on real dates (at target). gov: 12 undated / 0
+  future-off_market — nothing to do.
+
 ## Net Task-6c deliverable this round
 
 - **Phase A writer fix: committed** (dia + gov migrations). Apply after review.
