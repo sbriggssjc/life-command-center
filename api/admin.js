@@ -6314,6 +6314,20 @@ async function handleGovBuyerSync(req, res) {
         result.items.push(item); continue;
       }
 
+      // R16b: Task Due Date = the buy-side cadence's next_touch_due, read from
+      // the same cadence the view resolved the primary contact from
+      // (bd_opportunity_id, most-recently-updated row carrying a contact). Falls
+      // through to today (the helper default) when absent.
+      let activityDate;
+      try {
+        const cadDue = await opsQuery('GET',
+          'touchpoint_cadence?select=next_touch_due&bd_opportunity_id=eq.' + pgFilterVal(r.opportunity_id)
+          + '&sf_contact_id=not.is.null&order=updated_at.desc.nullslast&limit=1');
+        if (cadDue.ok && Array.isArray(cadDue.data) && cadDue.data[0] && cadDue.data[0].next_touch_due) {
+          activityDate = cadDue.data[0].next_touch_due;
+        }
+      } catch (_e) { /* soft — helper defaults to today */ }
+
       // Effect FIRST: create the SF Task on the primary CONTACT (WhoId). A
       // government buyer carries NMType BLANK (never "Opportunity"). The mapped
       // PARENT account rides as WhatId for context (never a subsidiary — R5).
@@ -6323,6 +6337,7 @@ async function handleGovBuyerSync(req, res) {
         nmType: null,
         status: 'Open',
         whatId: r.sf_account_id,
+        activityDate,
         idempotencyKey: String(r.opportunity_id),
       });
       if (!sf.ok || !sf.task || !sf.task.Id) {

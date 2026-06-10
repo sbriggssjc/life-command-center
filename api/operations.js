@@ -1390,6 +1390,9 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
         nmType: null,            // buyer = blank NMType
         status: 'Open',
         whatId: sfAccountId,
+        // R16b: Task Due Date = the buy-side cadence's next_touch_due (the row
+        // we just seeded). Helper defaults to today when absent.
+        activityDate: (cad && cad.next_touch_due) ? cad.next_touch_due : undefined,
         idempotencyKey: oppId || undefined,
       });
       if (sf.ok && sf.task && sf.task.Id) { sfTaskId = sf.task.Id; sfTaskStatus = 'created'; }
@@ -1508,10 +1511,11 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
   if (sfContactId) patch.sf_contact_id = sfContactId;
   let cadenceId = null;
   let cadenceOppId = null;
+  let cadenceNextDue = null;
   if (Object.keys(patch).length) {
     const cadGet = await opsQuery('GET', 'touchpoint_cadence?entity_id=eq.' + pgFilterVal(entityId)
       + '&phase=in.(prospecting,onboarding,steady_state,maintenance)'
-      + '&order=next_touch_due.asc.nullslast&select=id,bd_opportunity_id&limit=1');
+      + '&order=next_touch_due.asc.nullslast&select=id,bd_opportunity_id,next_touch_due&limit=1');
     const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
     if (!cadRow) {
       return res.status(404).json({ error: 'no_active_cadence', detail: 'No active cadence on this entity to attach the contact to' });
@@ -1520,6 +1524,7 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
     if (!upd.ok) return res.status(502).json({ error: 'cadence_attach_failed', detail: upd.data });
     cadenceId = cadRow.id;
     cadenceOppId = cadRow.bd_opportunity_id || null;
+    cadenceNextDue = cadRow.next_touch_due || null;
   }
 
   // R16: fire the SF Task at contact-selection time (WhoId is now known). A
@@ -1542,6 +1547,9 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
         subject: (entityName || contactName || 'Prospect') + ' — Prospect',
         nmType: 'Opportunity',   // seller prospect
         status: 'Open',
+        // R16b: Task Due Date = the cadence's next_touch_due (the row we just
+        // stamped the contact onto). Helper defaults to today when absent.
+        activityDate: cadenceNextDue || undefined,
         idempotencyKey: cadenceOppId || undefined,
       });
       if (sf.ok && sf.task && sf.task.Id) { sfTaskId = sf.task.Id; sfTaskStatus = 'created'; }
