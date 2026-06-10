@@ -187,8 +187,22 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    `CLAUDECODE_PROMPT_PHASE2_Slice1c_max_stage.md`) → Slice-1 steady-state
    (`FOLDER_FEED_ROOTS`=On Market folders) → **Slice 2** (PROPERTIES read+write-back)
    → **Slice 3** (context layer). Storage OM's = one-time local backfill, not a
-   steady root. NEXT: run Slice-1c via Claude Code → I run the capped gov On Market
-   drain (max_stage=2).
+   steady root. **✅ Slice 1 FULLY LIVE + VERIFIED 2026-06-10:** Slice-1c
+   max_stage cap (PR #1138); Phase-1 Get flow fixed ("Get file content using path"
+   was fed the full server-relative path → 502 on every file; fix = File Path
+   `replace(triggerBody()?['server_relative_url'],'/sites/TeamBriggs20','')`
+   so it's site-relative); Slice-1d stale-sweep fix (PR
+   `claude/affectionate-meitner-ef5tpy`: livePaths from full listing + miss_streak>=2
+   + DEFAULT_ROOTS→On Market only; migration `20260718122000` applied). End-to-end
+   PROVEN: Champaign SSA→gov 5681, Rome GA SSA→gov 4548, DaVita Houston→dia 44708
+   (fetched→extracted→matched 0.95→promoted). Stale-fix verified live (125-file
+   truncating drain → files_stale=0; pre-fix staled 54); 54 wrongly-staled gov rows
+   recovered. Cron 114 LIVE, scoped to On Market; backlog drains on cron (~2/tick by
+   the 22s budget; historical OMs enriching tracked properties — no urgency; do NOT
+   run local backfill alongside or it double-stages). **NEXT:** Slice 2a prompt READY
+   (`CLAUDECODE_PROMPT_PHASE2_Slice2a_properties_enrich.md`) — PROPERTIES enrich-read
+   (match-existing→fill-blanks, never create, unresolved→disambiguation); then
+   Slice 2b (write-back generated docs) + Slice 3 (context layer).
    3. Correspondence
    + notes enrichment. 4. Context layer as shared MCP+REST service. 5. Standards
    spine + cross-tool syndication. 6. New verticals on the same layers.
