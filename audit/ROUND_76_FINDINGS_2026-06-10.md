@@ -420,6 +420,48 @@ cap-by-term (dia, floor 2019) · gov #13 cap-by-credit (sparsity + E2 line-style
 
 ---
 
+## Layer C — on-market snapshot + 818 recovery (INVESTIGATION + DRY-RUN, gated, NO write yet)
+
+Two deliverables, kept strictly separate (the trap: the snapshot must NOT absorb
+the sold rows).
+
+### Deliverable 1 — snapshot, not TTM-sum (the explicit ask)
+`available_market_size_combo` (dia) reads `cm_dialysis_available_market_size_q`
+`count_total`, which is a **TTM-marketed sum** (JOIN `listing_date > period_end−1yr
+AND <= period_end`) — counts everything marketed in the trailing year, not what's
+available at quarter-end. Point-in-time active (from `cm_dialysis_active_listings_m`)
+is the real snapshot. Recent quarters (TTM-sum vs snapshot): 2024-Q4 251 vs 139;
+2025-Q1 260 vs 165; 2025-Q4 140 vs 146; **2026-Q1 99 vs 126** (~125, matches Scott).
+Fix: repoint the count series to point-in-time active. Must NOT absorb the recovered
+sold rows (they're not current inventory).
+
+### Deliverable 2 — recover the sold-anchorable rows (sale-anchor, Task-6c guards)
+Population (cap-eligible 0.04–0.12, NULL listing_date, non-synthetic = 932):
+**775 sold-anchorable** (sold_date or sale_txn) + **157 active-undated**. (Scott's
+framing 818/88 is a marginally different cut; structure matches — most are
+sold-anchorable, a minority genuinely undated.) The 157 active-undated **stay NULL**
+(Task-6c correct).
+
+Anchor: `listing_date = sale_date − 180`, `off_market_date = sale_date`. 180d mirrors
+both the synthetic-row convention (175d window) and real median DOM (194d).
+
+Dry-run (read-only sim) proves the three guards:
+- **(a) off_market=sale_date** ⇒ each recovered row is active only in `[sale−180,
+  sale)`, never after its sale.
+- **(b) dedup** vs synthetic windows on the same property drops 49 → **726 applied**.
+  (0 share a `sale_transaction_id` with a synthetic row; dedup is property-window.)
+- **(c) current snapshot unchanged**: of 775, **0 are active as-of-today**
+  (all sold in the past; latest sale 2026-04-08). Historical quarters gain the
+  listings that were genuinely on-market then (2020-Q4 +30, 2025-Q3 +90), which is
+  the historical asking-cap cohort/series filling in — NOT current inventory. This
+  is the opposite of Task-6c's 125→346 (that bug left off_market NULL ⇒ forever
+  active; this caps each at its true window).
+
+**Both applies are GATED** — no data write or view change made yet. The recovery
+would PATCH 726 rows (`listing_date`, `off_market_date`, `listing_date_source=
+'sale_anchor_r76c'`, only where currently NULL); the snapshot switch is a live
+dia view/chart change. Awaiting Scott's go on the 180d anchor + the switch.
+
 ## Status of the rest of Round 76 (scoped across sessions, per the note)
 - **A1** — done.
 - **A2** — gov fix applied live + verified (mis-bin floor + median); the genuine
