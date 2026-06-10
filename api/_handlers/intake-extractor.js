@@ -1064,6 +1064,13 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
           // hints (e.g. doctype='om' from the sidebar Stage Listing flow)
           // when the AI classification step under-classified.
           seedData: ctx.seedData || null,
+          // Phase 2 Slice 2a: the folder-feed PROPERTIES channel stamps
+          // seed_data.mode='enrich' — the promoter then fills blanks on an
+          // EXISTING property + attaches the doc + writes provenance and NEVER
+          // creates a property (unresolved → match_disambiguation lane). Every
+          // other channel carries no mode, so this defaults to 'ingest' (the
+          // Slice-1 full create/update path) — byte-identical to today.
+          promoteMode: ctx.seedData?.mode === 'enrich' ? 'enrich' : 'ingest',
         }
       );
       console.log('[intake-promoter]', intakeId, JSON.stringify(promotionResult));
@@ -1190,6 +1197,12 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
             match_domain:        matchResult?.domain || null,
             promotion_ok:        promotionResult?.ok ?? null,
             promotion_listing_id: promotionResult?.listing?.listing_id || null,
+            // Phase 2 Slice 2a — enrich-channel outcome (null for ingest/other
+            // channels). enrich_ok=true means an existing property was
+            // fill-blanks enriched; false means it routed to disambiguation.
+            promotion_mode:      promotionResult?.mode || null,
+            enrich_ok:           promotionResult?.enrich_ok ?? null,
+            enrich_fields_filled: promotionResult?.fields_filled ?? null,
             // Round 76ej.h (2026-05-04): preserve the promoter's `skipped`
             // reason + any thrown error so SQL audits can see WHY a
             // promotion that should have succeeded reported ok:false. Earlier

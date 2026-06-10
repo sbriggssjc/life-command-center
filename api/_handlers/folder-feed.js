@@ -48,6 +48,22 @@ const DEFAULT_ROOTS = [
   '/sites/TeamBriggs20/Shared Documents/Dialysis Research/Comps/On Market',
 ];
 
+// Phase 2 Slice 2a — ENRICH-mode roots (the PROPERTIES tree). Files found under
+// these roots flow through the SAME extract→match machinery as ingest, but with
+// enrich-only write policy: fill blanks on an EXISTING property + attach the doc
+// + write provenance — NEVER create a property, never write listings/sales.
+//
+// SAFETY (matches Slice 1d's defense-in-depth): the enrich channel is INERT
+// unless FOLDER_FEED_ENRICH_ROOTS is set in the env — the deep ~27-bucket
+// PROPERTIES tree must not auto-enrich until Scott opts in via a capped dry-run
+// then a capped real drain on ONE property folder. This constant is only the
+// fallback value used WHEN the env var is present-but-empty, or the target of a
+// manual `?folders=…&mode=enrich` drain. With the env unset the cron walks
+// ingest roots only.
+const ENRICH_DEFAULT_ROOTS = [
+  '/sites/TeamBriggs20/Shared Documents/PROPERTIES',
+];
+
 // Site document-library prefix the REST GetFolderByServerRelativeUrl needs in
 // front of a bare folder name. Configurable for a different site/library.
 const SP_DOC_PREFIX = (process.env.SHAREPOINT_DOC_PREFIX || '/sites/TeamBriggs20/Shared Documents').replace(/\/+$/, '');
@@ -184,15 +200,40 @@ export async function handleFolderFeedTick(req, res) {
 
   const dryRun = req.method === 'GET';
 
-  // Folder root list: ?folders=a,b  >  FOLDER_FEED_ROOTS env  >  DEFAULT_ROOTS.
-  // Normalized to canonical real server-relative paths (single apostrophes); the
-  // queue + folder_feed_seen identity use this form, toServerRelative() doubles
-  // apostrophes only at request time.
-  const rootsParam = String(req.query.folders || process.env.FOLDER_FEED_ROOTS || '').trim();
-  const roots = (rootsParam ? rootsParam.split(',') : DEFAULT_ROOTS)
-    .map(realServerRelative).filter(Boolean);
+  // ---- Channel roots (Slice 2a) ----------------------------------------------
+  // Two channels in one tick, each tagged with its mode:
+  //   ingest — On Market roots: ?folders=a,b > FOLDER_FEED_ROOTS env > DEFAULT_ROOTS
+  //   enrich — PROPERTIES roots: FOLDER_FEED_ENRICH_ROOTS env (INERT when unset)
+  // An explicit ?folders= override targets ONE channel, chosen by &mode= (default
+  // 'ingest'), so a manual dry-run/drain can aim at either. Normalized to
+  // canonical real server-relative paths (single apostrophes); toServerRelative()
+  // doubles apostrophes only at request time.
+  const foldersParam = String(req.query.folders || '').trim();
+  const overrideMode = req.query.mode === 'enrich' ? 'enrich' : 'ingest';
+
+  let ingestRoots = [];
+  let enrichRoots = [];
+  if (foldersParam) {
+    const list = foldersParam.split(',').map(realServerRelative).filter(Boolean);
+    if (overrideMode === 'enrich') enrichRoots = list; else ingestRoots = list;
+  } else {
+    ingestRoots = (process.env.FOLDER_FEED_ROOTS
+      ? process.env.FOLDER_FEED_ROOTS.split(',') : DEFAULT_ROOTS)
+      .map(realServerRelative).filter(Boolean);
+    // Enrich channel: OFF unless FOLDER_FEED_ENRICH_ROOTS is present. A
+    // present-but-empty value falls back to ENRICH_DEFAULT_ROOTS (PROPERTIES).
+    const enrichEnvRaw = process.env.FOLDER_FEED_ENRICH_ROOTS;
+    if (enrichEnvRaw != null) {
+      const trimmed = enrichEnvRaw.trim();
+      enrichRoots = (trimmed ? trimmed.split(',') : ENRICH_DEFAULT_ROOTS)
+        .map(realServerRelative).filter(Boolean);
+    }
+  }
 
   const limitFolders = Math.min(20, Math.max(1, parseInt(req.query.limit_folders || '8', 10)));
+  // Enrich gets its own small per-tick folder budget so a deep PROPERTIES pass
+  // never starves the ingest channel in a shared tick (ingest is walked FIRST).
+  const enrichLimitFolders = Math.min(limitFolders, Math.max(1, parseInt(req.query.enrich_limit_folders || '4', 10)));
 
   // Per-tick stage cap (POST/drain only — GET never stages). Absent → Infinity
   // (unbounded, current behavior). 0 is allowed and means "stage nothing this
@@ -207,7 +248,9 @@ export async function handleFolderFeedTick(req, res) {
   // Subfolders discovered in a listing are enqueued to recurse; a within-tick
   // guard prevents revisiting. (Cross-tick progress is by design re-listed —
   // the folder_feed_seen (path,hash) dedup makes re-walking seen files cheap.)
-  const queue = roots.slice();
+  // Each phase (ingest, then enrich) owns its own queue so subfolders inherit
+  // the phase's mode; walkedFolders is shared so a folder reachable from both
+  // channels is walked once.
   const walkedFolders = new Set();
 
   const callerEmail = user.email || process.env.LCC_FOLDER_FEED_EMAIL || null;
@@ -222,7 +265,9 @@ export async function handleFolderFeedTick(req, res) {
   const report = {
     ok: true,
     mode: dryRun ? 'dry_run' : 'drain',
-    folders_requested: roots.length,
+    folders_requested: ingestRoots.length + enrichRoots.length,
+    ingest_roots: ingestRoots.length,
+    enrich_roots: enrichRoots.length,
     folders_walked: 0,
     files_seen: 0,
     files_new: 0,
@@ -237,19 +282,15 @@ export async function handleFolderFeedTick(req, res) {
     folders: [],
   };
 
-  while (queue.length && report.folders_walked < limitFolders) {
-    if (Date.now() - startedAt > TIME_BUDGET_MS) break;
-    const folder = queue.shift();
-    if (!folder || walkedFolders.has(folder)) continue;
-    walkedFolders.add(folder);
-    report.folders_walked++;
-
-    const folderRep = { folder, listed: 0, new: 0, staged: 0, deferred: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
+  // Walk + process one folder. `mode` ('ingest'|'enrich') tags every file staged
+  // from this folder and is carried down to subfolders via the per-phase queue.
+  const processFolder = async (folder, mode, queue) => {
+    const folderRep = { folder, mode, listed: 0, new: 0, staged: 0, deferred: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
     const listing = await listFolder(folder);
     if (!listing.ok) {
       folderRep.error_detail = listing.detail || `status ${listing.status}`;
       report.folders.push(folderRep);
-      continue;
+      return;
     }
 
     // Split files from subfolders. Subfolders are enqueued to recurse (bounded
@@ -320,7 +361,7 @@ export async function handleFolderFeedTick(req, res) {
       // ---- Non-OM: record the type, do not parse (later units) ----
       if (!cls.isOm) {
         await upsertSeen({
-          path: item.path, hash, item, status: 'skipped',
+          path: item.path, hash, item, status: 'skipped', mode,
           vertical: subjectHint.vertical, detectedType: cls.type,
           subjectHint, intakeId: null,
         });
@@ -335,7 +376,7 @@ export async function handleFolderFeedTick(req, res) {
       // types never consume the cap. ----
       if (stagedThisTick >= maxStage) {
         await upsertSeen({
-          path: item.path, hash, item, status: 'seen',
+          path: item.path, hash, item, status: 'seen', mode,
           vertical: subjectHint.vertical, detectedType: cls.type,
           subjectHint, intakeId: null,
         });
@@ -346,7 +387,7 @@ export async function handleFolderFeedTick(req, res) {
 
       // ---- OM/flyer: stage through the SAME promoter as the email channel ----
       if (!callerEmail) {
-        await upsertSeen({ path: item.path, hash, item, status: 'error',
+        await upsertSeen({ path: item.path, hash, item, status: 'error', mode,
           vertical: subjectHint.vertical, detectedType: cls.type, subjectHint, intakeId: null });
         report.files_error++;
         folderRep.error++;
@@ -372,9 +413,18 @@ export async function handleFolderFeedTick(req, res) {
             channel:         'folder_feed',
             note:            `Folder-feed: ${item.path}`,
             seed_data: {
-              tags: ['folder_feed'],
+              tags: ['folder_feed', `folder_feed_${mode}`],
               subject_hint: subjectHint,
               source_path: item.path,
+              // Slice 2a: the promoter branches on mode — 'enrich' fills blanks
+              // on an existing property + attaches the doc (never creates one);
+              // 'ingest' is the Slice-1 full create/update path.
+              mode,
+              detected_type: cls.type,
+              // The filename classifier already gated to OM/flyer PDFs, so hand
+              // the doctype to the promoter's seed-doctype inference in case the
+              // AI under-classifies the cover page (mirrors the sidebar flow).
+              doctype: cls.type,
             },
           },
           { email: callerEmail, name: callerName },
@@ -387,7 +437,7 @@ export async function handleFolderFeedTick(req, res) {
       if (stageRes?.status === 200 && stageRes.body?.ok && stageRes.body.intake_id) {
         const matched = !!stageRes.body.matched_entity_id;
         await upsertSeen({
-          path: item.path, hash, item, status: 'staged',
+          path: item.path, hash, item, status: 'staged', mode,
           vertical: subjectHint.vertical, detectedType: cls.type,
           subjectHint, intakeId: stageRes.body.intake_id,
         });
@@ -396,7 +446,7 @@ export async function handleFolderFeedTick(req, res) {
         if (!matched) report.files_unresolved++;
       } else {
         await upsertSeen({
-          path: item.path, hash, item, status: 'error',
+          path: item.path, hash, item, status: 'error', mode,
           vertical: subjectHint.vertical, detectedType: cls.type,
           subjectHint, intakeId: null,
         });
@@ -443,7 +493,29 @@ export async function handleFolderFeedTick(req, res) {
     }
 
     report.folders.push(folderRep);
-  }
+  };
+
+  // Drive one channel's BFS walk: pop folders from the phase queue, enqueue
+  // subfolders (they inherit the phase's mode), bounded by the shared
+  // limitFolders cap AND this phase's own folder budget + the time budget.
+  const walkPhase = async (rootList, mode, folderBudget) => {
+    const queue = rootList.slice();
+    let phaseWalked = 0;
+    while (queue.length && report.folders_walked < limitFolders && phaseWalked < folderBudget) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+      const folder = queue.shift();
+      if (!folder || walkedFolders.has(folder)) continue;
+      walkedFolders.add(folder);
+      report.folders_walked++;
+      phaseWalked++;
+      await processFolder(folder, mode, queue);
+    }
+  };
+
+  // Ingest FIRST (the always-on On Market channel), then enrich with whatever
+  // folder + time budget remains — an enrich pass never starves ingest.
+  await walkPhase(ingestRoots, 'ingest', limitFolders);
+  await walkPhase(enrichRoots, 'enrich', enrichLimitFolders);
 
   return res.status(200).json(report);
 }
@@ -451,7 +523,7 @@ export async function handleFolderFeedTick(req, res) {
 // Idempotent record: insert the (path, hash) row, or update it in place if a
 // prior walk already recorded this exact pair (re-tick safety). Keyed on the
 // unique (server_relative_path, content_hash) constraint.
-async function upsertSeen({ path, hash, item, status, vertical, detectedType, subjectHint, intakeId }) {
+async function upsertSeen({ path, hash, item, status, mode, vertical, detectedType, subjectHint, intakeId }) {
   const nowIso = new Date().toISOString();
   const row = {
     server_relative_path: path,
@@ -460,6 +532,7 @@ async function upsertSeen({ path, hash, item, status, vertical, detectedType, su
     modified_at:          isoOrNull(item.modified),
     intake_id:            intakeId || null,
     status,
+    mode:                 mode || 'ingest',
     vertical:             vertical || null,
     detected_type:        detectedType || null,
     subject_hint:         subjectHint || null,
