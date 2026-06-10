@@ -120,6 +120,10 @@ export default withErrorHandler(async function handler(req, res) {
       return handleParseOm(req, res);
     case 'ingest_pdf':
       return handleIngestPdf(req, res);
+    case 'folder-feed-tick': {
+      const { handleFolderFeedTick } = await import('./_handlers/folder-feed.js');
+      return handleFolderFeedTick(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -130,7 +134,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, feedback, accuracy'
       });
   }
 });

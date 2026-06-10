@@ -240,6 +240,8 @@ app.all('/api/intake-create-property', (req, res) => { req.query._route = 'creat
 app.all('/api/intake-ocr-reextract', (req, res) => { req.query._route = 'ocr-reextract'; intakeHandler(req, res); });
 app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; intakeHandler(req, res); });
 app.all('/api/intake-pdf', (req, res) => { req.query._route = 'ingest_pdf'; intakeHandler(req, res); });
+// Phase 2 folder-feed worker (cron + manual): GET=dry-run, POST=drain.
+app.all('/api/folder-feed-tick', (req, res) => { req.query._route = 'folder-feed-tick'; intakeHandler(req, res); });
 
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to
