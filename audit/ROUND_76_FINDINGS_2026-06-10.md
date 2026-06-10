@@ -64,7 +64,78 @@ tab. No DB/view change required for A1.
 
 ---
 
-## A2 — non-monotonic gov cohorts — **DIAGNOSED, view change GATED for Scott**
+## A2 — non-monotonic gov cohorts — **FIXED (gov applied live 2026-06-10); dia leg gated for Scott**
+
+### Resolution (applied live to gov `scknotsqkcheojiaewwh`, migration `20260610_cm_round76_a2_gov_cap_by_term_misbin_median.sql`)
+Two surgical fixes to the three gov cap-by-term views (`cm_gov_cap_by_term_q`,
+`_m`, `cm_gov_sold_cap_by_term_dot`), in Scott's order:
+
+**(1) Mis-bin floor (correctness).** The firm_rem ladder preferred
+`s.firm_term_years_at_sale` first, but that column is in practice the **original**
+firm term (98.6% identical to `s.firm_term_years` where both exist — 1,230/1,248),
+NOT remaining-at-sale. For mid-lease sales it overstates remaining and over-buckets
+the deal. A blanket reorder is wrong (gsa termination often points past the sold
+lease's firm end → moves 437 rows mostly UPWARD). The correct floor is
+`COALESCE(LEAST(firm_term_years_at_sale, gsa_termination_remaining,
+lease_firm_remaining), firm_term_years, lease_expiration_remaining)` — only ever
+SHORTENS an overstated proxy (**67 rows table-wide, all downward**: 6-10→<5 25,
+10+→6-10 24, 10+→<5 18). Smoking gun: Williston VT — GSA termination AND
+lease-firm-remaining both say ~1yr, proxy said 6.0 → was 6-10, correctly → <5.
+
+**(2) Mean → median (`percentile_disc`).** The cohort statistic was the mean,
+which the 2024-26 skew exaggerated (10+ mean 7.04 sat below its own median 7.28,
+so 6-10 visually overtook 10+). Inner per-cohort stat only; the ±1q/±3mo smoothing
+of the gated series stays `avg()`. `percentile_disc` (not `_cont`) keeps the column
+`numeric` — `CREATE OR REPLACE VIEW` can't change column type and `_cont` returns
+double precision; the disc-vs-interpolated difference is <few bps at these n.
+
+**n≥5 gate, 2yr-TTM window, smoothing all unchanged** (Scott's guardrail).
+
+### Firm_rem source audit (the receipts Scott asked for, gov 6-10 cohort, 2-yr → 2026-Q1)
+- Which source terms each 6-10 sale: **22/26 tier-1** (`firm_term_years_at_sale`),
+  **4/26 tier-2** (GSA termination). **Zero** from the suspect tier-4/tier-5.
+- Is tier-1 right? Mostly — but it's effectively *original* term (see above), so it
+  overstates remaining for the mid-lease minority. Table-wide it overstates by >1yr
+  in only 41/1,536 cross-checkable rows (~2.7%). In the recent 6-10 cohort exactly
+  **1/22** is clearly mis-termed (Williston). The cohort's high cap is therefore
+  **not** a sourcing artifact — ~85% are correctly-termed near-commencement deals
+  that genuinely traded high in 2024-26.
+
+### Before / after (live views, smoothed + gated)
+| view · quarter | 10+ | 6-10 | <5 | ordering |
+|---|---|---|---|---|
+| q · 2022 BEFORE | 6.24 | 6.69 | 6.96 | monotonic |
+| q · 2022 AFTER  | 6.13 | 6.77 | 7.02 | monotonic (~89bps premium intact ✓) |
+| q · 2026 BEFORE | 6.99 | **7.16** | 7.08 | CROSS (6-10 highest — the defect) |
+| q · 2026 AFTER  | 7.00 | 7.14 | 7.29 | **monotonic ✓** |
+| dot · 2026 BEFORE | 7.02 | **7.16** | 7.05 | CROSS |
+| dot · 2026 AFTER  | 7.07 | 7.12 | 7.24 | **monotonic ✓** |
+
+**The 6-10-as-top-line spike now occurs in 0 quarters after 2015-09-30** — the
+entire 2024-26 region Scott flagged is clean (the 12 remaining spikes are all
+2005-2015 deep-history thin-n, a separate Layer-B1 completeness item).
+
+### Genuinely-inverted period — documented, not smoothed away (per Scott's rule)
+2024-Q3 → 2025-Q4 the gov fan is now **parallel but inverted**: 10+ > 6-10 > <5
+(e.g. 2025-Q1 10+ 7.30 > 6-10 7.05 > <5 6.96). This is the real post-2023 gov
+repricing (long-duration federal deals trading wider on rate/agency risk) that the
+R73 migration already established survives 2yr pooling + n≥5. The fix removes the
+**artifactual** 6-10 spike; this **genuine** inversion is shown honestly.
+
+### dia leg — gated for Scott's call (not applied)
+Scott asked to apply median cross-vertically "if dia carries the same skew." Receipts:
+dia skew is **mild and bidirectional**. At 2017 the 8-12 cohort spikes (mean 7.16 vs
+median 6.90 — median *helps* the "pre-2018 conflict"), but at 2026 the dia **mean is
+already monotonic** (12+ 6.55 < 8-12 6.56 < 6-8 6.80 < ≤5 7.26) and median slightly
+disorders 6-8/≤5 (7.15 vs 7.09, ~6bps). Also the dia *line* chart sources from
+`master_m`, not the dot view, so a clean median swap there is non-trivial. And the
+gov mis-bin LEAST floor **cannot** apply to dia (dia uses `firm_term_years_at_sale`
+directly, no gsa/lease cross-check source). **Recommendation:** hold dia — median is
+neutral-to-mixed and risks moving dia *away* from the PDF. Decide at the gate.
+
+---
+
+## A2 — original diagnosis (retained for the receipts trail)
 
 ### The symptom (live, `cm_gov_cap_by_term_q`, smoothed)
 2026-Q1: 10+ = 6.99% · **6-10 = 7.16%** · <5 = 7.08% · Outside = 7.44%
@@ -133,8 +204,9 @@ gate — deferred pending Scott's pick.
 ---
 
 ## Status of the rest of Round 76 (scoped across sessions, per the note)
-- **A1** — done (this session).
-- **A2** — diagnosed (this session); view change awaits Scott's stat decision.
+- **A1** — done.
+- **A2** — gov fix applied live + verified (mis-bin floor + median); the genuine
+  2024-25 inversion documented. **dia leg held for Scott's gate decision.**
 - **A3 / B / C / D / E / F / G** — not started. A3 (eligible-DB-rows vs
   chart-rows per cohort/year) is the natural next receipt pass and shares the
-  classification SQL above.
+  classification SQL above; B1 owns the pre-2016 deep-history 6-10 spikes.
