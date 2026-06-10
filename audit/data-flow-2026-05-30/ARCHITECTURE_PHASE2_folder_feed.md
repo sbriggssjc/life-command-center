@@ -170,3 +170,75 @@ next full walk (path gone → mark stale, don't delete derived data). Same
    request now that the conventions are locked.
 4. **Local backfill pass** for the legacy tree (one-time, via the synced folder;
    no API limits) — then the PA cron maintains steady-state on new files.
+
+## 10. Channel doctrine + roots (grounded live 2026-06-10) — Scott's design
+The tree splits into **two channels with different downstream semantics**. The
+"don't move files" rule holds for BOTH — the feed is DB-only tracking and never
+writes into the team tree (§6); the difference is what the *database* does with
+each file.
+
+### 10.1 Channel A — INGEST (on-market / external)
+The **`On Market`** folders are the active intake channel: extract → match →
+promote → **propagate** (may create/update property records). Grounded roots:
+- `Gv't Leased Research/On Market` (gov) — 32 OMs + 5 leases (mostly under `OLD/`).
+- `Dialysis Research/Comps/On Market` (dia) — 58 OMs + 2 leases (under
+  `_added or updated in comps spreadsheet/`). **Asymmetry kept, not reorganized:**
+  gov's is top-level, dia's nests under `Comps/`. Point at both as-is.
+- `Storage OM's` (flat legacy dump) — **one-time local backfill source, NOT a
+  steady-state root.** Drain once via the local script, then leave it out of
+  `FOLDER_FEED_ROOTS`.
+- `Single-Tenant Market`, the other `*/Comps/On Market` — candidates for later.
+
+`FOLDER_FEED_ROOTS` (steady-state, the `*/30` cron) = the two On Market folders.
+
+### 10.2 Channel B — PROPERTIES as a bidirectionally-connected workspace
+Scott (2026-06-10): *"Ingest and enrich our database now. Also … how to structure
+our future master sheet, BOVs, OMs, client memos and other documents we will
+create and work on in these folders. We will want these places completely
+connected to our database as well as enriching the data we have on conversations
+and interactions with clients along with what's in our email, Salesforce notes,
+conversation notes, LLC, etc."*
+
+So PROPERTIES is **not** read-only — it is a living, two-way surface:
+
+**(a) Read path — ingest+enrich, dup-safe.** PROPERTIES files
+(`PROPERTIES/<bucket>/<tenant>/<city, st>/…`) extract → match. **The path is the
+match key**: bucket+tenant+city/state resolves to an *existing* property at very
+high confidence, so the default outcome is **enrich the existing record** (fill
+blanks, attach the doc, write provenance), not create. The promoter runs in an
+**enrich-bias mode** for this channel: a confident path-anchored match enriches;
+anything unresolved routes to the **`match_disambiguation` decision lane (R8)**
+for Scott's judgment — **never a silent new record.** (This is the safety
+reconciliation for "ingest now" — the path anchor makes enrichment, not
+creation, the norm.)
+
+**(b) Write-back path — our generated work lands here, fully linked.** Master
+sheets, BOVs, OMs, client memos that LCC generates for a property are written
+**into that property's own folder** (the §6 "outputs to existing deliverable
+folders" convention), tagged `[LCC]` + a `property_documents` row
+(`source='lcc_generated'`, high trust) linking the file ↔ the property record.
+Re-ingestion recognizes them as our own authoritative work, not a third-party
+doc. This makes the folder and the DB a single connected object: open the folder
+→ see the live work product; query the property → see every doc, with provenance.
+
+**(c) Context links — the enrichment that isn't in the documents.** Each property
++ its docs link into the broader **context layer** (intelligence-hub Layer 3/4):
+client conversations & interactions, email threads, Salesforce notes, conversation
+notes, LLC/ownership research. The property folder becomes the physical anchor;
+the DB holds the relationships so any tool (LCC, Copilot, Claude, ChatGPT) sees
+the same connected picture. This is where folder-feed meets the shared-context
+service — sequence it as **Slice 3** (after the PROPERTIES read/write paths in
+Slice 2).
+
+### 10.3 Sequencing
+- **Slice 1c (now):** `max_stage` cap → controlled first real drain of 1–2 OMs
+  on gov On Market. (`CLAUDECODE_PROMPT_PHASE2_Slice1c_max_stage.md`.)
+- **Slice 1 steady-state:** `FOLDER_FEED_ROOTS` = the two On Market folders; cron
+  drains Channel A.
+- **Slice 2:** PROPERTIES read path (enrich-bias promoter mode + path-anchor
+  match + disambiguation routing) **and** the write-back/`property_documents`
+  linkage for generated docs.
+- **Slice 3:** context-layer links (email / SF notes / conversation notes / LLC)
+  — the shared-context service.
+- **Backfill:** one-time local pass over `Storage OM's` + the legacy On Market
+  subfolders (`OLD/`, `_added or updated …/`) via the synced disk, no API limits.

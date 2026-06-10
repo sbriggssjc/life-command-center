@@ -174,7 +174,21 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    (a) set `SHAREPOINT_LIST_URL` env to the flow trigger URL; (b) ship Slice-1b
    worker map (`CLAUDECODE_PROMPT_PHASE2_Slice1b_list_rest.md` — finalized to the
    confirmed shape); (c) GET dry-run to confirm the cron goes live. Slice-1 build
-   prompt: `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md`.
+   prompt: `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md`. **✅ Slice-1b shipped
+   (PR #1137); SharePoint env (LIST/FETCH/SAVE + STORAGE_BACKEND=sharepoint_pa) set
+   on tranquil-delight; dry-runs verified live 2026-06-10** (gov On Market 32 OMs,
+   dia Comps/On Market 58 OMs, Storage OM's 9 OMs all classify correctly).
+   **Channel doctrine LOCKED (ARCH §10):** Channel A = INGEST = the two `On Market`
+   folders (full pipeline); Channel B = PROPERTIES = bidirectional workspace
+   (path-anchor match-existing → enrich, never silent create; + write-back of
+   LCC-generated master/BOV/OM/memo docs `[LCC]`-tagged + property_documents
+   linked; + context links to email/SF notes/LLC). Sequence: **Slice 1c**
+   (`max_stage` cap → controlled first drain of 1–2 OMs; prompt ready:
+   `CLAUDECODE_PROMPT_PHASE2_Slice1c_max_stage.md`) → Slice-1 steady-state
+   (`FOLDER_FEED_ROOTS`=On Market folders) → **Slice 2** (PROPERTIES read+write-back)
+   → **Slice 3** (context layer). Storage OM's = one-time local backfill, not a
+   steady root. NEXT: run Slice-1c via Claude Code → I run the capped gov On Market
+   drain (max_stage=2).
    3. Correspondence
    + notes enrichment. 4. Context layer as shared MCP+REST service. 5. Standards
    spine + cross-tool syndication. 6. New verticals on the same layers.
