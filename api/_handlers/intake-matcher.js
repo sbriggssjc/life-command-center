@@ -637,7 +637,9 @@ async function collectAmbiguousCandidates(address, state, primaryDomain) {
 // Raise a match_disambiguation decision (Decision Center). Idempotent on
 // subject_ref; best-effort (a failed emit never breaks the matcher). context is
 // bounded (ids + scalar facts + ≤5 candidate summaries).
-async function emitMatchDisambiguation(intakeId, address, tenant, candidates) {
+// Exported (Phase 2 Slice 2a) so the enrich-channel promoter can route an
+// unresolved PROPERTIES file to the SAME lane instead of creating a property.
+export async function emitMatchDisambiguation(intakeId, address, tenant, candidates) {
   try {
     await opsQuery('POST', 'rpc/lcc_open_decision', {
       p_decision_type: 'match_disambiguation',

@@ -37,6 +37,7 @@ import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
 
 import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
+import { emitMatchDisambiguation } from './intake-matcher.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIdentitySystem } from '../_shared/entity-link.js';
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
@@ -131,6 +132,10 @@ async function recordFieldProvenance(args) {
  */
 async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}) {
   if (!ctx?.targetTable || !ctx?.recordPk) return;
+  // Slice 2a: the enrich channel passes ctx.source='folder_feed_properties'
+  // (priority 50, parallel to om_extraction) so the provenance ledger records
+  // the right writer. Defaults to 'om_extraction' for the ingest/email paths.
+  const source = ctx.source || 'om_extraction';
   const promises = [];
   for (const [fieldName, value] of Object.entries(fieldValues)) {
     if (value === undefined || value === null) continue;
@@ -141,7 +146,7 @@ async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {
       recordPk:       ctx.recordPk,
       fieldName,
       value,
-      source:         'om_extraction',
+      source,
       sourceRunId:    ctx.intakeId,
       confidence:     perFieldConfidence[fieldName] ?? OM_EXTRACTION_DEFAULT_CONFIDENCE,
       recordedBy:     ctx.actorId,
@@ -2114,6 +2119,180 @@ async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, ma
 // MAIN ENTRY POINT
 // ============================================================================
 
+// ============================================================================
+// Phase 2 Slice 2a — ENRICH-ONLY promotion (PROPERTIES folder feed)
+// ============================================================================
+//
+// The PROPERTIES tree describes properties WE ALREADY HOLD. The enrich channel
+// is the safety reconciliation that lets us ingest those files without minting
+// duplicates from our own portfolio. Its write policy is strictly:
+//   1. Require an EXISTING confident match (the path subject_hint already
+//      backfilled the matcher's city/state/tenant before the match pass).
+//   2. On match → ENRICH: fill ONLY blank fields on the matched property
+//      (promotePropertyFinancials is fill-blanks-only), attach the doc as a
+//      property_documents row, and write field_provenance
+//      (source='folder_feed_properties').
+//   3. On no/low-confidence match → emit a match_disambiguation decision
+//      (idempotent on the intake). NEVER create a property.
+// It NEVER touches available_listings / sales_transactions / contacts — those
+// are market-event writes, and PROPERTIES files are not new market events.
+async function runEnrichOnlyPromotion(args) {
+  const { intakeId, snapshot, match, effectiveMatch, context, artifact, propertyDocResult, docType } = args;
+
+  const domain     = effectiveMatch?.domain;
+  const propertyId = effectiveMatch?.property_id;
+  const isMatched  = match?.status === 'matched'
+    && typeof match.confidence === 'number'
+    && match.confidence >= MIN_CONFIDENCE_FOR_AUTO_PROMOTE
+    && (domain === 'government' || domain === 'dialysis')
+    && propertyId != null;
+
+  if (!isMatched) {
+    // No confident existing match — route to the Decision Center instead of
+    // creating anything. emitMatchDisambiguation is idempotent on the intake
+    // (subject_ref='match_disambig:'+intakeId), so this is safe even when the
+    // matcher already opened the same decision on its ambiguous path.
+    let emitted = false;
+    try {
+      await emitMatchDisambiguation(
+        intakeId,
+        snapshot?.address || null,
+        firstOf(snapshot?.tenant_name) || null,
+        Array.isArray(match?.candidates) ? match.candidates : []
+      );
+      emitted = true;
+    } catch (err) {
+      console.warn('[intake-promoter:enrich] disambiguation emit failed (non-fatal):', err?.message);
+    }
+    return {
+      ok: false,
+      mode: 'enrich',
+      enrich_ok: false,
+      skipped: 'enrich_unresolved',
+      emitted_disambiguation: emitted,
+      match_status: match?.status || null,
+      match_confidence: match?.confidence ?? null,
+      property_document: propertyDocResult,
+    };
+  }
+
+  // ---- Confident match → fill blanks on the existing property --------------
+  const financialsResult = await promotePropertyFinancials(domain, propertyId, snapshot)
+    .catch(e => ({ ok: false, error: e?.message }));
+  const patchedFields = financialsResult?.patched_fields || [];
+
+  // ---- Attach the OM/flyer as a property_documents row ---------------------
+  const sourceUrl = context?.seedData?.source_path
+    || snapshot?.source_url || snapshot?.listing_url || null;
+  const docAttach = await attachEnrichDocument(domain, propertyId, {
+    fileName: artifact?.file_name || `enrich-${intakeId}.pdf`,
+    docType:  docType || snapshot?.document_type || 'om',
+    sourceUrl,
+  }).catch(e => ({ ok: false, error: e?.message }));
+
+  // ---- Field provenance (source='folder_feed_properties') ------------------
+  try {
+    const targetDb     = domain === 'dialysis' ? 'dia_db' : 'gov_db';
+    const tablePrefix  = domain === 'dialysis' ? 'dia' : 'gov';
+    const provCtx = {
+      targetDatabase: targetDb,
+      workspaceId:    context?.workspaceId,
+      actorId:        context?.actorId,
+      intakeId,
+      source:         'folder_feed_properties',
+    };
+
+    if (patchedFields.length && propertyId) {
+      const propValues = {};
+      for (const f of patchedFields) {
+        if (f === 'year_built')              propValues.year_built          = snapshot.year_built;
+        else if (f === 'tenant')             propValues.tenant              = firstOf(snapshot.tenant_name) || firstOf(snapshot.primary_tenant) || null;
+        else if (f === 'lot_sf')             propValues.lot_sf              = snapshot.lot_sf;
+        else if (f === 'parcel_number')      propValues.parcel_number       = snapshot.parcel_number;
+        else if (f === 'building_size')      propValues.building_size       = snapshot.building_sf;
+        else if (f === 'land_area')          propValues.land_area           = snapshot.land_acres
+                                                                            ?? (snapshot.lot_sf ? snapshot.lot_sf / 43560 : null);
+        else if (f === 'lease_commencement') propValues.lease_commencement  = snapshot.lease_commencement;
+        else if (f === 'anchor_rent')        propValues.anchor_rent         = snapshot.annual_rent;
+        else if (f === 'anchor_rent_date')   propValues.anchor_rent_date    = snapshot.lease_commencement;
+        else if (f === 'anchor_rent_source') propValues.anchor_rent_source  = 'om_confirmed';
+        else if (f === 'noi')                propValues.noi                 = snapshot.noi;
+        else if (f === 'gross_rent')         propValues.gross_rent          = snapshot.annual_rent;
+        else if (f === 'land_acres')         propValues.land_acres          = snapshot.land_acres
+                                                                            ?? (snapshot.lot_sf ? snapshot.lot_sf / 43560 : null);
+        else if (f === 'rba')                propValues.rba                 = snapshot.building_sf;
+      }
+      await recordOmFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: propertyId },
+        propValues
+      );
+    }
+
+    if (docAttach?.ok && docAttach.document_id) {
+      await recordOmFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.property_documents`, recordPk: docAttach.document_id },
+        {
+          file_name:     artifact?.file_name || null,
+          document_type: docType || 'om',
+          source_url:    sourceUrl,
+        }
+      );
+    }
+  } catch (err) {
+    console.warn('[intake-promoter:enrich] provenance recording failed (non-fatal):', err?.message);
+  }
+
+  return {
+    ok: true,
+    mode: 'enrich',
+    enrich_ok: true,
+    domain,
+    property_id: propertyId,
+    fields_filled: patchedFields.length,
+    property: financialsResult,
+    property_document: docAttach?.ok ? docAttach : (propertyDocResult || docAttach),
+  };
+}
+
+// Attach an enrich-channel doc to <domain>.property_documents. Idempotent via
+// the (property_id, file_name) unique index. source='folder_feed_enrich' is set
+// when the column exists; the call gracefully degrades (retries without it) so a
+// schema without that column never blocks the attach.
+async function attachEnrichDocument(domain, propertyId, { fileName, docType, sourceUrl }) {
+  const base = {
+    property_id:      Number(propertyId),
+    file_name:        fileName || 'enrich-document.pdf',
+    document_type:    docType || 'om',
+    source_url:       sourceUrl || null,
+    ingestion_status: 'enriched',
+  };
+  const attempts = [
+    { ...base, source: 'folder_feed_enrich' },  // preferred — record the channel
+    base,                                        // fallback — no source column
+  ];
+  let lastErr = null;
+  for (const payload of attempts) {
+    const r = await domainQuery(
+      domain, 'POST',
+      'property_documents?on_conflict=property_id,file_name',
+      payload,
+      { Prefer: 'return=representation,resolution=merge-duplicates' }
+    );
+    if (r.ok) {
+      const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+      return { ok: true, document_id: inserted?.document_id || inserted?.id || null, domain };
+    }
+    lastErr = { status: r.status, detail: r.data };
+  }
+  // Last resort: plain insert (no on_conflict) for a table without that index.
+  const plain = await domainQuery(domain, 'POST', 'property_documents', base);
+  if (plain.ok) {
+    const inserted = Array.isArray(plain.data) ? plain.data[0] : plain.data;
+    return { ok: true, document_id: inserted?.document_id || inserted?.id || null, domain };
+  }
+  return { ok: false, ...lastErr, domain };
+}
+
 export async function promoteIntakeToDomainListing(intakeId, snapshot, match, context = {}) {
   // Round 76ej.h (2026-05-04): re-ordered so artifact persistence
   // happens BEFORE the doctype guard. Previous order let an unknown
@@ -2121,6 +2300,14 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // dia.property_documents write. We now (1) resolve the effective
   // match (lcc → dia/gov bridge), (2) persist the artifact, then
   // (3) check doctype + confidence + run domain promotions.
+
+  // Phase 2 Slice 2a — write policy. 'ingest' (default) is the full
+  // create/update path below. 'enrich' (PROPERTIES folder feed) fills blanks on
+  // an EXISTING property + attaches the doc + writes provenance and NEVER
+  // creates a property / listing / sale — an unresolved match routes to the
+  // match_disambiguation lane. Threaded from the worker via seed_data.mode →
+  // runDownstreamPipeline → context.promoteMode.
+  const promoteMode = context?.promoteMode === 'enrich' ? 'enrich' : 'ingest';
 
   // ---- 1. Resolve effectiveMatch up front ------------------------------
   let effectiveMatch = match;
@@ -2368,6 +2555,17 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       normalized_document_type: docType,
       property_document: propertyDocResult,
     };
+  }
+
+  // ---- Phase 2 Slice 2a — ENRICH-ONLY channel (PROPERTIES folder feed) -------
+  // Diverges here: enrich never creates/updates listings/sales/contacts. It
+  // requires an EXISTING match (fill blanks + attach doc + provenance) or routes
+  // the file to the match_disambiguation lane. Ingest falls through unchanged.
+  if (promoteMode === 'enrich') {
+    return await runEnrichOnlyPromotion({
+      intakeId, snapshot, match, effectiveMatch, context, artifact,
+      propertyDocResult, docType,
+    });
   }
 
   // Guard: must be a matched record with enough confidence

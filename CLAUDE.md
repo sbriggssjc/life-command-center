@@ -1975,3 +1975,73 @@ suite 548 pass / 0 fail.
 Lease-abstract / master-sheet / comp-export extractors · LCC-output write-back
 to Memos/Comps with `[LCC]` tagging · the `promoted` status reconcile ·
 correspondence/notes (Phase 3) · the shared-context MCP service (Phase 4).
+
+## Phase 2 Slice 2a — PROPERTIES enrich-read channel (2026-06-10)
+
+Adds the PROPERTIES tree as a SECOND folder-feed channel with **enrich-only**
+semantics: extract → match an EXISTING property via the path anchor → enhance it
+(fill blanks + attach the doc + write provenance). It **never creates a property**
+and **never writes listings/sales/contacts**; an unresolved file routes to the
+existing `match_disambiguation` decision lane. Same extract→match machinery as the
+On Market ingest channel (Slice 1d), different write policy. DB-only tracking is
+unchanged — nothing is written into the SharePoint tree.
+
+### The two write policies, one pipeline
+- **ingest** (On Market roots) — full create/update promoter (Slice 1). May
+  create a property/listing.
+- **enrich** (PROPERTIES roots) — `runEnrichOnlyPromotion` in
+  `intake-promoter.js`: requires a confident EXISTING match; runs only
+  `promotePropertyFinancials` (fill-blanks-only), attaches the OM/flyer as a
+  `property_documents` row, and records `field_provenance`
+  (`source='folder_feed_properties'`). No listing/sale/contact/lead writes. No
+  match → `emitMatchDisambiguation` (idempotent on the intake), never a create.
+
+### Mode threading
+`folder-feed.js` walks **ingest roots FIRST, then enrich roots** with a separate
+small `enrich_limit_folders` budget (default 4) so a deep ~27-bucket PROPERTIES
+pass never starves the ingest channel in a shared tick. Each file is tagged with
+its `mode` (carried down the per-phase BFS queue), passed into
+`seed_data.mode`, and recorded on `folder_feed_seen.mode`. The mode flows
+`seed_data.mode` → `runDownstreamPipeline` → `promoteIntakeToDomainListing`'s
+`context.promoteMode` (default `'ingest'` — every other channel is unchanged /
+byte-identical). The path `subject_hint` already backfills the matcher's
+city/state/tenant before the match pass (Slice 1), so an OM whose cover page
+omitted the city still resolves.
+
+### folder_feed_seen status for enrich
+A resolved+enriched file AND an unresolved-but-disambiguated file BOTH record
+`status='staged'` (the disambiguation decision IS the handled outcome) — never
+`error`. The intake carries `extraction_result.enrich_ok` + `enrich_fields_filled`.
+
+### SAFETY / rollout (matches Slice 1)
+- **Feature-flagged**: with `FOLDER_FEED_ENRICH_ROOTS` **unset** the enrich
+  channel is INERT (the cron walks ingest roots only — `enrich_roots=0`). Set the
+  env (present-but-empty falls back to the PROPERTIES default) to engage it.
+  Manual capped drains target either channel via `?folders=<dir>&mode=enrich`
+  (`?folders=` splits on comma, so target the comma-free tenant folder and let
+  BFS recurse into `City, ST`).
+- The cron stays ingest-only until Scott + Claude/Cowork run a capped dry-run
+  then a capped real drain on ONE PROPERTIES folder and confirm it ENRICHED an
+  existing record (no new property, fill-blanks only, provenance written) — same
+  first-drain discipline as On Market. Only then add the enrich roots to the env.
+
+### Migrations (LCC Opps, additive)
+- `20260718123000_lcc_phase2_folder_feed_mode.sql` — `folder_feed_seen.mode`
+  (`ingest`|`enrich`, default `ingest`).
+- `20260718124000_lcc_phase2_folder_feed_properties_priority.sql` —
+  `field_source_priority` rows for `source='folder_feed_properties'` (priority 50,
+  parallel to `om_extraction`) on the gov/dia properties + property_documents
+  fields the enrich path writes (else `v_field_provenance_unranked` flags drift).
+
+### Env
+- `FOLDER_FEED_ENRICH_ROOTS` — comma-separated PROPERTIES roots (full
+  server-relative, single apostrophes). Unset ⇒ enrich inert. Default value when
+  present-but-empty: `/sites/TeamBriggs20/Shared Documents/PROPERTIES`.
+
+### Verified (headless 2026-06-10)
+`test/folder-feed-enrich-mode.test.mjs` (promoter: enrich+match fills blanks +
+attaches doc + provenance, no listing/sale/property-create; enrich+no-match emits
+disambiguation, creates nothing; ingest writes a listing) + `test/folder-feed-
+enrich-channel.test.mjs` (mode tagging on `folder_feed_seen`; enrich inert when
+the env is unset). `node --check` clean; `ls api/*.js | wc -l`=12; full suite 576
+pass / 0 fail / 6 skipped.
