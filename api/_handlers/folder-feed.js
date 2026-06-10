@@ -33,15 +33,63 @@ import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
 import { classifyFile, parseSubjectHintFromPath } from '../_shared/folder-feed-classify.js';
 
 // Default roots to walk when neither ?folders= nor FOLDER_FEED_ROOTS is set.
-// Server-relative-ish folder paths the PA List flow understands. The flat OM
-// store + the per-vertical research roots are the cheapest high-signal start;
-// PROPERTIES/* buckets can be added to FOLDER_FEED_ROOTS as the flow's recursion
-// is dialed in.
+// Full SERVER-RELATIVE paths in the canonical identity form (SINGLE apostrophes —
+// toServerRelative() doubles them for the OData literal at request time). The
+// PROPERTIES tree + the per-vertical research roots + the flat OM store; the
+// walk recurses subfolders, so the bucket folders under PROPERTIES are reached
+// automatically.
 const DEFAULT_ROOTS = [
-  "Storage OM's",
-  "Gv't Leased Research",
-  'Dialysis Research',
+  '/sites/TeamBriggs20/Shared Documents/PROPERTIES',
+  "/sites/TeamBriggs20/Shared Documents/Storage OM's",
+  "/sites/TeamBriggs20/Shared Documents/Gv't Leased Research",
+  '/sites/TeamBriggs20/Shared Documents/Dialysis Research',
 ];
+
+// Site document-library prefix the REST GetFolderByServerRelativeUrl needs in
+// front of a bare folder name. Configurable for a different site/library.
+const SP_DOC_PREFIX = (process.env.SHAREPOINT_DOC_PREFIX || '/sites/TeamBriggs20/Shared Documents').replace(/\/+$/, '');
+
+// Canonical real server-relative path (SINGLE apostrophes) — the queue +
+// folder_feed_seen identity form, and the prefix used for the stale sweep. Bare
+// names get the site/library prefix; an already-server-relative path is left
+// as-is. Pre-doubled apostrophes are collapsed so identity stays single
+// regardless of how a root was configured.
+function realServerRelative(root) {
+  let p = String(root || '').replace(/\\/g, '/').trim();
+  if (!p) return '';
+  p = p.replace(/''/g, "'");
+  if (!p.startsWith('/')) p = `${SP_DOC_PREFIX}/${p.replace(/^\/+/, '')}`;
+  return p.replace(/\/+$/, '');
+}
+
+// OData string-literal form for the PA flow body: full server-relative with
+// apostrophes DOUBLED. The flow inlines folder_path into
+// GetFolderByServerRelativeUrl('<folder_path>'), so a single apostrophe would
+// break the literal — `Storage OM's` → `Storage OM''s`. Idempotent.
+export function toServerRelative(root) {
+  return realServerRelative(root).replace(/'/g, "''");
+}
+
+// Strip the site/library prefix so the path→subject_hint anchor logic
+// (PROPERTIES/<bucket>/<brand>[/<City, ST>]) is unchanged on full
+// server-relative paths.
+function stripSitePrefix(p) {
+  const s = String(p || '').replace(/\\/g, '/');
+  if (s.toLowerCase().startsWith(SP_DOC_PREFIX.toLowerCase())) {
+    return s.slice(SP_DOC_PREFIX.length).replace(/^\/+/, '');
+  }
+  return s.replace(/^\/+/, '');
+}
+
+// Coerce a SharePoint size field to a finite int, else null. The REST `Length`
+// arrives as a STRING ("208384"); folders carry no Length.
+function parseSize(it) {
+  if (it.Length != null) {
+    const n = parseInt(it.Length, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return it.size ?? it.size_bytes ?? it.length ?? null;
+}
 
 // Change-signature hash: with no bytes in hand the cloud worker keys idempotency
 // on the SharePoint etag (changes when the file content changes), falling back
@@ -53,8 +101,32 @@ function changeHash(item) {
   return createHash('sha1').update(`${item.path}|${sig}`).digest('hex');
 }
 
-// POST the PA "SharePoint → List folder" flow. Tolerant of a couple of response
-// shapes; returns { ok, items:[{path,name,size,modified,etag}], status, detail }.
+// Parse the PA "Send an HTTP request to SharePoint" REST response (verified live
+// 2026-06-10). The OData *verbose* envelope nests the arrays under
+// sp.d.Files.results / sp.d.Folders.results; stay tolerant of a future
+// nometadata switch (sp.Files / sp.Folders) and the legacy flat shapes
+// (json.items / json.value). REST fields are PascalCase; lowercase fallbacks
+// keep the mapper tolerant. Folder rows are tagged is_folder:true so the walk
+// enqueues them to recurse and the classifier never sees them as files.
+export function parseListFolderResponse(json) {
+  const sp = json?.sp?.d ?? json?.sp ?? json ?? {};
+  const rawFiles   = sp.Files?.results   ?? sp.Files   ?? json?.items ?? json?.value ?? [];
+  const rawFolders = sp.Folders?.results ?? sp.Folders ?? [];
+  const map = (it, isFolder) => ({
+    path:      it.ServerRelativeUrl || it.serverRelativeUrl || it.server_relative_url || it.path || it.full_path || null,
+    name:      it.Name || it.name || it.file_name || it.fileName || null,
+    size:      parseSize(it),
+    modified:  it.TimeLastModified || it.modified || it.modified_at || it.last_modified || it.lastModified || null,
+    etag:      it.ETag || it.UniqueId || it.etag || it.e_tag || it.eTag || null,
+    is_folder: !!isFolder,
+  });
+  const files   = (Array.isArray(rawFiles)   ? rawFiles   : []).map(it => map(it, false));
+  const folders = (Array.isArray(rawFolders) ? rawFolders : []).map(it => map(it, true));
+  return [...files, ...folders].filter(it => it.path);
+}
+
+// POST the PA "Send an HTTP request to SharePoint" (REST) list flow for one
+// folder. Returns { ok, items:[{path,name,size,modified,etag,is_folder}], status, detail }.
 async function listFolder(folderPath) {
   const listUrl = process.env.SHAREPOINT_LIST_URL;
   if (!listUrl) return { ok: false, status: 0, detail: 'SHAREPOINT_LIST_URL unset', items: [] };
@@ -62,7 +134,7 @@ async function listFolder(folderPath) {
     const res = await fetchWithTimeout(listUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder_path: folderPath }),
+      body: JSON.stringify({ folder_path: toServerRelative(folderPath) }),
     }, 25000);
     const text = await res.text().catch(() => '');
     let json = null;
@@ -70,16 +142,7 @@ async function listFolder(folderPath) {
     if (!res.ok || !json?.ok) {
       return { ok: false, status: res.status, detail: String(json?.error || text || 'pa_list_failed').slice(0, 200), items: [] };
     }
-    const rawItems = Array.isArray(json.items) ? json.items
-      : Array.isArray(json.value) ? json.value : [];
-    const items = rawItems.map(it => ({
-      path:     it.path || it.server_relative_url || it.serverRelativeUrl || it.full_path || null,
-      name:     it.name || it.file_name || it.fileName || null,
-      size:     it.size ?? it.size_bytes ?? it.length ?? null,
-      modified: it.modified || it.modified_at || it.last_modified || it.lastModified || null,
-      etag:     it.etag || it.e_tag || it.eTag || null,
-    })).filter(it => it.path);
-    return { ok: true, status: res.status, items };
+    return { ok: true, status: res.status, items: parseListFolderResponse(json) };
   } catch (err) {
     return { ok: false, status: 0, detail: err?.message?.slice(0, 200) || 'pa_list_error', items: [] };
   }
@@ -119,12 +182,20 @@ export async function handleFolderFeedTick(req, res) {
   const dryRun = req.method === 'GET';
 
   // Folder root list: ?folders=a,b  >  FOLDER_FEED_ROOTS env  >  DEFAULT_ROOTS.
+  // Normalized to canonical real server-relative paths (single apostrophes); the
+  // queue + folder_feed_seen identity use this form, toServerRelative() doubles
+  // apostrophes only at request time.
   const rootsParam = String(req.query.folders || process.env.FOLDER_FEED_ROOTS || '').trim();
   const roots = (rootsParam ? rootsParam.split(',') : DEFAULT_ROOTS)
-    .map(s => s.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean);
+    .map(realServerRelative).filter(Boolean);
 
   const limitFolders = Math.min(20, Math.max(1, parseInt(req.query.limit_folders || '8', 10)));
-  const foldersToWalk = roots.slice(0, limitFolders);
+  // Walk breadth-first from the roots, bounded by limitFolders per tick.
+  // Subfolders discovered in a listing are enqueued to recurse; a within-tick
+  // guard prevents revisiting. (Cross-tick progress is by design re-listed —
+  // the folder_feed_seen (path,hash) dedup makes re-walking seen files cheap.)
+  const queue = roots.slice();
+  const walkedFolders = new Set();
 
   const callerEmail = user.email || process.env.LCC_FOLDER_FEED_EMAIL || null;
   const callerName  = user.display_name || 'Folder Feed';
@@ -148,23 +219,38 @@ export async function handleFolderFeedTick(req, res) {
     folders: [],
   };
 
-  for (const folder of foldersToWalk) {
+  while (queue.length && report.folders_walked < limitFolders) {
     if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+    const folder = queue.shift();
+    if (!folder || walkedFolders.has(folder)) continue;
+    walkedFolders.add(folder);
     report.folders_walked++;
 
-    const folderRep = { folder, listed: 0, new: 0, staged: 0, skipped: 0, stale: 0, error: 0 };
+    const folderRep = { folder, listed: 0, new: 0, staged: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
     const listing = await listFolder(folder);
     if (!listing.ok) {
       folderRep.error_detail = listing.detail || `status ${listing.status}`;
       report.folders.push(folderRep);
       continue;
     }
-    folderRep.listed = listing.items.length;
-    report.files_seen += listing.items.length;
+
+    // Split files from subfolders. Subfolders are enqueued to recurse (bounded
+    // by limitFolders across the tick); the classifier only ever sees files.
+    const fileItems = listing.items.filter(it => !it.is_folder);
+    for (const sub of listing.items) {
+      if (!sub.is_folder) continue;
+      if (!walkedFolders.has(sub.path) && !queue.includes(sub.path)) {
+        queue.push(sub.path);
+        folderRep.subfolders++;
+      }
+    }
+
+    folderRep.listed = fileItems.length;
+    report.files_seen += fileItems.length;
 
     const livePaths = new Set();
 
-    for (const item of listing.items) {
+    for (const item of fileItems) {
       if (Date.now() - startedAt > TIME_BUDGET_MS) break;
       livePaths.add(item.path);
 
@@ -191,7 +277,7 @@ export async function handleFolderFeedTick(req, res) {
       report.files_new++;
       folderRep.new++;
 
-      const subjectHint = parseSubjectHintFromPath(item.path);
+      const subjectHint = parseSubjectHintFromPath(stripSitePrefix(item.path));
 
       if (dryRun) {
         // Report-only: what WOULD happen, no writes to LCC or SharePoint.
@@ -277,6 +363,11 @@ export async function handleFolderFeedTick(req, res) {
         `&status=in.(seen,staged,promoted,skipped)&select=id,server_relative_path`);
       if (existing.ok && Array.isArray(existing.data)) {
         for (const row of existing.data) {
+          // Only sweep DIRECT children of this folder — a descendant lives under
+          // its own subfolder and is swept when that folder is walked, so a
+          // recursive listing here must not mass-stale the whole subtree.
+          const rest = row.server_relative_path.slice(prefix.length);
+          if (rest.includes('/')) continue;
           if (!livePaths.has(row.server_relative_path)) {
             await opsQuery('PATCH', `folder_feed_seen?id=eq.${pgFilterVal(row.id)}`,
               { status: 'stale', last_seen_at: new Date().toISOString() }).catch(() => {});
