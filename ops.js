@@ -1452,6 +1452,7 @@ async function renderReviewConsolePage() {
     { n: buyerN, label: 'Buyer parents & SF mapping', sub: 'Confirm sponsors · map to Salesforce parent', open: 'renderBuyerParentLane()', tone: 'yellow' },
     { n: dc['intake_disposition'] || 0, label: 'Staged intake — needs review', sub: 'Create property · re-extract · dismiss', open: "renderFederatedLane('intake_disposition')", tone: 'yellow' },
     { n: dc['property_merge'] || 0, label: 'Property merges & duplicates', sub: 'Same property? merge or keep distinct', open: "renderFederatedLane('property_merge')", tone: 'yellow' },
+    { n: dc['merge_duplicate_entities'] || 0, label: 'Duplicate entities — merge', sub: 'Same entity? merge or keep separate', open: "renderFederatedLane('merge_duplicate_entities')", tone: 'yellow' },
     { n: dc['provenance_conflict'] || 0, label: 'Data conflicts & provenance', sub: 'Which value is right?', open: "renderFederatedLane('provenance_conflict')", tone: 'yellow' },
     { n: dc['pending_update'] || 0, label: 'Pending updates (Gov)', sub: 'Apply or reject proposed updates', open: "renderFederatedLane('pending_update')", tone: '' },
     { n: dc['cms_link_suspect'] || 0, label: 'CMS ↔ property link suspects', sub: 'Right clinic for this property?', open: "renderFederatedLane('cms_link_suspect')", tone: '' },
@@ -1902,6 +1903,8 @@ const _DC_FED_META = {
     intro: 'Clinic↔property links the un-truncation pass flagged (state mismatch worst-first). Confirm the link is correct, break it (via the cms-match unlink), or research.' },
   implausible_value: { title: 'Implausible values',
     intro: 'Sales over the per-domain magnitude soft-ceiling, retained for review. Confirm the price as real, correct it, void it (queued), or research.' },
+  merge_duplicate_entities: { title: 'Duplicate entities — merge',
+    intro: 'High-confidence duplicate-entity groups (same normalized name). Merge collapses the duplicates into the surviving entity (carries portfolio + identities + relationships); keep separate if they are genuinely distinct, or research.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -1982,6 +1985,14 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_as_is\')">Confirm as-is</button>'
       + '<button class="q-action" onclick="dcImplausibleCorrect(' + i + ')">Correct value…</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'void\')">Void</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'merge_duplicate_entities') {
+    const n = c.member_count || ((c.loser_ids || []).length + 1);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.winner_name || c.norm_name || 'Duplicate group') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + n + ' duplicates</span></div></div>'
+      + '<div class="q-item-meta">' + ((c.loser_ids || []).length) + ' duplicate(s) collapse into this survivor (portfolio + identities + relationships carry over).</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'merge\')">Merge duplicates →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_separate\')">Keep separate</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
