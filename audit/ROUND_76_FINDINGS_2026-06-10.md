@@ -203,6 +203,53 @@ gate — deferred pending Scott's pick.
 
 ---
 
+### dia mis-bin check — CLEAN, no fix (Scott's conditional)
+dia has no gsa ladder, but it carries `firm_term_expiration_at_sale` (firm-term
+END date at sale) as a cross-check. Of 2,021 dia sales with both,
+**97.4% (1,969)** have `firm_term_years_at_sale` ≈ (expiration − sale_date),
+avg gap −0.01yr; only 22 (1.1%) overstate remaining by >1yr. So dia's term
+column is genuinely **remaining-at-sale, not original** — dia does NOT have the
+gov mis-bin error. **No dia mis-bin fix applied** (per Scott: do it iff real).
+
+---
+
+## A3 — propagation: eligible-DB-rows vs chart-rows (dia cap-by-term lead)
+
+### dia cap-by-term "doesn't match PDF / conflicts prior to 2018" — NOT a propagation gap
+The dia LINE chart (`cap_rate_by_lease_term`) sources from
+`cm_dialysis_cap_by_term_m`, a thin rename over the master table
+`cm_dialysis_market_quarterly_master_m`. Compared the master_m cohort columns
+against the sales-computed `cm_dialysis_sold_cap_by_term_dot` (the DB universe)
+per period 2001-2026: **byte-identical, 0.00 bps difference, matching month
+coverage every year.** The R66x unification holds — the chart pulls master_m
+exactly. **There is no propagation/filter gap dia-side.**
+
+### The real cause = genuine pre-2014 cohort sparsity (Layer B1 at cohort grain)
+Eligible dia sales per cohort per year (cap_rate_final in band + term present):
+- **≤5 cohort: literally 0 deals every year 2005-2013**; first appears 2014.
+- **6-8 cohort: 0-2/yr before 2014.**
+- **8-12: thin** (often <12/yr ⇒ <3 in many 1yr-TTM windows ⇒ intermittently
+  gated ⇒ the spiking "conflicting" line; e.g. the 2017 8-12 = 7.16% spike is
+  a thin-n artifact off ~20 deals).
+- **~40% of pre-2018 dia sales have NULL cap** (2017: 75 cap-null vs 114 usable),
+  shrinking effective n further.
+- Plus a hard hole: **2002-2004 = zero data** in both sources.
+
+The 4-cohort dia fan first becomes continuous at **2014-06-30** (since then
+142/147 months carry all 4 cohorts; pre-2014 = 156 partial months where ≤5 / 6-8
+don't exist). So the pre-2014 tangle is structural sparsity, not a bug.
+
+### Recommendation (Layer-D / B1 gate decision for Scott)
+The dia cap-by-term x-axis currently reaches back to 2001/2005 and shows the
+structurally-incomplete pre-2014 fan (tangled/partial lines = the "conflict").
+Per Scott's standing rule ("extend only where consistent; gate + annotate
+genuine thinning"), the fix is to **floor the dia cap-by-term x-axis to ~2014-06**
+(where all 4 cohorts are continuous) and/or annotate the thin pre-2014 region —
+NOT a data/propagation change. Decide at the gate. (The same eligible-rows check
+still owes the gov cap-by-term + cap-by-credit cohorts — A3 continues.)
+
+---
+
 ## Status of the rest of Round 76 (scoped across sessions, per the note)
 - **A1** — done.
 - **A2** — gov fix applied live + verified (mis-bin floor + median); the genuine
