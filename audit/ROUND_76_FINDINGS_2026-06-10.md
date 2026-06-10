@@ -266,14 +266,38 @@ is on **mean** (Scott's confirmed call — median rejected). So:
 - **The residual 2015-2018 crossing is modest-n noise on the mean**, not a bug,
   and only fully clears ~2019.
 
-### Floor decision — gate for Scott (no code changed; my earlier 2014 floor was reverted)
-Where to set the dia cohort floor is a crop-vs-annotate judgment:
-- keep **2015** + annotate "early-period cohort lines are noisier (modest n)";
-- bump to **~2017** (drops the worst 2015 partial, keeps most history); or
-- bump to **~2019** where ordering fully stabilizes (heavy crop — loses 2015-18).
-Recommendation: **2017 + annotate** — drops the thinnest tail without the heavy
-2019 crop, and the annotation is honest about residual modest-n wobble. Decide at
-the gate. (gov cap-by-term + cap-by-credit + sentiment A3 classification still owed.)
+### RESOLVED — floor dia cap-by-term at 2019 + annotate (Scott 2026-06-10, APPLIED)
+Scott's call: floor at the earliest quarter the series stays consistent (doctrine:
+"floor where consistent; gate + annotate genuine thinning"). For dia that's **2019**
+(2015-2018 cross on small-sample noise; ordering only settles 2019). 2014 ruled out
+(thinner). No added smoothing (Scott's gov-#20 over-smoothing objection).
+
+**Pre-apply check (Scott asked): is the master/PDF dia cap-by-term richer than ours?**
+NO — the **master Excel carries no cap-by-term tab at all** (`audit/cm-style-audit/
+dia-diff.md`: "Data_Sold_Cap_by_Term / Data_Ask_Cap_by_Term — master does not
+include this tab"). The chart is LCC-built from `master_m`, which == the
+sales-computed dot view byte-for-byte (0.00 bps, proven above). So there are **no
+curated comps we're not pulling** → this is a floor decision, NOT a propagation
+finding. (The deck p.22 PDF itself isn't in the repo to read a start year, but the
+data evidence is conclusive; dia firm-term IS well-captured — 97% — unlike gov,
+whose cap-by-term thinness is a real firm-term coverage gap per
+`CAPITAL_MARKETS_CAP_BY_TERM_RECONCILIATION_2026-05-29.md`.)
+
+**Applied (Railway redeploy ships it; DB unaffected):**
+- `cm-native-chart-injector.js` — replaced the three cohort templates' static
+  `2015` floor with `capByTermFloor(rows)`: returns **2019 for dia** (detected by
+  its exclusive `cap_8to12`/`cap_5orless` cohort columns), **2015 for gov**
+  (unchanged — gov's own A3 classification is pending). The floor crops only the
+  charted x-axis; the Data_* tab keeps full history.
+- `cm-excel-export.js` — appended the annotation to the `cap_rate_by_lease_term`
+  description: "Dialysis starts 2019: before then the ≤5- and 8-12-year cohorts
+  carry too few comps per TTM window to hold a stable ordered premium… Gov starts
+  2015."
+- Verified: `node --check` clean (both files); chart suite 183/0; full suite 555/0;
+  12 functions. capByTermFloor → 2019 on dia rows / 2015 on gov rows.
+
+(gov cap-by-term + #13 cap-by-credit + gov sentiment-10+ A3 classification still
+owed — next A3 targets.)
 
 ---
 
