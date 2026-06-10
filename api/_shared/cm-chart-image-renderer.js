@@ -1547,29 +1547,37 @@ function buildChartConfig(chart, brand) {
       // federal data into the top edge. Real gov federal cap data ranges
       // 5%–26% (with outliers); typical band is 5.5%–9.5%. Use the
       // standard CAP_RATE_RANGE (5%–10%) for headroom without letting
-      // outliers dominate the visual. State + municipal still missing
-      // (deltas-doc item #17 — gov feed has 0 state/muni rows with
-      // populated cap rate; user feedback: "missing the state and
-      // municipal data" persists until we get that data feed).
+      // outliers dominate the visual.
+      // R76 E2 (2026-06-10) — state + municipal ARE present now (303 / 81
+      // eligible sales → 76 / 29 charted quarters); the stale "0 state" note
+      // is retired. They are just SPARSE (muni ~<1 sale/quarter), so the
+      // R73 markers-on-every-point treatment made them read as a different
+      // SERIES TYPE than federal's clean line (Scott E2: "line type different
+      // for municipal and state — fix"). All three now share ONE line style
+      // (solid, borderWidth 2.5, tension 0.3); a scriptable pointRadius shows
+      // a marker ONLY at a genuinely isolated point (value present, both
+      // neighbors null) so a lone reading still appears — but contiguous runs
+      // render identically to federal. spanGaps:false keeps real gaps broken
+      // (never fabricate a connection across a multi-year hole).
+      const isoPointRadius = function (ctx) {
+        var d = ctx.dataset.data, i = ctx.dataIndex;
+        var cur = d[i], prev = i > 0 ? d[i - 1] : null, next = i < d.length - 1 ? d[i + 1] : null;
+        return (cur != null && prev == null && next == null) ? 3.5 : 0;
+      };
       return {
         type: 'line',
         data: {
           labels,
           datasets: [
-            // R73 B13 — federal is dense (101 quarters) -> plain line. State (91q)
-            // and municipal (46q) are sparse with isolated non-null quarters
-            // between gaps that a markerless line can't draw -> give them markers
-            // so single points show. Markers only; gaps stay broken (no spanGaps)
-            // so we never fabricate a connection across a multi-year hole.
             { label: 'Federal',   data: rows.map(r => r.federal_cap),
-              borderColor: PDF_COLORS.cap_short,    backgroundColor: 'transparent',
-              tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
+              borderColor: PDF_COLORS.cap_short,    backgroundColor: PDF_COLORS.cap_short,
+              tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
             { label: 'State',     data: rows.map(r => r.state_cap),
               borderColor: PDF_COLORS.cap_mid,      backgroundColor: PDF_COLORS.cap_mid,
-              tension: 0.3, pointRadius: 3, pointStyle: 'circle', borderWidth: 2 },
+              tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
               borderColor: PDF_COLORS.cap_mid_long, backgroundColor: PDF_COLORS.cap_mid_long,
-              tension: 0.3, pointRadius: 3, pointStyle: 'circle', borderWidth: 2 },
+              tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),

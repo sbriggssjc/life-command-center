@@ -296,8 +296,51 @@ whose cap-by-term thinness is a real firm-term coverage gap per
 - Verified: `node --check` clean (both files); chart suite 183/0; full suite 555/0;
   12 functions. capByTermFloor → 2019 on dia rows / 2015 on gov rows.
 
-(gov cap-by-term + #13 cap-by-credit + gov sentiment-10+ A3 classification still
-owed — next A3 targets.)
+(gov cap-by-term + gov sentiment-10+ A3 classification still owed — next A3 targets.)
+
+---
+
+## A3 — gov #13 Cap-by-Credit (two-part: classifier + design E2), APPLIED
+
+### Part 1 — classifier: genuine sparsity, NO propagation gap
+Source view `cm_gov_cap_by_credit_q` reads the master mat's `federal_cap`/
+`state_cap`/`municipal_cap`. Eligible-DB-rows vs charted-quarters:
+
+| cohort | eligible sales (cap+tier) | charted quarters (of 101) |
+|---|---|---|
+| Federal | 3,414 | 101 |
+| State | 303 | 76 |
+| Municipal | 81 | 29 |
+
+State (303) and municipal (81) **are** reaching the chart (76 / 29 quarters) —
+consistent with the eligible counts under a TTM n-gate. In 2014+ there are **0
+isolated single points** (muni gaps are contiguous runs). So Scott's "missing
+data" is genuine **sparsity** (muni ≈ <1 sale/quarter), not a filter dropping
+eligible rows. **The stale Round-21 / R73 note ("0 state, ~5 municipal") is
+simply wrong now** — retired in both the chart description and the renderer/
+injector comments. No data fix; this is the floor/marker class.
+
+### Part 2 — design E2: consistent cohort line style (APPLIED)
+The defect: state/municipal rendered with **markers on every point + a thinner
+line (2 vs 2.5)** while federal was a clean line — so they read as a different
+SERIES TYPE (Scott E2: "line type different for municipal and state — fix").
+- **PNG image** (`cm-chart-image-renderer.js`) — all three now share one line
+  style (solid, `borderWidth 2.5`, `tension 0.3`); a scriptable `pointRadius`
+  (`isoPointRadius`) shows a marker **only at a genuinely isolated point** (value
+  present, both neighbors null), so a lone reading still appears but contiguous
+  runs render identically to federal. `spanGaps:false` keeps real gaps broken.
+  (QuickChart's JS-literal serializer preserves the function — confirmed.)
+- **Native Excel chart** (`cm-native-chart-injector.js`) — Excel can't do
+  per-point conditional markers, so all three render as one uniform plain line
+  (no per-series markers) = literally "the same line style as federal." Isolated
+  points are surfaced in the PNG; the editable chart prioritizes a clean trend.
+- **Description** (`cm-excel-export.js`) — replaced the stale "0 state/~5 muni"
+  note with the honest sparsity framing (303/81 eligible; ~76/29 quarters; same
+  line style across cohorts).
+- Test `R73 B13 …markers` → rewritten to `R76 E2 …uniform plain-line style`.
+- Verified: `node --check` clean (3 files); full suite 555/0; 12 functions.
+
+(gov sentiment-10+ + dia Ask-Cap-by-Term A3 classification still owed.)
 
 ---
 

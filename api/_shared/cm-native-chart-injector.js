@@ -3803,16 +3803,19 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     case 'cap_rate_by_credit': {
       // 3-line: Federal navy bold / State sky / Municipal sage.
-      // R73 B13 — the feed IS populated (verified live 2026-06-08:
-      // cm_gov_cap_by_credit_q has federal in 101 quarters, state 91, muni
-      // 46). gov sales carry government_type (10,805) + agency (12,202); the
-      // R66e classifier folds local/state/federal + agency-regex fallbacks.
-      // The "missing data for a smooth line" symptom is sparseness, not an
-      // empty feed: state/muni have isolated non-null quarters between gaps
-      // that a markerless line can't draw. Fix = small markers on the sparse
-      // state + municipal cohorts so single points show (federal is dense ->
-      // stays a plain line). Markers only; NO spanGaps (don't connect across
-      // multi-year gaps -> honest). Mirrors the renderer.
+      // R73 B13 / R76 E2 — the feed IS populated (verified live 2026-06-10:
+      // cm_gov_cap_by_credit_q has federal in 101 quarters, state 76, muni 29).
+      // state/muni are SPARSE, not empty. R73 put per-point markers on state +
+      // muni only — but that makes them read as a different SERIES TYPE than
+      // federal's clean line (Scott R76 E2: "line type different for municipal
+      // and state — fix … same line style as federal, not a different one").
+      // Excel native charts can't do the PNG's per-point conditional markers
+      // (Chart.js scriptable pointRadius), so here all three render in ONE
+      // uniform plain-line style (no per-series markers) — literally the same
+      // line style as federal. Isolated single points are surfaced in the PNG
+      // image (cm-chart-image-renderer.js isoPointRadius); the editable Excel
+      // chart prioritizes a clean, consistent trend. NO spanGaps (Excel breaks
+      // real gaps by default -> honest, never connects across a multi-year hole).
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -3827,9 +3830,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yAxisRange: CAP_RATE_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
-            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy   },
-            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
+            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy     },
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky      },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582' },  // sage
           ],
           anchor: standardAnchor,
         },
