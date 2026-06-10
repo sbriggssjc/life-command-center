@@ -109,18 +109,23 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
 5. **In-app work (Scott):** P-CONTACT contact selection (~314, biggest pipeline
    lever) · buyer-parent SF mappings (NGP unblocks its opp) · junk review buckets
    · Decision Center lanes.
-6. **R17 — data-quality (grounded 2026-06-09, prompt ready
-   `CLAUDECODE_PROMPT_R17_data_quality.md`):** dia is healthy (auto-supersede
-   drove dup-addr 1,061→42). Issues: (1) **HEADLINE — gov.properties has 7,626
-   rows (40%) with NULL data_source + NULL lease from two bulk batches (May-17
-   6,690 + Jun-7 894), heavily address-duplicated (159 addrs, 150-173 rows
-   each); 99.8% have agency, 943 sales, 446 listings — identify the generating
-   writer + triage/dedup (investigation-first, gated).** (2) LCC 436
-   auto_mergeable duplicate entities with NO drain cron. (3) 1,037 orphan
-   entities (no edge/identity/portfolio). (4) gov property-merge lane over-counts
-   (6,914 rows = 159 groups, 106 legit multi-lease; ~53 real) — de-noise like
-   R13. **Awaiting Scott:** does he recognize the May-17/Jun-7 gov load (was it
-   intentional)?
+6. **R17 — data-quality ✅ SHIPPED + VERIFIED 2026-06-10** (PRs life-command-center
+   #1129, government-lease #257, Dialysis #7293). Root cause: the R71/7d gov
+   "master Sold import" deduped per-sale-hash instead of per-address → a fresh
+   null-source/null-lease property per comp. Outcomes: **Unit 1** — 6,662 junk
+   rows archived (reversible, snapshotted), 6 anchored rows merged
+   (gov_merge_property, sales/listings repointed, 0 orphans), 16 kept rows +
+   942 leftover singletons stamped traceable, `gov_stamp_data_source_guard`
+   trigger prevents regrowth; gov real properties 18,949→12,284 (~35% de-bloat).
+   **Unit 2** — 436 auto_mergeable LCC entity dupes merged (verified survivors),
+   steady-state = Decision Center "merge duplicate entities" lane (no blind
+   cron). **Unit 3** — 698 orphan entities flagged + daily cron + picker
+   exclusion. **Unit 4** — gov merge lane 6,914 rows→51 groups (dia 54). dia was
+   already healthy (auto-supersede drove dup-addr 1,061→42).
+   **R17b follow-up (NEW, pre-existing, gated):** 343 orphan sales + 56 orphan
+   listings point to deleted gov property_ids (created Mar–May, NOT an R17
+   regression) — invisible to property views, skew comps. Claude Code to
+   investigate the pre-R17 delete path + propose re-link-or-archive cleanup.
 7. **Backlog / deferred:** precision BTS/chain developer signal · SOS adapters
    beyond FL · person-typing for chain owners.
 
