@@ -134,9 +134,13 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    verified). 2. **Folder-feed intake — DESIGNED** (`ARCHITECTURE_PHASE2_folder_feed.md`):
    read the Team Briggs tree (tenant/brand + City,ST anchor) into the existing
    extract→match→promote pipeline; additive landing zones only (read, don't
-   reorganize); cloud PA "List/Get folder" + local backfill. Awaiting Scott's 2
-   structure conventions (DB-only vs sidecar; central vs per-property
-   `_LCC/Generated`), then the `folder-feed-tick` worker prompt. 3. Correspondence
+   reorganize); cloud PA "List/Get folder" + local backfill. conventions LOCKED
+   (DB-only tracking; outputs to existing folders w/ `[LCC]` tag). **Worker build
+   prompt written:** `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md` (Slice 1 —
+   reuses the Phase-1 Get flow for bytes since folder files already live in
+   SharePoint; only new PA dependency is a "List folder" flow; OM-type files
+   first via the existing extractor; `folder_feed_seen` DB-only tracking;
+   path→subject_hint anchor; local backfill + gentle cron). 3. Correspondence
    + notes enrichment. 4. Context layer as shared MCP+REST service. 5. Standards
    spine + cross-tool syndication. 6. New verticals on the same layers.
 Architecture docs: `ARCHITECTURE_intelligence_hub.md` (the 5-layer design),
