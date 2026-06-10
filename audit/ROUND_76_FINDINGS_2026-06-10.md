@@ -457,10 +457,26 @@ Dry-run (read-only sim) proves the three guards:
   is the opposite of Task-6c's 125→346 (that bug left off_market NULL ⇒ forever
   active; this caps each at its true window).
 
-**Both applies are GATED** — no data write or view change made yet. The recovery
-would PATCH 726 rows (`listing_date`, `off_market_date`, `listing_date_source=
-'sale_anchor_r76c'`, only where currently NULL); the snapshot switch is a live
-dia view/chart change. Awaiting Scott's go on the 180d anchor + the switch.
+**Both applies LANDED 2026-06-10** (live dia DB + a renderer comment). Final
+post-apply receipt (Scott to re-verify):
+- **Guard 1 (current snapshot holds):** `cm_dialysis_available_market_size_q`
+  2026-Q1 = **123** (~125); max recent quarter = 193 — nowhere near the Task-6c
+  346. Series is now point-in-time (122-193) vs the old TTM-marketed (99-260).
+- **Guard 2 (history gains):** **684** rows recovered (sale-anchored,
+  off_market=sale_date); **657** carry their real asking cap into the
+  `cm_dialysis_asking_cap_by_term_m` cohort + the on-market history. Required a
+  scoped bypass in `cm_dialysis_active_listings_m` (recovered rows get the same
+  historical-window membership synthetic rows get — `listing_date_source=
+  'sale_anchor_r76c'`), else the current-status filter excluded sold listings
+  from their own past windows (only 230 showed before the bypass).
+- **Guard 3 (no synthetic double-count):** **0** at every sampled quarter
+  (2016/18/20/22/24). 42 recovered rows were reverted to NULL where a synthetic
+  row already covered that property-window (conservative; 726→684).
+- **157 active-undated stay NULL** (Task-6c intent preserved).
+Live DB changes: the 684-row recovery PATCH; `cm_dialysis_available_market_size_q`
+rebuilt point-in-time on `cm_dialysis_active_listings_m`; the bypass clause in
+`cm_dialysis_active_listings_m`. Renderer comment updated (ships on redeploy; the
+view change is already live).
 
 ## Status of the rest of Round 76 (scoped across sessions, per the note)
 - **A1** — done.
