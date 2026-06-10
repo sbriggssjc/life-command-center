@@ -166,9 +166,15 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    `stageOmIntake` sharepoint-pointer extension, local backfill script.
    Migrations applied to LCC Opps (`folder_feed_seen` table + `lcc-folder-feed`
    */30 cron); endpoint live + returns clean 200 no-op (`SHAREPOINT_LIST_URL`
-   unset).** Remaining: Scott builds the PA "List folder" flow + sets
-   `SHAREPOINT_LIST_URL` (the Get flow already exists from Phase 1), then the feed
-   walks the tree. Build prompt: `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md`.
+   unset).** **PA list flow ✅ BUILT + VERIFIED LIVE 2026-06-10** — the "List
+   folder" connector action was a dead end for dynamic paths; rebuilt on "Send an
+   HTTP request to SharePoint" (REST `GetFolderByServerRelativeUrl?$expand=Folders,Files`),
+   a live run returned real folder data. Confirmed verbose shape: arrays at
+   `sp.d.Files.results` / `sp.d.Folders.results`, `Length` is a string. Remaining:
+   (a) set `SHAREPOINT_LIST_URL` env to the flow trigger URL; (b) ship Slice-1b
+   worker map (`CLAUDECODE_PROMPT_PHASE2_Slice1b_list_rest.md` — finalized to the
+   confirmed shape); (c) GET dry-run to confirm the cron goes live. Slice-1 build
+   prompt: `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md`.
    3. Correspondence
    + notes enrichment. 4. Context layer as shared MCP+REST service. 5. Standards
    spine + cross-tool syndication. 6. New verticals on the same layers.

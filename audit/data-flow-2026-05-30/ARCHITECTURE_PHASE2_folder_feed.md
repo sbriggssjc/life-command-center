@@ -115,19 +115,55 @@ next full walk (path gone → mark stale, don't delete derived data). Same
 ## 9. Actionable next steps (in order)
 1. ✅ **Conventions decided** (§6, Scott 2026-06-09): DB-only tracking; outputs
    to existing deliverable folders with `[LCC]` tagging. Structure is settled.
-2. ✅ **PA "List folder" flow BUILT + On 2026-06-10** ("Http -> List folder (LCC
-   List Folder)", id `ca110bdc-41b0-4caf-854e-16ed6efa8706`): HTTP trigger
-   `{folder_path}` → SharePoint **List folder** (Team Briggs, File Identifier =
-   `triggerBody()?['folder_path']`) → **Response** body = single expression
-   `addProperty(json('{"ok":true}'),'value',body('List_folder'))` → `{ok:true,
-   value:[BlobMetadata…]}`. (Body had to be ONE expression — the Response field
-   statically validates JSON, so an unquoted `@{body(...)}` array is rejected;
-   `addProperty` builds the object instead.) **Remaining:** Scott copies the
-   trigger URL → `SHAREPOINT_LIST_URL`; then test to confirm (a) the `folder_path`
-   format the List action accepts and (b) the item field **casing** — SharePoint
-   `List folder` returns PascalCase (`Path/Name/Size/LastModified/ETag`) which the
-   worker's `callListFolder` fallbacks don't yet catch (they check lower/camelCase),
-   so a ~1-line worker tweak to add PascalCase fallbacks is the likely follow-up.
+2. **PA list flow — ✅ SOLVED via REST (verified live 2026-06-10).** The "List
+   folder" connector action was a dead end for dynamic paths; the working flow uses
+   "Send an HTTP request to SharePoint" and returns real folder data. Full
+   confirmed shape + remaining steps in the CORRECTED APPROACH block below.
+   _History:_ Built "Http -> List folder (LCC
+   List Folder)", id `ca110bdc-41b0-4caf-854e-16ed6efa8706` (HTTP trigger
+   `{folder_path}` → SharePoint **List folder** → **Response** = single expr
+   `addProperty(json('{"ok":true}'),'value',body('List_folder'))`). The Response
+   trick is correct (the field statically validates JSON, so a single `addProperty`
+   expression is the only way to wrap a dynamic array). BUT the **List folder**
+   action's "File Identifier" is an **opaque picker-encoded id, not a usable plain
+   path** — passing the dynamic `folder_path` returns **NotFound** for every format
+   tried (`/Shared Documents/Ad-Hoc Analyst Requests`, `/sites/TeamBriggs20/Shared
+   Documents/…`, apostrophe-free folders included). The picker *displays* a friendly
+   path but stores an encoded token, so it can't be driven by an arbitrary runtime
+   path. (The remote new-designer also froze on the action-swap — Scott's native
+   browser is more reliable for the rebuild.)
+
+   **CORRECTED APPROACH — use "Send an HTTP request to SharePoint" (REST):** it
+   takes a plain server-relative path and is the standard dynamic-folder-listing
+   pattern.
+   - Action: SharePoint **Send an HTTP request to SharePoint**, Site = Team Briggs,
+     Method **GET**, Uri (inline `@{}` ok in this text field — no fx-token dance):
+     `_api/web/GetFolderByServerRelativeUrl('@{triggerBody()?['folder_path']}')?$expand=Folders,Files`
+   - **Response** body (single expression, same wrap trick — MUST be committed via
+     the fx editor as a token, not typed as text; typed-as-text returns the literal
+     expression string at runtime, confirmed 2026-06-10):
+     `addProperty(json('{"ok":true}'),'sp',body('Send_an_HTTP_request_to_SharePoint'))`
+   - **✅ BUILT + VERIFIED LIVE 2026-06-10.** A real run against `Ad-Hoc Analyst
+     Requests` returned the folder's files+subfolders. **Confirmed response shape**
+     (OData *verbose* — note the `d` envelope and `.results` arrays):
+     `{ok:true, sp:{ d:{ Name, ServerRelativeUrl, ItemCount,
+        Files:{results:[{Name, ServerRelativeUrl, Length(string!), TimeCreated,
+        TimeLastModified, UniqueId, ETag, …}]},
+        Folders:{results:[{Name, ServerRelativeUrl, ItemCount, UniqueId,
+        TimeLastModified, …}]} }}}`. Arrays are at **`sp.d.Files.results` /
+     `sp.d.Folders.results`** (not `sp.Files`); **`Length` is a string** → parseInt.
+   - `folder_path` the worker sends = the **full server-relative path**
+     `/sites/TeamBriggs20/Shared Documents/<path>`; **apostrophes doubled** (`''`)
+     for the OData string literal (`Storage OM's` → `Storage OM''s`).
+   - **Worker change (Claude Code, paired — Slice 1b prompt ready):** `callListFolder`
+     reads `json.sp.d.Files.results` + `json.sp.d.Folders.results` (tolerant of a
+     future nometadata switch) mapping `ServerRelativeUrl→path`, `Name→name`,
+     `Length(parseInt)→size`, `TimeLastModified→modified`, `UniqueId/ETag→etag`;
+     `FOLDER_FEED_ROOTS` = `/sites/TeamBriggs20/Shared Documents/<root>` with
+     `''`-doubled apostrophes. See `CLAUDECODE_PROMPT_PHASE2_Slice1b_list_rest.md`.
+   - **Remaining:** copy the flow's trigger URL → `SHAREPOINT_LIST_URL` env (Railway);
+     ship the Slice-1b worker map; GET dry-run the `folder-feed-tick` endpoint to
+     confirm the cron goes live.
 3. **Claude Code: `folder-feed-tick` worker + `folder_feed_seen` table (DB-only)
    + filename/type classifier + the path→`subject_hint` matcher hook + the
    `[LCC]`/`source='lcc_generated'` provenance tag.** Prompt ready to write on
