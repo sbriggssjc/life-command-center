@@ -39,6 +39,31 @@ export function isSalesforceConfigured() {
   return !!process.env.SF_LOOKUP_WEBHOOK_URL;
 }
 
+/** Today in YYYY-MM-DD (UTC). */
+function todayUtcYmd() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Coerce a date-ish value to YYYY-MM-DD (UTC). Accepts a Date, an ISO
+ * timestamp (e.g. a cadence `next_touch_due` of `2026-09-07T00:00:00+00:00`),
+ * or an already-formatted date string. Returns null when it can't produce a
+ * clean YYYY-MM-DD so the caller can fall back to today.
+ */
+function normalizeActivityDate(v) {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  // Already a date or timestamp leading with YYYY-MM-DD — take the date portion.
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
 async function callSfLookupFlow(body) {
   const url = process.env.SF_LOOKUP_WEBHOOK_URL;
   if (!url) return { ok: false, reason: 'sf_not_configured' };
@@ -316,7 +341,16 @@ export async function createSalesforceTask(task) {
   const nmType = (task?.nmType != null) ? String(task.nmType).trim() : '';
   if (nmType) body.nm_type = nmType;
   body.status = task?.status ? String(task.status) : 'Open';
-  if (task?.activityDate) body.activity_date = String(task.activityDate);
+  // ActivityDate (Task Due Date): ALWAYS send a clean YYYY-MM-DD, never null.
+  // PA's date field rejected a typed default expression (saved it as literal
+  // text → runtime failure), so LCC owns the value and PA just inserts the
+  // token. Use the caller's date (the cadence `next_touch_due`) when supplied
+  // (accepts `activityDate` or the snake_case `activity_date` alias); otherwise
+  // default to today (UTC). (R16b, 2026-06-10.)
+  const rawActivityDate = (task?.activityDate != null) ? task.activityDate
+                        : (task?.activity_date != null) ? task.activity_date
+                        : null;
+  body.activity_date = normalizeActivityDate(rawActivityDate) || todayUtcYmd();
   const whatId = task?.whatId ? String(task.whatId).trim() : '';
   if (whatId && /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(whatId)) body.what_id = whatId;
   if (task?.idempotencyKey) body.idempotency_key = String(task.idempotencyKey);
