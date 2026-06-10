@@ -44,6 +44,28 @@ export const STORAGE_BACKENDS = Object.freeze({
 const SHAREPOINT_INTAKE_FOLDER =
   (process.env.SHAREPOINT_INTAKE_FOLDER || "Storage OM's/Intake").replace(/^\/+|\/+$/g, '');
 
+// The site/library prefix that the PA SharePoint connector supplies via its
+// "Site Address" — a server-relative folder path must be made LIBRARY-relative
+// (strip this prefix) before it goes into the Create-file action's `path`.
+const SHAREPOINT_DOC_PREFIX =
+  (process.env.SHAREPOINT_DOC_PREFIX || '/sites/TeamBriggs20/Shared Documents');
+
+/**
+ * Turn a full server-relative DESTINATION folder + file name into the
+ * LIBRARY-relative file path the Create-file flow expects (no site/library
+ * prefix, no leading slash, collapsed double-slashes). Exported for unit tests.
+ *
+ *   "/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI"
+ *     + "Foo [LCC].pdf"
+ *   -> "PROPERTIES/D/DaVita/Chilton, WI/Foo [LCC].pdf"
+ */
+export function libraryRelativeDocPath(folderPath, fileName) {
+  const libRelFolder = String(folderPath || '')
+    .replace(SHAREPOINT_DOC_PREFIX, '')
+    .replace(/^\/+/, '');
+  return `${libRelFolder}/${fileName}`.replace(/\/{2,}/g, '/');
+}
+
 let _warnedSharepointUnconfigured = false;
 
 /**
@@ -190,14 +212,16 @@ async function putToSharePoint({ objectPath, mimeType, buffer, fetchImpl }) {
  *
  * Mirrors fetchSharepointBytes' tolerant-parse + 503-when-unset shape. Never
  * throws; a failure returns ok:false so the caller writes nothing to the DB.
- * Contract (mirrors the List/Get flows):
- *   trigger body  { folder_path, file_name, content_base64 }
- *   response      { ok:true, server_relative_url }
+ * Contract (IDENTICAL to putToSharePoint / the proven Phase-1 Save flow, so
+ * either flow's clone works interchangeably):
+ *   trigger body  { path, content_base64, content_type }   (path is LIBRARY-relative)
+ *   response      { ok:true, server_relative_url, item_id, url? }
  *
  * @param {object}   o
  * @param {string}   o.folderPath  full server-relative path of the DESTINATION
- *                                  folder (single apostrophes — the PA flow's
- *                                  Create-file action takes a literal path).
+ *                                  folder. Made library-relative (the
+ *                                  site/library prefix is stripped) before it
+ *                                  becomes the flow's `path`.
  * @param {string}   o.fileName    target file name (already [LCC]-tagged + dedup'd)
  * @param {Buffer}   o.bytes       raw bytes to write
  * @param {Function} [o.fetchImpl] fetch impl (defaults to global fetch)
@@ -211,15 +235,16 @@ export async function uploadDocToFolder({ folderPath, fileName, bytes, fetchImpl
   if (!bytes || !Buffer.isBuffer(bytes) || bytes.length === 0) {
     return { ok: false, status: 400, detail: 'missing or empty bytes' };
   }
+  const path = libraryRelativeDocPath(folderPath, fileName);
   const doFetch = fetchImpl || ((u, opts) => fetch(u, opts));
   try {
     const res = await doFetch(uploadUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        folder_path:    folderPath,
-        file_name:      fileName,
+        path,
         content_base64: Buffer.from(bytes).toString('base64'),
+        content_type:   'application/pdf',
       }),
     });
     const text = await res.text().catch(() => '');
