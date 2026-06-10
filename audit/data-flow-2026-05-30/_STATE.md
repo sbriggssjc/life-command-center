@@ -136,12 +136,22 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    intact; listing current counts correctly drop 56 active off-universe.
    Snapshots: gov_junk_archive_audit_20260609, gov_anchored_merge_audit_20260610,
    gov_offuniverse_comp_audit_20260610.
-   **R17c (logged, Scott's call — `sql/R17c_FOLLOWUP_cm_flag_inconsistency.md`):**
-   the gov CM report is internally inconsistent TODAY — 16 flag-respecting views
-   read ~7.9% all-time cap, 13 others ~8.6% (66bps spread, same report), because
-   `exclude_from_market_metrics` flags ~9,601 sales that only some views honor.
-   Investigate what those 9,601 are + reconcile to one number (moves published
-   numbers, possibly TTM). NOT folded into R17b.
+   **R17c ✅ DONE + VERIFIED (gov branch `claude/stoic-edison-9x7dhy`):** the gov
+   CM report was internally inconsistent (7.9–8.6% all-time cap depending on
+   section). Investigation found the `exclude_from_market_metrics` flag (9,632
+   sales) was principled for most (needs_review 4,547 / ownership_stub 3,313 /
+   duplicate_superseded 711 / link+dedup) but **over-broad on 166 real gov sales**
+   — a too-narrow [3%,10%] DQ1 cap band dropped NOI-corroborated 10-15% gov deals,
+   and a dedup rule excluded live survivors whose only twin was non-live. Fix
+   (basis b, signed off): reinstated the 166, codified the corrected band as
+   `gov_apply_dq1_cap_band()`, converged all 29 CM sales views to honor the
+   corrected flag. **Verified: converged all-time cap 8.037% / $85.66B, every CM
+   view reads it (`v_cm_view_flag_audit` offenders-only = 0 rows), master_m TTM
+   8.174%, Boyd 564→317.** CI guard prevents re-split.
+   **R17d (logged, Scott's call):** `gov_apply_dq1_cap_band(true)` would flag 342
+   post-May captures with implausible caps (>15%/<3%/uncorroborated 10-15%) — a
+   pre-existing, consistent DQ gap; cleaning it moves the published number again,
+   so do it deliberately with impact shown, not chained onto R17c.
 7. **Backlog / deferred:** precision BTS/chain developer signal · SOS adapters
    beyond FL · person-typing for chain owners.
 
