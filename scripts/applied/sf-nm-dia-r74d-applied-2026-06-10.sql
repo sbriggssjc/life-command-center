@@ -1,8 +1,15 @@
 -- ============================================================================
 -- Round 74d — dia is_northmarq de-contamination: all-comps re-check + held removes
 -- Target: Dialysis_DB (zqzrriwuavgrquhisnoa). Flag-column + provenance ONLY.
--- STATUS: STAGED + independently verified. NOT applied (awaiting Scott's gate).
--- Idempotent (sets fixed values); safe to re-run.
+-- STATUS: APPLIED LIVE 2026-06-10 (Scott-gated, fully approved). Idempotent.
+-- Scott's gate decision: strip the full 62 = the 61 dry-run strips + 13289
+--   (Sam Bretz, the null-price row held separately — Scott confirmed Sam Bretz
+--   is not NM, so it strips too). is_northmarq 428 -> 366. 5420 stays buy-side
+--   (Peranich & Huffman LISTED it, but its Comp is Co-Broke (Buyer) = NM bought
+--   the buyer's side -> correctly is_northmarq_buyside, not a listing flag).
+--   The 3 outside names (Sam Bretz / Nathan Huffman / Peranich & Huffman) are
+--   now recorded as known-non-NM in api/_shared/sf-nm-classifier.js so no
+--   broker-string heuristic reintroduces them.
 --
 -- WHAT THIS CLOSES
 --   R74c v3 left ~208 dia sales as "held removes" (is_northmarq=true but unmatched
@@ -39,8 +46,8 @@
 ALTER TABLE public.sales_transactions ADD COLUMN IF NOT EXISTS is_northmarq_source text;
 ALTER TABLE public.sales_transactions ADD COLUMN IF NOT EXISTS is_northmarq_buyside boolean;
 
--- (1) STRIP — bucket 3: R23 broker-string false-positives (no comp, non-NM broker).
---     To HOLD any borderline row, delete its id from the IN-list before applying.
+-- (1) STRIP — bucket 3: R23 broker-string false-positives (no comp, non-NM broker)
+--     + 13289 (Sam Bretz, null price, Scott-confirmed non-NM). 62 ids total.
 UPDATE public.sales_transactions
    SET is_northmarq = false,
        is_northmarq_source = 'salesforce_comp'
@@ -48,7 +55,7 @@ UPDATE public.sales_transactions
    127,173,290,297,319,322,403,468,488,558,623,646,738,925,937,988,1017,1018,1024,
    1032,1035,1038,1040,1041,1043,1044,1046,1048,1049,1066,1068,1071,1078,1080,1108,
    1122,1159,5346,5358,5429,5576,5651,5661,5662,5879,6422,6708,7878,7881,7888,7975,
-   7980,8199,8257,8258,8260,8261,8483,8504,9018,9019
+   7980,8199,8257,8258,8260,8261,8483,8504,9018,9019,13289
  )
    AND is_northmarq IS TRUE;   -- idempotency guard
 
@@ -71,8 +78,12 @@ UPDATE public.sales_transactions
    AND is_northmarq_source IS DISTINCT FROM 'salesforce_comp';   -- idempotency guard
 
 -- ----------------------------------------------------------------------------
--- POST-APPLY EXPECTATION (read-only checks):
---   SELECT count(*) FILTER (WHERE is_northmarq) AS nm_true,           -- 367
---          count(*) FILTER (WHERE is_northmarq_source='salesforce_comp') -- ~194 (32 prior + 61 strip + 101 surfacer, minus overlap)
---   FROM public.sales_transactions;
+-- POST-APPLY RECEIPT (verified live 2026-06-10):
+--   is_northmarq=true           : 428 -> 366   (-62)
+--   is_northmarq_buyside=true   : 22 (unchanged; 5420 stays buy-side)
+--   is_northmarq_source=salesforce_comp : 194
+--   62 strip ids now is_northmarq=false : confirmed (0 still true)
+--   101 surfacer ids still is_northmarq=true : confirmed
+--   curated matched-comp listing median : 6.31% (n296) — unchanged by the strip
+--   raw flag-set (non-buyside, capped) median : 6.41% (n337) — ~deck 6.40%
 -- ============================================================================

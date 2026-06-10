@@ -4,7 +4,7 @@
   "generated_at": "2026-06-10",
   "domain": "dia",
   "project": "Dialysis_DB (zqzrriwuavgrquhisnoa)",
-  "status": "dry-run complete + independently verified — awaiting Scott's gate (no production flags flipped)",
+  "status": "APPLIED LIVE 2026-06-10 (Scott-gated). Gate extended the strip to 62 (the 61 below + 13289 Sam Bretz, null-price, Scott-confirmed non-NM). Receipt: is_northmarq 428->366; buyside 22 unchanged; src salesforce_comp=194; curated listing median 6.31% (n296) unchanged; raw 6.41%. 3 outside names recorded known-non-NM in sf-nm-classifier.js.",
   "source": {
     "nm_universe": "public.sf_internal_comp_export (status='Sold' = Northmarq/SJC Internal comps)",
     "internal_sold_total": 262,

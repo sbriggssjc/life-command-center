@@ -1,6 +1,37 @@
 # Round 74d — finish the dia `is_northmarq` de-contamination (all-comps re-check + held removes)
 
-**Date:** 2026-06-10 · **Status:** dry-run complete + **independently verified** · **awaiting Scott's gate** (no production flags flipped) · dia only; **gov untouched** (done in prior rounds).
+**Date:** 2026-06-10 · **Status:** ✅ **APPLIED LIVE (Scott-gated, fully approved)** · dia only; **gov untouched** (done in prior rounds).
+
+> ## Gate outcome — APPLIED 2026-06-10
+>
+> Scott approved the full set and extended the strip to **62** = the 61 dry-run
+> strips **+ 13289** (Sam Bretz, the null-price row held separately — Scott
+> confirmed Sam Bretz isn't NM, so it strips too despite the null price).
+>
+> **Receipt (verified live):** `is_northmarq` **428 → 366** (−62); the 101
+> all-comps rescues KEPT + comp-confirmed-tagged; the 46 NM-broker rows
+> untouched; `is_northmarq_buyside` **22 (unchanged)**; `is_northmarq_source=
+> salesforce_comp` = **194**. Curated matched-comp **listing median 6.31 %
+> (n 296) — unchanged**; raw flag median **6.41 % (n 337)** ≈ deck ~6.40 %.
+> **#20 holds.** This closes the dia de-contamination: from **436 over-flagged
+> down to the authoritative 366**, every flip gated.
+>
+> **5420 stays as-is** (`is_northmarq=false`, `is_northmarq_buyside=true`):
+> Peranich & Huffman *listed* it, but its Comp is **Co-Broke (Buyer)** — NM was
+> the buyer's broker, so it's correctly NM **buy-side** track record, not a
+> listing flag. No change.
+>
+> **Classifier guard:** the 3 confirmed-outside names (Sam Bretz / Nathan
+> Huffman / Peranich & Huffman) are now recorded as **known-non-NM** via
+> `KNOWN_NON_NM_BROKER_RE` + `isKnownNonNmBroker()` in
+> `api/_shared/sf-nm-classifier.js`; `isNorthmarqListingBroker()` returns false
+> for them, so no broker-string heuristic can reintroduce them. (A name there can
+> still be a buy-side co-broke on a real NM deal — the buy-side flag rides on the
+> Comp's Direct/Co-Broke, not this listing guard.)
+>
+> Applied SQL of record: `scripts/applied/sf-nm-dia-r74d-applied-2026-06-10.sql`.
+
+---
 
 Closes the dia `is_northmarq` cleanup opened in R74/R74c. R74c v3 left the held set
 (`is_northmarq=true` but unmatched in the strict 1:1 comp pass) un-stripped, pending

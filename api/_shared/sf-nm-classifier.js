@@ -416,6 +416,22 @@ export function isCompetitorBroker(name) {
 // A Northmarq / Stan Johnson listing-broker string → keep flagged even if absent
 // from a (date-filtered) SF export. Team surnames mirror the live broker_team set.
 export const NM_LISTING_BROKER_RE = /\b(sjc|stan johnson|northmarq|briggs|scrivner|feller|hughes|brett|duff|powell|tomlinson|maier|corriston|butler|cornell|hedrick|van dresser)\b/i;
+
+// Known NON-Northmarq listing brokers (R74d, Scott-confirmed outside brokers).
+// These listed dia sales the SF Internal-Comp object does NOT carry, so they are
+// NOT NM-listed. Recorded here so no broker-string heuristic ever re-introduces
+// them as is_northmarq (the de-contam strip is otherwise Comp-authoritative +
+// is_northmarq_source-tagged). NOTE: a name here can still be a BUY-SIDE co-broke
+// on a genuine NM deal — e.g. Peranich & Huffman on sale 5420 is Co-Broke (Buyer),
+// correctly is_northmarq_buyside. The buy-side flag rides on the Comp's
+// Direct/Co-Broke, NOT this listing guard, so listing-denying them is safe.
+export const KNOWN_NON_NM_BROKER_RE = /(sam bretz|nathan huffman|peranich\s*&\s*huffman)/i;
+export function isKnownNonNmBroker(name) {
+  return !!name && KNOWN_NON_NM_BROKER_RE.test(String(name));
+}
+
 export function isNorthmarqListingBroker(name) {
-  return !!name && NM_LISTING_BROKER_RE.test(String(name));
+  if (!name) return false;
+  if (isKnownNonNmBroker(name)) return false; // R74d: never re-flag a confirmed outside broker
+  return NM_LISTING_BROKER_RE.test(String(name));
 }
