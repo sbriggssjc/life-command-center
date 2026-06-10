@@ -50,8 +50,18 @@
   },
 
   "gov": {
-    "status": "REPORT-ONLY. is_northmarq_source + is_northmarq_buyside columns ADDED (no flips). Awaiting a gov Deal/Opportunity export (companion to the gov Comp file) to do the same listing-vs-buyside reconciliation.",
-    "comp_match": { "internal_sold": 113, "matched_sales": 103, "would_be_adds": 80, "current_flagged": 66, "flagged_unmatched": 43 },
-    "cap_finding": "No Internal-vs-DB basis contradiction (export 8.00% = matched DB 8.00% = current flags 7.90%); deck 6.78% is a different cohort/aggregation."
+    "status": "DRY-RUN — awaiting Scott's gate. Side rides directly on each comp via sf_comp_staging.raw_row->>'Direct_Co_Broke__c' (DISTINCT on sf_comp_id) — no separate Deal export needed. Columns already present.",
+    "universe": { "internal_sold": 113, "joinable_to_staging": 113, "comp_side": { "Co-Broke (Seller)": 51, "Direct (Both)": 40, "Co-Broke (Buyer)": 13, "null": 9 } },
+    "matching": { "matched_sales": 103, "geocoded_sales_pct": 94 },
+    "side_reconciliation": {
+      "listing_direct_or_seller": { "total": 84, "already_flagged_noop": 21, "new_adds": 63, "adds_city_confirmed": 61, "adds_competitor_promoted": 0, "adds_proximity_only": 0 },
+      "buyer_only": { "total": 10, "currently_flagged": 0, "new_buyside": 10, "note": "none NM-LISTED; the one SJC is the buyer-side broker (listing=Colliers) -> correctly buyside" },
+      "null_side_HELD": 9
+    },
+    "removes": { "flagged_unmatched": 43, "competitor_removes": 0, "note": "all 43 carry an NM listing broker (gov flags were re-derived from master L.BROKER) -> guard KEEPs all. Zero removes." },
+    "proposed_apply": { "listing_adds_true": 63, "buyside_set": 10, "net_is_northmarq_true": "66 -> 129", "net_is_northmarq_buyside_true": 10, "removes": 0 },
+    "null_side_discrepancy_for_scott": "You mentioned holding 23 null-side; this read finds 9 null-side comps (DISTINCT sf_comp_id, latest imported_at). Held all 9 regardless — please confirm which read (the transient staging dups may still be pruning).",
+    "topic20": { "listing_only_median_pct": 8.10, "listing_only_n": 81, "finding": "Side-reconciled NM listing still ~8.10% — confirms NO Internal-vs-DB basis contradiction. The deck's 6.78% is a different cohort/aggregation; gov #20 basis NOT switched. Re-flagging corrects coverage without moving the raw NM cap." },
+    "applied_sql": "scripts/applied/sf-nm-gov-r74c-staged.sql (gated, self-contained recompute + guard)"
   }
 }

@@ -67,6 +67,38 @@
 
 ---
 
+> ## gov reconciliation — DRY-RUN (awaiting gate)
+>
+> gov's side rides **directly on each comp** via
+> `sf_comp_staging.raw_row->>'Direct_Co_Broke__c'` (DISTINCT on `sf_comp_id`) — no
+> separate Deal export. All 113 Internal-Sold comps join to staging: 51 Seller /
+> 40 Direct / 13 Buyer / 9 null. Same matcher (state + date ±120d + price ±6%,
+> confirm city/agency/≤25 mi proximity; 94 % of gov sales geocoded) and the same
+> NM-broker guard (keyed on **listing_broker**).
+>
+> **103 matched sales** → **84 listing** (63 new adds — 61 city-confirmed, **0
+> competitor promotions, 0 proximity-only**, high confidence — + 21 no-op), **10
+> buyer → buyside** (none NM-*listed*; the one SJC is the buyer-side broker), **9
+> null-side → HOLD**.
+>
+> **Removes: 0.** All 43 currently-flagged-but-unmatched gov sales carry an **NM
+> listing broker** (gov flags were re-derived from master L.BROKER), so the guard
+> keeps every one — nothing to strip.
+>
+> **Proposed (gated):** `is_northmarq` **66 → 129**, `is_northmarq_buyside` **10**.
+> Side-reconciled NM **listing** cap stays **8.10 %** — confirms **no Internal-vs-DB
+> basis contradiction**; the deck's 6.78 % is a separate cohort/aggregation, so the
+> gov #20 basis is **not** switched here.
+>
+> **Note for Scott:** you mentioned holding **23** null-side; this read finds **9**
+> null-side comps (DISTINCT `sf_comp_id`, latest `imported_at`) — held all 9
+> regardless. Please confirm which read (transient staging dups may still be pruning).
+>
+> Gated apply: `scripts/applied/sf-nm-gov-r74c-staged.sql` (self-contained recompute
+> + guard). **Not yet applied.**
+
+---
+
 
 ## Source
 
