@@ -115,9 +115,19 @@ next full walk (path gone → mark stale, don't delete derived data). Same
 ## 9. Actionable next steps (in order)
 1. ✅ **Conventions decided** (§6, Scott 2026-06-09): DB-only tracking; outputs
    to existing deliverable folders with `[LCC]` tagging. Structure is settled.
-2. **PA flow "SharePoint → List/Get folder"** (Scott/me in PA — the read inverse
-   of the Save flow; reuses the same SharePoint connection). HTTP trigger →
-   SharePoint "List folder" + "Get file content using path" → Response.
+2. ✅ **PA "List folder" flow BUILT + On 2026-06-10** ("Http -> List folder (LCC
+   List Folder)", id `ca110bdc-41b0-4caf-854e-16ed6efa8706`): HTTP trigger
+   `{folder_path}` → SharePoint **List folder** (Team Briggs, File Identifier =
+   `triggerBody()?['folder_path']`) → **Response** body = single expression
+   `addProperty(json('{"ok":true}'),'value',body('List_folder'))` → `{ok:true,
+   value:[BlobMetadata…]}`. (Body had to be ONE expression — the Response field
+   statically validates JSON, so an unquoted `@{body(...)}` array is rejected;
+   `addProperty` builds the object instead.) **Remaining:** Scott copies the
+   trigger URL → `SHAREPOINT_LIST_URL`; then test to confirm (a) the `folder_path`
+   format the List action accepts and (b) the item field **casing** — SharePoint
+   `List folder` returns PascalCase (`Path/Name/Size/LastModified/ETag`) which the
+   worker's `callListFolder` fallbacks don't yet catch (they check lower/camelCase),
+   so a ~1-line worker tweak to add PascalCase fallbacks is the likely follow-up.
 3. **Claude Code: `folder-feed-tick` worker + `folder_feed_seen` table (DB-only)
    + filename/type classifier + the path→`subject_hint` matcher hook + the
    `[LCC]`/`source='lcc_generated'` provenance tag.** Prompt ready to write on
