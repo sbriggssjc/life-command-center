@@ -2320,6 +2320,23 @@ function capByTermFloor(rows) {
   return isDia ? 2019 : 2015;
 }
 
+// R76 A3 (2026-06-10) — dia ASKING cap-by-term floors at 2017, NOT 2019. Unlike
+// closed sales (which form a real term-premium ladder that settles ~2019),
+// asking caps are broker theater and cross in nearly every year regardless of n
+// (2016-2022 mostly CROSS even at high cohort counts), so there is no "ordering
+// settles" year to floor on. The honest floor is COMPLETENESS — all 4 dia
+// cohorts render continuously from 2017 (the ≤5 / 6-8 cohorts don't exist
+// before then). 2019 would over-crop two complete, decently-dense years.
+// Separately, ~33% of cap-eligible dia listings carry a NULL listing_date and
+// are dropped from EVERY active-window anchor (cm_dialysis_active_listings_m
+// requires listing_date IS NOT NULL) — that's an on-market data-quality gap
+// (Layer C), not a cohort floor; flooring can't recover those rows.
+function askByTermFloor(rows) {
+  const isDia = Array.isArray(rows) && rows.some(r => r &&
+    (r.cap_8to12 != null || r.cap_5orless != null));
+  return isDia ? 2017 : 2015;
+}
+
 const MIN_YEAR_BY_TEMPLATE = {
   // R47 → R69. cap_rate_ttm_by_quarter and the two charts that share
   // its baseline (cash_leveraged_returns, cost_of_capital) now use a
@@ -2358,9 +2375,10 @@ const MIN_YEAR_BY_TEMPLATE = {
   // for the longer-term buckets (12+ year had <5 samples per quarter
   // until ~2014). 2015 is the first year where all 4 cohorts have
   // dense, comparable coverage and the lines stop crossing erratically.
-  // R76 A3 — dia floors at 2019 (ordering stabilizes there); gov stays 2015.
+  // R76 A3 — dia sold floors at 2019 (ordering stabilizes there); asking floors
+  // at 2017 (completeness — asking crosses inherently, no ordering floor); gov 2015.
   sold_cap_by_term_dot_plot:    capByTermFloor,
-  asking_cap_by_term_dot_plot:  capByTermFloor,
+  asking_cap_by_term_dot_plot:  askByTermFloor,
   // 2026-05-29 - the cap-by-term LINE chart was untrimmed (307 monthly
   // points from 2001): thin pre-2015 cohorts made the lines erratic AND
   // the 25-yr category count crowded out the quarterly x-axis labels.
