@@ -203,6 +203,21 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    (`CLAUDECODE_PROMPT_PHASE2_Slice2a_properties_enrich.md`) — PROPERTIES enrich-read
    (match-existing→fill-blanks, never create, unresolved→disambiguation); then
    Slice 2b (write-back generated docs) + Slice 3 (context layer).
+   **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
+   (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
+   `20260718123000` (folder_feed_seen.mode) + `20260718124000`
+   (field_source_priority folder_feed_properties) applied. First enrich drain on
+   PROPERTIES/D/DaVita: `DaVita Dialysis - Chilton - WI - OM.pdf` matched EXISTING
+   dia property 29841 (0.97) → attached property_documents doc 2298 + field_provenance
+   (folder_feed_properties), fields_filled=0 (conservative), NO property created.
+   `FOLDER_FEED_ENRICH_ROOTS=/sites/TeamBriggs20/Shared Documents/PROPERTIES` SET on
+   tranquil-delight — full PROPERTIES tree enabled on the cron. **⚠️ Throughput
+   caveat (Slice 2a.1, prompt ready `CLAUDECODE_PROMPT_PHASE2_Slice2a1_enrich_budget.md`):**
+   walkPhase gates enrich on the SHARED limitFolders + 22s budget that ingest
+   consumes first → enrich crawls ~0 folders/tick during the On Market backlog drain,
+   ~1-2/tick after. Fix = independent per-phase folder budget + a ~7s enrich time
+   reserve. Recommended (Scott deferred the call to me 2026-06-10). NEXT: run Slice
+   2a.1 → verify both channels walk in one tick → then Slice 2b/3.
    3. Correspondence
    + notes enrichment. 4. Context layer as shared MCP+REST service. 5. Standards
    spine + cross-tool syndication. 6. New verticals on the same layers.
