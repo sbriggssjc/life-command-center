@@ -239,14 +239,41 @@ The 4-cohort dia fan first becomes continuous at **2014-06-30** (since then
 142/147 months carry all 4 cohorts; pre-2014 = 156 partial months where ≤5 / 6-8
 don't exist). So the pre-2014 tangle is structural sparsity, not a bug.
 
-### Recommendation (Layer-D / B1 gate decision for Scott)
-The dia cap-by-term x-axis currently reaches back to 2001/2005 and shows the
-structurally-incomplete pre-2014 fan (tangled/partial lines = the "conflict").
-Per Scott's standing rule ("extend only where consistent; gate + annotate
-genuine thinning"), the fix is to **floor the dia cap-by-term x-axis to ~2014-06**
-(where all 4 cohorts are continuous) and/or annotate the thin pre-2014 region —
-NOT a data/propagation change. Decide at the gate. (The same eligible-rows check
-still owes the gov cap-by-term + cap-by-credit cohorts — A3 continues.)
+### CORRECTION — there is already a 2015 floor, and the crossing persists to 2018
+The dia cohort charts (`cap_rate_by_lease_term`, `sold_cap_by_term_dot_plot`,
+`asking_cap_by_term_dot_plot`) **already floor at static year 2015** in
+`cm-native-chart-injector.js MIN_YEAR_BY_TEMPLATE` (added 2026-05-29 for exactly
+this "conflicts prior to 2018" note). So the chart Scott sees starts at 2015, not
+2001 — and his note is still accurate because the crossing PERSISTS past 2015.
+Dia dot view ordering at year-ends (smoothed, what the chart shows):
+
+| yr | 12+ | 8-12 | 6-8 | ≤5 | ordering |
+|---|---|---|---|---|---|
+| 2014 | 6.82 | 7.02 | 6.71 | 7.67 | CROSS |
+| 2015 | 6.52 | 7.02 | 6.96 | 7.03 | CROSS |
+| 2016 | 6.54 | 6.60 | 6.99 | 7.31 | ordered |
+| 2017 | 6.19 | 7.12 | 6.78 | 6.96 | CROSS |
+| 2018 | 6.24 | 6.81 | 7.07 | 6.92 | CROSS |
+| 2019 | 6.18 | 6.60 | 6.94 | 7.11 | ordered |
+
+The 8-12 cohort is volatile through 2018; ordering only settles ~2019. This is
+because the ≤5 cohort (n=2/4/4/10/21 in 2015-18) and 8-12 stay modest-n, and dia
+is on **mean** (Scott's confirmed call — median rejected). So:
+- **Pre-2014 is genuine sparsity** (≤5/6-8 absent) — the existing 2015 floor
+  already crops most of it.
+- **2014 is NOT the right floor** — it's thinner than 2015 (would reintroduce
+  crossing, exactly what Scott warned against).
+- **The residual 2015-2018 crossing is modest-n noise on the mean**, not a bug,
+  and only fully clears ~2019.
+
+### Floor decision — gate for Scott (no code changed; my earlier 2014 floor was reverted)
+Where to set the dia cohort floor is a crop-vs-annotate judgment:
+- keep **2015** + annotate "early-period cohort lines are noisier (modest n)";
+- bump to **~2017** (drops the worst 2015 partial, keeps most history); or
+- bump to **~2019** where ordering fully stabilizes (heavy crop — loses 2015-18).
+Recommendation: **2017 + annotate** — drops the thinnest tail without the heavy
+2019 crop, and the annotation is honest about residual modest-n wobble. Decide at
+the gate. (gov cap-by-term + cap-by-credit + sentiment A3 classification still owed.)
 
 ---
 
