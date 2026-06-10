@@ -261,6 +261,18 @@ export async function handleFolderFeedTick(req, res) {
   // TIME_BUDGET_MS) so a test can deterministically trip the per-file budget
   // break and prove the stale sweep no longer mass-stales the un-processed tail.
   const TIME_BUDGET_MS = Math.max(0, parseInt(process.env.FOLDER_FEED_TIME_BUDGET_MS, 10) || 22000);
+  // Slice 2a.1 — reserve a TIME slice for the enrich phase so ingest (walked
+  // FIRST) can't consume the entire tick and starve the PROPERTIES crawl. Folder
+  // LISTING is cheap (~2s), so even a ~7s enrich reserve lets it list + classify
+  // 2-3 PROPERTIES folders/tick (the discovery work) and opportunistically stage
+  // an enrich OM on a light tick. Overridable for deterministic tests. The
+  // reserve is only carved out when there ARE enrich roots — an ingest-only tick
+  // (the cron default until FOLDER_FEED_ENRICH_ROOTS is set) keeps the full
+  // budget, so the Slice-1 behaviour is byte-identical.
+  const ENRICH_TIME_RESERVE_MS = Math.max(0, parseInt(process.env.FOLDER_FEED_ENRICH_RESERVE_MS, 10) || 7000);
+  const reserveForEnrich = enrichRoots.length > 0 ? Math.min(ENRICH_TIME_RESERVE_MS, TIME_BUDGET_MS) : 0;
+  const ingestDeadline = startedAt + (TIME_BUDGET_MS - reserveForEnrich);
+  const enrichDeadline = startedAt + TIME_BUDGET_MS;
 
   const report = {
     ok: true,
@@ -284,7 +296,9 @@ export async function handleFolderFeedTick(req, res) {
 
   // Walk + process one folder. `mode` ('ingest'|'enrich') tags every file staged
   // from this folder and is carried down to subfolders via the per-phase queue.
-  const processFolder = async (folder, mode, queue) => {
+  // `phaseDeadline` is the absolute ms wall-clock cutoff for this phase (ingest
+  // gets TIME_BUDGET_MS - reserve; enrich gets the full TIME_BUDGET_MS).
+  const processFolder = async (folder, mode, queue, phaseDeadline) => {
     const folderRep = { folder, mode, listed: 0, new: 0, staged: 0, deferred: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
     const listing = await listFolder(folder);
     if (!listing.ok) {
@@ -314,7 +328,9 @@ export async function handleFolderFeedTick(req, res) {
     const livePaths = new Set(fileItems.map(it => it.path));
 
     for (const item of fileItems) {
-      if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+      // Per-phase deadline — never START a new stage past the phase cutoff (a
+      // stage that began just under it is allowed to finish, same as before).
+      if (Date.now() > phaseDeadline) break;
 
       const hash = changeHash(item);
       const cls = classifyFile(item.name || item.path.split('/').pop());
@@ -496,26 +512,33 @@ export async function handleFolderFeedTick(req, res) {
   };
 
   // Drive one channel's BFS walk: pop folders from the phase queue, enqueue
-  // subfolders (they inherit the phase's mode), bounded by the shared
-  // limitFolders cap AND this phase's own folder budget + the time budget.
-  const walkPhase = async (rootList, mode, folderBudget) => {
+  // subfolders (they inherit the phase's mode), bounded by this phase's OWN
+  // folder budget + this phase's OWN time deadline.
+  //
+  // Slice 2a.1 Unit 1: `report.folders_walked` is a REPORTING counter only — it
+  // is NOT a gate. Each phase is driven solely by its own `folderBudget` (and
+  // deadline), so enrich's budget is independent of how many folders ingest
+  // walked. Before this fix the shared `folders_walked < limitFolders` gate meant
+  // ingest exhausting limitFolders left enrich walking 0 folders/tick.
+  const walkPhase = async (rootList, mode, folderBudget, phaseDeadline) => {
     const queue = rootList.slice();
     let phaseWalked = 0;
-    while (queue.length && report.folders_walked < limitFolders && phaseWalked < folderBudget) {
-      if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+    while (queue.length && phaseWalked < folderBudget) {
+      if (Date.now() > phaseDeadline) break;
       const folder = queue.shift();
       if (!folder || walkedFolders.has(folder)) continue;
       walkedFolders.add(folder);
       report.folders_walked++;
       phaseWalked++;
-      await processFolder(folder, mode, queue);
+      await processFolder(folder, mode, queue, phaseDeadline);
     }
   };
 
-  // Ingest FIRST (the always-on On Market channel), then enrich with whatever
-  // folder + time budget remains — an enrich pass never starves ingest.
-  await walkPhase(ingestRoots, 'ingest', limitFolders);
-  await walkPhase(enrichRoots, 'enrich', enrichLimitFolders);
+  // Ingest FIRST (the always-on On Market channel) until its (reserved) deadline,
+  // then enrich until the full time budget — an enrich pass always gets a
+  // guaranteed time + folder slice and never starves ingest.
+  await walkPhase(ingestRoots, 'ingest', limitFolders, ingestDeadline);
+  await walkPhase(enrichRoots, 'enrich', enrichLimitFolders, enrichDeadline);
 
   return res.status(200).json(report);
 }
