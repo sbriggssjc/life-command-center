@@ -177,6 +177,68 @@ async function putToSharePoint({ objectPath, mimeType, buffer, fetchImpl }) {
 }
 
 // ---------------------------------------------------------------------------
+// PUT (write-back) — upload an LCC-generated doc INTO a property folder
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload an LCC-authored deliverable (BOV / OM / memo / master sheet) into a
+ * resolved SharePoint folder via the PA "Http -> Upload file (LCC Put
+ * Artifact)" flow (Phase 2, Slice 2b). This is the WRITE side of the PROPERTIES
+ * channel — unlike putArtifact (which drops intake artifacts into a fixed
+ * Storage OM's/Intake folder), this writes into the MATCHED property's own
+ * folder so the folder and the DB record become one connected object.
+ *
+ * Mirrors fetchSharepointBytes' tolerant-parse + 503-when-unset shape. Never
+ * throws; a failure returns ok:false so the caller writes nothing to the DB.
+ * Contract (mirrors the List/Get flows):
+ *   trigger body  { folder_path, file_name, content_base64 }
+ *   response      { ok:true, server_relative_url }
+ *
+ * @param {object}   o
+ * @param {string}   o.folderPath  full server-relative path of the DESTINATION
+ *                                  folder (single apostrophes — the PA flow's
+ *                                  Create-file action takes a literal path).
+ * @param {string}   o.fileName    target file name (already [LCC]-tagged + dedup'd)
+ * @param {Buffer}   o.bytes       raw bytes to write
+ * @param {Function} [o.fetchImpl] fetch impl (defaults to global fetch)
+ * @returns {Promise<{ok:boolean, server_relative_url?:string, status?:number, detail?:string}>}
+ */
+export async function uploadDocToFolder({ folderPath, fileName, bytes, fetchImpl }) {
+  const uploadUrl = process.env.SHAREPOINT_UPLOAD_URL;
+  if (!uploadUrl) return { ok: false, status: 503, detail: 'SHAREPOINT_UPLOAD_URL unset' };
+  if (!folderPath) return { ok: false, status: 400, detail: 'missing folder_path' };
+  if (!fileName)   return { ok: false, status: 400, detail: 'missing file_name' };
+  if (!bytes || !Buffer.isBuffer(bytes) || bytes.length === 0) {
+    return { ok: false, status: 400, detail: 'missing or empty bytes' };
+  }
+  const doFetch = fetchImpl || ((u, opts) => fetch(u, opts));
+  try {
+    const res = await doFetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folder_path:    folderPath,
+        file_name:      fileName,
+        content_base64: Buffer.from(bytes).toString('base64'),
+      }),
+    });
+    const text = await res.text().catch(() => '');
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
+    if (!res.ok || !json?.ok || !json?.server_relative_url) {
+      return {
+        ok: false,
+        status: res.status,
+        detail: String(json?.error || text || 'pa_upload_failed').slice(0, 200),
+      };
+    }
+    return { ok: true, status: res.status, server_relative_url: json.server_relative_url };
+  } catch (err) {
+    return { ok: false, status: 0, detail: err?.message?.slice(0, 200) || 'pa_upload_error' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GET — fetch raw bytes from SharePoint (extractor's sharepoint read branch)
 // ---------------------------------------------------------------------------
 

@@ -14,6 +14,59 @@
 export const DIA_CUES = /\b(dialysis|davita|fresenius|us\s*renal|american\s*renal|satellite|dva|nephrology|kidney)\b/i;
 export const GOV_CUES = /\b(gsa|ssa|dhs|fbi|irs|va|usda|federal|government|gov't|agency|social\s*security)\b/i;
 
+// ── LCC write-back marker (Phase 2, Slice 2b) ───────────────────────────────
+// Every deliverable LCC writes back into a property folder is tagged ` [LCC]`
+// in its filename. This is the SINGLE source of truth for that marker so the
+// re-ingest guard (classifyFile) and the write-back tagger (ensureLccTag) can
+// never diverge. Detection is case-insensitive and space-agnostic.
+export const LCC_TAG = ' [LCC]';
+
+/** True when a filename carries the LCC write-back marker. */
+export function hasLccTag(name) {
+  return /\[lcc\]/i.test(String(name || ''));
+}
+
+/**
+ * Insert the ` [LCC]` marker before the extension if not already present, so a
+ * re-ingest of our own deliverable classifies as lcc_generated (skipped), never
+ * re-extracted as third-party intel.
+ * @param {string} fileName
+ * @returns {string}
+ */
+export function ensureLccTag(fileName) {
+  const name = String(fileName || '').trim() || 'document.pdf';
+  if (hasLccTag(name)) return name;
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return `${name}${LCC_TAG}`;
+  return `${name.slice(0, dot)}${LCC_TAG}${name.slice(dot)}`;
+}
+
+/**
+ * Never overwrite an existing SharePoint file — when `name` collides with a
+ * name already in the destination folder, append ` (YYYY-MM-DD)` (then a short
+ * `-N` counter) before the extension. Write-back is additive, never destructive.
+ * @param {string} name              the desired (already [LCC]-tagged) file name
+ * @param {Set<string>|string[]} existing  names present in the destination folder
+ * @returns {string}                 a name guaranteed absent from `existing`
+ */
+export function dedupeFileName(name, existing) {
+  const lc = new Set(
+    (existing instanceof Set ? [...existing] : (existing || [])).map(s => String(s).toLowerCase())
+  );
+  if (!lc.has(String(name).toLowerCase())) return name;
+  const dot  = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext  = dot > 0 ? name.slice(dot) : '';
+  const date = new Date().toISOString().slice(0, 10);
+  let candidate = `${stem} (${date})${ext}`;
+  let n = 2;
+  while (lc.has(candidate.toLowerCase())) {
+    candidate = `${stem} (${date}-${n})${ext}`;
+    n++;
+  }
+  return candidate;
+}
+
 /**
  * Filename-first classifier (cheap). Only om/flyer are STAGED this slice; every
  * other recognized type is recorded with its detected_type so later units can
@@ -25,6 +78,12 @@ export function classifyFile(name) {
   const fn = String(name || '').trim();
   const lower = fn.toLowerCase();
   const ext = (lower.split('.').pop() || '');
+
+  // Slice 2b re-ingest guard — a file we authored + wrote back (` [LCC]` tag) is
+  // OUR output, not new market intel. Record it (skipped/lcc_generated) and
+  // NEVER re-extract it. Checked FIRST so an `… OM [LCC].pdf` doesn't fall into
+  // the OM branch below and re-ingest our own BOV/OM as a third-party doc.
+  if (hasLccTag(fn)) return { type: 'lcc_generated', isOm: false };
 
   // OM / flyer / marketing — the only types this slice extracts. Restrict to
   // PDF (the OM extractor's wheelhouse); a "*OM*.xlsx" is a master sheet, not an
