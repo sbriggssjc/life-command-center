@@ -1,21 +1,16 @@
 -- ============================================================================
--- Round 74c (v3) — GOV is_northmarq de-contamination, SIDE-RECONCILED
--- GATED: run ONLY on Scott's approval. Target: government (scknotsqkcheojiaewwh).
--- Flag-column + provenance ONLY. Idempotent. NO price/term/cap writes.
+-- Round 74c — GOV is_northmarq de-contamination — APPLIED 2026-06-09 (Scott-gated)
+-- Target: government (scknotsqkcheojiaewwh). Flag-column + provenance ONLY. Idempotent.
 --
--- gov differs from dia in one good way: the side rides DIRECTLY on each comp via
---   sf_comp_staging.raw_row->>'Direct_Co_Broke__c' (DISTINCT on sf_comp_id) — no
---   separate Deal export / fuzzy Deal->sale match needed.
--- Same doctrine + guard as dia: Direct(Both)/Co-Broke(Seller) -> is_northmarq;
---   Co-Broke(Buyer) -> is_northmarq_buyside; null side -> HOLD. Never demote/remove
---   a sale whose own listing_broker is an NM/SJC/Stan Johnson/Briggs token.
+-- gov side rides DIRECTLY on each comp via sf_comp_staging.raw_row->>'Direct_Co_Broke__c'
+--   (DISTINCT on sf_comp_id) — no separate Deal export. Doctrine + NM-broker guard
+--   (keyed on listing_broker) identical to dia.
 -- Matcher: state + date +/-120d + price +/-6%, confirm city OR agency OR <=25mi
 --   geocoded proximity; 1:1 (best per comp, one comp per sale).
 -- ============================================================================
 
--- columns already present on gov (added 2026-06-09). No-op if so.
-ALTER TABLE public.sales_transactions ADD COLUMN IF NOT EXISTS is_northmarq_source text;
-ALTER TABLE public.sales_transactions ADD COLUMN IF NOT EXISTS is_northmarq_buyside boolean;
+ALTER TABLE public.sales_transactions ADD COLUMN IF NOT EXISTS is_northmarq_source text;   -- present
+ALTER TABLE public.sales_transactions ADD COLUMN IF NOT EXISTS is_northmarq_buyside boolean; -- present
 
 WITH geo AS (
   SELECT upper(state) st, lower(city) ct, avg(latitude) lat, avg(longitude) lng
@@ -46,28 +41,22 @@ cand AS (
 bpc AS (SELECT DISTINCT ON (sf_comp_id) * FROM cand WHERE city_ok OR tenant_ok OR prox_ok
   ORDER BY sf_comp_id,(city_ok AND tenant_ok) DESC,tenant_ok DESC,city_ok DESC,prox_ok DESC,price_diff_pct,date_diff),
 matched AS (SELECT DISTINCT ON (sale_id) sale_id, cside FROM bpc
-  ORDER BY sale_id,(city_ok AND tenant_ok) DESC,tenant_ok DESC,city_ok DESC,prox_ok DESC,price_diff_pct,date_diff)
-
--- (1) LISTING-SIDE: Direct(Both)/Co-Broke(Seller) -> is_northmarq=true (63 adds + 21 no-op).
-,upd_listing AS (
+  ORDER BY sale_id,(city_ok AND tenant_ok) DESC,tenant_ok DESC,city_ok DESC,prox_ok DESC,price_diff_pct,date_diff),
+upd_listing AS (   -- Direct(Both)/Co-Broke(Seller) -> is_northmarq=true (63 adds + 21 retag)
   UPDATE public.sales_transactions st SET is_northmarq=true, is_northmarq_source='salesforce_comp'
-  FROM matched m WHERE m.sale_id=st.sale_id AND m.cside IN ('Direct (Both)','Co-Broke (Seller)')
-  RETURNING 1)
--- (2) BUY-SIDE: Co-Broke(Buyer) -> is_northmarq_buyside (10). GUARD: skip if the sale's
---     own listing_broker is an NM token (NM-listed; buyer tag would be a mis-route).
-,upd_buyer AS (
+  FROM matched m WHERE m.sale_id=st.sale_id AND m.cside IN ('Direct (Both)','Co-Broke (Seller)') RETURNING 1),
+upd_buyer AS (    -- Co-Broke(Buyer) -> is_northmarq_buyside (10). GUARD: skip NM listing_broker.
   UPDATE public.sales_transactions st SET is_northmarq=false, is_northmarq_buyside=true, is_northmarq_source='salesforce_comp'
   FROM matched m WHERE m.sale_id=st.sale_id AND m.cside='Co-Broke (Buyer)'
-    AND NOT (lower(coalesce(st.listing_broker,'')) ~ '(northmarq|sjc|stan johnson|briggs|stinson|gartman)')
-  RETURNING 1)
-SELECT (SELECT count(*) FROM upd_listing) AS listing_set, (SELECT count(*) FROM upd_buyer) AS buyside_set;
+    AND NOT (lower(coalesce(st.listing_broker,'')) ~ '(northmarq|sjc|stan johnson|briggs|stinson|gartman)') RETURNING 1)
+SELECT (SELECT count(*) FROM upd_listing) listing_written, (SELECT count(*) FROM upd_buyer) buyside_written;
 
--- (3) HELD — NOT written: 9 null-side matched comps -> HOLD; 0 removes (all 43
---     flagged-unmatched carry NM listing brokers -> KEEP per the guard).
+-- HELD: 9 null-side matched comps; 0 removes (all 43 flagged-unmatched carry NM listing brokers).
 -- ============================================================================
--- DRY-RUN EXPECTATION (verified 2026-06-09): listing adds 63 (+21 no-op),
---   buyside 10, null-side held 9, removes 0. is_northmarq 66 -> 129; buyside 10.
---   #20 gov NM listing median 8.10% (no Internal-vs-DB contradiction; deck 6.78%
---   is a separate cohort/aggregation — gov #20 basis NOT switched here).
--- NOT YET APPLIED — awaiting Scott's gate.
+-- APPLIED LIVE 2026-06-09 (Scott-gated). Result: listing_written=84 (63 new + 21 retag),
+--   buyside_written=10. is_northmarq 66 -> 129; is_northmarq_buyside 10; tagged_comp 94.
+-- #20 RECEIPT: gov NM-vs-market view (cm_gov_nm_vs_market_m) NM line did NOT shift —
+--   deck quarter 2024-11-30 raw TTM nm_avg 6.83% -> 6.84% (+1bp); 2025-11-30 7.76% -> 7.76%
+--   (0bp). Smoothed view reads 6.78% at the deck quarter = deck. The view's [4-12%] gate +
+--   n>=3 + 2yr TTM + 5q smoothing keeps the #20 NM basis decoupled from the raw ~8% flag cap.
 -- ============================================================================

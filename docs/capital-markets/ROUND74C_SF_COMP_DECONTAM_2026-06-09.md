@@ -99,6 +99,30 @@
 
 ---
 
+> ## gov + dia 5004 — APPLIED (live 2026-06-09, Scott-gated)
+>
+> **gov:** listing_written **84** (63 new adds + 21 retag), buyside **10**, removes **0**.
+> `is_northmarq` **66 → 129**, `is_northmarq_buyside` **10**, 94 tagged `salesforce_comp`.
+> Scott independently verified the side split (91 listing / 13 buyer / 9 null on the
+> 113 Sold comps — the "23" was Sold+Available+Under-Contract; the 9 null is correct)
+> and that 0 removes is right (gov was clean master-derived, never had dia's R23 mess).
+>
+> **#20 receipt — the NM line did NOT shift.** `cm_gov_nm_vs_market_m` raw TTM NM avg
+> at the deck quarter **2024-11-30: 6.83 % → 6.84 % (+1 bp)**; latest **2025-11-30:
+> 7.76 % → 7.76 % (0 bp)**. Smoothed view reads **6.78 %** at the deck quarter = deck.
+> The view's [4–12 %] cap-gate + n≥3 + 2-yr TTM + 5-quarter smoothing keeps the #20 NM
+> basis decoupled from the raw ~8 % flag cap, so doubling the flag (66→129) barely moved
+> it. No #20 action needed.
+>
+> **dia 5004** — Scott-approved: un-flagged (verified false-positive: Round Rock Satellite
+> Healthcare ~80 mi, different tenant). `is_northmarq` dia **429 → 428**.
+> **dia 5420** (Peranich & Huffman) — left as buyside (no evidence it's an NM team).
+>
+> Applied SQL of record: `scripts/applied/sf-nm-gov-r74c-applied-2026-06-09.sql`,
+> `scripts/applied/sf-nm-dia-r74c-applied-2026-06-09.sql`.
+
+---
+
 
 ## Source
 

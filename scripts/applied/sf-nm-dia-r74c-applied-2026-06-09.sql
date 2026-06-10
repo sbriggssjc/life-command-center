@@ -51,8 +51,9 @@ UPDATE public.sales_transactions SET is_northmarq=true, is_northmarq_source='sal
 --        Comp Fresenius-Edmond-OK $2.67M — both NM-listed; the Deal "Buyer" tag on
 --        them was a +/-1.5% cross-attribution to a same-metro neighbor.)
 --   * 5004 (Colliers) -> VERIFIED a genuine non-match (only candidate was a Round Rock
---       Satellite Healthcare deal, ~80mi, different tenant). Removal RECOMMENDED but
---       held for Scott's explicit nod (his "verify before removing" tier).
+--       Satellite Healthcare deal, ~80mi, different tenant). Scott-approved 2026-06-09:
+--       UN-FLAGGED. UPDATE sales_transactions SET is_northmarq=false,
+--       is_northmarq_source='salesforce_comp' WHERE sale_id=5004; (applied -> dia 429->428).
 --   * ~211 currently-flagged sales with NO Internal-comp match (non-competitor):
 --       75 NM/SJC/Briggs broker -> KEEP; 66 null; ~70 other -> HOLD (not stripped).
 --   * 5420 (PH: Peranich & Huffman) was FLIPPED in (3) as a non-NM firm — flag for

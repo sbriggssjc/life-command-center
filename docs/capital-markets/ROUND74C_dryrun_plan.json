@@ -50,7 +50,7 @@
   },
 
   "gov": {
-    "status": "DRY-RUN — awaiting Scott's gate. Side rides directly on each comp via sf_comp_staging.raw_row->>'Direct_Co_Broke__c' (DISTINCT on sf_comp_id) — no separate Deal export needed. Columns already present.",
+    "status": "APPLIED live 2026-06-09 (Scott-gated). is_northmarq 66->129; is_northmarq_buyside 10; 94 tagged salesforce_comp; 0 removes. #20 NM line did NOT shift (deck quarter 6.83%->6.84% +1bp; smoothed view 6.78% = deck). Applied SQL: scripts/applied/sf-nm-gov-r74c-applied-2026-06-09.sql.",
     "universe": { "internal_sold": 113, "joinable_to_staging": 113, "comp_side": { "Co-Broke (Seller)": 51, "Direct (Both)": 40, "Co-Broke (Buyer)": 13, "null": 9 } },
     "matching": { "matched_sales": 103, "geocoded_sales_pct": 94 },
     "side_reconciliation": {
