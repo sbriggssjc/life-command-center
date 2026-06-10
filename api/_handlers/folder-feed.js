@@ -34,15 +34,18 @@ import { classifyFile, parseSubjectHintFromPath } from '../_shared/folder-feed-c
 
 // Default roots to walk when neither ?folders= nor FOLDER_FEED_ROOTS is set.
 // Full SERVER-RELATIVE paths in the canonical identity form (SINGLE apostrophes —
-// toServerRelative() doubles them for the OData literal at request time). The
-// PROPERTIES tree + the per-vertical research roots + the flat OM store; the
-// walk recurses subfolders, so the bucket folders under PROPERTIES are reached
+// toServerRelative() doubles them for the OData literal at request time).
+//
+// DEFENSE-IN-DEPTH (Slice 1d): scope the FALLBACK to the two "On Market" ingest
+// folders only. With read-back now working, a cleared/missing FOLDER_FEED_ROOTS
+// env must NOT silently re-expose the entire tree to the cron and auto-promote
+// from PROPERTIES (there is no enrich-mode yet). FOLDER_FEED_ROOTS still
+// overrides this; PROPERTIES re-enters only via the deliberate Slice-2 enrich
+// path. The walk recurses subfolders, so per-bucket subfolders are reached
 // automatically.
 const DEFAULT_ROOTS = [
-  '/sites/TeamBriggs20/Shared Documents/PROPERTIES',
-  "/sites/TeamBriggs20/Shared Documents/Storage OM's",
-  "/sites/TeamBriggs20/Shared Documents/Gv't Leased Research",
-  '/sites/TeamBriggs20/Shared Documents/Dialysis Research',
+  "/sites/TeamBriggs20/Shared Documents/Gv't Leased Research/On Market",
+  '/sites/TeamBriggs20/Shared Documents/Dialysis Research/Comps/On Market',
 ];
 
 // Site document-library prefix the REST GetFolderByServerRelativeUrl needs in
@@ -211,7 +214,10 @@ export async function handleFolderFeedTick(req, res) {
   const callerName  = user.display_name || 'Folder Feed';
 
   const startedAt = Date.now();
-  const TIME_BUDGET_MS = 22000; // leave headroom under the 25s race / function cap
+  // Leave headroom under the 25s race / function cap. Overridable (FOLDER_FEED_
+  // TIME_BUDGET_MS) so a test can deterministically trip the per-file budget
+  // break and prove the stale sweep no longer mass-stales the un-processed tail.
+  const TIME_BUDGET_MS = Math.max(0, parseInt(process.env.FOLDER_FEED_TIME_BUDGET_MS, 10) || 22000);
 
   const report = {
     ok: true,
@@ -260,11 +266,14 @@ export async function handleFolderFeedTick(req, res) {
     folderRep.listed = fileItems.length;
     report.files_seen += fileItems.length;
 
-    const livePaths = new Set();
+    // Every file in the listing is "live" — independent of whether the per-file
+    // loop reaches it this tick. The loop may break early on the time budget, so
+    // building livePaths from the full listing (not incrementally) is what keeps
+    // the stale sweep from mass-staling the un-processed tail.
+    const livePaths = new Set(fileItems.map(it => it.path));
 
     for (const item of fileItems) {
       if (Date.now() - startedAt > TIME_BUDGET_MS) break;
-      livePaths.add(item.path);
 
       const hash = changeHash(item);
       const cls = classifyFile(item.name || item.path.split('/').pop());
@@ -287,10 +296,11 @@ export async function handleFolderFeedTick(req, res) {
             // re-staging below will refresh last_seen_at via upsertSeen
           } else {
             alreadySeen = true;
-            // Touch last_seen_at so the stale-sweep knows it's still present.
+            // Touch last_seen_at so the stale-sweep knows it's still present, and
+            // reset miss_streak — re-seeing a file clears any transient-miss count.
             await opsQuery('PATCH',
               `folder_feed_seen?id=eq.${pgFilterVal(seen.data[0].id)}`,
-              { last_seen_at: new Date().toISOString() }).catch(() => {});
+              { last_seen_at: new Date().toISOString(), miss_streak: 0 }).catch(() => {});
           }
         }
       }
@@ -402,7 +412,7 @@ export async function handleFolderFeedTick(req, res) {
       const prefix = `${folder}/`;
       const existing = await opsQuery('GET',
         `folder_feed_seen?server_relative_path=like.${pgFilterVal(prefix + '*')}` +
-        `&status=in.(seen,staged,promoted,skipped)&select=id,server_relative_path`);
+        `&status=in.(seen,staged,promoted,skipped)&select=id,server_relative_path,miss_streak`);
       if (existing.ok && Array.isArray(existing.data)) {
         for (const row of existing.data) {
           // Only sweep DIRECT children of this folder — a descendant lives under
@@ -410,11 +420,23 @@ export async function handleFolderFeedTick(req, res) {
           // recursive listing here must not mass-stale the whole subtree.
           const rest = row.server_relative_path.slice(prefix.length);
           if (rest.includes('/')) continue;
-          if (!livePaths.has(row.server_relative_path)) {
+          if (livePaths.has(row.server_relative_path)) continue;
+
+          // Require TWO consecutive misses before staling (the availability-checker
+          // consecutive_check_failures pattern). Unit 1 already prevents staling a
+          // file truncated off the per-file loop; this second guard makes a single
+          // transient partial-but-ok List response harmless too — only a path that
+          // is genuinely absent from two consecutive full listings goes stale.
+          const nextStreak = (row.miss_streak || 0) + 1;
+          if (nextStreak >= 2) {
             await opsQuery('PATCH', `folder_feed_seen?id=eq.${pgFilterVal(row.id)}`,
-              { status: 'stale', last_seen_at: new Date().toISOString() }).catch(() => {});
+              { status: 'stale', miss_streak: nextStreak, last_seen_at: new Date().toISOString() }).catch(() => {});
             report.files_stale++;
             folderRep.stale++;
+          } else {
+            // First miss — record the streak, leave status untouched.
+            await opsQuery('PATCH', `folder_feed_seen?id=eq.${pgFilterVal(row.id)}`,
+              { miss_streak: nextStreak }).catch(() => {});
           }
         }
       }
@@ -442,6 +464,7 @@ async function upsertSeen({ path, hash, item, status, vertical, detectedType, su
     detected_type:        detectedType || null,
     subject_hint:         subjectHint || null,
     last_seen_at:         nowIso,
+    miss_streak:          0,   // recording a file = it's present → clear any miss count
   };
   const ins = await opsQuery('POST', 'folder_feed_seen', row, {
     Prefer: 'resolution=merge-duplicates,return=minimal',
@@ -450,6 +473,6 @@ async function upsertSeen({ path, hash, item, status, vertical, detectedType, su
   // Fallback: explicit update on the unique key if merge-duplicates is unhappy.
   await opsQuery('PATCH',
     `folder_feed_seen?server_relative_path=eq.${pgFilterVal(path)}&content_hash=eq.${pgFilterVal(hash)}`,
-    { status, intake_id: intakeId || null, last_seen_at: nowIso }
+    { status, intake_id: intakeId || null, last_seen_at: nowIso, miss_streak: 0 }
   ).catch(() => {});
 }
