@@ -1324,6 +1324,14 @@ function buildChartConfig(chart, brand) {
       // (Total + Core 10+) on right axis. Two cohorts. Cap-rate axis pinned
       // to 5-10% so the data variation is visible (auto-scaling was producing
       // a 0-8% range with the data squashed against the top edge).
+      // R76 Layer C (2026-06-10) — `count_total` is now a POINT-IN-TIME active
+      // snapshot (what's available at each quarter-end), not the prior
+      // TTM-marketed trailing-year SUM. The dia view
+      // `cm_dialysis_available_market_size_q` was rebuilt on
+      // `cm_dialysis_active_listings_m` (the active-at-period_end membership).
+      // Current snapshot ~122 at 2026-Q1; recent-past quarters reflect true
+      // inventory (incl. the sale-anchor-recovered sold listings in their
+      // historical windows). Cap basis follows the active set (6.3-6.8%).
       return {
         type: 'bar',
         data: {
