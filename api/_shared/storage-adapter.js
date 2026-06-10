@@ -51,19 +51,32 @@ const SHAREPOINT_DOC_PREFIX =
   (process.env.SHAREPOINT_DOC_PREFIX || '/sites/TeamBriggs20/Shared Documents');
 
 /**
+ * Turn a full server-relative DESTINATION folder into the LIBRARY-relative
+ * folder the Create-file action's "Folder Path" field expects (no site/library
+ * prefix, no leading/trailing slash, collapsed double-slashes). Exported for
+ * unit tests.
+ *
+ *   "/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI"
+ *   -> "PROPERTIES/D/DaVita/Chilton, WI"
+ */
+export function libraryRelativeFolder(folderPath) {
+  return String(folderPath || '')
+    .replace(SHAREPOINT_DOC_PREFIX, '')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\/{2,}/g, '/');
+}
+
+/**
  * Turn a full server-relative DESTINATION folder + file name into the
- * LIBRARY-relative file path the Create-file flow expects (no site/library
- * prefix, no leading slash, collapsed double-slashes). Exported for unit tests.
+ * LIBRARY-relative file path (no site/library prefix, no leading slash,
+ * collapsed double-slashes). Exported for unit tests.
  *
  *   "/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI"
  *     + "Foo [LCC].pdf"
  *   -> "PROPERTIES/D/DaVita/Chilton, WI/Foo [LCC].pdf"
  */
 export function libraryRelativeDocPath(folderPath, fileName) {
-  const libRelFolder = String(folderPath || '')
-    .replace(SHAREPOINT_DOC_PREFIX, '')
-    .replace(/^\/+/, '');
-  return `${libRelFolder}/${fileName}`.replace(/\/{2,}/g, '/');
+  return `${libraryRelativeFolder(folderPath)}/${fileName}`.replace(/\/{2,}/g, '/');
 }
 
 let _warnedSharepointUnconfigured = false;
@@ -212,16 +225,19 @@ async function putToSharePoint({ objectPath, mimeType, buffer, fetchImpl }) {
  *
  * Mirrors fetchSharepointBytes' tolerant-parse + 503-when-unset shape. Never
  * throws; a failure returns ok:false so the caller writes nothing to the DB.
- * Contract (IDENTICAL to putToSharePoint / the proven Phase-1 Save flow, so
- * either flow's clone works interchangeably):
- *   trigger body  { path, content_base64, content_type }   (path is LIBRARY-relative)
+ * Contract (the Create-file action takes a DYNAMIC Folder Path + File Name from
+ * the trigger, so the destination folder is no longer hardcoded to the intake
+ * zone — Slice 2b.2):
+ *   trigger body  { folder_path, file_name, content_base64 }
+ *                 (folder_path is LIBRARY-relative, e.g.
+ *                  "PROPERTIES/D/DaVita/Chilton, WI")
  *   response      { ok:true, server_relative_url, item_id, url? }
  *
  * @param {object}   o
  * @param {string}   o.folderPath  full server-relative path of the DESTINATION
  *                                  folder. Made library-relative (the
  *                                  site/library prefix is stripped) before it
- *                                  becomes the flow's `path`.
+ *                                  becomes the flow's `folder_path`.
  * @param {string}   o.fileName    target file name (already [LCC]-tagged + dedup'd)
  * @param {Buffer}   o.bytes       raw bytes to write
  * @param {Function} [o.fetchImpl] fetch impl (defaults to global fetch)
@@ -235,16 +251,16 @@ export async function uploadDocToFolder({ folderPath, fileName, bytes, fetchImpl
   if (!bytes || !Buffer.isBuffer(bytes) || bytes.length === 0) {
     return { ok: false, status: 400, detail: 'missing or empty bytes' };
   }
-  const path = libraryRelativeDocPath(folderPath, fileName);
+  const folder_path = libraryRelativeFolder(folderPath);
   const doFetch = fetchImpl || ((u, opts) => fetch(u, opts));
   try {
     const res = await doFetch(uploadUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        path,
+        folder_path,
+        file_name:      fileName,
         content_base64: Buffer.from(bytes).toString('base64'),
-        content_type:   'application/pdf',
       }),
     });
     const text = await res.text().catch(() => '');
