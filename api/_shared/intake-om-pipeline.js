@@ -123,13 +123,21 @@ export async function stageOmIntake(input, auth, workspaceId) {
   //     extractor fetches bytes via OPS_URL/storage/v1/object/<path>.
   const hasStoragePath = input?.storage_path && typeof input.storage_path === 'string';
 
-  // ---- 0c. Validate we have SOMETHING (bytes or storage path)
-  if (!hasStoragePath && (!input?.bytes_base64 || typeof input.bytes_base64 !== 'string')) {
+  // ---- 0b-bis. SharePoint-resident artifact (Phase-2 folder feed). The bytes
+  //     already live in the Team Briggs library; the caller passes a pointer
+  //     (storage_backend='sharepoint_pa' + storage_ref=server_relative_path),
+  //     NO bytes and NO upload. The extractor reads them back via the Phase-1
+  //     "Get file content" PA flow (storage-adapter fetchSharepointBytes).
+  const hasSharepointRef = input?.storage_backend === 'sharepoint_pa'
+    && typeof input?.storage_ref === 'string' && input.storage_ref.length > 0;
+
+  // ---- 0c. Validate we have SOMETHING (bytes, storage path, or sharepoint ref)
+  if (!hasStoragePath && !hasSharepointRef && (!input?.bytes_base64 || typeof input.bytes_base64 !== 'string')) {
     return {
       status: 400,
       body: {
         error: 'missing_primary_document_bytes',
-        detail: 'Provide bytes_base64, data_uri, or storage_path.',
+        detail: 'Provide bytes_base64, data_uri, storage_path, or storage_backend=sharepoint_pa + storage_ref.',
       },
     };
   }
@@ -215,13 +223,13 @@ export async function stageOmIntake(input, auth, workspaceId) {
     }
   }
 
-  const bytesLen = hasStoragePath
+  const bytesLen = (hasStoragePath || hasSharepointRef)
     ? (input.size_bytes || 0)
     : Math.ceil((input.bytes_base64.length * 3) / 4);
-  // Size cap only applies to inline bytes — storage_path ingestion has no
-  // size limit at the LCC level (Supabase Storage handles any file up to
-  // its bucket cap, set in the Supabase dashboard).
-  if (!hasStoragePath && bytesLen > OM_INLINE_MAX_BYTES) {
+  // Size cap only applies to inline bytes — storage_path / sharepoint_ref
+  // ingestion has no size limit at the LCC level (the backing store handles
+  // any file up to its bucket/library cap).
+  if (!hasStoragePath && !hasSharepointRef && bytesLen > OM_INLINE_MAX_BYTES) {
     return {
       status: 413,
       body: {
@@ -445,10 +453,10 @@ export async function stageOmIntake(input, auth, workspaceId) {
   // records storage_backend + storage_ref; storage_path stays set for the
   // supabase backend (back-compat with the existing readers).
   let ingestStoragePath    = hasStoragePath ? input.storage_path : null;
-  let ingestStorageBackend = hasStoragePath ? 'supabase' : null;
-  let ingestStorageRef     = hasStoragePath ? input.storage_path : null;
-  let storeInline          = hasStoragePath ? null : input.bytes_base64;
-  if (!hasStoragePath && bytesLen > OM_INGEST_STORAGE_MIN_BYTES) {
+  let ingestStorageBackend = hasSharepointRef ? 'sharepoint_pa' : (hasStoragePath ? 'supabase' : null);
+  let ingestStorageRef     = hasSharepointRef ? input.storage_ref : (hasStoragePath ? input.storage_path : null);
+  let storeInline          = (hasStoragePath || hasSharepointRef) ? null : input.bytes_base64;
+  if (!hasStoragePath && !hasSharepointRef && bytesLen > OM_INGEST_STORAGE_MIN_BYTES) {
     const opsUrlEnv = process.env.OPS_SUPABASE_URL;
     const opsKeyEnv = process.env.OPS_SUPABASE_KEY;
     if (opsUrlEnv && opsKeyEnv) {

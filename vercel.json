@@ -113,6 +113,7 @@
     { "source": "/api/intake-ocr-reextract", "destination": "/api/intake?_route=ocr-reextract" },
     { "source": "/api/intake-discard", "destination": "/api/intake?_route=discard" },
     { "source": "/api/intake-pdf", "destination": "/api/intake?_route=ingest_pdf" },
+    { "source": "/api/folder-feed-tick", "destination": "/api/intake?_route=folder-feed-tick" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },
     { "source": "/api/intake/accuracy", "destination": "/api/intake?_route=accuracy" },
     { "source": "/api/inbox", "destination": "/api/queue?_route=inbox" },

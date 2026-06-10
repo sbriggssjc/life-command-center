@@ -948,6 +948,21 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
     if (seedUrl) mergedSnapshot.source_url = seedUrl;
   }
 
+  // Phase 2 folder-feed (2026-06-09): the SharePoint path itself is a strong
+  // match anchor — tenant/brand + City, ST resolve the entity more reliably
+  // than a cover-page parse. When the worker passes a path-derived subject_hint
+  // via seed_data, backfill the matcher's city/state/tenant inputs from it so
+  // an OM whose cover page omitted the city/state still resolves. Conservative
+  // (fill blanks only) so a confidently-extracted value is never clobbered;
+  // the address still comes from the document. Other channels carry no
+  // subject_hint, so this is a no-op for them.
+  if (mergedSnapshot && ctx.seedData?.subject_hint) {
+    const sh = ctx.seedData.subject_hint;
+    if (!mergedSnapshot.city && sh.city) mergedSnapshot.city = sh.city;
+    if (!mergedSnapshot.state && sh.state) mergedSnapshot.state = sh.state;
+    if (!mergedSnapshot.tenant_name && sh.tenant_brand) mergedSnapshot.tenant_name = sh.tenant_brand;
+  }
+
   // Run property matcher
   let matchResult = null;
   let matchError  = null;

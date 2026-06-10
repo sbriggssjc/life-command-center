@@ -1896,3 +1896,82 @@ last 6h ⇒ resolve) alongside the existing full-recovery path. Recurring
 failures (≥2 in the window) still only clear via full recovery, so genuinely-
 broken flows stay alerted. Same signature ⇒ cron unchanged. Verified live: the
 stuck HTTP-Switch alert (id 531) cleared with the TTL note.
+
+## Phase 2 — SharePoint folder-feed worker (Slice 1, 2026-06-09)
+
+Turns the EXISTING Team Briggs Documents tree into an ingestion channel that
+flows through the SAME extract → match → promote pipeline as the email-OM
+channel. **Read the tree as-is; never reorganize it; never write into it.**
+Design: `audit/data-flow-2026-05-30/ARCHITECTURE_PHASE2_folder_feed.md`.
+
+### Locked conventions (Scott, 2026-06-09)
+- **DB-only tracking** — the feed records what it has SEEN in
+  `public.folder_feed_seen` (LCC Opps) and writes **nothing** into the team
+  tree (no sidecar, no moves). Drop the table → zero trace.
+- **One pipeline, many channels** — emits a normalized payload to the EXISTING
+  promoter (`stageOmIntake`); never writes dia/gov tables directly.
+- **Reuse Phase 1, don't re-upload** — folder-feed files already live in
+  SharePoint, so the artifact row just POINTS at the existing path
+  (`storage_backend='sharepoint_pa'`, `storage_ref=<server_relative_path>`,
+  `inline_data=NULL`). Extraction reads the bytes back via the Phase-1 "Get
+  file content" PA flow (`SHAREPOINT_FETCH_URL`). The only NEW PA dependency is
+  a **"List folder"** flow (`SHAREPOINT_LIST_URL`).
+
+### What shipped
+- **`folder_feed_seen`** (migration `20260718120000`) — `(server_relative_path,
+  content_hash)` unique; `status seen|staged|promoted|skipped|error|stale`;
+  `subject_hint` jsonb; `detected_type`; soft `intake_id` pointer. `content_hash`
+  is an etag/size/modified change-signature for the cloud worker, a true sha256
+  for the local backfill. Additive, cache-or-live-safe.
+- **Worker** `?_route=folder-feed-tick` (sub-route of **intake.js** — still 12
+  api/*.js; handler `api/_handlers/folder-feed.js`). GET=dry-run, POST=drain.
+  Per tick (time-budgeted ~22s, bounded `limit_folders`): List each configured
+  root → diff vs `folder_feed_seen` by `(path, change-hash)` → classify by
+  filename → **OM/flyer PDFs** go through `stageOmIntake` (sharepoint pointer),
+  everything else records `status='skipped'` + `detected_type` (lease/master/
+  comp/bov/dd/unknown — NOT parsed this slice). Idempotent on `(path, hash)`; a
+  vanished path → `status='stale'` (never deletes derived data, never mass-stales
+  on an empty/failed listing). **Feature-flagged**: no-ops cleanly until
+  `SHAREPOINT_LIST_URL` is set (the find_contacts_by_account rollout pattern).
+- **Path → subject_hint anchor** (`api/_shared/folder-feed-classify.js`, pure,
+  shared by worker + script) — from `PROPERTIES/<bucket>/<TENANT/BRAND>[/<City,
+  ST>]/…`: tenant_brand, city/state (`^(.+),\s*([A-Z]{2})$`), vertical (tenant
+  cues / research-root). **Fed into the EXISTING matcher** via
+  `runDownstreamPipeline` (intake-extractor.js): backfills the matcher's
+  missing `city`/`state`/`tenant_name` from `seed_data.subject_hint` before the
+  match pass (fill-blanks only — the address still comes from the document; path
+  beats a missing cover-page field). Unresolved → the existing
+  `match_disambiguation` lane, never a guess-write. No-op for other channels.
+- **`stageOmIntake` extension** (`intake-om-pipeline.js`) — accepts a
+  SharePoint-resident artifact (`storage_backend='sharepoint_pa'` +
+  `storage_ref`, no bytes/upload); records `inline_data=NULL`, `storage_path=NULL`,
+  `storage_backend/ref` set. The extractor's Path-3 sharepoint branch already
+  reads these.
+- **Local backfill** `scripts/folder-feed-backfill.mjs` — one-time legacy sweep
+  from the synced library on disk (`C:\Users\scott\NorthMarq Capital, LLC\Team
+  Briggs - Documents`); walks the tree, classifies, and for OM PDFs uploads
+  bytes directly via `/api/intake/stage-om` (bytes are local — sanctioned for
+  the backfill). Resumable via a local manifest; gentle concurrency (default 3).
+  Steady-state new files ride the cron + List flow (reference mode, no re-upload).
+- **Cron** `lcc-folder-feed` (migration `20260718121000`, `*/30`) →
+  `lcc_cron_post('/api/folder-feed-tick?limit_folders=8', …, 'vercel')`. GENTLE
+  cadence (artifact-offload lesson). No-ops until `SHAREPOINT_LIST_URL` is set;
+  the endpoint 404s until intake.js ships (verify post-deploy with a GET
+  dry-run, same posture as lcc-artifact-offload).
+
+### Env
+- `SHAREPOINT_LIST_URL` — PA "List folder" flow (NEW; the worker no-ops without
+  it). `SHAREPOINT_FETCH_URL` — Phase-1 "Get file content" flow (already exists;
+  extraction read-back). `FOLDER_FEED_ROOTS` — comma-separated folder roots
+  (else the handler defaults: `Storage OM's`, `Gv't Leased Research`, `Dialysis
+  Research`).
+
+### Verified (headless 2026-06-09)
+Classifier + path anchor unit-tested (`test/folder-feed-classify.test.mjs`, 9
+cases). `node --check` clean; `ls api/*.js | wc -l`=12; vercel.json valid; full
+suite 548 pass / 0 fail.
+
+### Out of scope (later units)
+Lease-abstract / master-sheet / comp-export extractors · LCC-output write-back
+to Memos/Comps with `[LCC]` tagging · the `promoted` status reconcile ·
+correspondence/notes (Phase 3) · the shared-context MCP service (Phase 4).
