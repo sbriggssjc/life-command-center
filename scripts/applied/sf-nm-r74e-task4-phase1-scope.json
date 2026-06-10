@@ -1,0 +1,95 @@
+{
+  "round": "R74e Task 4 Phase 1 (scope only — DRY-RUN, no writes)",
+  "generated": "2026-06-10",
+  "gate": "state + sold_date +/-120d + sold_price +/-6%, city/tenant confirm; proximity (<=25mi) approximated by address/city reasoning (SQL cannot geocode comp cities). Final 1:1 vs far-deal disambiguation deferred to the Phase-2 importer geocode step.",
+  "method_notes": [
+    "Internal-Sold universe = sf_internal_comp_export WHERE status='Sold'.",
+    "confirmed_match = a sales_transactions row in state + date+/-120d + price+/-6% with an exact (normalized) city match.",
+    "loose_only = price/date/state match but city differs -> needs proximity/identity adjudication.",
+    "no_match = no price/date/state candidate at all.",
+    "Direct_Co_Broke__c lives in sf_comp_staging.raw_row (sparse: 23/276 rows). Internal comps default to sell-side (is_northmarq=true) when the field is null."
+  ],
+  "dia": {
+    "project_id": "zqzrriwuavgrquhisnoa",
+    "sold_comps_total": 262,
+    "priced_sold_comps": 253,
+    "excluded_not_single_asset": {
+      "count": 9,
+      "note": "All 9 are null sold_price. Includes 1 (Referral) [Terre Haute IN], 1 Outside Fee [Lawton OK US Renal], 7 plain null-price pending rows. No priced row carried an exclusion marker.",
+      "total_volume_usd": 0
+    },
+    "confirmed_matched_no_action": 227,
+    "loose_only_city_alias_dupes_no_import": {
+      "count": 17,
+      "note": "Same deal under an aliased/neighboring city; candidate sale matches to the penny on price + same/near date (e.g. Austintown<->Youngstown '137 vs 139 Javit Ct'; Paris<->Burgettstown PA $2,021,485.08; Lexington<->Red Bank SC '5506 vs 5552 Platt Springs'; West Salem<->Salem OR; Eau Claire<->Lake Hallie WI; Corpus Christi<->Robstown TX). DO NOT IMPORT."
+    },
+    "already_in_db_price_discrepancy_correction_not_import": [
+      {"sf_comp_id": "a1Y8W000004JkmYUAS", "comp_name": "DaVita Dialysis HQ2 - Federal Way - WA", "comp_price": 93527390, "existing_sale_id": 5436, "existing_price": 160000, "existing_date": "2022-05-12", "issue": "property + sale exist on the exact date with a $160K placeholder price; this is a price correction, not a new insert. Also a $93.5M HQ office — arguably not a standard single-asset dialysis comp. Scott decides."},
+      {"sf_comp_id": "a1Y8W000004K1BKUA0", "comp_name": "Fresenius Medical Care - Hillsboro, TX", "comp_price": 1233000, "existing_sale_id": 8091, "existing_price": 1593750, "existing_date": "2009-03-23", "issue": "same property (1507 Hillview Dr) + same date already in DB at $1.59M (29% off the comp); correction/dedup review, not a fresh insert."}
+    ],
+    "import_candidates": {
+      "count": 6,
+      "total_volume_usd": 16700338,
+      "default_listing_side": "sell-side (is_northmarq=true) — all 6 have null Direct_Co_Broke__c; Internal comps default sell-side.",
+      "rows": [
+        {"sf_comp_id": "a1Y8W000004KAZEUA4", "comp_name": "DaVita and BOA - Indianapolis IN", "tenant": "DaVita Dialysis", "city": "Indianapolis", "state": "IN", "sold_price": 2450000, "sold_cap_rate": 0.0701, "sold_date": "2020-08-24", "bucket": "no_match", "rationale": "no Indianapolis sale near date/price in DB; genuinely absent."},
+        {"sf_comp_id": "a1Y8W000004K4IJUA0", "comp_name": "U.S. Renal Care (Knollwood) - San Antonio, TX", "tenant": "US Renal Care", "city": "San Antonio", "state": "TX", "sold_price": 3150000, "sold_cap_rate": 0.0649, "sold_date": "2018-04-03", "bucket": "loose_only_far", "rationale": "loose match was Houston (sale 163, ~200mi); no $3.15M SA US Renal in DB (sale 361 is a different $4.38M Loop-410 deal). Absent."},
+        {"sf_comp_id": "a1Y8W000004JuRpUAK", "comp_name": "US Renal Care - Live Oak - TX", "tenant": null, "city": "San Antonio", "state": "TX", "sold_price": 4469698, "sold_cap_rate": 0.056, "sold_date": "2020-12-15", "bucket": "loose_only_far", "rationale": "loose match was Robstown (the Corpus Christi deal, ~140mi); no SA/Live Oak $4.47M in DB. Absent."},
+        {"sf_comp_id": "a1Y8W000004JvghUAC", "comp_name": "DaVita Dialysis - Allendale (Fairfax) - SC", "tenant": "DaVita Dialysis", "city": "Fairfax", "state": "SC", "sold_price": 1675000, "sold_cap_rate": 0.0706, "sold_date": "2021-02-18", "bucket": "loose_only_far", "rationale": "loose match was Kingstree (~90mi); no Fairfax/Allendale SC sale in DB. Absent."},
+        {"sf_comp_id": "a1Y8W000004JmlLUAS", "comp_name": "DaVita Dialysis - Apopka - FL", "tenant": "DaVita Dialysis", "city": "Apopka", "state": "FL", "sold_price": 3729640, "sold_cap_rate": 0.05, "sold_date": "2021-08-25", "bucket": "loose_only_far", "rationale": "loose match was Tampa (~85mi); no $3.73M Apopka 2021 sale in DB (an Apopka cluster exists at 640 Executive Park Ct — verify this isn't a re-trade before insert)."},
+        {"sf_comp_id": "a1Y8W000004JmejUAC", "comp_name": "DaVita Dialysis - Waycross - GA", "tenant": "DaVita Dialysis", "city": "Waycross", "state": "GA", "sold_price": 1226000, "sold_cap_rate": 0.1062, "sold_date": "2021-08-06", "bucket": "loose_only_far", "rationale": "loose match was Hephzibah (~180mi); Waycross has other-year sales but no $1.226M 2021. Absent."}
+      ]
+    },
+    "hold_proximity_coincidence": [
+      {"sf_comp_id": "a1Y8W000004K437UAC", "comp_name": "Fresenius Medical Center - Waco - TX", "sold_price": 1862000, "sold_date": "2012-09-17", "loose_candidate": {"sale_id": 5879, "city": "Seguin", "price": 1862000, "date": "2012-09-10"}, "note": "exact price match to a Seguin sale ~150mi away, 7 days apart; likely the SAME deal mis-cited as Waco. HOLD — geocode-confirm before deciding."}
+    ]
+  },
+  "gov": {
+    "project_id": "scknotsqkcheojiaewwh",
+    "sold_comps_total": 113,
+    "priced_sold_comps": 108,
+    "excluded_not_single_asset": {
+      "count": 7,
+      "total_volume_usd": 6841690,
+      "rows": [
+        {"sf_comp_id": "a1Y8W000004JtaHUAS", "comp_name": "GSA - HI (Deferred Fee)", "reason": "deferred fee, null price"},
+        {"sf_comp_id": "a1Y8W000004JsiaUAC", "comp_name": "GSA - HI (Deferred Fee)", "reason": "deferred fee, null price"},
+        {"sf_comp_id": "a1Y8W000004Jnk7UAC", "comp_name": "GSA Portfolio of 5/Sego", "reason": "portfolio, null price"},
+        {"sf_comp_id": "a1Y8W000004K5SZUA0", "comp_name": "SSA & VA - Wytheville - VA - Portf of 2", "reason": "portfolio, null price"},
+        {"sf_comp_id": "a1Y8W000004K0UVUA0", "comp_name": "State of TX Portfolio of 17", "reason": "portfolio, null price"},
+        {"sf_comp_id": "a1Y8W000004JsV8UAK", "comp_name": "Texas State Student Housing - San Marcos, TX (Equity Placement)", "sold_price": 4553253, "reason": "student housing + equity placement (priced but NOT a single-asset comp)"},
+        {"sf_comp_id": "a1Y8W000004JzLwUAK", "comp_name": "UTM Student Housing (Equity Placement) - Martin - TN", "sold_price": 2288437, "reason": "student housing + equity placement (priced but NOT a single-asset comp)"}
+      ]
+    },
+    "priced_single_asset_comps": 106,
+    "confirmed_matched_no_action": 100,
+    "loose_only_same_deal_no_import": {
+      "count": 4,
+      "note": "Conroe '600 Sargent Ed Holcomb' = exact addr/price/date; Jersey Village '16200 Dillard Dr' = Houston exact addr/price/date; GSA-HI TBD $95.35M = Kapolei '91 Enterprise Ave' same date (5% off, within window); SSF '560 Eccles' $47.1M loose-matches Fresno '855 M St (Part of a 2 Property Sale)' — the portfolio component is already in DB. DO NOT IMPORT."
+    },
+    "import_candidates": {
+      "count": 2,
+      "total_volume_usd": 7410000,
+      "rows": [
+        {"sf_comp_id": "a1Y8W000004JzxOUAS", "comp_name": "State of Texas - La Porte, TX", "tenant": "State of Texas-La Porte", "city": "La Porte", "state": "TX", "street": "11807 North D St", "sold_price": 660000, "sold_cap_rate": 0.08, "sold_date": "2020-01-16", "direct_co_broke": "Co-Broke (Seller)", "is_northmarq": true, "bucket": "no_match", "rationale": "only La Porte row in DB is a null-price 2014 ownership_change_stub; the $660K 2020 sale is absent."},
+        {"sf_comp_id": "a1Y8W000004Jl3LUAS", "comp_name": "GSA-BLM - El Dorado Hills - CA", "tenant": "GSA", "city": "El Dorado Hills", "state": "CA", "street": "5152 Hillsdale Circle", "sold_price": 6750000, "sold_cap_rate": 0.057, "sold_date": "2019-07-18", "direct_co_broke": "Direct (Both)", "is_northmarq": true, "bucket": "loose_only_far", "rationale": "loose match was Sacramento '4420 Auburn Blvd' (~30mi, different address); no El Dorado Hills / Hillsdale row in DB. Absent."}
+      ]
+    },
+    "hold_portfolio_component": [
+      {"sf_comp_id": "a1Y8W000004JjlFUAS", "comp_name": "GSA-USDA - South San Francisco - CA", "sold_price": 47127040, "sold_date": "2021-11-01", "loose_candidate": {"city": "Fresno", "addr": "855 M St (Part of a 2 Property Sale)", "price": 47704570}, "note": "the DB row is explicitly a 2-property portfolio sale that likely already contains the SSF asset; importing risks double-counting the portfolio. HOLD — confirm against the portfolio members before deciding."}
+    ]
+  },
+  "summary": {
+    "dia_import_candidates": 6,
+    "dia_import_volume_usd": 16700338,
+    "dia_holds": 1,
+    "dia_corrections_not_imports": 2,
+    "gov_import_candidates": 2,
+    "gov_import_volume_usd": 7410000,
+    "gov_holds": 1,
+    "combined_recommended_inserts": 8,
+    "combined_volume_usd": 24110338,
+    "median_impact_note": "All candidates are NM-listed at the curated basis; 6 small dia + 2 gov inserts will NOT move the #20 dia listing median materially (~6.40%)."
+  },
+  "next_step": "Scott verifies these counts/rows. On OK, Phase 2 runs the 7d importer (property attach-or-create + sales_transactions insert, is_northmarq per side, is_northmarq_source='salesforce_comp', data_source='sf_internal_comp_r74e', idempotent on sf_comp_id), geocode-confirming each loose_only_far candidate during the property-attach step so any that is actually a 1:1 dupe falls back to 0 inserts by construction."
+}
