@@ -485,3 +485,40 @@ view change is already live).
 - **A3 / B / C / D / E / F / G** — not started. A3 (eligible-DB-rows vs
   chart-rows per cohort/year) is the natural next receipt pass and shares the
   classification SQL above; B1 owns the pre-2016 deep-history 6-10 spikes.
+
+## Layer-C accuracy pass — Step 1 (re-date + flag + double-count proof), APPLIED 2026-06-10
+
+Scott's gate: one number built consistently from real data, estimation labeled.
+Step 1 = the data layer (Step 2, the view reconciliation, is separately gated).
+
+**Per-listing date signal investigation (receipt):** the sold-anchorable cohort
+(684) carries **0** real on-market date signal anywhere —
+`available_listings.created_at` is post-sale ingest, no pre-sale
+`price_change_date`/`cap_rate_change_date`/`last_seen`; dia `sales_transactions`
+has **no DOM/on-market column**; `listing_price_history` has **0 rows** for the
+cohort. So "best per-listing signal" = the median (last resort IS the only
+resort here), and it is now **labeled** so measured-vs-estimated is queryable.
+
+**Measured population DOM** (n=927 real listings carrying both listing_date +
+sale anchor): median **175** (p25 115, p75 285, mean 243). Replaced the flat
+180 with 175.
+
+**Applied:** 684 rows re-dated `listing_date = off_market_date − 175`, retagged
+`listing_date_source='sale_anchor_est_175'` (estimated, filterable); the
+`cm_dialysis_active_listings_m` bypass widened to `LIKE 'sale_anchor%'`.
+
+**Receipts:**
+- measured **0** / estimated **684** (all flagged `*_est_175`).
+- double-count **0** across ALL property-months, every period (not sampled) —
+  guaranteed by the interval-overlap dedup, verified by direct interval scan.
+- current snapshot holds **124** (~125), nowhere near Task-6c 346.
+- residual quantified openly: **157** genuinely active-undated (no anchor
+  exists), **91** sold-but-synthetic-covered (left NULL to avoid double-count —
+  their asking cap is the honest cost of not double-counting the synthetic row).
+
+**Step 2 (next, separately gated):** rebuild `cm_dialysis_active_listings_q` as
+a quarter-end slice of the recency-gated `_m` engine so the Excel snapshot and
+the chart read one point-in-time number; the 7 downstream "available" views
+inherit it. Dry-run to bring to gate: each of the 7 views before/after at a
+couple quarters, proof market_size == on_market_snapshot (the 183≠169 split
+gone), and a basis sanity-check (recency-gated point-in-time, not TTM).
