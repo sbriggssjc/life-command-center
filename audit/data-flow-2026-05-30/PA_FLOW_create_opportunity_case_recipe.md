@@ -15,6 +15,35 @@ The R5/R7 helper `api/_shared/salesforce.js::createSalesforceOpportunity` **drif
 to a real-Opportunity shape (`account_id` / `stage_name` / `amount`) — that's the
 bug. Both the LCC helper AND the PA flow case must target a **Task**.
 
+## ✅ BUILT + VERIFIED LIVE 2026-06-09
+The `create_opportunity` Task case is live on flow `c3744e93-…` and the full
+LCC→PA→SF chain is proven: gov-buyer-sync pushed Boyd Watterson Global → SF Task
+`00TVs00001GBewcMAD` on contact Joseph Capra, `sf_opp_id` written, opp `synced`;
+re-run = `already_synced` (idempotent, no duplicate); NGP Capital correctly
+`hold_unmapped`. Seller/buyer raw tests both returned `ok:true` with the right
+NM Type. Cron `lcc-gov-buyer-sync` re-enabled.
+
+**Build lessons (the friction points):**
+- Connector field labels ≠ API names: WhoId=**Task Name ID**, WhatId=**Task
+  Related To ID**, NM_Type__c=**Task NM Type**, Due Date=**Task Due Date Only**.
+- **Constrained fields reject typed expressions** in the new designer. **Status**
+  is an enum → set the **static "Open"** picklist value (don't expression it).
+  **ActivityDate** is a date type → a typed `if()` saved as literal text and
+  failed at runtime; **omitted Due Date for now** (not API-required).
+- **String fields (Name ID/Subject/NM Type) MUST be committed via the fx
+  expression flyout** so they render as token chips — typed-as-text passes save
+  but fails at runtime (bad WhoId). This was the cause of the persistent
+  NoResponse.
+- **Response Body needs its leading `{`** — the nested `@{…}` confused the
+  designer into dropping it, producing malformed JSON. PowerShell tolerated it
+  but LCC's `JSON.parse` rejected it (`flow_reported_failure`) — which would have
+  duplicated a task hourly. Body must be exactly
+  `{"ok": true, "task": {"Id": "@{outputs('Create_record')?['body/Id']}"}}`.
+
+**Follow-up (non-blocking):** add Due Date back the robust way — LCC always sends
+a valid `activity_date`, and add the request fields to the trigger's JSON schema
+so each maps via a clicked dynamic-content token (no typed expressions).
+
 ## Scott's mapping decisions (2026-06-09) — confirmed against the SF UI
 The SF surface is the Contact quick action **"Follow Up Only"** (screenshot
 2026-06-09): it creates a follow-up **Task** on the contact with fields Subject*,

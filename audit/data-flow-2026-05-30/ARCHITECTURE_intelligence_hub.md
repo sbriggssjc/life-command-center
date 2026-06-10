@@ -235,7 +235,7 @@ OMs/BOVs) is the next, higher-value slice.
 
 | Phase | What | Value | Build size |
 |---|---|---|---|
-| **1. Storage adapter** | Repoint ingest-storage at SharePoint (Team Briggs lib) via Power Automate; DB keeps references only | Solves storage limit now; foundation for everything | Small (adapter swap) |
+| **1. Storage adapter** ✅ **SHIPPED 2026-06-09** | Repoint ingest-storage at SharePoint (Team Briggs lib) via Power Automate; DB keeps references only. Adapter live; PA Save+Get flows built + tested end-to-end. | Solves storage limit now; foundation for everything | Small (adapter swap) |
 | **2. Folder-feed intake** | Property folders → existing extract/match/promote pipeline; per-file-type extractors (lease, master sheet, comp export) | Data quality jumps a tier; folder path = strong match anchor | Medium |
 | **3. Correspondence + notes enrichment** | Outlook email, call/meeting notes, SF notes → entity enrichment with provenance | Relationship intelligence; the brain "remembers" every interaction | Medium |
 | **4. Context layer as shared service** | Harden the context-assembly service; expose as MCP + REST for all tools | "Every agent fully informed" becomes real cross-tool | Medium |
@@ -274,17 +274,19 @@ finale. Phase 1 is a concrete next prompt; Phases 2–5 are deliberate designs.
 
 ---
 
-## 9. Slice 1 — the actionable next step
+## 9. Status + the actionable next step
 
-**Ready now:** `CLAUDECODE_PROMPT_PHASE1_storage_adapter.md` (this folder) — a
-pluggable storage backend that writes large OM artifacts to the **SharePoint
-Team Briggs Documents library via Power Automate** (Graph-free) instead of the
-Supabase bucket, keeping only a reference + extracted data in the DB. Config-
-flagged (`STORAGE_BACKEND`), Supabase fallback during cutover. It carries one
-dependency — a Power Automate "save artifact to SharePoint" flow (the inverse of
-the email-intake flow) — which Scott builds in PA (or I edit via the browser, as
-with the `find_contacts_by_account` flow).
+**Phase 1 — DONE (2026-06-09).** The pluggable storage adapter is live, and the
+two Power Automate flows (LCC → SharePoint Save / Get) are built and verified
+end-to-end against the Team Briggs library. To finish the cutover, set
+`SHAREPOINT_FETCH_URL` + flip `STORAGE_BACKEND=sharepoint_pa` (see
+`PHASE1_SHAREPOINT_PA_FLOW_CONTRACT.md`).
 
-When you're ready, I'll sketch the
-Phase 2 folder-feed (the matching anchor + the per-file-type extractor design)
-in detail.
+**Phase 2 — DESIGNED, ready to build:** `ARCHITECTURE_PHASE2_folder_feed.md`
+(this folder) — the SharePoint folder-feed: read the existing Team Briggs tree
+(tenant/brand + City, ST as the match anchor) into the same extract → match →
+promote pipeline, with per-file-type extractors, a cloud PA "List/Get folder"
+read path + a local backfill path, and **additive-only** landing zones (read the
+tree, never reorganize it). Two structure conventions need Scott's blessing
+before the worker is built (§6): DB-only record vs sidecar, and central vs
+per-property `_LCC/Generated`.
