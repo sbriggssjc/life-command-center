@@ -122,10 +122,26 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    cron). **Unit 3** — 698 orphan entities flagged + daily cron + picker
    exclusion. **Unit 4** — gov merge lane 6,914 rows→51 groups (dia 54). dia was
    already healthy (auto-supersede drove dup-addr 1,061→42).
-   **R17b follow-up (NEW, pre-existing, gated):** 343 orphan sales + 56 orphan
-   listings point to deleted gov property_ids (created Mar–May, NOT an R17
-   regression) — invisible to property views, skew comps. Claude Code to
-   investigate the pre-R17 delete path + propose re-link-or-archive cleanup.
+   **R17b ✅ DONE + VERIFIED (PR #257):** the 343 "orphan" sales + 56 listings
+   were NOT delete-orphans — they're `property_id IS NULL` off-universe CoStar/
+   CREXi market comps (importers leave pid NULL when no gov match, by design).
+   Fix = lens not data: 2 sales re-linked (incl. 9180 Covington→23520; 10
+   "exact" matches were dedup duplicates, kept unlinked), 341 sales + 56 listings
+   tagged `comp_scope='market_offuniverse'` (0 untagged residue), importer-
+   agnostic BEFORE-INSERT trigger auto-tags/excludes future NULL-pid comps, and
+   the 16 direct-reading `cm_gov_*` views scoped `comp_scope IS DISTINCT FROM
+   'market_offuniverse'` (off-universe-only — NOT the `exclude_from_market_metrics`
+   flag, which carries 9,601 unrelated rows). Dual gate verified: all-time cap
+   8.559→8.611% (+5.2bps, signed off), sales TTM byte-identical, cap-ladder
+   intact; listing current counts correctly drop 56 active off-universe.
+   Snapshots: gov_junk_archive_audit_20260609, gov_anchored_merge_audit_20260610,
+   gov_offuniverse_comp_audit_20260610.
+   **R17c (logged, Scott's call — `sql/R17c_FOLLOWUP_cm_flag_inconsistency.md`):**
+   the gov CM report is internally inconsistent TODAY — 16 flag-respecting views
+   read ~7.9% all-time cap, 13 others ~8.6% (66bps spread, same report), because
+   `exclude_from_market_metrics` flags ~9,601 sales that only some views honor.
+   Investigate what those 9,601 are + reconcile to one number (moves published
+   numbers, possibly TTM). NOT folded into R17b.
 7. **Backlog / deferred:** precision BTS/chain developer signal · SOS adapters
    beyond FL · person-typing for chain owners.
 
@@ -135,12 +151,15 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    read the Team Briggs tree (tenant/brand + City,ST anchor) into the existing
    extract→match→promote pipeline; additive landing zones only (read, don't
    reorganize); cloud PA "List/Get folder" + local backfill. conventions LOCKED
-   (DB-only tracking; outputs to existing folders w/ `[LCC]` tag). **Worker build
-   prompt written:** `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md` (Slice 1 —
-   reuses the Phase-1 Get flow for bytes since folder files already live in
-   SharePoint; only new PA dependency is a "List folder" flow; OM-type files
-   first via the existing extractor; `folder_feed_seen` DB-only tracking;
-   path→subject_hint anchor; local backfill + gentle cron). 3. Correspondence
+   (DB-only tracking; outputs to existing folders w/ `[LCC]` tag). **Slice 1
+   SHIPPED 2026-06-10 (PR #1133): worker `?_route=folder-feed-tick`, classifier,
+   `stageOmIntake` sharepoint-pointer extension, local backfill script.
+   Migrations applied to LCC Opps (`folder_feed_seen` table + `lcc-folder-feed`
+   */30 cron); endpoint live + returns clean 200 no-op (`SHAREPOINT_LIST_URL`
+   unset).** Remaining: Scott builds the PA "List folder" flow + sets
+   `SHAREPOINT_LIST_URL` (the Get flow already exists from Phase 1), then the feed
+   walks the tree. Build prompt: `CLAUDECODE_PROMPT_PHASE2_folder_feed_worker.md`.
+   3. Correspondence
    + notes enrichment. 4. Context layer as shared MCP+REST service. 5. Standards
    spine + cross-tool syndication. 6. New verticals on the same layers.
 Architecture docs: `ARCHITECTURE_intelligence_hub.md` (the 5-layer design),
