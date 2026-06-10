@@ -250,6 +250,49 @@ const hex = (color) => (color || '').replace('#', '').toUpperCase();
 // The first column is always 'period_end' (or year for annual data) and
 // 'subspecialty' is included as a filter context column.
 
+// Round 76 Layer A1 — the cap-by-term Data_* tabs carry BOTH cohort schemes
+// (dia 12+/8-12/6-8/≤5 AND gov 10+/6-10/<5/Outside) side-by-side because
+// CHART_COLUMNS is keyed by chart_template_id, not vertical. Each export only
+// populates its own vertical's 4 cohorts, so the other 4 columns ship 100%
+// NULL — Scott reads the empty gov-scheme `10+` column in a dia tab as a
+// "missing 10+ cohort" and the half-blank tab as "the data conflicts with
+// itself". The view for each vertical only EXPOSES its own scheme, so a chart
+// series can never bind to the wrong (null) set if we prune the tab to the
+// columns the vertical actually fills. selectCohortColumns():
+//   1. drops the OTHER vertical's cohort scheme entirely, and
+//   2. drops any remaining cohort column that is 100% empty across the data
+//      (auto-resolves the gov dot/q `cap_5to10` vs `cap_6to10` naming split —
+//      the dot view exposes cap_5to10, the quarterly view exposes cap_6to10).
+// Non-cohort columns (period_end / subspecialty / counts on non-cap keys) are
+// never touched.
+const DIA_COHORT_KEYS = new Set(['cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless']);
+const GOV_COHORT_KEYS = new Set(['cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm']);
+const COHORT_CAP_TEMPLATES = new Set([
+  'cap_rate_by_lease_term',
+  'sold_cap_by_term_dot_plot',
+  'asking_cap_by_term_dot_plot',
+]);
+
+function selectCohortColumns(cols, chartTemplateId, vertical, rows) {
+  if (!COHORT_CAP_TEMPLATES.has(chartTemplateId)) return cols;
+  // strip a trailing `_n` (count sibling) to get the cohort base key
+  const baseKey = (k) => k.replace(/_n$/, '');
+  const isCohortCol = (c) => DIA_COHORT_KEYS.has(baseKey(c.key)) || GOV_COHORT_KEYS.has(baseKey(c.key));
+  // The set this vertical does NOT use (national_st has no cohort scheme — keep
+  // dia's by convention since the cap-by-term charts are dia/gov only).
+  const wrongScheme = vertical === 'gov' ? DIA_COHORT_KEYS : GOV_COHORT_KEYS;
+  const rowList = Array.isArray(rows) ? rows : [];
+  const colHasData = (key) => rowList.some(r => r != null && r[key] != null);
+  return cols.filter((c) => {
+    if (!isCohortCol(c)) return true;                 // never touch non-cohort columns
+    if (wrongScheme.has(baseKey(c.key))) return false; // drop the other vertical's scheme
+    // keep only if the column actually carries data (prunes the gov 5to10/6to10
+    // alias the active view doesn't expose); when no rows are supplied (tests),
+    // keep the column so schema-sniffing callers still see it.
+    return rowList.length === 0 ? true : colHasData(c.key);
+  });
+}
+
 const CHART_COLUMNS = {
   volume_ttm_by_quarter: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -1253,6 +1296,11 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         ? { ...c, header: c.header.replace('10+ yr', '6+ yr') }
         : c);
     }
+
+    // R76 Layer A1 — prune the cap-by-term tabs to this vertical's canonical
+    // cohort scheme so no chart series binds to a permanently-NULL column set
+    // (the "missing 10+ cohort" / "data conflicts with itself" notes).
+    cols = selectCohortColumns(cols, chart.chart_template_id, vertical, chart.rows);
 
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
@@ -2496,6 +2544,9 @@ export function getExportBundleSchema() {
   return {
     tabNames:               TAB_NAMES,
     chartColumns:           CHART_COLUMNS,
+    // R76 Layer A1 — vertical-aware cohort-column pruner for the cap-by-term
+    // tabs (exported for regression coverage of the empty-column fix).
+    selectCohortColumns,
     periodSummaryTemplates: PERIOD_SUMMARY_TEMPLATES,
     // Charts whose worksheet is built via a dedicated renderPeriodSummaryTab /
     // renderKpiBlockTab / renderOnMarketSnapshotTab path. They need a tab name
