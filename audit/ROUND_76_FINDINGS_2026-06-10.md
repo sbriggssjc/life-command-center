@@ -377,7 +377,46 @@ over-smooth" doctrine. No floor change.
   the cohort is an "8+yr split" — corrected to note the live bucket is 6+
   (`firm_term_years >= 6`, R73 #22). No functional change; `node --check` clean.
 
-(dia Ask-Cap-by-Term / cohort dots A3 classification still owed.)
+---
+
+## A3 — dia Ask-Cap-by-Term / cohort dots (CLOSES A3), APPLIED + Layer-C handoff
+
+Source: `cm_dialysis_asking_cap_by_term_m` ← `cm_dialysis_active_listings_m`
+(2yr TTM window, n≥5 gate, 7-mo smooth). Two failure modes separated per Scott:
+
+### (b) date-gap exclusions → Layer C (the headline, NOT a floor)
+The active-window JOIN requires `listing_date IS NOT NULL AND <= period_end`.
+Receipts on dia `available_listings` (excl. synthetic):
+- **2,808** listings have a usable asking cap (0.04-0.12).
+- **932 of those (33%) have a NULL `listing_date`** → excluded from EVERY
+  active-window anchor, so a third of the cap-eligible asking universe never
+  reaches the cohort chart.
+- Future `off_market_date` / future `sold_date` = **0** (the #9-style over-stay
+  overcount is NOT present in dia today — clean on that axis).
+**Routing: Layer C** (on-market snapshot/date-quality). Flooring cannot recover
+these rows; the fix is the listing_date gap / membership logic, tracked under C.
+
+### (a) genuine cohort sparsity → completeness floor 2017 (APPLIED)
+The ≤5 and 6-8 asking cohorts do **not exist before 2017** (mo68/mo5 = 0 in
+2013-15, partial 2016); all four render continuously (12/12) from **2017**
+(n12=24, n8=28, n68=7, n5=16). So it IS the same structural sparsity as sold —
+but the floor differs:
+- **Asking caps cross in nearly every year** (2016 CROSS, 2017 CROSS, 2018-19
+  ordered, 2020 CROSS, 2021 CROSS, 2022 CROSS) even at high n — because asking
+  is seller pricing, not closed-sale evidence, so there is **no term-premium
+  ordering to floor on** (unlike sold, which settles ~2019).
+- Therefore the honest asking floor is **completeness (2017)**, not the sold
+  ordering floor. My initial R76 `capByTermFloor` had over-cropped asking to
+  2019 (it inherited the sold rule); split out **`askByTermFloor` → 2017** for
+  `asking_cap_by_term_dot_plot` (sold + line chart keep `capByTermFloor` → 2019).
+- Annotated the asking chart description: starts 2017 (completeness); asking
+  cohorts don't form a clean term-premium ladder — read levels, not ordering.
+- Verified: `node --check` clean; full suite 555/0; 12 functions.
+
+**A3 is complete.** Four flagged cohort/cap charts classified:
+cap-by-term (dia, floor 2019) · gov #13 cap-by-credit (sparsity + E2 line-style)
+· gov sentiment 6+ (healthy, R73 #22 verified) · dia ask-cap-by-term (floor 2017
++ a Layer-C date-gap handoff: 932 NULL-listing_date listings).
 
 ---
 
