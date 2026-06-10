@@ -1247,9 +1247,13 @@ async function exportWorkbook(req, res) {
       // Master_m has only the all-deals fields (pct_price_change_bid_ask,
       // avg_last_ask_cap); the mapper was aliasing the same field
       // twice for the "_long_term" cohort. The Round 11 rebuild of
-      // cm_gov_seller_sentiment_m computes a proper 8+yr cohort split
+      // cm_gov_seller_sentiment_m computes a proper long-term cohort split
       // from sales_transactions + leases — let the chart fetch from
       // that wrapper directly. ~190ms total over 303 monthly rows.
+      // R73 #22 — the gov long-term cohort is the 6+ firm-yr CORE
+      // (`firm_term_years >= 6` in the live view; the renderer + the
+      // Data_Sentiment header label it "6+ yr"). dia keeps its 10+ core.
+      // (This comment previously said "8+yr" — stale; the live bucket is 6+.)
       //
       // R45 — `cap_rate_by_credit` master_m mapper REMOVED.
       // master_m (cm_gov_market_quarterly_master_m_mat) only aggregates

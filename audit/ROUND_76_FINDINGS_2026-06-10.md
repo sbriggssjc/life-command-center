@@ -344,6 +344,43 @@ SERIES TYPE (Scott E2: "line type different for municipal and state — fix").
 
 ---
 
+## A3 — gov Sentiment "10+" cohort (classifier + R73 #22 definition), CONFIRMED HEALTHY
+
+### Part 1 — classifier: cohort is well-populated, NO propagation gap, NO absence
+The gov sentiment long-term cohort fetches from `cm_gov_seller_sentiment_m`.
+Density by year (TTM):
+
+| yr | n_all | n_6+ | months charted (6+) |
+|---|---|---|---|
+| 2010 | 10 | 6 | 12/12 |
+| 2013 | 17 | 5 | 12/12 |
+| 2016 | 37 | 8 | 12/12 |
+| 2019 | 79 | 12 | 12/12 |
+| 2022 | 75 | 16 | 12/12 |
+
+The 6+ cohort renders **12/12 months every year from 2010** (n above the n≥3
+gate throughout). So this is neither a propagation gap nor genuine absence —
+unlike cap-by-credit muni. Notably, **R73 #22's 10+→6+ redefinition is itself
+what fixed the "missing data"**: a 6+ firm-yr cohort is far denser than a 10+
+one would be. The existing 2016 floor crops the modest-n early years (n 5-9 in
+2010-2017) — consistent with the cap-by-term "floor where consistent, don't
+over-smooth" doctrine. No floor change.
+
+### Part 2 — R73 #22 definition: ALREADY CORRECT in data AND label
+- **Data**: the live `cm_gov_seller_sentiment_m` buckets the long-term cohort at
+  **`firm_term_years >= 6`** (verified in the view def — every long-term FILTER
+  is `>= 6`). NOT 8+, NOT 10+.
+- **Label**: the renderer labels gov `6+` (dia `10+` — correct, dia's core is
+  10+), and the `Data_Sentiment` header is relabeled `10+ yr`→`6+ yr` for gov
+  (export R73 #22 block). So bucket and label agree — no fix needed.
+- **The only stale artifact** was a code COMMENT in `capital-markets.js` claiming
+  the cohort is an "8+yr split" — corrected to note the live bucket is 6+
+  (`firm_term_years >= 6`, R73 #22). No functional change; `node --check` clean.
+
+(dia Ask-Cap-by-Term / cohort dots A3 classification still owed.)
+
+---
+
 ## Status of the rest of Round 76 (scoped across sessions, per the note)
 - **A1** — done.
 - **A2** — gov fix applied live + verified (mis-bin floor + median); the genuine
