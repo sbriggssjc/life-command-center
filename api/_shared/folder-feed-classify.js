@@ -99,6 +99,33 @@ export function classifyFile(name) {
   return { type: 'unknown', isOm: false };
 }
 
+// ── Archive / working-folder exclusion (Phase 2, Slice 2f) ──────────────────
+// Some On Market subfolders are NOT live-deal sources and must never be ingested
+// or re-surface as deferred backlog:
+//   • /OLD/, /Archive/, /Archived/ path SEGMENTS — deprecated listings.
+//   • leading-underscore working/staging folders (e.g. "_added or updated in
+//     comps spreadsheet") — scratch, not deal docs.
+// Each pattern is anchored to a WHOLE path SEGMENT so a tenant legitimately named
+// "Old Dominion …" (segment "Old Dominion", not "OLD") is NOT caught. Keep the
+// list small + named — extend it here, in one place.
+export const EXCLUDED_FOLDER_SEGMENT_RES = [/^old$/i, /^archive$/i, /^archived$/i];
+
+/**
+ * True when ANY '/'-delimited segment of `folderPath` is an archive segment
+ * (OLD/Archive/Archived) or a leading-underscore working/staging folder. Treats
+ * every segment as a FOLDER — call with a folder path, or with a file's PARENT
+ * directory (never the bare filename) so a `_draft.pdf` file in a clean folder
+ * isn't false-excluded.
+ * @param {string} folderPath
+ * @returns {boolean}
+ */
+export function isExcludedFolderPath(folderPath) {
+  const segs = String(folderPath || '').replace(/\\/g, '/').split('/').map(s => s.trim()).filter(Boolean);
+  return segs.some(seg =>
+    seg.startsWith('_') || EXCLUDED_FOLDER_SEGMENT_RES.some(re => re.test(seg))
+  );
+}
+
 // ── City/ST + street-address + portfolio recovery (Phase 2, Slice 2d.1) ─────
 // The PROPERTIES tree rarely follows the clean PROPERTIES/<tenant>/<City, ST>/
 // shape: the "City, ST" usually lives in the FILENAME ("… - Austin, TX - …")
