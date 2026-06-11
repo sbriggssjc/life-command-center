@@ -8,11 +8,21 @@
 
 import express from "express";
 import cors from "cors";
+import {
+  assemblePropertyPacketViaApi,
+  resolveContextPacket,
+} from "./context-assemble.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "3100", 10);
 const LCC_API_KEY = process.env.LCC_API_KEY || "";
+
+// Base URL of the main Express app (the tranquil-delight service). Used to
+// assemble a property context packet on a cache miss via
+// POST {LCC_API_BASE}/api/context?action=assemble. When unset, get_property_context
+// falls back to the cache-only read (context_packet: null) — Phase 2 Slice 3a.1.
+const LCC_API_BASE = process.env.LCC_API_BASE || "";
 
 const OPS_SUPABASE_URL = process.env.OPS_SUPABASE_URL || "";
 const OPS_SUPABASE_KEY = process.env.OPS_SUPABASE_KEY || "";
@@ -300,11 +310,15 @@ const TOOL_HANDLERS = {
         )
       );
 
-      // Context packet cache
+      // Context packet cache — fresh rows only (a stale/invalidated row counts
+      // as a miss so assemble-on-miss rebuilds it below, mirroring the
+      // /api/property HTTP mirror's fresh-only predicate).
       promises.push(
         opsQuery(
           "GET",
-          `context_packets?entity_id=eq.${enc(eid)}&packet_type=eq.property&order=created_at.desc&limit=1`
+          `context_packets?entity_id=eq.${enc(eid)}&packet_type=eq.property` +
+            `&invalidated=eq.false&expires_at=gt.${enc(new Date().toISOString())}` +
+            `&order=created_at.desc&limit=1`
         )
       );
 
@@ -331,10 +345,27 @@ const TOOL_HANDLERS = {
 
       const [actionsRes, contextRes, govData] = await Promise.all(promises);
 
+      // Assemble-on-miss: a cold / long-tail property has no fresh cached packet
+      // (the nightly pre-warm is bounded to the most-active assets). Call the
+      // main app's shared assembler over HTTP so agents get the SAME rich packet
+      // the HTTP mirror returns. Graceful: unset LCC_API_BASE or any
+      // error/timeout falls back to the cache-only null. Phase 2 Slice 3a.1.
+      const { context_packet } = await resolveContextPacket({
+        cachedRow: contextRes.data?.[0] || null,
+        entity,
+        assembleFn: ({ entityId, workspaceId }) =>
+          assemblePropertyPacketViaApi({
+            entityId,
+            workspaceId,
+            apiBase: LCC_API_BASE,
+            apiKey: LCC_API_KEY,
+          }),
+      });
+
       const result = {
         entity,
         active_tasks: actionsRes.data || [],
-        context_packet: contextRes.data?.[0] || null,
+        context_packet,
         gov_data: null,
       };
 
@@ -1020,4 +1051,5 @@ app.listen(PORT, () => {
   console.log(`[MCP] Auth: ${LCC_API_KEY ? "ENABLED" : "DISABLED (dev mode)"}`);
   console.log(`[MCP] OPS DB: ${OPS_SUPABASE_URL ? "configured" : "NOT configured"}`);
   console.log(`[MCP] GOV DB: ${GOV_SUPABASE_URL ? "configured" : "NOT configured"}`);
+  console.log(`[MCP] Assemble-on-miss: ${LCC_API_BASE ? `via ${LCC_API_BASE}` : "DISABLED (LCC_API_BASE not set — cache-only)"}`);
 });
