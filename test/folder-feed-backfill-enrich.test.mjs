@@ -63,12 +63,15 @@ describe('folder-feed backfill — buildStageEnvelope (ingest mode byte-identica
     const env = buildStageEnvelope({ ...COMMON, relPath: REL, hintPath: HINT, mode: 'ingest' });
     const seed = env.inputs.seed_data;
     assert.ok(!('mode' in seed), 'ingest seed_data carries no mode key');
-    // Full byte-identical seed_data shape (tags, subject_hint, source_path).
+    // Full seed_data shape (tags, subject_hint, source_path). subject_hint gained
+    // the Stage A recovery keys (tenant_core / address / is_portfolio) — additive,
+    // shared by both channels (they only fill BLANKS in the matcher).
     assert.deepEqual(seed, {
       tags: ['folder_feed', 'backfill'],
       subject_hint: {
-        tenant_brand: 'DaVita Dialysis', city: 'Tulsa', state: 'OK',
-        vertical: 'dia', bucket: 'D',
+        tenant_brand: 'DaVita Dialysis', tenant_core: 'DaVita Dialysis',
+        city: 'Tulsa', state: 'OK', address: null,
+        vertical: 'dia', bucket: 'D', is_portfolio: false,
       },
       source_path: REL,
     });
