@@ -145,6 +145,37 @@ describe('processSfActivityBatch (Unit 2)', () => {
     assert.equal(calls[0].metadata.sf_status, 'Completed');
   });
 
+  it('stores OwnerId (and Owner.Name when present) from a raw SF record', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { Id: 'own1', TaskSubtype: 'Call', Subject: 'Owned', WhoId: '003aaa',
+        OwnerId: '005xxTEAM', Owner: { Name: 'Scott Briggs' } },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].metadata.owner_id, '005xxTEAM');
+    assert.equal(calls[0].metadata.owner_name, 'Scott Briggs');
+  });
+
+  it('stores owner_id from the canonical owner_id field', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { sf_id: 'own2', type: 'Email', who_id: '003aaa', owner_id: '005yyDEBT', owner_name: 'NorthMarq Debt' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].metadata.owner_id, '005yyDEBT');
+    assert.equal(calls[0].metadata.owner_name, 'NorthMarq Debt');
+  });
+
+  it('records owner_id:null when the SF record carries no owner', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { sf_id: 'own3', type: 'Call', who_id: '003aaa' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].metadata.owner_id, null);
+    assert.equal(calls[0].metadata.owner_name, null);
+  });
+
   it('handles a mixed batch of canonical + raw SF records', async () => {
     const { fn, calls } = captureAppend();
     const out = await processSfActivityBatch([

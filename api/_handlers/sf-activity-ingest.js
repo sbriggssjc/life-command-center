@@ -91,6 +91,11 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     const whoId   = rec?.who_id       ?? rec?.WhoId ?? null;   // Contact
     const whatId  = rec?.what_id      ?? rec?.WhatId ?? null;  // Account / other
     const status  = rec?.status       ?? rec?.Status ?? null;
+    // WHO logged this Task — the SF Task.OwnerId. Records it so the timeline can
+    // attribute "my team" vs "NorthMarq debt" touches. Owner.Name only rides
+    // along if the flow ever expands it; null otherwise (id is enough to group).
+    const ownerId   = rec?.owner_id   ?? rec?.OwnerId ?? null;
+    const ownerName = rec?.owner_name ?? rec?.OwnerName ?? rec?.Owner?.Name ?? null;
 
     if (!sfId) {
       summary.skipped_no_id += 1;
@@ -148,6 +153,8 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
           what_id:   whatId,
           activity_date: actDate,
           resolved_via: resolvedVia,
+          owner_id:   ownerId,
+          owner_name: ownerName,
         },
       });
     } catch (err) {
