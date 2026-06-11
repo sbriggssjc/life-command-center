@@ -246,6 +246,10 @@ app.all('/api/folder-feed-tick', (req, res) => { req.query._route = 'folder-feed
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });
 
+// Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
+// canonical activity_events timeline (linked via external_identities).
+app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });
+
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to
 // Railway hit Express's 404 handler. 2026-04-24 E2E test: PA Flow's
