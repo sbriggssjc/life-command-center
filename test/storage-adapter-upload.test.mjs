@@ -1,11 +1,27 @@
-// Phase 2 Slice 2b.1 — uploadDocToFolder speaks the proven Save-flow contract
-// ({ path, content_base64, content_type }) and derives a LIBRARY-relative path.
+// Phase 2 Slice 2b.2 — uploadDocToFolder sends a DYNAMIC Folder Path + File Name
+// ({ folder_path, file_name, content_base64 }) so the write-back lands in the
+// resolved property folder, not the flow's hardcoded intake zone.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { libraryRelativeDocPath, uploadDocToFolder } =
+const { libraryRelativeFolder, libraryRelativeDocPath, uploadDocToFolder } =
   await import('../api/_shared/storage-adapter.js');
+
+describe('libraryRelativeFolder', () => {
+  it('strips the site/library prefix and leading/trailing slashes', () => {
+    assert.equal(
+      libraryRelativeFolder('/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI'),
+      'PROPERTIES/D/DaVita/Chilton, WI'
+    );
+  });
+  it('drops a trailing slash and collapses double slashes', () => {
+    assert.equal(
+      libraryRelativeFolder('/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/'),
+      'PROPERTIES/D'
+    );
+  });
+});
 
 describe('libraryRelativeDocPath', () => {
   it('strips the site/library prefix and joins the file name', () => {
@@ -37,7 +53,7 @@ describe('uploadDocToFolder', () => {
     if (prev !== undefined) process.env.SHAREPOINT_UPLOAD_URL = prev;
   });
 
-  it('POSTs the Save-flow body (path/content_base64/content_type) and reads server_relative_url', async () => {
+  it('POSTs the dynamic body (folder_path/file_name/content_base64) and reads server_relative_url', async () => {
     process.env.SHAREPOINT_UPLOAD_URL = 'https://pa.test.local/upload';
     let captured = null;
     const fetchImpl = async (_url, opts) => {
@@ -53,11 +69,11 @@ describe('uploadDocToFolder', () => {
     });
     assert.equal(r.ok, true);
     assert.equal(r.server_relative_url, `${FOLDER}/Foo [LCC].pdf`);
-    assert.equal(captured.path, 'PROPERTIES/D/DaVita/Chilton, WI/Foo [LCC].pdf');
+    assert.equal(captured.folder_path, 'PROPERTIES/D/DaVita/Chilton, WI');
+    assert.equal(captured.file_name, 'Foo [LCC].pdf');
     assert.equal(captured.content_base64, Buffer.from('hello').toString('base64'));
-    assert.equal(captured.content_type, 'application/pdf');
-    assert.equal('folder_path' in captured, false);
-    assert.equal('file_name' in captured, false);
+    assert.equal('path' in captured, false);
+    assert.equal('content_type' in captured, false);
     delete process.env.SHAREPOINT_UPLOAD_URL;
   });
 
