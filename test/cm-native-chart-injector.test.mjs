@@ -328,6 +328,23 @@ test('R37 P1: stacked-bar and multi-line builders emit cat numFmt', async () => 
   }
 });
 
+test('R76 E4: multi-line yLeftAxisTitle emits a rotated value-axis title; absent ⇒ none', () => {
+  const base = {
+    type: 'multi-line', tabName: 'Data_Test', catCol: 'A',
+    dataStart: 5, dataEnd: 8, valAxNumFmt: '0.00%',
+    series: [{ titleCol: 'B', titleRow: 4, valCol: 'B', color: '003DA5' }],
+  };
+  const withTitle = buildMultiLineChartXml({ ...base, yLeftAxisTitle: 'Cap rate' });
+  const valAx = withTitle.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(valAx, /<c:title>[\s\S]*<a:t>Cap rate<\/a:t>/, 'value axis carries the title text');
+  assert.match(valAx, /rot="-5400000"/, 'axis title is rotated -90deg');
+  // Title must sit between gridlines and numFmt (CT_ValAx order) — assert no XML error by re-parse shape
+  assert.ok(valAx.indexOf('<c:title>') < valAx.indexOf('<c:numFmt'), 'title precedes numFmt');
+  const without = buildMultiLineChartXml(base);
+  const valAx2 = without.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.ok(!valAx2.includes('<c:title>'), 'no axis title when yLeftAxisTitle absent');
+});
+
 test('R37 P1: catAxNumFmt override works for year-axis templates', async () => {
   const wb = new ExcelJS.Workbook();
   wb.addWorksheet('Index').getCell('A1').value = 'Test';
