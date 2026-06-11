@@ -1,0 +1,40 @@
+{
+  "_doc": "R76 Layer G — CONVERGENCE spec (zealous-johnson -> great-volta). PER SCOTT 2026-06-11: converge, don't fork. The single source of truth for the dia mis-ingestion cleanup is the FROZEN TABLE public._sweep_candidates_2026_06_11 (Dialysis_DB zqzrriwuavgrquhisnoa), built/owned by the great-volta sweep. This doc reconciles the zealous-johnson 'G sweep' SCOPING into that table. The zealous-johnson side runs NO parallel sweep and writes NO dia exclusions; its findings are handed here for the great-volta build to fold in through the frozen-review gate.",
+  "frozen_table_state_observed_2026_06_11": {
+    "table": "public._sweep_candidates_2026_06_11",
+    "taxonomy": {"phantom_duplicate": 224, "review": 31, "whole_center_multitenant": 25, "industrial_corporate": 10},
+    "note": "Table is ACTIVELY being rebuilt by the great-volta sweep (observed rows reset + confirmed_class cleared mid-session). Therefore convergence MUST happen in the great-volta BUILD, not via ad-hoc inserts from another branch (transient inserts get clobbered on rebuild). This spec is the durable hand-off."
+  },
+  "reconciliation": {
+    "fresenius": {
+      "zj_scoping_finding": "1,506 Fresenius-tagged sales of 3,037 market-metric dia sales",
+      "verdict": "NOT a distortion class. 1,506 ~= operator market share, not a mis-ingestion. The great-volta sweep correctly has NO Fresenius class. DO NOT blanket-exclude Fresenius. Resolved."
+    },
+    "phantom_duplicates": {
+      "zj_scoping_finding": "exact-triple (property+date+price) key found 0",
+      "verdict": "COVERED by great-volta's phantom_duplicate class (224, via price_fingerprint/sigs near-dup machinery). The zj exact key was simply too strict. No gap. Resolved."
+    },
+    "wrong_asset_class": {
+      "zj_scoping_finding": "89 candidates (61 nondialysis property_type + 29 impossible $/sf, overlapping). 27 already in the frozen table; 62 not.",
+      "gap_triage": {
+        "high_confidence_impossible_psf (n=19, FOLD IN)": "see impossible_psf_gap below",
+        "low_confidence_single_clinic (n=16, DO NOT add)": "$10-1,231/sf real single clinics typed retail/office in property.property_type. Likely FALSE POSITIVES of the broad type filter, not wrong assets. Excluded from the hand-off; do not pollute the gate.",
+        "no_bsf (remainder)": "candidates with NULL building_size have no $/sf signal; not actionable as impossible-psf."
+      }
+    },
+    "impossible_psf_gap": {
+      "fold_in_as": "proposed_class='review', proposed_reason='impossible_psf_gt_2000 (bad building_size suspected)'",
+      "IMPORTANT_taxonomy_nuance": "These 19 are GENUINE dialysis (DaVita / Fresenius / US Renal Care), NOT wrong assets. bsf is implausibly small (1,482-11,031 sf) against $3M-$28.9M prices -> $/sf $2,022-4,544. Root cause is almost certainly BAD building_size, not a portfolio/whole-center price. DISPOSITION: review + FIX building_size, KEEP the sale in market metrics. Do NOT exclude as non-comp (that would wrongly drop real dialysis comps). Property 27672 (Monroe NC Fresenius, bsf 1482) recurs 4x -> a single bad-bsf row driving multiple inflated $/sf.",
+      "reproducible_predicate": "sales_transactions t JOIN properties p ON p.property_id=t.property_id WHERE t.sold_price>0 AND NOT exclude_from_market_metrics AND p.building_size>0 AND t.sold_price/p.building_size > 2000 AND sale_id NOT IN (frozen table)",
+      "sale_ids": [5378,6502,9516,291,1224,6030,1024,1060,11379,8070,14451,9515,6339,1173,7932,6184,1234,14468,37]
+    },
+    "seattle_700_broadway_5530": {
+      "status_in_frozen": "ALREADY present as proposed_class='review', proposed_reason='mis_ingestion_sweep_2026_06_11' (unconfirmed).",
+      "scott_classification": "whole_building_hq -> reclass to proposed_class='whole_center_multitenant', proposed_reason carrying 'whole_building_hq' (Northwest Kidney Centers Broadway flagship/HQ; genuine dialysis but $42.5M whole-building, non-representative for single-clinic NNN comps).",
+      "transient_update_note": "A reclass UPDATE to 5530 was applied live during this session as a convergence attempt, but the table is being actively rebuilt by great-volta, so it may not survive. The DURABLE home of this classification is this spec — great-volta's build should set it."
+    }
+  },
+  "the_7_high_confidence_wrong_asset_slice": "The original R76G '7 + Seattle' high-confidence wrong-asset slice: 27 of the 89 zj candidates already sit in the frozen table; Seattle is 5530 (above). The 7 are members of the frozen table's whole_center_multitenant / review classes - they are NOT a separate list to write; they are already in the SoT. Confirm under the frozen-review gate.",
+  "action_owner": "great-volta sweep build folds in: (1) the 19 impossible_psf rows as review/bad-bsf, (2) Seattle 5530 as whole_building_hq. zealous-johnson writes nothing further to dia; the dia capital-markets export waits for the ONE completed frozen-review pass.",
+  "verified_2026_06_11": "scoping read-only; one transient 5530 reclass attempted (may be rebuilt away); canonical convergence is this spec"
+}
