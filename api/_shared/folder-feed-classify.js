@@ -99,6 +99,74 @@ export function classifyFile(name) {
   return { type: 'unknown', isOm: false };
 }
 
+// USPS 2-letter codes (50 states + DC + PR). Used to validate a filename-derived
+// "City, ST" token so a stray 2-caps token (`- Memo, XX`) never false-positives
+// into a city/state. Kept inline so this module stays dependency-free (the CLI
+// backfill imports it without pulling the intake chain).
+const US_STATE_CODES = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+  'DC', 'PR',
+]);
+
+// Trailing "…- <City>, <ST>" token. Anchored on a dash/en/em separator + a
+// 2-letter state; the city allows spaces/periods/apostrophes/slashes/hyphens
+// (Winston-Salem, St. Louis). Global so we can take the LAST match — city tokens
+// sit near the end of the name, before any `(Master Sheet)` label.
+const FILENAME_CITY_STATE_RE = /[-–—]\s*([A-Za-z][A-Za-z .'\/-]*?),\s*([A-Z]{2})\b/g;
+
+/**
+ * Slice 2e — parse "City, ST" out of a FILENAME (the actual PROPERTIES tree has
+ * no City, ST folder level; the city/state live in the file name, e.g.
+ * "Vervent - Portland, OR (Master Sheet).xlsx"). Returns {city, state} only when
+ * BOTH parse AND the state is a real US state; otherwise null (a pure rollup name
+ * like "ARA Portfolio of 5 - Master Sheet.xlsx" correctly returns null).
+ * @param {string} fileName
+ * @returns {{city:string, state:string}|null}
+ */
+export function parseCityStateFromFilename(fileName) {
+  let stem = String(fileName || '').replace(/\\/g, '/');
+  stem = stem.split('/').pop() || '';
+  // Drop the extension and any trailing parenthetical label group(s).
+  stem = stem.replace(/\.[A-Za-z0-9]{1,5}$/, '');
+  stem = stem.replace(/(?:\s*\([^)]*\))+\s*$/, '').trim();
+  if (!stem) return null;
+
+  let m, last = null;
+  FILENAME_CITY_STATE_RE.lastIndex = 0;
+  while ((m = FILENAME_CITY_STATE_RE.exec(stem)) !== null) last = m;
+  if (!last) return null;
+
+  const city  = last[1].trim().replace(/\s+/g, ' ');
+  const state = last[2].toUpperCase();
+  if (!city || !US_STATE_CODES.has(state)) return null;
+  return { city, state };
+}
+
+/**
+ * Slice 2e — true when a subject_hint looks like a multi-property rollup with no
+ * resolvable City, ST: a `Portfolio` bucket OR a tenant carrying "Portfolio"
+ * ("ARA Portfolio of 5"), and no city/state. Such files legitimately don't map
+ * to ONE property, so the caller parks them (skipped) instead of churning the
+ * match_disambiguation lane. A rollup-bucket file whose FILENAME still resolves a
+ * City, ST (e.g. "Thrive - San Antonio, TX") is NOT a rollup — it maps to one
+ * property — so the city/state guard returns false there.
+ * @param {{tenant_brand:?string, city:?string, state:?string, bucket:?string}} hint
+ * @returns {boolean}
+ */
+export function looksLikePortfolioRollup(hint) {
+  if (!hint || hint.city || hint.state) return false;
+  const tenant = String(hint.tenant_brand || '').trim();
+  if (!tenant) return false;
+  const bucket = String(hint.bucket || '').trim();
+  if (/^portfolio$/i.test(bucket)) return true;     // PROPERTIES/Portfolio/<tenant>
+  if (/\bportfolio\b/i.test(tenant)) return true;    // "… Portfolio of N", "… Portfolio (N)"
+  return false;
+}
+
 /**
  * Build the subject_hint match anchor from a path before any content parse.
  * PROPERTIES/<bucket>/<TENANT or BRAND>[/<City, ST>]/…files
@@ -134,6 +202,15 @@ export function parseSubjectHintFromPath(serverRelativePath) {
       const m = s.match(/^(.+),\s*([A-Z]{2})$/);
       if (m) { hint.city = m[1].trim(); hint.state = m[2]; break; }
     }
+  }
+
+  // Slice 2e — filename City, ST fallback. The real PROPERTIES tree carries the
+  // city/state in the FILENAME, not a folder segment. Parse the last segment only
+  // when no path segment already produced a city (a path segment always wins),
+  // and never overwrite an existing value.
+  if (!hint.city && segs.length) {
+    const fromName = parseCityStateFromFilename(segs[segs.length - 1]);
+    if (fromName) { hint.city = fromName.city; hint.state = fromName.state; }
   }
 
   // Tenant-implied vertical when the research-root didn't decide it.
