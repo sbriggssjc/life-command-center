@@ -59,31 +59,48 @@ CREATE TABLE IF NOT EXISTS public._sweep_applied_2026_06_11 (
 
 -- =====================================================================
 -- STEP 2 — PRIORITY SLICE: de-duplicate phantom sales (~$906M distortion)
---   Keep one row per (property_id, sold_price) fingerprint = keep_sale_id
---   (earliest sale_date). Supersede + exclude the rest. Never delete.
+--   Supersession is MECHANICAL: one row survives per (property_id, sold_price)
+--   fingerprint; the rest are superseded + excluded. The $906M double-count is
+--   removed regardless of which row survives.
+--   KEEPER selection (which row/quarter the survivor lands in) is cluster/modal-
+--   year aware, NOT blanket "earliest": _sweep_candidates.keep_sale_id = earliest
+--   row in the group's densest year-cluster. For all-distinct-year groups
+--   (keeper_ambiguous=true, 204 of 224 rows) the earliest is the default but the
+--   true sale year is unverified — Scott confirms via confirmed_keep_sale_id
+--   before this runs (an ancient identical-price date, e.g. 1985 vs a 2022
+--   CoStar capture, is usually a legacy artifact, NOT the real sale).
+--   Honors a genuine_resale opt-out (near-impossible at identical price, but safe).
 -- =====================================================================
+-- WITH keeper AS (   -- one keeper per fingerprint, honoring Scott's override
+--   SELECT DISTINCT property_id, price AS sold_price,
+--          coalesce(nullif(confirmed_keep_sale_id,'')::int, keep_sale_id) AS keep_id
+--     FROM public._sweep_candidates_2026_06_11
+--    WHERE confirmed_class = 'phantom_duplicate'
+-- )
 -- INSERT INTO public._sweep_applied_2026_06_11
 --   (sale_id, property_id, action, prev_exclude, prev_txn_state, prev_classification, new_value)
--- SELECT st.sale_id, st.property_id, 'supersede_duplicate',
---        st.exclude_from_market_metrics, st.transaction_state,
---        st.sales_record_classification, 'survivor='||c.keep_sale_id
---   FROM public._sweep_candidates_2026_06_11 c
---   JOIN public.sales_transactions st ON st.sale_id = c.sale_id
---  WHERE c.proposed_class = 'phantom_duplicate'
---    AND c.dup_rank > 1
---    AND coalesce(c.confirmed_class,'') <> 'genuine_resale';
+-- SELECT st.sale_id, st.property_id, 'supersede_duplicate', st.exclude_from_market_metrics,
+--        st.transaction_state, st.sales_record_classification, 'survivor='||k.keep_id
+--   FROM keeper k
+--   JOIN public.sales_transactions st
+--     ON st.property_id = k.property_id AND st.sold_price = k.sold_price
+--  WHERE st.sale_id <> k.keep_id
+--    AND st.exclude_from_market_metrics IS NOT TRUE
+--    AND st.sale_id NOT IN (SELECT sale_id FROM public._sweep_candidates_2026_06_11
+--                            WHERE confirmed_class = 'genuine_resale');
 --
 -- UPDATE public.sales_transactions st
 --    SET exclude_from_market_metrics = TRUE,
 --        transaction_state           = 'superseded_duplicate',
 --        sales_record_classification = 'duplicate_row',
---        sales_exclusion_reason      = 'mis_ingestion_sweep_2026_06_11: identical-price re-capture; survivor sale '||c.keep_sale_id,
---        dedup_group_id              = c.keep_sale_id
---   FROM public._sweep_candidates_2026_06_11 c
---  WHERE st.sale_id = c.sale_id
---    AND c.proposed_class = 'phantom_duplicate' AND c.dup_rank > 1
---    AND coalesce(c.confirmed_class,'') <> 'genuine_resale'
---    AND st.exclude_from_market_metrics IS NOT TRUE;     -- idempotent
+--        sales_exclusion_reason      = 'mis_ingestion_sweep_2026_06_11: identical-price re-capture; survivor sale '||k.keep_id,
+--        dedup_group_id              = k.keep_id
+--   FROM keeper k
+--  WHERE st.property_id = k.property_id AND st.sold_price = k.sold_price
+--    AND st.sale_id <> k.keep_id
+--    AND st.exclude_from_market_metrics IS NOT TRUE
+--    AND st.sale_id NOT IN (SELECT sale_id FROM public._sweep_candidates_2026_06_11
+--                            WHERE confirmed_class = 'genuine_resale');   -- idempotent
 
 
 -- =====================================================================
