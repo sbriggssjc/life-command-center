@@ -23,6 +23,7 @@
 
 import { matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
+import { looksLikePortfolioRollup } from '../_shared/folder-feed-classify.js';
 import { opsQuery } from '../_shared/ops-db.js';
 
 // Record provenance for the attached doc through the shared registry, tagged
@@ -70,6 +71,15 @@ async function recordAttachProvenance({ domain, propertyId, documentId, fileName
 export async function attachRecognizedDoc(args) {
   const { subjectHint, fileName, sourceUrl, docType, workspaceId, actorId } = args;
   const pathRef = args.pathRef || sourceUrl || fileName || null;
+
+  // Slice 2e — a multi-property rollup (Portfolio bucket / "… Portfolio of N"
+  // tenant) with no resolvable City, ST legitimately maps to no single property.
+  // Park it (skipped) rather than emit a match_disambiguation decision that would
+  // churn every tick. A later slice can attach a rollup doc to all member
+  // properties or a portfolio entity — out of scope here.
+  if (looksLikePortfolioRollup(subjectHint)) {
+    return { ok: false, attached: false, parked: true, reason: 'portfolio_rollup_no_city', match_status: 'parked' };
+  }
 
   const match = await matchByPathAnchor(subjectHint).catch(() => null);
   const resolved = match

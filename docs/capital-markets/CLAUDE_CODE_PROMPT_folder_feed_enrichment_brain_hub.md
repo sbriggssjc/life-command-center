@@ -57,6 +57,20 @@ completes for every recognized non-OM working doc:
   `property_documents` rows with `source='folder_feed_properties'` + `field_provenance`,
   refusing on ambiguity (never guessing the property). Receipts: per-type attach
   counts on dia + gov, before/after.
+- **DOMAIN SCOPE (Scott, decided):** dia/gov-first, the rest searchable-but-light.
+  PROPERTIES is the WHOLE brokerage book (banks, vets, daycare, healthcare, etc.) —
+  only dia/gov have curated property DBs. So:
+  - **dia/gov docs** → attach to `property_documents` + enrich (Stage A/B). Full
+    treatment.
+  - **Out-of-domain docs** (no dia/gov property) → do NOT force into a domain and do
+    NOT skip. They stay captured in `folder_feed_seen` with their path anchor
+    (tenant_brand, City/ST, doc_type) — that table IS the universal doc index. Make
+    `folder_feed_seen` **tenant-searchable** so "deals with <tenant> as tenant/guarantor"
+    resolves across the whole book (out-of-domain from `folder_feed_seen` + dia/gov from
+    domain sales/leases). Nothing lost; just not force-fit into the wrong vertical.
+  - A vertical-agnostic **deal registry** that gives every out-of-domain deal a real
+    connected record (Stage A.5) is the next expansion — scope it AFTER dia/gov Stage
+    A/B land, not as a prerequisite.
 
 ## Stage B — ENRICHMENT: files become structured DATA through the provenance arbiter
 A per-doc-type extractor turns each attached file into structured fields; EVERY write

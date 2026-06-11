@@ -121,6 +121,45 @@ describe('folder-feed light attach (Slice 2d Unit 2)', () => {
     assert.ok(!calls.some(c => c.url.includes('/property_documents')), 'no doc attached when unresolved');
   });
 
+  it('tenant + filename-derived city resolving to one property → attaches (not disambiguation)', async () => {
+    // Mirrors the Slice 2e fix: the path has no City, ST folder, but the matcher
+    // gets city/state from the filename via the subject_hint. One hit → attach.
+    installFetchMock({ diaRows: [{ property_id: 30001, address: '500 Vervent Way', tenant: 'Vervent' }] });
+
+    const res = await attachRecognizedDoc({
+      subjectHint: { tenant_brand: 'Vervent', city: 'Portland', state: 'OR', vertical: 'dia', bucket: 'V' },
+      fileName: 'Vervent - Portland, OR (Master Sheet).xlsx',
+      sourceUrl: '/sites/x/PROPERTIES/V/Vervent/Vervent - Portland, OR (Master Sheet).xlsx',
+      docType: 'master',
+      pathRef: '/sites/x/PROPERTIES/V/Vervent/Vervent - Portland, OR (Master Sheet).xlsx',
+    });
+
+    assert.equal(res.attached, true);
+    assert.equal(res.property_id, 30001);
+    const docWrites = calls.filter(c => c.url.includes('/property_documents') && c.method === 'POST');
+    assert.ok(docWrites.length >= 1, 'property_documents POST happened');
+    assert.equal(docWrites[0].body.document_type, 'master');
+    assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'no disambiguation on a clean filename-city match');
+  });
+
+  it('portfolio rollup with no City, ST → parked (skipped), emits NO decision', async () => {
+    installFetchMock({ diaRows: [], govRows: [] });
+
+    const res = await attachRecognizedDoc({
+      subjectHint: { tenant_brand: 'ARA Portfolio of 5', city: null, state: null, vertical: null, bucket: 'Portfolio' },
+      fileName: 'ARA Portfolio of 5 - Master Sheet.xlsx',
+      sourceUrl: '/sites/x/PROPERTIES/Portfolio/ARA Portfolio of 5/ARA Portfolio of 5 - Master Sheet.xlsx',
+      docType: 'master',
+      pathRef: '/sites/x/PROPERTIES/Portfolio/ARA Portfolio of 5/ARA Portfolio of 5 - Master Sheet.xlsx',
+    });
+
+    assert.equal(res.attached, false);
+    assert.equal(res.parked, true);
+    assert.equal(res.reason, 'portfolio_rollup_no_city');
+    assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'rollup never churns the disambiguation lane');
+    assert.ok(!calls.some(c => c.url.includes('/property_documents')), 'rollup attaches nothing');
+  });
+
   it('ambiguous (a hit in both domains via unknown vertical) → disambiguation, never a guess', async () => {
     installFetchMock({
       diaRows: [{ property_id: 1, address: 'A', tenant: 'Acme' }],

@@ -8,6 +8,10 @@ import assert from 'node:assert/strict';
 import {
   classifyFile, parseSubjectHintFromPath,
   extractCityState, extractStreetAddress, isPortfolioHint, tenantCore,
+  classifyFile,
+  parseSubjectHintFromPath,
+  parseCityStateFromFilename,
+  looksLikePortfolioRollup,
 } from '../api/_shared/folder-feed-classify.js';
 
 describe('folder-feed classifyFile', () => {
@@ -138,5 +142,74 @@ describe('folder-feed City/ST + address + portfolio recovery', () => {
       'PROPERTIES/A/AMRA Portfolio of 7/AMRA Portfolio of 7 - Master Sheet.xlsx');
     assert.equal(port.is_portfolio, true);
     assert.equal(port.tenant_core, 'AMRA');
+// Slice 2e — the real PROPERTIES tree has no City, ST folder level; the city and
+// state live in the FILENAME. These guards unlock the non-OM attach path.
+describe('folder-feed parseCityStateFromFilename (Slice 2e)', () => {
+  const cases = [
+    ['Vervent - Portland, OR (Master Sheet).xlsx',                                  'Portland',    'OR'],
+    ['First Oklahoma Federal Credit Union - Tulsa, OK (Master Sheet).xlsx',         'Tulsa',       'OK'],
+    ['Vistra Corp (UNIFIED) - Irving, TX (Master Sheet).xlsx',                      'Irving',      'TX'],
+    ['Thrive - San Antonio, TX (Master Sheet).xlsx',                               'San Antonio', 'TX'],
+    ['Master Sheet - Colony, TX.xlsx',                                              'Colony',      'TX'],
+    ['Brand - Alpharetta, GA - Valuation Analysis Memo.pdf',                        'Alpharetta',  'GA'],
+  ];
+  for (const [name, city, state] of cases) {
+    it(`parses "${name}" → ${city}, ${state}`, () => {
+      assert.deepEqual(parseCityStateFromFilename(name), { city, state });
+    });
+  }
+
+  it('returns null for a pure rollup name with no City, ST', () => {
+    assert.equal(parseCityStateFromFilename('ARA Portfolio of 5 - Master Sheet.xlsx'), null);
+    assert.equal(parseCityStateFromFilename('North American Dental Group Portfolio of 10 - Master Sheet.xlsx'), null);
+  });
+
+  it('returns null when the trailing 2-caps token is not a real US state', () => {
+    assert.equal(parseCityStateFromFilename('Something - Memo, ZZ.pdf'), null);
+    assert.equal(parseCityStateFromFilename('Brand - Foo, XX (Master Sheet).xlsx'), null);
+  });
+});
+
+describe('folder-feed parseSubjectHintFromPath — filename City, ST fallback (Slice 2e)', () => {
+  it('fills city/state from the filename when there is no City, ST folder', () => {
+    const h = parseSubjectHintFromPath('PROPERTIES/V/Vervent/Vervent - Portland, OR (Master Sheet).xlsx');
+    assert.equal(h.tenant_brand, 'Vervent');
+    assert.equal(h.city, 'Portland');
+    assert.equal(h.state, 'OR');
+  });
+
+  it('keeps the tenant_brand from the folder, not the filename', () => {
+    const h = parseSubjectHintFromPath('PROPERTIES/F/First Oklahoma Federal Credit Union/First Oklahoma Federal Credit Union - Tulsa, OK (Master Sheet).xlsx');
+    assert.equal(h.tenant_brand, 'First Oklahoma Federal Credit Union');
+    assert.equal(h.city, 'Tulsa');
+    assert.equal(h.state, 'OK');
+  });
+
+  it('a City, ST PATH SEGMENT still wins over a filename city', () => {
+    const h = parseSubjectHintFromPath('PROPERTIES/D/DaVita Dialysis/Tulsa, OK/DaVita - Reno, NV OM.pdf');
+    assert.equal(h.city, 'Tulsa');
+    assert.equal(h.state, 'OK');
+  });
+
+  it('rollup filename with no City, ST leaves city/state null', () => {
+    const h = parseSubjectHintFromPath('PROPERTIES/Portfolio/ARA Portfolio of 5/ARA Portfolio of 5 - Master Sheet.xlsx');
+    assert.equal(h.tenant_brand, 'ARA Portfolio of 5');
+    assert.equal(h.city, null);
+    assert.equal(h.state, null);
+  });
+});
+
+describe('folder-feed looksLikePortfolioRollup (Slice 2e)', () => {
+  it('flags a Portfolio-bucket tenant with no resolvable city', () => {
+    assert.equal(looksLikePortfolioRollup({ tenant_brand: 'ARA Portfolio of 5', bucket: 'Portfolio', city: null, state: null }), true);
+  });
+  it('flags a "… Portfolio …" tenant regardless of bucket', () => {
+    assert.equal(looksLikePortfolioRollup({ tenant_brand: 'North American Dental Group Portfolio of 10', bucket: 'N', city: null, state: null }), true);
+  });
+  it('does NOT flag a rollup-bucket file that resolved a City, ST', () => {
+    assert.equal(looksLikePortfolioRollup({ tenant_brand: 'Thrive Portfolio', bucket: 'Portfolio', city: 'San Antonio', state: 'TX' }), false);
+  });
+  it('does NOT flag an ordinary single-property tenant', () => {
+    assert.equal(looksLikePortfolioRollup({ tenant_brand: 'Vervent', bucket: 'V', city: null, state: null }), false);
   });
 });

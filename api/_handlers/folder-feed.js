@@ -30,7 +30,7 @@ import { createHash } from 'crypto';
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
-import { classifyFile, parseSubjectHintFromPath } from '../_shared/folder-feed-classify.js';
+import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup } from '../_shared/folder-feed-classify.js';
 import { attachRecognizedDoc } from './folder-feed-attach.js';
 
 // Default roots to walk when neither ?folders= nor FOLDER_FEED_ROOTS is set.
@@ -394,10 +394,15 @@ export async function handleFolderFeedTick(req, res) {
         && cls.type !== 'unknown'
         && cls.type !== 'lcc_generated';
 
+      // Slice 2e — a Portfolio-rollup working doc with no resolvable City, ST is
+      // parked (skipped), not sent to disambiguation. Detected once per file so
+      // dry-run reporting and the real attach branch agree.
+      const portfolioRollup = attachEligible && looksLikePortfolioRollup(subjectHint);
+
       if (dryRun) {
         // Report-only: what WOULD happen, no writes to LCC or SharePoint.
         if (cls.isOm) folderRep.staged++;
-        else if (attachEligible) { folderRep.attached = (folderRep.attached || 0) + 1; report.files_attached++; }
+        else if (attachEligible && !portfolioRollup) { folderRep.attached = (folderRep.attached || 0) + 1; report.files_attached++; }
         else folderRep.skipped++;
         continue;
       }
@@ -423,17 +428,28 @@ export async function handleFolderFeedTick(req, res) {
         // → 'staged'); no in-domain property (out-of-universe / portfolio) →
         // 'unresolved_no_domain_property' (terminal, captured + tenant-searchable,
         // NOT a decision); a genuine attach failure → 'error' for a later retry.
+        // Resolved + linked → 'attached'; a Portfolio rollup with no city →
+        // 'skipped' (parked, never sent to disambiguation); unresolved/ambiguous
+        // routes to the match_disambiguation lane (the decision IS the handled
+        // outcome → 'staged'); a genuine attach failure → 'error' for a later retry.
         let status;
         if (attachRes?.attached) status = 'attached';
+        else if (attachRes?.parked) status = 'skipped';
         else if (attachRes?.emitted_disambiguation) status = 'staged';
         else if (attachRes?.no_domain) status = 'unresolved_no_domain_property';
         else status = 'error';
+        // Record the parking reason on the subject_hint (no dedicated column) so
+        // the skipped row is self-explanatory in folder_feed_seen.
+        const seenHint = status === 'skipped'
+          ? { ...subjectHint, skip_reason: attachRes?.reason || 'portfolio_rollup_no_city' }
+          : subjectHint;
         await upsertSeen({
           path: item.path, hash, item, status, mode,
           vertical: subjectHint.vertical, detectedType: cls.type,
-          subjectHint, intakeId: null,
+          subjectHint: seenHint, intakeId: null,
         });
         if (status === 'attached') { report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1; }
+        else if (status === 'skipped') { report.files_skipped++; folderRep.skipped++; }
         else if (status === 'staged') { report.files_unresolved++; folderRep.staged++; }
         else if (status === 'unresolved_no_domain_property') { report.files_no_domain = (report.files_no_domain || 0) + 1; folderRep.no_domain = (folderRep.no_domain || 0) + 1; }
         else { report.files_error++; folderRep.error++; }
