@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {
   classifyFile, parseSubjectHintFromPath,
   extractCityState, extractStreetAddress, isPortfolioHint, tenantCore,
-  parseCityStateFromFilename, looksLikePortfolioRollup,
+  parseCityStateFromFilename, looksLikePortfolioRollup, isExcludedFolderPath,
 } from '../api/_shared/folder-feed-classify.js';
 
 describe('folder-feed classifyFile', () => {
@@ -196,6 +196,46 @@ describe('folder-feed parseSubjectHintFromPath — filename City, ST fallback (S
     assert.equal(h.tenant_brand, 'ARA Portfolio of 5');
     assert.equal(h.city, null);
     assert.equal(h.state, null);
+  });
+});
+
+// Slice 2f — archive / working-folder exclusion. Anchored to a whole path
+// SEGMENT so a tenant legitimately named "Old Dominion …" isn't caught.
+describe('folder-feed isExcludedFolderPath (Slice 2f)', () => {
+  const BASE = "/sites/TeamBriggs20/Shared Documents/Gv't Leased Research/On Market";
+
+  it('excludes an /OLD/ archive subfolder + its files', () => {
+    assert.equal(isExcludedFolderPath(`${BASE}/OLD`), true);
+    assert.equal(isExcludedFolderPath(`${BASE}/OLD/Some Deprecated Listing OM.pdf`), true);
+  });
+
+  it('excludes /Archive/ and /Archived/ segments (any case)', () => {
+    assert.equal(isExcludedFolderPath(`${BASE}/Archive/x.pdf`), true);
+    assert.equal(isExcludedFolderPath(`${BASE}/archived/y.pdf`), true);
+  });
+
+  it('excludes a leading-underscore working/staging subfolder', () => {
+    assert.equal(isExcludedFolderPath(
+      '/sites/TeamBriggs20/Shared Documents/Dialysis Research/Comps/On Market/_added or updated in comps spreadsheet'), true);
+    assert.equal(isExcludedFolderPath(
+      '/sites/TeamBriggs20/Shared Documents/Dialysis Research/Comps/On Market/_added or updated in comps spreadsheet/y.xlsx'), true);
+  });
+
+  it('does NOT exclude a live deal folder', () => {
+    assert.equal(isExcludedFolderPath(`${BASE}/Live Deal`), false);
+    assert.equal(isExcludedFolderPath(`${BASE}/Live Deal/z.pdf`), false);
+  });
+
+  it('does NOT catch a tenant named "Old Dominion …" (segment ≠ OLD)', () => {
+    assert.equal(isExcludedFolderPath(`${BASE}/Old Dominion Freight Line - Greenville, NC`), false);
+    assert.equal(isExcludedFolderPath(
+      `${BASE}/Old Dominion Freight Line - Greenville, NC/Old Dominion OM.pdf`), false);
+  });
+
+  it('tolerates empty / backslash paths', () => {
+    assert.equal(isExcludedFolderPath(''), false);
+    assert.equal(isExcludedFolderPath(null), false);
+    assert.equal(isExcludedFolderPath(`${BASE}\\OLD\\x.pdf`), true);
   });
 });
 
