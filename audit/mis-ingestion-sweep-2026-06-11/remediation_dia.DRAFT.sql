@@ -71,11 +71,15 @@ CREATE TABLE IF NOT EXISTS public._sweep_applied_2026_06_11 (
 --   CoStar capture, is usually a legacy artifact, NOT the real sale).
 --   Honors a genuine_resale opt-out (near-impossible at identical price, but safe).
 -- =====================================================================
--- WITH keeper AS (   -- one keeper per fingerprint, honoring Scott's override
---   SELECT DISTINCT property_id, price AS sold_price,
---          coalesce(nullif(confirmed_keep_sale_id,'')::int, keep_sale_id) AS keep_id
---     FROM public._sweep_candidates_2026_06_11
---    WHERE confirmed_class = 'phantom_duplicate'
+-- WITH keep_ids AS (
+--   SELECT DISTINCT coalesce(nullif(confirmed_keep_sale_id,'')::int, keep_sale_id) AS keep_id
+--     FROM public._sweep_candidates_2026_06_11 WHERE confirmed_class = 'phantom_duplicate'
+-- ),
+-- keeper AS (   -- keeper's EXACT property_id+sold_price via its sale_id.
+--               -- NEVER key the fingerprint off _sweep_candidates.price — that column
+--               -- is sold_price::bigint (ROUNDED) and misses ~9 cents-bearing groups.
+--   SELECT k.keep_id, s.property_id, s.sold_price
+--     FROM keep_ids k JOIN public.sales_transactions s ON s.sale_id = k.keep_id
 -- )
 -- INSERT INTO public._sweep_applied_2026_06_11
 --   (sale_id, property_id, action, prev_exclude, prev_txn_state, prev_classification, new_value)

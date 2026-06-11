@@ -213,15 +213,27 @@ Per-year dia non-excluded book (these three columns are exact):
 | 2024 | 129 | $0.502B | $3.89M | 23 |
 | 2025 | 187 | $0.774B | $4.14M | 18 |
 
-**Caveat (why no precise "after" column yet):** a Postgres NULL-propagation trap
-(`portfolio_id IS NULL OR notes_null` → NULL; NULL `building_size` → NULL psf)
-makes any blunt `signals < 2` "clean" recomputation silently drop every
-no-notes/no-size row, **overstating** removal. The exact "after" must be computed
-from the **frozen, classified candidate list** (not a live regex), which is the
-first gate step (§7). The directional impact is clear: removing the ~21 wrong
-assets at the $30M+ tail plus the 33 (2022) / 42 (2023) phantom dups pulls 2022
-**avg deal size down ~10–13%** and **2022–23 volume down materially** (the dups
-alone are ≈$906M of double-count book-wide).
+### VERIFIED before/after — computed from the fully-confirmed frozen list (2026-06-11)
+All 290 candidates carry a `confirmed_class`; the "after" removes the 5 terminal
+exclusion classes + phantom non-keepers (keyed off each keeper's **exact**
+`sold_price`, not the rounded table column), keeping the 3 genuine clinics.
+Book-wide: **286 rows removed** (223 phantom-dups = **$905.25M** double-count +
+63 wrong-assets = **$1.594B** gross non-representative volume); book 3,037 → 2,751.
+
+| yr | avg before → after | volume before → after | dropped dup / wrong |
+|---|---|---|---|
+| 2019 | $5.12M → $3.83M | $1.496B → $1.019B | 13 / 13 |
+| 2021 | $3.76M → $3.62M | $1.114B → $0.981B | 24 / 1 |
+| **2022** | **$4.71M → $3.96M (−16%)** | **$1.315B → $0.938B (−29%)** | 32 / 10 |
+| **2023** | **$4.15M → $3.68M (−11%)** | **$0.788B → $0.570B (−28%)** | 33 / 2 |
+| 2024 | $3.89M → $3.95M | $0.502B → $0.422B | 22 / 0 |
+| 2025 | $4.14M → $3.47M | $0.774B → $0.569B | 16 / 7 |
+
+The 2022/23 "spike" deflates exactly as Layer G implied; **dedup dominates the
+recent-year correction**, wrong-assets dominate the dollar magnitude. (An earlier
+blunt `signals<2` recompute was discarded — a Postgres NULL-propagation trap plus
+the rounded-price join both **overstated/undercounted** removal; the table above
+is the authoritative computation.)
 
 ### Root-cause — which ingestion path leaked each class (dia)
 | data_source | wrong-asset candidates | phantom dups |
