@@ -267,11 +267,19 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    live migration `activity_events_dedup_unique_index` (dedup 21 collisions +
    `uq_activity_events_workspace_source_external`). **MUST commit as repo migration**
    (prompt `CLAUDECODE_PROMPT_activity_events_dedup_index_migration.md`, task #90) so a
-   rebuild can't lose it. REMAINING (task #91): the **SF→LCC Activity Sync PA flow** to
-   feed `/api/sf-activity` (query SF Task/ActivityHistory → POST batches) — confirm SF
-   Task read-access first, then build in browser. **Intelligence-hub spine COMPLETE:
-   ingest→enrich→write-back→context(every agent)→correspondence — all live;** only the
-   SF live-feed PA flow + the migration-file commit remain.
+   rebuild can't lose it. **✅ SF→LCC Activity Sync PA flow BUILT (Scott) + VERIFIED LIVE 2026-06-11.** Flow
+   `SF -> LCC: Activity Sync` (id c9204da3, scheduled hourly): Recurrence → Init
+   Watermark (24h rolling lookback) → SF Get records (Tasks, filter `LastModifiedDate
+   gt {Watermark}`) → HTTP POST raw to `/api/sf-activity` (addProperty wrap). SF
+   connection confirmed reads the Task object. Paired raw-fields handler tweak shipped
+   (`/api/sf-activity` accepts raw SF field names Id/Subject/TaskSubtype/WhoId/WhatId
+   — verified live). Manual run → **15 salesforce activity_events inserted** (14 calls
+   + 1 note) linked to real entities (Regions Bank, Steve Gonzalez, Harbor Group Intl).
+   Migration `20260718130000` (activity_events dedup unique index) committed to repo
+   (#1158). **🎉 INTELLIGENCE-HUB SPINE COMPLETE + LIVE: ingest → enrich → write-back →
+   context (every agent, assemble-on-miss) → correspondence (email + SF calls/notes).**
+   Optional later: SF Events query (meetings) → same endpoint; merge PRs #1157/#1158
+   for repo. Phase 1-3 of the architecture all in production.
    **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
    (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
    `20260718123000` (folder_feed_seen.mode) + `20260718124000`
