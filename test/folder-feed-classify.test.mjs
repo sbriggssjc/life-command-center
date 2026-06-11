@@ -6,6 +6,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  classifyFile, parseSubjectHintFromPath,
+  extractCityState, extractStreetAddress, isPortfolioHint, tenantCore,
   classifyFile,
   parseSubjectHintFromPath,
   parseCityStateFromFilename,
@@ -82,6 +84,64 @@ describe('folder-feed parseSubjectHintFromPath', () => {
   });
 });
 
+// ── Stage A (Slice 2d.1): recover City/ST + address + portfolio from the
+// filename / fused tenant folder (the clean City, ST subfolder is the exception).
+describe('folder-feed City/ST + address + portfolio recovery', () => {
+  it('extracts City, ST embedded in a filename (not anchored to the end)', () => {
+    assert.deepEqual(extractCityState('Hamilton Electric- Austin, TX- Valuation Analysis Memo.docx'),
+      { city: 'Austin', state: 'TX' });
+    assert.deepEqual(extractCityState('Master Sheet - Colony, TX.xlsx'), { city: 'Colony', state: 'TX' });
+    assert.deepEqual(extractCityState('Valuation Analysis Memo - Fountainview Dental - Raytown, MO (Stan Johnson Company).pdf'),
+      { city: 'Raytown', state: 'MO' });
+    assert.equal(extractCityState('AMRA Portfolio of 7 - Master Sheet.xlsx'), null); // no City, ST
+    assert.equal(extractCityState('Office Comps 4-12-22.xlsx'), null);              // 22 is not a state
+  });
+
+  it('un-fuses City, ST from a combined tenant folder name', () => {
+    assert.deepEqual(extractCityState('Cypress Grove Office - Greenville, MS'), { city: 'Greenville', state: 'MS' });
+  });
+
+  it('extracts a leading street address', () => {
+    assert.equal(extractStreetAddress('9216 S Toledo Ave - Tulsa, OK'), '9216 S Toledo Ave');
+    assert.equal(extractStreetAddress('Fountainview Dental - KC (Master Sheet).xlsx'), null);
+  });
+
+  it('flags multi-property portfolios', () => {
+    assert.equal(isPortfolioHint('AMRA Portfolio of 7'), true);
+    assert.equal(isPortfolioHint('GSA-USDA Portfolio (4) - TX'), true);
+    assert.equal(isPortfolioHint('Rite Aid Portfolio of 12 - PA & TN'), true);
+    assert.equal(isPortfolioHint('Hamilton Electric'), false);
+    assert.equal(isPortfolioHint('FMC - Martin, TN (Master Sheet).xlsx'), false);
+  });
+
+  it('reduces a fused/portfolio tenant label to a matchable core', () => {
+    assert.equal(tenantCore('Cypress Grove Office - Greenville, MS'), 'Cypress Grove Office');
+    assert.equal(tenantCore('FMC Portfolio of 14 - Capital Square'), 'FMC');
+    assert.equal(tenantCore('DaVita Portfolio (3) - AR'), 'DaVita');
+    assert.equal(tenantCore('Kohls Portfolio 10 - BRIGGS HERROLD'), 'Kohls');
+    assert.equal(tenantCore('Hamilton Electric'), 'Hamilton Electric');
+  });
+
+  it('recovers the anchor from a filename when there is no City, ST subfolder', () => {
+    const h = parseSubjectHintFromPath(
+      'PROPERTIES/H/Hamilton Electric/Hamilton Electric- Austin, TX- Valuation Analysis Memo (Stan Johnson Company).docx');
+    assert.equal(h.tenant_brand, 'Hamilton Electric');
+    assert.equal(h.city, 'Austin');
+    assert.equal(h.state, 'TX');
+    assert.equal(h.is_portfolio, false);
+  });
+
+  it('un-fuses a combined tenant folder + flags portfolios from the path', () => {
+    const fused = parseSubjectHintFromPath(
+      'PROPERTIES/Multi/Cypress Grove Office - Greenville, MS/Cypress Grove Office - Greenville MS - Valuation Analysis Memo.docx');
+    assert.equal(fused.city, 'Greenville');
+    assert.equal(fused.state, 'MS');
+    assert.equal(fused.tenant_core, 'Cypress Grove Office');
+
+    const port = parseSubjectHintFromPath(
+      'PROPERTIES/A/AMRA Portfolio of 7/AMRA Portfolio of 7 - Master Sheet.xlsx');
+    assert.equal(port.is_portfolio, true);
+    assert.equal(port.tenant_core, 'AMRA');
 // Slice 2e — the real PROPERTIES tree has no City, ST folder level; the city and
 // state live in the FILENAME. These guards unlock the non-OM attach path.
 describe('folder-feed parseCityStateFromFilename (Slice 2e)', () => {
