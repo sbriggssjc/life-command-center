@@ -144,7 +144,7 @@ async function backwriteSfIdToDomain({ kind, sfId, email, name }) {
  * Look up an existing entity_id via external_identities.
  * Returns { entityId, externalIdentityId } or null.
  */
-async function findEntityBySfId(workspaceId, sourceType, sfId) {
+export async function findEntityBySfId(workspaceId, sourceType, sfId) {
   if (!workspaceId || !sfId) return null;
   const r = await opsQuery('GET',
     `external_identities?workspace_id=eq.${pgFilterVal(workspaceId)}` +

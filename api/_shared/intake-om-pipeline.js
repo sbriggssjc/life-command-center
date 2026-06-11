@@ -26,6 +26,7 @@ import { logCopilotInteraction } from './memory.js';
 import { processIntakeExtraction } from '../_handlers/intake-extractor.js';
 import { ensureEntityLink } from './entity-link.js';
 import { putArtifact } from './storage-adapter.js';
+import { logEmailIntakeCorrespondence } from './intake-correspondence.js';
 
 const BRIGGSLAND_WORKSPACE_ID = 'a0000000-0000-0000-0000-000000000001';
 const OM_INLINE_MAX_BYTES     = 25 * 1024 * 1024; // 25 MB (PVA + Copilot Chat cap)
@@ -69,6 +70,7 @@ const EXTRACT_RACE_MS = (() => {
  * @property {string}  [entity_id]          — optional pre-link to a property/contact
  * @property {('copilot_chat'|'outlook'|'teams'|'sidebar'|'email')} channel
  * @property {object}  [seed_data]          — pre-extracted property hints (optional)
+ * @property {object}  [email_context]      — email channel only: { internet_message_id, subject, body_snippet, web_link, received_at, from, to } → logs the email as an `email` activity on a confident match (Slice 3b Unit 1)
  * @property {object}  [copilot_metadata]   — Copilot conversation context
  */
 
@@ -600,6 +602,27 @@ export async function stageOmIntake(input, auth, workspaceId) {
       );
     } catch (err) {
       console.warn('[intake-om-pipeline] inbox_items entity_id patch failed (non-fatal):', err?.message);
+    }
+  }
+
+  // ---- 8b. Phase 2 Slice 3b (Unit 1): log the EMAIL correspondence itself as
+  //     an `email` activity on the matched entity, so the conversation shows in
+  //     the timeline alongside the extracted OM. Email channel only, confident
+  //     match only, deduped on internet_message_id. Fire-and-forget — never
+  //     blocks intake (the helper / appendActivityEvent never throw).
+  if (input.channel === 'email' && matchedEntityId && input.email_context) {
+    try {
+      await logEmailIntakeCorrespondence({
+        channel:         input.channel,
+        emailContext:    input.email_context,
+        matchedEntityId,
+        matchedDomain:   matchedDomain || (matchResult?.domain && matchResult.domain !== 'lcc' ? matchResult.domain : null),
+        workspaceId:     wsId,
+        actorId:         user.id,
+        intakeId:        inboxItemId,
+      });
+    } catch (err) {
+      console.warn('[intake-om-pipeline] email correspondence log failed (non-fatal):', err?.message);
     }
   }
 
