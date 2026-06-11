@@ -31,6 +31,7 @@ import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
 import { classifyFile, parseSubjectHintFromPath } from '../_shared/folder-feed-classify.js';
+import { attachRecognizedDoc } from './folder-feed-attach.js';
 
 // Default roots to walk when neither ?folders= nor FOLDER_FEED_ROOTS is set.
 // Full SERVER-RELATIVE paths in the canonical identity form (SINGLE apostrophes —
@@ -200,6 +201,18 @@ export async function handleFolderFeedTick(req, res) {
 
   const dryRun = req.method === 'GET';
 
+  // Slice 2d (Unit 3): when FOLDER_FEED_ASYNC_EXTRACT is set, OM staging defers
+  // the ~20s extraction to the /api/intake-extract-drain worker so a crawl tick
+  // stays fast (list many folders + stage many OMs without blocking). Default
+  // OFF → the synchronous inline-extraction fallback (nothing breaks if the
+  // drain is paused).
+  const asyncExtract = process.env.FOLDER_FEED_ASYNC_EXTRACT === 'true';
+
+  // Slice 2d (Unit 1): ?source=frontier drives the PROPERTIES (enrich) crawl from
+  // the durable folder_feed_frontier cursor so successive ticks DESCEND the tree
+  // instead of re-listing the roots. Used by the lcc-folder-feed-crawl cron.
+  const useFrontier = req.query.source === 'frontier';
+
   // ---- Channel roots (Slice 2a) ----------------------------------------------
   // Two channels in one tick, each tagged with its mode:
   //   ingest — On Market roots: ?folders=a,b > FOLDER_FEED_ROOTS env > DEFAULT_ROOTS
@@ -277,6 +290,7 @@ export async function handleFolderFeedTick(req, res) {
   const report = {
     ok: true,
     mode: dryRun ? 'dry_run' : 'drain',
+    source: useFrontier ? 'frontier' : 'roots',
     folders_requested: ingestRoots.length + enrichRoots.length,
     ingest_roots: ingestRoots.length,
     enrich_roots: enrichRoots.length,
@@ -284,11 +298,12 @@ export async function handleFolderFeedTick(req, res) {
     files_seen: 0,
     files_new: 0,
     files_staged: 0,
+    files_attached: 0,     // Slice 2d Unit 2: non-OM recognized doc linked by path anchor
     files_deferred: 0,     // OM-eligible but skipped this tick (max_stage cap) → 'seen'
     files_skipped: 0,
     files_stale: 0,
     files_error: 0,
-    files_unresolved: 0,   // staged but the matcher could not resolve a property
+    files_unresolved: 0,   // staged/attach attempted but the matcher could not resolve a property
     max_stage: Number.isFinite(maxStage) ? maxStage : null,  // effective cap; null = unbounded
     by_type: {},
     folders: [],
@@ -368,13 +383,59 @@ export async function handleFolderFeedTick(req, res) {
 
       const subjectHint = parseSubjectHintFromPath(stripSitePrefix(item.path));
 
+      // Slice 2d (Unit 2): in ENRICH mode every recognized non-OM working doc
+      // (lease / BOV / DD / master / comp) is ATTACHED to the property its path
+      // describes — the LIGHT path (resolve by path anchor, no extraction). Only
+      // unknown / lcc_generated stay skipped. Ingest mode is unchanged (non-OM →
+      // skipped). OM/flyer still go through the stage→extract path below.
+      const attachEligible = mode === 'enrich'
+        && !cls.isOm
+        && cls.type !== 'unknown'
+        && cls.type !== 'lcc_generated';
+
       if (dryRun) {
         // Report-only: what WOULD happen, no writes to LCC or SharePoint.
-        if (cls.isOm) folderRep.staged++; else folderRep.skipped++;
+        if (cls.isOm) folderRep.staged++;
+        else if (attachEligible) { folderRep.attached = (folderRep.attached || 0) + 1; report.files_attached++; }
+        else folderRep.skipped++;
         continue;
       }
 
-      // ---- Non-OM: record the type, do not parse (later units) ----
+      // ---- Non-OM recognized doc (enrich) → light attach by path anchor ----
+      if (attachEligible) {
+        let attachRes;
+        try {
+          attachRes = await attachRecognizedDoc({
+            subjectHint,
+            fileName:  item.name || item.path.split('/').pop() || 'document.pdf',
+            sourceUrl: item.path,
+            docType:   cls.type,
+            pathRef:   item.path,
+            workspaceId,
+            actorId:   user.id,
+          });
+        } catch (err) {
+          attachRes = { ok: false, attached: false, error: err?.message };
+        }
+        // Resolved + linked → 'attached'; unresolved/ambiguous routes to the
+        // match_disambiguation lane (the decision IS the handled outcome → 'staged'),
+        // a genuine attach failure → 'error' for a later retry.
+        let status;
+        if (attachRes?.attached) status = 'attached';
+        else if (attachRes?.emitted_disambiguation) status = 'staged';
+        else status = 'error';
+        await upsertSeen({
+          path: item.path, hash, item, status, mode,
+          vertical: subjectHint.vertical, detectedType: cls.type,
+          subjectHint, intakeId: null,
+        });
+        if (status === 'attached') { report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1; }
+        else if (status === 'staged') { report.files_unresolved++; folderRep.staged++; }
+        else { report.files_error++; folderRep.error++; }
+        continue;
+      }
+
+      // ---- Non-OM (ingest, or unknown/lcc_generated): record the type, no parse ----
       if (!cls.isOm) {
         await upsertSeen({
           path: item.path, hash, item, status: 'skipped', mode,
@@ -428,6 +489,9 @@ export async function handleFolderFeedTick(req, res) {
             mime_type:       'application/pdf',
             channel:         'folder_feed',
             note:            `Folder-feed: ${item.path}`,
+            // Slice 2d (Unit 3): defer the ~20s extraction to the drain worker so
+            // a crawl tick lists+stages fast. Default OFF (synchronous fallback).
+            defer_extraction: asyncExtract,
             seed_data: {
               tags: ['folder_feed', `folder_feed_${mode}`],
               subject_hint: subjectHint,
@@ -533,6 +597,104 @@ export async function handleFolderFeedTick(req, res) {
       await processFolder(folder, mode, queue, phaseDeadline);
     }
   };
+
+  // Slice 2d (Unit 1) — frontier crawl: pop pending folders from the durable
+  // cursor, descend ONE BFS level (enqueue subfolders into the frontier), process
+  // files, mark visited + schedule a revisit. Successive ticks descend deeper.
+  // When no pending rows remain, visited rows past revisit_after are re-promoted
+  // to pending so the tree is re-swept for NEW files. Bounded by folderBudget +
+  // the time deadline. Idempotent + resumable by construction.
+  const revisitDays = Math.max(1, parseInt(process.env.FOLDER_FEED_REVISIT_DAYS || '7', 10) || 7);
+  const crawlFrontier = async (roots, mode, folderBudget, phaseDeadline) => {
+    // Seed roots as pending (ignore-duplicates: never disturb an existing row's
+    // status/discovered_at). With no roots (env unset) the crawl is a no-op.
+    for (const root of roots) {
+      await opsQuery('POST', 'folder_feed_frontier', {
+        server_relative_path: root, mode, status: 'pending', depth: 0, parent_path: null,
+      }, { Prefer: 'resolution=ignore-duplicates,return=minimal' }).catch(() => {});
+    }
+
+    let processed = 0;
+    let repromoted = 0;
+    while (processed < folderBudget) {
+      if (Date.now() > phaseDeadline) break;
+
+      // Pop the oldest pending folder for this mode.
+      let pop = await opsQuery('GET',
+        `folder_feed_frontier?status=eq.pending&mode=eq.${pgFilterVal(mode)}` +
+        `&select=id,server_relative_path,depth&order=discovered_at.asc&limit=1`);
+      let row = pop.ok && pop.data?.length ? pop.data[0] : null;
+
+      // No pending → re-promote any visited folder past its revisit window, then
+      // retry the pop once. If still nothing, the sweep is fully caught up.
+      if (!row) {
+        const prom = await opsQuery('PATCH',
+          `folder_feed_frontier?status=eq.visited&mode=eq.${pgFilterVal(mode)}` +
+          `&revisit_after=lt.${pgFilterVal(new Date().toISOString())}`,
+          { status: 'pending' }, { Prefer: 'return=representation' }).catch(() => null);
+        if (prom?.ok && Array.isArray(prom.data)) repromoted += prom.data.length;
+        pop = await opsQuery('GET',
+          `folder_feed_frontier?status=eq.pending&mode=eq.${pgFilterVal(mode)}` +
+          `&select=id,server_relative_path,depth&order=discovered_at.asc&limit=1`);
+        row = pop.ok && pop.data?.length ? pop.data[0] : null;
+        if (!row) break;
+      }
+
+      const folder = row.server_relative_path;
+      if (walkedFolders.has(folder)) {
+        // Already walked this tick (shouldn't happen — the pop is mode-scoped) —
+        // mark visited to avoid an infinite loop and move on.
+        await opsQuery('PATCH', `folder_feed_frontier?id=eq.${pgFilterVal(row.id)}`,
+          { status: 'visited', visited_at: new Date().toISOString() }).catch(() => {});
+        continue;
+      }
+      walkedFolders.add(folder);
+      report.folders_walked++;
+      processed++;
+
+      // processFolder pushes discovered subfolders into this local queue; we then
+      // persist them into the frontier (it does NOT recurse here).
+      const subQueue = [];
+      await processFolder(folder, mode, subQueue, phaseDeadline);
+      for (const sub of subQueue) {
+        await opsQuery('POST', 'folder_feed_frontier', {
+          server_relative_path: sub, mode, status: 'pending',
+          depth: (row.depth || 0) + 1, parent_path: folder,
+        }, { Prefer: 'resolution=ignore-duplicates,return=minimal' }).catch(() => {});
+      }
+
+      const nowIso = new Date().toISOString();
+      const revisitIso = new Date(Date.now() + revisitDays * 86400_000).toISOString();
+      await opsQuery('PATCH', `folder_feed_frontier?id=eq.${pgFilterVal(row.id)}`,
+        { status: 'visited', visited_at: nowIso, revisit_after: revisitIso }).catch(() => {});
+    }
+
+    report.frontier = { mode, folders_visited: processed, repromoted };
+  };
+
+  if (useFrontier) {
+    // Frontier crawl drives the PROPERTIES (enrich) roots from the durable
+    // cursor. The dedicated lcc-folder-feed-crawl cron uses this path so
+    // PROPERTIES gets its own budget independent of On Market. GET (dry-run)
+    // never mutates the frontier — report current cursor depth only.
+    if (dryRun) {
+      // opsQuery GET defaults to count=exact → resp.count is the total matching
+      // rows regardless of the limit, so &limit=1 keeps the payload tiny.
+      const pendRes = await opsQuery('GET',
+        `folder_feed_frontier?mode=eq.enrich&status=eq.pending&select=id&limit=1`).catch(() => null);
+      const visRes = await opsQuery('GET',
+        `folder_feed_frontier?mode=eq.enrich&status=eq.visited&select=id&limit=1`).catch(() => null);
+      report.frontier = {
+        mode: 'enrich',
+        pending: pendRes?.ok ? (pendRes.count ?? null) : null,
+        visited: visRes?.ok ? (visRes.count ?? null) : null,
+        roots_configured: enrichRoots.length,
+      };
+    } else {
+      await crawlFrontier(enrichRoots, 'enrich', limitFolders, enrichDeadline);
+    }
+    return res.status(200).json(report);
+  }
 
   // Ingest FIRST (the always-on On Market channel) until its (reserved) deadline,
   // then enrich until the full time budget — an enrich pass always gets a

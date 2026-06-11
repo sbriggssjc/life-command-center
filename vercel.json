@@ -114,6 +114,7 @@
     { "source": "/api/intake-discard", "destination": "/api/intake?_route=discard" },
     { "source": "/api/intake-pdf", "destination": "/api/intake?_route=ingest_pdf" },
     { "source": "/api/folder-feed-tick", "destination": "/api/intake?_route=folder-feed-tick" },
+    { "source": "/api/intake-extract-drain", "destination": "/api/intake?_route=intake-extract-drain" },
     { "source": "/api/property-doc-writeback", "destination": "/api/intake?_route=property-doc-writeback" },
     { "source": "/api/sf-activity", "destination": "/api/intake?_route=sf-activity" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },

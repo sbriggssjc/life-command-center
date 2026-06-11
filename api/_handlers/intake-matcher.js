@@ -639,22 +639,102 @@ async function collectAmbiguousCandidates(address, state, primaryDomain) {
 // bounded (ids + scalar facts + ≤5 candidate summaries).
 // Exported (Phase 2 Slice 2a) so the enrich-channel promoter can route an
 // unresolved PROPERTIES file to the SAME lane instead of creating a property.
-export async function emitMatchDisambiguation(intakeId, address, tenant, candidates) {
+export async function emitMatchDisambiguation(intakeId, address, tenant, candidates, opts = {}) {
   try {
+    // Slice 2d (Unit 2): the light attach path has no intake_id (a non-OM doc is
+    // attached by path anchor without staging an intake), so callers can pass a
+    // stable subjectRef (e.g. the server-relative path) + extra context. Default
+    // preserves the intake-keyed behavior for every existing caller.
+    const subjectRef = opts.subjectRef || ('match_disambig:' + intakeId);
     await opsQuery('POST', 'rpc/lcc_open_decision', {
       p_decision_type: 'match_disambiguation',
-      p_workspace_id: null,
+      p_workspace_id: opts.workspaceId || null,
       p_question: 'Multiple candidate properties matched this intake — which one (or create new)?',
       p_context: {
         intake_id: intakeId, address: address || null, tenant: tenant || null,
         candidates: candidates,
+        ...(opts.context || {}),
       },
-      p_subject_ref: 'match_disambig:' + intakeId,
+      p_subject_ref: subjectRef,
       p_rank_value: candidates.length,
     });
   } catch (e) {
     console.warn('[intake-matcher] match_disambiguation emit skipped:', e?.message || e);
   }
+}
+
+// ============================================================================
+// PATH-ANCHOR MATCH (Phase 2 Slice 2d — light attach path)
+// ============================================================================
+//
+// Resolve an EXISTING property from the SharePoint path anchor ALONE — no AI
+// extraction. The PROPERTIES tree encodes PROPERTIES/<bucket>/<tenant>/<City,
+// ST>, so parseSubjectHintFromPath already hands us {tenant_brand, city, state,
+// vertical}. That is exactly the tenant+city+state matcher tier, so this reuses
+// tenantCityStateMatch per resolved domain.
+//
+// Conservative by construction — it NEVER guesses:
+//   • exactly one candidate across the resolved domain(s) → matched (attach)
+//   • more than one candidate                              → review_required
+//     (the caller routes it to the match_disambiguation lane)
+//   • zero candidates                                      → unmatched
+//
+// Used by api/_handlers/folder-feed-attach.js to attach lease/BOV/DD/master/comp
+// working docs to the property they describe without staging an intake.
+export async function matchByPathAnchor(subjectHint) {
+  const tenant = subjectHint?.tenant_brand ? String(subjectHint.tenant_brand).trim() : '';
+  const city   = subjectHint?.city ? String(subjectHint.city).trim() : '';
+  const state  = normalizeState(subjectHint?.state);
+  // Without a tenant AND a state the anchor is too weak to resolve a property
+  // safely — bail to unmatched rather than risk a wrong attach.
+  if (!tenant || !state) {
+    return { status: 'unmatched', confidence: 0, property_id: null, domain: null, candidates: [] };
+  }
+
+  // Resolve which domain(s) to probe. The research-root/tenant-cue vertical is
+  // authoritative when present; otherwise probe both, tenant-cue first.
+  const vertical = subjectHint?.vertical;
+  let domains;
+  if (vertical === 'dia') domains = ['dialysis'];
+  else if (vertical === 'gov') domains = ['government'];
+  else domains = DIALYSIS_KEYWORDS.test(tenant) ? ['dialysis', 'government'] : ['government', 'dialysis'];
+
+  const candidates = [];
+  for (const domain of domains) {
+    const m = await tenantCityStateMatch(domain, tenant, city, state);
+    if (m && Array.isArray(m.candidates)) {
+      for (const c of m.candidates) candidates.push({ domain, ...c });
+    }
+  }
+
+  if (candidates.length === 1) {
+    const c = candidates[0];
+    return {
+      status: 'matched',
+      reason: 'path_anchor_tenant_city_state',
+      confidence: 0.75,
+      property_id: c.property_id,
+      domain: c.domain,
+      candidates,
+    };
+  }
+  if (candidates.length > 1) {
+    return {
+      status: 'review_required',
+      reason: 'path_anchor_ambiguous',
+      confidence: 0,
+      property_id: null,
+      domain: null,
+      candidates: candidates.slice(0, 5).map(c => ({
+        domain: c.domain === 'dialysis' ? 'dia' : 'gov',
+        property_id: String(c.property_id),
+        address: c.address || null,
+        tenant: c.tenant || c.agency || c.agency_full_name || null,
+        confidence: 0.7,
+      })),
+    };
+  }
+  return { status: 'unmatched', confidence: 0, property_id: null, domain: null, candidates: [] };
 }
 
 /**

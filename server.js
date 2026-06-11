@@ -242,6 +242,8 @@ app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; int
 app.all('/api/intake-pdf', (req, res) => { req.query._route = 'ingest_pdf'; intakeHandler(req, res); });
 // Phase 2 folder-feed worker (cron + manual): GET=dry-run, POST=drain.
 app.all('/api/folder-feed-tick', (req, res) => { req.query._route = 'folder-feed-tick'; intakeHandler(req, res); });
+// Phase 2 Slice 2d (Unit 3): bounded async extraction drain. GET=dry-run, POST=drain.
+app.all('/api/intake-extract-drain', (req, res) => { req.query._route = 'intake-extract-drain'; intakeHandler(req, res); });
 
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });

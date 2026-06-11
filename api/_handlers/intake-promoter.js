@@ -2283,7 +2283,7 @@ async function runEnrichOnlyPromotion(args) {
 // the (property_id, file_name) unique index. source='folder_feed_enrich' is set
 // when the column exists; the call gracefully degrades (retries without it) so a
 // schema without that column never blocks the attach.
-async function attachEnrichDocument(domain, propertyId, { fileName, docType, sourceUrl }) {
+export async function attachEnrichDocument(domain, propertyId, { fileName, docType, sourceUrl }) {
   const base = {
     property_id:      Number(propertyId),
     file_name:        fileName || 'enrich-document.pdf',
