@@ -203,6 +203,23 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    (`CLAUDECODE_PROMPT_PHASE2_Slice2a_properties_enrich.md`) — PROPERTIES enrich-read
    (match-existing→fill-blanks, never create, unresolved→disambiguation); then
    Slice 2b (write-back generated docs) + Slice 3 (context layer).
+   **✅ Slice 2b WRITE-BACK COMPLETE + VERIFIED LIVE 2026-06-11.** `POST
+   /api/property-doc-writeback {domain,property_id,file_name,doc_type,content_base64}`
+   resolves the property's PROPERTIES folder (known-path from property_documents
+   source_url), uploads the file `[LCC]`-tagged via the PA "Http -> Put file (LCC
+   Put Artifact)" flow (Create file, dynamic Folder Path), links a
+   `property_documents` row (`source='lcc_generated'`) + provenance, and the enrich
+   re-ingest guard classifies `[LCC]` files as `lcc_generated`/skip. Migration
+   `20260718125000` (lcc_generated priority 1) applied. PRs: #1148 (handler/resolver),
+   #1149 (server.js mount + adapter), #1150/#1151 (upload contract fixes). **Hard-won
+   PA gotcha:** SharePoint "Create file" Folder Path is **site-relative WITH the
+   library** — strip only `/sites/TeamBriggs20`, keep `/Shared Documents/...` (bare
+   `PROPERTIES/...` → 400 "Root folder is not found"); same form the Get flow needed.
+   PA new-designer froze repeatedly over remote CDP — Scott does flow edits natively.
+   Test artifacts (2 stray `LCC Writeback Test [LCC].pdf` files in `Storage OM's/Intake`
+   + Chilton folder) left for Scott to delete; enrich guard skips them. **Phase 2
+   ingest+enrich+write-back ALL LIVE.** Remaining roadmap: Slice 3 (context layer —
+   email/SF notes/LLC), needs upstream-connector grounding first.
    **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
    (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
    `20260718123000` (folder_feed_seen.mode) + `20260718124000`
