@@ -185,6 +185,18 @@ export async function handleFolderFeedTick(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
 
+  // Slice 2g — bounded re-process of the stranded in-domain enrich backlog. The
+  // already-staged enrich rows are TERMINAL (the worker only re-attempts
+  // status='seen'), so the city-parser + out-of-domain fixes never reach them
+  // until they're re-queued. POST ?reprocess=enrich_in_domain flips the dia/gov
+  // enrich rows back to 'seen' and re-promotes their containing frontier folders
+  // to 'pending' so the next enrich crawl re-walks + re-attaches them. Scoped to
+  // dia/gov (out-of-domain rows reach skipped/out_of_domain_asset_class on their
+  // next natural visit — no reset needed). DB-only; independent of the List flow.
+  if (req.method === 'POST' && req.query.reprocess === 'enrich_in_domain') {
+    return await reprocessInDomainEnrich(req, res);
+  }
+
   // Feature flag — no-op cleanly until the PA List flow is configured.
   if (!process.env.SHAREPOINT_LIST_URL) {
     return res.status(200).json({
@@ -299,7 +311,8 @@ export async function handleFolderFeedTick(req, res) {
     files_new: 0,
     files_staged: 0,
     files_attached: 0,     // Slice 2d Unit 2: non-OM recognized doc linked by path anchor
-    files_no_domain: 0,    // Stage A: recognized doc with no dia/gov property (captured, no decision)
+    files_no_domain: 0,    // Stage A: recognized doc with a dia/gov cue but no property (captured, no decision)
+    files_out_of_domain: 0,// Slice 2g: no dia/gov cue at all (office/retail/bank) — parked skipped, out of scope
     files_deferred: 0,     // OM-eligible but skipped this tick (max_stage cap) → 'seen'
     files_excluded: 0,     // Slice 2f: under an archive/working folder — never ingested
     files_skipped: 0,
@@ -462,9 +475,14 @@ export async function handleFolderFeedTick(req, res) {
         // 'skipped' (parked, never sent to disambiguation); unresolved/ambiguous
         // routes to the match_disambiguation lane (the decision IS the handled
         // outcome → 'staged'); a genuine attach failure → 'error' for a later retry.
+        // Slice 2g — an out-of-domain asset class (no dia/gov cue, no match) is
+        // PARKED as 'skipped'/out_of_domain_asset_class (mirrors the Slice-2f
+        // excluded_archive_or_working pattern): terminal, never a decision, and
+        // distinguished from a genuine in-domain miss in the backlog.
         let status;
         if (attachRes?.attached) status = 'attached';
         else if (attachRes?.parked) status = 'skipped';
+        else if (attachRes?.out_of_domain) status = 'skipped';
         else if (attachRes?.emitted_disambiguation) status = 'staged';
         else if (attachRes?.no_domain) status = 'unresolved_no_domain_property';
         else status = 'error';
@@ -479,7 +497,10 @@ export async function handleFolderFeedTick(req, res) {
           subjectHint: seenHint, intakeId: null,
         });
         if (status === 'attached') { report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1; }
-        else if (status === 'skipped') { report.files_skipped++; folderRep.skipped++; }
+        else if (status === 'skipped') {
+          report.files_skipped++; folderRep.skipped++;
+          if (attachRes?.out_of_domain) { report.files_out_of_domain = (report.files_out_of_domain || 0) + 1; folderRep.out_of_domain = (folderRep.out_of_domain || 0) + 1; }
+        }
         else if (status === 'staged') { report.files_unresolved++; folderRep.staged++; }
         else if (status === 'unresolved_no_domain_property') { report.files_no_domain = (report.files_no_domain || 0) + 1; folderRep.no_domain = (folderRep.no_domain || 0) + 1; }
         else { report.files_error++; folderRep.error++; }
@@ -781,6 +802,59 @@ async function skipExcludedSubtree(folderPath, report, folderRep) {
     report.files_excluded += n;
     folderRep.excluded += n;
   }
+}
+
+// Slice 2g — one-shot, bounded re-queue of the stranded IN-DOMAIN enrich backlog
+// so the city-parser + out-of-domain fixes can finally attach them. Flips dia/gov
+// enrich rows that were recorded terminal ('staged' = disambiguation handed off,
+// or 'unresolved_no_domain_property' = in-domain miss) back to 'seen', and
+// re-promotes their containing frontier folders to 'pending'. Scoped to dia/gov
+// — out-of-domain rows are left alone (they reach skipped on the next natural
+// visit). Idempotent + bounded by ?limit (default 500, cap 2000).
+async function reprocessInDomainEnrich(req, res) {
+  const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit || '500', 10) || 500));
+  const rows = await opsQuery('GET',
+    'folder_feed_seen?mode=eq.enrich&vertical=in.(dia,gov)' +
+    '&status=in.(staged,unresolved_no_domain_property)' +
+    `&select=id,server_relative_path&limit=${limit}`);
+  if (!rows.ok) return res.status(502).json({ ok: false, error: 'seen_query_failed' });
+  const list = Array.isArray(rows.data) ? rows.data : [];
+  if (!list.length) {
+    return res.status(200).json({ ok: true, scanned: 0, reset_seen: 0, parents: 0, frontier_repromoted: 0 });
+  }
+
+  // Flip the seen rows back to 'seen' (re-attempt eligible), in bounded id batches.
+  const ids = list.map(r => r.id);
+  let resetSeen = 0;
+  for (let i = 0; i < ids.length; i += 100) {
+    const batch = ids.slice(i, i + 100);
+    const patched = await opsQuery('PATCH',
+      `folder_feed_seen?id=in.(${batch.join(',')})`,
+      { status: 'seen', intake_id: null, miss_streak: 0, last_seen_at: new Date().toISOString() },
+      { Prefer: 'return=representation' }).catch(() => null);
+    if (patched?.ok && Array.isArray(patched.data)) resetSeen += patched.data.length;
+  }
+
+  // Re-promote each file's containing frontier folder (its parent dir) to pending
+  // so the next enrich crawl tick re-lists it and re-attempts the reset rows.
+  const parents = [...new Set(list.map(r => {
+    const p = String(r.server_relative_path || '');
+    const idx = p.lastIndexOf('/');
+    return idx > 0 ? p.slice(0, idx) : null;
+  }).filter(Boolean))];
+  let repromoted = 0;
+  for (const parent of parents) {
+    const prom = await opsQuery('PATCH',
+      `folder_feed_frontier?mode=eq.enrich&status=eq.visited&server_relative_path=eq.${pgFilterVal(parent)}`,
+      { status: 'pending', revisit_after: new Date().toISOString() },
+      { Prefer: 'return=representation' }).catch(() => null);
+    if (prom?.ok && Array.isArray(prom.data)) repromoted += prom.data.length;
+  }
+
+  return res.status(200).json({
+    ok: true, scanned: list.length, reset_seen: resetSeen,
+    parents: parents.length, frontier_repromoted: repromoted,
+  });
 }
 
 // Idempotent record: insert the (path, hash) row, or update it in place if a

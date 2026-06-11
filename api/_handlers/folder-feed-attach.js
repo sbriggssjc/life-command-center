@@ -115,13 +115,22 @@ export async function attachRecognizedDoc(args) {
       }
       return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
     }
-    // No in-domain property — captured, not a decision.
+    // No in-domain property. Split the terminal disposition (Slice 2g):
+    //   • NO dia/gov vertical cue (office / retail / bank — the bulk of Briggs's
+    //     book) → this asset class has no home DB and will NEVER resolve, so PARK
+    //     it ('skipped' / out_of_domain_asset_class). Honest backlog, zero churn.
+    //   • HAS a dia/gov cue but unresolved → keep 'unresolved_no_domain_property'
+    //     (a genuine in-domain miss — captured + tenant-searchable for later).
+    // Either way no emitMatchDisambiguation here — a non-dia/gov property is not
+    // an operator disambiguation.
+    const hasVerticalCue = subjectHint?.vertical === 'dia' || subjectHint?.vertical === 'gov';
     return {
       ok: false,
       attached: false,
       emitted_disambiguation: false,
-      reason: match?.reason || 'no_domain_property',
-      no_domain: true,
+      reason: hasVerticalCue ? (match?.reason || 'no_domain_property') : 'out_of_domain_asset_class',
+      no_domain: hasVerticalCue,
+      out_of_domain: !hasVerticalCue,
       is_portfolio: !!subjectHint?.is_portfolio,
       match_status: match?.status || null,
     };
