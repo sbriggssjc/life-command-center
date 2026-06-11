@@ -299,6 +299,7 @@ export async function handleFolderFeedTick(req, res) {
     files_new: 0,
     files_staged: 0,
     files_attached: 0,     // Slice 2d Unit 2: non-OM recognized doc linked by path anchor
+    files_no_domain: 0,    // Stage A: recognized doc with no dia/gov property (captured, no decision)
     files_deferred: 0,     // OM-eligible but skipped this tick (max_stage cap) → 'seen'
     files_skipped: 0,
     files_stale: 0,
@@ -417,12 +418,15 @@ export async function handleFolderFeedTick(req, res) {
         } catch (err) {
           attachRes = { ok: false, attached: false, error: err?.message };
         }
-        // Resolved + linked → 'attached'; unresolved/ambiguous routes to the
-        // match_disambiguation lane (the decision IS the handled outcome → 'staged'),
-        // a genuine attach failure → 'error' for a later retry.
+        // Resolved + linked → 'attached'; genuine ≥2 in-domain ambiguity routes
+        // to the match_disambiguation lane (the decision IS the handled outcome
+        // → 'staged'); no in-domain property (out-of-universe / portfolio) →
+        // 'unresolved_no_domain_property' (terminal, captured + tenant-searchable,
+        // NOT a decision); a genuine attach failure → 'error' for a later retry.
         let status;
         if (attachRes?.attached) status = 'attached';
         else if (attachRes?.emitted_disambiguation) status = 'staged';
+        else if (attachRes?.no_domain) status = 'unresolved_no_domain_property';
         else status = 'error';
         await upsertSeen({
           path: item.path, hash, item, status, mode,
@@ -431,6 +435,7 @@ export async function handleFolderFeedTick(req, res) {
         });
         if (status === 'attached') { report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1; }
         else if (status === 'staged') { report.files_unresolved++; folderRep.staged++; }
+        else if (status === 'unresolved_no_domain_property') { report.files_no_domain = (report.files_no_domain || 0) + 1; folderRep.no_domain = (folderRep.no_domain || 0) + 1; }
         else { report.files_error++; folderRep.error++; }
         continue;
       }

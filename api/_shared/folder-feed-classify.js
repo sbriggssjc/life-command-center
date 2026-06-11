@@ -99,17 +99,83 @@ export function classifyFile(name) {
   return { type: 'unknown', isOm: false };
 }
 
+// ── City/ST + street-address + portfolio recovery (Phase 2, Slice 2d.1) ─────
+// The PROPERTIES tree rarely follows the clean PROPERTIES/<tenant>/<City, ST>/
+// shape: the "City, ST" usually lives in the FILENAME ("… - Austin, TX - …")
+// or is fused into the tenant folder ("Cypress Grove Office - Greenville, MS"),
+// and a large share of folders are multi-property PORTFOLIOS. These pure
+// helpers recover that signal so the light attach can resolve a single
+// in-domain property — or correctly REFUSE (portfolio / out-of-universe).
+
+const US_STATES = new Set(
+  'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ')
+);
+
+const STREET_SUFFIX = '(?:Ave|Avenue|St|Street|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Way|Hwy|Highway|Pkwy|Parkway|Ct|Court|Pl|Place|Cir|Circle|Ter|Terrace|Trl|Trail|Sq|Square|Loop|Pike|Expressway|Expy)';
+
+// Multi-property markers — a portfolio folder/master sheet covers MANY
+// properties, so it must never single-attach. Tagged for the Stage-B fan-out.
+const PORTFOLIO_RE = /\bportfolios?\b|\bof\s+(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,3})\b|\(\s*\d{1,3}\s*\)|\b[A-Z]{2}\s*&\s*[A-Z]{2}\b/i;
+
+/**
+ * Find a "City, ST" pair anywhere in a string (filename or fused folder name),
+ * not just anchored at the segment end. Takes the LAST valid occurrence and the
+ * token(s) immediately before the comma (bounded by a leading separator) as the
+ * city. Returns {city, state} or null.
+ */
+export function extractCityState(text) {
+  const s = String(text || '').replace(/\.[A-Za-z0-9]{2,4}$/, ' '); // drop extension
+  const re = /(?:^|[-–—,(])\s*([A-Za-z][A-Za-z.'/ ]{1,38}?)\s*,\s*([A-Z]{2})(?![A-Za-z])/g;
+  let m, last = null;
+  while ((m = re.exec(s)) !== null) {
+    if (US_STATES.has(m[2])) last = { city: m[1].trim(), state: m[2] };
+  }
+  return last;
+}
+
+/** Extract a leading "<number> <street> <suffix>" address, else null. */
+export function extractStreetAddress(text) {
+  const s = String(text || '');
+  const m = s.match(new RegExp(`\\b(\\d{1,6}\\s+[A-Za-z0-9.'# ]{1,40}?\\b${STREET_SUFFIX})\\b`, 'i'));
+  return m ? m[1].replace(/\s+/g, ' ').trim() : null;
+}
+
+/** True when any part names a multi-property portfolio. */
+export function isPortfolioHint(...parts) {
+  return parts.some(p => PORTFOLIO_RE.test(String(p || '')));
+}
+
+/**
+ * Reduce a tenant-folder label to a matchable tenant CORE by stripping the
+ * fused "- City, ST", portfolio descriptors, "(N)" counts, trailing "- ST" /
+ * "- PA & TN", and trailing ALL-CAPS broker initials ("- HEDRICK"). So
+ * "FMC Portfolio of 14 - Capital Square" → "FMC", "Cypress Grove Office -
+ * Greenville, MS" → "Cypress Grove Office". Falls back to the original when the
+ * cleanup would empty it.
+ */
+export function tenantCore(tenant) {
+  let t = String(tenant || '');
+  t = t.replace(/[-,]\s*[A-Za-z.'/ ]+,\s*[A-Z]{2}\s*$/, '');     // trailing - City, ST
+  t = t.replace(/\s*[-(]?\s*Portfolio\b.*$/i, '');                // Portfolio …
+  t = t.replace(/\(\s*\d+\s*\)\s*$/, '');                         // (N)
+  t = t.replace(/-\s*[A-Z]{2}(\s*&\s*[A-Z]{2})?\s*$/, '');        // - ST / - PA & TN
+  t = t.replace(/-\s*[A-Z][A-Z]{2,}(\s+[A-Z]{2,})*\s*$/, '');     // - HEDRICK / - BRIGGS HERROLD
+  return t.replace(/[-–—\s]+$/, '').trim() || String(tenant || '').trim();
+}
+
 /**
  * Build the subject_hint match anchor from a path before any content parse.
  * PROPERTIES/<bucket>/<TENANT or BRAND>[/<City, ST>]/…files
  * @param {string} serverRelativePath  '/'-joined path (server-relative or local-relative)
- * @returns {{tenant_brand:?string, city:?string, state:?string, vertical:?string, bucket:?string}}
+ * @returns {{tenant_brand:?string, tenant_core:?string, city:?string, state:?string,
+ *            address:?string, vertical:?string, bucket:?string, is_portfolio:boolean}}
  */
 export function parseSubjectHintFromPath(serverRelativePath) {
   const raw = String(serverRelativePath || '').replace(/\\/g, '/');
   const segs = raw.split('/').map(s => s.trim()).filter(Boolean);
+  const fileName = segs.length ? segs[segs.length - 1] : '';
 
-  const hint = { tenant_brand: null, city: null, state: null, vertical: null, bucket: null };
+  const hint = { tenant_brand: null, tenant_core: null, city: null, state: null, address: null, vertical: null, bucket: null, is_portfolio: false };
 
   // Research-root vertical (e.g. "Dialysis Research" / "Gv't Leased Research").
   for (const s of segs) {
@@ -136,10 +202,25 @@ export function parseSubjectHintFromPath(serverRelativePath) {
     }
   }
 
-  // Tenant-implied vertical when the research-root didn't decide it.
-  if (!hint.vertical && hint.tenant_brand) {
-    if (DIA_CUES.test(hint.tenant_brand)) hint.vertical = 'dia';
-    else if (GOV_CUES.test(hint.tenant_brand)) hint.vertical = 'gov';
+  // ── Recover City/ST + street address + portfolio signal (Slice 2d.1) ──
+  // The clean PROPERTIES/<tenant>/<City, ST> shape is the exception. Pull the
+  // anchor from the FILENAME and the often-fused tenant folder too. Re-derive
+  // when the segment loop above captured a FUSED city ("Office - Greenville").
+  const fusedCity = hint.city && /[-–—]/.test(hint.city);
+  if (!hint.state || fusedCity) {
+    const cs = extractCityState(fileName) || extractCityState(hint.tenant_brand);
+    if (cs) { hint.city = cs.city; hint.state = cs.state; }
+  }
+  hint.address = extractStreetAddress(fileName) || extractStreetAddress(hint.tenant_brand) || null;
+  hint.is_portfolio = isPortfolioHint(hint.tenant_brand, fileName);
+  if (hint.tenant_brand) hint.tenant_core = tenantCore(hint.tenant_brand);
+
+  // Tenant-implied vertical when the research-root didn't decide it. Use the
+  // cleaned core so cues survive a fused "DaVita Portfolio (3) - AR" label.
+  if (!hint.vertical && (hint.tenant_core || hint.tenant_brand)) {
+    const t = hint.tenant_core || hint.tenant_brand;
+    if (DIA_CUES.test(t)) hint.vertical = 'dia';
+    else if (GOV_CUES.test(t)) hint.vertical = 'gov';
   }
 
   return hint;

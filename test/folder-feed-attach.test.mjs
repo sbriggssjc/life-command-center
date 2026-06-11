@@ -100,7 +100,10 @@ describe('folder-feed light attach (Slice 2d Unit 2)', () => {
     assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'no disambiguation on a clean match');
   });
 
-  it('unresolved doc (zero candidates) → match_disambiguation, attaches nothing', async () => {
+  it('no in-domain property (zero candidates) → terminal, NO decision, attaches nothing', async () => {
+    // Stage A doctrine: most PROPERTIES docs are out-of-universe (no dia/gov
+    // property). A zero-candidate result is captured terminally, NOT churned
+    // into the match_disambiguation lane.
     installFetchMock({ diaRows: [], govRows: [] });
 
     const res = await attachRecognizedDoc({
@@ -112,10 +115,9 @@ describe('folder-feed light attach (Slice 2d Unit 2)', () => {
     });
 
     assert.equal(res.attached, false);
-    assert.equal(res.emitted_disambiguation, true);
-    const dec = calls.find(c => c.url.includes('/rpc/lcc_open_decision'));
-    assert.ok(dec, 'disambiguation decision emitted');
-    assert.equal(dec.body.p_subject_ref, 'folder_feed_attach:/sites/x/PROPERTIES/D/DaVita/Tulsa, OK/bov.pdf');
+    assert.equal(res.emitted_disambiguation, false);
+    assert.equal(res.no_domain, true);
+    assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'no decision emitted for out-of-universe doc');
     assert.ok(!calls.some(c => c.url.includes('/property_documents')), 'no doc attached when unresolved');
   });
 

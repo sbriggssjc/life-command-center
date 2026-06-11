@@ -682,13 +682,18 @@ export async function emitMatchDisambiguation(intakeId, address, tenant, candida
 // Used by api/_handlers/folder-feed-attach.js to attach lease/BOV/DD/master/comp
 // working docs to the property they describe without staging an intake.
 export async function matchByPathAnchor(subjectHint) {
-  const tenant = subjectHint?.tenant_brand ? String(subjectHint.tenant_brand).trim() : '';
-  const city   = subjectHint?.city ? String(subjectHint.city).trim() : '';
-  const state  = normalizeState(subjectHint?.state);
-  // Without a tenant AND a state the anchor is too weak to resolve a property
-  // safely — bail to unmatched rather than risk a wrong attach.
-  if (!tenant || !state) {
-    return { status: 'unmatched', confidence: 0, property_id: null, domain: null, candidates: [] };
+  // Prefer the cleaned tenant CORE (folder labels carry fused City/ST, portfolio
+  // descriptors, and broker initials that never ILIKE-match a tenant column).
+  const tenantRaw = subjectHint?.tenant_brand ? String(subjectHint.tenant_brand).trim() : '';
+  const tenant    = subjectHint?.tenant_core ? String(subjectHint.tenant_core).trim() : tenantRaw;
+  const city      = subjectHint?.city ? String(subjectHint.city).trim() : '';
+  const state     = normalizeState(subjectHint?.state);
+  const address   = subjectHint?.address ? String(subjectHint.address).trim() : '';
+
+  // Need a state plus either a street address OR a tenant to resolve safely.
+  // Otherwise the anchor is too weak — bail to unmatched (no decision, no guess).
+  if (!state || (!address && !tenant)) {
+    return { status: 'unmatched', confidence: 0, reason: 'insufficient_anchor', property_id: null, domain: null, candidates: [] };
   }
 
   // Resolve which domain(s) to probe. The research-root/tenant-cue vertical is
@@ -699,11 +704,52 @@ export async function matchByPathAnchor(subjectHint) {
   else if (vertical === 'gov') domains = ['government'];
   else domains = DIALYSIS_KEYWORDS.test(tenant) ? ['dialysis', 'government'] : ['government', 'dialysis'];
 
+  const toReview = (cands) => ({
+    status: 'review_required',
+    reason: 'path_anchor_ambiguous',
+    confidence: 0,
+    property_id: null,
+    domain: null,
+    candidates: cands.slice(0, 5).map(c => ({
+      domain: c.domain === 'dialysis' ? 'dia' : 'gov',
+      property_id: String(c.property_id),
+      address: c.address || null,
+      tenant: c.tenant || c.agency || c.agency_full_name || null,
+      confidence: 0.7,
+    })),
+  });
+
+  // 1) Address-first — when the path/filename carried a street address, run the
+  //    full canonical/exact/normalized matcher (highest precision, single hit).
+  if (address) {
+    const addrCands = [];
+    for (const domain of domains) {
+      const m = await matchAgainstDomain(domain, address, state, city, tenant);
+      if (m && m.property_id != null) addrCands.push({ domain, ...m });
+    }
+    if (addrCands.length === 1) {
+      const c = addrCands[0];
+      return {
+        status: 'matched',
+        reason: `path_anchor_${c.reason || 'address'}`,
+        confidence: Math.max(0.8, c.confidence || 0.8),
+        property_id: c.property_id,
+        domain: c.domain,
+        candidates: addrCands,
+      };
+    }
+    if (addrCands.length > 1) return toReview(addrCands);
+    // 0 address hits → fall through to tenant+city+state.
+  }
+
+  // 2) Tenant + city + state — only when we actually have a tenant.
   const candidates = [];
-  for (const domain of domains) {
-    const m = await tenantCityStateMatch(domain, tenant, city, state);
-    if (m && Array.isArray(m.candidates)) {
-      for (const c of m.candidates) candidates.push({ domain, ...c });
+  if (tenant) {
+    for (const domain of domains) {
+      const m = await tenantCityStateMatch(domain, tenant, city, state);
+      if (m && Array.isArray(m.candidates)) {
+        for (const c of m.candidates) candidates.push({ domain, ...c });
+      }
     }
   }
 
@@ -718,23 +764,8 @@ export async function matchByPathAnchor(subjectHint) {
       candidates,
     };
   }
-  if (candidates.length > 1) {
-    return {
-      status: 'review_required',
-      reason: 'path_anchor_ambiguous',
-      confidence: 0,
-      property_id: null,
-      domain: null,
-      candidates: candidates.slice(0, 5).map(c => ({
-        domain: c.domain === 'dialysis' ? 'dia' : 'gov',
-        property_id: String(c.property_id),
-        address: c.address || null,
-        tenant: c.tenant || c.agency || c.agency_full_name || null,
-        confidence: 0.7,
-      })),
-    };
-  }
-  return { status: 'unmatched', confidence: 0, property_id: null, domain: null, candidates: [] };
+  if (candidates.length > 1) return toReview(candidates);
+  return { status: 'unmatched', confidence: 0, reason: 'no_domain_property', property_id: null, domain: null, candidates: [] };
 }
 
 /**

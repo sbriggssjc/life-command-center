@@ -78,30 +78,41 @@ export async function attachRecognizedDoc(args) {
     && (match.domain === 'government' || match.domain === 'dialysis');
 
   if (!resolved) {
-    // Unresolved or ambiguous → the Decision Center, keyed on the path so the
-    // same file is idempotent across ticks. Never a guess, never a create.
-    let emitted = false;
-    try {
-      await emitMatchDisambiguation(
-        null,
-        subjectHint?.tenant_brand || null,
-        subjectHint?.tenant_brand || null,
-        Array.isArray(match?.candidates) ? match.candidates : [],
-        {
-          subjectRef: 'folder_feed_attach:' + pathRef,
-          workspaceId,
-          context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: docType || null },
-        },
-      );
-      emitted = true;
-    } catch (err) {
-      console.warn('[folder-feed-attach] disambiguation emit failed (non-fatal):', err?.message);
+    // DOCTRINE (Stage A, 2026-06-11): the PROPERTIES tree is Briggs's whole
+    // net-lease book — most folders are out-of-universe (no dia/gov property) or
+    // multi-property portfolios. Emit a decision ONLY on genuine in-domain
+    // ambiguity (≥2 near-miss candidates → review_required); a zero-candidate /
+    // too-weak / portfolio result is a TERMINAL non-error outcome (captured +
+    // tenant-searchable in folder_feed_seen, NOT a decision-lane card). This
+    // stops the lane churn from ~100+ out-of-universe docs.
+    if (match?.status === 'review_required') {
+      let emitted = false;
+      try {
+        await emitMatchDisambiguation(
+          null,
+          subjectHint?.tenant_brand || null,
+          subjectHint?.tenant_brand || null,
+          Array.isArray(match?.candidates) ? match.candidates : [],
+          {
+            subjectRef: 'folder_feed_attach:' + pathRef,
+            workspaceId,
+            context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: docType || null },
+          },
+        );
+        emitted = true;
+      } catch (err) {
+        console.warn('[folder-feed-attach] disambiguation emit failed (non-fatal):', err?.message);
+      }
+      return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
     }
+    // No in-domain property — captured, not a decision.
     return {
       ok: false,
       attached: false,
-      emitted_disambiguation: emitted,
-      reason: match?.status === 'review_required' ? 'ambiguous' : 'unresolved',
+      emitted_disambiguation: false,
+      reason: match?.reason || 'no_domain_property',
+      no_domain: true,
+      is_portfolio: !!subjectHint?.is_portfolio,
       match_status: match?.status || null,
     };
   }
