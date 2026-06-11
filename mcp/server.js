@@ -333,7 +333,7 @@ const TOOL_HANDLERS = {
           ),
           govQuery(
             "GET",
-            `ownership_history?property_id=eq.${enc(govExtId)}&select=*&order=recorded_date.desc&limit=10`
+            `ownership_history?property_id=eq.${enc(govExtId)}&select=*&order=transfer_date.desc&limit=10`
           ),
           govQuery(
             "GET",
