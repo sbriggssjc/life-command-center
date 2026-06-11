@@ -60,6 +60,56 @@ tells, using **no fabricated deals** — just NorthMarq's confirmed comp set poo
 wide enough to escape the 2-deal recent window. **This is a basis-definition
 choice, which is Scott's call — no view change until the gate.**
 
+### Phase 1b — deep deal-by-deal audit (Scott's follow-up: reproduce 6.89%, then go deal-by-deal)
+
+**(1) The 6.89% reproduces exactly — it is the *clean-quality* subset, and it is
+biased LOW.** The full gov NM universe decomposes as:
+
+| slice | n | avg cap |
+|---|---|---|
+| all NM with a cap | 128 | **8.24%** ← the ~8.0% intuition |
+| all NM not-excluded | 99 | 8.11% |
+| NM in-band [4–12%], all quality | 98 | 7.96% |
+| **NM in-band, excl. `implausible_unverified` (the 6.89% cohort)** | **49** | **6.89%** |
+| NM `implausible_unverified` | 65 | 9.56% |
+| NM cap > 12% | 2 | 26.00% (data error — e.g. 111 Greencourt VA = **22.42%**) |
+
+The entire 8.11% → 6.89% gap is the `implausible_unverified` flag. So 6.89% does
+**not** stand on its own as "the NM number" — it is what's left after the cap-
+quality filter drops *half* the NM universe.
+
+**(2) Deal-by-deal: the high-cap NM tail is NOT uniformly garbage.** Every
+not-excluded NM deal ≥7% is `implausible_unverified`, but they split by *why* the
+cap is high. Of the 49 in-band `implausible_unverified` NM rows:
+
+| bucket | n | avg cap | read |
+|---|---|---|---|
+| **A. short / holdover firm term (<3y)** | 8 | 9.32% | **legitimately high** (601 W Main IL 11.78% @3.5y State; 10703 Stancliff TX 10.6% @0.55y; 2600 W Hillsboro AR 8.82% @ **−1.58y holdover**) |
+| **B. low-credit state/local** | 8 | 9.37% | **legitimately high** (state/municipal genuinely trades wider) |
+| **C. long-firm federal at high cap** | 9 | 9.11% | **genuinely suspect** (4750 S Garnett OK 9.44% @ **14.1y** SSA — a long federal lease should not trade at 9.4%) |
+| **D. other mid-term** | 24 | 8.78% | mixed — needs per-deal |
+
+**Conclusion (the honest number is in between).** 6.89% is biased **low** because
+the cap-quality flag drops ~16 *legitimately-high* short-term/low-credit NM deals
+(buckets A+B, avg ~9.3%) **along with** the genuine errors. ~8.1% is biased
+**high** because it keeps the 22% error and the suspect long-firm-federal rows.
+Reclassifying A+B back into the clean cohort lands NM ≈ **7.5%**
+(`(49×6.89 + 16×9.35)/65`), with C + the >12% rows correctly excluded.
+
+**(3) Name-by-name reconciliation to the deck's NM comp set: BLOCKED — need the
+deck list.** I don't have the deck's NM Value-Prop comp roster, so I can't confirm
+whether the deck's 6.78% itself excludes the short-term/low-credit highs (which
+would explain why it sits below our reclassified ~7.5%) or uses a different
+curated set. **Ask: provide the deck NM comp list (names/addresses) and I'll
+reconcile ours against it row-by-row.**
+
+**Gate (no view change yet).** The basis is not a one-line window swap — the real
+lever is the `implausible_unverified` flag on the NM rows. Recommended sequence:
+(a) Scott provides the deck NM comp list → I reconcile; (b) I dry-run a cap-quality
+**re-derivation** that keeps the genuine errors flagged but reclassifies the
+term/credit-justified highs; (c) then the basis (and any view change) is decided
+on the reconciled cohort. Until then: **no view change.**
+
 ---
 
 ## LAYER G — dia "huge outlier ~2022/23"
@@ -107,9 +157,19 @@ policy) — but per-deal confirmation that each is genuinely non-representative 
 - **E3 gov #26 volume+cap — axis separation (R73 C4) LANDED** (gov right-axis
   `{0.020, 0.105}`). The remaining "type + palette" tweak is best judged on a fresh
   render.
-- **E4 y-axis titles + tighter min/max — GENUINELY REMAINING.** The multi-line
-  handler currently supports min/max (`valAxScalingFrag`) but **not** axis titles
-  (only the combo handler does, via `axisTitleFrag` / `yLeftAxisTitle`). Adding
-  titled value axes to the flagged cap-rate line charts requires extending the
-  multi-line `<c:valAx>` in both the native injector and the PNG renderer + a
-  harness assertion. Ready to implement.
+- **E4 y-axis titles — SHIPPED (chart-code → re-export).** Extended the
+  multi-line builder (`buildMultiLineChartXml`) with an optional rotated
+  value-axis title (`yLeftAxisTitle`, mirroring the combo's `axisTitleFrag`,
+  inserted between gridlines and numFmt per CT_ValAx order) + a matching
+  `yAxisTitle` in the PNG renderer's `commonOpts` (`scales.y.title`). Labelled
+  **'Cap rate'** on the three cap-rate line charts Scott is reviewing:
+  `nm_vs_market_cap` (#20), `cap_rate_by_credit` (#13), `cap_rate_by_lease_term`.
+  The min/max on these are already tight (set per template). New harness test
+  `R76 E4` (185 pass / 0 fail / 1 skip); `node --check` clean on both paths;
+  12 functions. Verified on Scott's re-export (Railway redeploy).
+
+### Closeout note (verification rides the redeploy)
+E1, E3, and E4 are all **code-correct in `main`** and render on the next Railway
+redeploy + fresh export (the recurring stale-build pattern in CLAUDE.md — code
+live in `main`, export served from an old build). No piecemeal re-export needed;
+fold their visual confirmation into the closeout redeploy.

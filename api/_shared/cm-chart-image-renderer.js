@@ -269,7 +269,7 @@ const AXIS_FORMAT_INTEGER = {
 // Common Chart.js v3 options
 // ============================================================================
 
-function commonOpts({ yAxisFormat, yAxisRange, xMaxTicks = 12, legendPosition = 'bottom' } = {}) {
+function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legendPosition = 'bottom' } = {}) {
   const opts = {
     responsive: false,
     maintainAspectRatio: false,
@@ -316,6 +316,13 @@ function commonOpts({ yAxisFormat, yAxisRange, xMaxTicks = 12, legendPosition = 
   if (yAxisRange) {
     if (yAxisRange.min != null) opts.scales.y.min = yAxisRange.min;
     if (yAxisRange.max != null) opts.scales.y.max = yAxisRange.max;
+  }
+  // R76 E4 — optional y-axis title (Scott: "y-axes LABELED").
+  if (yAxisTitle) {
+    opts.scales.y.title = {
+      display: true, text: yAxisTitle,
+      color: '#6A748C', font: { family: 'Calibri', size: 10 },
+    };
   }
   return opts;
 }
@@ -722,6 +729,7 @@ function buildChartConfig(chart, brand) {
         },
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           // R66bb — tight fit to 2020+ data. dia 5.75-7.25%; R66l — gov sits
           // higher (NM 6.32-7.42%, market to 7.27%) so it gets a 6.0-7.75% frame.
           yAxisRange: (chart.vertical === 'dialysis')
@@ -885,6 +893,7 @@ function buildChartConfig(chart, brand) {
         // bag). Tightened 5.25-8.0% -> 5.5-7.75% to surface the cohort movement.
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           yAxisRange:  { min: 0.055, max: 0.0775 },
         }),
       };
@@ -1588,7 +1597,7 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
           ],
         },
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE }),
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE, yAxisTitle: 'Cap rate' }),   // R76 E4
       };
     }
 

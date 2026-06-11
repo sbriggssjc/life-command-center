@@ -793,6 +793,19 @@ function buildMultiLineChartXml(spec) {
   // R37 P2 — pin val axis range + format
   const valScalingFrag = valAxScalingFrag(spec.yAxisRange);
   const valFmtFrag     = valAxNumFmtFrag(spec.valAxNumFmt);
+  // R76 E4 — optional rotated value-axis title (Scott: "y-axes LABELED").
+  // Mirrors the combo builder's axisTitleFrag (rot -5400000, gray 6A748C,
+  // sz 900). Inserted between majorGridlines and numFmt per CT_ValAx order.
+  const valAxTitleFrag = (spec.yLeftAxisTitle || spec.yAxisTitle)
+    ? `<c:title>
+          <c:tx><c:rich>
+            <a:bodyPr rot="-5400000" vert="horz"/>
+            <a:lstStyle/>
+            <a:p><a:r><a:rPr lang="en-US" sz="900" b="0"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill></a:rPr><a:t>${escapeXml(spec.yLeftAxisTitle || spec.yAxisTitle)}</a:t></a:r></a:p>
+          </c:rich></c:tx>
+          <c:overlay val="0"/>
+        </c:title>`
+    : '';
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
@@ -880,6 +893,7 @@ ${upDownBarsFrag}
         <c:delete val="0"/>
         <c:axPos val="l"/>
         ${MAJOR_GRIDLINES_FRAG}
+        ${valAxTitleFrag}
         ${valFmtFrag}
         <c:crossAx val="1"/>
       </c:valAx>
@@ -3170,6 +3184,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // R37 P2 — 4-line cohort caps: 4-11% pin (renderer line ~874)
           yAxisRange: cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
+          yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: series.map(s => ({
             titleCol: s.col, titleRow: headerRow,
             valCol: s.col,
@@ -3223,6 +3238,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           // R66o — thin gray vertical connectors between the two lines (deck style).
           hiLowLines: '#C9CED6',
+          yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
             { titleCol: marketCol, titleRow: headerRow, valCol: marketCol, color: NM_GRAY, dataLabels: mktLabels },
             { titleCol: nmCol,     titleRow: headerRow, valCol: nmCol,     color: sky, dataLabels: nmLabels },
@@ -3847,6 +3863,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // R37 P2 — cap by credit uses CAP_RATE_RANGE 5-10% (renderer ~1538)
           yAxisRange: CAP_RATE_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
+          yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
             { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy     },
             { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky      },
