@@ -218,8 +218,28 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    PA new-designer froze repeatedly over remote CDP — Scott does flow edits natively.
    Test artifacts (2 stray `LCC Writeback Test [LCC].pdf` files in `Storage OM's/Intake`
    + Chilton folder) left for Scott to delete; enrich guard skips them. **Phase 2
-   ingest+enrich+write-back ALL LIVE.** Remaining roadmap: Slice 3 (context layer —
-   email/SF notes/LLC), needs upstream-connector grounding first.
+   ingest+enrich+write-back ALL LIVE.**
+   **✅ Slice 3a PROPERTY CONTEXT PACKET COMPLETE + VERIFIED LIVE 2026-06-11 (PR
+   #1152).** Grounding: context_packets had 45,733 packets but only `contact` +
+   `daily_briefing` types — ZERO `property`. `assemblePropertyPacket` existed +
+   wired in the switch but nothing called it (preassemble skipped assets; the
+   property handler only read cache → null), and it was thin (no documents/
+   ownership/transactions). Fix enriched the assembler (documents w/ provenance —
+   surfaces the Phase-2 doc connections; ownership + related entities; transactions
+   + listings; real investment score) + assemble-on-miss in the `/api/property`
+   HTTP mirror + nightly pre-warm of active assets. Verified: `GET /api/property
+   ?entity_id=9782c412-...` (DaVita Chilton) returns the full packet — documents=1
+   (`DaVita...OM.pdf`, source `enriched`), ownership (Avalon Properties / DaVita
+   Inc.), 4 transactions, lease, score; cached + fresh (property_packets_total 0→1).
+   **TWO FINDINGS:** (1) the deployed **MCP server `mcp/server.js` get_property_context
+   does NOT assemble-on-miss** — only reads cache (relies on nightly pre-warm); a
+   cold-miss returns null to agents (Copilot/Claude/GPT). → optional **Slice 3a.1**
+   (small mcp/server.js change) completes the agent-facing keystone. (2) **gov ingest
+   doesn't mint LCC asset entities** (unlike dia's promoter bridge) — get_property_context
+   by entity_id finds nothing for gov; gov reachable by address only. Next: Slice 3a.1
+   (MCP assemble-on-miss) then **Slice 3b** (route email/SF-notes correspondence into
+   activity_events → enriches the packet's activity_timeline; today activity_events
+   is mostly system events, ~494 human notes + 1 call).
    **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
    (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
    `20260718123000` (folder_feed_seen.mode) + `20260718124000`
