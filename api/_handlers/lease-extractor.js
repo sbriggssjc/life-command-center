@@ -21,7 +21,18 @@
 // live until the gated activation.
 // ============================================================================
 
+import { createRequire } from 'module';
 import { isReportedField } from '../_shared/extraction-field-policy.js';
+import { invokeExtractionAI } from '../_shared/ai.js';
+import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
+import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
+import { domainQuery } from '../_shared/domain-db.js';
+import { matchAgainstDomain } from './intake-matcher.js';
+import { attachEnrichDocument } from './intake-promoter.js';
+import { ensureEntityLink } from '../_shared/entity-link.js';
+import { authenticate } from '../_shared/auth.js';
+
+const nodeRequire = createRequire(import.meta.url);
 
 // Logical field → domain column. dia.leases already differs from gov.leases, so
 // the writer maps once here (mirrors the field_source_priority registration in
@@ -265,4 +276,195 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
   }
 
   return out;
+}
+
+// ============================================================================
+// LIVE ORCHESTRATION (gated dry-run / real) + endpoint
+// ============================================================================
+
+function parseLeaseJson(text) {
+  if (!text) return null;
+  const fenced = String(text).match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : text;
+  const m = String(body).match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+// Decode lease doc bytes to text for the prompt. PDF → pdf-parse; text/* →
+// decode; other binaries (docx/xlsx) → best-effort utf-8 (the AI tolerates
+// partial). Returns '' when nothing usable.
+async function leaseTextFromBytes(buffer, mediaType) {
+  const isPdf = /pdf/i.test(mediaType || '') || (buffer && buffer[0] === 0x25 && buffer[1] === 0x50);
+  if (isPdf) {
+    try {
+      const pdfParse = nodeRequire('pdf-parse');
+      const parsed = await pdfParse(buffer);
+      return (parsed?.text || '').trim().slice(0, 120000);
+    } catch (err) { console.warn('[lease-extractor] pdf-parse failed:', err?.message); return ''; }
+  }
+  try { return Buffer.from(buffer).toString('utf8').replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ' ').trim().slice(0, 120000); }
+  catch { return ''; }
+}
+
+/**
+ * One file read → normalized lease extraction. `raw` may be supplied to bypass
+ * the AI (tests / a pre-extracted preview); otherwise bytes are fetched from the
+ * SharePoint ref and run through the lease prompt.
+ */
+export async function runLeaseExtraction({ storageRef, mediaType = 'application/pdf', raw = null, fetchImpl } = {}) {
+  if (raw) return { normalized: normalizeLeaseExtraction(raw), source: 'raw' };
+  if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
+  const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
+  if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
+  const text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
+  if (!text) throw new Error('no_extractable_text');
+  const prompt = `${buildLeaseExtractionPrompt()}\n\n--- LEASE DOCUMENT TEXT ---\n${text}`;
+  const result = await invokeExtractionAI({ prompt });
+  if (!result.ok) throw new Error(`AI provider error ${result.status}`);
+  const aiText = result.data?.response || result.data?.content || result.data?.choices?.[0]?.message?.content || (typeof result.data === 'string' ? result.data : '') || '';
+  const parsed = parseLeaseJson(aiText);
+  if (!parsed) throw new Error('no_json_in_ai_response');
+  return { normalized: normalizeLeaseExtraction(parsed), source: 'ai' };
+}
+
+const DOMAIN_DB = (d) => (d === 'dialysis' ? 'dia_db' : 'gov_db');
+const DOMAIN_SCHEMA = (d) => (d === 'dialysis' ? 'dia' : 'gov');
+const DOMAIN_SHORT = (d) => (d === 'dialysis' ? 'dia' : 'gov');
+
+/** Real writer deps (provenance-first; guarantor entity + guaranteed_by edge). */
+export function buildRealLeaseDeps({ workspaceId, actorId }) {
+  return {
+    matchAgainstDomain,
+    domainsFor: (pi) => {
+      const t = `${pi.tenant || ''}`;
+      return /dialysis|davita|fresenius|renal|nephrology|kidney/i.test(t) ? ['dialysis', 'government'] : ['government', 'dialysis'];
+    },
+    mergeField: async ({ domain, table, recordPk, field, value }) => {
+      const r = await opsQuery('POST', 'rpc/lcc_merge_field', {
+        p_workspace_id: workspaceId || null,
+        p_target_database: DOMAIN_DB(domain),
+        p_target_table: `${DOMAIN_SCHEMA(domain)}.${table}`,
+        p_record_pk: String(recordPk),
+        p_field_name: field, p_value: value == null ? null : String(value),
+        p_source: 'folder_feed_lease', p_confidence: 0.85, p_recorded_by: actorId || null,
+      }).catch(() => null);
+      const d = Array.isArray(r?.data) ? r.data[0] : r?.data;
+      return { decision: d?.decision || 'write' };
+    },
+    patchLease: async ({ domain, leaseId, propertyId, fields }) => {
+      let lid = leaseId;
+      if (!lid) {
+        const g = await domainQuery(domain, 'GET', `leases?property_id=eq.${propertyId}&select=lease_id&order=lease_id.desc&limit=1`);
+        lid = g.ok && g.data?.[0]?.lease_id;
+      }
+      if (!lid) return { ok: false, reason: 'no_lease_row' };
+      const r = await domainQuery(domain, 'PATCH', `leases?lease_id=eq.${pgFilterVal(lid)}`, fields);
+      return { ok: !!r.ok, lease_id: lid };
+    },
+    insertTiRows: async ({ domain, propertyId, leaseId, rows }) => {
+      const payload = rows.map(row => ({ ...row, property_id: Number(propertyId), lease_id: leaseId || null }));
+      const r = await domainQuery(domain, 'POST', 'lease_ti_amortization?on_conflict=lease_id,property_id,schedule_year', payload,
+        { Prefer: 'resolution=merge-duplicates,return=minimal' });
+      return { ok: !!r.ok, count: r.ok ? payload.length : 0 };
+    },
+    ensureGuarantorEntity: async ({ domain, propertyId, name }) => {
+      // Mint the guarantor org entity (idempotent on the normalized name), then a
+      // guaranteed_by edge to the property's asset entity (cross-deal search).
+      const guar = await ensureEntityLink({
+        workspaceId, userId: actorId, sourceSystem: 'folder_feed_lease', sourceType: 'guarantor',
+        externalId: name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), domain: 'lcc',
+        seedFields: { display_name: name, entity_type: 'organization' }, metadata: { role: 'guarantor' },
+      }).catch(() => null);
+      const guarId = guar?.entity?.id || guar?.entityId || null;
+      if (guarId) {
+        const asset = await ensureEntityLink({
+          workspaceId, userId: actorId, sourceSystem: DOMAIN_SHORT(domain), sourceType: 'asset',
+          externalId: String(propertyId), domain: DOMAIN_SHORT(domain),
+        }).catch(() => null);
+        const assetId = asset?.entity?.id || asset?.entityId || null;
+        if (assetId) {
+          const dupe = await opsQuery('GET', `entity_relationships?from_entity_id=eq.${pgFilterVal(guarId)}&to_entity_id=eq.${pgFilterVal(assetId)}&relationship_type=eq.guaranteed_by&select=id&limit=1`).catch(() => null);
+          if (!(dupe?.ok && dupe.data?.length)) {
+            await opsQuery('POST', 'entity_relationships', { from_entity_id: guarId, to_entity_id: assetId, relationship_type: 'guaranteed_by' }, { Prefer: 'return=minimal' }).catch(() => {});
+          }
+        }
+      }
+      return { entity_id: guarId };
+    },
+    attachDoc: async ({ domain, propertyId, fileName, sourceUrl }) => {
+      const r = await attachEnrichDocument(domain, propertyId, { fileName, docType: 'lease', sourceUrl }).catch(() => null);
+      return { document_id: r?.document_id || null };
+    },
+  };
+}
+
+/**
+ * Orchestrate one lease doc: extract → resolve (or use the given property) →
+ * dry-run preview OR real apply. Gated: dryRun returns the full write PLAN +
+ * boundary check and writes NOTHING.
+ */
+export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, domain, propertyId, dryRun = true }, deps) {
+  const { normalized } = await runLeaseExtraction({ storageRef, mediaType, raw, fetchImpl: deps?.fetchImpl });
+
+  // Resolve the property from the in-file address unless the caller pinned one.
+  let resolved = null;
+  if (domain && propertyId != null) {
+    resolved = { status: 'matched', domain, property_id: propertyId, reason: 'caller_pinned' };
+  } else {
+    resolved = await resolveAttachFromExtraction(normalized, deps);
+  }
+
+  if (resolved.status !== 'matched') {
+    return { ok: false, dry_run: dryRun, resolved, normalized, reason: resolved.status };
+  }
+
+  const plan = planLeaseWrites(resolved.domain, normalized);
+  // Boundary check: NOTHING the lease writer touches may be a reported field.
+  const reported_targets = Object.keys(plan.leaseFields).filter(isReportedField);
+
+  if (dryRun) {
+    return {
+      ok: true, dry_run: true, resolved,
+      preview: {
+        property: { domain: resolved.domain, property_id: resolved.property_id },
+        lease_fields: plan.leaseFields, guarantor: plan.guarantor,
+        ti_rows: plan.tiRows.length, expense_rows: normalized.expense_schedule.length,
+      },
+      boundary_ok: reported_targets.length === 0,
+      reported_targets,            // must be [] — proves no reported-cohort reach
+      warnings: plan.warnings,
+    };
+  }
+
+  const applied = await applyLeaseEnrichment({
+    domain: resolved.domain, propertyId: resolved.property_id, normalized,
+    doc: fileName ? { fileName, sourceUrl: storageRef } : null,
+  }, deps);
+  return { ok: applied.ok, dry_run: false, resolved, applied, boundary_ok: reported_targets.length === 0 };
+}
+
+/**
+ * POST /api/intake?_route=lease-extract — the gated dry-run / real tool.
+ * Body: { storage_ref, file_name?, media_type?, domain?, property_id?, dry_run?, raw? }
+ * dry_run defaults TRUE (a call without dry_run:false writes nothing).
+ */
+export async function handleLeaseExtract(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const b = req.body || {};
+  const dryRun = b.dry_run !== false;     // default safe
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID || null;
+  const deps = buildRealLeaseDeps({ workspaceId, actorId: user.id });
+  try {
+    const out = await extractLeaseDoc({
+      storageRef: b.storage_ref, fileName: b.file_name, mediaType: b.media_type,
+      raw: b.raw || null, domain: b.domain || null, propertyId: b.property_id ?? null,
+      dryRun,
+    }, deps);
+    return res.status(out.ok ? 200 : 422).json(out);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || 'lease_extract_error' });
+  }
 }

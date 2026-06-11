@@ -5,9 +5,17 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+process.env.OPS_SUPABASE_URL = 'https://ops.test.local';
+process.env.OPS_SUPABASE_KEY = 'k';
+process.env.DIA_SUPABASE_URL = 'https://dia.test.local';
+process.env.DIA_SUPABASE_KEY = 'k';
+process.env.GOV_SUPABASE_URL = 'https://gov.test.local';
+process.env.GOV_SUPABASE_KEY = 'k';
+
 import {
   buildLeaseExtractionPrompt, normalizeLeaseExtraction, planLeaseWrites,
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
+  extractLeaseDoc,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -147,5 +155,50 @@ describe('lease extractor — writer (provenance-first, guarantor entity, TI)', 
     const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, normalized: n }, deps);
     assert.equal(out.ok, true);
     assert.ok(out.fields_filled >= 1);  // other fields still written
+  });
+});
+
+describe('lease extractor — orchestrator (gated dry-run / real)', () => {
+  // raw bypasses the AI; mock matcher resolves the in-file address to one prop.
+  const deps = {
+    matchAgainstDomain: async (domain, address) =>
+      (domain === 'dialysis' && /4601 madison/i.test(address)) ? { property_id: 30441, confidence: 0.95, reason: 'canonical' } : null,
+    mergeField: async () => ({ decision: 'write' }),
+    patchLease: async () => ({ ok: true }),
+    insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+    ensureGuarantorEntity: async () => ({ entity_id: 'g1' }),
+    attachDoc: async () => ({ document_id: 1 }),
+  };
+
+  it('dry-run resolves + previews + proves the boundary, writes NOTHING', async () => {
+    const calls = { writes: 0 };
+    const spyDeps = {
+      ...deps,
+      mergeField: async () => { calls.writes++; return { decision: 'write' }; },
+      patchLease: async () => { calls.writes++; return { ok: true }; },
+      insertTiRows: async () => { calls.writes++; return { ok: true, count: 1 }; },
+    };
+    const out = await extractLeaseDoc({ raw: RAW, fileName: 'lease.pdf', dryRun: true }, spyDeps);
+    assert.equal(out.ok, true);
+    assert.equal(out.dry_run, true);
+    assert.equal(out.resolved.property_id, 30441);
+    assert.equal(out.boundary_ok, true);
+    assert.deepEqual(out.reported_targets, []);          // nothing reaches a reported field
+    assert.equal(out.preview.guarantor, 'Total Renal Care, Inc.');
+    assert.equal(calls.writes, 0, 'dry-run wrote nothing');
+  });
+
+  it('real run applies via deps', async () => {
+    const out = await extractLeaseDoc({ raw: RAW, fileName: 'lease.pdf', dryRun: false }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.dry_run, false);
+    assert.equal(out.applied.guarantor_entity_id, 'g1');
+    assert.equal(out.applied.ti_rows, 1);
+  });
+
+  it('caller-pinned property skips the resolver', async () => {
+    const out = await extractLeaseDoc({ raw: RAW, domain: 'government', propertyId: 555, dryRun: true }, deps);
+    assert.equal(out.resolved.reason, 'caller_pinned');
+    assert.equal(out.resolved.property_id, 555);
   });
 });

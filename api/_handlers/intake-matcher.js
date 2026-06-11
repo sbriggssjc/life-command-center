@@ -334,7 +334,7 @@ async function tenantCityStateMatch(domain, tenant, city, state) {
  * Run the full match sequence against a single domain.
  * Returns first successful match or null.
  */
-async function matchAgainstDomain(domain, address, state, city, tenant) {
+export async function matchAgainstDomain(domain, address, state, city, tenant) {
   const norm    = address ? normalizeAddress(address) : '';
   const noDir   = norm     ? stripDirectional(norm)   : '';
 
