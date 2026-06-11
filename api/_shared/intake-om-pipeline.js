@@ -69,6 +69,7 @@ const EXTRACT_RACE_MS = (() => {
  * @property {string}  [note]               — free-text caller intent
  * @property {string}  [entity_id]          — optional pre-link to a property/contact
  * @property {('copilot_chat'|'outlook'|'teams'|'sidebar'|'email')} channel
+ * @property {boolean} [defer_extraction]   — Slice 2d: skip the inline extraction race; leave status='queued' for the /api/intake-extract-drain worker (folder-feed crawl async path)
  * @property {object}  [seed_data]          — pre-extracted property hints (optional)
  * @property {object}  [email_context]      — email channel only: { internet_message_id, subject, body_snippet, web_link, received_at, from, to } → logs the email as an `email` activity on a confident match (Slice 3b Unit 1)
  * @property {object}  [copilot_metadata]   — Copilot conversation context
@@ -511,24 +512,39 @@ export async function stageOmIntake(input, auth, workspaceId) {
   // ---- 8. Fire extraction + matching with a race timeout
   //     Whichever finishes first wins: either we return real classification,
   //     or we return 'queued' and the pipeline continues asynchronously.
+  //
+  //     Phase 2 Slice 2d (Unit 3): the folder-feed crawl decouples extraction
+  //     from staging so a crawl tick can list many folders + stage many OMs FAST
+  //     without blocking ~20s on each extraction. When input.defer_extraction is
+  //     set, skip the inline race entirely — the row stays status='queued' and a
+  //     bounded drain (/api/intake-extract-drain) extracts it on its own cadence.
+  //     The existing lcc-retry-stranded-extractions cron is a second safety net.
   let extractionResult = null;
   let raceTimedOut     = false;
-  try {
-    const extraction = processIntakeExtraction(inboxItemId)
-      .catch((err) => {
-        console.error('[intake-om-pipeline] extraction failed:', inboxItemId, err?.message);
-        return { ok: false, extraction_snapshot: null, error: err?.message || 'extraction_error' };
-      });
+  const deferExtraction = input.defer_extraction === true;
+  if (deferExtraction) {
+    // No inline extraction. Report 'processing' (received) — the snapshot/match
+    // come later from the drain. Everything downstream (entity bridge, email
+    // correspondence, memory log) no-ops cleanly on the null snapshot.
+    raceTimedOut = true;
+  } else {
+    try {
+      const extraction = processIntakeExtraction(inboxItemId)
+        .catch((err) => {
+          console.error('[intake-om-pipeline] extraction failed:', inboxItemId, err?.message);
+          return { ok: false, extraction_snapshot: null, error: err?.message || 'extraction_error' };
+        });
 
-    const timeout = new Promise((resolve) => setTimeout(() => {
-      raceTimedOut = true;
-      resolve({ ok: null, extraction_snapshot: null, timedOut: true });
-    }, EXTRACT_RACE_MS));
+      const timeout = new Promise((resolve) => setTimeout(() => {
+        raceTimedOut = true;
+        resolve({ ok: null, extraction_snapshot: null, timedOut: true });
+      }, EXTRACT_RACE_MS));
 
-    extractionResult = await Promise.race([extraction, timeout]);
-  } catch (err) {
-    console.error('[intake-om-pipeline] race error:', inboxItemId, err?.message);
-    extractionResult = { ok: false, extraction_snapshot: null, error: 'race_error' };
+      extractionResult = await Promise.race([extraction, timeout]);
+    } catch (err) {
+      console.error('[intake-om-pipeline] race error:', inboxItemId, err?.message);
+      extractionResult = { ok: false, extraction_snapshot: null, error: 'race_error' };
+    }
   }
 
   const extractionStatus = raceTimedOut
