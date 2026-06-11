@@ -29,9 +29,53 @@
 
 import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
+import { assembleSinglePacket } from '../operations.js';
 
 function enc(v) {
   return encodeURIComponent(String(v));
+}
+
+/**
+ * Resolve the property context packet, assembling on a cache miss.
+ *
+ * Phase 2 Slice 3a — the handler used to READ the cache and return null on a
+ * miss, so every property returned `context_packet: null`. Now a miss (no fresh
+ * cached row) warms the cache via the assembler and returns the freshly built
+ * packet. A cache HIT short-circuits (no assembly). Exported + dependency-
+ * injected (`assembleFn`) so the miss/hit branches are unit-testable.
+ */
+export async function resolveContextPacket({ cachedRow, entity, assembleFn }) {
+  if (cachedRow) {
+    return { context_packet: cachedRow, assembled_on_miss: false };
+  }
+  try {
+    const assembled = await assembleFn({
+      packet_type: 'property',
+      entity_id: entity.id,
+      entity_type: 'asset',
+      workspaceId: entity.workspace_id || null,
+      userId: null,
+    });
+    if (!assembled || !assembled.payload) {
+      return { context_packet: null, assembled_on_miss: false };
+    }
+    return {
+      context_packet: {
+        packet_type: 'property',
+        entity_id: entity.id,
+        payload: assembled.payload,
+        token_count: assembled.token_count ?? null,
+        assembled_at: assembled.assembled_at ?? null,
+        expires_at: assembled.expires_at ?? null,
+        cache_hit: !!assembled.cache_hit,
+        assembled_on_miss: true,
+      },
+      assembled_on_miss: true,
+    };
+  } catch (err) {
+    console.error('[property] assemble-on-miss failed:', err.message);
+    return { context_packet: null, assembled_on_miss: false };
+  }
 }
 
 // ── Address abbreviation expansion ──────────────────────────────────────────
@@ -202,11 +246,14 @@ export async function propertyHandler(req, res) {
     )
   );
 
-  // Context packet cache
+  // Context packet cache — fresh rows only (a stale/invalidated row counts as a
+  // miss so assemble-on-miss rebuilds it below).
   promises.push(
     opsQuery(
       'GET',
-      `context_packets?entity_id=eq.${enc(eid)}&packet_type=eq.property&order=created_at.desc&limit=1`
+      `context_packets?entity_id=eq.${enc(eid)}&packet_type=eq.property` +
+      `&invalidated=eq.false&expires_at=gt.${enc(new Date().toISOString())}` +
+      `&order=created_at.desc&limit=1`
     )
   );
 
@@ -224,10 +271,17 @@ export async function propertyHandler(req, res) {
 
   const [actionsRes, contextRes, govData] = await Promise.all(promises);
 
+  // Assemble-on-miss: warm + return a real packet when the cache has no fresh row.
+  const { context_packet } = await resolveContextPacket({
+    cachedRow: contextRes?.data?.[0] || null,
+    entity,
+    assembleFn: assembleSinglePacket,
+  });
+
   const result = {
     entity,
     active_tasks: actionsRes?.data || [],
-    context_packet: contextRes?.data?.[0] || null,
+    context_packet,
     gov_data: null,
   };
 

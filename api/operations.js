@@ -5267,7 +5267,7 @@ async function handlePreassembleNightly(req, res, workspaceId, userId) {
   const startMs = Date.now();
 
   // Step 1 — Identify high-priority entities (candidates for pre-assembly)
-  const [propsRes, contactsRes, crossDomainRes] = await Promise.all([
+  const [propsRes, contactsRes, crossDomainRes, activeAssetsRes] = await Promise.all([
     // Query 1: Properties with high investment scores
     opsQuery('GET',
       `entities?entity_type=eq.asset` +
@@ -5283,12 +5283,16 @@ async function handlePreassembleNightly(req, res, workspaceId, userId) {
       `entities?tags=cs.{cross_domain_owner}` +
       `&workspace_id=eq.${pgFilterVal(workspaceId)}` +
       `&select=id,entity_type,domain`
-    )
+    ),
+    // Query 4 (Slice 3a): most-active property/asset entities, so property
+    // packets are warm without waiting for the first read. Bounded to keep the
+    // nightly run inside budget — same "recent activity" ranking as contacts.
+    fetchActiveAssets(workspaceId)
   ]);
 
-  // Merge and deduplicate all three lists
+  // Merge and deduplicate all four lists
   const entityMap = new Map();
-  for (const list of [propsRes, contactsRes, crossDomainRes]) {
+  for (const list of [propsRes, contactsRes, crossDomainRes, activeAssetsRes]) {
     const rows = Array.isArray(list.data) ? list.data : (list.data ? [list.data] : []);
     for (const row of rows) {
       if (row.id && !entityMap.has(row.id)) {
@@ -5423,11 +5427,46 @@ async function fetchActiveContacts(workspaceId) {
   return entitiesRes;
 }
 
+/**
+ * Fetch property/asset entities (entity_type=asset) with activity in the last
+ * 90 days — the "most-active properties first" candidates for nightly
+ * property-packet pre-warming (Slice 3a). Mirrors fetchActiveContacts; bounded.
+ */
+async function fetchActiveAssets(workspaceId) {
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+  const activityRes = await opsQuery('GET',
+    `activity_events?occurred_at=gt.${pgFilterVal(ninetyDaysAgo)}` +
+    `&select=entity_id` +
+    `&limit=500`
+  );
+
+  const entityIds = [...new Set(
+    (Array.isArray(activityRes.data) ? activityRes.data : [])
+      .map(r => r.entity_id)
+      .filter(Boolean)
+  )];
+
+  if (entityIds.length === 0) {
+    return { ok: true, data: [] };
+  }
+
+  const entitiesRes = await opsQuery('GET',
+    `entities?entity_type=eq.asset` +
+    `&workspace_id=eq.${pgFilterVal(workspaceId)}` +
+    `&id=in.(${entityIds.map(id => pgFilterVal(id)).join(',')})` +
+    `&select=id,entity_type,domain` +
+    `&limit=200`
+  );
+
+  return entitiesRes;
+}
+
 // ---------------------------------------------------------------------------
 // Core assembly engine — used by both assemble and assemble-multi
 // ---------------------------------------------------------------------------
 
-async function assembleSinglePacket({ packet_type, entity_id, entity_type, surface_hint, force_refresh, max_tokens, workspaceId, userId }) {
+export async function assembleSinglePacket({ packet_type, entity_id, entity_type, surface_hint, force_refresh, max_tokens, workspaceId, userId }) {
   const startMs = Date.now();
 
   // Step 1 — Cache check (unless force_refresh)
@@ -5593,25 +5632,88 @@ async function assembleSinglePacket({ packet_type, entity_id, entity_type, surfa
 
 // ---------------------------------------------------------------------------
 // Property packet assembly
+//
+// Phase 2 Slice 3a — the property context packet is the Layer 4 keystone. The
+// assembler pulls the full breadth+depth of what's known about a property so a
+// single packet fully informs LCC, Copilot, Claude, and external agents:
+//   entity · lease_data · documents (the Phase-2 doc connections) · ownership ·
+//   transactions · comps · investment · activity_timeline · external_identities
+//
+// Every domain sub-query is bounded + defensive: a section that can't be
+// fetched pushes a fields_missing entry rather than throwing the whole packet.
+// `deps` is injectable for unit testing (opsQuery / domainGet).
 // ---------------------------------------------------------------------------
 
-async function assemblePropertyPacket(entityId, workspaceId) {
+// Default domain reader: GET against the gov/dia PostgREST surface. Returns
+// { ok, data } and NEVER throws so a single failing section degrades cleanly.
+async function ctxDomainGet(domain, path) {
+  const url = domain === 'gov' ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = domain === 'gov' ? govSupabaseKey() : diaSupabaseKey();
+  if (!url || !key) return { ok: false, data: null, reason: 'not_configured' };
+  try {
+    const r = await fetch(`${url}/rest/v1/${path}`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` }
+    });
+    if (!r.ok) return { ok: false, data: null, status: r.status };
+    const data = await r.json();
+    return { ok: true, data: Array.isArray(data) ? data : (data ? [data] : []) };
+  } catch (err) {
+    return { ok: false, data: null, error: err.message };
+  }
+}
+
+// Map a raw domain sales_transactions row to a compact, domain-agnostic shape.
+function mapTransaction(r) {
+  return {
+    sale_id: r.sale_id ?? r.id ?? null,
+    sale_date: r.sale_date ?? null,
+    price: r.sold_price ?? r.sale_price ?? r.price ?? null,
+    price_psf: r.sold_price_psf ?? r.price_psf ?? null,
+    cap_rate: r.sold_cap_rate ?? r.cap_rate ?? null,
+    buyer: r.buyer ?? r.buyer_name ?? null,
+    seller: r.seller ?? r.seller_name ?? null
+  };
+}
+
+// Map a raw domain property_documents row. The `source` provenance lets a
+// consumer tell an lcc_generated BOV from an om_extraction OM from a
+// folder_feed_* attach. PK column varies by domain (document_id / id).
+function mapDocument(r) {
+  return {
+    document_id: r.document_id ?? r.id ?? null,
+    file_name: r.file_name ?? null,
+    document_type: r.document_type ?? null,
+    source_url: r.source_url ?? null,
+    source: r.source ?? r.ingestion_status ?? null,
+    created_at: r.created_at ?? null
+  };
+}
+
+export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
+  const _ops = deps.opsQuery || opsQuery;
+  const _domainGet = deps.domainGet || ctxDomainGet;
+
   const sourcesQueried = ['lcc_db'];
   const fieldsMissing = [];
 
-  // Parallel queries: entity record, external identities, activity events, related research
-  const [entityRes, identitiesRes, activityRes, researchRes] = await Promise.all([
-    opsQuery('GET',
+  // LCC-side parallel queries: entity, external identities, activity, research,
+  // and the ownership/relationship graph (owns / associated_with edges).
+  const [entityRes, identitiesRes, activityRes, researchRes, relationshipsRes] = await Promise.all([
+    _ops('GET',
       `entities?id=eq.${pgFilterVal(entityId)}&select=*&limit=1`
     ),
-    opsQuery('GET',
+    _ops('GET',
       `external_identities?entity_id=eq.${pgFilterVal(entityId)}&select=*`
     ),
-    opsQuery('GET',
+    _ops('GET',
       `activity_events?entity_id=eq.${pgFilterVal(entityId)}&order=occurred_at.desc&limit=10&select=id,category,title,source_type,occurred_at,metadata`
     ),
-    opsQuery('GET',
+    _ops('GET',
       `action_items?entity_id=eq.${pgFilterVal(entityId)}&status=in.(open,in_progress)&select=id,title,status,priority,due_date,action_type&order=created_at.desc&limit=5`
+    ),
+    _ops('GET',
+      `entity_relationships?or=(from_entity_id.eq.${pgFilterVal(entityId)},to_entity_id.eq.${pgFilterVal(entityId)})` +
+      `&relationship_type=in.(owns,associated_with)&select=relationship_type,from_entity_id,to_entity_id&limit=25`
     )
   ]);
 
@@ -5625,63 +5727,144 @@ async function assemblePropertyPacket(entityId, workspaceId) {
   const identities = Array.isArray(identitiesRes.data) ? identitiesRes.data : [];
   const activityTimeline = Array.isArray(activityRes.data) ? activityRes.data : [];
   const activeResearch = Array.isArray(researchRes.data) ? researchRes.data : [];
+  const relationships = Array.isArray(relationshipsRes.data) ? relationshipsRes.data : [];
 
-  // Query domain DBs for lease data via linked source IDs
-  let leaseData = null;
+  // Resolve the linked domain + external property id.
   // R4-A: canonical 'gov'/'dia'; accept deprecated spellings during transition.
   const govIdentity = identities.find(i => ['gov','gov_db','gov_supabase','government'].includes(i.source_system));
   const diaIdentity = identities.find(i => ['dia','dia_db','dia_supabase','dialysis'].includes(i.source_system));
+  let domain = null, externalId = null;
+  if (govIdentity?.external_id) { domain = 'gov'; externalId = govIdentity.external_id; }
+  else if (diaIdentity?.external_id) { domain = 'dia'; externalId = diaIdentity.external_id; }
 
-  const ctxGovKey = govSupabaseKey();
-  const ctxDiaKey = diaSupabaseKey();
-  if (govIdentity?.external_id && process.env.GOV_SUPABASE_URL && ctxGovKey) {
-    sourcesQueried.push('gov_db');
-    try {
-      const govRes = await fetch(
-        `${process.env.GOV_SUPABASE_URL}/rest/v1/properties?id=eq.${encodeURIComponent(govIdentity.external_id)}&select=*&limit=1`,
-        { headers: { 'apikey': ctxGovKey, 'Authorization': `Bearer ${ctxGovKey}` } }
-      );
-      if (govRes.ok) {
-        const govData = await govRes.json();
-        leaseData = govData?.[0] || null;
+  let leaseData = null;
+  let documents = [];
+  let transactions = [];
+  let listings = [];
+  let ownership = null;
+  let investment = null;
+
+  if (domain && externalId) {
+    sourcesQueried.push(domain === 'gov' ? 'gov_db' : 'dia_db');
+    const pid = encodeURIComponent(externalId);
+
+    // First domain batch — all parallel, each degrades to {ok:false} independently.
+    const [propRes, docRes, txnRes, listRes, invRes] = await Promise.all([
+      _domainGet(domain, `properties?property_id=eq.${pid}&select=*&limit=1`),
+      _domainGet(domain, `property_documents?property_id=eq.${pid}&order=created_at.desc&limit=15`),
+      _domainGet(domain, `sales_transactions?property_id=eq.${pid}&order=sale_date.desc&limit=8`),
+      _domainGet(domain, `available_listings?property_id=eq.${pid}&select=*&limit=3`),
+      _domainGet(domain, `investment_scores?property_id=eq.${pid}&limit=1`)
+    ]);
+
+    if (propRes.ok) leaseData = propRes.data?.[0] || null;
+    else fieldsMissing.push('lease_data');
+
+    // documents — the keystone: surfaces the Phase-2 doc connections.
+    if (docRes.ok) documents = (docRes.data || []).map(mapDocument);
+    else fieldsMissing.push('documents');
+
+    if (txnRes.ok) transactions = (txnRes.data || []).map(mapTransaction);
+    else fieldsMissing.push('transactions');
+
+    if (listRes.ok) listings = listRes.data || [];
+
+    // ownership — recorded/true owner names (domain) + related people/orgs (LCC graph).
+    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    if (leaseData && (leaseData.recorded_owner_id != null || leaseData.true_owner_id != null)) {
+      const ownerCalls = [];
+      if (leaseData.recorded_owner_id != null) {
+        ownerCalls.push(_domainGet(domain,
+          `recorded_owners?recorded_owner_id=eq.${encodeURIComponent(leaseData.recorded_owner_id)}&select=recorded_owner_id,name&limit=1`)
+          .then(r => ({ kind: 'recorded', r })));
       }
-    } catch (err) {
-      console.error('[context-broker] Gov DB query failed:', err.message);
-      fieldsMissing.push('lease_data');
+      if (leaseData.true_owner_id != null) {
+        ownerCalls.push(_domainGet(domain,
+          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=true_owner_id,name&limit=1`)
+          .then(r => ({ kind: 'true', r })));
+      }
+      for (const { kind, r } of await Promise.all(ownerCalls)) {
+        if (r.ok && r.data?.[0]?.name) {
+          if (kind === 'recorded') ownership.recorded_owner_name = r.data[0].name;
+          else ownership.true_owner_name = r.data[0].name;
+        }
+      }
     }
-  } else if (diaIdentity?.external_id && process.env.DIA_SUPABASE_URL && ctxDiaKey) {
-    sourcesQueried.push('dia_db');
-    try {
-      const diaRes = await fetch(
-        `${process.env.DIA_SUPABASE_URL}/rest/v1/properties?id=eq.${encodeURIComponent(diaIdentity.external_id)}&select=*&limit=1`,
-        { headers: { 'apikey': ctxDiaKey, 'Authorization': `Bearer ${ctxDiaKey}` } }
-      );
-      if (diaRes.ok) {
-        const diaData = await diaRes.json();
-        leaseData = diaData?.[0] || null;
-      }
-    } catch (err) {
-      console.error('[context-broker] Dia DB query failed:', err.message);
-      fieldsMissing.push('lease_data');
+
+    // investment — prefer the REAL investment_scores / deal_grade, then the
+    // property-level score, then the naive recompute.
+    if (invRes.ok && invRes.data?.[0]) {
+      const s = invRes.data[0];
+      investment = {
+        score: s.investment_score ?? s.score ?? null,
+        grade: s.deal_grade ?? s.grade ?? null,
+        source: 'investment_scores'
+      };
+    } else if (leaseData && (leaseData.investment_score != null || leaseData.deal_grade != null)) {
+      investment = {
+        score: leaseData.investment_score ?? null,
+        grade: leaseData.deal_grade ?? null,
+        source: 'properties'
+      };
+    } else if (leaseData) {
+      let score = 50; // base — naive fallback only
+      if (leaseData.remaining_lease_term_years > 10) score += 20;
+      else if (leaseData.remaining_lease_term_years > 5) score += 10;
+      if (leaseData.occupancy_status === 'occupied') score += 15;
+      if (leaseData.lease_type === 'NNN') score += 15;
+      investment = { score, grade: null, source: 'computed' };
+    } else {
+      fieldsMissing.push('investment');
+    }
+  } else {
+    // No domain linkage — these sections are unavailable, not errors.
+    fieldsMissing.push('lease_data', 'documents', 'transactions', 'ownership', 'investment');
+    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+  }
+
+  // Related people/orgs from the LCC graph — resolve the "other" entity's name.
+  const relatedIds = new Set();
+  const relTypeById = new Map();
+  for (const rel of relationships) {
+    const other = rel.from_entity_id === entityId ? rel.to_entity_id : rel.from_entity_id;
+    if (other && other !== entityId) {
+      relatedIds.add(other);
+      if (!relTypeById.has(other)) relTypeById.set(other, rel.relationship_type);
+    }
+  }
+  if (relatedIds.size > 0) {
+    const idList = [...relatedIds].map(id => pgFilterVal(id)).join(',');
+    const relEntRes = await _ops('GET',
+      `entities?id=in.(${idList})&select=id,name,entity_type&limit=25`
+    );
+    if (relEntRes.ok && Array.isArray(relEntRes.data)) {
+      ownership.related_entities = relEntRes.data.map(e => ({
+        entity_id: e.id,
+        name: e.name,
+        entity_type: e.entity_type,
+        relationship: relTypeById.get(e.id) || null
+      }));
     }
   }
 
-  // Compute a simple investment score based on available data
-  let investmentScore = null;
-  if (leaseData) {
-    investmentScore = 50; // base
-    if (leaseData.remaining_lease_term_years > 10) investmentScore += 20;
-    else if (leaseData.remaining_lease_term_years > 5) investmentScore += 10;
-    if (leaseData.occupancy_status === 'occupied') investmentScore += 15;
-    if (leaseData.lease_type === 'NNN') investmentScore += 15;
-  }
+  // comps — deferred placeholder (no cheap nearby-comps source on the hot path);
+  // recorded in fields_missing rather than running a heavy geospatial query here.
+  const comps = [];
+  fieldsMissing.push('comps');
 
   const payload = {
     entity,
     lease_data: leaseData,
+    documents,
+    ownership,
+    transactions,
+    listings,
+    comps,
+    investment,
+    // investment_score kept for backward compatibility with existing consumers.
+    investment_score: investment?.score ?? null,
     research_status: activeResearch,
     activity_timeline: activityTimeline,
-    investment_score: investmentScore,
     external_identities: identities.map(i => ({
       source_system: i.source_system,
       source_type: i.source_type,
