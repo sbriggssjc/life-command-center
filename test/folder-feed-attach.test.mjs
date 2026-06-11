@@ -24,6 +24,7 @@ process.env.GOV_SUPABASE_URL = 'https://gov.test.local';
 process.env.GOV_SUPABASE_KEY = 'gov-key';
 
 const { attachRecognizedDoc } = await import('../api/_handlers/folder-feed-attach.js');
+const { parseSubjectHintFromPath } = await import('../api/_shared/folder-feed-classify.js');
 
 const originalFetch = global.fetch;
 
@@ -158,6 +159,57 @@ describe('folder-feed light attach (Slice 2d Unit 2)', () => {
     assert.equal(res.reason, 'portfolio_rollup_no_city');
     assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'rollup never churns the disambiguation lane');
     assert.ok(!calls.some(c => c.url.includes('/property_documents')), 'rollup attaches nothing');
+  });
+
+  it('in-domain Multi/DaVita Anchored - Tracy, CA master → path parse resolves + attaches', async () => {
+    // The Blocker-2 chain end to end: the tenant-prefixed fused folder yields the
+    // BARE city ("Tracy"), the DaVita cue picks the dia domain, and a single
+    // tenant+city+state hit attaches the master sheet.
+    const hint = parseSubjectHintFromPath(
+      'PROPERTIES/Multi/DaVita Anchored - Tracy, CA/DaVita Anchored - Tracy, CA (Master Sheet).xlsx');
+    assert.equal(hint.city, 'Tracy');
+    assert.equal(hint.state, 'CA');
+    assert.equal(hint.vertical, 'dia');
+
+    installFetchMock({ diaRows: [{ property_id: 26955, address: '123 Main St', tenant: 'DaVita' }] });
+
+    const res = await attachRecognizedDoc({
+      subjectHint: hint,
+      fileName: 'DaVita Anchored - Tracy, CA (Master Sheet).xlsx',
+      sourceUrl: '/sites/x/PROPERTIES/Multi/DaVita Anchored - Tracy, CA/DaVita Anchored - Tracy, CA (Master Sheet).xlsx',
+      docType: 'master',
+      pathRef: '/sites/x/PROPERTIES/Multi/DaVita Anchored - Tracy, CA/master.xlsx',
+    });
+
+    assert.equal(res.attached, true);
+    assert.equal(res.domain, 'dialysis');
+    assert.equal(res.property_id, 26955);
+    const docWrites = calls.filter(c => c.url.includes('/property_documents') && c.method === 'POST');
+    assert.ok(docWrites.length >= 1, 'property_documents POST happened');
+    assert.equal(docWrites[0].body.document_type, 'master');
+  });
+
+  it('out-of-domain asset class (no dia/gov cue, zero candidates) → out_of_domain, NO decision', async () => {
+    // Slice 2g: an office/retail/bank doc (vertical null) that resolves to no
+    // dia/gov property is PARKED honestly — never sent to disambiguation, and
+    // distinguished from a genuine in-domain miss (which keeps a dia/gov cue).
+    installFetchMock({ diaRows: [], govRows: [] });
+
+    const res = await attachRecognizedDoc({
+      subjectHint: { tenant_brand: 'Vervent', city: 'Portland', state: 'OR', vertical: null, bucket: 'V' },
+      fileName: 'Vervent - Portland, OR (Master Sheet).xlsx',
+      sourceUrl: '/sites/x/PROPERTIES/V/Vervent/Vervent - Portland, OR (Master Sheet).xlsx',
+      docType: 'master',
+      pathRef: '/sites/x/PROPERTIES/V/Vervent/Vervent - Portland, OR (Master Sheet).xlsx',
+    });
+
+    assert.equal(res.attached, false);
+    assert.equal(res.emitted_disambiguation, false);
+    assert.equal(res.out_of_domain, true);
+    assert.equal(res.no_domain, false);
+    assert.equal(res.reason, 'out_of_domain_asset_class');
+    assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'out-of-domain doc never churns the disambiguation lane');
+    assert.ok(!calls.some(c => c.url.includes('/property_documents')), 'out-of-domain doc attaches nothing');
   });
 
   it('ambiguous (a hit in both domains via unknown vertical) → disambiguation, never a guess', async () => {

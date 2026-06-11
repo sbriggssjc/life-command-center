@@ -199,6 +199,40 @@ describe('folder-feed parseSubjectHintFromPath — filename City, ST fallback (S
   });
 });
 
+// Slice 2g — a tenant-prefixed FUSED folder segment ("DaVita Anchored - Tracy,
+// CA") must yield the BARE city, while a legitimately hyphenated city
+// ("Winston-Salem, NC") must survive intact. The greedy ^(.+), ST$ segment regex
+// did neither — it captured the whole tenant-prefixed string, and the fused-city
+// recovery then mangled Winston-Salem to "Salem".
+describe('folder-feed city parser — tenant-prefix strip + hyphen guard (Slice 2g)', () => {
+  const segCases = [
+    ['PROPERTIES/Multi/DaVita Anchored - Tracy, CA/Master Sheet.xlsx',          'Tracy',        'CA'],
+    ['PROPERTIES/Multi/Stone Oak MOB - San Antonio, TX/BOV.pdf',                'San Antonio',  'TX'],
+    ['PROPERTIES/K/KCMO - 4601 Madison - Kansas City, MO/comps.xlsx',           'Kansas City',  'MO'],
+    ['PROPERTIES/F/Fairview Center MOB (DaVita) - Fairview Park, OH/lease.pdf', 'Fairview Park','OH'],
+    ['PROPERTIES/W/Winston-Salem, NC/file.pdf',                                 'Winston-Salem','NC'],
+    ['PROPERTIES/T/Tracy, CA/file.pdf',                                         'Tracy',        'CA'],
+  ];
+  for (const [path, city, state] of segCases) {
+    it(`path "${path}" → ${city}, ${state}`, () => {
+      const h = parseSubjectHintFromPath(path);
+      assert.equal(h.city, city);
+      assert.equal(h.state, state);
+    });
+  }
+
+  it('extractCityState strips a tenant prefix but keeps an internal hyphen', () => {
+    assert.deepEqual(extractCityState('DaVita Anchored - Tracy, CA'), { city: 'Tracy', state: 'CA' });
+    assert.deepEqual(extractCityState('Winston-Salem, NC'),          { city: 'Winston-Salem', state: 'NC' });
+    assert.deepEqual(extractCityState('Tracy, CA'),                  { city: 'Tracy', state: 'CA' });
+  });
+
+  it('parseCityStateFromFilename strips a tenant prefix but keeps an internal hyphen', () => {
+    assert.deepEqual(parseCityStateFromFilename('DaVita Anchored - Tracy, CA (Master Sheet).xlsx'), { city: 'Tracy', state: 'CA' });
+    assert.deepEqual(parseCityStateFromFilename('Acme - Winston-Salem, NC (Master Sheet).xlsx'),    { city: 'Winston-Salem', state: 'NC' });
+  });
+});
+
 // Slice 2f — archive / working-folder exclusion. Anchored to a whole path
 // SEGMENT so a tenant legitimately named "Old Dominion …" isn't caught.
 describe('folder-feed isExcludedFolderPath (Slice 2f)', () => {

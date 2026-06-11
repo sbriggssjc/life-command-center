@@ -134,10 +134,6 @@ export function isExcludedFolderPath(folderPath) {
 // helpers recover that signal so the light attach can resolve a single
 // in-domain property — or correctly REFUSE (portfolio / out-of-universe).
 
-const US_STATES = new Set(
-  'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ')
-);
-
 const STREET_SUFFIX = '(?:Ave|Avenue|St|Street|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Way|Hwy|Highway|Pkwy|Parkway|Ct|Court|Pl|Place|Cir|Circle|Ter|Terrace|Trl|Trail|Sq|Square|Loop|Pike|Expressway|Expy)';
 
 // Multi-property markers — a portfolio folder/master sheet covers MANY
@@ -146,18 +142,12 @@ const PORTFOLIO_RE = /\bportfolios?\b|\bof\s+(?:two|three|four|five|six|seven|ei
 
 /**
  * Find a "City, ST" pair anywhere in a string (filename or fused folder name),
- * not just anchored at the segment end. Takes the LAST valid occurrence and the
- * token(s) immediately before the comma (bounded by a leading separator) as the
- * city. Returns {city, state} or null.
+ * not just anchored at the segment end. Takes the LAST valid occurrence and
+ * strips any tenant prefix joined by a space-adjacent dash (Slice 2g). Returns
+ * {city, state} or null.
  */
 export function extractCityState(text) {
-  const s = String(text || '').replace(/\.[A-Za-z0-9]{2,4}$/, ' '); // drop extension
-  const re = /(?:^|[-–—,(])\s*([A-Za-z][A-Za-z.'/ ]{1,38}?)\s*,\s*([A-Z]{2})(?![A-Za-z])/g;
-  let m, last = null;
-  while ((m = re.exec(s)) !== null) {
-    if (US_STATES.has(m[2])) last = { city: m[1].trim(), state: m[2] };
-  }
-  return last;
+  return splitCityState(text);
 }
 
 /** Extract a leading "<number> <street> <suffix>" address, else null. */
@@ -203,11 +193,48 @@ const US_STATE_CODES = new Set([
   'DC', 'PR',
 ]);
 
-// Trailing "…- <City>, <ST>" token. Anchored on a dash/en/em separator + a
-// 2-letter state; the city allows spaces/periods/apostrophes/slashes/hyphens
-// (Winston-Salem, St. Louis). Global so we can take the LAST match — city tokens
-// sit near the end of the name, before any `(Master Sheet)` label.
-const FILENAME_CITY_STATE_RE = /[-–—]\s*([A-Za-z][A-Za-z .'\/-]*?),\s*([A-Z]{2})\b/g;
+// A space-adjacent dash (" - ", "Foo- Bar", "Foo -Bar") — the boundary between a
+// tenant/descriptor PREFIX and the real "City, ST". A bare hyphen with NO
+// adjacent space (Winston-Salem) is part of the city, never a separator.
+const TENANT_PREFIX_SEP_RE = /\s[-–—]|[-–—]\s/g;
+
+/**
+ * Slice 2g — the ONE "City, ST" extractor shared by every parser. Reads the LAST
+ * "<run>, <ST>" pair (cities sit near the end of a folder/file label) where the
+ * run is city-legal characters (letters, space, period, apostrophe, slash,
+ * hyphen) and ST is a real US/territory code. The captured run keeps INTERNAL
+ * hyphens (Winston-Salem) but DROPS any tenant prefix joined by a space-adjacent
+ * dash:
+ *   "DaVita Anchored - Tracy, CA"          → Tracy, CA
+ *   "KCMO - 4601 Madison - Kansas City, MO" → Kansas City, MO   (digits break the run)
+ *   "Stone Oak MOB - San Antonio, TX"       → San Antonio, TX
+ *   "Winston-Salem, NC"                     → Winston-Salem, NC  (no spaced dash)
+ *   "Tracy, CA"                             → Tracy, CA
+ * Returns {city, state} or null.
+ * @param {string} text
+ * @returns {{city:string, state:string}|null}
+ */
+function splitCityState(text) {
+  const s = String(text || '').replace(/\.[A-Za-z0-9]{1,5}$/, ' ').trim(); // drop extension
+  if (!s) return null;
+  // Every "<run>, <ST>" candidate; take the LAST whose ST is a real state.
+  const re = /([A-Za-z][A-Za-z.'/ -]*?)\s*,\s*([A-Z]{2})(?![A-Za-z])/g;
+  let m, last = null;
+  while ((m = re.exec(s)) !== null) {
+    if (US_STATE_CODES.has(m[2])) last = m;
+  }
+  if (!last) return null;
+  let city = last[1].trim();
+  // Strip a tenant/descriptor prefix joined by a space-adjacent dash — keep only
+  // the part AFTER the last such separator. Internal (un-spaced) hyphens survive.
+  let cut = -1, sm;
+  TENANT_PREFIX_SEP_RE.lastIndex = 0;
+  while ((sm = TENANT_PREFIX_SEP_RE.exec(city)) !== null) cut = sm.index + sm[0].length;
+  if (cut >= 0) city = city.slice(cut);
+  city = city.replace(/^[-–—\s]+/, '').replace(/\s+/g, ' ').trim();
+  if (!city) return null;
+  return { city, state: last[2] };
+}
 
 /**
  * Slice 2e — parse "City, ST" out of a FILENAME (the actual PROPERTIES tree has
@@ -215,26 +242,22 @@ const FILENAME_CITY_STATE_RE = /[-–—]\s*([A-Za-z][A-Za-z .'\/-]*?),\s*([A-Z]
  * "Vervent - Portland, OR (Master Sheet).xlsx"). Returns {city, state} only when
  * BOTH parse AND the state is a real US state; otherwise null (a pure rollup name
  * like "ARA Portfolio of 5 - Master Sheet.xlsx" correctly returns null).
+ *
+ * Slice 2g — delegates the actual parse to the shared splitCityState core so a
+ * tenant prefix ("DaVita Anchored - Tracy, CA") is stripped to the bare city
+ * while a legitimately hyphenated city ("Winston-Salem, NC") is preserved.
  * @param {string} fileName
  * @returns {{city:string, state:string}|null}
  */
 export function parseCityStateFromFilename(fileName) {
   let stem = String(fileName || '').replace(/\\/g, '/');
   stem = stem.split('/').pop() || '';
-  // Drop the extension and any trailing parenthetical label group(s).
+  // Drop the extension and any trailing parenthetical label group(s) so a
+  // "(Stan Johnson Company)" credit can never be mistaken for the City, ST.
   stem = stem.replace(/\.[A-Za-z0-9]{1,5}$/, '');
   stem = stem.replace(/(?:\s*\([^)]*\))+\s*$/, '').trim();
   if (!stem) return null;
-
-  let m, last = null;
-  FILENAME_CITY_STATE_RE.lastIndex = 0;
-  while ((m = FILENAME_CITY_STATE_RE.exec(stem)) !== null) last = m;
-  if (!last) return null;
-
-  const city  = last[1].trim().replace(/\s+/g, ' ');
-  const state = last[2].toUpperCase();
-  if (!city || !US_STATE_CODES.has(state)) return null;
-  return { city, state };
+  return splitCityState(stem);
 }
 
 /**
@@ -279,31 +302,37 @@ export function parseSubjectHintFromPath(serverRelativePath) {
   }
 
   // PROPERTIES/<bucket>/<tenant_brand>[/<City, ST>]
+  // Slice 2g — parse each segment through the shared splitCityState core so a
+  // fused "DaVita Anchored - Tracy, CA" folder yields the BARE city ("Tracy"),
+  // not the tenant-prefixed whole segment, while "Winston-Salem, NC" is kept
+  // intact. The greedy `^(.+), ST$` segment regex did neither.
   const propIdx = segs.findIndex(s => /^properties$/i.test(s));
   if (propIdx !== -1) {
     hint.bucket = segs[propIdx + 1] || null;            // A-Z | 1-9 | Multi | Portfolio
     hint.tenant_brand = segs[propIdx + 2] || null;      // the brand/tenant folder
     for (let i = propIdx + 3; i < segs.length; i++) {
-      const m = segs[i].match(/^(.+),\s*([A-Z]{2})$/);
-      if (m) { hint.city = m[1].trim(); hint.state = m[2]; break; }
+      const cs = splitCityState(segs[i]);
+      if (cs) { hint.city = cs.city; hint.state = cs.state; break; }
     }
   }
 
-  // Also accept a "City, ST" segment anywhere (some research/flat folders use it).
+  // Also accept a "City, ST" segment anywhere (research/flat folders use it; the
+  // tenant folder is often FUSED — "Cypress Grove Office - Greenville, MS").
   if (!hint.city) {
     for (const s of segs) {
-      const m = s.match(/^(.+),\s*([A-Z]{2})$/);
-      if (m) { hint.city = m[1].trim(); hint.state = m[2]; break; }
+      const cs = splitCityState(s);
+      if (cs) { hint.city = cs.city; hint.state = cs.state; break; }
     }
   }
 
   // ── Recover City/ST + street address + portfolio signal (Slice 2d.1) ──
-  // The clean PROPERTIES/<tenant>/<City, ST> shape is the exception. Pull the
-  // anchor from the FILENAME and the often-fused tenant folder too. Re-derive
-  // when the segment loop above captured a FUSED city ("Office - Greenville").
-  const fusedCity = hint.city && /[-–—]/.test(hint.city);
-  if (!hint.state || fusedCity) {
-    const cs = extractCityState(fileName) || extractCityState(hint.tenant_brand);
+  // The clean PROPERTIES/<tenant>/<City, ST> shape is the exception. When NO
+  // segment carried the anchor, pull it from the FILENAME (its trailing
+  // parenthetical label is stripped) or the tenant folder. splitCityState above
+  // already de-prefixes fused segments, so there is no longer a fused-city case
+  // to re-derive here.
+  if (!hint.state) {
+    const cs = splitCityState(fileName) || splitCityState(hint.tenant_brand);
     if (cs) { hint.city = cs.city; hint.state = cs.state; }
   }
   hint.address = extractStreetAddress(fileName) || extractStreetAddress(hint.tenant_brand) || null;
