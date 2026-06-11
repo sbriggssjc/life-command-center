@@ -1,6 +1,6 @@
 {
-  "_doc": "R76 Layer G — dia 2022/23 outlier. NO WRITE APPLIED. PER SCOTT (2026-06-11): do NOT write these 7 piecemeal — fold them into ONE complete dia sweep (wrong-assets + phantom-dups + Fresenius) under a single consistent reason taxonomy, through the frozen-review gate. These 7 are the HIGHEST-CONFIDENCE slice of the sweep's wrong-asset class. The dia export waits for the one complete pass, not a half-correction. Project: Dialysis_DB (zqzrriwuavgrquhisnoa).",
-  "status": "scoped_not_written — the standalone 7-deal write is SUPERSEDED by the complete sweep below",
+  "_doc": "R76 Layer G — dia 2022/23 outlier. NO WRITE APPLIED. SUPERSEDED 2026-06-11: CONVERGED into the great-volta mis-ingestion sweep's frozen table public._sweep_candidates_2026_06_11 as the single source of truth. PER SCOTT: converge, don't fork — do NOT run a second parallel dia sweep. See ROUND76_LAYER_G_dia_sweep_convergence.json for the reconciliation hand-off (Fresenius = not a class; phantom-dups covered by the frozen table; the 19 impossible-$/sf gap = bad-building_size, fix-not-exclude; Seattle 5530 = whole_building_hq). Project: Dialysis_DB (zqzrriwuavgrquhisnoa).",
+  "status": "CONVERGED — superseded by ROUND76_LAYER_G_dia_sweep_convergence.json. The 7 are already members of the frozen table; this dry-run is retained for the per-deal evidence only.",
   "sweep_scope_2026_06_11": {
     "_note": "Read-only survey of the 3,037 dia market-metric sales. The sweep must dispose ALL of these classes under one taxonomy before the dia export is refreshed.",
     "wrong_asset_class": {
