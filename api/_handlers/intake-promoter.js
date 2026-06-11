@@ -2209,9 +2209,18 @@ async function runEnrichOnlyPromotion(args) {
   // ---- Attach the OM/flyer as a property_documents row ---------------------
   const sourceUrl = context?.seedData?.source_path
     || snapshot?.source_url || snapshot?.listing_url || null;
+  // Slice 2e Unit 3 — type the attached doc by the classifier's detected_type
+  // (master/comp/bov/lease) when the folder-feed seed carries it, so the context
+  // packet can tell a lease from a comp. Fall back to the normalized listing
+  // doctype, then 'om'. (The light-attach path types itself via the classifier;
+  // this is the OM-extraction promoter path only.)
+  const seedDetected  = context?.seedData?.detected_type;
+  const attachDocType = (seedDetected && seedDetected !== 'unknown')
+    ? seedDetected
+    : (docType || snapshot?.document_type || 'om');
   const docAttach = await attachEnrichDocument(domain, propertyId, {
     fileName: artifact?.file_name || `enrich-${intakeId}.pdf`,
-    docType:  docType || snapshot?.document_type || 'om',
+    docType:  attachDocType,
     sourceUrl,
   }).catch(e => ({ ok: false, error: e?.message }));
 
@@ -2258,7 +2267,7 @@ async function runEnrichOnlyPromotion(args) {
         { ...provCtx, targetTable: `${tablePrefix}.property_documents`, recordPk: docAttach.document_id },
         {
           file_name:     artifact?.file_name || null,
-          document_type: docType || 'om',
+          document_type: attachDocType,
           source_url:    sourceUrl,
         }
       );
