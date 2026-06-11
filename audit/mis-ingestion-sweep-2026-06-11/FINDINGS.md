@@ -252,11 +252,29 @@ fixes). **dia needs gov's framework ported.**
 
 Draft (un-applied) SQL: `remediation_dia.DRAFT.sql`. Steps, in order:
 
-1. **Freeze the candidate list.** Run `candidates_dia.sql`, export to a static
-   review table `_sweep_candidates_2026_06_11` (sale_id, signals, proposed_class,
-   proposed_reason). Hand-confirm each ≥2-signal row + each $30M+ row (the KEEPs
-   in §2 prove this can't be auto-applied). This freeze is what the exact "after"
-   numbers (§5) are computed from — Scott's independent verification gate.
+1. **Freeze the candidate list. ✅ DONE (read-only) 2026-06-11.** Materialized as
+   dia table **`public._sweep_candidates_2026_06_11`** (290 rows) via
+   `CREATE TABLE AS` (`candidates_dia.sql`). It carries the signals, a
+   `proposed_class`, and empty `confirmed_class` / `reviewer` / `reviewed_at` /
+   `review_notes` columns for Scott's row-by-row confirmation. The exact "after"
+   numbers (§5) compute against this stable list, not a moving query.
+   **Proposed-class distribution (review, not authoritative):**
+   | proposed_class | rows | Σ price | needs confirm? |
+   |---|---|---|---|
+   | `phantom_duplicate` | 224 | $905,879,926 (195 survivor groups) | deterministic — apply unless marked `genuine_resale` |
+   | `review` | 31 | $1.15B | yes — ambiguous high-$ tail (Anniston $142.9M, Satellite $130.85M…) |
+   | `whole_center_multitenant` | 25 | $302.0M | yes |
+   | `industrial_corporate` | 10 | $147.2M | yes (Fresenius operator RE — labeled, kept, excluded from clinic comps) |
+
+   Review in place:
+   ```sql
+   SELECT sale_id, price, psf, bsf, property_type, name, tenant, city, state,
+          which, proposed_class FROM public._sweep_candidates_2026_06_11
+   ORDER BY (proposed_class='phantom_duplicate'), price DESC;
+   -- set confirmed_class per row before STEP 2+ of remediation_dia.DRAFT.sql run
+   ```
+   The KEEPs in §2 (Dcc-Olympia Fields, Hiram, University Plaza) prove the
+   non-dup classes can't be auto-applied — this table is the human gate.
 2. **Port gov's taxonomy to dia** (additive, reversible): add
    `sales_record_classification` + `sales_exclusion_reason` to dia
    `sales_transactions` (mirror gov). Backfill existing `exclude_from_market_metrics=true`
