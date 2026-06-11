@@ -2077,6 +2077,11 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .pq-chip b { font-variant-numeric: tabular-nums; }
 .pq-chip-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .pq-band { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.4px; color: #fff; padding: 2px 7px; border-radius: 5px; margin-right: 8px; vertical-align: middle; }
+/* R14: per-property drill-down on a rolled-up trigger card (P1/P3/P5/P8) */
+.pq-trigger-detail { margin: 8px 0 2px; padding: 6px 0 0; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 4px; }
+.pq-trigger-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text2); padding: 3px 0; }
+.pq-trigger-addr { flex: 1 1 auto; color: var(--text); }
+.pq-trigger-fact { color: var(--text2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Self-propelling contract: elevate the top item ("do this first") + the next-up highlight */
 .pq-hero { border: 1px solid var(--accent2); border-left: 4px solid var(--accent2); background: linear-gradient(180deg, rgba(0,61,165,0.05), transparent); box-shadow: 0 1px 6px rgba(0,61,165,0.08); }

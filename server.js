@@ -133,6 +133,7 @@ app.all('/api/intake-rematch', (req, res) => { req.query._route = 'intake-rematc
 app.all('/api/intake-promote-drain', (req, res) => { req.query._route = 'intake-promote-drain'; adminHandler(req, res); });
 app.all('/api/priority-band', (req, res) => { req.query._route = 'priority-band'; adminHandler(req, res); });
 app.all('/api/priority-queue', (req, res) => { req.query._route = 'priority-queue'; adminHandler(req, res); });
+app.all('/api/priority-trigger-properties', (req, res) => { req.query._route = 'priority-trigger-properties'; adminHandler(req, res); });
 app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'; adminHandler(req, res); });
 app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });
