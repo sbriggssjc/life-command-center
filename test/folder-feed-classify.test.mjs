@@ -8,10 +8,7 @@ import assert from 'node:assert/strict';
 import {
   classifyFile, parseSubjectHintFromPath,
   extractCityState, extractStreetAddress, isPortfolioHint, tenantCore,
-  classifyFile,
-  parseSubjectHintFromPath,
-  parseCityStateFromFilename,
-  looksLikePortfolioRollup,
+  parseCityStateFromFilename, looksLikePortfolioRollup,
 } from '../api/_shared/folder-feed-classify.js';
 
 describe('folder-feed classifyFile', () => {
@@ -142,6 +139,9 @@ describe('folder-feed City/ST + address + portfolio recovery', () => {
       'PROPERTIES/A/AMRA Portfolio of 7/AMRA Portfolio of 7 - Master Sheet.xlsx');
     assert.equal(port.is_portfolio, true);
     assert.equal(port.tenant_core, 'AMRA');
+  });
+});
+
 // Slice 2e — the real PROPERTIES tree has no City, ST folder level; the city and
 // state live in the FILENAME. These guards unlock the non-OM attach path.
 describe('folder-feed parseCityStateFromFilename (Slice 2e)', () => {
