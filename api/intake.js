@@ -128,6 +128,10 @@ export default withErrorHandler(async function handler(req, res) {
       const { handlePropertyDocWriteback } = await import('./_handlers/property-doc-writeback.js');
       return handlePropertyDocWriteback(req, res);
     }
+    case 'sf-activity': {
+      const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
+      return handleSfActivityIngest(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -138,7 +142,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, property-doc-writeback, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, property-doc-writeback, sf-activity, feedback, accuracy'
       });
   }
 });
@@ -305,6 +309,20 @@ async function handleOutlookMessage(req, res) {
   const deepLink = webLink
     || (graphRestId ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(graphRestId)}` : null);
 
+  // Phase 2 Slice 3b (Unit 1): email correspondence context handed to
+  // stageOmIntake so a confident entity match also logs the email itself as an
+  // `email` activity on that entity (deduped on internet_message_id). Built
+  // once and shared by both the fresh-path and dedup-replay stageOmIntake calls.
+  const emailContext = {
+    internet_message_id: internetMsgId || graphRestId || String(messageId),
+    subject,
+    body_snippet: (bodyForUrlScan || bodyPreview || '').toString().slice(0, 500) || null,
+    web_link: deepLink,
+    received_at: receivedAtIso,
+    from: sender?.email || null,
+    to: firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null),
+  };
+
   // Dedup guard: Power Automate's flagged-email trigger fires multiple times
   // (typically 3–6) for the same email within a minute. Check if this
   // correlation_id already exists in inbox_items before inserting a new row.
@@ -447,6 +465,7 @@ async function handleOutlookMessage(req, res) {
             channel:          'email',
             note:             subject || null,
             seed_data: { tags: ['email_intake', 'dedup_replay'] },
+            email_context:    emailContext,
           },
           {
             email:      sender?.email || user.email,
@@ -637,6 +656,7 @@ async function handleOutlookMessage(req, res) {
             property: null,
             tags:     ['email_intake'],
           },
+          email_context:    emailContext,
           copilot_metadata: null,
         },
         {
