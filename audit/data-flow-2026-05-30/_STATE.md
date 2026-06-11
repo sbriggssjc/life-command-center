@@ -240,6 +240,21 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    (MCP assemble-on-miss) then **Slice 3b** (route email/SF-notes correspondence into
    activity_events → enriches the packet's activity_timeline; today activity_events
    is mostly system events, ~494 human notes + 1 call).
+   **✅ Slice 3a.1 MCP ASSEMBLE-ON-MISS COMPLETE + VERIFIED LIVE 2026-06-11 (PR
+   #1153).** mcp/server.js get_property_context now POSTs {LCC_API_BASE}/api/context
+   ?action=assemble (X-LCC-Key) on a cache miss → full packet; graceful fallback to
+   cache-only if env unset/errors. **Deploy gotcha:** this is the
+   `life-command-center-production` MCP service (NOT the main tranquil-delight app),
+   and `LCC_API_BASE` must be the correct var name on THAT service — Scott initially
+   had the wrong var name; fixing it made it work. Verified cache-proof on cold gov
+   property Allentown (entity 6bd44b44): MCP returned `cache_hit:false,
+   assembled_on_miss:true` with the full rich packet (lease, ownership, 8 txns,
+   listing, grade C, timeline). **Layer-4 keystone now reaches all agents.**
+   **Pre-existing MCP bug noted (NOT 3a.1):** the MCP `gov_data` section queries
+   `ownership_history.recorded_date` which doesn't exist → returns a 42703 error
+   object (the context_packet's own ownership section is fine; only the legacy
+   gov_data path is broken). Small cleanup for later. NEXT: **Slice 3b** (correspondence
+   → activity_timeline).
    **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
    (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
    `20260718123000` (folder_feed_seen.mode) + `20260718124000`
