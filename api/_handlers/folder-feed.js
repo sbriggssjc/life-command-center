@@ -30,7 +30,7 @@ import { createHash } from 'crypto';
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
-import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup } from '../_shared/folder-feed-classify.js';
+import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup, isExcludedFolderPath } from '../_shared/folder-feed-classify.js';
 import { attachRecognizedDoc } from './folder-feed-attach.js';
 
 // Default roots to walk when neither ?folders= nor FOLDER_FEED_ROOTS is set.
@@ -301,6 +301,7 @@ export async function handleFolderFeedTick(req, res) {
     files_attached: 0,     // Slice 2d Unit 2: non-OM recognized doc linked by path anchor
     files_no_domain: 0,    // Stage A: recognized doc with no dia/gov property (captured, no decision)
     files_deferred: 0,     // OM-eligible but skipped this tick (max_stage cap) → 'seen'
+    files_excluded: 0,     // Slice 2f: under an archive/working folder — never ingested
     files_skipped: 0,
     files_stale: 0,
     files_error: 0,
@@ -315,7 +316,7 @@ export async function handleFolderFeedTick(req, res) {
   // `phaseDeadline` is the absolute ms wall-clock cutoff for this phase (ingest
   // gets TIME_BUDGET_MS - reserve; enrich gets the full TIME_BUDGET_MS).
   const processFolder = async (folder, mode, queue, phaseDeadline) => {
-    const folderRep = { folder, mode, listed: 0, new: 0, staged: 0, deferred: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
+    const folderRep = { folder, mode, listed: 0, new: 0, staged: 0, deferred: 0, excluded: 0, skipped: 0, stale: 0, error: 0, subfolders: 0 };
     const listing = await listFolder(folder);
     if (!listing.ok) {
       folderRep.error_detail = listing.detail || `status ${listing.status}`;
@@ -328,6 +329,15 @@ export async function handleFolderFeedTick(req, res) {
     const fileItems = listing.items.filter(it => !it.is_folder);
     for (const sub of listing.items) {
       if (!sub.is_folder) continue;
+      // Slice 2f — never descend into an archive (OLD/Archive/Archived) or
+      // leading-underscore working/staging subfolder. Flip any existing backlog
+      // rows under it to 'skipped' so the deferred count drains without ever
+      // re-listing the folder (the 56 On Market/OLD + 15 _added… rows).
+      if (isExcludedFolderPath(sub.path)) {
+        folderRep.excluded++;
+        if (!dryRun) await skipExcludedSubtree(sub.path, report, folderRep);
+        continue;
+      }
       if (!walkedFolders.has(sub.path) && !queue.includes(sub.path)) {
         queue.push(sub.path);
         folderRep.subfolders++;
@@ -347,6 +357,26 @@ export async function handleFolderFeedTick(req, res) {
       // Per-phase deadline — never START a new stage past the phase cutoff (a
       // stage that began just under it is allowed to finish, same as before).
       if (Date.now() > phaseDeadline) break;
+
+      // Slice 2f — defense in depth: a file sitting directly in an archive /
+      // working folder (e.g. an excluded folder configured as a root, or a
+      // re-list) is recorded 'skipped' (excluded_archive_or_working), never
+      // staged. Check the file's PARENT directory so the filename itself is
+      // never subject to the leading-underscore rule.
+      const fileDir = item.path.slice(0, item.path.lastIndexOf('/'));
+      if (isExcludedFolderPath(fileDir)) {
+        report.files_excluded++;
+        folderRep.excluded++;
+        if (!dryRun) {
+          const exHint = parseSubjectHintFromPath(stripSitePrefix(item.path));
+          await upsertSeen({
+            path: item.path, hash: changeHash(item), item, status: 'skipped', mode,
+            vertical: exHint.vertical, detectedType: 'excluded_archive_or_working',
+            subjectHint: { ...exHint, skip_reason: 'excluded_archive_or_working' }, intakeId: null,
+          });
+        }
+        continue;
+      }
 
       const hash = changeHash(item);
       const cls = classifyFile(item.name || item.path.split('/').pop());
@@ -694,25 +724,31 @@ export async function handleFolderFeedTick(req, res) {
   };
 
   if (useFrontier) {
-    // Frontier crawl drives the PROPERTIES (enrich) roots from the durable
-    // cursor. The dedicated lcc-folder-feed-crawl cron uses this path so
-    // PROPERTIES gets its own budget independent of On Market. GET (dry-run)
-    // never mutates the frontier — report current cursor depth only.
+    // Frontier crawl drives ONE channel from the durable cursor per tick, so the
+    // ingest and enrich budgets stay separate (Slice 2a.1 lesson): the On Market
+    // ingest cron passes &mode=ingest; the PROPERTIES enrich crawl cron leaves
+    // mode unset. Default is 'enrich' (backward-compatible with the Slice-2d
+    // crawl + its dry-run shape). A dedicated single-mode tick gets the FULL time
+    // budget — no cross-channel reserve to carve out. GET (dry-run) never mutates
+    // the frontier — report current cursor depth only.
+    const frontierMode  = req.query.mode === 'ingest' ? 'ingest' : 'enrich';
+    const frontierRoots = frontierMode === 'ingest' ? ingestRoots : enrichRoots;
+    const frontierDeadline = startedAt + TIME_BUDGET_MS;
     if (dryRun) {
       // opsQuery GET defaults to count=exact → resp.count is the total matching
       // rows regardless of the limit, so &limit=1 keeps the payload tiny.
       const pendRes = await opsQuery('GET',
-        `folder_feed_frontier?mode=eq.enrich&status=eq.pending&select=id&limit=1`).catch(() => null);
+        `folder_feed_frontier?mode=eq.${pgFilterVal(frontierMode)}&status=eq.pending&select=id&limit=1`).catch(() => null);
       const visRes = await opsQuery('GET',
-        `folder_feed_frontier?mode=eq.enrich&status=eq.visited&select=id&limit=1`).catch(() => null);
+        `folder_feed_frontier?mode=eq.${pgFilterVal(frontierMode)}&status=eq.visited&select=id&limit=1`).catch(() => null);
       report.frontier = {
-        mode: 'enrich',
+        mode: frontierMode,
         pending: pendRes?.ok ? (pendRes.count ?? null) : null,
         visited: visRes?.ok ? (visRes.count ?? null) : null,
-        roots_configured: enrichRoots.length,
+        roots_configured: frontierRoots.length,
       };
     } else {
-      await crawlFrontier(enrichRoots, 'enrich', limitFolders, enrichDeadline);
+      await crawlFrontier(frontierRoots, frontierMode, limitFolders, frontierDeadline);
     }
     return res.status(200).json(report);
   }
@@ -724,6 +760,27 @@ export async function handleFolderFeedTick(req, res) {
   await walkPhase(enrichRoots, 'enrich', enrichLimitFolders, enrichDeadline);
 
   return res.status(200).json(report);
+}
+
+// Slice 2f — flip any existing folder_feed_seen backlog rows under an excluded
+// archive/working subtree to 'skipped' so they stop showing as deferred backlog
+// (the 56 On Market/OLD + 15 _added… rows). Bounded + idempotent: only rows
+// still in (seen,error) are touched, so after the first flip subsequent ticks
+// match nothing. Never lists/descends into the folder — a pure LCC-side status
+// correction; the reason rides detected_type. The stale-sweep leaves these rows
+// alone because their parent folder is never listed again.
+async function skipExcludedSubtree(folderPath, report, folderRep) {
+  const prefix = `${folderPath}/`;
+  const patched = await opsQuery('PATCH',
+    `folder_feed_seen?server_relative_path=like.${pgFilterVal(prefix + '*')}` +
+    `&status=in.(seen,error)`,
+    { status: 'skipped', detected_type: 'excluded_archive_or_working', last_seen_at: new Date().toISOString() },
+  ).catch(() => null);
+  const n = (patched?.ok && Array.isArray(patched.data)) ? patched.data.length : 0;
+  if (n) {
+    report.files_excluded += n;
+    folderRep.excluded += n;
+  }
 }
 
 // Idempotent record: insert the (path, hash) row, or update it in place if a

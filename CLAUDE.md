@@ -2134,3 +2134,57 @@ tick.
 ### Out of scope (Slice 3, later)
 The context layer — linking property + docs to email / SF notes / conversation
 notes / LLC research (the shared-context service). Separate prompt.
+
+## Phase 2 Slice 2f — On Market ingest on the frontier cursor + archive/working exclusion (2026-06-11)
+
+71 On Market OMs were stuck in `folder_feed_seen.status='seen'` (deferred) and
+never re-reached: the ingest cron (`/api/folder-feed-tick?limit_folders=8`,
+mode=ingest) used the legacy `walkPhase` whose `queue = rootList.slice()`
+RESTARTS the BFS from the roots every tick and is bounded to 8 folders — so it
+re-walked the top On Market folders forever and never descended to the deep
+subfolders where the deferred OMs lived. Same no-cursor bug Slice 2d fixed for
+ENRICH; the INGEST path is now on the same `folder_feed_frontier` cursor.
+
+### Unit 1 — ingest rides the frontier (structural fix)
+`api/_handlers/folder-feed.js` `?source=frontier` now drives **one channel per
+tick** keyed by `&mode=`: `mode=ingest` crawls the On Market (ingest) roots via
+the durable cursor and stages OMs through the SAME `stageOmIntake` ingest path;
+`mode` unset defaults to **enrich** (byte-identical to the Slice-2d enrich crawl
++ its dry-run shape). One mode per tick keeps the ingest/enrich budgets separate
+(Slice 2a.1 lesson) — a dedicated tick gets the FULL time budget, no reserve.
+`crawlFrontier`/`processFolder` already branch on the frontier row's `mode`, so
+ingest rows stage (not enrich-attach). Deferred `'seen'` rows re-stage
+automatically once the frontier reaches their folder (the worker already falls
+through `'seen'` → re-attempt). Cron change (migration
+`20260718129000_lcc_phase2_slice2f_ingest_frontier_cron.sql`): RETIRE the legacy
+cursorless `lcc-folder-feed` tick; SCHEDULE `lcc-folder-feed-crawl-ingest`
+(`0,30 * * * *` → `?source=frontier&mode=ingest&limit_folders=10`), offset from
+the enrich crawl (`lcc-folder-feed-crawl`, `:10/:40`, unchanged). **No schema
+migration** — `folder_feed_frontier` already allows `mode='ingest'` and
+`folder_feed_seen` already allows `status='skipped'`.
+
+### Unit 2 — exclude archive + working subfolders
+New shared helper `isExcludedFolderPath()` (`folder-feed-classify.js`,
+`EXCLUDED_FOLDER_SEGMENT_RES` named constant): excludes any path whose whole
+SEGMENT is `OLD`/`Archive`/`Archived` OR starts with `_` (leading-underscore
+working/staging folders). Segment-anchored so a tenant named "Old Dominion …"
+(segment "Old Dominion" ≠ "OLD") is NOT caught. Applied in BOTH places in
+`processFolder`: the subfolder ENQUEUE loop (excluded subfolders are never
+descended into — no frontier/queue row) AND the per-file loop (defense-in-depth:
+a file in an excluded folder is recorded `skipped`/`detected_type=
+'excluded_archive_or_working'`, never staged). When an excluded subfolder is
+discovered, `skipExcludedSubtree()` flips any existing `(seen,error)` backlog rows
+under it to `skipped` via one bounded, idempotent PATCH — so the 56 `On Market/OLD`
++ 15 `_added or updated in comps spreadsheet` deferred rows drain WITHOUT ever
+re-listing the folder, and the stale-sweep (never lists the excluded parent)
+leaves them alone. New `report.files_excluded` counter.
+
+### Verified (headless 2026-06-11)
+`test/folder-feed-classify.test.mjs` (+`isExcludedFolderPath` cases: OLD/Archive/
+Archived/leading-underscore excluded; "Live Deal" + "Old Dominion" NOT) +
+`test/folder-feed-ingest-frontier.test.mjs` (ingest frontier descends On Market,
+enqueues only live subfolders w/ mode=ingest, stages an OM via the ingest path,
+SKIPS a non-OM lease per ingest policy — not enrich attach; OLD + `_working`
+never enqueued and their backlog rows flipped to skipped; GET dry-run reports
+ingest cursor counts without mutating). `node --check` clean; `ls api/*.js | wc
+-l`=12; full suite 699 pass / 0 fail / 6 skipped. Ships on the Railway redeploy.
