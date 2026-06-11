@@ -157,7 +157,7 @@ const CHART_FOOTER_CAPTIONS = {
   cap_rate_by_lease_term:
     'Cap-rate cohorts by remaining lease term (TTM). Dialysis chart uses the PDF p.22 cohorts (12+/8-12/6-8/≤5); gov uses 10+/6-10/<5/outside. Term premium (longest minus shortest) is the discount investors apply for shorter-dated assets. Dialysis starts 2019: before then the ≤5- and 8-12-year cohorts carry too few comps per TTM window to hold a stable ordered premium, so the early lines cross on small-sample noise. Gov starts 2015.',
   asking_cap_by_term_dot_plot:
-    'Asking cap-rate cohorts by remaining lease term (active listings, TTM). Starts 2017, where all four cohorts have continuous coverage (the ≤5- and 6-8-year cohorts do not exist in the active-listing record before then). Asking caps are seller pricing, not closed-sale evidence, so the cohorts do not form a clean term-premium ladder — the lines cross across years even at high counts; read levels, not strict ordering.',
+    'Asking cap-rate cohorts by remaining lease term (active listings, TTM). Starts 2017, where all four cohorts have continuous coverage (the ≤5- and 6-8-year cohorts do not exist in the active-listing record before then). Asking caps are seller pricing, not closed-sale evidence, so the cohorts do not form a clean term-premium ladder — the lines cross across years even at high counts; read levels, not strict ordering. Dialysis: observed asking listings only — sale-anchored / synthetic reconstructions are excluded so the line is not contaminated with closed-sale caps; recent cohorts are deep (hundreds of pooled obs), but pre-2020 thins and should be read as indicative.',
   dom_and_pct_of_ask:
     'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line). Improving % of ask + flat/falling DOM signals tightening bid/ask.',
   dom_and_pct_of_ask_monthly:
@@ -171,11 +171,11 @@ const CHART_FOOTER_CAPTIONS = {
   seller_sentiment_monthly:
     'Share of broadly marketed deals that closed after a price adjustment.',
   asking_cap_quartiles_active:
-    'Active-listing asking cap quartiles for the Total Market and the 10+ Year Term cohort. Read alongside the closed-sale cap-rate panel to gauge seller vs. clearing pricing.',
+    'Active-listing asking cap quartiles for the Total Market and the 10+ Year Term cohort. Read alongside the closed-sale cap-rate panel to gauge seller vs. clearing pricing. Dialysis: observed asking listings only (sale-anchored / synthetic reconstructions excluded); pre-2020 thins — read those quarters as indicative.',
   available_market_size_combo:
-    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort. The 10+ cohort cap line shows only when both cohorts have ≥3 in-band priced listings that quarter — when the non-core pool is thinner there is no meaningful contrast to draw.',
+    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort. The 10+ cohort cap line shows only when both cohorts have ≥3 in-band priced listings that quarter — when the non-core pool is thinner there is no meaningful contrast to draw. Dialysis: the count is distinct properties actually on the market (one property = one unit, deduped across multiple listings), gated to listings seen on-market recently — so it reads the true ~120 at the recent edge, not the larger listing-row tally. Pre-2020 is genuinely thin and shown as the honest history floor.',
   dom_price_change_active:
-    'Days on market and price-change frequency on active listings. Pair with the asking cap quartiles panel to gauge seller alignment with clearing pricing.',
+    'Days on market and price-change frequency on active listings. Pair with the asking cap quartiles panel to gauge seller alignment with clearing pricing. Dialysis: observed active listings only (distinct-property, last-seen-gated); pre-2020 thins — read those quarters as indicative.',
   buyer_class_pct_by_year:
     'Annual breakdown of buyer pool by capital source. Private capital (individual/family/small fund) historically dominates dialysis; public REITs and institutional capital ebb and flow with the cycle.',
   buyer_pool_breakdown:
