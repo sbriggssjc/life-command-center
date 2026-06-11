@@ -280,6 +280,26 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    context (every agent, assemble-on-miss) → correspondence (email + SF calls/notes).**
    Optional later: SF Events query (meetings) → same endpoint; merge PRs #1157/#1158
    for repo. Phase 1-3 of the architecture all in production.
+   **⚠️ PROPERTIES INGESTION IS NOT ACTUALLY FLOWING (found 2026-06-11).** The
+   folder-feed cron CANNOT ingest PROPERTIES: (1) `walkPhase` has NO cross-tick
+   cursor (`queue=rootList.slice()` per tick) → re-lists top letter-buckets forever,
+   never descends to tenant/city folders where files live (confirmed: cron tick
+   walked 3 ingest + 0 enrich); (2) enrich is OM-ONLY — leases/BOVs/DD/masters/comps
+   classified then SKIPPED (a PROPERTIES dry-run: 31 lease, 19 dd, 14 master, 11 bov,
+   8 comp, **2 om**); (3) synchronous ~20s staging caps throughput ~1/tick (On Market
+   has 71 OMs still deferred). The local backfill (Slice 2c, script `--mode=enrich`
+   shipped PR #1166) is NOT viable — the synced PROPERTIES tree is mostly OneDrive
+   cloud-only placeholders (DaVita: 151 city folders, 11 local files). **Scott chose
+   (2026-06-11): cloud crawl engine + attach ALL doc types.** → **Slice 2d** (prompt
+   `CLAUDECODE_PROMPT_PHASE2_Slice2d_crawl_engine.md`): Unit 1 persisted
+   `folder_feed_frontier` cursor (descend tree over ticks) + dedicated
+   `lcc-folder-feed-crawl` cron; Unit 2 attach ALL recognized doc types
+   (lease/BOV/DD/master/comp/OM) as property_documents via path-anchor match —
+   OMs also AI-extract, others attach-only, unresolved→disambiguation; Unit 3 async
+   OM extraction (stage `received` fast + `lcc-intake-extract-drain` cron) — also
+   fixes On Market ~1/tick. Ship order: Unit 2 (most value) → Unit 1 (whole tree) →
+   Unit 3 (throughput). **This is the real PROPERTIES-ingestion build; until it
+   lands, only ~1 manually-enriched property (DaVita Chilton) exists.**
    **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
    (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
    `20260718123000` (folder_feed_seen.mode) + `20260718124000`
