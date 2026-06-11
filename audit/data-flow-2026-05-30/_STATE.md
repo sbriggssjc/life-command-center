@@ -255,6 +255,23 @@ loop · R11 value-ranking integrity (rank_annual_rent) · R12 Salesforce sync
    object (the context_packet's own ownership section is fine; only the legacy
    gov_data path is broken). Small cleanup for later. NEXT: **Slice 3b** (correspondence
    → activity_timeline).
+   **✅ gov_data fix + Slice 3b CODE COMPLETE + VERIFIED LIVE 2026-06-11 (PRs #1155
+   MCP, #1157 main).** gov_data ownership_history col fixed (recorded_date→transfer_date)
+   — verified returns rows (Fort Collins gov). Slice 3b: Unit 1 email-OM intake logs
+   an `email` activity on the matched entity (wired+unit-tested; fires on next matched
+   email intake); Unit 2 `/api/sf-activity` ingest handler — VERIFIED LIVE: resolved
+   entity via salesforce external_identity (Community Credit Union), inserted, deduped
+   on sf_id. **REAL INFRA GAP FOUND + FIXED:** `appendActivityEvent` POSTs
+   `on_conflict=(workspace_id,source_type,external_id)` but NO matching unique index
+   existed (only id PK) → every dedup insert 400'd; the writer had never worked. Applied
+   live migration `activity_events_dedup_unique_index` (dedup 21 collisions +
+   `uq_activity_events_workspace_source_external`). **MUST commit as repo migration**
+   (prompt `CLAUDECODE_PROMPT_activity_events_dedup_index_migration.md`, task #90) so a
+   rebuild can't lose it. REMAINING (task #91): the **SF→LCC Activity Sync PA flow** to
+   feed `/api/sf-activity` (query SF Task/ActivityHistory → POST batches) — confirm SF
+   Task read-access first, then build in browser. **Intelligence-hub spine COMPLETE:
+   ingest→enrich→write-back→context(every agent)→correspondence — all live;** only the
+   SF live-feed PA flow + the migration-file commit remain.
    **✅ Slice 2a SHIPPED + VERIFIED LIVE 2026-06-10 (PR #1144):** enrich channel
    (FOLDER_FEED_ENRICH_ROOTS env, default PROPERTIES; INERT when unset). Migrations
    `20260718123000` (folder_feed_seen.mode) + `20260718124000`
