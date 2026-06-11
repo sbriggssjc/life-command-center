@@ -21,21 +21,37 @@ counts to independently verify.
 | 6 | `dia_writer_guards.sql` | dia | yes | future-date CHECK + active⇄off_market trigger (index + close trigger already exist) |
 | 7 | JS writer guards | app | — | see below — coordinated with the sales-dup family |
 
-## JS writer guards (the go-forward cause-fix — ships on Railway redeploy)
+## JS writer guards (the go-forward cause-fix — IMPLEMENTED in this commit, ships on Railway redeploy)
 
-The DB triggers/indexes are the backstop; these stop the duplicates at the source.
+The DB triggers/indexes are the backstop; these stop the duplicates at the source. **These
+JS edits are part of this PR and release in lockstep with the DB guards** (deploy-order-safe
+either way: the DB trigger/index backstops a stale writer, and the property-first writer is
+correct even before the index exists).
 
-1. **gov `upsertGovListings` (`api/_handlers/sidebar-pipeline.js`) and the gov OM promoter
-   path (`api/_handlers/intake-promoter.js`):** drop `listing_date` from the upsert conflict
-   key and switch to **property-first**: look up the open active row for the property
-   (regardless of source/date); PATCH it for the same iteration; only INSERT (and let the
-   `supersede-prior-active` trigger retire the old one) for a genuinely new iteration. This is
-   what stops the daily-OM-reingest row explosion (gov property 16350: 11 rows → 1).
-2. **dia `promoteDiaPropertyFromOm`:** check for an open active row before INSERT instead of
-   relying on the unique index to throw — PATCH-or-supersede explicitly.
-3. **Availability-checker:** never stamp `off_market_date` on a row with NULL `listing_date`
-   without first setting `listing_date = first_seen`; never stamp a future date (now also
-   blocked by the CHECK).
+1. **gov OM promoter — `api/_handlers/intake-promoter.js` (DONE).** Was inserting via
+   `on_conflict=source_listing_ref` (the intake_id) with only a same-date 23505 fallback, so
+   each daily OM (new intake_id + drifting `listing_date`) minted a fresh active row
+   (property 16350: 11 rows). Now **property-first**: look up ANY active row for the property
+   and PATCH it (enrich; never write `is_active`/`listing_status`/`listing_date`); INSERT only
+   when none exists. This is the fix for the 143 `lcc_intake_om` excess rows.
+2. **gov sidebar — `api/_handlers/sidebar-pipeline.js::upsertGovListings` (DONE).** Its
+   active-row pre-check was scoped to `listing_source=costar_sidebar&listing_status=Active`,
+   so a CoStar re-scrape sat beside an OM-sourced active row. Broadened to **property-first**
+   (`is_active=eq.true`, any source) so all channels converge onto one active row.
+3. **dia OM promoter — `intake-promoter.js` (ALREADY property-first).** It already looks up any
+   `is_active=true` row for the property and PATCHes it (Round 76eg) — which is exactly why
+   dia's snapshot is already 1:1. No change needed; gov now matches it.
+4. **Availability-checker (FOLLOW-UP, not in this commit).** The edge function should never
+   stamp `off_market_date` on a row with NULL `listing_date` without first setting
+   `listing_date = first_seen` (the G3 phantom cause). Future-date stamps are already blocked
+   by the `al_off_market_not_future` CHECK in the writer-guard SQL. The TS edge-function edit
+   is a small focused follow-up.
+
+> **Minor follow-up:** the gov sidebar convergence PATCH still writes the capture's
+> `listing_source`/`listing_date` onto the converged row (pre-existing behavior, now applied to
+> a possibly-OM row). That relabels source + shifts the window start to the latest touch — a
+> fidelity nit, not a duplicate. Excluding those from the sidebar PATCH (as the OM-promoter
+> path now does) is the clean follow-up if window-start fidelity matters.
 
 ## Coordinate with the sales-dup root-cause family (one fix, not two)
 

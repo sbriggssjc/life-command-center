@@ -348,21 +348,46 @@ async function promoteListing(domain, intakeId, snapshot, match) {
     : buildDiaListingRow(intakeId, snapshot, match, artifact);
 
   if (isGov) {
-    // Gov has TWO unique indexes on available_listings:
-    //   1. source_listing_ref (one row per intake)
-    //   2. (property_id, listing_source, listing_status, listing_date)
-    //      — only one active LCC-sourced listing per property per day.
-    //
-    // PostgREST on_conflict= only handles a single index. If multiple OMs
-    // for the same property land on the same day, the first inserts cleanly
-    // via on_conflict=source_listing_ref, but subsequent inserts blow up
-    // with 23505 against the second index.
-    //
-    // Fix: detect that specific 23505, look up the existing listing, and
-    // PATCH it with only the non-null fields from the new row. This turns
-    // "3 OMs for one property on one day" into "1 row, progressively
-    // enriched as each OM arrives" — which is the behavior we actually
-    // want for broker updates, corrections, and re-sends.
+    // Property-first dedup (Round 76 listing-lifecycle). The OLD logic
+    // inserted via on_conflict=source_listing_ref (the intake_id — unique per
+    // intake) and only PATCHed on a 23505 against the
+    // (property, source, status, listing_date) index. But the daily OM
+    // re-ingest carries a NEW intake_id AND a drifting listing_date, so the
+    // date index never collided and each day minted a fresh active row — gov
+    // property 16350 accumulated 11 lcc_intake_om rows this way. Mirror the
+    // dia branch below: look up ANY active listing for this property and
+    // PATCH it (converge every channel onto ONE active row); only INSERT when
+    // none exists. The DB-side supersede-prior-active trigger + one-active
+    // partial unique index (gov_writer_guards.sql) are the backstop. is_active
+    // is GENERATED from listing_status, so query it directly and never write
+    // it / listing_status / listing_date here (leave the row Active with its
+    // original on-market start).
+    const govActive = await domainQuery(
+      'government', 'GET',
+      `available_listings?property_id=eq.${row.property_id}` +
+      `&is_active=eq.true&select=listing_id&order=listing_date.desc.nullslast&limit=1`
+    );
+    if (govActive.ok && Array.isArray(govActive.data) && govActive.data.length) {
+      const existingId = govActive.data[0].listing_id;
+      const patchRow = Object.fromEntries(
+        Object.entries(row).filter(([k, v]) =>
+          v != null &&
+          !['source_listing_ref', 'first_seen_at', 'listing_status', 'listing_date'].includes(k))
+      );
+      patchRow.last_seen_at = new Date().toISOString();
+      const patchRes = await domainQuery(
+        'government', 'PATCH',
+        `available_listings?listing_id=eq.${encodeURIComponent(existingId)}`,
+        patchRow, { Prefer: 'return=representation' }
+      );
+      return patchRes.ok
+        ? { ok: true, listing_id: existingId, merged_into_existing: true }
+        : { ok: false, status: patchRes.status, detail: patchRes.data, stage: 'gov_property_first_patch' };
+    }
+
+    // No active row exists → INSERT. on_conflict=source_listing_ref keeps a
+    // same-intake re-promote idempotent; the 23505-on-date-index fallback
+    // stays as a secondary safety for the rare same-day collision.
     const result = await domainQuery(
       'government',
       'POST',
