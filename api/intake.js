@@ -132,6 +132,10 @@ export default withErrorHandler(async function handler(req, res) {
       const { handlePropertyDocWriteback } = await import('./_handlers/property-doc-writeback.js');
       return handlePropertyDocWriteback(req, res);
     }
+    case 'lease-extract': {
+      const { handleLeaseExtract } = await import('./_handlers/lease-extractor.js');
+      return handleLeaseExtract(req, res);
+    }
     case 'sf-activity': {
       const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
       return handleSfActivityIngest(req, res);
