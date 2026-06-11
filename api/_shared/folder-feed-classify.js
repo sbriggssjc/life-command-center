@@ -161,6 +161,8 @@ export function tenantCore(tenant) {
   t = t.replace(/-\s*[A-Z]{2}(\s*&\s*[A-Z]{2})?\s*$/, '');        // - ST / - PA & TN
   t = t.replace(/-\s*[A-Z][A-Z]{2,}(\s+[A-Z]{2,})*\s*$/, '');     // - HEDRICK / - BRIGGS HERROLD
   return t.replace(/[-–—\s]+$/, '').trim() || String(tenant || '').trim();
+}
+
 // USPS 2-letter codes (50 states + DC + PR). Used to validate a filename-derived
 // "City, ST" token so a stray 2-caps token (`- Memo, XX`) never false-positives
 // into a city/state. Kept inline so this module stays dependency-free (the CLI
@@ -281,25 +283,21 @@ export function parseSubjectHintFromPath(serverRelativePath) {
   hint.is_portfolio = isPortfolioHint(hint.tenant_brand, fileName);
   if (hint.tenant_brand) hint.tenant_core = tenantCore(hint.tenant_brand);
 
+  // Slice 2e — filename City, ST fallback (additional guard). The real PROPERTIES
+  // tree often carries the city/state in the FILENAME; run only when nothing above
+  // produced a city (a path segment / the Slice-2d.1 recovery always wins) and
+  // never overwrite an existing value.
+  if (!hint.city && segs.length) {
+    const fromName = parseCityStateFromFilename(segs[segs.length - 1]);
+    if (fromName) { hint.city = fromName.city; hint.state = fromName.state; }
+  }
+
   // Tenant-implied vertical when the research-root didn't decide it. Use the
   // cleaned core so cues survive a fused "DaVita Portfolio (3) - AR" label.
   if (!hint.vertical && (hint.tenant_core || hint.tenant_brand)) {
     const t = hint.tenant_core || hint.tenant_brand;
     if (DIA_CUES.test(t)) hint.vertical = 'dia';
     else if (GOV_CUES.test(t)) hint.vertical = 'gov';
-  // Slice 2e — filename City, ST fallback. The real PROPERTIES tree carries the
-  // city/state in the FILENAME, not a folder segment. Parse the last segment only
-  // when no path segment already produced a city (a path segment always wins),
-  // and never overwrite an existing value.
-  if (!hint.city && segs.length) {
-    const fromName = parseCityStateFromFilename(segs[segs.length - 1]);
-    if (fromName) { hint.city = fromName.city; hint.state = fromName.state; }
-  }
-
-  // Tenant-implied vertical when the research-root didn't decide it.
-  if (!hint.vertical && hint.tenant_brand) {
-    if (DIA_CUES.test(hint.tenant_brand)) hint.vertical = 'dia';
-    else if (GOV_CUES.test(hint.tenant_brand)) hint.vertical = 'gov';
   }
 
   return hint;
