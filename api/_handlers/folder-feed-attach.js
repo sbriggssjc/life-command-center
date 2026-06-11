@@ -24,6 +24,7 @@
 import { matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
 import { looksLikePortfolioRollup } from '../_shared/folder-feed-classify.js';
+import { registerCreProperty } from '../_shared/cre-registry.js';
 import { opsQuery } from '../_shared/ops-db.js';
 
 // Record provenance for the attached doc through the shared registry, tagged
@@ -115,22 +116,55 @@ export async function attachRecognizedDoc(args) {
       }
       return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
     }
-    // No in-domain property. Split the terminal disposition (Slice 2g):
-    //   • NO dia/gov vertical cue (office / retail / bank — the bulk of Briggs's
-    //     book) → this asset class has no home DB and will NEVER resolve, so PARK
-    //     it ('skipped' / out_of_domain_asset_class). Honest backlog, zero churn.
+    // No in-domain property. Split the terminal disposition:
     //   • HAS a dia/gov cue but unresolved → keep 'unresolved_no_domain_property'
-    //     (a genuine in-domain miss — captured + tenant-searchable for later).
-    // Either way no emitMatchDisambiguation here — a non-dia/gov property is not
-    // an operator disambiguation.
+    //     (a genuine in-domain miss — captured + tenant-searchable for later);
+    //     a non-dia/gov property is not an operator disambiguation.
+    //   • NO dia/gov vertical cue (office / retail / bank — the bulk of Briggs's
+    //     book) → R15: register into the generic CRE registry instead of parking.
+    //     The light-attach path carries NO extraction snapshot, so the property
+    //     registers by path anchor (tenant/city) with the owner left pending for
+    //     a Phase-2 backfill. PARK only when the anchor is too weak to register.
     const hasVerticalCue = subjectHint?.vertical === 'dia' || subjectHint?.vertical === 'gov';
+    if (!hasVerticalCue) {
+      const reg = await registerCreProperty({
+        subjectHint,
+        snapshot: null,            // light-attach has no extraction → owner pending
+        fileName: fileName || `attach-${docType || 'doc'}.pdf`,
+        sourceUrl,
+        docType,
+        workspaceId,
+        actorId,
+      }).catch(e => ({ ok: false, error: e?.message }));
+      if (reg?.registered) {
+        return {
+          ok: true,
+          attached: true,
+          cre: true,
+          cre_property_id: reg.cre_property_id,
+          owner_entity_id: reg.owner_entity_id || null,
+          owner_pending: !!reg.owner_pending,
+          document: reg,
+          match_status: 'cre_registered',
+        };
+      }
+      // Anchor too weak to register → PARK (out-of-domain), the old behavior.
+      return {
+        ok: false,
+        attached: false,
+        emitted_disambiguation: false,
+        reason: reg?.reason ? `cre_${reg.reason}` : 'out_of_domain_asset_class',
+        out_of_domain: true,
+        is_portfolio: !!subjectHint?.is_portfolio,
+        match_status: match?.status || null,
+      };
+    }
     return {
       ok: false,
       attached: false,
       emitted_disambiguation: false,
-      reason: hasVerticalCue ? (match?.reason || 'no_domain_property') : 'out_of_domain_asset_class',
-      no_domain: hasVerticalCue,
-      out_of_domain: !hasVerticalCue,
+      reason: match?.reason || 'no_domain_property',
+      no_domain: true,
       is_portfolio: !!subjectHint?.is_portfolio,
       match_status: match?.status || null,
     };
