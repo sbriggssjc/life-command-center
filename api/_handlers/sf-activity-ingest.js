@@ -79,15 +79,24 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
   if (!Array.isArray(records) || records.length === 0) return summary;
 
   for (const rec of records) {
-    const sfId = rec?.sf_id || rec?.Id || rec?.id || null;
+    // Accept EITHER the canonical shape ({sf_id, type, subject, ...}) OR the
+    // raw Salesforce "Get records (Tasks)" field names ({Id, TaskSubtype,
+    // Subject, ...}) so the PA flow can POST the SF output with no in-flow
+    // field mapping. The canonical key wins when both are present.
+    const sfId    = rec?.sf_id        ?? rec?.Id ?? rec?.id ?? null;
+    const rawType = rec?.type         ?? rec?.TaskSubtype ?? rec?.EventSubtype ?? rec?.Type ?? null;
+    const subject = rec?.subject      ?? rec?.Subject ?? null;
+    const descr   = rec?.description  ?? rec?.Description ?? null;
+    const actDate = rec?.activity_date ?? rec?.ActivityDate ?? rec?.activityDate ?? null;
+    const whoId   = rec?.who_id       ?? rec?.WhoId ?? null;   // Contact
+    const whatId  = rec?.what_id      ?? rec?.WhatId ?? null;  // Account / other
+    const status  = rec?.status       ?? rec?.Status ?? null;
+
     if (!sfId) {
       summary.skipped_no_id += 1;
       summary.results.push({ sf_id: null, outcome: 'skipped_no_id' });
       continue;
     }
-
-    const whoId  = rec.who_id  || rec.WhoId  || null;   // Contact
-    const whatId = rec.what_id || rec.WhatId || null;   // Account / other
 
     // Resolve the LCC entity — Contact (who) first, then Account (what).
     let entity = null;
@@ -117,7 +126,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     }
 
     summary.matched += 1;
-    const category = mapSfTypeToCategory(rec.type || rec.TaskSubtype || rec.EventSubtype);
+    const category = mapSfTypeToCategory(rawType);
 
     let appendRes;
     try {
@@ -125,18 +134,19 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
         workspaceId,
         actorId,
         category,
-        title:       rec.subject || rec.Subject || `(SF ${category})`,
-        body:        rec.description || rec.Description || null,
+        title:       subject || `(SF ${category})`,
+        body:        descr,
         entityId,
         sourceType:  'salesforce',
         externalId:  String(sfId),
-        occurredAt:  rec.activity_date || rec.ActivityDate || rec.activityDate || null,
+        occurredAt:  actDate,
         metadata: {
           sf_id:     String(sfId),
-          sf_type:   rec.type || rec.TaskSubtype || rec.EventSubtype || null,
-          sf_status: rec.status || rec.Status || null,
+          sf_type:   rawType,
+          sf_status: status,
           who_id:    whoId,
           what_id:   whatId,
+          activity_date: actDate,
           resolved_via: resolvedVia,
         },
       });

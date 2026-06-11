@@ -127,5 +127,39 @@ describe('processSfActivityBatch (Unit 2)', () => {
     assert.equal(calls[0].externalId, 'sf9');
     assert.equal(calls[0].category, 'call');
     assert.equal(calls[0].occurredAt, '2026-06-02');
+    // useful raw fields ride along in metadata for the timeline
+    assert.equal(calls[0].metadata.sf_type, 'Call');
+    assert.equal(calls[0].metadata.who_id, '003aaa');
+    assert.equal(calls[0].metadata.activity_date, '2026-06-02');
+  });
+
+  it('falls back to the raw SF Type field when TaskSubtype is absent', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { Id: 'sf10', Type: 'Email', Subject: 'Raw type', WhoId: '003aaa', Description: 'body', Status: 'Completed' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].category, 'email');
+    assert.equal(calls[0].title, 'Raw type');
+    assert.equal(calls[0].body, 'body');
+    assert.equal(calls[0].metadata.sf_status, 'Completed');
+  });
+
+  it('handles a mixed batch of canonical + raw SF records', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { sf_id: 'mix1', type: 'Call', subject: 'Canonical', who_id: '003aaa' },
+      { Id: 'mix2', TaskSubtype: 'Email', Subject: 'Raw', WhatId: '001bbb', ActivityDate: '2026-06-03' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.total, 2);
+    assert.equal(out.matched, 2);
+    assert.equal(out.inserted, 2);
+    assert.equal(calls[0].externalId, 'mix1');
+    assert.equal(calls[0].category, 'call');
+    assert.equal(calls[0].entityId, 'ent-contact-1');
+    assert.equal(calls[1].externalId, 'mix2');
+    assert.equal(calls[1].category, 'email');
+    assert.equal(calls[1].entityId, 'ent-account-1');
+    assert.equal(calls[1].metadata.resolved_via, 'account');
   });
 });
