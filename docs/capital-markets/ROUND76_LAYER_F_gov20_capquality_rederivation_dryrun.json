@@ -1,0 +1,34 @@
+{
+  "_doc": "R76 Layer F — gov #20 NM cap-quality RE-DERIVATION dry-run. READ-ONLY, NO WRITE. Blessed by Scott 2026-06-11 as a data-quality fix to the implausible_unverified flag (it was dropping legitimately-high short-term/low-credit NM deals along with real errors). Deal-by-deal, documented reason per deal, receipts -> Scott's gate before any flag write. Project: government (scknotsqkcheojiaewwh).",
+  "scope": "53 not-excluded NM (is_northmarq) rows currently cap_rate_quality='implausible_unverified'. The flag drops ALL of them from the #20 NM line; this re-derivation separates genuine errors (keep flagged) from legitimately-high market deals (reclassify into the cohort).",
+  "rules": {
+    "drop_error_extreme": "cap > 13% — physically impossible cap (e.g. 22.42% DEA 2002). Genuine error; KEEP FLAGGED.",
+    "drop_error_low_outlier": "cap < 5% — too-low outlier (price/NOI error or a sub-5 trophy that is NOT a market comp). KEEP FLAGGED / separate review.",
+    "drop_suspect_longfirm_fed": "federal AND firm/total term >= 7y AND cap 8-11% — a long federal lease should trade ~6-7%; a 9%+ print is a likely NOI/price/RBA error. KEEP FLAGGED pending per-deal confirm.",
+    "keep_short_or_holdover": "remaining firm term < 3y OR holdover (negative firm) — short/expiring leases genuinely trade wider. RECLASSIFY into the NM cohort (clear stated cap, sane $/sf).",
+    "keep_low_credit": "tenant credit is State/Local (not Federal) — lower-credit gov genuinely trades wider. RECLASSIFY into the NM cohort.",
+    "review_midterm": "mid-term federal with no decisive signal — NEEDS SCOTT'S PER-DEAL EYES (do not auto-reclassify)."
+  },
+  "buckets": [
+    {"verdict": "keep_short_or_holdover", "action": "reclassify_into_cohort", "n": 8, "avg_cap": 0.0932, "confidence": "high"},
+    {"verdict": "keep_low_credit",        "action": "reclassify_into_cohort", "n": 7, "avg_cap": 0.1009, "confidence": "high"},
+    {"verdict": "review_midterm",         "action": "scott_per_deal",         "n": 21, "avg_cap": 0.0899, "confidence": "needs_review"},
+    {"verdict": "drop_suspect_longfirm_fed","action": "keep_flagged",         "n": 11, "avg_cap": 0.0901, "confidence": "suspect"},
+    {"verdict": "drop_error_low_outlier", "action": "keep_flagged",           "n": 2,  "avg_cap": 0.0460, "confidence": "error"},
+    {"verdict": "drop_error_extreme",     "action": "keep_flagged",           "n": 1,  "avg_cap": 0.2242, "confidence": "error"}
+  ],
+  "resulting_nm_cohort_cap": {
+    "clean_only_today (n=49)": 0.0689,
+    "plus_15_confident_legit_highs (n=64)": 0.0754,
+    "plus_21_review_midterm_too (n=85)": 0.0790,
+    "interpretation": "The honest NM number is ~7.5% (if only the 15 high-confidence legit highs come in) to ~7.9% (if the 21 mid-term federals are also legitimate) — NOT 6.89% (biased low: drops legit highs) and NOT 8.24% (biased high: includes the 14 genuine errors)."
+  },
+  "example_deals": {
+    "keep_short_or_holdover": ["10703 Stancliff TX SSA 10.6% firm 0.55y $286/sf", "2600 W Hillsboro AR SSA 8.82% firm -1.58y holdover", "21 Wabash IN FBI 8.66% firm -0.93y", "633 Venture NC SSA 8.28% firm -3.17y"],
+    "keep_low_credit": ["601 W Main IL State 11.78% firm 3.54y", "2001 NE Jefferson IL DCFS State 9.98% term 1.21y", "1616 Rothwell TX Dept Criminal Justice State 9.70%"],
+    "drop_suspect_longfirm_fed": ["4750 S Garnett OK SSA 9.44% firm 14.12y", "694 Beverly Pike WV GSA 10.31% firm 9.25y", "3801 S Port Ave TX SSA 9.84% firm 9.70y"],
+    "drop_error_extreme": ["111 Greencourt VA DEA 22.42% (2002)"]
+  },
+  "next": "Scott reviews the 21 review_midterm per-deal (and confirms the 14 drops + 15 keeps). On his gate: re-stamp the reclassified rows' cap_rate_quality (e.g. stated_only) so they enter the #20 NM cohort; THEN the basis (raw window vs curated) is decided on the corrected cohort. No write until his gate.",
+  "verified_2026_06_11": "read-only; nothing written"
+}

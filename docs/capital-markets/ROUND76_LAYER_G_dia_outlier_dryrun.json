@@ -1,7 +1,23 @@
 {
-  "_doc": "R76 Layer G — dia 2022/23 outlier exclusion DRY-RUN. NO WRITE APPLIED. Deal-by-deal by reason (Scott's gate: never a price threshold). Project: Dialysis_DB (zqzrriwuavgrquhisnoa). Effect = set sales_transactions.exclude_from_market_metrics=true with the reason in cap_rate_notes. Median dia deal $3.0M / p95 $10.26M for scale; a single dialysis clinic is ~7-15k sf at ~$300-700/sf.",
-  "verified_2026_06_11": "read-only; nothing written",
-  "exclude": [
+  "_doc": "R76 Layer G — dia 2022/23 outlier. NO WRITE APPLIED. PER SCOTT (2026-06-11): do NOT write these 7 piecemeal — fold them into ONE complete dia sweep (wrong-assets + phantom-dups + Fresenius) under a single consistent reason taxonomy, through the frozen-review gate. These 7 are the HIGHEST-CONFIDENCE slice of the sweep's wrong-asset class. The dia export waits for the one complete pass, not a half-correction. Project: Dialysis_DB (zqzrriwuavgrquhisnoa).",
+  "status": "scoped_not_written — the standalone 7-deal write is SUPERSEDED by the complete sweep below",
+  "sweep_scope_2026_06_11": {
+    "_note": "Read-only survey of the 3,037 dia market-metric sales. The sweep must dispose ALL of these classes under one taxonomy before the dia export is refreshed.",
+    "wrong_asset_class": {
+      "nondialysis_property_type (retail/office/mixed, no dialysis tenant/operator)": 61,
+      "impossible_psf_over_2000 (portfolio price on a single parcel)": 29,
+      "_the_7_below": "are the highest-confidence, highest-$ members of this class"
+    },
+    "phantom_duplicate_sales": {
+      "exact_triple (property+date+price)": 0,
+      "_todo": "exact key finds 0 — phantom dups arrive via multi-source ingest with SLIGHTLY DIFFERENT prices, so the sweep needs a looser definition (same property_id + sale_date within a window, or same normalized address+date). Define + quantify in the sweep pass."
+    },
+    "fresenius": {
+      "fresenius_tagged_sales": 1506,
+      "_todo": "1,506 (~half the book) — NOT all wrong. The specific Fresenius distortion Scott means must be defined (e.g. a bulk/portfolio transaction split across clinics, or a mis-tag) before any exclusion. Do NOT blanket-exclude."
+    }
+  },
+  "wrong_asset_high_confidence_7": [
     {"sale_id": 6592, "sale_date": "2023-01-26", "addr": "13003-13075 Victory Blvd, Los Angeles CA", "sold_price": 57750000, "property_type": "Retail Centers", "tenant": null, "building_sf": 13478, "price_per_sf": 4285, "reason": "whole_center_multitenant", "evidence": "Retail-center property type, address RANGE (multi-building), $4,285/sf is impossible for a single 13k-sf clinic — a whole multi-tenant center price mis-attached to one parcel; not a single-clinic NNN dialysis comp."},
     {"sale_id": 6658, "sale_date": "2022-06-08", "addr": "8 King Rd, Rockleigh NJ", "sold_price": 50000000, "property_type": "Healthcare", "tenant": null, "building_sf": null, "price_per_sf": null, "reason": "unconfirmed_portfolio", "evidence": "$50M Healthcare with NO dialysis tenant, no operator, no building size — no evidence this is a single dialysis clinic; portfolio/campus-scale unconfirmed."},
     {"sale_id": 6596, "sale_date": "2022-12-20", "addr": "5730 S Semoran Blvd, Orlando FL", "sold_price": 36500000, "property_type": "Office", "tenant": "DaVita Kidney Care", "building_sf": 10531, "price_per_sf": 3466, "reason": "unconfirmed_portfolio", "evidence": "Real DaVita tenant BUT $3,466/sf on a 10.5k-sf clinic is physically impossible (~5-10x a normal clinic $/sf) — the $36.5M is a portfolio/multi-asset price mis-attached to a single clinic parcel."},
@@ -9,9 +25,10 @@
     {"sale_id": 6631, "sale_date": "2022-08-05", "addr": "3040 Dyer Blvd, Kissimmee FL", "sold_price": 36070000, "property_type": "Retail", "tenant": null, "building_sf": 98136, "price_per_sf": 368, "reason": "whole_center_multitenant", "evidence": "98,136-sf RETAIL property at $368/sf = a whole retail center, not a single dialysis clinic; no dialysis tenant."},
     {"sale_id": 6654, "sale_date": "2022-07-07", "addr": "501 N State Rd 7, Royal Palm Beach FL", "sold_price": 34000000, "property_type": "Retail", "tenant": "DaVita Wellington", "building_sf": 7182, "price_per_sf": 4734, "reason": "unconfirmed_portfolio", "evidence": "Real DaVita tenant BUT $4,734/sf on a 7.2k-sf clinic is impossible — $34M is a portfolio/multi-asset price mis-attached to a single clinic parcel."}
   ],
-  "hold_for_scott_verdict": [
-    {"sale_id": 5530, "sale_date": "2021-10-08", "addr": "700 Broadway, Seattle WA", "sold_price": 42500000, "property_type": "Office", "operator": "Northwest Kidney Centers", "tenant": "NKC Broadway Kidney", "building_sf": null, "price_per_sf": null, "lean": "exclude_as_non_representative", "evidence": "GENUINE dialysis (Northwest Kidney Centers' Broadway flagship), but 'Office' type and $42.5M with no per-clinic sf reads as a whole office building / NKC HQ campus — a non-representative whole-building deal, not a single-clinic NNN comp. Single facility = keep+note; whole building/HQ = exclude. Scott's call."}
+  "wrong_asset_seattle_per_scott": [
+    {"sale_id": 5530, "sale_date": "2021-10-08", "addr": "700 Broadway, Seattle WA", "sold_price": 42500000, "property_type": "Office", "operator": "Northwest Kidney Centers", "tenant": "NKC Broadway Kidney", "building_sf": null, "price_per_sf": null, "reason": "whole_building_hq", "evidence": "GENUINE dialysis (Northwest Kidney Centers' Broadway flagship), but a $42.5M office/HQ building — non-representative for single-clinic NNN comps. Scott (2026-06-11): exclude with reason whole_building_hq."}
   ],
-  "before_after_note": "After excluding the 6 (and, pending verdict, Seattle), the dia avg-deal-size and TTM-volume series lose the 2022/23 spike (median market $3.0M). Exact before/after per affected quarter will be captured at commit time once the verdict set is fixed.",
-  "next": "Scott independent check of each reason tag + the Seattle verdict -> then the flag write (effect-first, reason in cap_rate_notes) -> recapture before/after."
+  "before_after_note": "Before/after on the affected dia chart (avg-deal-size / TTM-volume around 2022/23) will be captured at commit time for the COMPLETE sweep verdict set, not this 7-row slice.",
+  "next": "Build the COMPLETE dia sweep (wrong-asset 61+29 deal-by-deal incl. these 7+Seattle; phantom-dups under a looser definition; the specific Fresenius distortion) as ONE frozen-review dry-run with a single reason taxonomy -> Scott's independent gate -> flag write -> recapture before/after. Do NOT write the 7 alone.",
+  "verified_2026_06_11": "read-only; nothing written"
 }
