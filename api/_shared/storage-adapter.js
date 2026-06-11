@@ -50,6 +50,14 @@ const SHAREPOINT_INTAKE_FOLDER =
 const SHAREPOINT_DOC_PREFIX =
   (process.env.SHAREPOINT_DOC_PREFIX || '/sites/TeamBriggs20/Shared Documents');
 
+// The SITE prefix only (NO library segment). The write-back "Create file"
+// connector resolves its Folder Path relative to the SITE root, so the upload
+// folder_path must KEEP the "/Shared Documents" library segment — strip ONLY
+// the site path. This is the proven Get-flow form (Slice 2b.3, 2026-06-11:
+// the bare library-relative form 400'd "Root folder is not found").
+const SHAREPOINT_SITE_PATH =
+  (process.env.SHAREPOINT_SITE_PATH || '/sites/TeamBriggs20');
+
 /**
  * Turn a full server-relative DESTINATION folder into the LIBRARY-relative
  * folder the Create-file action's "Folder Path" field expects (no site/library
@@ -77,6 +85,25 @@ export function libraryRelativeFolder(folderPath) {
  */
 export function libraryRelativeDocPath(folderPath, fileName) {
   return `${libraryRelativeFolder(folderPath)}/${fileName}`.replace(/\/{2,}/g, '/');
+}
+
+/**
+ * Turn a full server-relative DESTINATION folder into the SITE-relative folder
+ * the write-back Create-file action expects — strip ONLY the site prefix and
+ * KEEP the "/Shared Documents" library segment + the single leading slash
+ * (the proven Get-flow form). Collapses double slashes and drops a trailing
+ * slash. Exported for unit tests.
+ *
+ *   "/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI"
+ *   -> "/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI"
+ */
+export function siteRelativeFolder(folderPath) {
+  let f = String(folderPath || '')
+    .replace(SHAREPOINT_SITE_PATH, '')
+    .replace(/\/{2,}/g, '/')   // collapse double slashes
+    .replace(/\/+$/, '');      // drop trailing slash
+  if (!f.startsWith('/')) f = `/${f}`; // KEEP a single leading slash
+  return f;
 }
 
 let _warnedSharepointUnconfigured = false;
@@ -227,17 +254,20 @@ async function putToSharePoint({ objectPath, mimeType, buffer, fetchImpl }) {
  * throws; a failure returns ok:false so the caller writes nothing to the DB.
  * Contract (the Create-file action takes a DYNAMIC Folder Path + File Name from
  * the trigger, so the destination folder is no longer hardcoded to the intake
- * zone — Slice 2b.2):
+ * zone — Slice 2b.2; the connector resolves Folder Path relative to the SITE
+ * root, so folder_path KEEPS the "/Shared Documents" library segment — Slice
+ * 2b.3):
  *   trigger body  { folder_path, file_name, content_base64 }
- *                 (folder_path is LIBRARY-relative, e.g.
- *                  "PROPERTIES/D/DaVita/Chilton, WI")
+ *                 (folder_path is SITE-relative, e.g.
+ *                  "/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI")
  *   response      { ok:true, server_relative_url, item_id, url? }
  *
  * @param {object}   o
  * @param {string}   o.folderPath  full server-relative path of the DESTINATION
- *                                  folder. Made library-relative (the
- *                                  site/library prefix is stripped) before it
- *                                  becomes the flow's `folder_path`.
+ *                                  folder. Made site-relative (only the site
+ *                                  prefix is stripped; the library segment is
+ *                                  kept) before it becomes the flow's
+ *                                  `folder_path`.
  * @param {string}   o.fileName    target file name (already [LCC]-tagged + dedup'd)
  * @param {Buffer}   o.bytes       raw bytes to write
  * @param {Function} [o.fetchImpl] fetch impl (defaults to global fetch)
@@ -251,7 +281,7 @@ export async function uploadDocToFolder({ folderPath, fileName, bytes, fetchImpl
   if (!bytes || !Buffer.isBuffer(bytes) || bytes.length === 0) {
     return { ok: false, status: 400, detail: 'missing or empty bytes' };
   }
-  const folder_path = libraryRelativeFolder(folderPath);
+  const folder_path = siteRelativeFolder(folderPath);
   const doFetch = fetchImpl || ((u, opts) => fetch(u, opts));
   try {
     const res = await doFetch(uploadUrl, {

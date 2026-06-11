@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { libraryRelativeFolder, libraryRelativeDocPath, uploadDocToFolder } =
+const { libraryRelativeFolder, libraryRelativeDocPath, siteRelativeFolder, uploadDocToFolder } =
   await import('../api/_shared/storage-adapter.js');
 
 describe('libraryRelativeFolder', () => {
@@ -41,8 +41,31 @@ describe('libraryRelativeDocPath', () => {
   });
 });
 
+describe('siteRelativeFolder', () => {
+  it('strips ONLY the site prefix and keeps the library segment + leading slash', () => {
+    assert.equal(
+      siteRelativeFolder('/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI'),
+      '/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI'
+    );
+  });
+  it('keeps the single leading slash', () => {
+    assert.equal(
+      siteRelativeFolder('/sites/TeamBriggs20/Shared Documents/PROPERTIES'),
+      '/Shared Documents/PROPERTIES'
+    );
+    assert.match(siteRelativeFolder('/sites/TeamBriggs20/Shared Documents/PROPERTIES'), /^\/[^/]/);
+  });
+  it('collapses double slashes and drops a trailing slash', () => {
+    assert.equal(
+      siteRelativeFolder('/sites/TeamBriggs20//Shared Documents/PROPERTIES/D/'),
+      '/Shared Documents/PROPERTIES/D'
+    );
+  });
+});
+
 describe('uploadDocToFolder', () => {
   const FOLDER = '/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI';
+  const SITE_REL = '/Shared Documents/PROPERTIES/D/DaVita/Chilton, WI';
 
   it('503s when SHAREPOINT_UPLOAD_URL is unset', async () => {
     const prev = process.env.SHAREPOINT_UPLOAD_URL;
@@ -69,7 +92,7 @@ describe('uploadDocToFolder', () => {
     });
     assert.equal(r.ok, true);
     assert.equal(r.server_relative_url, `${FOLDER}/Foo [LCC].pdf`);
-    assert.equal(captured.folder_path, 'PROPERTIES/D/DaVita/Chilton, WI');
+    assert.equal(captured.folder_path, SITE_REL);
     assert.equal(captured.file_name, 'Foo [LCC].pdf');
     assert.equal(captured.content_base64, Buffer.from('hello').toString('base64'));
     assert.equal('path' in captured, false);
