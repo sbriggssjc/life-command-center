@@ -9619,10 +9619,16 @@ async function upsertGovListings(propertyId, entity, metadata) {
   // is the same listing even if CoStar changed the listing_date). So we do
   // a single pre-check looking for an Active row on the same property and,
   // if found, PATCH it. Otherwise we upsert via on_conflict.
+  // Property-first (Round 76 listing-lifecycle): converge onto ANY active row
+  // for this property regardless of source, so a CoStar re-scrape updates the
+  // existing iteration (including an OM-sourced one) instead of minting a
+  // parallel active row. Was scoped to costar_sidebar+Active, which let a
+  // sidebar capture sit beside an lcc_intake_om active row. is_active is
+  // GENERATED from listing_status — query it directly.
   const activeLookup = await domainQuery('government', 'GET',
     `available_listings?property_id=eq.${propertyId}` +
-    `&listing_source=eq.costar_sidebar&listing_status=eq.Active` +
-    `&select=listing_id&limit=1`
+    `&is_active=eq.true` +
+    `&select=listing_id&order=listing_date.desc.nullslast&limit=1`
   );
   if (activeLookup.ok && activeLookup.data?.length) {
     const existingId = activeLookup.data[0].listing_id;
