@@ -166,6 +166,21 @@ re-captures. Among non-excluded, priced sales:
 - `dedup_group_id` / `dedup_natural_key` columns **exist but did not catch these**
   — the de-dup pass missed identical-price/different-date re-captures.
 
+### Keeper-date is NOT mechanical (Scott Check-2 finding, 2026-06-11)
+**Supersession** is mechanical (one row survives per `(property_id, sold_price)`
+fingerprint → the $906M double-count clears regardless of which survives). But
+**which year the survivor lands in is not.** Of 195 groups, only **16 span ≤1yr**;
+**134 span >3 years** at an *identical* price (prop 23494: 1985 **and** 2022 at
+$2,615,000; prop 30025: 1996 **and** 2025 at $15,010,000). A property selling
+twice for the *exact* same price is effectively impossible (so `genuine_resale`
+rarely fires — Check 1), which means one date in each wide group is a **legacy
+artifact**, and a blanket "earliest" keeper would **park a real 2022 deal in 1985
+and drop it off the recent volume charts**. Keeper rule is therefore **cluster/
+modal-year aware** (keep the densest year-cluster — fixes prop 1715545, whose two
+2016 captures + notes pin the true year to 2016), and the **204 all-distinct-year
+rows are flagged `keeper_ambiguous`** in the frozen table for Scott's targeted
+keeper-year confirmation (`confirmed_keep_sale_id`) before any write.
+
 This is the dominant distortion of **volume / transaction-count / avg-deal-size**
 metrics and should be remediated alongside the wrong-asset rows (gov already has
 an `excluded_*`/`duplicate_row` class for exactly this — see §6).
@@ -266,12 +281,27 @@ Draft (un-applied) SQL: `remediation_dia.DRAFT.sql`. Steps, in order:
    | `whole_center_multitenant` | 25 | $302.0M | yes |
    | `industrial_corporate` | 10 | $147.2M | yes (Fresenius operator RE — labeled, kept, excluded from clinic comps) |
 
-   Review in place:
+   **Gate state (2026-06-11):** option (a) applied — the **224 phantom-dups are
+   pre-confirmed** `confirmed_class='phantom_duplicate'` (supersession is
+   mechanical); **204 carry `keeper_ambiguous=true`** + a `KEEPER-YEAR CHECK`
+   note for Scott's targeted Check-2 keeper-year confirmation (override via
+   `confirmed_keep_sale_id`). The **66 non-dup rows await `confirmed_class`.**
+   The table now carries `keep_sale_id`, `keeper_year`, `keeper_year_n`,
+   `span_yrs`, `distinct_years`, `keeper_ambiguous`, `confirmed_keep_sale_id`.
+
+   Non-dup review queue (66 rows) + targeted keeper-year spot-check (204):
    ```sql
+   -- (1) the 66 wrong-asset rows needing a class:
    SELECT sale_id, price, psf, bsf, property_type, name, tenant, city, state,
           which, proposed_class FROM public._sweep_candidates_2026_06_11
-   ORDER BY (proposed_class='phantom_duplicate'), price DESC;
-   -- set confirmed_class per row before STEP 2+ of remediation_dia.DRAFT.sql run
+   WHERE confirmed_class IS NULL ORDER BY price DESC;
+   -- set confirmed_class per row before STEP 3+ of remediation_dia.DRAFT.sql run
+
+   -- (2) Check-2 keeper-year spot-check (widest spans first):
+   SELECT property_id, price, span_yrs, keeper_year, keep_sale_id, review_notes
+   FROM public._sweep_candidates_2026_06_11
+   WHERE keeper_ambiguous ORDER BY span_yrs DESC;
+   -- override confirmed_keep_sale_id where earliest != the true sale year
    ```
    The KEEPs in §2 (Dcc-Olympia Fields, Hiram, University Plaza) prove the
    non-dup classes can't be auto-applied — this table is the human gate.
