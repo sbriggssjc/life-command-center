@@ -41,11 +41,16 @@ correct even before the index exists).
 3. **dia OM promoter — `intake-promoter.js` (ALREADY property-first).** It already looks up any
    `is_active=true` row for the property and PATCHes it (Round 76eg) — which is exactly why
    dia's snapshot is already 1:1. No change needed; gov now matches it.
-4. **Availability-checker (FOLLOW-UP, not in this commit).** The edge function should never
-   stamp `off_market_date` on a row with NULL `listing_date` without first setting
-   `listing_date = first_seen` (the G3 phantom cause). Future-date stamps are already blocked
-   by the `al_off_market_not_future` CHECK in the writer-guard SQL. The TS edge-function edit
-   is a small focused follow-up.
+4. **Availability-checker phantom guard — `lcc_record_listing_check` RPC (DONE, gated SQL).**
+   The off_market/sold stamp is written by the `lcc_record_listing_check` RPC (the choke point
+   both the edge function AND `lcc-auto-scrape-listings` call), not the TS edge function — so
+   the guard lives there, in `gov_writer_guards.sql` (3b) + `dia_writer_guards.sql` (3). When
+   it stamps `off_market_date` on a row with NULL `listing_date` (the Round 76ej
+   `unverified_assumed_off` path — the G3 phantom cause), it now backfills
+   `listing_date = LEAST(first_seen, today)` in the SAME UPDATE, so the on-market window has a
+   forward start instead of a backward/zero one. Future-date stamps are also blocked by the
+   `al_off_market_not_future` CHECK. Both replacements compiled clean against the live DBs
+   (inside `BEGIN…ROLLBACK`, live functions untouched). No edge-function (TS) change needed.
 
 > **Minor follow-up:** the gov sidebar convergence PATCH still writes the capture's
 > `listing_source`/`listing_date` onto the converged row (pre-existing behavior, now applied to
