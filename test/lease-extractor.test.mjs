@@ -15,7 +15,7 @@ process.env.GOV_SUPABASE_KEY = 'k';
 import {
   buildLeaseExtractionPrompt, normalizeLeaseExtraction, planLeaseWrites,
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
-  extractLeaseDoc,
+  extractLeaseDoc, planExpenseFinancials,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -81,6 +81,53 @@ describe('lease extractor — domain write plan', () => {
     assert.equal(plan.leaseFields.leased_area, 50000);
     assert.equal(plan.leaseFields.expense_structure, 'NNN');  // lease_structure → expense_structure
     assert.ok(!('rent_psf' in plan.leaseFields));
+  });
+});
+
+describe('lease extractor — expense_schedule → property_financials (#64 leg, boundary-safe)', () => {
+  it('aggregates the expense schedule by fiscal year, maps categories, preserves line_items', () => {
+    const n = normalizeLeaseExtraction({
+      ...RAW,
+      expense_schedule: [
+        { year: 2022, category: 'CAM', amount: '$80,000' },
+        { year: 2022, category: 'Real Estate Taxes', amount: '$50,000' },
+        { year: 2022, category: 'Insurance', amount: '$10,000' },
+        { year: 2023, category: 'CAM', amount: '$82,000' },
+        { year: 1700, category: 'junk', amount: '$1' },   // out-of-range year dropped
+      ],
+    });
+    const rows = planExpenseFinancials(n);
+    assert.equal(rows.length, 2);
+    const y22 = rows.find(r => r.fiscal_year === 2022);
+    assert.equal(y22.cam, 80000);
+    assert.equal(y22.taxes, 50000);
+    assert.equal(y22.insurance, 10000);
+    assert.equal(y22.operating_expenses, 140000);          // sum of all categories
+    assert.equal(y22.line_items.source, 'folder_feed_lease');
+    assert.equal(y22.line_items.entries.length, 3);
+    assert.ok(rows.every(r => r.fiscal_year >= 2022));      // junk year dropped
+  });
+
+  it('empty / no expense schedule → no rows (the leg is a no-op)', () => {
+    assert.deepEqual(planExpenseFinancials(normalizeLeaseExtraction({ ...RAW, expense_schedule: [] })), []);
+    assert.deepEqual(planExpenseFinancials({}), []);
+  });
+
+  it('applyLeaseEnrichment writes the financial rows via the dep and counts them', async () => {
+    let finCall = null;
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }),
+      patchLease: async () => ({ ok: true }),
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      insertPropertyFinancials: async (a) => { finCall = a; return { ok: true, count: a.rows.length }; },
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1', edge_ok: true }),
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: n }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.financial_rows, 1);                    // one FY in the RAW schedule
+    assert.equal(finCall.rows[0].fiscal_year, 2022);
+    assert.equal(finCall.rows[0].cam, 80000);
   });
 });
 
