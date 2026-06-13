@@ -248,6 +248,8 @@ app.all('/api/intake-extract-drain', (req, res) => { req.query._route = 'intake-
 
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });
+// R15 Phase 2: backfill CRE property owners from master-sheet/BOV docs. GET=dry-run, POST=drain.
+app.all('/api/cre-owner-backfill', (req, res) => { req.query._route = 'cre-owner-backfill'; intakeHandler(req, res); });
 
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).

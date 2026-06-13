@@ -299,7 +299,7 @@ async function attachCreDoc({ crePropertyId, fileName, docType, sourceUrl }) {
 // source_system — the composite-person path mints the same way). The shared junk
 // / implausible-person / federal-anti-pattern guards inside ensureEntityLink
 // reject garbage; we surface that as ok:false so the caller leaves owner pending.
-async function ensureCreOwnerEntity(name, { workspaceId, actorId }) {
+export async function ensureCreOwnerEntity(name, { workspaceId, actorId } = {}) {
   const sourceType = looksLikePersonName(name) ? 'person' : 'true_owner';
   const res = await ensureEntityLink({
     workspaceId,
@@ -311,7 +311,7 @@ async function ensureCreOwnerEntity(name, { workspaceId, actorId }) {
   return res; // {ok:true, entityId} | {ok:false, skipped}
 }
 
-async function recordCreProvenance(entries, { workspaceId, actorId }) {
+export async function recordCreProvenance(entries, { workspaceId, actorId } = {}) {
   const tasks = [];
   for (const e of entries) {
     for (const [fieldName, value] of Object.entries(e.fields)) {
@@ -331,6 +331,31 @@ async function recordCreProvenance(entries, { workspaceId, actorId }) {
     }
   }
   await Promise.allSettled(tasks);
+}
+
+/**
+ * Set a CRE property's owner (Phase 2 backfill). Guarded on `owner_entity_id IS
+ * NULL` so it is idempotent and never clobbers an owner another tick already
+ * resolved — a second tick or re-run patches nothing (`patched:false`). On a
+ * real write it records field provenance (source='folder_feed_cre', the
+ * owner_entity_id field is already registered).
+ *
+ * @returns {Promise<{ok:boolean, patched:boolean}>}
+ */
+export async function setCrePropertyOwner(crePropertyId, ownerEntityId, { workspaceId, actorId } = {}) {
+  if (crePropertyId == null || !ownerEntityId) return { ok: false, patched: false };
+  const r = await opsQuery('PATCH',
+    `lcc_cre_properties?id=eq.${encodeURIComponent(crePropertyId)}&owner_entity_id=is.null`,
+    { owner_entity_id: ownerEntityId, updated_at: new Date().toISOString() },
+    { Prefer: 'return=representation' });
+  const patched = !!(r.ok && Array.isArray(r.data) && r.data.length);
+  if (patched) {
+    await recordCreProvenance(
+      [{ targetTable: 'public.lcc_cre_properties', recordPk: crePropertyId, fields: { owner_entity_id: ownerEntityId } }],
+      { workspaceId, actorId },
+    ).catch(() => {});
+  }
+  return { ok: !!r.ok, patched };
 }
 
 /**
