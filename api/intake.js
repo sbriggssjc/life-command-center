@@ -132,6 +132,10 @@ export default withErrorHandler(async function handler(req, res) {
       const { handlePropertyDocWriteback } = await import('./_handlers/property-doc-writeback.js');
       return handlePropertyDocWriteback(req, res);
     }
+    case 'cre-owner-backfill': {
+      const { handleCreOwnerBackfill } = await import('./_handlers/cre-owner-backfill.js');
+      return handleCreOwnerBackfill(req, res);
+    }
     case 'lease-extract': {
       const { handleLeaseExtract } = await import('./_handlers/lease-extractor.js');
       return handleLeaseExtract(req, res);
@@ -150,7 +154,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, sf-activity, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, sf-activity, feedback, accuracy'
       });
   }
 });
