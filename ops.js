@@ -2334,6 +2334,51 @@ function _pqMoney(v) {
   if (!isFinite(n) || n <= 0) return null;
   return '$' + Math.round(n).toLocaleString('en-US');
 }
+// R14 hybrid drill-down: the rolled-up trigger card (P1/P3/P5/P8) is one row per
+// owner; this expands the per-property detail via the lcc_trigger_band_properties
+// fan-out (the queue row stays one-per-owner). Toggles open/closed; loads once.
+async function pqTriggerDrill(entityId, band, domain, btn) {
+  var card = btn && btn.closest ? btn.closest('.q-item') : null;
+  var box = card ? card.querySelector('.pq-trigger-detail') : null;
+  if (!box) return;
+  if (box.dataset.loaded === '1') {
+    box.style.display = (box.style.display === 'none' ? '' : 'none');
+    return;
+  }
+  btn.disabled = true;
+  var _label = btn.textContent;
+  btn.textContent = 'Loading…';
+  var qs = '/api/priority-trigger-properties?entity_id=' + encodeURIComponent(entityId)
+    + '&band=' + encodeURIComponent(band)
+    + (domain ? '&domain=' + encodeURIComponent(domain) : '');
+  var res = await opsApi(qs);
+  btn.disabled = false;
+  btn.textContent = _label;
+  if (!res.ok) {
+    box.innerHTML = '<div class="q-item-meta">Could not load properties.</div>';
+    box.dataset.loaded = '1'; box.style.display = '';
+    return;
+  }
+  var props = (res.data && res.data.properties) || [];
+  var rows = props.map(function (p) {
+    var a = [p.address, p.city, p.state].filter(Boolean).join(', ');
+    var bits = [];
+    if (p.trigger_fact) bits.push(p.trigger_fact);
+    var rent = _pqMoney(p.annual_rent);
+    if (rent) bits.push(rent);
+    var dom = p.source_domain === 'government' ? 'gov' : p.source_domain === 'dialysis' ? 'dia' : (p.source_domain || '');
+    var open = (p.source_property_id != null && dom)
+      ? '<button class="q-action" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(p.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open →</button>'
+      : '';
+    return '<div class="pq-trigger-row">'
+      + '<span class="pq-trigger-addr">' + esc(a || ('Property ' + (p.source_property_id || ''))) + '</span>'
+      + (bits.length ? '<span class="pq-trigger-fact">' + esc(bits.join(' · ')) + '</span>' : '')
+      + open + '</div>';
+  }).join('');
+  box.innerHTML = rows || '<div class="q-item-meta">No properties.</div>';
+  box.dataset.loaded = '1';
+  box.style.display = '';
+}
 async function renderPriorityQueuePage(band) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
@@ -2369,7 +2414,12 @@ async function renderPriorityQueuePage(band) {
     // Self-propelling contract: elevate the single top item as 'do this first'.
     var _itemCls = 'q-item' + (_ix === 0 ? ' pq-hero' : '');
     var _heroFlag = _ix === 0 ? '<div class="pq-hero-flag">\u25B6 Do this first</div>' : '';
-    var isBuyerLane = String(it.priority_band || '').toUpperCase() === 'P-BUYER';
+    var _bandU = String(it.priority_band || '').toUpperCase();
+    var isBuyerLane = _bandU === 'P-BUYER';
+    // R14: the four property-trigger bands now arrive ONE row per owner with the
+    // band portfolio rolled up (count + rollup rent + top property fact), the
+    // same shape P-BUYER uses. Render the rollup, not a single property.
+    var isTriggerLane = !isBuyerLane && (_bandU === 'P1' || _bandU === 'P3' || _bandU === 'P5' || _bandU === 'P8') && it.trigger_property_count != null;
     var ctx = [];
     if (isBuyerLane) {
       // Parent rollup of the whole SPE portfolio (R5).
@@ -2378,6 +2428,13 @@ async function renderPriorityQueuePage(band) {
       var bmoney = _pqMoney(it.buyer_rollup_annual_rent);
       if (bmoney) ctx.push(bmoney + ' rent');
       ctx.push(it.buyer_sf_account_id ? 'SF account mapped' : 'SF mapping needed');
+    } else if (isTriggerLane) {
+      // R14 rollup card: "{count} propert(y|ies) in this band · $X total".
+      // Single-property owners read naturally ("1 property"), never "1 properties".
+      var _tc = Number(it.trigger_property_count) || 0;
+      ctx.push(_tc + (_tc === 1 ? ' property' : ' properties') + ' in this band');
+      var tmoney = _pqMoney(it.trigger_rollup_annual_rent);
+      if (tmoney) ctx.push(tmoney + ' total');
     } else {
       if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + (Number(it.total_property_count) === 1 ? ' property' : ' properties'));
       var money = _pqMoney(it.current_annual_rent_total);
@@ -2400,6 +2457,14 @@ async function renderPriorityQueuePage(band) {
       else ctx.push('Owner known — connect SF account / contact');
     }
     var addr = hasProp ? (it.source_property_address || '') + (it.source_property_city ? ', ' + it.source_property_city : '') + (it.source_property_state ? ', ' + it.source_property_state : '') : '';
+    // R14: on a rolled-up trigger card the representative property is the MOST
+    // urgent one — label it as "Top:" and fold in its fact (e.g. "built 1925").
+    if (isTriggerLane) {
+      var _tparts = [];
+      if (addr) _tparts.push(addr);
+      if (it.trigger_top_fact) _tparts.push(it.trigger_top_fact);
+      if (_tparts.length) addr = 'Top: ' + _tparts.join(' — ');
+    }
     // data-q-id keys the self-propelling row-advance (entity_id is the natural
     // PQ row key); reused by _opsAdvanceAfterComplete after open_opportunity.
     var _qid = it.entity_id == null ? '' : String(it.entity_id);
@@ -2452,7 +2517,14 @@ async function renderPriorityQueuePage(band) {
       + ((hasProp && _state !== 'resolve')
           ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(domShort) + '\', {property_id: ' + esc(String(it.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property \u2192</button>'
           : _ownerAction)
-      + '</div></div>';
+      // R14 hybrid: the per-property detail stays reachable on a drill-down that
+      // calls the fan-out function. Only when there's more than one to expand.
+      + ((isTriggerLane && Number(it.trigger_property_count) > 1 && _qid)
+          ? '<button class="q-action" onclick="pqTriggerDrill(' + jsStringArg(_qid) + ', ' + jsStringArg(it.priority_band || '') + ', ' + jsStringArg(domShort) + ', this)">View ' + Number(it.trigger_property_count) + ' properties \u2192</button>'
+          : '')
+      + '</div>'
+      + (isTriggerLane && Number(it.trigger_property_count) > 1 ? '<div class="pq-trigger-detail" style="display:none"></div>' : '')
+      + '</div>';
   });
   // Bulk "Open top N" action (R4-C §2): when a band (esp. P0.5) holds many rows
   // that all just need an opportunity opened, let the operator clear the top

@@ -125,6 +125,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'priority-queue':             return handlePriorityQueueList(req, res);
+    case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
@@ -428,6 +429,9 @@ async function handlePriorityBand(req, res) {
     // R11 Unit 2: coalesced rank value (portfolio rollup, else representative-
     // property rent) so the detail banner can show the same $ value the queue ranks on.
     'current_annual_rent_total', 'source_property_rent', 'rank_annual_rent',
+    // R14 trigger-band rollup so the detail banner can show the owner-level
+    // rollup (count + rollup rent + top property fact) on P1/P3/P5/P8.
+    'trigger_property_count', 'trigger_rollup_annual_rent', 'trigger_top_fact',
     // R6: ownership-resolution context so the detail Next-Step banner stays
     // consistent with the queue's P0.4 verdict (same state source).
     'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
@@ -504,6 +508,11 @@ async function handlePriorityBand(req, res) {
     resolve_reason: row.resolve_reason || null,
     resolve_true_owner_name: row.resolve_true_owner_name || null,
     resolve_is_connected: row.resolve_is_connected != null ? !!row.resolve_is_connected : null,
+    // R14 trigger-band rollup (P1/P3/P5/P8): owner-level count + rollup rent +
+    // the top property's fact (NULL on every other band).
+    trigger_property_count: row.trigger_property_count != null ? Number(row.trigger_property_count) : null,
+    trigger_rollup_annual_rent: row.trigger_rollup_annual_rent != null ? Number(row.trigger_rollup_annual_rent) : null,
+    trigger_top_fact: row.trigger_top_fact || null,
   });
 }
 
@@ -595,6 +604,10 @@ async function handlePriorityQueueList(req, res) {
     // R5 P-BUYER lane: parent rollup of the SPE portfolio (NULL on other bands).
     'buyer_spe_count', 'buyer_rollup_property_count', 'buyer_rollup_annual_rent',
     'buyer_last_acquisition_date', 'buyer_sf_account_id', 'buyer_needs_sf_mapping',
+    // R14 trigger-band rollup (P1/P3/P5/P8): one row per owner, the SPE-style
+    // portfolio rolled up (count + rollup rent) + the top property's fact. NULL
+    // on every other band.
+    'trigger_property_count', 'trigger_rollup_annual_rent', 'trigger_top_fact',
     // R6 P0.4 resolve band: ownership-resolution context.
     'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
   ].join(',');
@@ -667,6 +680,42 @@ async function handlePriorityQueueList(req, res) {
     .map(b => ({ band: b, n: countMap[b] }));
 
   return res.status(200).json({ counts, total, band: band || null, items });
+}
+
+// ============================================================================
+// PRIORITY QUEUE — trigger-band drill-down (R14, 2026-06-11)
+// GET /api/priority-trigger-properties?entity_id=<uuid>&band=<P1|P3|P5|P8>[&domain=]
+//   The hybrid card: the queue row is one-per-owner, but the per-property
+//   detail stays reachable. Lists the owner's properties in this trigger band
+//   (property_id, address, fact, rent), urgency-ordered — via the
+//   lcc_trigger_band_properties() fan-out (the P-BUYER cohort pattern).
+// ============================================================================
+async function handlePriorityTriggerProperties(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const entityId = req.query.entity_id ? String(req.query.entity_id) : null;
+  const band = req.query.band ? String(req.query.band) : null;
+  const domain = req.query.domain ? String(req.query.domain) : null;
+  if (!entityId || !band) {
+    return res.status(400).json({ error: 'Provide entity_id and band' });
+  }
+  if (!['P1', 'P3', 'P5', 'P8'].includes(band)) {
+    return res.status(400).json({ error: 'band must be one of P1/P3/P5/P8' });
+  }
+  // Accept the canonical short form (dia/gov); pass null to span domains.
+  const normDomain = domain === 'government' ? 'gov' : domain === 'dialysis' ? 'dia' : (domain || null);
+
+  const r = await opsQuery('POST', 'rpc/lcc_trigger_band_properties', {
+    p_entity_id: entityId, p_band: band, p_domain: normDomain,
+  });
+  if (!r.ok) {
+    console.warn('[priority-trigger-properties] rpc failed:', r.status, r.data);
+    return res.status(502).json({ error: 'list_failed', detail: r.data });
+  }
+  const rows = Array.isArray(r.data) ? r.data : [];
+  return res.status(200).json({ entity_id: entityId, band, count: rows.length, properties: rows });
 }
 
 // ============================================================================
