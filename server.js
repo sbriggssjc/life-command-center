@@ -217,6 +217,7 @@ app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHand
 app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.query.action = 'preassemble-nightly'; operationsHandler(req, res); });
 app.all('/api/context', (req, res) => { req.query._route = 'context'; operationsHandler(req, res); });
 app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
+app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 
