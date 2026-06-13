@@ -78,6 +78,24 @@ function str(v) {
   return s || null;
 }
 
+// True when two field values are the SAME for fill-blanks purposes. Numeric
+// compare ONLY when both sides are pure numbers (so 193330.00 vs 193329.48 is a
+// DISAGREEMENT, not a rounding match); date strings ('2021-06-01') and text
+// compare case-insensitively as strings (never numerically — '2021-06-01' must
+// not collapse to 2021). Used by the existing-lease writer to decide
+// fill-blank vs conflict; NEVER used to justify an overwrite.
+const PURE_NUMBER_RE = /^[\s$,%]*\d[\d.,$%\s]*$/;
+export function leaseValuesEqual(a, b) {
+  if (a == null || b == null) return a == b;     // both null → equal; one null → not
+  const sa = String(a).trim(), sb = String(b).trim();
+  if (sa.toLowerCase() === sb.toLowerCase()) return true;
+  if (PURE_NUMBER_RE.test(sa) && PURE_NUMBER_RE.test(sb)) {
+    const na = num(sa), nb = num(sb);
+    if (na !== null && nb !== null) return na === nb;
+  }
+  return false;
+}
+
 /**
  * The lease-specific AI extraction prompt. Asks for a STRICT JSON object — the
  * property identity (so the attach resolves), the factual lease fields, the TI
@@ -278,8 +296,10 @@ export async function resolveAttachFromExtraction(normalized, deps) {
  * @param {object} a  { domain, propertyId, leaseId?, normalized }
  * @param {object} deps {
  *   ensureLeaseRow({domain, propertyId, leaseId, fields}), // resolve-or-create → {ok, lease_id, created, reason?}
- *   mergeField({domain,table,recordPk,field,value}),  // → lcc_merge_field
- *   patchLease({domain, leaseId, propertyId, fields}), // domain leases UPDATE
+ *   mergeField({domain,table,recordPk,field,value}),  // → lcc_merge_field (records provenance)
+ *   getLeaseRow({domain, leaseId, propertyId, cols}),  // → live column values (true fill-blanks)
+ *   recordConflict({domain,table,recordPk,field,currentValue,attemptedValue}), // → Decision Center
+ *   patchLease({domain, leaseId, propertyId, fields}), // domain leases UPDATE (blanks only)
  *   insertTiRows({domain, propertyId, leaseId, rows}),
  *   insertPropertyFinancials({domain, propertyId, leaseId, rows}), // expense_schedule → property_financials (boundary: is_actual=false)
  *   ensureGuarantorEntity({domain, propertyId, leaseId, name}), // entity + guaranteed_by edge
@@ -290,7 +310,7 @@ export async function resolveAttachFromExtraction(normalized, deps) {
 export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null, normalized, doc = null }, deps) {
   const plan = planLeaseWrites(domain, normalized);
   const out = {
-    ok: true, fields_filled: 0, ti_rows: 0, financial_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
+    ok: true, fields_filled: 0, conflicts: 0, ti_rows: 0, financial_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
     document_id: null, lease_id: leaseId, lease_created: false, warnings: plan.warnings,
   };
 
@@ -324,15 +344,32 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
       }
     }
   } else {
-    // Existing lease — provenance-first per field, then the UPDATE (fill-blanks).
+    // Existing lease — TRUE fill-blanks against the LIVE column value (NOT the
+    // lcc_merge_field priority decision, which keys on provenance history and so
+    // returns 'write' for un-provenanced curated data → the clobber on lease 14365).
+    // Only a column that is currently NULL/empty is written. A populated column
+    // that DISAGREES with the doc is NEVER overwritten — it is routed to the
+    // Decision Center as a provenance conflict. (Stage B widen blocker fix.)
+    const cols = Object.keys(plan.leaseFields);
+    const existing = deps.getLeaseRow
+      ? await deps.getLeaseRow({ domain, leaseId: resolvedLeaseId, propertyId, cols }).catch(() => ({}))
+      : {};
     const fieldsToWrite = {};
     for (const [col, value] of Object.entries(plan.leaseFields)) {
-      const decision = deps.mergeField
-        ? await deps.mergeField({ domain, table: plan.table, recordPk: resolvedLeaseId ?? propertyId, field: col, value }).catch(() => ({ decision: 'write' }))
-        : { decision: 'write' };
-      if (!decision || decision.decision === 'write' || decision.decision === 'record_only' || decision.decision === undefined) {
+      const cur = existing ? existing[col] : undefined;
+      const isBlank = cur === null || cur === undefined || cur === '';
+      if (isBlank) {
         fieldsToWrite[col] = value;
-      }
+        if (deps.mergeField) {
+          await deps.mergeField({ domain, table: plan.table, recordPk: resolvedLeaseId, field: col, value }).catch(() => {});
+        }
+      } else if (!leaseValuesEqual(cur, value)) {
+        // Populated + disagreement → route to the Decision Center, never overwrite.
+        out.conflicts += 1;
+        if (deps.recordConflict) {
+          await deps.recordConflict({ domain, table: plan.table, recordPk: resolvedLeaseId, field: col, currentValue: cur, attemptedValue: value }).catch(() => {});
+        }
+      } // else equal → no-op
     }
     if (Object.keys(fieldsToWrite).length && deps.patchLease) {
       const r = await deps.patchLease({ domain, leaseId: resolvedLeaseId, propertyId, fields: fieldsToWrite }).catch(() => ({ ok: false }));
@@ -418,7 +455,10 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
   if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
   const text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
-  if (!text) throw new Error('no_extractable_text');
+  // Fix #2: a scanned / image-only PDF (executed copies have no text layer) has no
+  // extractable text. Return a graceful needs_ocr outcome instead of throwing (which
+  // 500'd the endpoint) — most executed leases will hit this until OCR lands.
+  if (!text) return { normalized: null, needs_ocr: true, source: 'needs_ocr' };
   const prompt = `${buildLeaseExtractionPrompt()}\n\n--- LEASE DOCUMENT TEXT ---\n${text}`;
   const result = await invokeExtractionAI({ prompt });
   if (!result.ok) throw new Error(`AI provider error ${result.status}`);
@@ -446,6 +486,28 @@ function activeLeaseQuery(domain, propertyId) {
 
 /** Real writer deps (lease resolve-or-create; provenance-first; guarantor entity + guaranteed_by edge). */
 export function buildRealLeaseDeps({ workspaceId, actorId }) {
+  // Resolve a guarantor/operator NAME to its canonical parent operator entity via
+  // lcc_operator_affiliate_patterns (relationship='operator'). e.g.
+  // "Renal Treatment Centers – Mid-Atlantic, Inc." / "Total Renal Care, Inc." →
+  // the canonical "Davita" entity. Most-specific (longest) pattern wins. Returns
+  // the parent entity id, or null when no operator pattern matches.
+  const resolveOperatorParent = async (name) => {
+    const nm = String(name || '').trim().toLowerCase();
+    if (!nm) return null;
+    const r = await opsQuery('GET',
+      'lcc_operator_affiliate_patterns?relationship=eq.operator&parent_entity_id=not.is.null' +
+      '&select=pattern_name,pattern_type,parent_entity_id').catch(() => ({ ok: false }));
+    if (!(r.ok && Array.isArray(r.data))) return null;
+    const matches = r.data.filter((p) => {
+      const pat = String(p.pattern_name || '').toLowerCase().replace(/%/g, '').trim();
+      if (!pat) return false;
+      if (p.pattern_type === 'exact') return nm === pat;
+      if (p.pattern_type === 'contains') return nm.includes(pat);
+      return nm.startsWith(pat);   // 'prefix' (and default)
+    }).sort((a, b) => String(b.pattern_name || '').length - String(a.pattern_name || '').length);
+    return matches[0]?.parent_entity_id || null;
+  };
+
   return {
     // Read-only: the active lease_id for a property, or null. Used by the gated
     // dry-run to report whether the real write would CREATE a lease.
@@ -498,6 +560,42 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       }).catch(() => null);
       const d = Array.isArray(r?.data) ? r.data[0] : r?.data;
       return { decision: d?.decision || 'write' };
+    },
+    // Read the LIVE lease row's current values for the columns the writer intends
+    // to fill — the true-fill-blanks check keys on the actual column, not on
+    // provenance history (the lease-14365 clobber root cause).
+    getLeaseRow: async ({ domain, leaseId, propertyId, cols }) => {
+      let lid = leaseId;
+      if (!lid) {
+        const g = await domainQuery(domain, 'GET', activeLeaseQuery(domain, propertyId)).catch(() => ({ ok: false }));
+        lid = g.ok && g.data?.[0]?.lease_id;
+      }
+      if (!lid) return {};
+      const sel = (Array.isArray(cols) && cols.length) ? cols.join(',') : '*';
+      const r = await domainQuery(domain, 'GET', `leases?lease_id=eq.${pgFilterVal(lid)}&select=${sel}&limit=1`).catch(() => ({ ok: false }));
+      return (r.ok && r.data?.[0]) ? r.data[0] : {};
+    },
+    // Route a populated-field disagreement to the Decision Center provenance_conflict
+    // lane — a field_provenance row with decision='conflict'. The folder_feed_lease
+    // leases rules are enforce_mode='warn' (migration 20260719123000), so
+    // v_field_provenance_actionable surfaces it. RECORD-ONLY: the curated value is
+    // never overwritten; this only logs the disagreement for human review.
+    recordConflict: async ({ domain, table, recordPk, field, currentValue, attemptedValue }) => {
+      const r = await opsQuery('POST', 'field_provenance', {
+        workspace_id: workspaceId || null,
+        target_database: DOMAIN_DB(domain),
+        target_table: `${DOMAIN_SCHEMA(domain)}.${table}`,
+        record_pk_value: String(recordPk),
+        field_name: field,
+        value: attemptedValue == null ? null : attemptedValue,
+        source: 'folder_feed_lease',
+        source_run_id: null,
+        confidence: 0.85,
+        recorded_by: actorId || null,
+        decision: 'conflict',
+        decision_reason: `lease doc disagrees with curated ${field}: current=${JSON.stringify(currentValue ?? null)}, attempted=${JSON.stringify(attemptedValue ?? null)} — fill-blanks writer did NOT overwrite`,
+      }, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+      return { ok: !!r.ok };
     },
     patchLease: async ({ domain, leaseId, propertyId, fields }) => {
       // The lease_id is normally resolved by ensureLeaseRow; fall back to the
@@ -587,18 +685,33 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       return { ok: count > 0, count, skipped };
     },
     ensureGuarantorEntity: async ({ domain, propertyId, name }) => {
-      // Mint the guarantor org entity (idempotent on the normalized name), then a
-      // guaranteed_by edge guarantor → the property's asset entity (cross-deal
-      // search; brain-hub entity completeness). Both endpoints are resolved/created
-      // BEFORE the edge write; a failure to write the edge is SURFACED as a warning
-      // (never swallowed), so the gate sees an incomplete graph rather than a silent
-      // no-op. (Stage B Unit 1 re-gate, 2026-06-13.)
-      const guar = await ensureEntityLink({
-        workspaceId, userId: actorId, sourceSystem: 'folder_feed_lease', sourceType: 'guarantor',
-        externalId: name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), domain: 'lcc',
-        seedFields: { display_name: name, entity_type: 'organization' }, metadata: { role: 'guarantor' },
-      }).catch(() => null);
-      const guarId = guar?.entity?.id || guar?.entityId || null;
+      // Resolve the guarantor to the CANONICAL operator entity, then a guaranteed_by
+      // edge guarantor → the property's asset entity (cross-deal search; brain-hub
+      // completeness). Both endpoints are resolved/created BEFORE the edge write; a
+      // failed edge is SURFACED as a warning (never swallowed). (Stage B widen.)
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      // Fix #3: resolve a known operator alias (Total Renal Care / Renal Treatment
+      // Centers / DVA → Davita) to the registered parent entity instead of minting a
+      // per-lease duplicate. On a hit, link the folder_feed_lease guarantor identity
+      // ONTO that canonical entity. On a miss, mint a clean org entity by its REAL
+      // name (seedFields.name — not display_name, which previously fell through to a
+      // "guarantor <slug>" junk name) deduped by canonical_name across domains.
+      let guar = null;
+      const parentId = await resolveOperatorParent(name).catch(() => null);
+      if (parentId) {
+        guar = await ensureEntityLink({
+          workspaceId, userId: actorId, entityId: parentId,
+          sourceSystem: 'folder_feed_lease', sourceType: 'guarantor', externalId: slug,
+          metadata: { role: 'guarantor', resolved_via: 'operator_affiliate' },
+        }).catch(() => null);
+      } else {
+        guar = await ensureEntityLink({
+          workspaceId, userId: actorId, sourceSystem: 'folder_feed_lease', sourceType: 'guarantor',
+          externalId: slug,
+          seedFields: { name, entity_type: 'organization' }, metadata: { role: 'guarantor' },
+        }).catch(() => null);
+      }
+      const guarId = guar?.entity?.id || guar?.entityId || parentId || null;
       if (!guarId) return { entity_id: null, asset_entity_id: null, edge_ok: false, warning: 'guarantor_entity_unresolved' };
 
       // Resolve-or-create the asset entity FIRST so the edge always has a target.
@@ -646,7 +759,12 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
  * boundary check and writes NOTHING.
  */
 export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, domain, propertyId, dryRun = true }, deps) {
-  const { normalized } = await runLeaseExtraction({ storageRef, mediaType, raw, fetchImpl: deps?.fetchImpl });
+  const ext = await runLeaseExtraction({ storageRef, mediaType, raw, fetchImpl: deps?.fetchImpl });
+  // Fix #2: a scanned / image-only PDF → graceful needs_ocr (ok:true, no 500).
+  if (ext.needs_ocr) {
+    return { ok: true, dry_run: dryRun, status: 'needs_ocr', needs_ocr: true, resolved: null, reason: 'needs_ocr' };
+  }
+  const { normalized } = ext;
 
   // Resolve the property from the in-file address unless the caller pinned one.
   let resolved = null;
@@ -720,7 +838,13 @@ export async function attachLeaseDoc(a, injected = {}) {
 
   let normalized;
   try {
-    ({ normalized } = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl }));
+    const ext = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl });
+    // Fix #2: scanned / image-only PDF → graceful needs_ocr (folder-feed records
+    // it skipped/needs_ocr, never an error/500).
+    if (ext.needs_ocr) {
+      return { ok: true, attached: false, needs_ocr: true, reason: 'needs_ocr', match_status: 'needs_ocr' };
+    }
+    ({ normalized } = ext);
   } catch (e) {
     return { ok: false, attached: false, reason: `extract_failed:${e?.message || 'err'}`, match_status: null };
   }
