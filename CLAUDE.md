@@ -2188,3 +2188,82 @@ SKIPS a non-OM lease per ingest policy — not enrich attach; OLD + `_working`
 never enqueued and their backlog rows flipped to skipped; GET dry-run reports
 ingest cursor counts without mutating). `node --check` clean; `ls api/*.js | wc
 -l`=12; full suite 699 pass / 0 fail / 6 skipped. Ships on the Railway redeploy.
+
+## R15 — generic CRE property registry (the "high-value middle", Phase 1, 2026-06-11)
+
+LCC is two deep verticals (dia = CMS, gov = GSA), but the PROPERTIES SharePoint
+tree is Briggs's WHOLE net-lease book — office (Vervent/Vistra), retail, bank
+(Santander), entertainment (Top Golf), MOB. ~84% of enrich docs are these other
+asset classes; they correctly PARKED (`skip_reason='out_of_domain_asset_class'`)
+because they had no home DB. R15 builds the **lightweight middle**: a generic CRE
+registry so the BD spine (entities → owner) covers these owners WITHOUT a third
+underwriting engine. **The value is the OWNER, not the underwriting** — no
+scoring / NOI / cap-rate columns, deliberately (no public-data equivalent exists
+for office/retail; these are relationship-tracked, not underwritten).
+
+### What shipped (Phase 1 = store + register-by-path + owner-entity + doc-attach)
+- **Store (LCC Opps, migration `20260718130000_lcc_r15_cre_registry.sql`,
+  additive):** `lcc_cre_properties` (id, normalized_address, address, city, state,
+  tenant_brand, `asset_class` text, `owner_entity_id` uuid→entities(id),
+  source_path, metadata) + `lcc_cre_property_documents` (doc-attach, mirrors
+  dia/gov property_documents). Natural-key dedupe = partial unique indexes on
+  `(normalized_address, upper(state))` and `(lower(tenant_brand), lower(city),
+  upper(state))` (the tenant+city fallback when no address yet). NO
+  scoring/financial columns by design. `field_source_priority` rows for
+  `source='folder_feed_cre'` (priority 50) registered so
+  `v_field_provenance_unranked` stays at 0. Drop the two tables → zero trace.
+- **The core (`api/_shared/cre-registry.js`):** `performCreRegister(args, deps)`
+  (deps-injected, unit-tested) → match-or-create the CRE property by natural key
+  (fill-blanks only), resolve the OWNER → entity, attach the doc, write
+  provenance. `registerCreProperty(args)` wires the production deps (opsQuery +
+  ensureEntityLink + lcc_merge_field). **Owner is minted via `ensureEntityLink`
+  with `domain='cre'`, deduped by canonical_name** (NO novel `external_identities`
+  source_system — the composite-person path mints the same way, so the deferred
+  R4-A source_system CHECK can't break it). The shared junk / implausible-person /
+  federal-anti-pattern guards (domain-agnostic) reject garbage → owner left
+  pending, **never invents an owner**. `entities.domain='cre'` has no CHECK
+  constraint (verified live) and `canonicalEntityDomain` preserves it.
+- **Two entry points, one core:**
+  - **OM/master-sheet enrich path** (`intake-promoter.js runEnrichOnlyPromotion`):
+    on an unmatched enrich intake whose `subject_hint.vertical` is NOT dia/gov →
+    `registerCreProperty(snapshot)` instead of churning the match_disambiguation
+    lane. The extraction snapshot supplies the OWNER (seller/owner name) — the BD
+    payoff. A genuine dia/gov miss (vertical cue present) still routes to
+    disambiguation. Returns `{cre_registered, cre_property_id, owner_entity_id,
+    owner_pending}`.
+  - **Light-attach path** (`folder-feed-attach.js attachRecognizedDoc`): the
+    out-of-domain (no dia/gov cue) branch registers by PATH ANCHOR (tenant/city,
+    no extraction → owner pending for the Phase-2 backfill) instead of parking.
+    PARKS only when the anchor is too weak (no tenant + no address) →
+    `registered:false`, the old honest out-of-domain park. `folder-feed.js`
+    records `status='attached'` + stamps `subject_hint.cre_property_id` /
+    `owner_pending`; new `report.files_cre_registered` counter.
+- **dia/gov pipelines UNCHANGED** — the CRE branch only fires on the
+  `out_of_domain_asset_class` set that parks today (gated on no dia/gov vertical
+  cue). **No scoring/underwriting.** ≤12 api/*.js (CRE branch lives in the
+  existing handler/_shared modules, no new api/*.js).
+
+### Queue/cadence (by construction, no per-band change)
+A bare `domain='cre'` owner entity has no `lcc_entity_portfolio_facts` edge, no
+`bd_opportunity`, no cadence — so it does NOT appear in the property-driven or
+relationship bands until it earns one (no crash, no rank-zero pollution — the
+queue is driven by portfolio/cadence/opp a bare CRE entity lacks). Surfacing CRE
+owners in relationship bands (a CRE portfolio sync) + the context-packet variant
++ owner backfill for path-registered rows are **Phase 2**.
+
+### Verified (headless 2026-06-11)
+`test/cre-registry.test.mjs` (core: with-owner → property+owner+doc; no-owner →
+registers + owner pending, never invents; junk owner → pending; weak anchor →
+registered:false PARK; existing property → fill-blanks, no dup) +
+`test/folder-feed-attach.test.mjs` updated (out-of-domain → CRE register, never a
+disambiguation; no-anchor → park). Migration validated against live LCC Opps in a
+rolled-back tx (FK + both natural keys + fsp insert OK; **0 residue**). `node
+--check` clean; `ls api/*.js | wc -l`=12; full suite 747 pass / 0 fail / 6
+skipped. DB migration is additive (apply anytime); JS ships on the Railway
+redeploy.
+
+### Phase 2 (follow-ups, not in this phase)
+Owner backfill for path-registered rows (re-extract the doc for the owner) ·
+a CRE portfolio sync so cross-asset-class owners (a Vervent/Top Golf owner that
+ALSO owns dia/gov) surface a unified portfolio in the queue · the CRE context
+packet variant for MCP/agents · asset-class refinement.

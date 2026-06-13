@@ -486,17 +486,25 @@ export async function handleFolderFeedTick(req, res) {
         else if (attachRes?.emitted_disambiguation) status = 'staged';
         else if (attachRes?.no_domain) status = 'unresolved_no_domain_property';
         else status = 'error';
-        // Record the parking reason on the subject_hint (no dedicated column) so
-        // the skipped row is self-explanatory in folder_feed_seen.
-        const seenHint = status === 'skipped'
-          ? { ...subjectHint, skip_reason: attachRes?.reason || 'portfolio_rollup_no_city' }
-          : subjectHint;
+        // Record the parking reason / CRE pointer on the subject_hint (no
+        // dedicated column) so the row is self-explanatory in folder_feed_seen.
+        let seenHint = subjectHint;
+        if (status === 'skipped') {
+          seenHint = { ...subjectHint, skip_reason: attachRes?.reason || 'portfolio_rollup_no_city' };
+        } else if (attachRes?.cre) {
+          // R15: out-of-domain doc registered into the CRE registry (status
+          // 'attached'). Stamp the CRE pointer + owner-pending flag for the backlog.
+          seenHint = { ...subjectHint, cre_property_id: attachRes.cre_property_id, owner_pending: !!attachRes.owner_pending };
+        }
         await upsertSeen({
           path: item.path, hash, item, status, mode,
           vertical: subjectHint.vertical, detectedType: cls.type,
           subjectHint: seenHint, intakeId: null,
         });
-        if (status === 'attached') { report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1; }
+        if (status === 'attached') {
+          report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1;
+          if (attachRes?.cre) { report.files_cre_registered = (report.files_cre_registered || 0) + 1; folderRep.cre = (folderRep.cre || 0) + 1; }
+        }
         else if (status === 'skipped') {
           report.files_skipped++; folderRep.skipped++;
           if (attachRes?.out_of_domain) { report.files_out_of_domain = (report.files_out_of_domain || 0) + 1; folderRep.out_of_domain = (folderRep.out_of_domain || 0) + 1; }

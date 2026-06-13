@@ -47,6 +47,7 @@ import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
+import { registerCreProperty } from '../_shared/cre-registry.js';
 import {
   LISTING_DOCUMENT_TYPES,
   normalizeDocType,
@@ -2173,6 +2174,45 @@ async function runEnrichOnlyPromotion(args) {
     && propertyId != null;
 
   if (!isMatched) {
+    // R15: out-of-domain asset class (office/retail/bank/... — no dia/gov vertical
+    // cue) → register into the generic CRE registry instead of churning the
+    // match_disambiguation lane with a doc that can never resolve to a dia/gov
+    // property. The extraction snapshot supplies the OWNER (the BD payoff). A
+    // genuine dia/gov miss (vertical cue present) still falls through to
+    // disambiguation below.
+    const sh = context?.seedData?.subject_hint || null;
+    const outOfDomain = sh && sh.vertical !== 'dia' && sh.vertical !== 'gov';
+    if (outOfDomain) {
+      const sourceUrl = context?.seedData?.source_path
+        || snapshot?.source_url || snapshot?.listing_url || null;
+      const seedDetected = context?.seedData?.detected_type;
+      const reg = await registerCreProperty({
+        subjectHint: sh,
+        snapshot,
+        fileName: artifact?.file_name || `enrich-${intakeId}.pdf`,
+        sourceUrl,
+        docType: (seedDetected && seedDetected !== 'unknown')
+          ? seedDetected
+          : (docType || snapshot?.document_type || null),
+        workspaceId: context?.workspaceId,
+        actorId:     context?.actorId,
+      }).catch(e => ({ ok: false, error: e?.message }));
+      if (reg?.registered) {
+        return {
+          ok: true,
+          mode: 'enrich',
+          enrich_ok: false,
+          cre_registered: true,
+          cre_property_id: reg.cre_property_id,
+          owner_entity_id: reg.owner_entity_id || null,
+          owner_pending: !!reg.owner_pending,
+          asset_class: reg.asset_class,
+          property_document: reg,
+        };
+      }
+      // Anchor too weak to register → fall through to the disambiguation path.
+    }
+
     // No confident existing match — route to the Decision Center instead of
     // creating anything. emitMatchDisambiguation is idempotent on the intake
     // (subject_ref='match_disambig:'+intakeId), so this is safe even when the

@@ -59,6 +59,10 @@ function installFetchMock({ diaRows = [], govRows = [] } = {}) {
     if (u.includes('/rest/v1/property_documents') && method === 'POST') {
       return jsonResponse([{ document_id: 9001 }], true, 201);
     }
+    // R15 CRE registry (LCC Opps): GET = not-yet-registered, POST = new row id.
+    if (u.includes('/rest/v1/lcc_cre_properties') && method === 'GET') return jsonResponse([]);
+    if (u.includes('/rest/v1/lcc_cre_properties') && method === 'POST') return jsonResponse([{ id: 5001 }], true, 201);
+    if (u.includes('/rest/v1/lcc_cre_property_documents') && method === 'POST') return jsonResponse([{ id: 6001 }], true, 201);
     // provenance merge_field + disambiguation decision RPCs (LCC Opps).
     if (u.includes('/rest/v1/rpc/lcc_merge_field')) return jsonResponse({ decision: 'write' });
     if (u.includes('/rest/v1/rpc/lcc_open_decision')) return jsonResponse({ id: 'dec-1' });
@@ -189,10 +193,11 @@ describe('folder-feed light attach (Slice 2d Unit 2)', () => {
     assert.equal(docWrites[0].body.document_type, 'master');
   });
 
-  it('out-of-domain asset class (no dia/gov cue, zero candidates) → out_of_domain, NO decision', async () => {
-    // Slice 2g: an office/retail/bank doc (vertical null) that resolves to no
-    // dia/gov property is PARKED honestly — never sent to disambiguation, and
-    // distinguished from a genuine in-domain miss (which keeps a dia/gov cue).
+  it('out-of-domain asset class (no dia/gov cue) → R15 CRE register, NO decision', async () => {
+    // R15: an office/retail/bank doc (vertical null) with a usable path anchor
+    // (tenant + City, ST) no longer parks — it registers into the generic CRE
+    // registry (owner left pending on the light-attach path, no extraction) and
+    // is never sent to the dia/gov disambiguation lane.
     installFetchMock({ diaRows: [], govRows: [] });
 
     const res = await attachRecognizedDoc({
@@ -203,13 +208,35 @@ describe('folder-feed light attach (Slice 2d Unit 2)', () => {
       pathRef: '/sites/x/PROPERTIES/V/Vervent/Vervent - Portland, OR (Master Sheet).xlsx',
     });
 
-    assert.equal(res.attached, false);
-    assert.equal(res.emitted_disambiguation, false);
-    assert.equal(res.out_of_domain, true);
-    assert.equal(res.no_domain, false);
-    assert.equal(res.reason, 'out_of_domain_asset_class');
+    assert.equal(res.attached, true);
+    assert.equal(res.cre, true);
+    assert.equal(res.cre_property_id, 5001);
+    assert.equal(res.owner_pending, true, 'no snapshot on the light path → owner pending');
+    assert.equal(res.match_status, 'cre_registered');
+    // Registered the property + attached the doc into the CRE registry…
+    assert.ok(calls.some(c => c.url.includes('/lcc_cre_properties') && c.method === 'POST'), 'CRE property created');
+    assert.ok(calls.some(c => c.url.includes('/lcc_cre_property_documents') && c.method === 'POST'), 'CRE doc attached');
+    // …and NEVER churned the dia/gov disambiguation lane.
     assert.ok(!calls.some(c => c.url.includes('/rpc/lcc_open_decision')), 'out-of-domain doc never churns the disambiguation lane');
-    assert.ok(!calls.some(c => c.url.includes('/property_documents')), 'out-of-domain doc attaches nothing');
+  });
+
+  it('out-of-domain doc with no usable anchor → PARK (registered:false)', async () => {
+    // No tenant, no address → too weak to register a CRE property; falls back to
+    // the honest out-of-domain park (never a guessed property).
+    installFetchMock({ diaRows: [], govRows: [] });
+
+    const res = await attachRecognizedDoc({
+      subjectHint: { tenant_brand: null, city: null, state: null, vertical: null },
+      fileName: 'mystery.pdf',
+      sourceUrl: '/sites/x/PROPERTIES/_misc/mystery.pdf',
+      docType: 'master',
+      pathRef: '/sites/x/PROPERTIES/_misc/mystery.pdf',
+    });
+
+    assert.equal(res.attached, false);
+    assert.equal(res.out_of_domain, true);
+    assert.match(res.reason, /out_of_domain_asset_class|cre_insufficient_anchor/);
+    assert.ok(!calls.some(c => c.url.includes('/lcc_cre_properties') && c.method === 'POST'), 'no guessed CRE property');
   });
 
   it('ambiguous (a hit in both domains via unknown vertical) → disambiguation, never a guess', async () => {
