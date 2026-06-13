@@ -4657,6 +4657,10 @@ async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
       `&is_actual=eq.true` +
       `&fiscal_year=in.(${saleYear},${saleYear - 1})` +
       `&noi=not.is.null` +
+      // BOUNDARY (Stage B widen): folder-feed lease-abstract expense rows are
+      // is_actual=false + noi=null (so already excluded above); the explicit
+      // source guard is belt-and-suspenders against a future row that sets them.
+      `&source=neq.folder_feed_lease` +
       `&select=${finPkCol},fiscal_year&order=fiscal_year.desc&limit=1`);
     if (finRes.ok && finRes.data?.[0]?.[finPkCol]) {
       return {
