@@ -32,6 +32,7 @@ import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
 import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup, isExcludedFolderPath } from '../_shared/folder-feed-classify.js';
 import { attachRecognizedDoc } from './folder-feed-attach.js';
+import { attachLeaseDoc } from './lease-extractor.js';
 
 // Default roots to walk when neither ?folders= nor FOLDER_FEED_ROOTS is set.
 // Full SERVER-RELATIVE paths in the canonical identity form (SINGLE apostrophes —
@@ -225,6 +226,17 @@ export async function handleFolderFeedTick(req, res) {
   // instead of re-listing the roots. Used by the lcc-folder-feed-crawl cron.
   const useFrontier = req.query.source === 'frontier';
 
+  // Stage B widen: route in-domain (vertical dia/gov) detected_type='lease' docs
+  // through the LEASE EXTRACTOR (extract → resolve → enrich + TI + expense
+  // financials + guaranteed_by edge) instead of the Stage-A light-attach. GATED:
+  // OFF unless FOLDER_FEED_LEASE_EXTRACT='true' (global) — but an explicit
+  // ?lease_extract=1|0 overrides for the capped first-drain on ONE folder before
+  // the global flag is flipped (the find_contacts_by_account rollout pattern).
+  // Out-of-universe (no dia/gov cue) leases keep the light-attach/CRE path.
+  const leaseExtract = req.query.lease_extract != null
+    ? /^(1|true|yes)$/i.test(String(req.query.lease_extract))
+    : process.env.FOLDER_FEED_LEASE_EXTRACT === 'true';
+
   // ---- Channel roots (Slice 2a) ----------------------------------------------
   // Two channels in one tick, each tagged with its mode:
   //   ingest — On Market roots: ?folders=a,b > FOLDER_FEED_ROOTS env > DEFAULT_ROOTS
@@ -311,6 +323,7 @@ export async function handleFolderFeedTick(req, res) {
     files_new: 0,
     files_staged: 0,
     files_attached: 0,     // Slice 2d Unit 2: non-OM recognized doc linked by path anchor
+    files_lease_enriched: 0, // Stage B widen: in-domain lease routed through the extractor (enriched)
     files_no_domain: 0,    // Stage A: recognized doc with a dia/gov cue but no property (captured, no decision)
     files_out_of_domain: 0,// Slice 2g: no dia/gov cue at all (office/retail/bank) — parked skipped, out of scope
     files_deferred: 0,     // OM-eligible but skipped this tick (max_stage cap) → 'seen'
@@ -452,17 +465,34 @@ export async function handleFolderFeedTick(req, res) {
 
       // ---- Non-OM recognized doc (enrich) → light attach by path anchor ----
       if (attachEligible) {
+        // Stage B widen: an IN-DOMAIN lease (dia/gov cue) goes through the lease
+        // EXTRACTOR (extract → resolve → enrich). Out-of-universe leases (no cue)
+        // stay on the light-attach/CRE path, so no AI extraction is wasted on the
+        // office/retail book that has no dia/gov home.
+        const routeLeaseToExtractor = leaseExtract && cls.type === 'lease'
+          && (subjectHint.vertical === 'dia' || subjectHint.vertical === 'gov');
         let attachRes;
         try {
-          attachRes = await attachRecognizedDoc({
-            subjectHint,
-            fileName:  item.name || item.path.split('/').pop() || 'document.pdf',
-            sourceUrl: item.path,
-            docType:   cls.type,
-            pathRef:   item.path,
-            workspaceId,
-            actorId:   user.id,
-          });
+          if (routeLeaseToExtractor) {
+            attachRes = await attachLeaseDoc({
+              storageRef: item.path,
+              fileName:   item.name || item.path.split('/').pop() || 'lease.pdf',
+              subjectHint,
+              pathRef:    item.path,
+              workspaceId,
+              actorId:    user.id,
+            });
+          } else {
+            attachRes = await attachRecognizedDoc({
+              subjectHint,
+              fileName:  item.name || item.path.split('/').pop() || 'document.pdf',
+              sourceUrl: item.path,
+              docType:   cls.type,
+              pathRef:   item.path,
+              workspaceId,
+              actorId:   user.id,
+            });
+          }
         } catch (err) {
           attachRes = { ok: false, attached: false, error: err?.message };
         }
@@ -504,6 +534,7 @@ export async function handleFolderFeedTick(req, res) {
         if (status === 'attached') {
           report.files_attached++; folderRep.attached = (folderRep.attached || 0) + 1;
           if (attachRes?.cre) { report.files_cre_registered = (report.files_cre_registered || 0) + 1; folderRep.cre = (folderRep.cre || 0) + 1; }
+          if (attachRes?.lease) { report.files_lease_enriched++; folderRep.lease_enriched = (folderRep.lease_enriched || 0) + 1; }
         }
         else if (status === 'skipped') {
           report.files_skipped++; folderRep.skipped++;

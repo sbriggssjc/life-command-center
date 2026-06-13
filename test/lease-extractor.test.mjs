@@ -15,7 +15,7 @@ process.env.GOV_SUPABASE_KEY = 'k';
 import {
   buildLeaseExtractionPrompt, normalizeLeaseExtraction, planLeaseWrites,
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
-  extractLeaseDoc, planExpenseFinancials,
+  extractLeaseDoc, planExpenseFinancials, attachLeaseDoc,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -305,6 +305,88 @@ describe('lease extractor — lease-less property (create the lease, never orpha
     assert.equal(calls.patch.leaseId, 70707);  // patched the resolved existing lease
     assert.ok(out.fields_filled > 0);
     assert.equal(out.guarantor_entity_id, 'g-existing');
+  });
+});
+
+describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enrich, never guess)', () => {
+  // Deps that resolve the in-file address (4601 Madison) to one dia property and
+  // succeed on every write. raw:RAW bypasses the AI.
+  const enrichDeps = () => ({
+    matchAgainstDomain: async (domain, address) =>
+      (domain === 'dialysis' && /4601 madison/i.test(address)) ? { property_id: 30441, confidence: 0.95, reason: 'canonical' } : null,
+    domainsFor: () => ['dialysis', 'government'],
+    ensureLeaseRow: async () => ({ ok: true, lease_id: 7001, created: false }),
+    mergeField: async () => ({ decision: 'write' }),
+    patchLease: async () => ({ ok: true }),
+    insertTiRows: async (x) => ({ ok: true, count: x.rows.length }),
+    insertPropertyFinancials: async (x) => ({ ok: true, count: x.rows.length }),
+    ensureGuarantorEntity: async () => ({ entity_id: 'g1', edge_ok: true }),
+    attachDoc: async () => ({ document_id: 9001 }),
+  });
+
+  it('in-file address resolves → enriches (lease+TI+financials), shaped like an attach', async () => {
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'lease.pdf', subjectHint: { vertical: 'dia' }, workspaceId: 'w', actorId: 'u' },
+      { deps: enrichDeps(), matchByPathAnchor: async () => null, emitMatchDisambiguation: async () => {} });
+    assert.equal(out.attached, true);
+    assert.equal(out.lease, true);
+    assert.equal(out.domain, 'dialysis');
+    assert.equal(out.property_id, 30441);
+    assert.equal(out.boundary_ok, true);
+    assert.ok(out.applied.financial_rows >= 1);   // the #64 expense leg ran
+    assert.equal(out.applied.guaranteed_by_edge, true);
+  });
+
+  it('in-file miss → PATH ANCHOR resolves the property', async () => {
+    const deps = { ...enrichDeps(), matchAgainstDomain: async () => null };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'lease.pdf', subjectHint: { vertical: 'gov', tenant_brand: 'X' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => ({ status: 'matched', domain: 'government', property_id: 555, reason: 'tenant_city' }),
+        emitMatchDisambiguation: async () => {} });
+    assert.equal(out.attached, true);
+    assert.equal(out.domain, 'government');
+    assert.equal(out.property_id, 555);
+  });
+
+  it('ambiguous (≥2 in-domain near-misses) → match_disambiguation, never a guess', async () => {
+    let emitted = false;
+    const deps = { ...enrichDeps(), matchAgainstDomain: async () => null };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'lease.pdf', subjectHint: { vertical: 'gov', tenant_brand: 'X' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => ({ status: 'review_required', candidates: [{ property_id: 1 }, { property_id: 2 }] }),
+        emitMatchDisambiguation: async () => { emitted = true; } });
+    assert.equal(out.attached, false);
+    assert.equal(out.emitted_disambiguation, true);
+    assert.equal(out.match_status, 'review_required');
+    assert.equal(emitted, true);
+  });
+
+  it('no in-domain property → unresolved_no_domain (terminal, never a create/guess)', async () => {
+    const deps = { ...enrichDeps(), matchAgainstDomain: async () => null };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'lease.pdf', subjectHint: { vertical: 'gov' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => ({ status: 'unmatched' }), emitMatchDisambiguation: async () => {} });
+    assert.equal(out.attached, false);
+    assert.equal(out.no_domain, true);
+  });
+
+  it('dry-run previews the plan + boundary, writes NOTHING', async () => {
+    const calls = { writes: 0 };
+    const deps = { ...enrichDeps(),
+      patchLease: async () => { calls.writes++; return { ok: true }; },
+      insertTiRows: async () => { calls.writes++; return { ok: true, count: 1 }; },
+      insertPropertyFinancials: async () => { calls.writes++; return { ok: true, count: 1 }; },
+      ensureGuarantorEntity: async () => { calls.writes++; return { entity_id: 'g' }; },
+      ensureLeaseRow: async () => { calls.writes++; return { ok: true, lease_id: 1, created: false }; },
+    };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'lease.pdf', subjectHint: { vertical: 'dia' }, dryRun: true, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => null, emitMatchDisambiguation: async () => {} });
+    assert.equal(out.dry_run, true);
+    assert.equal(out.boundary_ok, true);
+    assert.equal(out.preview.guarantor, 'Total Renal Care, Inc.');
+    assert.ok(out.preview.financial_years >= 1);
+    assert.equal(calls.writes, 0, 'dry-run wrote nothing');
   });
 });
 

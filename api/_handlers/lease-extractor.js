@@ -27,7 +27,7 @@ import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
-import { matchAgainstDomain } from './intake-matcher.js';
+import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { authenticate } from '../_shared/auth.js';
@@ -695,6 +695,86 @@ export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, do
     doc: fileName ? { fileName, sourceUrl: storageRef } : null,
   }, deps);
   return { ok: applied.ok, dry_run: false, resolved, applied, boundary_ok: reported_targets.length === 0 };
+}
+
+/**
+ * Folder-feed channel entry: extract a lease doc → resolve the property (in-file
+ * address FIRST, then the path anchor) → enrich it (real) or preview (dry). This
+ * REPLACES the Stage-A light-attach for in-domain (`vertical` dia/gov) lease docs.
+ *
+ * Returns the SAME result shape as `attachRecognizedDoc` so the folder-feed
+ * worker's status mapping is shared: `{attached}` → 'attached',
+ * `{emitted_disambiguation}` → 'staged', `{no_domain}` →
+ * 'unresolved_no_domain_property'. Out-of-universe never guesses — it routes to
+ * the match_disambiguation lane (≥2 in-domain near-misses) or records unresolved.
+ *
+ * @param {object} a { storageRef, fileName, subjectHint, pathRef?, mediaType?, dryRun?, workspaceId, actorId }
+ * @param {object} [injected] { deps?, matchByPathAnchor?, emitMatchDisambiguation? } — tests inject; prod wires live
+ */
+export async function attachLeaseDoc(a, injected = {}) {
+  const { storageRef, fileName, subjectHint, mediaType, workspaceId, actorId, dryRun = false } = a;
+  const pathRef = a.pathRef || storageRef || fileName || null;
+  const deps = injected.deps || buildRealLeaseDeps({ workspaceId, actorId });
+  const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
+  const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
+
+  let normalized;
+  try {
+    ({ normalized } = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl }));
+  } catch (e) {
+    return { ok: false, attached: false, reason: `extract_failed:${e?.message || 'err'}`, match_status: null };
+  }
+
+  // Resolve: the in-file street address first (the attach-resolver), then fall
+  // back to the path anchor (tenant/City, ST) when the cover page omitted it.
+  let resolved = await resolveAttachFromExtraction(normalized, deps);
+  if (resolved.status !== 'matched') {
+    const m = await matchPath(subjectHint).catch(() => null);
+    if (m && m.status === 'matched' && m.property_id != null && (m.domain === 'government' || m.domain === 'dialysis')) {
+      resolved = { status: 'matched', domain: m.domain, property_id: m.property_id, reason: `path_anchor_${m.reason || 'match'}` };
+    } else if (m && m.status === 'review_required') {
+      resolved = { status: 'review_required', candidates: Array.isArray(m.candidates) ? m.candidates : [], reason: 'path_anchor_ambiguous' };
+    }
+  }
+
+  if (resolved.status === 'matched') {
+    const plan = planLeaseWrites(resolved.domain, normalized);
+    const reported_targets = Object.keys(plan.leaseFields).filter(isReportedField);
+    if (dryRun) {
+      return {
+        ok: true, attached: false, dry_run: true, domain: resolved.domain, property_id: resolved.property_id,
+        preview: {
+          lease_fields: plan.leaseFields, guarantor: plan.guarantor, ti_rows: plan.tiRows.length,
+          expense_rows: normalized.expense_schedule.length, financial_years: planExpenseFinancials(normalized).length,
+        },
+        boundary_ok: reported_targets.length === 0, reported_targets, match_status: 'matched',
+      };
+    }
+    const applied = await applyLeaseEnrichment({
+      domain: resolved.domain, propertyId: resolved.property_id, normalized,
+      doc: fileName ? { fileName, sourceUrl: storageRef } : null,
+    }, deps);
+    return {
+      ok: !!applied.ok, attached: !!applied.ok, lease: true,
+      domain: resolved.domain, property_id: resolved.property_id, applied,
+      boundary_ok: reported_targets.length === 0, match_status: 'matched',
+    };
+  }
+
+  if (resolved.status === 'review_required') {
+    let emitted = false;
+    try {
+      await emitDisambig(null, subjectHint?.tenant_brand || null, subjectHint?.tenant_brand || null,
+        Array.isArray(resolved.candidates) ? resolved.candidates : [],
+        { subjectRef: 'folder_feed_lease:' + pathRef, workspaceId,
+          context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: 'lease' } });
+      emitted = true;
+    } catch (err) { console.warn('[attachLeaseDoc] disambiguation emit failed (non-fatal):', err?.message); }
+    return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
+  }
+
+  // Unmatched — a genuine in-domain miss: captured + tenant-searchable, never a guess.
+  return { ok: false, attached: false, no_domain: true, reason: resolved.reason || 'no_domain_property', match_status: resolved.status || null };
 }
 
 /**
