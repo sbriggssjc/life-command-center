@@ -146,6 +146,34 @@ describe('lease extractor — writer (provenance-first, guarantor entity, TI)', 
     assert.equal(calls.patch.fields.rent_per_sf, 25);              // dia column mapping reached the writer
   });
 
+  it('reports the guaranteed_by edge outcome (edge_ok=true → no warning)', async () => {
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }),
+      patchLease: async () => ({ ok: true }),
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1', asset_entity_id: 'a1', edge_ok: true }),
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: n }, deps);
+    assert.equal(out.guarantor_entity_id, 'g1');
+    assert.equal(out.guaranteed_by_edge, true);
+    assert.ok(!out.warnings.some(w => /edge/.test(w)));
+  });
+
+  it('surfaces a warning (never silently drops) when the guaranteed_by edge cannot be written', async () => {
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }),
+      patchLease: async () => ({ ok: true }),
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1', asset_entity_id: 'a1', edge_ok: false, warning: 'guaranteed_by_edge_write_failed:400' }),
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: n }, deps);
+    assert.equal(out.guarantor_entity_id, 'g1');           // entity still minted
+    assert.equal(out.guaranteed_by_edge, false);           // but the graph edge is incomplete
+    assert.ok(out.warnings.some(w => /guaranteed_by_edge_write_failed/.test(w)));
+  });
+
   it('a merge_field skip decision drops that one field, keeps the rest', async () => {
     const deps = {
       mergeField: async (a) => ({ decision: a.field === 'annual_rent' ? 'skip' : 'write' }),
