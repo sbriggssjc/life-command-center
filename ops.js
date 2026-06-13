@@ -2445,7 +2445,19 @@ async function renderPriorityQueuePage(band) {
         // fall back to the subject/representative property's rent, labeled so it
         // isn't read as portfolio rent.
         var smoney = _pqMoney(it.source_property_rent);
-        if (smoney) ctx.push(smoney + ' rent (subject property)');
+        if (smoney) {
+          ctx.push(smoney + ' rent (subject property)');
+        } else {
+          // R17: connect bands (P0.4 / P-CONTACT) with no portfolio edge and no
+          // subject property — fall back to the value of property the owner
+          // CONTROLS via owns/purchases/leases edges (what rank_annual_rent now
+          // ranks on), so a high-value owner reads as high-value, not blank.
+          var cmoney = _pqMoney(it.connected_property_value);
+          if (cmoney) {
+            var ccount = Number(it.connected_property_count) || 0;
+            ctx.push(cmoney + ' rent (' + ccount + (ccount === 1 ? ' connected property' : ' connected properties') + ')');
+          }
+        }
       }
       if (it.is_cross_vertical) ctx.push('cross-vertical');
     }

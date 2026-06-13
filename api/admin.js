@@ -435,6 +435,9 @@ async function handlePriorityBand(req, res) {
     // R6: ownership-resolution context so the detail Next-Step banner stays
     // consistent with the queue's P0.4 verdict (same state source).
     'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
+    // R17: connect-band fallback value (P0.4 / P-CONTACT) — folded into
+    // rank_annual_rent; surfaced here so the detail banner can show it.
+    'connected_property_value', 'connected_property_count',
   ].join(',');
 
   let path;
@@ -610,6 +613,11 @@ async function handlePriorityQueueList(req, res) {
     'trigger_property_count', 'trigger_rollup_annual_rent', 'trigger_top_fact',
     // R6 P0.4 resolve band: ownership-resolution context.
     'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
+    // R17: connect-band fallback value (P0.4 / P-CONTACT) — the SUM of property
+    // the owner controls via owns/purchases/leases edges. rank_annual_rent
+    // already coalesces this in (after the representative property), so ordering
+    // needs no change; these columns let the card show "$X across N properties".
+    'connected_property_value', 'connected_property_count',
   ].join(',');
 
   // Items page: most-urgent band first, then most-overdue within band, then
