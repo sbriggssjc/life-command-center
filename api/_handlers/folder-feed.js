@@ -511,6 +511,7 @@ export async function handleFolderFeedTick(req, res) {
         // distinguished from a genuine in-domain miss in the backlog.
         let status;
         if (attachRes?.attached) status = 'attached';
+        else if (attachRes?.needs_ocr) status = 'skipped';   // scanned PDF — no text layer (Fix #2)
         else if (attachRes?.parked) status = 'skipped';
         else if (attachRes?.out_of_domain) status = 'skipped';
         else if (attachRes?.emitted_disambiguation) status = 'staged';
@@ -539,6 +540,7 @@ export async function handleFolderFeedTick(req, res) {
         else if (status === 'skipped') {
           report.files_skipped++; folderRep.skipped++;
           if (attachRes?.out_of_domain) { report.files_out_of_domain = (report.files_out_of_domain || 0) + 1; folderRep.out_of_domain = (folderRep.out_of_domain || 0) + 1; }
+          if (attachRes?.needs_ocr) { report.files_needs_ocr = (report.files_needs_ocr || 0) + 1; folderRep.needs_ocr = (folderRep.needs_ocr || 0) + 1; }
         }
         else if (status === 'staged') { report.files_unresolved++; folderRep.staged++; }
         else if (status === 'unresolved_no_domain_property') { report.files_no_domain = (report.files_no_domain || 0) + 1; folderRep.no_domain = (folderRep.no_domain || 0) + 1; }
