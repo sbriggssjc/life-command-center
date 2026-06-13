@@ -15,6 +15,10 @@ const {
   looksLikeOwnerValue,
   classifyOwnerDoc,
   pickOwnerBearingDoc,
+  orderOwnerBearingDocs,
+  aiOwnerFromText,
+  debugLabelsForDoc,
+  dumpLoadedWorkbookCells,
 } = await import('../api/_shared/cre-owner-extract.js');
 
 // Build an xlsx buffer from a sparse {[ "r,c" ]: value} cell map (1-indexed).
@@ -102,6 +106,26 @@ describe('scanLoadedWorkbookForOwner (label scan)', () => {
     assert.equal(hit.name, 'Acme Real Estate Partners LP');
   });
 
+  it('skips a BLANK gap to the right (Label | (empty) | Value layout)', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    ws.getRow(2).getCell(1).value = 'True Owner';
+    // col 2 empty (merged-cell / formatting gap) → value lives at col 3
+    ws.getRow(2).getCell(3).value = 'Gap Owner Holdings LLC';
+    const hit = scanLoadedWorkbookForOwner(wb);
+    assert.equal(hit.name, 'Gap Owner Holdings LLC');
+  });
+
+  it('does NOT jump PAST a populated non-owner cell to the right', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    ws.getRow(2).getCell(1).value = 'Owner';
+    ws.getRow(2).getCell(2).value = 1250000;                 // first non-empty is numeric → stop here
+    ws.getRow(2).getCell(3).value = 'Not The Owner Co LLC';  // must NOT be grabbed
+    const hit = scanLoadedWorkbookForOwner(wb);
+    assert.equal(hit, null);
+  });
+
   it('prefers True Owner over Recorded Owner / Seller when several are present', async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('M');
@@ -165,5 +189,70 @@ describe('extractCreOwner (dispatch)', () => {
     const r = await extractCreOwner({ buffer: Buffer.alloc(0), fileName: 'x.xlsx' });
     assert.equal(r.name, null);
     assert.equal(r.method, 'no_bytes');
+  });
+});
+
+// blocker 2 — the owner prompt distinguishes owner from tenant.
+describe('aiOwnerFromText (owner-vs-tenant)', () => {
+  it('passes the tenant brand into the prompt as a NEGATIVE signal', async () => {
+    let captured = '';
+    const invokeAI = async ({ prompt }) => { captured = prompt; return { ok: true, data: { response: '{"owner_name":"Vervent Holdings LLC"}' } }; };
+    const name = await aiOwnerFromText('… owner is Vervent Holdings LLC …', { tenantBrand: 'HUB Group Trucking', invokeAI });
+    assert.equal(name, 'Vervent Holdings LLC');
+    assert.match(captured, /HUB Group Trucking/, 'names the tenant brand to exclude');
+    assert.match(captured, /TENANT/, 'instructs the model to exclude the tenant/occupant');
+    assert.match(captured, /SELLER|LANDLORD|fee owner/i, 'asks for the owner/seller/landlord');
+  });
+
+  it('returns null when the model identifies only a tenant (never guesses an owner)', async () => {
+    const invokeAI = async () => ({ ok: true, data: { response: '{"owner_name": null}' } });
+    const name = await aiOwnerFromText('HUB Group Trucking occupies the building (tenant).', { tenantBrand: 'HUB Group Trucking', invokeAI });
+    assert.equal(name, null);
+  });
+
+  it('returns null on AI failure', async () => {
+    const invokeAI = async () => ({ ok: false });
+    assert.equal(await aiOwnerFromText('text', { invokeAI }), null);
+  });
+});
+
+// blocker 3 — the label-scan diagnostic mode returns the cell labels.
+describe('debugLabelsForDoc / dumpLoadedWorkbookCells', () => {
+  it('dumps non-empty cells, flags owner labels, and returns the scan verdict', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Master');
+    ws.getRow(1).getCell(1).value = 'Tenant';
+    ws.getRow(1).getCell(2).value = 'Top Golf';
+    ws.getRow(2).getCell(1).value = 'True Owner';
+    ws.getRow(2).getCell(2).value = 'Topgolf RE Owner LLC';
+    const cells = dumpLoadedWorkbookCells(wb);
+    assert.ok(cells.length >= 4, 'returns every non-empty cell');
+    const ownerLabel = cells.find((c) => c.text === 'True Owner');
+    assert.equal(ownerLabel.is_owner_label, true);
+    assert.equal(cells.find((c) => c.text === 'Tenant').is_owner_label, false);
+
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    const dump = await debugLabelsForDoc({ buffer: buf, fileName: 'Top Golf (Master Sheet).xlsx' });
+    assert.equal(dump.kind, 'xlsx');
+    assert.ok(dump.owner_labels.some((c) => c.text === 'True Owner'), 'surfaces the owner label');
+    assert.equal(dump.scan.name, 'Topgolf RE Owner LLC');
+  });
+
+  it('is a no-op for a non-xlsx doc', async () => {
+    const dump = await debugLabelsForDoc({ buffer: Buffer.from('%PDF'), fileName: 'BOV.pdf' });
+    assert.equal(dump.note, 'not_xlsx');
+    assert.deepEqual(dump.cells, []);
+  });
+});
+
+describe('orderOwnerBearingDocs', () => {
+  it('orders master > comp > bov > om, dropping docs with no source_url', () => {
+    const ordered = orderOwnerBearingDocs([
+      { document_type: 'om', source_url: '/om' },
+      { document_type: 'master', source_url: '/m' },
+      { document_type: 'bov', source_url: '/b' },
+      { document_type: 'lease' /* no source_url */ },
+    ]);
+    assert.deepEqual(ordered.map((d) => d.document_type), ['master', 'bov', 'om']);
   });
 });

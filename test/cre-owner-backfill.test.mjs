@@ -84,4 +84,61 @@ describe('backfillOneProperty', () => {
     const r = await backfillOneProperty(PROP, d);
     assert.equal(r.status, 'already_set');
   });
+
+  it('blocker 3 — master has no owner → falls through to the OM/BOV, which does', async () => {
+    const reads = [];
+    const d = deps({
+      fetchBytes: async (url) => { reads.push(url); return { ok: true, buffer: Buffer.from('x') }; },
+      // master (read first) yields no owner; the om yields one.
+      extractOwner: async ({ fileName }) =>
+        /master/i.test(String(fileName || '')) || reads.length === 1
+          ? { name: null, method: 'master_sheet_label_scan' }
+          : { name: 'Office Owner LP', method: 'pdf_ai_fallback' },
+    });
+    const prop = {
+      id: 5,
+      tenant_brand: 'Vervent',
+      docs: [
+        { document_type: 'master', source_url: '/m.xlsx', file_name: 'Master.xlsx' },
+        { document_type: 'om', source_url: '/om.pdf', file_name: 'OM.pdf' },
+      ],
+    };
+    const r = await backfillOneProperty(prop, d);
+    assert.equal(r.status, 'owner_set');
+    assert.equal(r.owner_name, 'Office Owner LP');
+    assert.equal(reads.length, 2, 'tried the master first, then the om');
+  });
+
+  it('blocker 3 — every doc read but no owner → marks the property exhausted', async () => {
+    let marked = null;
+    const d = deps({
+      extractOwner: async () => ({ name: null, method: 'master_sheet_label_scan' }),
+      markExhausted: async (id, meta, info) => { marked = { id, meta, info }; return { ok: true }; },
+    });
+    const prop = { id: 7, metadata: { x: 1 }, docs: [{ document_type: 'master', source_url: '/m.xlsx', file_name: 'M.xlsx' }] };
+    const r = await backfillOneProperty(prop, d);
+    assert.equal(r.status, 'no_owner_found');
+    assert.equal(marked.id, 7);
+    assert.equal(marked.info.reason, 'no_owner_found');
+  });
+
+  it('blocker 3 — a pure fetch failure is transient: NOT marked exhausted', async () => {
+    let marked = false;
+    const d = deps({
+      fetchBytes: async () => ({ ok: false, detail: 'down' }),
+      markExhausted: async () => { marked = true; return { ok: true }; },
+    });
+    const prop = { id: 8, docs: [{ document_type: 'master', source_url: '/m.xlsx', file_name: 'M.xlsx' }] };
+    const r = await backfillOneProperty(prop, d);
+    assert.equal(r.status, 'fetch_failed');
+    assert.equal(marked, false, 'transient fetch failure retries next tick');
+  });
+
+  it('blocker 1 — surfaces reuse on the result when the owner was reused', async () => {
+    const d = deps({ ensureOwner: async () => ({ ok: true, entityId: 'dia-1', reused: true, reused_domain: 'dia' }) });
+    const r = await backfillOneProperty(PROP, d);
+    assert.equal(r.status, 'owner_set');
+    assert.equal(r.reused, true);
+    assert.equal(r.reused_domain, 'dia');
+  });
 });

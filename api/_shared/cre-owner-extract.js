@@ -101,11 +101,31 @@ function isNumericOrDate(cell) {
   return false;
 }
 
+// Adjacent value candidates for a label at (r, c): the FIRST non-empty cell to
+// the right within a small window, then the FIRST non-empty cell below within a
+// small window. Skipping intervening BLANK cells handles "Label | (merged/empty
+// gap) | Value" layouts common in formatted master sheets — but stopping at the
+// first non-empty cell means we never jump PAST a populated (non-owner) column,
+// so widening stays conservative. (R15 Phase 2b, blocker 3 — robustness.)
+function adjacentValueCandidates(ws, r, c, { rightWindow = 4, downWindow = 2 } = {}) {
+  const out = [];
+  const row = ws.getRow(r);
+  for (let dc = 1; dc <= rightWindow; dc++) {
+    const cell = row.getCell(c + dc);
+    if (cellText(cell).trim()) { out.push(cell); break; }   // stop at first non-empty
+  }
+  for (let dr = 1; dr <= downWindow; dr++) {
+    const cell = ws.getRow(r + dr).getCell(c);
+    if (cellText(cell).trim()) { out.push(cell); break; }
+  }
+  return out;
+}
+
 /**
  * Scan an already-loaded ExcelJS workbook for the best owner value. Pure (no
  * I/O) so it unit-tests directly. Walks every sheet (bounded), finds labelled
- * cells, and takes the adjacent value (right cell first, then the cell below).
- * Returns the highest-priority hit, or null.
+ * cells, and takes the adjacent value (first non-empty cell to the right, then
+ * the first non-empty cell below). Returns the highest-priority hit, or null.
  *
  * @returns {{name:string, label:string}|null}
  */
@@ -120,8 +140,7 @@ export function scanLoadedWorkbookForOwner(workbook, { maxRows = 400, maxCols = 
         const labelCell = row.getCell(c);
         const rank = ownerLabelRank(cellText(labelCell));
         if (!rank) continue;
-        // Adjacent value: right cell first, then the cell directly below.
-        const adjacents = [row.getCell(c + 1), ws.getRow(r + 1).getCell(c)];
+        const adjacents = adjacentValueCandidates(ws, r, c);
         for (const adj of adjacents) {
           if (isNumericOrDate(adj)) continue;
           const val = cellText(adj).trim();
@@ -144,7 +163,9 @@ async function defaultLoadWorkbook(buffer) {
 
 // PDF owner fallback: extract text with pdf-parse, then ask the AI for the
 // owner/seller name ONLY (not a full deal extraction). Returns a name or null.
-async function defaultPdfOwner(buffer) {
+// `tenantBrand` (the folder's tenant/occupant brand) is passed through as a
+// NEGATIVE signal — the tenant is NOT the owner (R15 Phase 2b, blocker 2).
+async function defaultPdfOwner(buffer, tenantBrand) {
   let text = '';
   try {
     const pdfParse = nodeRequire('pdf-parse');
@@ -154,23 +175,39 @@ async function defaultPdfOwner(buffer) {
     return null;
   }
   if (!text) return null;
-  return aiOwnerFromText(text);
+  return aiOwnerFromText(text, { tenantBrand });
 }
 
 // Focused owner-only AI prompt over already-extracted document text. Returns a
 // trimmed name string or null. Caps the text — the owner/seller almost always
 // appears on the cover / disclosure pages.
-export async function aiOwnerFromText(text) {
+//
+// blocker 2 (2026-06-13): the prompt now draws a hard OWNER-vs-TENANT line. CRE
+// docs are dominated by the building's tenant brand (the folder is named after
+// it — e.g. "HUB Group Trucking"), and the loose prompt pulled the tenant as the
+// owner. The owner is the fee owner / landlord / disposition SELLER (usually an
+// LLC/LP/REIT/trust), NEVER the operating company that leases the space. When
+// `tenantBrand` is known it is named explicitly as a thing to exclude. `invokeAI`
+// is injected for tests.
+export async function aiOwnerFromText(text, { tenantBrand = null, invokeAI = invokeExtractionAI } = {}) {
   const body = String(text || '').slice(0, 60_000);
   if (!body.trim()) return null;
-  const prompt = `From the commercial real estate document text below, identify the property's OWNER (the entity or person that owns/holds title — labelled Owner, True Owner, Recorded Owner, Landlord, or Seller). Return ONLY a JSON object, no markdown:
+  const tenantLine = tenantBrand && String(tenantBrand).trim()
+    ? `\n- "${String(tenantBrand).trim()}" is this building's TENANT/occupant (the folder is named after the tenant brand). The tenant is NOT the owner — do NOT return it, its parent, or any operating-company name.`
+    : '';
+  const prompt = `From the commercial real estate document text below, identify the property's OWNER — the entity/person that holds or is selling TITLE: the fee owner, landlord, or disposition SELLER (usually an LLC, LP, REIT, or trust). Return ONLY a JSON object, no markdown:
 {"owner_name": null}
-Use null if no owner/seller is stated. Do NOT return the listing broker, marketing firm, or contact name. Return the name verbatim as written.
+
+Rules:
+- Return the OWNER / SELLER / LANDLORD only.
+- NEVER return the TENANT or occupant (the operating company that leases the space), the listing broker, the marketing firm, or a contact person.
+- The tenant is frequently the building's brand/name; if the only party you can identify is the tenant/occupant, return null — do NOT guess an owner.
+- Use null if no owner/seller/landlord is stated. Return the name verbatim as written.${tenantLine}
 
 DOCUMENT:
 ${body}`;
   try {
-    const res = await invokeExtractionAI({ prompt });
+    const res = await invokeAI({ prompt });
     if (!res?.ok) return null;
     const raw = res?.data?.response ?? res?.data ?? '';
     const jsonText = typeof raw === 'string' ? raw : JSON.stringify(raw);
@@ -205,10 +242,10 @@ export function classifyOwnerDoc({ contentType, fileName }) {
  * Returns {name, method, label?} — name is null when no clean owner is found.
  * NEVER invents.
  *
- * @param {object} args  - {buffer, contentType, fileName}
+ * @param {object} args  - {buffer, contentType, fileName, tenantBrand}
  * @param {object} deps  - {loadWorkbook, pdfOwner} (injected for tests)
  */
-export async function extractCreOwner({ buffer, contentType, fileName }, deps = {}) {
+export async function extractCreOwner({ buffer, contentType, fileName, tenantBrand = null }, deps = {}) {
   const kind = classifyOwnerDoc({ contentType, fileName });
   if (!buffer || !buffer.length) return { name: null, method: 'no_bytes' };
 
@@ -225,24 +262,88 @@ export async function extractCreOwner({ buffer, contentType, fileName }, deps = 
 
   if (kind === 'pdf') {
     const pdfOwner = deps.pdfOwner || defaultPdfOwner;
-    const name = await pdfOwner(buffer).catch(() => null);
+    // tenantBrand is a NEGATIVE signal for the owner-only AI prompt (blocker 2).
+    const name = await pdfOwner(buffer, tenantBrand).catch(() => null);
     return { name: name || null, method: 'pdf_ai_fallback' };
   }
 
   return { name: null, method: 'unsupported_doc_type' };
 }
 
+// ---- Diagnostic: dump the master-sheet's non-empty cells / labels ----------
+// (R15 Phase 2b, blocker 3.) The label scan found nothing on 6/6 master sheets,
+// so we need to SEE the real layout: is the owner present under a label/adjacency
+// the scan misses (case a), or do Briggs master sheets structurally not carry an
+// owner (case b)? This returns every non-empty cell (sheet/row/col/text) plus the
+// owner-label hits and the scan verdict, so the worker's ?debug=labels mode can
+// surface 2-3 real files without committing to either hypothesis.
+
+export function dumpLoadedWorkbookCells(workbook, { maxRows = 200, maxCols = 60, maxCells = 500 } = {}) {
+  const cells = [];
+  for (const ws of workbook?.worksheets || []) {
+    const rowCount = Math.min(ws.rowCount || 0, maxRows);
+    const colCount = Math.min(ws.columnCount || 0, maxCols);
+    for (let r = 1; r <= rowCount && cells.length < maxCells; r++) {
+      const row = ws.getRow(r);
+      for (let c = 1; c <= colCount && cells.length < maxCells; c++) {
+        const text = cellText(row.getCell(c)).trim();
+        if (!text) continue;
+        cells.push({ sheet: ws.name, row: r, col: c, text: text.slice(0, 120), is_owner_label: ownerLabelRank(text) > 0 });
+      }
+    }
+  }
+  return cells;
+}
+
+/**
+ * Diagnostic read of one CRE doc's bytes — xlsx only. Returns the non-empty cell
+ * dump, the owner-label hits, and the scan verdict. Never mints anything.
+ *
+ * @param {object} args  - {buffer, contentType, fileName}
+ * @param {object} deps  - {loadWorkbook} (injected for tests)
+ */
+export async function debugLabelsForDoc({ buffer, contentType, fileName }, deps = {}) {
+  const kind = classifyOwnerDoc({ contentType, fileName });
+  if (kind !== 'xlsx') return { kind, cell_count: 0, owner_labels: [], cells: [], scan: null, note: 'not_xlsx' };
+  if (!buffer || !buffer.length) return { kind, cell_count: 0, owner_labels: [], cells: [], scan: null, note: 'no_bytes' };
+  const loadWorkbook = deps.loadWorkbook || defaultLoadWorkbook;
+  try {
+    const wb = await loadWorkbook(buffer);
+    const cells = dumpLoadedWorkbookCells(wb);
+    const scan = scanLoadedWorkbookForOwner(wb);
+    return {
+      kind,
+      cell_count: cells.length,
+      owner_labels: cells.filter((c) => c.is_owner_label),
+      cells,
+      scan,
+    };
+  } catch (e) {
+    return { kind, cell_count: 0, owner_labels: [], cells: [], scan: null, error: e?.message?.slice(0, 200) || 'xlsx_load_failed' };
+  }
+}
+
 // Document-type read priority for the backfill (richest, most structured first):
 // master > comp > bov > om > anything else. Returns the best doc carrying a
 // source_url, or null.
 const DOC_READ_PRIORITY = { master: 1, comp: 2, bov: 3, om: 4 };
+
+// All readable owner-bearing docs in read priority (richest/most-structured
+// first). The worker tries them in order until one yields an owner — so an OM/BOV
+// (which carries the seller/owner) is still reached when the dominant master sheet
+// turns out NOT to carry an owner (blocker 3, case b). Returns [] when none have a
+// source_url.
+export function orderOwnerBearingDocs(docs) {
+  return (Array.isArray(docs) ? docs : [])
+    .filter((d) => d && d.source_url)
+    .sort((a, b) => {
+      const pa = DOC_READ_PRIORITY[String(a.document_type || '').toLowerCase()] || 9;
+      const pb = DOC_READ_PRIORITY[String(b.document_type || '').toLowerCase()] || 9;
+      return pa - pb;
+    });
+}
+
 export function pickOwnerBearingDoc(docs) {
-  const list = (Array.isArray(docs) ? docs : []).filter((d) => d && d.source_url);
-  if (!list.length) return null;
-  list.sort((a, b) => {
-    const pa = DOC_READ_PRIORITY[String(a.document_type || '').toLowerCase()] || 9;
-    const pb = DOC_READ_PRIORITY[String(b.document_type || '').toLowerCase()] || 9;
-    return pa - pb;
-  });
-  return list[0];
+  const list = orderOwnerBearingDocs(docs);
+  return list.length ? list[0] : null;
 }

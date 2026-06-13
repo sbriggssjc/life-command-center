@@ -31,6 +31,7 @@ import {
   ensureEntityLink,
   normalizeCanonicalName,
   looksLikePersonName,
+  hasFirmSuffix,
 } from './entity-link.js';
 
 // ---- Pure helpers ----------------------------------------------------------
@@ -294,14 +295,60 @@ async function attachCreDoc({ crePropertyId, fileName, docType, sourceUrl }) {
   return { ok: false, status: r.status, detail: r.data };
 }
 
-// Resolve/create the owner entity in the existing graph, domain='cre' so it is
-// tagged a CRE owner but deduped by canonical_name (no novel external_identities
-// source_system — the composite-person path mints the same way). The shared junk
-// / implausible-person / federal-anti-pattern guards inside ensureEntityLink
-// reject garbage; we surface that as ok:false so the caller leaves owner pending.
-export async function ensureCreOwnerEntity(name, { workspaceId, actorId } = {}) {
-  const sourceType = looksLikePersonName(name) ? 'person' : 'true_owner';
-  const res = await ensureEntityLink({
+// Cross-domain reuse lookup (R15 Phase 2b, blocker 1). Finds the best EXISTING
+// organization entity whose NORMALIZED name matches `name`, via the same
+// normalizer the merge-candidate / lcc_apply_fuzzy_merges machinery uses
+// (lcc_match_existing_entity_for_cre → lcc_normalize_entity_name; normalized-
+// EXACT, no trigram → conservative, never wrongly merges two real owners).
+// Returns {entityId, name, domain} or null. Graceful: if the RPC isn't deployed
+// yet (cache-or-live), opsQuery errors → null → the caller mints a fresh cre
+// entity (no regression).
+async function findReusableOwnerEntity(name, workspaceId) {
+  const r = await opsQuery('POST', 'rpc/lcc_match_existing_entity_for_cre', {
+    p_name: name,
+    p_workspace_id: workspaceId || null,
+  });
+  if (r.ok && Array.isArray(r.data) && r.data.length) {
+    const row = r.data[0];
+    if (row && row.entity_id) {
+      return { entityId: row.entity_id, name: row.entity_name || null, domain: row.domain || null };
+    }
+  }
+  return null;
+}
+
+// Resolve/create the owner entity in the existing graph. Two-step:
+//  (1) CROSS-DOMAIN REUSE (org names only) — before minting a NEW cre entity,
+//      reuse an EXISTING entity (ANY domain) whose normalized name matches. That
+//      reuse IS the cross-asset link (it makes lcc_cre_properties.owner_entity_id
+//      equal the dia/gov portfolio owner's id, lighting v_lcc_cre_cross_asset_
+//      owners) AND it stops minting a duplicate cre entity for an owner that
+//      already exists. Reuse NEVER rewrites the existing entity's domain — it
+//      only links the CRE property to it. Persons are NOT reused (normalized-
+//      exact on a human name is unsafe — two different "John Smith").
+//  (2) MINT a domain='cre' entity otherwise. The shared junk / implausible-person
+//      / federal-anti-pattern guards inside ensureEntityLink reject garbage; we
+//      surface that as ok:false so the caller leaves the owner pending.
+//
+// deps (injected for tests): { matchExisting, mintEntity }.
+export async function ensureCreOwnerEntity(name, { workspaceId, actorId } = {}, deps = {}) {
+  const matchExisting = deps.matchExisting || ((nm) => findReusableOwnerEntity(nm, workspaceId));
+  const mintEntity = deps.mintEntity || ((args) => ensureEntityLink(args));
+
+  // An org carrying a firm suffix ("Truist Bank", "Lexington Realty Trust") can
+  // pass looksLikePersonName (2 capitalized tokens), so treat firm-suffixed names
+  // as orgs for BOTH the reuse gate and the minted entity type. Genuine persons
+  // (no firm suffix) are never reused.
+  const treatAsOrg = !looksLikePersonName(name) || hasFirmSuffix(name);
+  if (treatAsOrg) {
+    const reuse = await matchExisting(name).catch(() => null);
+    if (reuse && reuse.entityId) {
+      return { ok: true, entityId: reuse.entityId, reused: true, reused_domain: reuse.domain || null };
+    }
+  }
+
+  const sourceType = treatAsOrg ? 'true_owner' : 'person';
+  const res = await mintEntity({
     workspaceId,
     userId: actorId,
     domain: 'cre',
@@ -356,6 +403,33 @@ export async function setCrePropertyOwner(crePropertyId, ownerEntityId, { worksp
     ).catch(() => {});
   }
   return { ok: !!r.ok, patched };
+}
+
+/**
+ * Mark a CRE property's owner scan EXHAUSTED (R15 Phase 2b, blocker 3). After the
+ * backfill reads every owner-bearing doc and still resolves no usable owner (a
+ * master sheet that structurally has no owner, every doc rejected by the guards,
+ * or no readable doc), stamp `metadata.owner_scan_exhausted=true` so the eligible
+ * query drops it — no per-tick re-scan churn. Merges into existing metadata (read-
+ * modify-write) and is guarded on `owner_entity_id IS NULL`, so it never marks a
+ * property a racing tick just resolved. Re-attach a richer doc + clear the flag to
+ * re-queue (a future enhancement); today the flag is conservative dead-ending.
+ *
+ * @returns {Promise<{ok:boolean}>}
+ */
+export async function markCreOwnerScanExhausted(crePropertyId, existingMetadata, info = {}) {
+  if (crePropertyId == null) return { ok: false };
+  const base = existingMetadata && typeof existingMetadata === 'object' ? existingMetadata : {};
+  const metadata = {
+    ...base,
+    owner_scan_exhausted: true,
+    owner_scan_exhausted_at: new Date().toISOString(),
+    owner_scan_detail: info || null,
+  };
+  const r = await opsQuery('PATCH',
+    `lcc_cre_properties?id=eq.${encodeURIComponent(crePropertyId)}&owner_entity_id=is.null`,
+    { metadata, updated_at: new Date().toISOString() });
+  return { ok: !!r.ok };
 }
 
 /**
