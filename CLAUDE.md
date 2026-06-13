@@ -2335,3 +2335,83 @@ indexes plain `NULLS NOT DISTINCT`). JS ships on the Railway redeploy.
 Auto-route `detected_type='lease'` through the extractor + the
 `property_financials` #64 leg + the MCP search surface remain paused until this
 fix is merged and Scott blesses the widen.
+
+## R16 — unlock the outreach loop: auto-acquire SF contacts + tighten reachability (2026-06-13)
+
+The conversion point of the whole system. Grounded live 2026-06-13: 409
+cadences, only 3 ever touched, 400 overdue — not a cadence-mechanics problem,
+there was no one to contact (395 prospecting cadences, 0 with a `contact_id`/
+`sf_contact_id`). Of the 395, **67 carry a Salesforce ACCOUNT identity**
+(`external_identities source_system='salesforce', source_type='Account'`) — the
+human contacts almost certainly already exist in SF and just weren't pulled into
+LCC. The other 328 (no SF, no person) are cold contact-acquisition — **out of
+scope** (research/CoStar capture, separate track).
+
+### Unit 1 — the contact-acquisition worker (shipped)
+`?_route=contact-acquisition-tick` (sub-route of **operations.js** — no new
+api/*.js; handler `api/_handlers/contact-acquisition.js`). GET=dry-run /
+POST=drain. Per tick (bounded `limit` default 25 + a ~20s wall-clock budget):
+1. **Select** contactless overdue active cadences (`contact_id IS NULL AND
+   sf_contact_id IS NULL`, `next_touch_due<=now`, active phases), one per entity.
+2. **Map** which of those entities carry an SF **Account** identity (+ the
+   entity's workspace) — the 67 set; entities with no SF account are skipped
+   (the cold 328).
+3. For each: call the EXISTING **`getSalesforceContactsByAccount`**
+   (`find_contacts_by_account` flow), create each returned contact as a person
+   via **`ensureEntityLink`** (`sourceSystem='salesforce'`,`sourceType='Contact'`
+   → guards + SF-identity mirror, never invents garbage), **link** person→entity
+   (`associated_with`), and **stamp the PRIMARY** contact onto the cadence
+   (`contact_id`/`sf_contact_id`) → outreach-ready.
+- **Reuse, not fork:** the link + cadence-stamp logic lives once in
+  `api/_shared/contact-attach.js` (`linkPersonToEntity`,
+  `stampCadenceContactById`, `stampContactOnActiveCadence`), shared by the worker
+  AND the interactive P-CONTACT picker (`bridgeSelectProspectingContact` was
+  refactored onto it). The worker does NOT fire SF Tasks per contact — the
+  operator fires the task when they work the touch (R10 Unit 4 draft/log-touch).
+- **Don't re-hammer / outcome-truthful:** SF-no-contacts and capped-transient
+  outages are recorded under the NEW `touchpoint_cadence.metadata` jsonb
+  (`contact_acquisition: {status, attempts, last_attempt_at}`); `isAcqExhausted`
+  excludes them from the next tick. An acquired cadence carries contact ids so it
+  naturally leaves the contactless set. A no-contacts entity falls to P-CONTACT
+  (Unit 2) for manual acquisition. Acquired ⇒ one
+  `lcc_refresh_priority_queue_resolved()` at tick end (Slice-1 staleness hook).
+- **Feature-flagged:** no-ops cleanly when `SF_LOOKUP_WEBHOOK_URL` is unset
+  (same posture as the buyer picker / folder-feed). Migrations: metadata column
+  `20260719122000`; gentle cron `lcc-contact-acquisition` (`*/30`)
+  `20260719122500` (no-ops until the SF flow + JS deploy; endpoint 404s until
+  operations.js ships — verify post-deploy with a GET dry-run).
+
+### Unit 2 — reachability gate: SF account identity is NOT a reachable human
+Migration `20260719123000` (`CREATE OR REPLACE v_priority_queue_live` +
+queue-cache refresh). R10 Unit 3b counted a bare SF **account** identity as
+"connected" ⇒ the 67 sat in the OUTREACH bands (P0/P6/P7) with no person to
+email. Now reachability requires a real human: a new `person_connected_entities`
+CTE (the two person-relationship branches, **minus** the SF-identity branch)
+drives `reachable_cadence`; a cadence is reachable iff `sf_contact_id`/
+`contact_id` OR a person relationship. **Scope:** ONLY the cadence reachability
+predicate changed — P0.4/P0.5 keep the original `connected_entities` (SF account
+identity legitimately = "connected" for the R6 ownership-resolution question, a
+different question). So SF-mapped-but-contactless entities correctly sit in
+P-CONTACT until Unit 1 (or a human) attaches a contact.
+- **DEPLOY ORDER:** apply Unit 2 AFTER running the Unit 1 drain, so the 67
+  acquire contacts first instead of all dumping into P-CONTACT. Applying earlier
+  is still SAFE (P-CONTACT IS the honest state) — just more visible manual work
+  until the worker drains.
+
+### Boundaries / verified (headless 2026-06-13)
+dia/gov pipelines untouched (reads SF contacts, writes LCC person entities +
+cadence links). `test/contact-acquisition.test.mjs` (8): acquired path
+(persons created+linked, primary stamped); no-contacts → recorded, nothing
+stamped, falls to P-CONTACT; all-guard-rejected → no_usable_contacts (never
+invents); SF unavailable → retryable with incremented attempts;
+`isAcqExhausted` re-hammer guard; contact-attach metadata-merge + dupe-guard.
+`node --check` clean; `ls api/*.js | wc -l`=12; vercel.json valid; full suite
+811 pass / 0 fail / 6 skipped. JS ships on the Railway redeploy.
+
+### After deploy (verify live)
+With `SF_LOOKUP_WEBHOOK_URL` set: GET dry-run, then POST drain — the 67
+SF-mapped contactless cadences acquire contacts and become outreach-ready
+(`contact_id`/`sf_contact_id` set); touchable cadences jump from ~3 toward ~70.
+Then the R10 Unit 4 draft → mark-sent → advance loop closes on a real recipient.
+Apply the Unit 2 gate after the drain; confirm no outreach card shows an empty
+recipient.

@@ -65,6 +65,7 @@ import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, 
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { buildTeamContextWithSales, getTrackRecordSummary } from './_shared/team-context.js';
 import { getCadenceForDraft, advanceCadence, getCadenceState } from './_shared/cadence-engine.js';
+import { linkPersonToEntity, stampContactOnActiveCadence } from './_shared/contact-attach.js';
 import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -180,6 +181,13 @@ export default withErrorHandler(async function handler(req, res) {
       }
     }
     return handleDraftRoute(req, res);
+  }
+
+  // R16 contact-acquisition worker (via vercel.json _route=contact-acquisition-tick).
+  // Cron-driven drain — authenticates internally (like the other tick workers).
+  if (req.query._route === 'contact-acquisition-tick') {
+    const { handleContactAcquisitionTick } = await import('./_handlers/contact-acquisition.js');
+    return handleContactAcquisitionTick(req, res);
   }
 
   // Context broker route (via vercel.json _route=context)
@@ -1487,17 +1495,9 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
   }
 
   // Link person→entity (associated_with) — dupe-guarded (no unique index).
+  // Shared with the R16 contact-acquisition worker via contact-attach.js.
   if (contactEntityId) {
-    try {
-      const exists = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
-        + '&from_entity_id=eq.' + pgFilterVal(entityId) + '&to_entity_id=eq.' + pgFilterVal(contactEntityId) + '&limit=1');
-      if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
-        await opsQuery('POST', 'entity_relationships', {
-          workspace_id: workspaceId, from_entity_id: entityId, to_entity_id: contactEntityId,
-          relationship_type: 'associated_with', metadata: { role: 'prospecting_contact', via: 'priority_queue' },
-        });
-      }
-    } catch (_e) { /* non-fatal */ }
+    await linkPersonToEntity({ workspaceId, entityId, contactEntityId, role: 'prospecting_contact', via: 'priority_queue' });
     if (!contactName) {
       try {
         const ce = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(contactEntityId) + '&select=name&limit=1');
@@ -1508,25 +1508,18 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
 
   // Stamp the contact onto the entity's active cadence (effect FIRST). Most
   // overdue active cadence is the one driving the P-CONTACT card.
-  const patch = {};
-  if (contactEntityId) patch.contact_id = contactEntityId;
-  if (sfContactId) patch.sf_contact_id = sfContactId;
   let cadenceId = null;
   let cadenceOppId = null;
   let cadenceNextDue = null;
-  if (Object.keys(patch).length) {
-    const cadGet = await opsQuery('GET', 'touchpoint_cadence?entity_id=eq.' + pgFilterVal(entityId)
-      + '&phase=in.(prospecting,onboarding,steady_state,maintenance)'
-      + '&order=next_touch_due.asc.nullslast&select=id,bd_opportunity_id,next_touch_due&limit=1');
-    const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
-    if (!cadRow) {
+  if (contactEntityId || sfContactId) {
+    const stamp = await stampContactOnActiveCadence({ entityId, contactEntityId, sfContactId });
+    if (!stamp.ok && stamp.reason === 'no_active_cadence') {
       return res.status(404).json({ error: 'no_active_cadence', detail: 'No active cadence on this entity to attach the contact to' });
     }
-    const upd = await opsQuery('PATCH', 'touchpoint_cadence?id=eq.' + pgFilterVal(cadRow.id), patch);
-    if (!upd.ok) return res.status(502).json({ error: 'cadence_attach_failed', detail: upd.data });
-    cadenceId = cadRow.id;
-    cadenceOppId = cadRow.bd_opportunity_id || null;
-    cadenceNextDue = cadRow.next_touch_due || null;
+    if (!stamp.ok) return res.status(502).json({ error: 'cadence_attach_failed', detail: stamp.detail });
+    cadenceId = stamp.cadenceId;
+    cadenceOppId = stamp.cadenceOppId;
+    cadenceNextDue = stamp.cadenceNextDue;
   }
 
   // R16: fire the SF Task at contact-selection time (WhoId is now known). A
