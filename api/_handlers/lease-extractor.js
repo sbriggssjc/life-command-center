@@ -251,7 +251,7 @@ export async function resolveAttachFromExtraction(normalized, deps) {
 export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null, normalized, doc = null }, deps) {
   const plan = planLeaseWrites(domain, normalized);
   const out = {
-    ok: true, fields_filled: 0, ti_rows: 0, guarantor_entity_id: null,
+    ok: true, fields_filled: 0, ti_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
     document_id: null, lease_id: leaseId, lease_created: false, warnings: plan.warnings,
   };
 
@@ -309,8 +309,13 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
 
   // 4) Guarantor entity + guaranteed_by edge — ONLY now that the lease exists.
   if (plan.guarantor && deps.ensureGuarantorEntity) {
-    const g = await deps.ensureGuarantorEntity({ domain, propertyId, leaseId: resolvedLeaseId, name: plan.guarantor }).catch(() => null);
+    const g = await deps.ensureGuarantorEntity({ domain, propertyId, leaseId: resolvedLeaseId, name: plan.guarantor })
+      .catch((e) => ({ entity_id: null, edge_ok: false, warning: `guarantor_threw:${e?.message || 'err'}` }));
     out.guarantor_entity_id = g?.entity_id || null;
+    // The graph edge is the deliverable (brain-hub entity completeness), not the
+    // bare guarantor entity — surface its outcome instead of silently dropping it.
+    out.guaranteed_by_edge = g?.edge_ok ?? null;
+    if (g?.warning) out.warnings = [...out.warnings, g.warning];
   }
 
   // 5) Attach the lease doc to the property.
@@ -463,27 +468,50 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
     },
     ensureGuarantorEntity: async ({ domain, propertyId, name }) => {
       // Mint the guarantor org entity (idempotent on the normalized name), then a
-      // guaranteed_by edge to the property's asset entity (cross-deal search).
+      // guaranteed_by edge guarantor → the property's asset entity (cross-deal
+      // search; brain-hub entity completeness). Both endpoints are resolved/created
+      // BEFORE the edge write; a failure to write the edge is SURFACED as a warning
+      // (never swallowed), so the gate sees an incomplete graph rather than a silent
+      // no-op. (Stage B Unit 1 re-gate, 2026-06-13.)
       const guar = await ensureEntityLink({
         workspaceId, userId: actorId, sourceSystem: 'folder_feed_lease', sourceType: 'guarantor',
         externalId: name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), domain: 'lcc',
         seedFields: { display_name: name, entity_type: 'organization' }, metadata: { role: 'guarantor' },
       }).catch(() => null);
       const guarId = guar?.entity?.id || guar?.entityId || null;
-      if (guarId) {
-        const asset = await ensureEntityLink({
-          workspaceId, userId: actorId, sourceSystem: DOMAIN_SHORT(domain), sourceType: 'asset',
-          externalId: String(propertyId), domain: DOMAIN_SHORT(domain),
-        }).catch(() => null);
-        const assetId = asset?.entity?.id || asset?.entityId || null;
-        if (assetId) {
-          const dupe = await opsQuery('GET', `entity_relationships?from_entity_id=eq.${pgFilterVal(guarId)}&to_entity_id=eq.${pgFilterVal(assetId)}&relationship_type=eq.guaranteed_by&select=id&limit=1`).catch(() => null);
-          if (!(dupe?.ok && dupe.data?.length)) {
-            await opsQuery('POST', 'entity_relationships', { from_entity_id: guarId, to_entity_id: assetId, relationship_type: 'guaranteed_by' }, { Prefer: 'return=minimal' }).catch(() => {});
-          }
-        }
+      if (!guarId) return { entity_id: null, asset_entity_id: null, edge_ok: false, warning: 'guarantor_entity_unresolved' };
+
+      // Resolve-or-create the asset entity FIRST so the edge always has a target.
+      const asset = await ensureEntityLink({
+        workspaceId, userId: actorId, sourceSystem: DOMAIN_SHORT(domain), sourceType: 'asset',
+        externalId: String(propertyId), domain: DOMAIN_SHORT(domain),
+      }).catch(() => null);
+      const assetId = asset?.entity?.id || asset?.entityId || null;
+      if (!assetId) {
+        console.warn(`[lease-extractor] guaranteed_by edge skipped — asset entity unresolved for ${DOMAIN_SHORT(domain)} property ${propertyId}`);
+        return { entity_id: guarId, asset_entity_id: null, edge_ok: false, warning: 'asset_entity_unresolved' };
       }
-      return { entity_id: guarId };
+
+      // Idempotent: entity_relationships has no unique index, so pre-check the
+      // edge before inserting (mirrors operations.js / entity-link.js).
+      const dupe = await opsQuery('GET', `entity_relationships?from_entity_id=eq.${pgFilterVal(guarId)}&to_entity_id=eq.${pgFilterVal(assetId)}&relationship_type=eq.guaranteed_by&select=id&limit=1`).catch(() => null);
+      if (dupe?.ok && dupe.data?.length) return { entity_id: guarId, asset_entity_id: assetId, edge_ok: true };
+
+      // workspace_id is NOT NULL on entity_relationships (FK → workspaces); every
+      // other writer passes it. Omitting it was the silent INSERT failure that left
+      // the guarantor with zero relationships.
+      const edge = await opsQuery('POST', 'entity_relationships', {
+        workspace_id: workspaceId,
+        from_entity_id: guarId,
+        to_entity_id: assetId,
+        relationship_type: 'guaranteed_by',
+        metadata: { role: 'guarantor', source: 'folder_feed_lease' },
+      }, { Prefer: 'return=minimal' }).catch((e) => ({ ok: false, status: e?.message || 'threw' }));
+      if (!edge?.ok) {
+        console.warn(`[lease-extractor] guaranteed_by edge write failed (${edge?.status ?? '?'}) guarantor=${guarId} asset=${assetId}`);
+        return { entity_id: guarId, asset_entity_id: assetId, edge_ok: false, warning: `guaranteed_by_edge_write_failed:${edge?.status ?? '?'}` };
+      }
+      return { entity_id: guarId, asset_entity_id: assetId, edge_ok: true };
     },
     attachDoc: async ({ domain, propertyId, fileName, sourceUrl }) => {
       const r = await attachEnrichDocument(domain, propertyId, { fileName, docType: 'lease', sourceUrl }).catch(() => null);
