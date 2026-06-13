@@ -19,6 +19,7 @@ const {
   deriveAssetClass,
   extractOwnerName,
   buildCreNaturalKey,
+  ensureCreOwnerEntity,
 } = await import('../api/_shared/cre-registry.js');
 
 // ---- Pure helpers ----------------------------------------------------------
@@ -159,6 +160,41 @@ describe('performCreRegister', () => {
     assert.equal(r.registered, false);
     assert.equal(r.reason, 'insufficient_anchor');
     assert.equal(d._calls.insert, 0, 'never inserts a guessed property');
+  });
+
+  it('blocker 1 — an org owner matching an existing entity REUSES it (no new cre mint)', async () => {
+    let minted = false;
+    const res = await ensureCreOwnerEntity('Truist Bank', { workspaceId: 'ws1', actorId: 'u1' }, {
+      matchExisting: async (nm) => { assert.equal(nm, 'Truist Bank'); return { entityId: 'dia-truist', domain: 'dia' }; },
+      mintEntity: async () => { minted = true; return { ok: true, entityId: 'new-cre' }; },
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.entityId, 'dia-truist', 'reuses the existing dia entity — the cross-asset link');
+    assert.equal(res.reused, true);
+    assert.equal(res.reused_domain, 'dia');
+    assert.equal(minted, false, 'never mints a duplicate cre entity when a match exists');
+  });
+
+  it('blocker 1 — a genuinely-new org owner mints a cre entity', async () => {
+    let mintArgs = null;
+    const res = await ensureCreOwnerEntity('Brand New Owner LLC', { workspaceId: 'ws1', actorId: 'u1' }, {
+      matchExisting: async () => null,            // no existing entity matches
+      mintEntity: async (args) => { mintArgs = args; return { ok: true, entityId: 'cre-new' }; },
+    });
+    assert.equal(res.entityId, 'cre-new');
+    assert.notEqual(res.reused, true);
+    assert.equal(mintArgs.domain, 'cre', 'mints with domain=cre');
+    assert.equal(mintArgs.sourceType, 'true_owner');
+  });
+
+  it('blocker 1 — person names are NOT reused (matchExisting never consulted)', async () => {
+    let matchCalled = false;
+    const res = await ensureCreOwnerEntity('John Q. Smith', { workspaceId: 'ws1', actorId: 'u1' }, {
+      matchExisting: async () => { matchCalled = true; return { entityId: 'x' }; },
+      mintEntity: async (args) => ({ ok: true, entityId: 'cre-person', _type: args.sourceType }),
+    });
+    assert.equal(matchCalled, false, 'normalized-exact reuse is unsafe for human names');
+    assert.equal(res.entityId, 'cre-person');
   });
 
   it('existing CRE property → fill-blanks only (no duplicate insert)', async () => {

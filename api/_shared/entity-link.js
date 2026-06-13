@@ -276,6 +276,13 @@ const STREET_LEAD_DIRECTIONAL_RE =
   /^(?:n|s|e|w|ne|nw|se|sw|north|south|east|west|northeast|northwest|southeast|southwest)\b/i;
 const STREET_TRAIL_DIRECTIONAL_RE = /\s(?:n|s|e|w|ne|nw|se|sw)$/i;
 
+// True when a name carries a corporate/firm suffix (LLC, LP, Bank, Trust, Realty,
+// Holdings, …). Useful where a 2-token org name ("Truist Bank") would otherwise
+// pass looksLikePersonName and be mis-handled as a person.
+export function hasFirmSuffix(name) {
+  return typeof name === 'string' && ENTITY_FIRM_SUFFIX_RE.test(name);
+}
+
 export function isStreetFragmentName(name) {
   if (typeof name !== 'string') return false;
   const t = name.trim();
