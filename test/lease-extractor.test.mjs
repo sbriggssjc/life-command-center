@@ -11,11 +11,12 @@ process.env.DIA_SUPABASE_URL = 'https://dia.test.local';
 process.env.DIA_SUPABASE_KEY = 'k';
 process.env.GOV_SUPABASE_URL = 'https://gov.test.local';
 process.env.GOV_SUPABASE_KEY = 'k';
+process.env.SHAREPOINT_FETCH_URL = 'https://pa.test.local/fetch';
 
 import {
   buildLeaseExtractionPrompt, normalizeLeaseExtraction, planLeaseWrites,
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
-  extractLeaseDoc, planExpenseFinancials, attachLeaseDoc,
+  extractLeaseDoc, planExpenseFinancials, attachLeaseDoc, leaseValuesEqual, runLeaseExtraction,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -221,15 +222,71 @@ describe('lease extractor — writer (provenance-first, guarantor entity, TI)', 
     assert.ok(out.warnings.some(w => /guaranteed_by_edge_write_failed/.test(w)));
   });
 
-  it('a merge_field skip decision drops that one field, keeps the rest', async () => {
+  it('TRUE fill-blanks: NEVER overwrites a populated field; routes the disagreement to the Decision Center', async () => {
+    // The lease-14365 clobber: curated tenant_agency + annual_rent are POPULATED
+    // and DISAGREE with the doc; genuinely-NULL fields are blank. The writer must
+    // fill ONLY the blanks and route the two disagreements to a conflict — never
+    // PATCH the populated columns.
+    const calls = { patch: null, conflicts: [], merged: [] };
     const deps = {
-      mergeField: async (a) => ({ decision: a.field === 'annual_rent' ? 'skip' : 'write' }),
-      patchLease: async (a) => ({ ok: true, fields: a.fields }),
+      getLeaseRow: async () => ({
+        tenant_agency: 'DaVita (Covington Mill Dialysis)',  // populated + disagrees
+        annual_rent: 193330.00,                              // populated + disagrees (193329.48)
+        guarantor: null, rent_psf: null, lease_structure: null, renewal_options: null,
+        firm_term_years: null, total_term_years: null, commencement_date: null, expiration_date: null,
+      }),
+      mergeField: async (a) => { calls.merged.push(a.field); return { decision: 'write' }; },
+      recordConflict: async (a) => { calls.conflicts.push(a.field); return { ok: true }; },
+      patchLease: async (a) => { calls.patch = a; return { ok: true }; },
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1', edge_ok: true }),
     };
-    const n = normalizeLeaseExtraction(RAW);
-    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, normalized: n }, deps);
+    const n = normalizeLeaseExtraction(RAW);   // tenant 'DaVita Inc', annual_rent 1,250,000
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: n }, deps);
     assert.equal(out.ok, true);
-    assert.ok(out.fields_filled >= 1);  // other fields still written
+    // The two populated disagreements were routed to conflict, NOT written.
+    assert.ok(calls.conflicts.includes('tenant_agency'), 'tenant disagreement → conflict');
+    assert.ok(calls.conflicts.includes('annual_rent'), 'rent disagreement → conflict');
+    assert.equal(out.conflicts, 2);
+    assert.ok(!('tenant_agency' in (calls.patch?.fields || {})), 'populated tenant NEVER patched');
+    assert.ok(!('annual_rent' in (calls.patch?.fields || {})), 'populated rent NEVER patched');
+    // The genuinely-NULL fields filled (e.g. guarantor) with provenance recorded.
+    assert.ok('guarantor' in (calls.patch?.fields || {}), 'blank guarantor filled');
+    assert.ok(calls.merged.includes('guarantor'));
+    assert.ok(out.fields_filled >= 1);
+  });
+
+  it('a populated field that AGREES with the doc is a no-op (no conflict, no patch)', async () => {
+    const calls = { conflicts: 0, patch: null };
+    const deps = {
+      getLeaseRow: async () => ({ annual_rent: 1250000, tenant_agency: 'DaVita Inc' }),  // both equal the doc
+      mergeField: async () => ({ decision: 'write' }),
+      recordConflict: async () => { calls.conflicts++; return { ok: true }; },
+      patchLease: async (a) => { calls.patch = a; return { ok: true }; },
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1', edge_ok: true }),
+    };
+    const n = normalizeLeaseExtraction({ ...RAW, factual: { tenant: 'DaVita Inc', annual_rent: 1250000 }, ti_schedule: [], expense_schedule: [] });
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: n }, deps);
+    assert.equal(out.conflicts, 0);
+    assert.deepEqual(calls.patch?.fields || {}, {});  // nothing to write
+  });
+});
+
+describe('lease extractor — leaseValuesEqual (the no-clobber comparator)', () => {
+  it('numeric exact (193330 ≠ 193329.48 is a disagreement; $1,250,000 == 1250000)', () => {
+    assert.equal(leaseValuesEqual(193330.00, 193329.48), false);
+    assert.equal(leaseValuesEqual('$1,250,000', 1250000), true);
+  });
+  it('dates compare as strings, never collapse to a year', () => {
+    assert.equal(leaseValuesEqual('2021-06-01', '2036-05-31'), false);
+    assert.equal(leaseValuesEqual('2021-06-01', '2021-06-01'), true);
+  });
+  it('text case-insensitive; one-sided null is a disagreement', () => {
+    assert.equal(leaseValuesEqual('DaVita Inc', 'davita inc'), true);
+    assert.equal(leaseValuesEqual('DaVita', 'Renal Treatment Centers'), false);
+    assert.equal(leaseValuesEqual(null, 'x'), false);
+    assert.equal(leaseValuesEqual(null, null), true);
   });
 });
 
@@ -368,6 +425,21 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
       { deps, matchByPathAnchor: async () => ({ status: 'unmatched' }), emitMatchDisambiguation: async () => {} });
     assert.equal(out.attached, false);
     assert.equal(out.no_domain, true);
+  });
+
+  it('scanned PDF (no text layer) → needs_ocr, ok:true (never a 500)', async () => {
+    // PA fetch returns a no-text buffer (base64 of 0x000000) → leaseTextFromBytes ''.
+    const blankFetch = async () => ({ ok: true, status: 200,
+      text: async () => JSON.stringify({ ok: true, content_base64: 'AAAA', content_type: 'application/octet-stream' }) });
+    const ext = await runLeaseExtraction({ storageRef: '/x/scanned-lease.pdf', fetchImpl: blankFetch });
+    assert.equal(ext.needs_ocr, true);
+    assert.equal(ext.normalized, null);
+    const out = await attachLeaseDoc(
+      { storageRef: '/x/scanned-lease.pdf', fileName: 'scanned.pdf', subjectHint: { vertical: 'dia' }, workspaceId: 'w', actorId: 'u' },
+      { deps: { fetchImpl: blankFetch }, matchByPathAnchor: async () => null, emitMatchDisambiguation: async () => {} });
+    assert.equal(out.ok, true);
+    assert.equal(out.needs_ocr, true);
+    assert.equal(out.match_status, 'needs_ocr');
   });
 
   it('dry-run previews the plan + boundary, writes NOTHING', async () => {
