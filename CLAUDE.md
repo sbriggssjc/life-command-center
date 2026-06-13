@@ -2415,3 +2415,93 @@ SF-mapped contactless cadences acquire contacts and become outreach-ready
 Then the R10 Unit 4 draft → mark-sent → advance loop closes on a real recipient.
 Apply the Unit 2 gate after the drain; confirm no outreach card shows an empty
 recipient.
+
+## R17 — value-rank the connect-the-data work (P0.4 + P-CONTACT) (2026-06-13)
+
+The app guides the operator to the right KIND of work (connect-the-data vs
+next-touch), and the touch bands (P1-P8, P-BUYER) are value-ranked via
+`rank_annual_rent` (R11 + R14). But the two big CONNECT bands were NOT
+value-ranked, so the app couldn't tell the user WHICH connection matters most.
+Grounded live 2026-06-13: **P0.4** (resolve ownership) 543 rows, 59% rank-zero;
+**P-CONTACT** (select prospecting contact) 316 rows, 99% rank-zero. Connect-work
+is ~87% of all surfaced work — the larger half of "guide where to spend time" was
+sorting NULLS-LAST (noise).
+
+### The fix — a relationship-graph fallback tier in `rank_annual_rent`
+The rank-zero connect entities lack an `lcc_entity_portfolio_facts` edge (so no
+rollup, no representative property), but many carry **owns / purchases / leases**
+edges in `entity_relationships` to ASSET entities, and those assets have value in
+`lcc_property_attributes` (annual_rent, fallback noi). The value existed; it was
+never joined into the connect-band rank.
+- **Linkage (verified live):** owner = `from_entity`, asset = `to_entity` for
+  owns/purchases/leases. The asset entity carries an `external_identities` row
+  (`source_type='asset'`, `source_system`=domain, `external_id`=property_id) →
+  `lcc_property_attributes(source_domain, source_property_id)`. brokers/sells/
+  finances are **excluded** (past/agency edges, not control).
+- **Connected-property value** = SUM over the DISTINCT controlled properties of
+  `COALESCE(NULLIF(annual_rent,0), noi)` (dedup so owns+purchases to the same
+  asset counts once).
+- **New COALESCE chain** (`v_priority_queue_enriched.rank_annual_rent`): trigger
+  rollup → portfolio rollup → representative-property rent → **connected-property
+  value** → P-BUYER rollup → NULLS LAST.
+
+### Bounding the cost (the R7 caching doctrine)
+The aggregation walks ~45k owns/purchases/leases edges → external_identities →
+lcc_property_attributes (~270ms standalone) — too costly to add live to every
+items-page enriched read. So it is **materialized** into a small cron-refreshed
+cache table **`lcc_entity_connected_value`** (~2,948 rows: entity_id PK,
+connected_property_value, connected_property_count) and the enriched view
+hash-joins it cheaply — exactly how `lcc_property_attributes` bounds the
+representative-property join. `lcc_refresh_entity_connected_value()` +
+cron **`lcc-entity-connected-value-refresh`** (`17 * * * *` — connected value is
+a slow-moving signal; a band-moving connect verdict moves the row out of the band
+regardless, so it doesn't need the */5 queue cadence). ANALYZE baked in;
+autovacuum hardened (full-replace each tick).
+
+### Safe by construction / scope guards
+- **Empty cache ⇒ pre-R17 behavior** (connected_property_value NULL ⇒ the tier is
+  inert ⇒ connect rows sort NULLS-LAST). DB-vs-Railway deploy order is irrelevant;
+  a stalled cron only ever costs ranking quality, never correctness.
+- The cv join is **GATED on `priority_band IN ('P0.4','P-CONTACT')`**, so the
+  touch bands (P1-P8, P-BUYER) **and P0.5** are byte-identical — verified live by
+  md5 of each band's ordered (entity_id, rank) set (all 11 non-target bands match
+  pre/post exactly).
+- Genuinely value-less entities (no portfolio, no representative property, no
+  connected assets) still sort NULLS-LAST — correct. The relationship→property
+  mapping is conservative: an unresolvable asset contributes 0, never an error.
+- dia/gov pipelines untouched. ≤12 api/*.js.
+
+### Migration / JS
+- LCC Opps migration `20260613200000_lcc_r17_connect_band_connected_value_rank.sql`
+  (additive table + refresh fn + cron + `CREATE OR REPLACE VIEW` that appends two
+  columns at the END and extends the one rank expression). Applied live.
+- `api/admin.js` selects `connected_property_value` / `connected_property_count`
+  on the items page + detail band (the ORDER BY already keys on
+  `rank_annual_rent`, so ranking improves with **zero JS change** the moment the
+  migration lands). `ops.js` card falls back to "$X rent (N connected properties)"
+  when there's no portfolio/subject-property rent. Ships on the Railway redeploy.
+
+### Verified live (read-only) 2026-06-13
+- All 10 touch bands (P1-P8, P-BUYER) + P0.5 **byte-identical** (count AND md5 of
+  the ordered (entity_id, rank) set).
+- **P0.4** rank-zero 317 → 313 (only 4 rescued — the data refuted the premise
+  that rank-zero P0.4 carry rich edges: of 317, only 20 have ANY edge and 4 reach
+  a valued property; the other 313 are genuine orphan owners → correctly
+  NULLS-LAST). **P-CONTACT** rank-zero 314 → 254 (60 rescued). Top rescues now at
+  the band head: Northwestern Mutual $26.1M, Foulger Pratt $24.3M (2 props),
+  Jamestown $22.8M, Akridge, MetLife — previously buried NULLS-LAST.
+- Items-page query (enriched + ORDER BY + LIMIT 150) **90ms** (gated cache join is
+  negligible). `node --check` clean; 12 functions; suite 824 pass / 0 fail / 6
+  skipped.
+
+### Secondary (junk lane) — already satisfied
+The `junk_entity_name` lane (746 open) is already positioned at slot #9 in the
+Decision Center ordering (`renderReviewConsolePage`), below the ownership/contact
+connect-work (confirm_true_owner #1, buyer parents #2) — not peer-to-peer with
+high-value ownership resolution. No change made.
+
+### Follow-ups (not in R17)
+The rendering of the connected-value state in the entity-detail Next-Step banner
+(the full "one truth, three renderings"); optional `owns`-weighted tiering of the
+connected value (kept a flat SUM here — "dollars of property controlled" is the
+honest, explainable signal).
