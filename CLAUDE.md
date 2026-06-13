@@ -2267,3 +2267,71 @@ Owner backfill for path-registered rows (re-extract the doc for the owner) ·
 a CRE portfolio sync so cross-asset-class owners (a Vervent/Top Golf owner that
 ALSO owns dia/gov) surface a unified portfolio in the queue · the CRE context
 packet variant for MCP/agents · asset-class refinement.
+
+## Stage B Unit 1 — fix the lease-less-property gap + re-gate (2026-06-13)
+
+The Unit 1 boundary was already proven (dry-run + real-write both
+`boundary_ok:true`/`reported_targets:[]`, DB-level CHECK/registry/byte-identical
+view) and the resolve worked (caller-pinned → gov 30430). But the live gate
+surfaced a real gap on **30430** (a property with NO existing lease row): the
+real-write returned `fields_filled:0, ti_rows:0` and minted an **orphan
+guarantor entity**. Root cause: the enricher fill-blanks-PATCHed an existing
+lease row and never CREATED one when absent, so at scale most lease-less
+properties would go unenriched and accumulate orphan guarantors.
+
+### The fix (`api/_handlers/lease-extractor.js`)
+- **Create the lease when none exists.** New `ensureLeaseRow` dep
+  (`buildRealLeaseDeps`) resolves the property's active lease or, when genuinely
+  absent, CREATES one from the extracted facts (`data_source='folder_feed_lease'`;
+  dia sets `status='active'`/`is_active=true`, gov has neither — active ==
+  `superseded_at IS NULL`). Dedupes against any existing active lease via
+  `activeLeaseQuery(domain)` — **one-active-lease-per-property, never a
+  duplicate**. The lease doc IS the lease.
+- **Never orphan the guarantor.** `applyLeaseEnrichment` now resolves/creates
+  the lease FIRST; if it can't be created/linked it returns `ok:false` +
+  `warnings:[lease_unresolved:…]` **before** the guarantor mint — no guarantor
+  without a lease/edge to attach to. TI rows + the `guaranteed_by` edge only run
+  once the lease exists, so the edge forms naturally. On the create path the
+  factual fields land at insert (provenance recorded for observability); the
+  existing-lease patch path is unchanged (provenance-first per field).
+- **Boundary intact.** The create-path writes only the factual lease columns
+  (`planLeaseWrites` map + the `isReportedField` guard) — never price/cap
+  advisories. The four guards still apply.
+- **Two latent write bugs fixed along the way** (the re-gate would have failed
+  on them): (a) `gov.lease_ti_amortization.lease_id` was `bigint` but
+  `gov.leases.lease_id` is **uuid** → TI could never link; corrective gov
+  migration `government/20260613_gov_stageB_unit1_lease_ti_lease_id_uuid.sql`
+  (table empty, applied live). (b) The TI `uq_lease_ti_lease_year` was a
+  `COALESCE()` expression index that PostgREST's
+  `on_conflict=lease_id,property_id,schedule_year` can't infer (42P10) → replaced
+  with a plain unique index `NULLS NOT DISTINCT` on both domains (gov above +
+  dia `dialysis/20260613_dia_stageB_unit1_lease_ti_uq_fix.sql`). (c) the real
+  `mergeField` dep omitted the **required** `p_source_run_id` (no default) and
+  passed `p_value` as a String not jsonb → `lcc_merge_field` failed to resolve
+  and provenance silently never recorded; fixed to the canonical
+  `field-priority-guard.js` convention.
+
+### Re-gate (gated; synthetic throwaway gov property, 0 residue)
+Exercised every write the production path performs on synthetic gov property
+990000777 (sanctioned throwaway), then deleted all rows across gov + LCC Opps
+(verified 0 residue): lease CREATED (uuid `e552…`), **`fields_filled=11`**,
+**`ti_rows=1`** linked to the uuid lease_id (on_conflict inference works,
+idempotent on re-tick), dedupe holds (1 active lease — a re-run is
+created:false, no duplicate), `lcc_merge_field` returned `decision='write'`,
+`new_priority=45`, `enforce_mode='record_only'` and wrote 2 `folder_feed_lease`
+`field_provenance` rows on `gov.leases` (conflicts → Decision Center, no
+clobber), and the **`guaranteed_by` edge formed** (guarantor → asset). The gap
+30430 couldn't exercise is closed.
+
+### Verified (headless 2026-06-13)
+`test/lease-extractor.test.mjs` 13 → **16** (new: create-path fills+TI+guarantor;
+no-orphan gate — lease unresolved ⇒ `ok:false`, no guarantor, no TI; existing
+active lease reused via the patch path, no duplicate). `node --check` clean;
+`ls api/*.js | wc -l`=12; full suite **779 / 773 pass / 0 fail / 6 skipped**.
+Both corrective migrations applied live (gov TI lease_id now uuid; both uq
+indexes plain `NULLS NOT DISTINCT`). JS ships on the Railway redeploy.
+
+### Widen — still PAUSED (next, gated)
+Auto-route `detected_type='lease'` through the extractor + the
+`property_financials` #64 leg + the MCP search surface remain paused until this
+fix is merged and Scott blesses the widen.
