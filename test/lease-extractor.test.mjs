@@ -158,6 +158,81 @@ describe('lease extractor — writer (provenance-first, guarantor entity, TI)', 
   });
 });
 
+describe('lease extractor — lease-less property (create the lease, never orphan the guarantor)', () => {
+  // The 30430 gap: a property with NO existing lease row. The lease doc IS the
+  // lease, so the writer creates one from the facts, then the fields land, the
+  // TI rows write, and the guaranteed_by edge forms.
+  it('creates the lease, fills the factual fields, inserts TI, mints the guarantor', async () => {
+    const calls = { ensure: null, created: false, ti: null, guarantor: null, provenance: [] };
+    const deps = {
+      ensureLeaseRow: async (a) => { calls.ensure = a; return { ok: true, lease_id: 88001, created: true }; },
+      mergeField: async (a) => { calls.provenance.push(a.field); return { decision: 'write' }; },
+      patchLease: async () => { throw new Error('patchLease must NOT run on the create path'); },
+      insertTiRows: async (a) => { calls.ti = a; return { ok: true, count: a.rows.length }; },
+      ensureGuarantorEntity: async (a) => { calls.guarantor = a; return { entity_id: 'g-created' }; },
+      attachDoc: async () => ({ document_id: 4242 }),
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment(
+      { domain: 'dialysis', propertyId: 30430, normalized: n,
+        doc: { fileName: 'lease.pdf', sourceUrl: '/x/lease.pdf' } },
+      deps,
+    );
+    assert.equal(out.ok, true);
+    assert.equal(out.lease_created, true);
+    assert.equal(out.lease_id, 88001);
+    assert.ok(out.fields_filled > 0);          // the create wrote the factual fields
+    assert.equal(out.ti_rows, 1);
+    assert.equal(out.guarantor_entity_id, 'g-created');
+    assert.equal(out.document_id, 4242);
+    // ensureLeaseRow got the mapped factual fields to seed the new row
+    assert.equal(calls.ensure.fields.tenant, 'DaVita Inc');
+    // TI + guarantor linked to the CREATED lease
+    assert.equal(calls.ti.leaseId, 88001);
+    assert.equal(calls.guarantor.leaseId, 88001);
+    // provenance recorded for observability against the real lease_id
+    assert.ok(calls.provenance.includes('guarantor'));
+  });
+
+  it('NEVER mints the guarantor when the lease cannot be created/linked', async () => {
+    let guarantorMinted = false, tiAttempted = false;
+    const deps = {
+      ensureLeaseRow: async () => ({ ok: false, reason: 'no_factual_fields' }),
+      mergeField: async () => ({ decision: 'write' }),
+      insertTiRows: async () => { tiAttempted = true; return { ok: true, count: 1 }; },
+      ensureGuarantorEntity: async () => { guarantorMinted = true; return { entity_id: 'should-not-exist' }; },
+      attachDoc: async () => ({ document_id: 1 }),
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 30430, normalized: n }, deps);
+    assert.equal(out.ok, false);
+    assert.equal(out.guarantor_entity_id, null, 'no orphan guarantor');
+    assert.equal(guarantorMinted, false);
+    assert.equal(tiAttempted, false, 'no TI without a lease');
+    assert.equal(out.fields_filled, 0);
+    assert.ok(out.warnings.some(w => /lease_unresolved/.test(w)));
+  });
+
+  it('an EXISTING active lease is reused (no duplicate), fields fill via the patch path', async () => {
+    const calls = { patch: null };
+    const deps = {
+      ensureLeaseRow: async () => ({ ok: true, lease_id: 70707, created: false }),  // dedupe hit
+      mergeField: async () => ({ decision: 'write' }),
+      patchLease: async (a) => { calls.patch = a; return { ok: true }; },
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g-existing' }),
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment({ domain: 'dialysis', propertyId: 30441, normalized: n }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.lease_created, false);
+    assert.equal(out.lease_id, 70707);
+    assert.equal(calls.patch.leaseId, 70707);  // patched the resolved existing lease
+    assert.ok(out.fields_filled > 0);
+    assert.equal(out.guarantor_entity_id, 'g-existing');
+  });
+});
+
 describe('lease extractor — orchestrator (gated dry-run / real)', () => {
   // raw bypasses the AI; mock matcher resolves the in-file address to one prop.
   const deps = {

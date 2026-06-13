@@ -224,52 +224,96 @@ export async function resolveAttachFromExtraction(normalized, deps) {
 
 /**
  * Apply the lease enrichment to a resolved property. Deps-injected so it is
- * testable and never wires itself live. Effect order is provenance-first per
- * field; the guarantor entity + guaranteed_by edge are minted before the
- * leases.guarantor column write so the search index and the record agree.
+ * testable and never wires itself live.
+ *
+ * The lease row is resolved/created FIRST — the lease doc IS the lease, so a
+ * property with no existing lease row gets one created from the extracted facts
+ * (respecting one-active-lease-per-property: dedupe against any existing active
+ * lease; create only when genuinely absent). Only once the lease is
+ * created/linked do the TI rows, the guarantor entity, and the guaranteed_by
+ * edge land. If the lease can't be created/linked we return early WITHOUT
+ * minting the guarantor — never an orphan guarantor entity (the lease-less-30430
+ * gap). Effect order is provenance-first per field on the existing-lease patch
+ * path; on the create path the fields land at insert and provenance is recorded
+ * for observability.
  *
  * @param {object} a  { domain, propertyId, leaseId?, normalized }
  * @param {object} deps {
+ *   ensureLeaseRow({domain, propertyId, leaseId, fields}), // resolve-or-create → {ok, lease_id, created, reason?}
  *   mergeField({domain,table,recordPk,field,value}),  // → lcc_merge_field
  *   patchLease({domain, leaseId, propertyId, fields}), // domain leases UPDATE
  *   insertTiRows({domain, propertyId, leaseId, rows}),
- *   ensureGuarantorEntity({domain, propertyId, name}), // entity + guaranteed_by edge
+ *   ensureGuarantorEntity({domain, propertyId, leaseId, name}), // entity + guaranteed_by edge
  *   attachDoc({domain, propertyId, fileName, sourceUrl}),
  * }
- * @returns {Promise<{ok, fields_filled, ti_rows, guarantor_entity_id, document_id, warnings}>}
+ * @returns {Promise<{ok, fields_filled, ti_rows, guarantor_entity_id, document_id, lease_id, lease_created, warnings}>}
  */
 export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null, normalized, doc = null }, deps) {
   const plan = planLeaseWrites(domain, normalized);
-  const out = { ok: true, fields_filled: 0, ti_rows: 0, guarantor_entity_id: null, document_id: null, warnings: plan.warnings };
+  const out = {
+    ok: true, fields_filled: 0, ti_rows: 0, guarantor_entity_id: null,
+    document_id: null, lease_id: leaseId, lease_created: false, warnings: plan.warnings,
+  };
 
-  // 1) Guarantor entity + guaranteed_by edge FIRST (search index), then the column.
-  if (plan.guarantor && deps.ensureGuarantorEntity) {
-    const g = await deps.ensureGuarantorEntity({ domain, propertyId, name: plan.guarantor }).catch(() => null);
-    out.guarantor_entity_id = g?.entity_id || null;
+  // 1) Resolve OR create the lease row first. Never proceed to guarantor/TI/edge
+  //    if the lease can't be created/linked — that's what orphaned the guarantor
+  //    on the lease-less property. Gated on the dep so callers that pass a known
+  //    leaseId (or the legacy tests) keep the prior patch-only behavior.
+  let resolvedLeaseId = leaseId;
+  if (deps.ensureLeaseRow) {
+    const lr = await deps.ensureLeaseRow({ domain, propertyId, leaseId, fields: plan.leaseFields })
+      .catch((e) => ({ ok: false, reason: e?.message || 'threw' }));
+    if (!lr?.ok) {
+      out.ok = false;
+      out.warnings = [...out.warnings, `lease_unresolved:${lr?.reason || 'unknown'}`];
+      return out;                               // no guarantor mint → no orphan
+    }
+    resolvedLeaseId = lr.lease_id;
+    out.lease_id = resolvedLeaseId;
+    out.lease_created = !!lr.created;
   }
 
-  // 2) Factual lease fields — provenance-first per field, then the UPDATE.
-  const fieldsToWrite = {};
-  for (const [col, value] of Object.entries(plan.leaseFields)) {
-    const decision = deps.mergeField
-      ? await deps.mergeField({ domain, table: plan.table, recordPk: leaseId ?? propertyId, field: col, value }).catch(() => ({ decision: 'write' }))
-      : { decision: 'write' };
-    if (!decision || decision.decision === 'write' || decision.decision === 'record_only' || decision.decision === undefined) {
-      fieldsToWrite[col] = value;
+  // 2) Factual lease fields.
+  if (out.lease_created) {
+    // The create already wrote the factual fields; record provenance per field
+    // for observability (a brand-new row has nothing to conflict with).
+    const cols = Object.keys(plan.leaseFields);
+    out.fields_filled = cols.length;
+    if (deps.mergeField) {
+      for (const col of cols) {
+        await deps.mergeField({ domain, table: plan.table, recordPk: resolvedLeaseId, field: col, value: plan.leaseFields[col] }).catch(() => {});
+      }
+    }
+  } else {
+    // Existing lease — provenance-first per field, then the UPDATE (fill-blanks).
+    const fieldsToWrite = {};
+    for (const [col, value] of Object.entries(plan.leaseFields)) {
+      const decision = deps.mergeField
+        ? await deps.mergeField({ domain, table: plan.table, recordPk: resolvedLeaseId ?? propertyId, field: col, value }).catch(() => ({ decision: 'write' }))
+        : { decision: 'write' };
+      if (!decision || decision.decision === 'write' || decision.decision === 'record_only' || decision.decision === undefined) {
+        fieldsToWrite[col] = value;
+      }
+    }
+    if (Object.keys(fieldsToWrite).length && deps.patchLease) {
+      const r = await deps.patchLease({ domain, leaseId: resolvedLeaseId, propertyId, fields: fieldsToWrite }).catch(() => ({ ok: false }));
+      if (r?.ok) out.fields_filled = Object.keys(fieldsToWrite).length;
     }
   }
-  if (Object.keys(fieldsToWrite).length && deps.patchLease) {
-    const r = await deps.patchLease({ domain, leaseId, propertyId, fields: fieldsToWrite }).catch(() => ({ ok: false }));
-    if (r?.ok) out.fields_filled = Object.keys(fieldsToWrite).length;
-  }
 
-  // 3) TI amortization rows.
+  // 3) TI amortization rows — now lease-linked.
   if (plan.tiRows.length && deps.insertTiRows) {
-    const r = await deps.insertTiRows({ domain, propertyId, leaseId, rows: plan.tiRows }).catch(() => ({ ok: false, count: 0 }));
+    const r = await deps.insertTiRows({ domain, propertyId, leaseId: resolvedLeaseId, rows: plan.tiRows }).catch(() => ({ ok: false, count: 0 }));
     out.ti_rows = r?.count || 0;
   }
 
-  // 4) Attach the lease doc to the property.
+  // 4) Guarantor entity + guaranteed_by edge — ONLY now that the lease exists.
+  if (plan.guarantor && deps.ensureGuarantorEntity) {
+    const g = await deps.ensureGuarantorEntity({ domain, propertyId, leaseId: resolvedLeaseId, name: plan.guarantor }).catch(() => null);
+    out.guarantor_entity_id = g?.entity_id || null;
+  }
+
+  // 5) Attach the lease doc to the property.
   if (doc && deps.attachDoc) {
     const r = await deps.attachDoc({ domain, propertyId, fileName: doc.fileName, sourceUrl: doc.sourceUrl }).catch(() => null);
     out.document_id = r?.document_id || null;
@@ -332,9 +376,49 @@ const DOMAIN_DB = (d) => (d === 'dialysis' ? 'dia_db' : 'gov_db');
 const DOMAIN_SCHEMA = (d) => (d === 'dialysis' ? 'dia' : 'gov');
 const DOMAIN_SHORT = (d) => (d === 'dialysis' ? 'dia' : 'gov');
 
-/** Real writer deps (provenance-first; guarantor entity + guaranteed_by edge). */
+// The "currently active lease" PostgREST filter per domain. dia carries
+// is_active + status; gov has neither — active == not superseded. Both dedupe to
+// at most one row so the create path never duplicates an active lease.
+function activeLeaseQuery(domain, propertyId) {
+  if (domain === 'dialysis') {
+    return `leases?property_id=eq.${propertyId}&is_active=eq.true&superseded_at=is.null` +
+           `&select=lease_id&order=lease_start.desc.nullslast,lease_id.desc&limit=1`;
+  }
+  return `leases?property_id=eq.${propertyId}&superseded_at=is.null` +
+         `&select=lease_id&order=commencement_date.desc.nullslast&limit=1`;
+}
+
+/** Real writer deps (lease resolve-or-create; provenance-first; guarantor entity + guaranteed_by edge). */
 export function buildRealLeaseDeps({ workspaceId, actorId }) {
   return {
+    // Read-only: the active lease_id for a property, or null. Used by the gated
+    // dry-run to report whether the real write would CREATE a lease.
+    findActiveLeaseId: async ({ domain, propertyId }) => {
+      const g = await domainQuery(domain, 'GET', activeLeaseQuery(domain, propertyId)).catch(() => ({ ok: false }));
+      return (g.ok && g.data?.[0]?.lease_id) || null;
+    },
+    // Resolve the active lease, or CREATE one from the extracted facts when the
+    // property genuinely has none. The lease doc IS the lease. Dedupes against
+    // any existing active lease (one-active-lease-per-property doctrine) so it
+    // never writes a duplicate. Returns {ok, lease_id, created, reason?}.
+    ensureLeaseRow: async ({ domain, propertyId, leaseId, fields }) => {
+      if (leaseId) return { ok: true, lease_id: leaseId, created: false };
+      const g = await domainQuery(domain, 'GET', activeLeaseQuery(domain, propertyId)).catch(() => ({ ok: false }));
+      const existing = g.ok && g.data?.[0]?.lease_id;
+      if (existing) return { ok: true, lease_id: existing, created: false };
+      // No active lease — create it. Require at least one factual field so we
+      // never mint an empty placeholder lease (and therefore never a guarantor
+      // with nothing to attach to).
+      if (!fields || Object.keys(fields).length === 0) return { ok: false, reason: 'no_factual_fields' };
+      const row = { property_id: Number(propertyId), ...fields, data_source: 'folder_feed_lease' };
+      if (domain === 'dialysis') { row.status = 'active'; row.is_active = true; }  // gov: active == not superseded
+      const ins = await domainQuery(domain, 'POST', 'leases', row, { Prefer: 'return=representation' }).catch(() => ({ ok: false }));
+      if (!ins.ok) return { ok: false, reason: `create_failed:${ins.status || ''}` };
+      const created = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+      const newId = created?.lease_id ?? null;
+      if (newId == null) return { ok: false, reason: 'create_no_id' };
+      return { ok: true, lease_id: newId, created: true };
+    },
     matchAgainstDomain,
     domainsFor: (pi) => {
       const t = `${pi.tenant || ''}`;
@@ -346,16 +430,25 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
         p_target_database: DOMAIN_DB(domain),
         p_target_table: `${DOMAIN_SCHEMA(domain)}.${table}`,
         p_record_pk: String(recordPk),
-        p_field_name: field, p_value: value == null ? null : String(value),
-        p_source: 'folder_feed_lease', p_confidence: 0.85, p_recorded_by: actorId || null,
+        p_field_name: field,
+        // p_value is jsonb — pass the raw value (the registry compares jsonb).
+        p_value: value == null ? null : value,
+        p_source: 'folder_feed_lease',
+        // p_source_run_id has NO default — omitting it makes PostgREST fail to
+        // resolve the function, which silently nulls the decision. Pass it.
+        p_source_run_id: null,
+        p_confidence: 0.85,
+        p_recorded_by: actorId || null,
       }).catch(() => null);
       const d = Array.isArray(r?.data) ? r.data[0] : r?.data;
       return { decision: d?.decision || 'write' };
     },
     patchLease: async ({ domain, leaseId, propertyId, fields }) => {
+      // The lease_id is normally resolved by ensureLeaseRow; fall back to the
+      // active-lease lookup for direct callers.
       let lid = leaseId;
       if (!lid) {
-        const g = await domainQuery(domain, 'GET', `leases?property_id=eq.${propertyId}&select=lease_id&order=lease_id.desc&limit=1`);
+        const g = await domainQuery(domain, 'GET', activeLeaseQuery(domain, propertyId));
         lid = g.ok && g.data?.[0]?.lease_id;
       }
       if (!lid) return { ok: false, reason: 'no_lease_row' };
@@ -424,12 +517,24 @@ export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, do
   const reported_targets = Object.keys(plan.leaseFields).filter(isReportedField);
 
   if (dryRun) {
+    // Read-only peek: does the property already have an active lease? Lets the
+    // gate see whether the real write would CREATE one (the lease-less path) or
+    // fill blanks on the existing row. Never writes.
+    let existing_lease_id = null;
+    if (deps?.findActiveLeaseId) {
+      existing_lease_id = await deps.findActiveLeaseId({ domain: resolved.domain, propertyId: resolved.property_id }).catch(() => null);
+    }
+    const has_factual = Object.keys(plan.leaseFields).length > 0;
     return {
       ok: true, dry_run: true, resolved,
       preview: {
         property: { domain: resolved.domain, property_id: resolved.property_id },
         lease_fields: plan.leaseFields, guarantor: plan.guarantor,
         ti_rows: plan.tiRows.length, expense_rows: normalized.expense_schedule.length,
+        existing_lease_id,
+        // The real write creates a lease only when there's no active one AND we
+        // have factual fields to seed it (else it fills blanks on the existing).
+        will_create_lease: existing_lease_id == null && has_factual,
       },
       boundary_ok: reported_targets.length === 0,
       reported_targets,            // must be [] — proves no reported-cohort reach
