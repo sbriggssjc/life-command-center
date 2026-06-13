@@ -124,7 +124,7 @@ const TOOL_DEFINITIONS = {
   },
   search_entities: {
     name: 'search_entities',
-    description: 'Search for properties, contacts, or organizations in the LCC database',
+    description: 'Search for properties, contacts, or organizations in the LCC database. For an organization/person match, also returns the deals where it is the tenant or guarantor (e.g. "deals with Total Renal Care, Inc. as tenant or guarantor").',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,7 +137,7 @@ const TOOL_DEFINITIONS = {
   },
   get_property_context: {
     name: 'get_property_context',
-    description: 'Get full context for a specific property: lease details, ownership history, comps, investment score, research status, and related contacts',
+    description: 'Get full context for a specific property: lease details, ownership history, comps, investment score, research status, related contacts, and the property\'s tenant(s) + guarantor(s) from the lease/guaranty graph',
     inputSchema: {
       type: 'object',
       properties: {
@@ -253,10 +253,46 @@ const TOOL_HANDLERS = {
       path += `&limit=${Math.min(limit || 10, 50)}&order=name`;
 
       const result = await opsQuery("GET", path);
+      const entities = result.data || [];
+
+      // Cross-deal tenant/guarantor resolution (Stage B widen): for every
+      // org/person match, attach the DEALS where it is the tenant or guarantor,
+      // so "deals we've sold with Total Renal Care, Inc. as tenant or guarantor"
+      // resolves from a name search. tenant edges are relationship_type='leases',
+      // guarantor edges are 'guaranteed_by' (both point FROM the org/person TO
+      // the asset). One batched query over the matched ids.
+      const orgPersonIds = entities
+        .filter((e) => e.entity_type === "organization" || e.entity_type === "person")
+        .map((e) => e.id);
+      if (orgPersonIds.length > 0) {
+        const idList = orgPersonIds.map(enc).join(",");
+        const rel = await opsQuery(
+          "GET",
+          `entity_relationships?from_entity_id=in.(${idList})` +
+            `&relationship_type=in.(leases,guaranteed_by)` +
+            `&select=from_entity_id,relationship_type,asset:entities!entity_relationships_to_entity_id_fkey(id,name,address,city,state,domain,entity_type)`
+        ).catch(() => ({ data: [] }));
+        const byEntity = new Map();
+        for (const r of rel.data || []) {
+          if (!r.asset) continue;
+          const role = r.relationship_type === "guaranteed_by" ? "guarantor" : "tenant";
+          const arr = byEntity.get(r.from_entity_id) || [];
+          arr.push({ role, asset: r.asset });
+          byEntity.set(r.from_entity_id, arr);
+        }
+        for (const e of entities) {
+          const deals = byEntity.get(e.id);
+          if (deals && deals.length) {
+            e.as_tenant_or_guarantor = deals;
+            e.deal_count = deals.length;
+          }
+        }
+      }
+
       return textResult({
         query: searchTerm,
-        count: result.count || (result.data || []).length,
-        entities: result.data || [],
+        count: result.count || entities.length,
+        entities,
       });
     });
   },
@@ -343,7 +379,26 @@ const TOOL_HANDLERS = {
       }
       promises.push(gsaPromise);
 
-      const [actionsRes, contextRes, govData] = await Promise.all(promises);
+      // Tenant + guarantor of THIS asset (Stage B widen): edges that point TO the
+      // asset — relationship_type='leases' (tenant) and 'guaranteed_by'
+      // (guarantor) — with the org/person entity embedded. Makes the lease/
+      // guaranty graph visible on the property card and feeds cross-deal search.
+      promises.push(
+        opsQuery(
+          "GET",
+          `entity_relationships?to_entity_id=eq.${enc(eid)}` +
+            `&relationship_type=in.(leases,guaranteed_by)` +
+            `&select=relationship_type,metadata,party:entities!entity_relationships_from_entity_id_fkey(id,name,entity_type,domain)`
+        ).catch(() => ({ data: [] }))
+      );
+
+      const [actionsRes, contextRes, govData, tgRes] = await Promise.all(promises);
+      const tenantGuarantor = { tenants: [], guarantors: [] };
+      for (const r of tgRes?.data || []) {
+        if (!r.party) continue;
+        const bucket = r.relationship_type === "guaranteed_by" ? tenantGuarantor.guarantors : tenantGuarantor.tenants;
+        bucket.push({ id: r.party.id, name: r.party.name, entity_type: r.party.entity_type, domain: r.party.domain });
+      }
 
       // Assemble-on-miss: a cold / long-tail property has no fresh cached packet
       // (the nightly pre-warm is bounded to the most-active assets). Call the
@@ -366,6 +421,7 @@ const TOOL_HANDLERS = {
         entity,
         active_tasks: actionsRes.data || [],
         context_packet,
+        tenant_guarantor: tenantGuarantor,
         gov_data: null,
       };
 

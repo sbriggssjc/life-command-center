@@ -27,7 +27,7 @@ import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
-import { matchAgainstDomain } from './intake-matcher.js';
+import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { authenticate } from '../_shared/auth.js';
@@ -191,6 +191,44 @@ export function planLeaseWrites(domain, normalized) {
   };
 }
 
+// Expense-category → property_financials column. Anything unmatched still rolls
+// into operating_expenses (and the full schedule is preserved in line_items).
+const EXPENSE_CATEGORY_RES = [
+  { col: 'taxes', re: /\b(?:re[\s_-]*tax|real\s*estate\s*tax|property\s*tax|tax(?:es)?)\b/i },
+  { col: 'insurance', re: /\binsur/i },
+  { col: 'cam', re: /\b(?:cam|common\s*area)\b/i },
+];
+
+/**
+ * Aggregate the lease's expense_schedule ([{year, category, amount}]) into one
+ * property_financials row per fiscal_year. BOUNDARY (cap_rate_history doctrine):
+ * these rows are lease-abstract pass-through estimates, NOT audited financials —
+ * the writer stamps is_actual=false, noi=null, source='folder_feed_lease', so the
+ * gov cap-rate provenance ladder (resolveCapRateProvenance Tier 2, which requires
+ * is_actual=true AND noi not null) can NEVER consume them. Pure + unit-testable.
+ *
+ * @returns {Array<{fiscal_year:number, taxes:?number, insurance:?number,
+ *   cam:?number, operating_expenses:?number, line_items:object}>}
+ */
+export function planExpenseFinancials(normalized) {
+  const rows = Array.isArray(normalized?.expense_schedule) ? normalized.expense_schedule : [];
+  const byYear = new Map();
+  for (const r of rows) {
+    const y = r?.year != null ? parseInt(r.year, 10) : null;
+    const amt = num(r?.amount);
+    if (!Number.isFinite(y) || y < 1990 || y > new Date().getFullYear() + 2) continue;
+    if (amt == null) continue;
+    if (!byYear.has(y)) byYear.set(y, { fiscal_year: y, taxes: null, insurance: null, cam: null, operating_expenses: 0, line_items: [] });
+    const bucket = byYear.get(y);
+    const cat = (r.category || '').toString();
+    const hit = EXPENSE_CATEGORY_RES.find(({ re }) => re.test(cat));
+    if (hit) bucket[hit.col] = (bucket[hit.col] || 0) + amt;
+    bucket.operating_expenses += amt;
+    bucket.line_items.push({ category: r.category || null, amount: amt });
+  }
+  return [...byYear.values()].map(b => ({ ...b, line_items: { source: 'folder_feed_lease', entries: b.line_items } }));
+}
+
 /**
  * Resolve the property the lease belongs to FROM THE FILE — the in-file street
  * address through the injected domain matcher. This is the attach-resolver that
@@ -243,6 +281,7 @@ export async function resolveAttachFromExtraction(normalized, deps) {
  *   mergeField({domain,table,recordPk,field,value}),  // → lcc_merge_field
  *   patchLease({domain, leaseId, propertyId, fields}), // domain leases UPDATE
  *   insertTiRows({domain, propertyId, leaseId, rows}),
+ *   insertPropertyFinancials({domain, propertyId, leaseId, rows}), // expense_schedule → property_financials (boundary: is_actual=false)
  *   ensureGuarantorEntity({domain, propertyId, leaseId, name}), // entity + guaranteed_by edge
  *   attachDoc({domain, propertyId, fileName, sourceUrl}),
  * }
@@ -251,7 +290,7 @@ export async function resolveAttachFromExtraction(normalized, deps) {
 export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null, normalized, doc = null }, deps) {
   const plan = planLeaseWrites(domain, normalized);
   const out = {
-    ok: true, fields_filled: 0, ti_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
+    ok: true, fields_filled: 0, ti_rows: 0, financial_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
     document_id: null, lease_id: leaseId, lease_created: false, warnings: plan.warnings,
   };
 
@@ -305,6 +344,18 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
   if (plan.tiRows.length && deps.insertTiRows) {
     const r = await deps.insertTiRows({ domain, propertyId, leaseId: resolvedLeaseId, rows: plan.tiRows }).catch(() => ({ ok: false, count: 0 }));
     out.ti_rows = r?.count || 0;
+  }
+
+  // 3b) Expense schedule → property_financials (#64 NOI input). BOUNDARY: the dep
+  //     stamps is_actual=false, noi=null, source='folder_feed_lease' so these rows
+  //     are structurally excluded from the reported cap-rate cohort. Never blocks.
+  if (deps.insertPropertyFinancials) {
+    const finRows = planExpenseFinancials(normalized);
+    if (finRows.length) {
+      const r = await deps.insertPropertyFinancials({ domain, propertyId, leaseId: resolvedLeaseId, rows: finRows })
+        .catch(() => ({ ok: false, count: 0 }));
+      out.financial_rows = r?.count || 0;
+    }
   }
 
   // 4) Guarantor entity + guaranteed_by edge — ONLY now that the lease exists.
@@ -466,6 +517,75 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
         { Prefer: 'resolution=merge-duplicates,return=minimal' });
       return { ok: !!r.ok, count: r.ok ? payload.length : 0 };
     },
+    // Expense schedule → property_financials. BOUNDARY (cap_rate_history doctrine):
+    // every row is stamped is_actual=false + noi=null + source='folder_feed_lease'
+    // so the gov cap-rate provenance ladder (resolveCapRateProvenance Tier 2:
+    // is_actual=true AND noi not null) structurally cannot consume it. Dedups on
+    // (property_id, fiscal_year, source). Records folder_feed_lease provenance per
+    // expense column (field_source_priority registered by the sibling migration).
+    insertPropertyFinancials: async ({ domain, propertyId, rows }) => {
+      if (domain !== 'government' && domain !== 'dialysis') return { ok: false, count: 0 };
+      const pkCol = domain === 'government' ? 'financial_id' : 'id';
+      let count = 0, skipped = 0;
+      for (const r of rows) {
+        const payload = {
+          property_id: Number(propertyId),
+          fiscal_year: r.fiscal_year,
+          source: 'folder_feed_lease',
+          is_actual: false,            // BOUNDARY: never an audited actual
+          noi: null,                   // BOUNDARY: a lease expense schedule carries no NOI
+          taxes: r.taxes ?? null,
+          insurance: r.insurance ?? null,
+          cam: r.cam ?? null,
+          operating_expenses: r.operating_expenses ?? null,
+          line_items: r.line_items || null,
+        };
+        // Find OUR existing folder_feed_lease row for this (property, year). gov's
+        // unique key is (property_id, fiscal_year) — source-agnostic — so a year
+        // occupied by a curated/costar/legacy row must NOT be clobbered; dia's key
+        // is (property_id, fiscal_year, source), so our row coexists. Either way we
+        // only ever touch a row whose source IS folder_feed_lease.
+        const look = await domainQuery(domain, 'GET',
+          `property_financials?property_id=eq.${Number(propertyId)}&fiscal_year=eq.${r.fiscal_year}` +
+          `&select=${pkCol},source&order=${pkCol}.asc`).catch(() => ({ ok: false }));
+        const existingRows = (look.ok && Array.isArray(look.data)) ? look.data : [];
+        const ours = existingRows.find(x => x.source === 'folder_feed_lease');
+        let recId = null;
+        if (ours) {
+          const patch = { ...payload }; delete patch.is_actual;  // immutable post-insert
+          const r2 = await domainQuery(domain, 'PATCH', `property_financials?${pkCol}=eq.${pgFilterVal(ours[pkCol])}`, patch).catch(() => ({ ok: false }));
+          if (!r2.ok) continue;
+          recId = ours[pkCol];
+        } else if (domain === 'government' && existingRows.length > 0) {
+          // gov year already held by another source — boundary: do not clobber.
+          skipped++; continue;
+        } else {
+          const ins = await domainQuery(domain, 'POST', 'property_financials', payload, { Prefer: 'return=representation' }).catch(() => ({ ok: false }));
+          if (!ins.ok) { skipped++; continue; }
+          const row = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+          recId = row?.[pkCol] ?? null;
+        }
+        count++;
+        if (recId) {
+          for (const col of ['taxes', 'insurance', 'cam', 'operating_expenses']) {
+            if (payload[col] == null) continue;
+            await opsQuery('POST', 'rpc/lcc_merge_field', {
+              p_workspace_id: workspaceId || null,
+              p_target_database: DOMAIN_DB(domain),
+              p_target_table: `${DOMAIN_SCHEMA(domain)}.property_financials`,
+              p_record_pk: String(recId),
+              p_field_name: col,
+              p_value: payload[col],
+              p_source: 'folder_feed_lease',
+              p_source_run_id: null,
+              p_confidence: 0.7,
+              p_recorded_by: actorId || null,
+            }).catch(() => {});
+          }
+        }
+      }
+      return { ok: count > 0, count, skipped };
+    },
     ensureGuarantorEntity: async ({ domain, propertyId, name }) => {
       // Mint the guarantor org entity (idempotent on the normalized name), then a
       // guaranteed_by edge guarantor → the property's asset entity (cross-deal
@@ -575,6 +695,86 @@ export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, do
     doc: fileName ? { fileName, sourceUrl: storageRef } : null,
   }, deps);
   return { ok: applied.ok, dry_run: false, resolved, applied, boundary_ok: reported_targets.length === 0 };
+}
+
+/**
+ * Folder-feed channel entry: extract a lease doc → resolve the property (in-file
+ * address FIRST, then the path anchor) → enrich it (real) or preview (dry). This
+ * REPLACES the Stage-A light-attach for in-domain (`vertical` dia/gov) lease docs.
+ *
+ * Returns the SAME result shape as `attachRecognizedDoc` so the folder-feed
+ * worker's status mapping is shared: `{attached}` → 'attached',
+ * `{emitted_disambiguation}` → 'staged', `{no_domain}` →
+ * 'unresolved_no_domain_property'. Out-of-universe never guesses — it routes to
+ * the match_disambiguation lane (≥2 in-domain near-misses) or records unresolved.
+ *
+ * @param {object} a { storageRef, fileName, subjectHint, pathRef?, mediaType?, dryRun?, workspaceId, actorId }
+ * @param {object} [injected] { deps?, matchByPathAnchor?, emitMatchDisambiguation? } — tests inject; prod wires live
+ */
+export async function attachLeaseDoc(a, injected = {}) {
+  const { storageRef, fileName, subjectHint, mediaType, workspaceId, actorId, dryRun = false } = a;
+  const pathRef = a.pathRef || storageRef || fileName || null;
+  const deps = injected.deps || buildRealLeaseDeps({ workspaceId, actorId });
+  const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
+  const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
+
+  let normalized;
+  try {
+    ({ normalized } = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl }));
+  } catch (e) {
+    return { ok: false, attached: false, reason: `extract_failed:${e?.message || 'err'}`, match_status: null };
+  }
+
+  // Resolve: the in-file street address first (the attach-resolver), then fall
+  // back to the path anchor (tenant/City, ST) when the cover page omitted it.
+  let resolved = await resolveAttachFromExtraction(normalized, deps);
+  if (resolved.status !== 'matched') {
+    const m = await matchPath(subjectHint).catch(() => null);
+    if (m && m.status === 'matched' && m.property_id != null && (m.domain === 'government' || m.domain === 'dialysis')) {
+      resolved = { status: 'matched', domain: m.domain, property_id: m.property_id, reason: `path_anchor_${m.reason || 'match'}` };
+    } else if (m && m.status === 'review_required') {
+      resolved = { status: 'review_required', candidates: Array.isArray(m.candidates) ? m.candidates : [], reason: 'path_anchor_ambiguous' };
+    }
+  }
+
+  if (resolved.status === 'matched') {
+    const plan = planLeaseWrites(resolved.domain, normalized);
+    const reported_targets = Object.keys(plan.leaseFields).filter(isReportedField);
+    if (dryRun) {
+      return {
+        ok: true, attached: false, dry_run: true, domain: resolved.domain, property_id: resolved.property_id,
+        preview: {
+          lease_fields: plan.leaseFields, guarantor: plan.guarantor, ti_rows: plan.tiRows.length,
+          expense_rows: normalized.expense_schedule.length, financial_years: planExpenseFinancials(normalized).length,
+        },
+        boundary_ok: reported_targets.length === 0, reported_targets, match_status: 'matched',
+      };
+    }
+    const applied = await applyLeaseEnrichment({
+      domain: resolved.domain, propertyId: resolved.property_id, normalized,
+      doc: fileName ? { fileName, sourceUrl: storageRef } : null,
+    }, deps);
+    return {
+      ok: !!applied.ok, attached: !!applied.ok, lease: true,
+      domain: resolved.domain, property_id: resolved.property_id, applied,
+      boundary_ok: reported_targets.length === 0, match_status: 'matched',
+    };
+  }
+
+  if (resolved.status === 'review_required') {
+    let emitted = false;
+    try {
+      await emitDisambig(null, subjectHint?.tenant_brand || null, subjectHint?.tenant_brand || null,
+        Array.isArray(resolved.candidates) ? resolved.candidates : [],
+        { subjectRef: 'folder_feed_lease:' + pathRef, workspaceId,
+          context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: 'lease' } });
+      emitted = true;
+    } catch (err) { console.warn('[attachLeaseDoc] disambiguation emit failed (non-fatal):', err?.message); }
+    return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
+  }
+
+  // Unmatched — a genuine in-domain miss: captured + tenant-searchable, never a guess.
+  return { ok: false, attached: false, no_domain: true, reason: resolved.reason || 'no_domain_property', match_status: resolved.status || null };
 }
 
 /**
