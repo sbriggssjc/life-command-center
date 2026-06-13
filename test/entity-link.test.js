@@ -1,7 +1,8 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix,
-  isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName } from '../api/_shared/entity-link.js';
+  isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName,
+  isFieldLabelName, isImplausibleOwnerName } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
 
@@ -244,5 +245,45 @@ describe('entity-link helper', () => {
     assert.equal(result.ok, false);
     assert.equal(result.error, 'Failed to create external identity link');
     assert.equal(result.entity.id, 'entity-1');
+  });
+});
+
+// R15 Phase 2c — owner-name guard: reject bare field labels + the tenant brand,
+// accept real owner firms (the owner-specific complement to isJunkEntityName).
+describe('isFieldLabelName', () => {
+  it('rejects bare field labels (header grabbed instead of the value)', () => {
+    for (const label of ['Ownership', 'Owner', 'Seller', 'Buyer', 'Recorded Owner',
+      'True Owner', 'Landlord', 'Developer', 'L. BROKER', 'P. BROKER', 'Broker',
+      'Tenant', 'Lessee', 'Seller:', 'Owner :']) {
+      assert.equal(isFieldLabelName(label), true, `${label} is a label`);
+    }
+  });
+  it('accepts a real firm name that merely contains a label word as a token', () => {
+    assert.equal(isFieldLabelName('Seller Properties LLC'), false);
+    assert.equal(isFieldLabelName('Wallace Properties, Inc.'), false);
+    assert.equal(isFieldLabelName('Agarita Management Company'), false);
+    assert.equal(isFieldLabelName(''), false);
+    assert.equal(isFieldLabelName(null), false);
+  });
+});
+
+describe('isImplausibleOwnerName', () => {
+  it('rejects bare labels regardless of tenant', () => {
+    assert.equal(isImplausibleOwnerName('Ownership'), true);
+    assert.equal(isImplausibleOwnerName('Seller'), true);
+    assert.equal(isImplausibleOwnerName('L. BROKER'), true);
+  });
+  it('rejects the folder tenant brand (equality / substring / token overlap)', () => {
+    assert.equal(isImplausibleOwnerName('HUB Group Trucking', { tenantBrand: 'HUB Group Trucking' }), true);
+    assert.equal(isImplausibleOwnerName('Mavis', { tenantBrand: 'Mavis Tire' }), true);
+    assert.equal(isImplausibleOwnerName('Mavis Discount Tire', { tenantBrand: 'Mavis Tire' }), true);
+  });
+  it('accepts a real owner that is NOT the tenant', () => {
+    assert.equal(isImplausibleOwnerName('Agarita Management Company', { tenantBrand: 'HUB Group' }), false);
+    assert.equal(isImplausibleOwnerName('Wallace Properties, Inc.', { tenantBrand: 'Mavis Tire' }), false);
+    assert.equal(isImplausibleOwnerName('Vervent Holdings LLC', { tenantBrand: 'Vistra' }), false);
+  });
+  it('does not false-reject when tenant shares a single common token', () => {
+    assert.equal(isImplausibleOwnerName('First National Bank Trust', { tenantBrand: 'Bank' }), false);
   });
 });

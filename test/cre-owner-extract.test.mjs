@@ -154,6 +154,39 @@ describe('scanLoadedWorkbookForOwner (label scan)', () => {
     const hit = scanLoadedWorkbookForOwner(wb);
     assert.equal(hit.name, 'Boyd Watterson Global');
   });
+
+  // R15 Phase 2c — bug 1: never return a LABEL cell as the owner.
+  it('returns null when the owner value is blank (master sheet left owner empty)', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    ws.getRow(2).getCell(1).value = 'True Owner';
+    ws.getRow(2).getCell(2).value = '   ';        // whitespace-only adjacent
+    const hit = scanLoadedWorkbookForOwner(wb);
+    assert.equal(hit, null);
+  });
+
+  it('returns null when the adjacent value is itself another field label', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    // Header row: "Seller" label with "L. BROKER" (the next column header) adjacent.
+    ws.getRow(1).getCell(1).value = 'Seller';
+    ws.getRow(1).getCell(2).value = 'L. BROKER';
+    const hit = scanLoadedWorkbookForOwner(wb);
+    assert.equal(hit, null, 'a label value is rejected, not minted as the owner');
+  });
+
+  // R15 Phase 2c — bug 2: the tenant brand is not the owner (scan path).
+  it('rejects a scanned value that is the folder tenant brand', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    ws.getRow(3).getCell(1).value = 'Owner';
+    ws.getRow(3).getCell(2).value = 'Mavis Discount Tire';   // the TENANT, not the owner
+    const hit = scanLoadedWorkbookForOwner(wb, { tenantBrand: 'Mavis Tire' });
+    assert.equal(hit, null);
+    // …but a real owner on the same property still resolves.
+    const ok = scanLoadedWorkbookForOwner(wb, { tenantBrand: 'HUB Group' });
+    assert.equal(ok.name, 'Mavis Discount Tire');
+  });
 });
 
 describe('extractCreOwner (dispatch)', () => {
@@ -168,6 +201,13 @@ describe('extractCreOwner (dispatch)', () => {
     const buf = await workbookBuffer({ '1,1': 'Address', '1,2': '10 Market St' });
     const r = await extractCreOwner({ buffer: buf, fileName: 'sheet.xlsx' });
     assert.equal(r.name, null);
+  });
+
+  it('xlsx → threads tenantBrand into the scan (tenant-as-owner rejected)', async () => {
+    const buf = await workbookBuffer({ '2,1': 'Owner', '2,2': 'Mavis Discount Tire' });
+    const r = await extractCreOwner({ buffer: buf, fileName: 'Mavis (Master Sheet).xlsx', tenantBrand: 'Mavis Tire' });
+    assert.equal(r.method, 'master_sheet_label_scan');
+    assert.equal(r.name, null, 'the folder tenant is not minted as the owner');
   });
 
   it('pdf → AI fallback (injected), returns the owner name', async () => {

@@ -32,6 +32,7 @@
 import { createRequire } from 'node:module';
 import ExcelJS from 'exceljs';
 import { invokeExtractionAI } from './ai.js';
+import { isImplausibleOwnerName } from './entity-link.js';
 
 // createRequire'd for the same reason as intake-extractor.js — pdf-parse 1.1.1's
 // ESM-hostile debug block stays dormant under require().
@@ -127,9 +128,14 @@ function adjacentValueCandidates(ws, r, c, { rightWindow = 4, downWindow = 2 } =
  * cells, and takes the adjacent value (first non-empty cell to the right, then
  * the first non-empty cell below). Returns the highest-priority hit, or null.
  *
+ * `tenantBrand` (the folder's tenant/occupant brand) is threaded in as a NEGATIVE
+ * signal — the tenant is NOT the owner (R15 Phase 2c). A scanned value that is a
+ * bare field label OR the tenant brand is rejected here, returning null instead
+ * of minting the label/tenant. The same guard runs again at the mint boundary.
+ *
  * @returns {{name:string, label:string}|null}
  */
-export function scanLoadedWorkbookForOwner(workbook, { maxRows = 400, maxCols = 80 } = {}) {
+export function scanLoadedWorkbookForOwner(workbook, { maxRows = 400, maxCols = 80, tenantBrand = null } = {}) {
   let best = null; // { rank, name, label }
   for (const ws of workbook?.worksheets || []) {
     const rowCount = Math.min(ws.rowCount || 0, maxRows);
@@ -145,6 +151,9 @@ export function scanLoadedWorkbookForOwner(workbook, { maxRows = 400, maxCols = 
           if (isNumericOrDate(adj)) continue;
           const val = cellText(adj).trim();
           if (!looksLikeOwnerValue(val)) continue;
+          // Reject a bare field label (Buyer / L. BROKER / Tenant …) or the
+          // tenant brand grabbed from the adjacent cell — never the owner.
+          if (isImplausibleOwnerName(val, { tenantBrand })) continue;
           // Strict `<` keeps the FIRST hit on a rank tie (deterministic).
           if (!best || rank < best.rank) best = { rank, name: val, label: cellText(labelCell).trim() };
           break; // first usable adjacent for this label
@@ -253,7 +262,9 @@ export async function extractCreOwner({ buffer, contentType, fileName, tenantBra
     const loadWorkbook = deps.loadWorkbook || defaultLoadWorkbook;
     try {
       const wb = await loadWorkbook(buffer);
-      const hit = scanLoadedWorkbookForOwner(wb);
+      // tenantBrand is a NEGATIVE signal for the scan (blocker 2 — the tenant is
+      // not the owner), mirroring the PDF AI prompt below.
+      const hit = scanLoadedWorkbookForOwner(wb, { tenantBrand });
       return { name: hit?.name || null, label: hit?.label || null, method: 'master_sheet_label_scan' };
     } catch (e) {
       return { name: null, method: 'master_sheet_label_scan', error: e?.message?.slice(0, 200) || 'xlsx_load_failed' };

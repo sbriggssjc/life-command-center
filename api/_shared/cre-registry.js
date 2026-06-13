@@ -32,6 +32,7 @@ import {
   normalizeCanonicalName,
   looksLikePersonName,
   hasFirmSuffix,
+  isImplausibleOwnerName,
 } from './entity-link.js';
 
 // ---- Pure helpers ----------------------------------------------------------
@@ -161,9 +162,10 @@ export async function performCreRegister(args, deps) {
   let ownerEntityId = null;
   const ownerName = extractOwnerName(snapshot);
   if (ownerName) {
-    const res = await ensureOwnerEntity(ownerName, { workspaceId, actorId }).catch(() => null);
+    // Thread the tenant brand so the mint boundary rejects a tenant-as-owner.
+    const res = await ensureOwnerEntity(ownerName, { workspaceId, actorId, tenantBrand: key.tenant_brand }).catch(() => null);
     if (res && res.ok && res.entityId) ownerEntityId = res.entityId;
-    // res.ok=false (junk/implausible/federal anti-pattern) → leave pending.
+    // res.ok=false (junk/implausible/federal anti-pattern/label/tenant) → leave pending.
   }
 
   // ---- Match-or-create the CRE property (fill-blanks only) ----------------
@@ -331,9 +333,18 @@ async function findReusableOwnerEntity(name, workspaceId) {
 //      surface that as ok:false so the caller leaves the owner pending.
 //
 // deps (injected for tests): { matchExisting, mintEntity }.
-export async function ensureCreOwnerEntity(name, { workspaceId, actorId } = {}, deps = {}) {
+export async function ensureCreOwnerEntity(name, { workspaceId, actorId, tenantBrand = null } = {}, deps = {}) {
   const matchExisting = deps.matchExisting || ((nm) => findReusableOwnerEntity(nm, workspaceId));
   const mintEntity = deps.mintEntity || ((args) => ensureEntityLink(args));
+
+  // The shared mint boundary — runs BEFORE the reuse gate so NO extraction path
+  // (xlsx scan / PDF AI) can mint OR REUSE a bare field label ("Ownership",
+  // "Seller", "L. BROKER") or the folder's TENANT brand as the owner (R15 Phase
+  // 2c). The reuse gate skips ensureEntityLink's junk guards, so this is the only
+  // place a tenant/label could otherwise sneak through to an existing entity.
+  if (isImplausibleOwnerName(name, { tenantBrand })) {
+    return { ok: false, skipped: 'implausible_owner_name' };
+  }
 
   // An org carrying a firm suffix ("Truist Bank", "Lexington Realty Trust") can
   // pass looksLikePersonName (2 capitalized tokens), so treat firm-suffixed names
