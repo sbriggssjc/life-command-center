@@ -117,6 +117,7 @@
     { "source": "/api/folder-feed-tick", "destination": "/api/intake?_route=folder-feed-tick" },
     { "source": "/api/intake-extract-drain", "destination": "/api/intake?_route=intake-extract-drain" },
     { "source": "/api/property-doc-writeback", "destination": "/api/intake?_route=property-doc-writeback" },
+    { "source": "/api/cre-owner-backfill", "destination": "/api/intake?_route=cre-owner-backfill" },
     { "source": "/api/lease-extract", "destination": "/api/intake?_route=lease-extract" },
     { "source": "/api/sf-activity", "destination": "/api/intake?_route=sf-activity" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },
