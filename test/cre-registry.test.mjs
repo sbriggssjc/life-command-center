@@ -187,6 +187,38 @@ describe('performCreRegister', () => {
     assert.equal(mintArgs.sourceType, 'true_owner');
   });
 
+  it('Phase 2c — a bare field label is rejected at the mint boundary (never reused/minted)', async () => {
+    let matchCalled = false; let minted = false;
+    const res = await ensureCreOwnerEntity('Ownership', { workspaceId: 'ws1', actorId: 'u1' }, {
+      matchExisting: async () => { matchCalled = true; return { entityId: 'x' }; },
+      mintEntity: async () => { minted = true; return { ok: true, entityId: 'y' }; },
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.skipped, 'implausible_owner_name');
+    assert.equal(matchCalled, false, 'rejected BEFORE the reuse gate');
+    assert.equal(minted, false);
+  });
+
+  it('Phase 2c — the folder tenant brand is rejected at the mint boundary', async () => {
+    let minted = false;
+    const res = await ensureCreOwnerEntity('Mavis Discount Tire', { workspaceId: 'ws1', actorId: 'u1', tenantBrand: 'Mavis Tire' }, {
+      matchExisting: async () => ({ entityId: 'x' }),
+      mintEntity: async () => { minted = true; return { ok: true, entityId: 'y' }; },
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.skipped, 'implausible_owner_name');
+    assert.equal(minted, false);
+  });
+
+  it('Phase 2c — a real owner that is NOT the tenant still mints', async () => {
+    const res = await ensureCreOwnerEntity('Agarita Management Company', { workspaceId: 'ws1', actorId: 'u1', tenantBrand: 'HUB Group' }, {
+      matchExisting: async () => null,
+      mintEntity: async (args) => ({ ok: true, entityId: 'cre-agarita', _type: args.sourceType }),
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.entityId, 'cre-agarita');
+  });
+
   it('blocker 1 — person names are NOT reused (matchExisting never consulted)', async () => {
     let matchCalled = false;
     const res = await ensureCreOwnerEntity('John Q. Smith', { workspaceId: 'ws1', actorId: 'u1' }, {

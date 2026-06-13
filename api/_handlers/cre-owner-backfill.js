@@ -83,7 +83,9 @@ export async function backfillOneProperty(prop, deps) {
     return { cre_property_id: prop.id, status: 'no_readable_doc' };
   }
 
-  const ctx = { workspaceId: prop.workspaceId, actorId: prop.actorId };
+  // tenantBrand is threaded to the mint boundary as a NEGATIVE signal — the
+  // tenant is never the owner (R15 Phase 2c).
+  const ctx = { workspaceId: prop.workspaceId, actorId: prop.actorId, tenantBrand: prop.tenant_brand };
   let sawRead = false;
   let lastRejected = null;
   let lastNoOwner = null;

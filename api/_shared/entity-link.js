@@ -401,6 +401,65 @@ export function looksLikePersonName(name) {
   return tokens.every((tok) => /^[A-Za-z][A-Za-z'.\-]*$/.test(tok));
 }
 
+// ---------------------------------------------------------------------------
+// Owner-name plausibility guard (R15 Phase 2c, 2026-06-13)
+// ---------------------------------------------------------------------------
+// CRE owner extraction reads owner names out of messy broker docs / Briggs
+// master sheets. Two failure modes the structural junk guard (isJunkEntityName)
+// does NOT catch: a bare field LABEL ("Ownership", "Seller", "L. BROKER") grabbed
+// instead of the adjacent value, and the building's TENANT brand pulled as the
+// owner. isImplausibleOwnerName is the owner-specific complement — run at every
+// CRE owner-mint boundary (and the scan/AI extraction paths) so NO path can mint
+// a label or the tenant as an owner.
+//
+// Anchored exact-ish on the label WORDS so a real owner that merely contains a
+// label token still passes ("Seller Properties LLC" / "Wallace Properties, Inc."
+// are fine; bare "Seller" / "L. BROKER" are not).
+const OWNER_FIELD_LABEL_RE =
+  /^(?:ownership|owners?|recorded\s*owner|owner\s*of\s*record|true\s*owner|current\s*owner|sellers?|buyers?|landlord|lessors?|tenants?|lessees?|developers?|brokers?|l\.?\s*broker|p\.?\s*broker|listing\s*broker|purchasing\s*broker|contacts?|agency|address|city|state)$/i;
+
+// True for a bare field-label cell ("Ownership", "Seller", "L. BROKER") — a
+// header the scan/AI grabbed instead of the value. Strips a trailing colon and
+// collapses internal whitespace before matching.
+export function isFieldLabelName(name) {
+  if (typeof name !== 'string') return false;
+  const t = name.trim().replace(/[:：]\s*$/, '').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  return OWNER_FIELD_LABEL_RE.test(t);
+}
+
+// Normalize a brand/owner name for tenant comparison: lower-case, drop
+// punctuation, collapse whitespace.
+function normalizeBrandName(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// True when `name` should NOT be minted as a CRE owner: it is a bare field label,
+// OR it IS the folder's TENANT brand (the tenant is never the owner). The tenant
+// match is conservative — exact normalized equality, substring either way, or a
+// full multi-token tenant overlap ("Mavis Tire" ⊂ "Mavis Discount Tire") — so a
+// real owner ("Agarita Management Company" on a HUB Group property) still passes.
+export function isImplausibleOwnerName(name, { tenantBrand = null } = {}) {
+  if (typeof name !== 'string') return false;
+  const t = name.trim();
+  if (!t) return false;
+  if (isFieldLabelName(t)) return true;
+  const owner = normalizeBrandName(t);
+  const tenant = normalizeBrandName(tenantBrand);
+  if (owner && tenant) {
+    if (owner === tenant) return true;
+    // Owner is a FRAGMENT of the tenant brand ("Mavis" of "Mavis Tire").
+    if (tenant.includes(owner)) return true;
+    // Owner carries every token of a multi-token tenant ("Mavis Tire" ⊂ "Mavis
+    // Discount Tire", or "tenant + suffix"). ≥2 tokens avoids a single common
+    // word ("Bank") false-rejecting a longer legitimate owner that shares it.
+    const ownerTokens = new Set(owner.split(' ').filter(Boolean));
+    const tenantTokens = tenant.split(' ').filter(Boolean);
+    if (tenantTokens.length >= 2 && tenantTokens.every((tok) => ownerTokens.has(tok))) return true;
+  }
+  return false;
+}
+
 // Title tokens that can be glued to a captured name with no delimiter
 // ("John CarverExecutive Vice President", "Steve MoormannAgent").
 const CONTACT_TITLE_WORDS = new Set([
