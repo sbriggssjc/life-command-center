@@ -2912,7 +2912,8 @@ async function renderCadenceDashboard() {
     var action;
     if (isEmail && cid && eid && tmpl) {
       action = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
-        + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '') + ', this)">Draft email →</button>';
+        + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
+        + ',' + jsStringArg(it.contact_email || '') + ', this)">Draft email →</button>';
     } else if (cid && eid) {
       action = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
         + ',' + jsStringArg(nt || 'call') + ', this)">Log touch →</button>';
@@ -2930,7 +2931,7 @@ async function renderCadenceDashboard() {
 window.renderCadenceDashboard = renderCadenceDashboard;
 
 // Generate the next-touch email inline (no sending — copy / mailto / mark sent).
-async function cadDraft(cadenceId, entityId, templateId, name, domain, btn) {
+async function cadDraft(cadenceId, entityId, templateId, name, domain, contactEmail, btn) {
   var card = (btn && btn.closest) ? btn.closest('.q-item') : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Drafting…'; }
   var body = {
@@ -2952,8 +2953,16 @@ async function cadDraft(cadenceId, entityId, templateId, name, domain, btn) {
   if (!host) { host = document.createElement('div'); host.className = 'cad-draft'; card.appendChild(host); }
   // Stash the rendered draft on the card for record_send + edit capture.
   card._cadDraft = { templateId: templateId, entityId: entityId, domain: domain || '', subject: subject, body: bodyText };
-  var mailto = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
-  host.innerHTML = '<div class="cad-draft-subj"><b>Subject:</b> ' + esc(subject) + '</div>'
+  // R20: resolve the recipient from the cadence's contact entity (= the person,
+  // incl. a person who is their own contact). Falls back to an empty to: when
+  // the contact carries no email (phone-only persons / unresolved contacts).
+  var to = (contactEmail || '').trim();
+  var mailto = 'mailto:' + encodeURIComponent(to) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
+  var recipientLine = to
+    ? '<div class="cad-draft-to"><b>To:</b> ' + esc(to) + '</div>'
+    : '<div class="cad-draft-to q-item-meta">No recipient email on file — add a "To:" in your mail client.</div>';
+  host.innerHTML = recipientLine
+    + '<div class="cad-draft-subj"><b>Subject:</b> ' + esc(subject) + '</div>'
     + '<textarea class="cad-draft-body" rows="8" style="width:100%;margin:6px 0">' + esc(bodyText) + '</textarea>'
     + '<div class="q-actions">'
     + '<button class="q-action" onclick="cadCopyDraft(this)">Copy</button>'

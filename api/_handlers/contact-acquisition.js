@@ -19,6 +19,14 @@
 //   GET  → dry-run (no SF calls, no writes) — reports what WOULD be processed.
 //   POST → drain (bounded by `limit` + a wall-clock budget).
 //
+// R20 (2026-06-15) — person-is-its-own-contact (the near-free unlock). Before
+// the SF pass, a Pass-1 self-stamp runs over the SAME contactless set: for a
+// cadence seeded ON a person who already carries an email/phone on the entity
+// record, stamp contact_id = entity_id (the person IS the contact). This needs
+// no Salesforce, so it runs even when the SF flow is unconfigured. Auditing the
+// "cold" cadences live 2026-06-15 found ~200 such person-with-contact rows that
+// were sitting un-actionable in P-CONTACT purely because contact_id was null.
+//
 // Outcome-truthful + don't-re-hammer: an entity where SF returns no contacts is
 // marked on the cadence (metadata.contact_acquisition) so it isn't re-hit every
 // tick, and it falls to the P-CONTACT lane (Unit 2 gate) for manual
@@ -33,13 +41,37 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { ensureEntityLink } from '../_shared/entity-link.js';
+import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
 import { getSalesforceContactsByAccount, isSalesforceConfigured } from '../_shared/salesforce.js';
 import { linkPersonToEntity, stampCadenceContactById, ACTIVE_CADENCE_PHASES } from '../_shared/contact-attach.js';
 
 // Transient SF outages (unavailable) get a few retries; a definitive empty
 // account (no_contacts / no_usable_contacts) is terminal — never re-hammered.
 const MAX_UNAVAILABLE_ATTEMPTS = parseInt(process.env.CONTACT_ACQ_MAX_ATTEMPTS || '4', 10);
+
+/**
+ * R20 — person-is-its-own-contact eligibility. A cadence seeded ON an individual
+ * (the owner IS a person) who already carries an email or phone on the entity
+ * record needs no contact acquisition — the person IS the contact. This guard
+ * decides whether such a cadence can self-stamp `contact_id = entity_id`.
+ *
+ * Boundaries (the same guard the P-CONTACT picker uses, so the two never
+ * diverge): ONLY a `person`-typed entity (an org is never its own contact);
+ * with a real email or phone on the record; not junk/orphan-flagged; and a
+ * plausible HUMAN name (`looksLikePersonName` rejects firm-suffix / deal
+ * artifacts mistyped as persons — e.g. "DAUM Commercial Real Estate Services").
+ * Never fabricates contact data — only wires what's already on the record.
+ */
+export function isSelfContactablePerson(entity) {
+  if (!entity || entity.entity_type !== 'person') return false;
+  const email = entity.email && String(entity.email).trim();
+  const phone = entity.phone && String(entity.phone).trim();
+  if (!email && !phone) return false;
+  const md = entity.metadata;
+  if (md && (md.junk_name_flagged === true || md.orphan_flagged === true)) return false;
+  if (!looksLikePersonName(entity.name)) return false;
+  return true;
+}
 
 /** Has a prior tick already exhausted this cadence's SF acquisition attempts? */
 export function isAcqExhausted(metadata) {
@@ -122,12 +154,16 @@ export async function handleContactAcquisitionTick(req, res) {
 
   const dryRun = req.method === 'GET';
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+  const selfStampLimit = Math.min(200, Math.max(1,
+    parseInt(req.query.self_stamp_limit || process.env.CONTACT_ACQ_SELF_STAMP_LIMIT || '100', 10)));
   const configured = isSalesforceConfigured();
 
   const result = {
     mode: dryRun ? 'dry_run' : 'apply',
     sf_configured: configured,
     scanned_cadences: 0,
+    self_stamp_eligible: 0,   // R20: person-is-own-contact set
+    self_stamped: 0,
     sf_mapped: 0,
     candidates: 0,
     acquired: 0,
@@ -137,18 +173,12 @@ export async function handleContactAcquisitionTick(req, res) {
     items: [],
   };
 
-  // Feature flag: no-op cleanly when the SF flow isn't wired (same posture as
-  // the buyer-contact picker / folder-feed channels).
-  if (!configured) {
-    result.note = 'salesforce_not_configured — worker is inert until SF_LOOKUP_WEBHOOK_URL is set';
-    return res.status(200).json(result);
-  }
-
-  // Step A — contactless overdue active cadences. Over-fetch so the
-  // already-exhausted (no_contacts) rows can be filtered out in JS and we still
-  // fill the per-tick budget with workable candidates.
+  // Step A — contactless overdue active cadences. Shared by BOTH passes (the
+  // R20 self-stamp pass and the SF-acquisition pass). Over-fetch so the
+  // already-exhausted rows can be filtered out in JS and we still fill the
+  // per-tick budget with workable candidates.
   const nowIso = new Date().toISOString();
-  const overFetch = Math.min(400, limit * 6);
+  const overFetch = Math.min(600, Math.max(limit, selfStampLimit) * 6);
   const cadRes = await opsQuery('GET',
     'touchpoint_cadence?contact_id=is.null&sf_contact_id=is.null'
     + '&next_touch_due=lte.' + encodeURIComponent(nowIso)
@@ -173,32 +203,86 @@ export async function handleContactAcquisitionTick(req, res) {
     return res.status(200).json(result);
   }
 
-  // Step B — which of those entities carry an SF ACCOUNT identity, and their
-  // workspace (needed for entity creation). Batch both lookups.
+  // Step B — entity facts (type/email/phone/metadata/workspace/name) for the
+  // self-stamp pass, and the SF ACCOUNT identity map for the acquisition pass.
+  // The SF map is only needed when SF is configured.
+  const entityById = new Map();
   const sfByEntity = new Map();
-  const wsByEntity = new Map();
   for (let i = 0; i < entityIds.length; i += 100) {
     const slice = entityIds.slice(i, i + 100);
     const inList = slice.map(pgFilterVal).join(',');
-    const eiRes = await opsQuery('GET', 'external_identities?source_system=eq.salesforce&source_type=eq.Account'
-      + '&entity_id=in.(' + inList + ')&select=entity_id,external_id');
-    if (eiRes.ok && Array.isArray(eiRes.data)) {
-      for (const row of eiRes.data) {
-        if (row.entity_id && row.external_id && !sfByEntity.has(row.entity_id)) sfByEntity.set(row.entity_id, row.external_id);
+    const enRes = await opsQuery('GET', 'entities?id=in.(' + inList + ')'
+      + '&select=id,workspace_id,name,entity_type,email,phone,metadata');
+    if (enRes.ok && Array.isArray(enRes.data)) {
+      for (const row of enRes.data) entityById.set(row.id, row);
+    }
+    if (configured) {
+      const eiRes = await opsQuery('GET', 'external_identities?source_system=eq.salesforce&source_type=eq.Account'
+        + '&entity_id=in.(' + inList + ')&select=entity_id,external_id');
+      if (eiRes.ok && Array.isArray(eiRes.data)) {
+        for (const row of eiRes.data) {
+          if (row.entity_id && row.external_id && !sfByEntity.has(row.entity_id)) sfByEntity.set(row.entity_id, row.external_id);
+        }
       }
     }
-    const enRes = await opsQuery('GET', 'entities?id=in.(' + inList + ')&select=id,workspace_id,name');
-    if (enRes.ok && Array.isArray(enRes.data)) {
-      for (const row of enRes.data) wsByEntity.set(row.id, { workspace_id: row.workspace_id, name: row.name });
+  }
+
+  const deadline = Date.now() + parseInt(process.env.CONTACT_ACQ_BUDGET_MS || '20000', 10);
+
+  // ── Pass 1 (R20): self-stamp the person-is-own-contact set. ───────────────
+  // A person entity with its own email/phone IS the contact. Stamp
+  // contact_id = entity_id so the cadence becomes reachable + draftable. Needs
+  // NO Salesforce, so it runs whether or not SF is configured. Idempotent
+  // (guarded on contact_id IS NULL by the fetch; a re-tick can't double-stamp
+  // because the row leaves the contactless set once stamped).
+  const selfStamped = new Set();
+  const selfEligible = [];
+  for (const entityId of entityIds) {
+    const e = entityById.get(entityId);
+    if (!isSelfContactablePerson(e)) continue;
+    selfEligible.push({ entity_id: entityId, entity_name: e.name, cadence_id: perEntity.get(entityId).id });
+  }
+  result.self_stamp_eligible = selfEligible.length;
+  const selfWork = selfEligible.slice(0, selfStampLimit);
+  let anyWrite = false;
+  if (dryRun) {
+    for (const s of selfWork) {
+      result.items.push({ pass: 'self_stamp', entity_id: s.entity_id, entity_name: s.entity_name, cadence_id: s.cadence_id });
     }
+  } else {
+    for (const s of selfWork) {
+      if (Date.now() > deadline) { result.budget_stopped = true; break; }
+      const cad = perEntity.get(s.entity_id);
+      const up = await stampCadenceContactById(s.cadence_id, {
+        contactEntityId: s.entity_id,        // the person is their own contact
+        existingMetadata: cad.metadata || {},
+        acquisitionMeta: { status: 'self_contact', via: 'person_self_contact', last_attempt_at: new Date().toISOString() },
+      });
+      if (up.ok) {
+        result.self_stamped++; anyWrite = true; selfStamped.add(s.entity_id);
+        result.items.push({ pass: 'self_stamp', entity_id: s.entity_id, entity_name: s.entity_name, cadence_id: s.cadence_id, outcome: 'self_stamped' });
+      } else {
+        result.items.push({ pass: 'self_stamp', entity_id: s.entity_id, entity_name: s.entity_name, cadence_id: s.cadence_id, outcome: 'stamp_failed', detail: up.detail });
+      }
+    }
+  }
+
+  // ── Pass 2: SF contact acquisition (only when SF is configured). ──────────
+  if (!configured) {
+    result.note = result.self_stamp_eligible
+      ? 'salesforce_not_configured — SF acquisition inert; self-contact pass ran'
+      : 'salesforce_not_configured — SF acquisition inert; no self-contactable persons either';
+    if (anyWrite) { try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ } }
+    return res.status(200).json(result);
   }
 
   const candidates = [];
   for (const entityId of entityIds) {
+    if (selfStamped.has(entityId)) continue;   // already given its own contact (Pass 1)
     const accountId = sfByEntity.get(entityId);
-    if (!accountId) continue;   // no SF account → out of scope (the 328 cold set)
+    if (!accountId) continue;   // no SF account + not self-contactable → cold set (out of scope)
     const cad = perEntity.get(entityId);
-    const meta = wsByEntity.get(entityId) || {};
+    const meta = entityById.get(entityId) || {};
     candidates.push({
       cadence_id: cad.id,
       entity_id: entityId,
@@ -216,12 +300,13 @@ export async function handleContactAcquisitionTick(req, res) {
   result.candidates = work.length;
 
   if (dryRun) {
-    result.items = work.map(c => ({ entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, cadence_id: c.cadence_id }));
+    for (const c of work) {
+      result.items.push({ pass: 'sf_acquire', entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, cadence_id: c.cadence_id });
+    }
     return res.status(200).json(result);
   }
 
-  // Drain, bounded by a wall-clock budget (SF flow calls are serial HTTP).
-  const deadline = Date.now() + parseInt(process.env.CONTACT_ACQ_BUDGET_MS || '20000', 10);
+  // Drain, bounded by the same wall-clock budget (SF flow calls are serial HTTP).
   let anyAcquired = false;
   for (const c of work) {
     if (Date.now() > deadline) { result.budget_stopped = true; break; }
@@ -250,12 +335,13 @@ export async function handleContactAcquisitionTick(req, res) {
     if (out.outcome === 'acquired') { result.acquired++; result.contacts_created += out.contacts_created; anyAcquired = true; }
     else if (out.outcome === 'no_contacts') result.no_contacts++;
     else result.unavailable++;
-    result.items.push({ entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, outcome: out.outcome, contacts_created: out.contacts_created || 0 });
+    result.items.push({ pass: 'sf_acquire', entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, outcome: out.outcome, contacts_created: out.contacts_created || 0 });
   }
 
-  // Staleness hook: acquired entities just became reachable — refresh the queue
-  // cache so they leave P-CONTACT within the request instead of waiting 5 min.
-  if (anyAcquired) {
+  // Staleness hook: self-stamped + acquired entities just became reachable —
+  // refresh the queue cache so they leave P-CONTACT within the request instead
+  // of waiting the */5 cron.
+  if (anyWrite || anyAcquired) {
     try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
   }
 
