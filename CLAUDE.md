@@ -2505,3 +2505,59 @@ The rendering of the connected-value state in the entity-detail Next-Step banner
 (the full "one truth, three renderings"); optional `owns`-weighted tiering of the
 connected value (kept a flat SUM here — "dollars of property controlled" is the
 honest, explainable signal).
+
+## R18 — durable DB-growth prevention: close the whack-a-mole (2026-06-15)
+
+DB-size bloat caused two near-auth-lockout incidents (May: `sf_sync_log` 5.5 GB;
+June: `staged_intake_artifacts` 9.85 GB). **Auth lives on LCC Opps — disk-full
+there = read-only = total sign-in lockout.** Audit verdict 2026-06-15:
+
+- The two incident tables are durably **source-fixed** (payloads externalized —
+  `sf_sync_log` no longer stores `payload` on `ok` rows; OM artifacts now write
+  to SharePoint/Storage at ingest). They won't re-bloat.
+- Every big table has a **retention prune** (sf_sync_log 30d, context_packets
+  7d, staged_intake_artifacts 50d, field_provenance 90d) → growth is bounded.
+- The remaining systemic exposure was **"a disabled maintenance cron goes
+  unnoticed"** (the June root cause: artifact-offload was deliberately disabled
+  after a connection incident and silently stayed off while the backlog grew —
+  the hourly `lcc-cron-health-check` watches for run FAILURES, not for jobs
+  switched OFF). R18 closes it.
+- **VACUUM FULL stays a rare manual tool** (only after a bloat event). Runbook
+  note: VACUUM FULL scratch space ≈ **LIVE** data size, not total table size —
+  so a bloated-but-mostly-dead table (like the June artifacts once offloaded +
+  nulled) can be reclaimed even at low headroom.
+
+### Unit 1 — autovacuum hardening parity (repo migration)
+The live autovacuum hardening (applied 2026-06-15 so prune-freed space is
+reused and churn-driven file growth is capped) is now committed as
+`20260615120000_lcc_r18_unit1_autovacuum_hardening_parity.sql` (idempotent
+`ALTER TABLE ... SET`, `to_regclass`-guarded) so a rebuild/replay keeps it:
+`field_provenance` (0.05/0.05/threshold 10000), `perf_metrics` (0.05/0.05/5000),
+`signals` (0.05/0.05/5000), `staged_intake_artifacts` (0.05/0.05/500).
+`context_packets` + `sf_sync_log` already carry theirs from prior migrations.
+
+### Unit 2 — alert when a CRITICAL maintenance cron is disabled
+`public.lcc_check_disabled_critical_crons()` (migration
+`20260615121000_lcc_r18_unit2_disabled_critical_cron_alert.sql`) checks a small
+allowlist of maintenance/retention/offload crons whose absence causes silent
+bloat/disk risk: `lcc-artifact-offload-edge`, `sf-sync-log-prune`,
+`field-provenance-prune`, `lcc-context-packet-prune`,
+`lcc-staged-intake-artifacts-prune`, `lcc-disk-health-check`,
+`lcc-pg-net-response-cleanup`. Any allowlisted job that is **missing OR
+`active=false`** opens a `maintenance_cron_disabled` alert in
+`lcc_health_alerts` (severity warn, one open per jobname, idempotent via
+NOT-EXISTS-open); auto-resolves when the job is active again. Conservative —
+maintenance jobs ONLY, so a deliberately-disabled feature cron never alerts.
+**Folded into the EXISTING `lcc-cron-health-check` tick (:15)** rather than a new
+cron (a new watcher could itself be silently disabled — the very failure mode
+being closed); the migration sorts after the original monitor migration so a
+replay re-establishes the combined command last. Surfaced by
+`v_cron_health_summary` + the daily briefing + the Teams health push.
+
+### Verified live (read-only / rolled-back, 0 residue) 2026-06-15
+Unit 1 reloptions match the live-applied values exactly. Unit 2: healthy state
+(all 7 maintenance crons active) → `new_alerts=0, resolved=0, down=[]` (no false
+alarms); a simulated missing job is detected `down=true` while an active one is
+`down=false`; a seeded stale open alert on an active job auto-resolved. Both
+applied live to LCC Opps; the `lcc-cron-health-check` command now runs both
+functions. DB-only, no Railway dependency; auth schema untouched.
