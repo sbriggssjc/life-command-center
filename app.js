@@ -7258,15 +7258,19 @@ function renderTeamPulse() {
   if (!widget || !el) return;
 
   // Only show for managers/owners with meaningful canonical data.
-  // QA-22 (2026-05-18): also gate on live sync-health connector errors so
-  // the widget appears when only that signal is non-zero (stale
-  // canonicalCounts.sync_errors meant the widget was hidden when only the
-  // live count was non-zero).
+  // R25 Unit 3 follow-up (2026-06-15): the visibility gate keys on the LIVE
+  // bounded sync-error count (window._lccLiveSyncErrors), NOT
+  // canonicalCounts.sync_errors. The latter is mv_work_counts.sync_errors — an
+  // all-time row total (~2,638) refreshed every 5min by pg_cron, mislabeled as
+  // "current". It was the last Team-Pulse reference to that stale field (the
+  // displayed value already reads the live count below); removing it here means
+  // the whole card — visibility AND value — agrees with the Daily Briefing Team
+  // Signals tile on the same bounded source.
   const isManager = LCC_USER.role === 'owner' || LCC_USER.role === 'manager';
   const liveSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : 0;
   const hasData = canonicalCounts && (
     (canonicalCounts.open_actions || 0) > 0 || (canonicalCounts.open_escalations || 0) > 0 ||
-    (canonicalCounts.sync_errors || 0) > 0 || liveSyncErr > 0 || (canonicalCounts.in_progress || 0) > 0
+    liveSyncErr > 0 || (canonicalCounts.in_progress || 0) > 0
   );
   if (!isManager || !hasData) {
     widget.style.display = 'none';
