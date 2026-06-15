@@ -126,6 +126,31 @@ export function isExcludedFolderPath(folderPath) {
   );
 }
 
+// ── Multi-tenant / portfolio deal-folder guard (multi-tenant contamination) ──
+// A lease (or any single-asset enrich doc) living UNDER a `/Multi/` or
+// `/Portfolio(s)/` path SEGMENT is part of a multi-tenant or portfolio deal
+// package, NOT a single-asset/single-tenant lease. Per Scott's dia/gov doctrine
+// (single-asset, single-tenant) the lease extractor must NOT auto-create or fill
+// a domain lease from these folders — doing so cross-attributes one tenant's
+// terms/guarantor onto another (the Hertz-in-"DaVita Anchored - Springfield, IL"
+// contamination, 2026-06-15). Whole-segment + case-insensitive so a tenant
+// legitimately named "Multifoods" / "Multimedia …" (segment ≠ "Multi") is NOT
+// caught. Keep the list small + named — extend here, in one place.
+export const MULTITENANT_FOLDER_SEGMENT_RES = [/^multi$/i, /^multi[\s_-]?tenant$/i, /^portfolios?$/i];
+
+/**
+ * True when ANY '/'-delimited segment of `folderPath` is a multi-tenant /
+ * portfolio deal-folder bucket (Multi / Multitenant / Portfolio / Portfolios).
+ * Call with a folder path or with a file's full path — every segment is tested
+ * as a whole segment so a substring like "Multimedia" never false-positives.
+ * @param {string} folderPath
+ * @returns {boolean}
+ */
+export function isMultiTenantDealFolderPath(folderPath) {
+  const segs = String(folderPath || '').replace(/\\/g, '/').split('/').map(s => s.trim()).filter(Boolean);
+  return segs.some(seg => MULTITENANT_FOLDER_SEGMENT_RES.some(re => re.test(seg)));
+}
+
 // ── City/ST + street-address + portfolio recovery (Phase 2, Slice 2d.1) ─────
 // The PROPERTIES tree rarely follows the clean PROPERTIES/<tenant>/<City, ST>/
 // shape: the "City, ST" usually lives in the FILENAME ("… - Austin, TX - …")
