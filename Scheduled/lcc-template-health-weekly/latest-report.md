@@ -1,6 +1,6 @@
 # LCC Template Health Report
 
-**Week of:** June 8, 2026
+**Week of:** June 15, 2026
 **Lookback window:** 120 days
 **Run mode:** Live API call against `https://tranquil-delight-production-633f.up.railway.app/api/operations?_route=draft&action=health` with `X-LCC-Key`.
 **Status:** ✅ Completed — HTTP 200.
@@ -16,7 +16,7 @@
 
 Health endpoint returned a clean 200. **No templates need revision and none are underperforming.** All 14 active templates are flagged `stale` for the same standing reason as every prior week: no broker sends have been recorded in the lookback window, so there is no edit-distance or performance data to score.
 
-| Metric | This week (Jun 8) | Last week (Jun 1) |
+| Metric | This week (Jun 15) | Last week (Jun 8) |
 |---|---|---|
 | Endpoint response | **HTTP 200** | HTTP 200 |
 | Total templates evaluated | **14** | 14 |
@@ -58,17 +58,18 @@ Health endpoint returned a clean 200. **No templates need revision and none are 
 
 ## What needs attention this week
 
-1. **Standing item (6 weeks running):** the refinement loop has nothing to score because no sends are recorded in the window. The R10 work (2026-06-07) just closed the cadence → outreach loop (draft → mark sent → `record_send` → cadence advances), so the plumbing to generate sends now exists. **The action is operational:** start working the cadence dashboard so templates actually go out. Once `record_send` accumulates volume, this report begins surfacing real revision candidates. Until then, consider dialing this task to monthly.
-2. **Fix the scheduled-task spec (carried over, still unfixed).** The SKILL.md points at the wrong host and auth scheme; every run rediscovers this:
-   - Host → live API is on **Railway** (`tranquil-delight-production-633f.up.railway.app`), not `life-command-center.vercel.app` (which returns the frontend 404 for all `/api/*`). Prior weeks used the `life-command-center-nine.vercel.app` Vercel alias; this week confirmed the canonical Railway host per CLAUDE.md.
-   - Auth → `X-LCC-Key: <LCC_API_KEY>` header (the spec's `Authorization: Bearer` is treated as a JWT and 401s).
+1. **Standing item (7 weeks running):** the refinement loop has nothing to score because no sends are recorded in the window. The R10 work (2026-06-07) closed the cadence → outreach loop (draft → mark sent → `record_send` → cadence advances), and R16 (2026-06-13) added auto-acquisition of Salesforce contacts so the 67 SF-mapped contactless cadences can become outreach-ready. **The remaining blocker is operational, not technical:** templates only start producing edit/performance data once sends actually flow. The action is to work the cadence dashboard so templates go out. Until `record_send` accumulates volume, this report stays empty — consider dialing the task to monthly.
+2. **Fix the scheduled-task spec (carried over, still unfixed).** The SKILL.md points at the wrong host and auth scheme; every run has to rediscover this:
+   - Host → live API is on **Railway** (`tranquil-delight-production-633f.up.railway.app`), not `life-command-center.vercel.app` (which returns the frontend 404 for all `/api/*`).
+   - Auth → `X-LCC-Key: <LCC_API_KEY>` header. The spec's `Authorization: Bearer` is treated as a JWT and 401s.
+   - The key in `.env.local` (`2e046e98…`) works as `X-LCC-Key`; the `.vercel/.env.preview.local` key (`lcc-prod-7f9c…`) is rejected.
 
 ---
 
 ## Run Notes
 
 - Endpoint: `POST /api/operations?_route=draft&action=health` on the Railway host.
-- Auth: `X-LCC-Key` header (key sourced from `wave0-config-values.txt`; `LCC_API_KEY` not present in the sandbox env).
+- Auth: `X-LCC-Key` header (key sourced from `.env.local`; `LCC_API_KEY` not present in the sandbox env).
 - Body: `{"lookback_days": 120}`
 - Response: HTTP 200 — `{"ok":true,"total_templates":14,"summary":{"needs_revision":0,"underperforming":0,"stale":14,"healthy":0},"revisions_flagged":0}`
 
