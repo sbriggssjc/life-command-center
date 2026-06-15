@@ -34,6 +34,10 @@
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { appendActivityEvent as defaultAppendActivityEvent } from '../_shared/activity-events.js';
 import { findEntityBySfId as defaultFindEntityBySfId } from '../_shared/bridge-handlers-salesforce.js';
+import {
+  advanceCadence as defaultAdvanceCadence,
+  resolveCadenceForEntity as defaultResolveCadenceForEntity,
+} from '../_shared/cadence-engine.js';
 
 const MAX_BATCH = 500;
 
@@ -52,6 +56,27 @@ export function mapSfTypeToCategory(type) {
 }
 
 /**
+ * Decide whether a mirrored email activity is an INBOUND REPLY from the
+ * contact (R24 Unit 2). A reply is a high-signal touch that should advance the
+ * cadence into active-engagement, not be counted as one of our outbound sends.
+ *
+ * Signals (any one):
+ *   - an explicit inbound flag on the record (SF EmailMessage.Incoming, or a
+ *     direction field the PA flow may add)
+ *   - a subject line that begins with a reply prefix (RE:, AW:, etc.)
+ *
+ * Only meaningful for the 'email' category.
+ */
+export function isInboundReply(category, rec, subject) {
+  if (category !== 'email') return false;
+  const incoming = rec?.incoming ?? rec?.Incoming ?? rec?.is_incoming ?? null;
+  if (incoming === true || String(incoming).toLowerCase() === 'true') return true;
+  const dir = String(rec?.direction ?? rec?.Direction ?? '').toLowerCase();
+  if (dir === 'inbound' || dir === 'incoming' || dir === 'received') return true;
+  return /^\s*(re|aw|antw|sv|vs|rv)\s*:/i.test(String(subject || ''));
+}
+
+/**
  * Process a batch of SF activity records. Pure-ish: all I/O is injected via
  * `deps` so it can be unit-tested without a DB.
  *
@@ -61,8 +86,10 @@ export function mapSfTypeToCategory(type) {
  * @returns {Promise<{matched,skipped_no_entity,inserted,deduped,errors,total,results}>}
  */
 export async function processSfActivityBatch(records, ctx, deps = {}) {
-  const findEntity = deps.findEntityBySfId || defaultFindEntityBySfId;
-  const append     = deps.appendActivityEvent || defaultAppendActivityEvent;
+  const findEntity     = deps.findEntityBySfId || defaultFindEntityBySfId;
+  const append         = deps.appendActivityEvent || defaultAppendActivityEvent;
+  const advance        = deps.advanceCadence || defaultAdvanceCadence;
+  const resolveCadence = deps.resolveCadenceForEntity || defaultResolveCadenceForEntity;
   const { workspaceId, actorId } = ctx || {};
 
   const summary = {
@@ -73,6 +100,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     inserted: 0,
     deduped: 0,
     errors: 0,
+    replies_captured: 0,
     results: [],
   };
 
@@ -132,6 +160,27 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
 
     summary.matched += 1;
     const category = mapSfTypeToCategory(rawType);
+    const replyTouch = isInboundReply(category, rec, subject);
+
+    const metadata = {
+      sf_id:     String(sfId),
+      sf_type:   rawType,
+      sf_status: status,
+      who_id:    whoId,
+      what_id:   whatId,
+      activity_date: actDate,
+      resolved_via: resolvedVia,
+      owner_id:   ownerId,
+      owner_name: ownerName,
+    };
+    // R24 Unit 2 — for an inbound reply, the JS advanceCadence path owns the
+    // advance (sets emails_replied + the converted/pause branch), so tag the
+    // event skip_cadence_advance='true' to keep the SQL trigger from also
+    // advancing it (the R10 single-advance-owner doctrine).
+    if (replyTouch) {
+      metadata.is_reply = true;
+      metadata.skip_cadence_advance = 'true';
+    }
 
     let appendRes;
     try {
@@ -145,17 +194,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
         sourceType:  'salesforce',
         externalId:  String(sfId),
         occurredAt:  actDate,
-        metadata: {
-          sf_id:     String(sfId),
-          sf_type:   rawType,
-          sf_status: status,
-          who_id:    whoId,
-          what_id:   whatId,
-          activity_date: actDate,
-          resolved_via: resolvedVia,
-          owner_id:   ownerId,
-          owner_name: ownerName,
-        },
+        metadata,
       });
     } catch (err) {
       // appendActivityEvent never throws, but stay defensive.
@@ -166,7 +205,25 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
 
     if (appendRes?.ok && appendRes.inserted) {
       summary.inserted += 1;
-      summary.results.push({ sf_id: sfId, entity_id: entityId, outcome: 'inserted' });
+      // R24 Unit 2 — a freshly-inserted inbound reply advances the cadence
+      // (emails_replied++, unopened reset, → converted). Only on `inserted` so
+      // a re-POST of the same SF id (deduped) never double-counts. Best-effort:
+      // a missing cadence or a failed advance never fails the mirror.
+      let replyAdvanced = false;
+      if (replyTouch) {
+        try {
+          const cad = await resolveCadence(entityId);
+          if (cad?.id) {
+            const adv = await advance(cad.id, { type: 'reply', direction: 'inbound', outcome: 'replied' });
+            replyAdvanced = !!(adv && adv.ok);
+            if (replyAdvanced) summary.replies_captured += 1;
+          }
+        } catch (err) {
+          // non-blocking — the activity is recorded regardless
+          replyAdvanced = false;
+        }
+      }
+      summary.results.push({ sf_id: sfId, entity_id: entityId, outcome: 'inserted', reply_captured: replyAdvanced });
     } else if (appendRes?.ok) {
       summary.deduped += 1;
       summary.results.push({ sf_id: sfId, entity_id: entityId, outcome: 'deduped' });

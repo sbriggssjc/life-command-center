@@ -14,6 +14,24 @@
 // ============================================================================
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
+import { recordTemplateSend } from './templates.js';
+
+// ============================================================================
+// OPEN-TRACKING FLAG (R24 Unit 3)
+// ============================================================================
+//
+// The mailto/copy send path has NO open signal — nothing ever reports whether
+// a sent email was opened. Treating "no open recorded" as "unopened" would let
+// consecutive_unopened climb on every send and wrongly trip the >=2 phone-
+// recovery deprioritization on contacts who may be perfectly engaged. Until a
+// real open-tracking channel (ESP/pixel) exists, the engine must only react to
+// REAL unopened signals, never to the ABSENCE of a signal. This flag (default
+// false) gates the consecutive_unopened branch; flip CADENCE_OPEN_TRACKING_ACTIVE
+// when open tracking lands.
+function openTrackingActive(options = {}) {
+  if (typeof options.open_tracking === 'boolean') return options.open_tracking;
+  return String(process.env.CADENCE_OPEN_TRACKING_ACTIVE || '').toLowerCase() === 'true';
+}
 
 // ============================================================================
 // CADENCE SEQUENCE DEFINITION
@@ -176,7 +194,7 @@ export function recommendNextTouch(cadence, options = {}) {
 
   // ── Consecutive unopened → switch to phone ────────────────────────────
 
-  if (cadence.consecutive_unopened >= 2 && cadence.phase === 'prospecting') {
+  if (openTrackingActive(options) && cadence.consecutive_unopened >= 2 && cadence.phase === 'prospecting') {
     const coolDown = checkCoolDowns(cadence, 'phone', now);
     return {
       touch_number: cadence.current_touch + 1,
@@ -340,6 +358,42 @@ export async function advanceCadence(cadenceId, touchData) {
   const cadence = result.data[0];
   const now = new Date();
 
+  // ── Inbound reply (R24 Unit 2) ────────────────────────────────────────────
+  // A reply is a high-signal INBOUND touch, NOT an outbound send. It bumps
+  // emails_replied, resets the unopened streak (engagement acknowledged), and
+  // moves the cadence into the engine's 'converted' (active-engagement) state
+  // so the cold prospecting sequence PAUSES and the human takes over (the
+  // pause/escalate branch). It must NEVER increment emails_sent / current_touch
+  // or write a template_sends row (that would double-count a send that never
+  // happened). Routed here whenever the caller flags a reply/inbound touch.
+  const isReply = touchData.outcome === 'replied'
+    || touchData.type === 'reply'
+    || touchData.direction === 'inbound';
+  if (isReply) {
+    const replyUpdate = {
+      last_touch_at: now.toISOString(),
+      last_touch_type: 'reply',
+      emails_replied: (cadence.emails_replied || 0) + 1,
+      consecutive_unopened: 0
+    };
+    if (cadence.phase !== 'converted') replyUpdate.phase = 'converted';
+    const replyPatch = await opsQuery(
+      'PATCH',
+      `touchpoint_cadence?id=eq.${pgFilterVal(cadenceId)}`,
+      replyUpdate
+    );
+    if (!replyPatch.ok) {
+      return { ok: false, error: 'Failed to update cadence', detail: replyPatch.data };
+    }
+    const merged = { ...cadence, ...replyUpdate };
+    return {
+      ok: true,
+      cadence: replyPatch.data?.[0] || merged,
+      recommendation: recommendNextTouch(merged),
+      reply_captured: true
+    };
+  }
+
   // Build update payload
   const update = {
     last_touch_at: now.toISOString(),
@@ -361,11 +415,20 @@ export async function advanceCadence(cadenceId, touchData) {
   // Update engagement counters
   if (touchData.type === 'email') {
     update.emails_sent = (cadence.emails_sent || 0) + 1;
-    if (touchData.opened) {
-      update.emails_opened = (cadence.emails_opened || 0) + 1;
-      update.consecutive_unopened = 0;
-    } else {
-      update.consecutive_unopened = (cadence.consecutive_unopened || 0) + 1;
+    // R24 Unit 3 — open-tracking-aware. Only move the open counters when this
+    // send's channel actually reports opens (an explicit `opened` boolean, or
+    // touchData.open_tracking === true). The mailto/copy path carries no open
+    // signal, so its absence must NOT be read as "unopened" — leaving
+    // consecutive_unopened untouched keeps engaged contacts from being wrongly
+    // deprioritized at the >=2 phone-recovery threshold.
+    const hasOpenSignal = (typeof touchData.opened === 'boolean') || touchData.open_tracking === true;
+    if (hasOpenSignal) {
+      if (touchData.opened) {
+        update.emails_opened = (cadence.emails_opened || 0) + 1;
+        update.consecutive_unopened = 0;
+      } else {
+        update.consecutive_unopened = (cadence.consecutive_unopened || 0) + 1;
+      }
     }
   } else if (touchData.type === 'phone') {
     update.calls_made = (cadence.calls_made || 0) + 1;
@@ -378,11 +441,6 @@ export async function advanceCadence(cadenceId, touchData) {
   } else if (touchData.type === 'meeting') {
     update.meetings_scheduled = (cadence.meetings_scheduled || 0) + 1;
     update.last_meeting_at = now.toISOString();
-  }
-
-  // If contact replied, consider conversion
-  if (touchData.outcome === 'replied') {
-    update.emails_replied = (cadence.emails_replied || 0) + 1;
   }
 
   // Clear escalation flags if addressed
@@ -416,11 +474,83 @@ export async function advanceCadence(cadenceId, touchData) {
     return { ok: false, error: 'Failed to update cadence', detail: patchResult.data };
   }
 
+  // R24 Unit 1 — co-locate the template_sends write with the emails_sent bump
+  // so the two can NEVER diverge: every email advance that increments
+  // emails_sent here also records a template_sends row, feeding the
+  // high_performing_templates signal view + the weekly health-rollup. Skipped
+  // when (a) the caller already recorded a rich send row (record_send passes
+  // skip_template_send=true to avoid a duplicate), or (b) no template is
+  // resolvable. Fire-and-forget — a failed record must never block the advance.
+  if (touchData.type === 'email' && !touchData.skip_template_send) {
+    const tid = touchData.template_id || cadence.last_touch_template || cadence.next_touch_template;
+    if (tid) {
+      try {
+        await recordTemplateSend({
+          template_id: tid,
+          template_version: touchData.template_version || 1,
+          user_id: touchData.user_id || null,
+          entity_id: cadence.entity_id || null,
+          contact_id: cadence.contact_id || null,
+          entity_type: 'contact',
+          domain: cadence.domain || null
+        });
+      } catch (e) {
+        console.warn('[advanceCadence] template_sends co-location failed (non-blocking):', e?.message || e);
+      }
+    }
+  }
+
   return {
     ok: true,
     cadence: patchResult.data?.[0] || { ...cadence, ...update },
     recommendation: nextRec
   };
+}
+
+// ============================================================================
+// RESOLVE CADENCE FOR AN ENTITY (R24 Unit 2 — reply capture)
+// ============================================================================
+
+/**
+ * Find the active cadence to advance for an entity, mirroring the SQL trigger's
+ * resolution order: (1) a cadence ON the entity directly, then (2) the
+ * asset→owner hop — when the entity is the ASSET (to_entity) of an `owns`
+ * edge, the OWNER (from_entity) holds the cadence. Restricted to `owns` (true
+ * ownership), not brokerage/sale-side edges. Returns the cadence row or null.
+ *
+ * Used by the reply-capture producer so an inbound reply logged against a
+ * property (asset) entity advances the OWNER's cadence — the same hop the
+ * organic-touch trigger performs.
+ *
+ * @param {string} entityId
+ * @param {object} [opts] - { phases }
+ * @returns {Promise<object|null>}
+ */
+export async function resolveCadenceForEntity(entityId, opts = {}) {
+  if (!entityId) return null;
+  const phases = (opts.phases || ['prospecting', 'onboarding', 'steady_state', 'maintenance']).join(',');
+  const select = 'select=id,entity_id,bd_opportunity_id,phase,domain';
+
+  // 1. Direct cadence on the entity (most-overdue first).
+  const direct = await opsQuery('GET',
+    `touchpoint_cadence?entity_id=eq.${pgFilterVal(entityId)}&phase=in.(${phases})`
+    + `&order=next_touch_due.asc.nullslast&${select}&limit=1`);
+  if (direct.ok && Array.isArray(direct.data) && direct.data[0]) return direct.data[0];
+
+  // 2. Asset→owner hop — entity is the asset; the owner holds the cadence.
+  const edges = await opsQuery('GET',
+    `entity_relationships?to_entity_id=eq.${pgFilterVal(entityId)}&relationship_type=eq.owns&select=from_entity_id&limit=10`);
+  if (edges.ok && Array.isArray(edges.data)) {
+    for (const edge of edges.data) {
+      if (!edge?.from_entity_id) continue;
+      const owner = await opsQuery('GET',
+        `touchpoint_cadence?entity_id=eq.${pgFilterVal(edge.from_entity_id)}&phase=in.(${phases})`
+        + `&order=next_touch_due.asc.nullslast&${select}&limit=1`);
+      if (owner.ok && Array.isArray(owner.data) && owner.data[0]) return owner.data[0];
+    }
+  }
+
+  return null;
 }
 
 // ============================================================================

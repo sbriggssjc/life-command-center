@@ -237,18 +237,20 @@ function computeEditDistance(original: string, final_: string): number {
 }
 
 async function recordTemplateSend(params: Record<string, unknown>) {
+  // R24 Unit 1 — match the live template_sends schema (sent_by / contact_id /
+  // entity_type / packet_snapshot_id / subject_line_used + additive `domain`).
+  // The old mapping wrote columns that don't exist → PGRST204 on every send.
   const row = {
     template_id: params.template_id,
     template_version: params.template_version || 1,
-    user_id: params.user_id,
+    sent_by: params.user_id || params.sent_by || null,
     entity_id: params.entity_id || null,
-    domain: params.domain || null,
-    context_packet_id: params.context_packet_id || null,
-    rendered_subject: params.rendered_subject || null,
-    rendered_body: params.rendered_body || null,
-    final_subject: params.final_subject || null,
-    final_body: params.final_body || null,
+    contact_id: params.contact_id || null,
+    entity_type: params.entity_type || (params.entity_id ? "contact" : null),
+    packet_snapshot_id: params.context_packet_id || null,
+    subject_line_used: params.final_subject || params.rendered_subject || null,
     edit_distance_pct: params.edit_distance_pct ?? null,
+    domain: params.domain || null,
     opened: false, replied: false, deal_advanced: false,
     sent_at: isoNow()
   };

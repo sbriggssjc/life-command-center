@@ -297,17 +297,29 @@ export async function generateDraft(templateId, context, options = {}) {
  * Record a template send for performance tracking.
  * Called after the broker reviews, edits, and sends an email.
  *
+ * R24 Unit 1 — the column map below MUST match the live `template_sends`
+ * schema (schema/021_template_sends.sql). The previous mapping wrote
+ * `user_id` / `domain` / `context_packet_id` / `rendered_*` / `final_*` —
+ * none of which exist on the table — so EVERY send POST failed with PGRST204
+ * and `recordTemplateSend` returned before even writing the `template_sent`
+ * signal. That left the entire template-learning loop unfed (template_sends,
+ * the high_performing_templates signal view, and the health-rollup all empty).
+ * The canonical columns are `sent_by` / `contact_id` / `entity_type` /
+ * `packet_snapshot_id` / `subject_line_used`; `domain` is added additively by
+ * migration 20260616130000.
+ *
  * @param {object} params
  * @param {string} params.template_id - e.g., 'T-001'
  * @param {number} params.template_version
- * @param {string} params.user_id
+ * @param {string} [params.user_id] - Authenticated user → sent_by (nullable;
+ *   the cadence-advance co-location path has no user context)
  * @param {string} [params.entity_id] - The contact/entity being emailed
+ * @param {string} [params.contact_id] - The person/contact entity → contact_id
+ * @param {string} [params.entity_type] - e.g. 'contact' (defaults to 'contact')
  * @param {string} [params.domain]
- * @param {string} [params.context_packet_id] - UUID of the cached packet used
- * @param {string} params.rendered_subject - The subject after variable substitution
- * @param {string} params.rendered_body - The body after variable substitution
- * @param {string} [params.final_subject] - The subject after broker edits
- * @param {string} [params.final_body] - The body after broker edits
+ * @param {string} [params.context_packet_id] - UUID of the cached packet used → packet_snapshot_id
+ * @param {string} [params.rendered_subject] - Subject after variable substitution
+ * @param {string} [params.final_subject] - Subject after broker edits
  * @param {number} [params.edit_distance_pct] - How much the broker changed (0-100)
  * @returns {{ ok: boolean, send?: object, error?: string }}
  */
@@ -315,15 +327,14 @@ export async function recordTemplateSend(params) {
   const row = {
     template_id: params.template_id,
     template_version: params.template_version || 1,
-    user_id: params.user_id,
+    sent_by: params.user_id || params.sent_by || null,
     entity_id: params.entity_id || null,
-    domain: params.domain || null,
-    context_packet_id: params.context_packet_id || null,
-    rendered_subject: params.rendered_subject || null,
-    rendered_body: params.rendered_body || null,
-    final_subject: params.final_subject || null,
-    final_body: params.final_body || null,
+    contact_id: params.contact_id || null,
+    entity_type: params.entity_type || (params.entity_id ? 'contact' : null),
+    packet_snapshot_id: params.context_packet_id || null,
+    subject_line_used: params.final_subject || params.rendered_subject || null,
     edit_distance_pct: params.edit_distance_pct ?? null,
+    domain: params.domain || null,
     opened: false,
     replied: false,
     deal_advanced: false,
@@ -391,6 +402,64 @@ export function computeEditDistance(original, final_) {
 
   const similarity = matchingLines / maxLen;
   return Math.round((1 - similarity) * 100);
+}
+
+// ============================================================================
+// PERFORMANCE-AWARE TEMPLATE SELECTION (R24 Unit 4)
+// ============================================================================
+
+/**
+ * Pick the best-performing template for the same category as `defaultTemplateId`,
+ * falling back to the default when there isn't enough performance data yet
+ * (cold-start safe). Reads the `high_performing_templates` view (signals-backed,
+ * response_rate_pct over a 60-day window), so it only becomes non-trivial once
+ * Unit 1's send producer has accrued enough `template_sent`/`template_response`
+ * signals.
+ *
+ * Conservative by design:
+ *   - Only swaps WITHIN the same category as the recommended default (an intro
+ *     never becomes a hard ask), so it tunes voice, never the sequence intent.
+ *   - A candidate must clear `min_sends` (default 3 — the view's HAVING floor)
+ *     before it can win.
+ *   - Any error or empty performance data → returns `defaultTemplateId`
+ *     unchanged. The whole feature is inert until data exists.
+ *
+ * @param {string} defaultTemplateId - the cadence-recommended template
+ * @param {object} [opts] - { min_sends }
+ * @returns {Promise<string>} the chosen template_id (may equal the default)
+ */
+export async function chooseBestTemplate(defaultTemplateId, opts = {}) {
+  if (!defaultTemplateId) return defaultTemplateId;
+  const minSends = opts.min_sends || 3;
+  try {
+    const def = await loadTemplate(defaultTemplateId);
+    if (!def || !def.category) return defaultTemplateId;
+
+    const [perfRes, actives] = await Promise.all([
+      opsQuery('GET', 'high_performing_templates?order=response_rate_pct.desc&limit=25'),
+      listActiveTemplates()
+    ]);
+    const rows = perfRes.ok ? (perfRes.data || []) : [];
+    if (!rows.length) return defaultTemplateId;
+
+    // template_id → category (latest version wins, matching listActiveTemplates order)
+    const catOf = {};
+    for (const t of actives) if (!(t.template_id in catOf)) catOf[t.template_id] = t.category;
+
+    let best = defaultTemplateId;
+    let bestRate = -1;
+    for (const row of rows) {
+      const tid = row.template_id;
+      if (!tid) continue;
+      if ((Number(row.sent_count) || 0) < minSends) continue;   // not enough data
+      if (catOf[tid] !== def.category) continue;                 // same category only
+      const rate = Number(row.response_rate_pct) || 0;
+      if (rate > bestRate) { bestRate = rate; best = tid; }
+    }
+    return best;
+  } catch {
+    return defaultTemplateId;
+  }
 }
 
 // ============================================================================
