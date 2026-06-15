@@ -140,6 +140,10 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleLeaseExtract } = await import('./_handlers/lease-extractor.js');
       return handleLeaseExtract(req, res);
     }
+    case 'lease-backfill': {
+      const { handleLeaseBackfill } = await import('./_handlers/lease-backfill.js');
+      return handleLeaseBackfill(req, res);
+    }
     case 'sf-activity': {
       const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
       return handleSfActivityIngest(req, res);
@@ -154,7 +158,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, sf-activity, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, sf-activity, feedback, accuracy'
       });
   }
 });

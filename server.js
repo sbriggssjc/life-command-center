@@ -252,6 +252,10 @@ app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'prope
 // R15 Phase 2: backfill CRE property owners from master-sheet/BOV docs. GET=dry-run, POST=drain.
 app.all('/api/cre-owner-backfill', (req, res) => { req.query._route = 'cre-owner-backfill'; intakeHandler(req, res); });
 
+// Stage B widen: one-time LEASE backfill over the existing folder_feed_seen corpus
+// (re-run the lease extractor on already-seen in-domain lease docs). GET=dry-run, POST=drain.
+app.all('/api/lease-backfill', (req, res) => { req.query._route = 'lease-backfill'; intakeHandler(req, res); });
+
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });

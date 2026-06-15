@@ -120,6 +120,7 @@
     { "source": "/api/property-doc-writeback", "destination": "/api/intake?_route=property-doc-writeback" },
     { "source": "/api/cre-owner-backfill", "destination": "/api/intake?_route=cre-owner-backfill" },
     { "source": "/api/lease-extract", "destination": "/api/intake?_route=lease-extract" },
+    { "source": "/api/lease-backfill", "destination": "/api/intake?_route=lease-backfill" },
     { "source": "/api/sf-activity", "destination": "/api/intake?_route=sf-activity" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },
     { "source": "/api/intake/accuracy", "destination": "/api/intake?_route=accuracy" },
