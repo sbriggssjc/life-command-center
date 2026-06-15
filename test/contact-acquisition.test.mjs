@@ -7,7 +7,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { acquireForEntity, isAcqExhausted } from '../api/_handlers/contact-acquisition.js';
+import { acquireForEntity, isAcqExhausted, isSelfContactablePerson } from '../api/_handlers/contact-acquisition.js';
 import { linkPersonToEntity, stampCadenceContactById } from '../api/_shared/contact-attach.js';
 
 const originalFetch = global.fetch;
@@ -99,6 +99,39 @@ describe('isAcqExhausted — don\'t re-hammer (R16 Unit 1)', () => {
     assert.equal(isAcqExhausted({ contact_acquisition: { status: 'no_usable_contacts' } }), true);
     assert.equal(isAcqExhausted({ contact_acquisition: { status: 'unavailable', attempts: 4 } }), true);
     assert.equal(isAcqExhausted({ contact_acquisition: { status: 'unavailable', attempts: 1 } }), false);
+  });
+});
+
+describe('isSelfContactablePerson — person is their own contact (R20)', () => {
+  it('person with an email self-stamps (becomes its own contact)', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Steven Manela', email: 'steven@x.com' }), true);
+  });
+
+  it('person with only a phone self-stamps', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Neil McMurry', phone: '(307) 555-1212' }), true);
+  });
+
+  it('person with no email and no phone stays cold (P-CONTACT)', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Jane Cold', email: '', phone: null }), false);
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Jane Cold' }), false);
+  });
+
+  it('an organization is never its own contact (even with an email)', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'organization', name: 'Acme Capital', email: 'info@acme.com' }), false);
+  });
+
+  it('a firm mistyped as a person is not self-stamped (looksLikePersonName guard)', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Townsend Capital LLC', email: 'x@y.com' }), false);
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Leibsohn Family Trust', phone: '5551212' }), false);
+  });
+
+  it('a junk/orphan-flagged person is excluded', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Real Person', email: 'r@x.com', metadata: { junk_name_flagged: true } }), false);
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Real Person', email: 'r@x.com', metadata: { orphan_flagged: true } }), false);
+  });
+
+  it('whitespace-only email/phone does not count', () => {
+    assert.equal(isSelfContactablePerson({ entity_type: 'person', name: 'Hollow Contact', email: '   ', phone: '  ' }), false);
   });
 });
 
