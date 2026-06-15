@@ -161,7 +161,9 @@ async function bumpAttempt(row, attempts, deps) {
  *                           retry) → TERMINAL on the FIRST pass with the captured
  *                           SQLSTATE + column reason; separable from the benign
  *                           no-terms tail. (Unit 2, 2026-06-15)
- *   ambiguous             — ≥2 in-domain near-misses → match_disambiguation lane
+ *   ambiguous             — ≥2 in-domain near-misses OR a Unit-3 operator-family
+ *                           mismatch (DaVita doc vs Satellite property) →
+ *                           match_disambiguation lane (reason distinguishes them)
  *   no_domain             — no in-domain property (captured, tenant-searchable, no guess)
  *   error                 — transient extract/fetch/write failure → NOT marked,
  *                           retries (bumps the attempt counter)
@@ -257,8 +259,12 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
     };
   }
   if (res?.emitted_disambiguation) {
-    await deps.markBackfilled(row, { outcome: 'ambiguous' });
-    return { id: row.id, path: row.path, outcome: 'ambiguous' };
+    // reason distinguishes an address-ambiguous emit from the Unit-3 operator
+    // mismatch (DaVita doc vs Satellite property) — both route to the same lane,
+    // but the marker stays queryable.
+    const reason = res.reason || null;
+    await deps.markBackfilled(row, { outcome: 'ambiguous', reason });
+    return { id: row.id, path: row.path, outcome: 'ambiguous', reason };
   }
   if (res?.no_domain) {
     await deps.markBackfilled(row, { outcome: 'no_domain', reason: res.reason || null });

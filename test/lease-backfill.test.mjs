@@ -96,6 +96,21 @@ describe('lease backfill — per-doc outcome mapping', () => {
     assert.equal(marked, true);
   });
 
+  it('operator mismatch (Unit 3) → ambiguous lane, MARKED with the operator_mismatch reason', async () => {
+    let marked = null;
+    const deps = {
+      attachLeaseDoc: async () => ({ ok: false, attached: false, emitted_disambiguation: true,
+        operator_mismatch: true, reason: 'operator_mismatch', property_operator: 'Satellite Healthcare',
+        domain: 'dialysis', property_id: 30680, match_status: 'review_required' }),
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), ctx, deps);
+    assert.equal(out.outcome, 'ambiguous');
+    assert.equal(out.reason, 'operator_mismatch');
+    assert.equal(marked.outcome, 'ambiguous');
+    assert.equal(marked.reason, 'operator_mismatch');
+  });
+
   it('no in-domain property → no_domain (captured, never a guess), marked', async () => {
     let marked = false;
     const deps = {

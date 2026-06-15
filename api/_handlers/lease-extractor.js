@@ -293,6 +293,49 @@ export function guarantorContradictsTenant({ tenant, guarantor, tenantParent = n
   return !tenantSharesFamily;
 }
 
+// ── Operator-agreement gate (Unit 3, 2026-06-15) ─────────────────────────────
+// The DaVita-lease-onto-Satellite-30680 mis-match: a domain lease address-matched
+// (canonical/exact/fuzzy — NO operator check) a property of a DIFFERENT operator.
+// `dialysisOperatorFamily` maps an operator/tenant string to a COARSE family key
+// (DaVita / Fresenius / Satellite / American Renal / US Renal / DCI). A bare
+// dialysis/renal/kidney/nephrology cue is deliberately NOT operator-specific →
+// returns null (can't discriminate → won't block). Pure + unit-testable.
+const DIA_OPERATOR_FAMILY_RES = [
+  { family: 'davita', re: /\b(?:davita|dva|total\s+renal|renal\s+treatment\s+centers?)\b/i },
+  { family: 'fresenius', re: /\b(?:fresenius|fmcna?|fkc|bio[-\s]?medical\s+applications)\b/i },
+  { family: 'satellite', re: /\bsatellite\s+(?:health(?:care)?|dialysis)\b|\bshc\b/i },
+  { family: 'american_renal', re: /\bamerican\s+renal\b/i },
+  { family: 'us_renal', re: /\bus\s+renal\b/i },
+  { family: 'dci', re: /\bdci\b|dialysis\s+clinic,?\s+inc/i },
+];
+export function dialysisOperatorFamily(name) {
+  const s = String(name || '');
+  if (!s.trim()) return null;
+  for (const { family, re } of DIA_OPERATOR_FAMILY_RES) if (re.test(s)) return family;
+  return null;
+}
+
+/**
+ * True iff the doc's tenant and the candidate property's operator-of-record
+ * belong to CLEARLY DIFFERENT operator families. Conservative by construction —
+ * agreement OR unknown-on-either-side returns false (passes); only a two-sided,
+ * different-family signal contradicts. Two signals, strongest first:
+ *   1. dialysis operator-family cue on BOTH names (DaVita vs Satellite) — the
+ *      ground-truth discriminator (works off CMS chain_organization).
+ *   2. registered operator-parent on BOTH names (lcc_operator_affiliate_patterns).
+ * Never blocks a normal single-operator lease; never blocks gov (agencies carry
+ * no dialysis cue and don't resolve to an operator parent → always passes).
+ *
+ * @param {{docTenant:?string, propOperator:?string, docParent:?string, propParent:?string}} a
+ */
+export function operatorFamiliesContradict({ docTenant, propOperator, docParent = null, propParent = null } = {}) {
+  const df = dialysisOperatorFamily(docTenant);
+  const pf = dialysisOperatorFamily(propOperator);
+  if (df && pf) return df !== pf;                                   // both known families
+  if (docParent && propParent) return String(docParent) !== String(propParent); // both registered parents
+  return false;                                                    // unknown on either side → pass
+}
+
 /**
  * Resolve the property the lease belongs to FROM THE FILE — the in-file street
  * address through the injected domain matcher. This is the attach-resolver that
@@ -636,6 +679,27 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       const newId = created?.lease_id ?? null;
       if (newId == null) return { ok: false, reason: 'create_no_id' };
       return { ok: true, lease_id: newId, created: true };
+    },
+    // Operator-of-record for the operator-agreement gate (Unit 3). PREFERS the
+    // linked CMS clinic's chain_organization (ground truth — Satellite vs DaVita
+    // vs Fresenius) over the stored tenant, which can itself be corrupt (30680's
+    // address is). gov has no CMS → the agency is the operator. Returns
+    // {operator, source}.
+    getPropertyOperator: async ({ domain, propertyId }) => {
+      const pid = Number(propertyId);
+      if (domain === 'dialysis') {
+        const c = await domainQuery('dialysis', 'GET',
+          `medicare_clinics?property_id=eq.${pid}&chain_organization=not.is.null&select=chain_organization&limit=1`).catch(() => ({ ok: false }));
+        const chain = c.ok && c.data?.[0]?.chain_organization;
+        if (chain) return { operator: chain, source: 'cms_chain' };
+        const p = await domainQuery('dialysis', 'GET',
+          `properties?property_id=eq.${pid}&select=tenant&limit=1`).catch(() => ({ ok: false }));
+        return { operator: (p.ok && p.data?.[0]?.tenant) || null, source: 'tenant' };
+      }
+      const p = await domainQuery('government', 'GET',
+        `properties?property_id=eq.${pid}&select=agency,agency_full_name&limit=1`).catch(() => ({ ok: false }));
+      const row = p.ok && p.data?.[0];
+      return { operator: (row && (row.agency || row.agency_full_name)) || null, source: 'agency' };
     },
     matchAgainstDomain,
     domainsFor: (pi) => {
@@ -1050,6 +1114,57 @@ export async function attachLeaseDoc(a, injected = {}) {
   }
 
   if (resolved.status === 'matched') {
+    // ── Operator-agreement gate (Unit 3, 2026-06-15) ─────────────────────────
+    // A domain lease address-matched (canonical/exact/fuzzy — NO operator check)
+    // a property; if the property's OPERATOR family clearly contradicts the doc's
+    // tenant (the DaVita-lease-onto-Satellite-30680 mis-match), do NOT enrich —
+    // route the single wrong-operator candidate to the existing match_disambiguation
+    // lane so a human confirms or creates the correct property. Never a
+    // cross-operator hard write. Conservative: prefers the property's CMS
+    // chain_organization (ground truth) over its stored tenant; agreement OR
+    // unknown-on-either-side passes; only a CLEAR family contradiction blocks (so
+    // a normal single-operator lease and every gov lease still enrich). Gated on
+    // the dep so the legacy patch-only tests keep their behavior.
+    if (deps.getPropertyOperator) {
+      const docTenant = normalized.factual?.tenant || normalized.property_identity?.tenant || subjectHint?.tenant_brand || null;
+      const propInfo = await deps.getPropertyOperator({ domain: resolved.domain, propertyId: resolved.property_id }).catch(() => null);
+      const propOperator = propInfo?.operator || null;
+      let docParent = null, propParent = null;
+      if (deps.resolveOperatorParent) {
+        docParent = await deps.resolveOperatorParent(docTenant).catch(() => null);
+        propParent = await deps.resolveOperatorParent(propOperator).catch(() => null);
+      }
+      if (operatorFamiliesContradict({ docTenant, propOperator, docParent, propParent })) {
+        const candidate = {
+          domain: DOMAIN_SHORT(resolved.domain), property_id: String(resolved.property_id),
+          tenant: propOperator, operator_source: propInfo?.source || null, confidence: 0,
+        };
+        if (dryRun) {
+          return {
+            ok: false, attached: false, dry_run: true, operator_mismatch: true,
+            reason: 'operator_mismatch', doc_tenant: docTenant, property_operator: propOperator,
+            property_operator_source: propInfo?.source || null,
+            domain: resolved.domain, property_id: resolved.property_id, match_status: 'review_required',
+          };
+        }
+        let emitted = false;
+        try {
+          await emitDisambig(null, docTenant, docTenant, [candidate],
+            { subjectRef: 'folder_feed_lease:' + pathRef, workspaceId,
+              context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: 'lease',
+                operator_mismatch: true, doc_tenant: docTenant, property_operator: propOperator,
+                property_operator_source: propInfo?.source || null } });
+          emitted = true;
+        } catch (err) { console.warn('[attachLeaseDoc] operator-mismatch disambiguation emit failed (non-fatal):', err?.message); }
+        return {
+          ok: false, attached: false, emitted_disambiguation: emitted, operator_mismatch: true,
+          reason: 'operator_mismatch', doc_tenant: docTenant, property_operator: propOperator,
+          property_operator_source: propInfo?.source || null,
+          domain: resolved.domain, property_id: resolved.property_id, match_status: 'review_required',
+        };
+      }
+    }
+
     const plan = planLeaseWrites(resolved.domain, normalized);
     const reported_targets = Object.keys(plan.leaseFields).filter(isReportedField);
     if (dryRun) {
