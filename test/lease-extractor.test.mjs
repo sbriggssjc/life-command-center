@@ -17,6 +17,7 @@ import {
   buildLeaseExtractionPrompt, normalizeLeaseExtraction, planLeaseWrites,
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
   extractLeaseDoc, planExpenseFinancials, attachLeaseDoc, leaseValuesEqual, runLeaseExtraction,
+  guarantorContradictsTenant,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -270,6 +271,108 @@ describe('lease extractor — writer (provenance-first, guarantor entity, TI)', 
     const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: n }, deps);
     assert.equal(out.conflicts, 0);
     assert.deepEqual(calls.patch?.fields || {}, {});  // nothing to write
+  });
+});
+
+describe('lease extractor — guarantorContradictsTenant (multi-tenant cross-attribution guard)', () => {
+  it('flags the real bug: a Hertz tenant "guaranteed by" Total Renal Care (DIA fallback, no parents)', () => {
+    assert.equal(guarantorContradictsTenant({
+      tenant: 'THE HERTZ CORPORATION', guarantor: 'Total Renal Care, Inc.',
+    }), true);
+  });
+  it('does NOT flag a normal dialysis lease (DaVita tenant + Total Renal Care guarantor — same family)', () => {
+    assert.equal(guarantorContradictsTenant({
+      tenant: 'DaVita Inc', guarantor: 'Total Renal Care, Inc.',
+    }), false);
+  });
+  it('same resolved operator parent → consistent (operating sub + its credit parent)', () => {
+    assert.equal(guarantorContradictsTenant({
+      tenant: 'Operating Sub LLC', guarantor: 'Credit Parent Inc',
+      tenantParent: 'ent-davita', guarantorParent: 'ent-davita',
+    }), false);
+  });
+  it('different resolved operator parents → cross-attribution', () => {
+    assert.equal(guarantorContradictsTenant({
+      tenant: 'Tenant A', guarantor: 'Guarantor B',
+      tenantParent: 'ent-fresenius', guarantorParent: 'ent-davita',
+    }), true);
+  });
+  it('a non-operator guarantor cannot contradict (e.g. a generic LLC guarantor)', () => {
+    assert.equal(guarantorContradictsTenant({
+      tenant: 'THE HERTZ CORPORATION', guarantor: 'Hertz Holdings LLC',
+    }), false);
+  });
+  it('no guarantor → never a contradiction', () => {
+    assert.equal(guarantorContradictsTenant({ tenant: 'THE HERTZ CORPORATION', guarantor: null }), false);
+    assert.equal(guarantorContradictsTenant({}), false);
+  });
+});
+
+describe('lease extractor — cross-attribution guard withholds the contaminated guarantor', () => {
+  // The exact 2026-06-15 finding: a genuine Hertz lease in a multi-tenant
+  // "DaVita Anchored" deal folder extracted with a dialysis guarantor bled from
+  // the anchor. The guard must withhold the guarantor (never write the column,
+  // never mint the entity/edge) + route a conflict — while the real Hertz facts
+  // (rent/dates/SF) still land.
+  const HERTZ_RAW = {
+    property_identity: { address: '2936 S 6th St', city: 'Springfield', state: 'IL', tenant: 'THE HERTZ CORPORATION' },
+    factual: {
+      tenant: 'THE HERTZ CORPORATION', guarantor: 'Total Renal Care, Inc.',
+      annual_rent: 24000, rent_psf: 16, leased_sf: 1500, lease_structure: 'NNN',
+      commencement_date: '2023-02-01', expiration_date: '2028-01-31',
+      renewal_options: '3 additional periods of 3 years',
+    },
+    ti_schedule: [], expense_schedule: [],
+  };
+
+  it('create path: guarantor withheld + conflict routed; tenant/rent still written; NO guarantor entity/edge', async () => {
+    const calls = { ensureFields: null, conflicts: [], guarantorMinted: false };
+    const deps = {
+      // DIA fallback alone catches it, but exercise the resolver dep too.
+      resolveOperatorParent: async (name) => /renal|davita/i.test(String(name || '')) ? 'ent-davita' : null,
+      ensureLeaseRow: async (a) => { calls.ensureFields = a.fields; return { ok: true, lease_id: 25312, created: true }; },
+      mergeField: async () => ({ decision: 'write' }),
+      recordConflict: async (a) => { calls.conflicts.push({ field: a.field, attempted: a.attemptedValue, reason: a.reason }); return { ok: true }; },
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async () => { calls.guarantorMinted = true; return { entity_id: 'should-not-exist' }; },
+      attachDoc: async () => ({ document_id: 1 }),
+    };
+    const n = normalizeLeaseExtraction(HERTZ_RAW);
+    const out = await applyLeaseEnrichment({ domain: 'dialysis', propertyId: 40041, normalized: n }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.guarantor_withheld, true);
+    assert.equal(out.guarantor_entity_id, null, 'no contaminated guarantor entity');
+    assert.equal(calls.guarantorMinted, false, 'guaranteed_by edge never minted');
+    // The contaminated guarantor was NOT written to the lease row (create-insert fields).
+    assert.ok(!('guarantor' in (calls.ensureFields || {})), 'guarantor column never written');
+    // But the real Hertz facts seeded the row.
+    assert.equal(calls.ensureFields.tenant, 'THE HERTZ CORPORATION');
+    assert.equal(calls.ensureFields.annual_rent, 24000);
+    // The disagreement was routed to the Decision Center conflict lane.
+    assert.equal(out.conflicts, 1);
+    assert.ok(calls.conflicts.some(c => c.field === 'guarantor' && c.reason === 'guarantor_contradicts_tenant'));
+    assert.ok(out.warnings.some(w => /guarantor_contradicts_tenant/.test(w)));
+  });
+
+  it('a CLEAN dialysis lease is untouched (guarantor written, entity minted, no conflict)', async () => {
+    const calls = { conflicts: 0, guarantorName: null };
+    const deps = {
+      resolveOperatorParent: async (name) => /renal|davita/i.test(String(name || '')) ? 'ent-davita' : null,
+      ensureLeaseRow: async () => ({ ok: true, lease_id: 7001, created: false }),
+      getLeaseRow: async () => ({ guarantor: null, tenant: null, annual_rent: null, rent_per_sf: null, expense_structure: null, renewal_options: null, lease_start: null, lease_expiration: null }),
+      mergeField: async () => ({ decision: 'write' }),
+      recordConflict: async () => { calls.conflicts++; return { ok: true }; },
+      patchLease: async () => ({ ok: true }),
+      insertTiRows: async (a) => ({ ok: true, count: a.rows.length }),
+      ensureGuarantorEntity: async (a) => { calls.guarantorName = a.name; return { entity_id: 'g-davita', edge_ok: true }; },
+    };
+    const n = normalizeLeaseExtraction(RAW);   // DaVita Inc tenant + Total Renal Care guarantor
+    const out = await applyLeaseEnrichment({ domain: 'dialysis', propertyId: 30441, normalized: n }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.guarantor_withheld, false);
+    assert.equal(out.guarantor_entity_id, 'g-davita');
+    assert.equal(calls.guarantorName, 'Total Renal Care, Inc.');
+    assert.equal(out.conflicts, 0, 'no false-positive conflict on a clean dialysis lease');
   });
 });
 
