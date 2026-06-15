@@ -30,7 +30,7 @@ import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
-import { isMultiTenantDealFolderPath } from '../_shared/folder-feed-classify.js';
+import { isMultiTenantDealFolderPath, isDraftDocumentPath } from '../_shared/folder-feed-classify.js';
 import { authenticate } from '../_shared/auth.js';
 
 const nodeRequire = createRequire(import.meta.url);
@@ -334,6 +334,57 @@ export function operatorFamiliesContradict({ docTenant, propOperator, docParent 
   if (df && pf) return df !== pf;                                   // both known families
   if (docParent && propParent) return String(docParent) !== String(propParent); // both registered parents
   return false;                                                    // unknown on either side → pass
+}
+
+// ── Location-agreement guard (Unit 1, 2026-06-16) ────────────────────────────
+// The corporate-notice-address mis-match: a ground lease / commencement-date
+// memorandum carries the tenant's corporate NOTICE address in its boilerplate,
+// and the matcher latched onto THAT instead of the leased premises — landing a
+// "The Villages, FL" ground lease on DaVita's Denver, CO HEADQUARTERS (property
+// 30705). The operator-agreement gate CANNOT catch it (same operator, DaVita ==
+// DaVita). Mirror the operator-gate philosophy at the LOCATION boundary: require
+// the matched property's city/state to AGREE with the doc's location anchor;
+// only a CLEAR contradiction blocks (→ match_disambiguation), never a correctly-
+// located lease. Pure + unit-testable.
+const STATE_RE = /^[A-Za-z]{2}$/;
+function normState(s) {
+  const v = String(s || '').trim().toUpperCase();
+  return STATE_RE.test(v) ? v : null;
+}
+// City normalization for the same-state secondary check: lowercase, drop
+// punctuation, expand the common saint/fort/mount abbreviations, strip spaces so
+// "St. Louis" == "Saint Louis" and "Ft Worth" == "Fort Worth" (never a false
+// contradiction on an abbreviation variant).
+function normCity(c) {
+  let v = String(c || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!v) return null;
+  v = v.replace(/^st\b/, 'saint').replace(/^ft\b/, 'fort').replace(/^mt\b/, 'mount');
+  v = v.replace(/[^a-z0-9]/g, '');
+  return v || null;
+}
+/**
+ * True iff the doc's location anchor and the matched property's location are in
+ * CLEARLY DIFFERENT places. Conservative by construction (mirror of
+ * operatorFamiliesContradict): agreement OR unknown-on-either-side returns false
+ * (passes); only a two-sided, clearly-different signal contradicts.
+ *   1. STATE — both known AND different → contradict. The robust primary signal;
+ *      catches the FL-doc-onto-CO-HQ mis-match the operator gate cannot.
+ *   2. CITY — both states known AND EQUAL, both cities known AND
+ *      normalized-different → contradict (same-state wrong-city). Gated on the
+ *      state agreeing so a city-name collision across states never false-blocks,
+ *      and abbreviation variants (St./Saint, Ft/Fort) normalize equal.
+ * Never blocks when a side is unknown; never blocks a correctly-located lease.
+ *
+ * @param {{docCity:?string, docState:?string, propCity:?string, propState:?string}} a
+ */
+export function locationContradicts({ docCity, docState, propCity, propState } = {}) {
+  const ds = normState(docState), ps = normState(propState);
+  if (ds && ps && ds !== ps) return true;                    // clearly different states
+  if (ds && ps && ds === ps) {                               // same state → city discriminator
+    const dc = normCity(docCity), pc = normCity(propCity);
+    if (dc && pc && dc !== pc) return true;
+  }
+  return false;
 }
 
 /**
@@ -749,6 +800,17 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       const row = p.ok && p.data?.[0];
       return { operator: (row && (row.agency || row.agency_full_name)) || null, source: 'agency' };
     },
+    // Location-of-record for the location-agreement gate (Unit 1). Both dia and
+    // gov `properties` carry city/state; the gate compares them against the doc's
+    // folder/in-file anchor. Domain-agnostic — a wrong-location notice-address
+    // mis-match can corrupt a gov lease as readily as a dia one.
+    getPropertyLocation: async ({ domain, propertyId }) => {
+      const pid = Number(propertyId);
+      const r = await domainQuery(domain, 'GET',
+        `properties?property_id=eq.${pid}&select=city,state&limit=1`).catch(() => ({ ok: false }));
+      const row = r.ok && r.data?.[0];
+      return { city: (row && row.city) || null, state: (row && row.state) || null };
+    },
     matchAgainstDomain,
     domainsFor: (pi) => {
       const t = `${pi.tenant || ''}`;
@@ -1131,6 +1193,17 @@ export async function attachLeaseDoc(a, injected = {}) {
     return { ok: true, attached: false, multitenant_deferred: true, skip_reason: 'multitenant_deal_folder', match_status: 'multitenant_deferred' };
   }
 
+  // ── Draft / unexecuted-document gate (Unit 2, 2026-06-16) — SHARED CHOKE ─────
+  // A doc under a `/Drafts/` segment OR with a blackline/redline/draft/version
+  // filename is an UNEXECUTED working draft. It must NEVER mint an authoritative
+  // lease (the Federal Way `…/PSA/Drafts/` redline/blackline files that built a
+  // phantom 160k-SF / $4M lease on property 3353605). Refuse BEFORE any byte
+  // fetch / extract / resolve, exactly like the multi-tenant gate, and return a
+  // terminal, non-enriching result every caller already understands.
+  if (isDraftDocumentPath(pathRef)) {
+    return { ok: true, attached: false, draft_not_executed: true, skip_reason: 'draft_not_executed', match_status: 'draft_not_executed' };
+  }
+
   const deps = injected.deps || buildRealLeaseDeps({ workspaceId, actorId });
   const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
   const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
@@ -1162,6 +1235,58 @@ export async function attachLeaseDoc(a, injected = {}) {
   }
 
   if (resolved.status === 'matched') {
+    // ── Location-agreement gate (Unit 1, 2026-06-16) ─────────────────────────
+    // A domain lease address-matched a property whose LOCATION clearly
+    // contradicts the doc's location anchor (the corporate-notice-address bleed —
+    // a "The Villages, FL" ground lease landing on DaVita's Denver, CO HQ). The
+    // operator gate can't see it (same operator). The FOLDER anchor (subject_hint)
+    // is the TRUSTED independent location signal — it's how the human filed the
+    // deal, so it survives the notice-block bleed that corrupts the in-file
+    // premises address; fall back to the in-file address per-field only when the
+    // folder lacks it. Conservative: agreement OR unknown-on-either-side passes;
+    // only a CLEAR state (or same-state city) contradiction routes the single
+    // wrong-location candidate to the existing match_disambiguation lane — never a
+    // wrong-property hard write. Gated on the dep so the legacy tests keep their
+    // behavior; runs BEFORE the operator gate (location is the more fundamental
+    // signal and the HQ case passes the operator gate).
+    if (deps.getPropertyLocation) {
+      const docCity = subjectHint?.city || normalized.property_identity?.city || null;
+      const docState = subjectHint?.state || normalized.property_identity?.state || null;
+      const loc = await deps.getPropertyLocation({ domain: resolved.domain, propertyId: resolved.property_id }).catch(() => null);
+      const propCity = loc?.city || null, propState = loc?.state || null;
+      const locContradicts = locationContradicts({ docCity, docState, propCity, propState });
+      console.log(`[lease-extractor] location-gate domain=${resolved.domain} property=${resolved.property_id} doc_loc=${JSON.stringify({ city: docCity, state: docState })} property_loc=${JSON.stringify({ city: propCity, state: propState })} contradicts=${locContradicts} decision=${locContradicts ? 'location_mismatch→match_disambiguation' : 'pass'}`);
+      if (locContradicts) {
+        const docTenant = normalized.factual?.tenant || normalized.property_identity?.tenant || subjectHint?.tenant_brand || null;
+        const candidate = {
+          domain: DOMAIN_SHORT(resolved.domain), property_id: String(resolved.property_id),
+          city: propCity, state: propState, confidence: 0,
+        };
+        if (dryRun) {
+          return {
+            ok: false, attached: false, dry_run: true, location_mismatch: true, reason: 'location_mismatch',
+            doc_location: { city: docCity, state: docState }, property_location: { city: propCity, state: propState },
+            domain: resolved.domain, property_id: resolved.property_id, match_status: 'review_required',
+          };
+        }
+        let emitted = false;
+        try {
+          await emitDisambig(null, docTenant, docTenant, [candidate],
+            { subjectRef: 'folder_feed_lease:' + pathRef, workspaceId,
+              context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: 'lease',
+                location_mismatch: true, doc_location: { city: docCity, state: docState },
+                property_location: { city: propCity, state: propState } } });
+          emitted = true;
+        } catch (err) { console.warn('[attachLeaseDoc] location-mismatch disambiguation emit failed (non-fatal):', err?.message); }
+        return {
+          ok: false, attached: false, emitted_disambiguation: emitted, location_mismatch: true,
+          reason: 'location_mismatch',
+          doc_location: { city: docCity, state: docState }, property_location: { city: propCity, state: propState },
+          domain: resolved.domain, property_id: resolved.property_id, match_status: 'review_required',
+        };
+      }
+    }
+
     // ── Operator-agreement gate (Unit 3, 2026-06-15) ─────────────────────────
     // A domain lease address-matched (canonical/exact/fuzzy — NO operator check)
     // a property; if the property's OPERATOR family clearly contradicts the doc's

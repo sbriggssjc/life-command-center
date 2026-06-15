@@ -149,6 +149,10 @@ async function bumpAttempt(row, attempts, deps) {
  *   multitenant_deferred  — under a /Multi/ or /Portfolio/ deal folder; the
  *                           attachLeaseDoc gate refused (no extract, no lease) —
  *                           TERMINAL, marked so it drops out of the eligible queue
+ *   draft_not_executed    — under a /Drafts/ segment OR a blackline/redline/draft/
+ *                           version filename; the shared attachLeaseDoc gate
+ *                           refused — an UNEXECUTED draft never mints an
+ *                           authoritative lease. TERMINAL (Unit 2)
  *   needs_ocr             — scanned / no-text-layer PDF, incl. a matched doc whose
  *                           only text was a thin cover page (sizes the OCR follow-up)
  *   enrich_unprocessable  — matched, but the doc carries NO usable primary-lease
@@ -161,8 +165,9 @@ async function bumpAttempt(row, attempts, deps) {
  *                           retry) → TERMINAL on the FIRST pass with the captured
  *                           SQLSTATE + column reason; separable from the benign
  *                           no-terms tail. (Unit 2, 2026-06-15)
- *   ambiguous             — ≥2 in-domain near-misses OR a Unit-3 operator-family
- *                           mismatch (DaVita doc vs Satellite property) →
+ *   ambiguous             — ≥2 in-domain near-misses OR an operator-family
+ *                           mismatch (DaVita doc vs Satellite property) OR a
+ *                           location mismatch (FL doc vs CO/HQ property, Unit 1) →
  *                           match_disambiguation lane (reason distinguishes them)
  *   no_domain             — no in-domain property (captured, tenant-searchable, no guess)
  *   error                 — transient extract/fetch/write failure → NOT marked,
@@ -199,6 +204,14 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
     const reason = res.skip_reason || 'multitenant_deal_folder';
     await deps.markBackfilled(row, { outcome: 'multitenant_deferred', skip_reason: reason });
     return { id: row.id, path: row.path, outcome: 'multitenant_deferred', skip_reason: reason };
+  }
+  // Draft / unexecuted doc: the shared attachLeaseDoc gate refused (no extract,
+  // no lease, no edge). TERMINAL — mark it so it drops out of the eligible queue
+  // and isn't re-listed every tick. NOT an error, NOT enriched. (Unit 2)
+  if (res?.draft_not_executed) {
+    const reason = res.skip_reason || 'draft_not_executed';
+    await deps.markBackfilled(row, { outcome: 'draft_not_executed', skip_reason: reason });
+    return { id: row.id, path: row.path, outcome: 'draft_not_executed', skip_reason: reason };
   }
   if (res?.needs_ocr) {
     const info = { outcome: 'needs_ocr' };

@@ -9,7 +9,7 @@ import {
   classifyFile, parseSubjectHintFromPath,
   extractCityState, extractStreetAddress, isPortfolioHint, tenantCore,
   parseCityStateFromFilename, looksLikePortfolioRollup, isExcludedFolderPath,
-  isMultiTenantDealFolderPath,
+  isMultiTenantDealFolderPath, isDraftDocumentPath, filenameLooksDraft,
 } from '../api/_shared/folder-feed-classify.js';
 
 describe('folder-feed classifyFile', () => {
@@ -34,6 +34,51 @@ describe('folder-feed classifyFile', () => {
 
   it('treats an unknown file as unknown (recorded, not parsed)', () => {
     assert.deepEqual(classifyFile('random notes.docx'), { type: 'unknown', isOm: false });
+  });
+
+  it('Unit 2 — a draft-marked filename classifies draft_not_executed BEFORE the OM/lease branch', () => {
+    assert.deepEqual(classifyFile('PSA - Federal Way - blackline.pdf'), { type: 'draft_not_executed', isOm: false });
+    assert.deepEqual(classifyFile('Lease redline.pdf'), { type: 'draft_not_executed', isOm: false });
+    assert.deepEqual(classifyFile('DaVita Tulsa OM draft.pdf'), { type: 'draft_not_executed', isOm: false });  // not staged as OM
+    assert.equal(classifyFile('Changed Pages v3.pdf').type, 'draft_not_executed');
+  });
+});
+
+describe('folder-feed draft / unexecuted-document guard (Unit 2)', () => {
+  const BASE = '/sites/TeamBriggs20/Shared Documents/PROPERTIES/D/DaVita/Federal Way, WA';
+
+  it('filenameLooksDraft: strong markers always; a bare version tag unless executed/final/signed', () => {
+    assert.equal(filenameLooksDraft('PSA blackline.pdf'), true);
+    assert.equal(filenameLooksDraft('Lease redline.pdf'), true);
+    assert.equal(filenameLooksDraft('Lease Draft.pdf'), true);
+    assert.equal(filenameLooksDraft('Changed Pages.pdf'), true);
+    assert.equal(filenameLooksDraft('Lease v2.pdf'), true);
+    assert.equal(filenameLooksDraft('Lease - Fully Executed v2.pdf'), false);  // executed overrides version
+    assert.equal(filenameLooksDraft('Lease - FINAL v3.pdf'), false);
+    assert.equal(filenameLooksDraft('DVA Lease - Fully Executed.pdf'), false);
+    assert.equal(filenameLooksDraft('Avenue Place Lease.pdf'), false);          // "Avenue" is not a version tag
+  });
+
+  it('isDraftDocumentPath: a /Drafts/ SEGMENT is caught even with a clean filename', () => {
+    assert.equal(isDraftDocumentPath(`${BASE}/PSA/Drafts/PSA Federal Way.pdf`), true);
+    assert.equal(isDraftDocumentPath(`${BASE}/PSA/Draft/PSA Federal Way.pdf`), true);
+    assert.equal(isDraftDocumentPath(`${BASE}/PSA/Drafts/PSA - blackline.pdf`), true);
+  });
+
+  it('isDraftDocumentPath: a draft FILENAME is caught in a clean folder', () => {
+    assert.equal(isDraftDocumentPath(`${BASE}/Rec'd/Lease redline.pdf`), true);
+    assert.equal(isDraftDocumentPath('Lease redline.pdf'), true);   // bare filename
+  });
+
+  it('isDraftDocumentPath: an executed file in a clean folder is NOT a draft', () => {
+    assert.equal(isDraftDocumentPath(`${BASE}/Rec'd/DVA Lease - Fully Executed.pdf`), false);
+    assert.equal(isDraftDocumentPath('DVA Lease - Fully Executed.pdf'), false);
+  });
+
+  it('isDraftDocumentPath: tolerates empty / backslash paths', () => {
+    assert.equal(isDraftDocumentPath(''), false);
+    assert.equal(isDraftDocumentPath(null), false);
+    assert.equal(isDraftDocumentPath(`${BASE}\\PSA\\Drafts\\x.pdf`), true);
   });
 });
 

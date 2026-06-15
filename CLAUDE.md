@@ -2881,3 +2881,102 @@ Railway redeploy. After deploy: a draft `Mark sent` writes a `template_sends`
 row + the `template_sent` signal; once ≥3 sends/template land,
 `high_performing_templates` populates and the weekly rollup has data; a logged
 reply bumps `emails_replied` and pauses the cadence (`converted`).
+
+## Stage B — location-agreement guard + draft-document policy (2026-06-16)
+
+The corpus lease backfill is COMPLETE and the end-gate held the structural
+invariants (no dup leases/edges, no clobber, operator gate held on
+cross-operator). But the end-gate surfaced two mis-match classes the operator
+gate by design cannot catch — a same-operator WRONG-LOCATION match and an
+UNEXECUTED-draft enrich. Two wrong-property leases were already reverted under
+the gate (dia 25325 on 30705 = DaVita HQ; dia 25330 on 3353605 = 160k-SF non-
+clinic). This round closes the matcher hole + sets the draft policy. The
+backfill drain stays DONE — do NOT re-drain the corpus until this guard deploys.
+
+### Unit 1 — location-agreement guard (`lease-extractor.js`)
+The corporate-notice-address mis-match: a ground lease / commencement-date
+memorandum carries the tenant's corporate NOTICE address in its boilerplate, and
+the matcher latched onto THAT instead of the leased premises — landing a "The
+Villages, FL" ground lease on DaVita's Denver, CO HEADQUARTERS (property 30705).
+Same operator (DaVita==DaVita) ⇒ the operator gate PASSES; only a LOCATION gate
+catches it. New pure `locationContradicts({docCity,docState,propCity,propState})`
+(exported) mirrors `operatorFamiliesContradict`: **(1) STATE — both known AND
+different → contradict** (the robust primary signal, catches FL→CO); **(2) CITY —
+both states known AND EQUAL, both cities normalized-different → contradict**
+(same-state wrong-city; St./Saint + Ft/Fort normalize equal so an abbreviation
+variant never false-blocks). Agreement OR unknown-on-either-side passes. Wired
+into `attachLeaseDoc`'s matched block **BEFORE** the operator gate (location is
+the more fundamental signal AND the HQ case passes the operator gate), gated on a
+new `getPropertyLocation` dep (dia+gov `properties.city/state`, domain-agnostic).
+The **FOLDER anchor (`subject_hint.city/state`) is the trusted independent
+location signal** — it's how the human filed the deal, so it survives the notice-
+block bleed; falls back per-field to the in-file `property_identity` only when the
+folder lacks it. A clear contradiction routes the single wrong-location candidate
+to the EXISTING `match_disambiguation` lane (reason `location_mismatch`,
+`context.location_mismatch=true`) — never a wrong-property hard write; dry-run
+reports it and emits/writes nothing. Legacy deps without `getPropertyLocation`
+skip the gate (backward compatible). In the backfill, `location_mismatch` rides
+the existing `emitted_disambiguation` → `outcome='ambiguous', reason='location_mismatch'`.
+
+**Premises-address preference (the deeper cure) is NOT yet done** — the extractor
+still matches on whatever address it pulled (which can be the notice/corporate
+block). The folder-anchor-first location gate is the safety net that catches the
+corruption; preferring the demised/leased-premises address over the notice block
+at extraction time, and rejecting a match to the tenant's known corporate HQ, is
+the follow-up cure.
+
+### Unit 2 — draft-document policy (`folder-feed-classify.js` + the choke point)
+A doc under a `/Drafts/` path SEGMENT, or whose FILENAME carries a
+blackline/redline/draft/"changed pages"/version(vN) marker, is UNEXECUTED and
+must NEVER mint an authoritative `data_source='folder_feed_lease'` lease (the
+Federal Way `…/PSA/Drafts/` redline/blackline files that built the phantom
+160k-SF / $4M lease on 3353605). New pure `isDraftDocumentPath(pathRef)` +
+`filenameLooksDraft(name)` (exported) mirror `isMultiTenantDealFolderPath` —
+whole-segment `/Drafts?/` + anchored filename markers. Strong markers
+(blackline/redline/draft/changed pages) always match; a bare `v\d+` version tag
+counts only when the name carries no executed/final/signed cue (so "… Fully
+Executed v2.pdf" passes). Wired in THREE places, single source of truth:
+- `classifyFile` returns `{type:'draft_not_executed', isOm:false}` for a draft
+  FILENAME — checked BEFORE the OM/lease branches (an "OM redline.pdf" is recorded
+  draft, never re-ingested as an OM).
+- `attachLeaseDoc` refuses at the SHARED choke point (right after the multi-tenant
+  gate) — BEFORE any byte fetch / resolve — returning terminal
+  `{draft_not_executed:true, skip_reason:'draft_not_executed'}`, so every caller
+  (crawl auto-route + corpus backfill) inherits it. `lease-backfill.js` maps it to
+  a TERMINAL `outcome='draft_not_executed'` (marked, drops out of the queue).
+- The folder-feed worker forces `cls={type:'draft_not_executed'}` when
+  `isDraftDocumentPath(item.path)` (catches a `/Drafts/` segment a clean filename
+  can't reveal) and excludes the type from `attachEligible` → recorded
+  skipped/draft_not_executed, no stage / attach / extractor.
+
+### Unit 3 — re-process the held docs (POST-DEPLOY runbook, NOT done here)
+The 8 source docs (6374, 7004, 19517, 19522, 19524, 19526, 19530, 19541) are HELD
+(`subject_hint.lease_backfill_reverted=true`, `lease_backfilled_at` set ⇒ out of
+the eligible queue). **After this guard deploys (Railway redeploy of merged
+`main`) AND a synthetic FL-doc→CO-property gate-verify**, reset their markers
+(clear `lease_backfilled_at` + `lease_backfill*`) and re-drain via
+`?_route=lease-backfill`. Expected: the FL/Gardena memoranda →
+`location_mismatch` → `match_disambiguation` (NO write to 30705); the Federal Way
+drafts → `draft_not_executed` (no write to 3353605). None re-creates a lease on
+the wrong/HQ/non-clinic property. Do NOT reset the markers before the deploy.
+
+### Unit 4 — Decision Center data-quality rows (surface, don't bury — LIVE op)
+Open `lcc_open_decision`/data-quality rows (a LIVE LCC-Opps op, separate from
+this code change) for: **30680** phantom address (1221 S Capitol vs CMS 1450
+Kooser Rd); stray **medicare_clinics 552652 → property 30680** property_id mis-
+link; **30705** = DaVita HQ mis-ingested into the dia clinic book; **3353605** =
+160k-SF non-clinic (verify real DaVita facility vs mis-ingestion); **25323**
+landlord-as-tenant (WellSpan → should be DaVita) on property **22640**.
+
+### Verified (headless 2026-06-16)
+`test/lease-location-draft-guard.test.mjs` (locationContradicts cases; the
+location gate blocks FL→CO/HQ with operator gate PASSING + emits to
+match_disambiguation + writes nothing; dry-run; correctly-located still enriches;
+legacy-deps backward compat; draft choke point + backfill terminal mapping) +
+`test/folder-feed-classify.test.mjs` (classifyFile draft branch;
+filenameLooksDraft executed-override; isDraftDocumentPath segment+filename).
+`node --check` clean; `ls api/*.js | wc -l`=12; full suite 925 pass / 0 fail / 6
+skipped. JS ships on the Railway redeploy; the held docs (Unit 3) + the Decision
+Center rows (Unit 4) are post-deploy/live steps, NOT in this commit. The cleaned/
+reverted records (dia 25312/19530/14365; superseded provenance incl. 25325/25330;
+canonical guaranteed_by edges) were not touched.

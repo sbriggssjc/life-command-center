@@ -30,7 +30,7 @@ import { createHash } from 'crypto';
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
-import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup, isExcludedFolderPath, isMultiTenantDealFolderPath } from '../_shared/folder-feed-classify.js';
+import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup, isExcludedFolderPath, isMultiTenantDealFolderPath, isDraftDocumentPath } from '../_shared/folder-feed-classify.js';
 import { attachRecognizedDoc } from './folder-feed-attach.js';
 import { attachLeaseDoc } from './lease-extractor.js';
 
@@ -405,7 +405,15 @@ export async function handleFolderFeedTick(req, res) {
       }
 
       const hash = changeHash(item);
-      const cls = classifyFile(item.name || item.path.split('/').pop());
+      let cls = classifyFile(item.name || item.path.split('/').pop());
+      // Unit 2 (2026-06-16) — an unexecuted DRAFT (a `/Drafts/` path segment that
+      // classifyFile can't see from the filename alone, OR a draft-marked name) is
+      // recorded skipped/draft_not_executed: no stage, no attach, no extractor —
+      // mirrors the excluded_archive_or_working / multitenant park. Never an
+      // authoritative lease from an unsigned redline.
+      if (cls.type !== 'lcc_generated' && isDraftDocumentPath(item.path)) {
+        cls = { type: 'draft_not_executed', isOm: false };
+      }
       report.by_type[cls.type] = (report.by_type[cls.type] || 0) + 1;
 
       // ---- Diff: have we already seen this exact (path, content_hash)? ----
@@ -448,7 +456,8 @@ export async function handleFolderFeedTick(req, res) {
       const attachEligible = mode === 'enrich'
         && !cls.isOm
         && cls.type !== 'unknown'
-        && cls.type !== 'lcc_generated';
+        && cls.type !== 'lcc_generated'
+        && cls.type !== 'draft_not_executed';   // Unit 2 — unexecuted draft, never enrich
 
       // Slice 2e — a Portfolio-rollup working doc with no resolvable City, ST is
       // parked (skipped), not sent to disambiguation. Detected once per file so
