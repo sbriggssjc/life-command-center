@@ -109,10 +109,14 @@
         <div class="greeting-date" id="greetingDate"></div>
         <div class="home-layout">
           <div class="home-main">
-            <!-- Next Best Action — cross-domain prioritized broker queue (Item #4 Phase C, 2026-05-17) -->
+            <!-- Top Data Gaps to Close — cross-domain data-quality gap queue, ranked
+                 by property value (R25 Unit 5, 2026-06-15). This is the DATA-GAP
+                 cockpit: highest-value records missing ownership/agency data. It is
+                 deliberately distinct from the Priority Queue (the BD-action cockpit
+                 — who to pursue). Two tools, two questions; do not converge them. -->
             <div class="widget" id="nextBestActionWidget">
               <div class="widget-title">
-                Next Best Action
+                Top Data Gaps to Close
                 <div class="nba-controls">
                   <div class="nba-domain-switch" id="nbaDomainSwitch">
                     <button type="button" class="nba-domain-btn active" data-nba-domain="both" onclick="setNbaDomainView('both')">All</button>
@@ -122,8 +126,9 @@
                   <button type="button" class="nba-refresh-btn" onclick="loadNextBestActionData(true)" title="Refresh">↻</button>
                 </div>
               </div>
+              <div class="nba-subhead">Highest-value records missing ownership / agency data — close these to complete underwritings.</div>
               <div id="nextBestActionContent"><div class="loading"><span class="spinner"></span></div></div>
-              <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue')">Start here — view full priority queue →</button>
+              <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue')">Looking for who to pursue? Open the Priority Queue →</button>
             </div>
 
             <!-- Stats -->
