@@ -25,6 +25,7 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
 import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
@@ -112,6 +113,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'sf-link-tick':            return handleSfLinkTick(req, res);
     case 'gov-buyer-sync':          return handleGovBuyerSync(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
+    case 'recorder-portal':         return handleRecorderPortal(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
@@ -6641,6 +6643,32 @@ async function handleNextBestAction(req, res) {
     rank: offset + idx + 1,
   }));
 
+  // R26 Unit 2: turn gov "Research recorded owner" gaps into a one-click
+  // county-recorder lookup. Resolve portals for the shown gov recorded-owner
+  // items (county comes from the R26 Unit 1 backfill). Best-effort — never
+  // fail the NBA response if portal resolution errors; items without a resolved
+  // county simply carry no link.
+  try {
+    const portalIds = items
+      .filter((r) => (r.source_domain === 'government' || r.source_domain === 'gov')
+        && String(r.gap_type || '') === 'missing_recorded_owner'
+        && r.property_id != null)
+      .map((r) => r.property_id);
+    if (portalIds.length > 0) {
+      const portalMap = await resolvePortalsForProperties('gov', portalIds, { domainQuery });
+      for (const r of items) {
+        const hit = r.property_id != null && portalMap.get(String(r.property_id));
+        if (hit) {
+          r.portal_url = hit.portal_url;
+          r.portal_label = hit.portal_label;
+          r.portal_county = hit.county;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[next-best-action] portal resolution skipped:', e && e.message);
+  }
+
   const byDomain = {};
   for (const r of fanOutResults) {
     byDomain[r.domain] = r.ok
@@ -6662,6 +6690,50 @@ async function handleNextBestAction(req, res) {
     by_domain:     byDomain,
     items,
   });
+}
+
+// ============================================================================
+// RECORDER PORTAL — R26 Unit 2
+//
+// GET /api/admin?_route=recorder-portal&domain=gov&property_id=<id>
+//   Resolves a GOV property's county recorder/assessor portal URL (county comes
+//   from the R26 Unit 1 backfill). Used by the property-detail ownership feed to
+//   render a "Look up owner → <County> Recorder" link on recorded-owner gaps.
+//   Returns { ok:true, property_id, portal_url|null, portal_label?, county? }.
+//   A property with no resolvable county/authority returns portal_url:null
+//   (the UI renders no link — never a guessed URL).
+// ============================================================================
+async function handleRecorderPortal(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domain = String(req.query.domain || 'gov').toLowerCase();
+  const propertyId = req.query.property_id;
+  if (propertyId == null || propertyId === '') {
+    return res.status(400).json({ error: 'property_id required' });
+  }
+  // county_authorities is gov-only; dia returns no link (not an error).
+  if (domain !== 'gov' && domain !== 'government') {
+    return res.status(200).json({ ok: true, property_id: propertyId, portal_url: null });
+  }
+  try {
+    const portal = await resolvePortalForProperty('gov', propertyId, { domainQuery });
+    if (!portal) {
+      return res.status(200).json({ ok: true, property_id: propertyId, portal_url: null });
+    }
+    return res.status(200).json({
+      ok: true,
+      property_id: propertyId,
+      portal_url: portal.portal_url,
+      portal_label: portal.portal_label,
+      portal_kind: portal.portal_kind,
+      county: portal.county,
+    });
+  } catch (e) {
+    console.warn('[recorder-portal] resolution failed:', e && e.message);
+    return res.status(200).json({ ok: true, property_id: propertyId, portal_url: null });
+  }
 }
 
 // ============================================================================

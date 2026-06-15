@@ -7211,6 +7211,12 @@ function renderNextBestActionPanel() {
     parts.push(  '<div class="nba-body">');
     parts.push(    '<div class="nba-label" title="' + esc(label) + '">' + esc(label) + '</div>');
     parts.push(    '<div class="nba-action" title="' + esc(action) + '">' + esc(action) + '</div>');
+    // R26 Unit 2: one-click county-recorder lookup on "Research recorded owner"
+    // gov gaps once the property's county is backfilled. stopPropagation so the
+    // link opens the portal instead of the row's openNbaItem detail nav.
+    if (row.portal_url) {
+      parts.push('<a class="nba-portal-link" href="' + esc(row.portal_url) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Open the county portal to research the recorded owner">Look up owner → ' + esc(row.portal_label || 'county recorder') + '</a>');
+    }
     parts.push(  '</div>');
     parts.push(  '<div class="nba-value">' + esc(val) + '</div>');
     parts.push('</div>');

@@ -5965,6 +5965,24 @@ async function _udFetchProspectingFeed(limit) {
     const rows = Array.isArray(res) ? res : (res && res.data ? res.data : []);
     _udCache.researchFeed = rows || [];
   } catch (_e) { _udCache.researchFeed = []; }
+  // R26 Unit 2: for a gov property with a recorded-owner research gap, resolve
+  // the county recorder portal (county comes from the R26 Unit 1 backfill) so
+  // the feed can render a one-click "Look up owner →" link. Best-effort; a
+  // missing county / authority simply yields no link.
+  try {
+    const feedRows = _udCache.researchFeed || [];
+    const hasRecordedOwnerGap = feedRows.some(function (r) {
+      return String(r.research_type || '').indexOf('missing_recorded_owner') !== -1;
+    });
+    if (db === 'gov' && hasRecordedOwnerGap && _udCache.recorderPortal === undefined) {
+      const doFetch = (window.LCC_AUTH && window.LCC_AUTH.apiFetch) ? window.LCC_AUTH.apiFetch : fetch;
+      const pr = await doFetch('/api/admin?_route=recorder-portal&domain=gov&property_id=' + encodeURIComponent(pid));
+      if (pr && pr.ok) {
+        const pd = await pr.json();
+        _udCache.recorderPortal = (pd && pd.portal_url) ? pd : null;
+      } else { _udCache.recorderPortal = null; }
+    }
+  } catch (_e) { _udCache.recorderPortal = null; }
   if (typeof _setUdCache === 'function') _setUdCache(_udCache);
   return _udCache.researchFeed;
 }
@@ -6134,12 +6152,19 @@ function _udRenderProspectingFeed() {
       + '<button type="button" class="prospect-cta" onclick="event.stopPropagation();_udBtnGuard(this,_udAddToCadence)">Add to cadence</button></div>');
     rows.push('</div>');
   }
+  const portal = _udCache && _udCache.recorderPortal;
   feed.forEach(function (r) {
     const cta = _udResearchCta(r.research_type);
     rows.push('<div class="prospect-row">');
     rows.push('<span class="prospect-rank" title="priority score">' + esc(String(r.priority != null ? r.priority : '—')) + '</span>');
     rows.push('<div class="prospect-why"><b>' + esc(_udResearchTitle(r)) + '</b><div class="prospect-sub">' + esc(r.instructions || r.label || '') + '</div></div>');
-    rows.push('<div class="prospect-actions"><button type="button" class="prospect-cta" onclick="event.stopPropagation();switchUnifiedTab(&quot;' + esc(cta.tab) + '&quot;)">' + esc(cta.label) + '</button></div>');
+    // R26 Unit 2: one-click county-recorder lookup on recorded-owner gaps.
+    const isRecordedOwner = String(r.research_type || '').indexOf('missing_recorded_owner') !== -1;
+    let portalLink = '';
+    if (isRecordedOwner && portal && portal.portal_url) {
+      portalLink = '<a class="prospect-cta" href="' + esc(portal.portal_url) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Open the county portal to research the recorded owner">Look up owner → ' + esc(portal.portal_label || 'county recorder') + '</a>';
+    }
+    rows.push('<div class="prospect-actions">' + portalLink + '<button type="button" class="prospect-cta" onclick="event.stopPropagation();switchUnifiedTab(&quot;' + esc(cta.tab) + '&quot;)">' + esc(cta.label) + '</button></div>');
     rows.push('</div>');
   });
   if (feed.length === 0 && legacy && legacy.gap_type) {
