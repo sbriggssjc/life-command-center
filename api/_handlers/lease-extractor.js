@@ -30,6 +30,7 @@ import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
+import { isMultiTenantDealFolderPath } from '../_shared/folder-feed-classify.js';
 import { authenticate } from '../_shared/auth.js';
 
 const nodeRequire = createRequire(import.meta.url);
@@ -921,6 +922,24 @@ export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, do
 export async function attachLeaseDoc(a, injected = {}) {
   const { storageRef, fileName, subjectHint, mediaType, workspaceId, actorId, dryRun = false } = a;
   const pathRef = a.pathRef || storageRef || fileName || null;
+
+  // ── Multi-tenant / portfolio deal-folder gate — THE SHARED CHOKE POINT ──────
+  // A lease (or any single-asset doc) living under a /Multi/ or /Portfolio(s)/
+  // path SEGMENT is part of a multi-tenant / portfolio deal package, NOT a
+  // single-asset/single-tenant lease (the Hertz-in-"DaVita Anchored -
+  // Springfield, IL" contamination, 2026-06-15). Per dia/gov single-asset
+  // doctrine the extractor must NEVER create/fill a domain lease from it — so
+  // the gate lives HERE, in the one place every caller funnels through
+  // (crawl auto-route, the corpus backfill, and any future caller). It is the
+  // GUARANTEE: refuse BEFORE any byte fetch / classify / extract / resolve, and
+  // return a terminal, non-enriching result the callers already understand.
+  // The folder-feed crawl path keeps its own pre-check (it parks at the crawl
+  // layer before this is even called — harmless redundancy that avoids a wasted
+  // call), but the extractor itself now refuses so no path can sneak past.
+  if (isMultiTenantDealFolderPath(pathRef)) {
+    return { ok: true, attached: false, multitenant_deferred: true, skip_reason: 'multitenant_deal_folder', match_status: 'multitenant_deferred' };
+  }
+
   const deps = injected.deps || buildRealLeaseDeps({ workspaceId, actorId });
   const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
   const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
