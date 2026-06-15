@@ -62,12 +62,24 @@ function cleanHint(hint) {
  */
 export async function fetchEligibleLeaseDocs(limit, deps) {
   const q = deps.opsQuery || opsQuery;
+  // Cosmetic-accuracy filter: exclude multi-tenant / portfolio deal-folder leases
+  // at SELECTION so the dry-run's eligible count reflects what will actually be
+  // worked. The hard GUARANTEE is the `attachLeaseDoc` gate (whole-segment via
+  // `isMultiTenantDealFolderPath`); this ILIKE mirrors its EXACT whole-segment
+  // semantics by anchoring the surrounding slashes (`*/Multi/*` matches the
+  // segment "Multi", never a substring like "Multimedia"/"Multifoods"). PostgREST
+  // ANDs repeated column filters, and `*` is the wildcard. `/Portfolios/` is a
+  // distinct segment from `/Portfolio/`, so both are listed.
   const r = await q('GET',
     'folder_feed_seen' +
     '?detected_type=eq.lease' +
     '&status=in.(staged,attached)' +
     '&vertical=in.(dia,gov)' +
     '&subject_hint->>lease_backfilled_at=is.null' +
+    '&server_relative_path=not.ilike.*/Multi/*' +
+    '&server_relative_path=not.ilike.*/Multitenant/*' +
+    '&server_relative_path=not.ilike.*/Portfolio/*' +
+    '&server_relative_path=not.ilike.*/Portfolios/*' +
     '&select=id,server_relative_path,vertical,status,subject_hint' +
     '&order=id.asc' +
     `&limit=${limit}`);
@@ -106,11 +118,14 @@ async function markBackfilled(row, info, deps) {
  *
  * Outcome vocabulary (mapped from the attachLeaseDoc result, mirroring the
  * folder-feed worker's status mapping):
- *   enriched   — matched + applied (fill-blanks / conflicts → Decision Center)
- *   needs_ocr  — scanned / no-text-layer PDF (sizes the OCR follow-up)
- *   ambiguous  — ≥2 in-domain near-misses → match_disambiguation lane
- *   no_domain  — no in-domain property (captured, tenant-searchable, no guess)
- *   error      — extract/fetch failure (transient → NOT marked, retries)
+ *   enriched              — matched + applied (fill-blanks / conflicts → Decision Center)
+ *   multitenant_deferred  — under a /Multi/ or /Portfolio/ deal folder; the
+ *                           attachLeaseDoc gate refused (no extract, no lease) —
+ *                           TERMINAL, marked so it drops out of the eligible queue
+ *   needs_ocr             — scanned / no-text-layer PDF (sizes the OCR follow-up)
+ *   ambiguous             — ≥2 in-domain near-misses → match_disambiguation lane
+ *   no_domain             — no in-domain property (captured, tenant-searchable, no guess)
+ *   error                 — extract/fetch failure (transient → NOT marked, retries)
  *
  * deps: { attachLeaseDoc, markBackfilled }
  */
@@ -131,6 +146,14 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
   }
 
   // ---- map the extractor result → a backfill outcome -----------------------
+  // Multi-tenant / portfolio deal-folder: the shared attachLeaseDoc gate refused
+  // (no extract, no lease, no edge). TERMINAL — mark it so it drops out of the
+  // eligible queue and isn't re-listed every tick. NOT an error, NOT enriched.
+  if (res?.multitenant_deferred) {
+    const reason = res.skip_reason || 'multitenant_deal_folder';
+    await deps.markBackfilled(row, { outcome: 'multitenant_deferred', skip_reason: reason });
+    return { id: row.id, path: row.path, outcome: 'multitenant_deferred', skip_reason: reason };
+  }
   if (res?.needs_ocr) {
     const out = { id: row.id, path: row.path, outcome: 'needs_ocr' };
     await deps.markBackfilled(row, { outcome: 'needs_ocr' });
@@ -212,6 +235,7 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     limit,
     scanned: 0,
     enriched: 0,
+    multitenant_deferred: 0,
     needs_ocr: 0,
     ambiguous: 0,
     no_domain: 0,
