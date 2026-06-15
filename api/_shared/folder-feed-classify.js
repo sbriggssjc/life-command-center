@@ -85,6 +85,12 @@ export function classifyFile(name) {
   // the OM branch below and re-ingest our own BOV/OM as a third-party doc.
   if (hasLccTag(fn)) return { type: 'lcc_generated', isOm: false };
 
+  // Unit 2 (2026-06-16) — an unexecuted working DRAFT (blackline / redline /
+  // draft / "changed pages" / version tag) is NEVER staged or enriched. Checked
+  // BEFORE the OM/lease branches so an "OM redline.pdf" is recorded
+  // draft_not_executed, never re-ingested as a third-party OM.
+  if (filenameLooksDraft(fn)) return { type: 'draft_not_executed', isOm: false };
+
   // OM / flyer / marketing — the only types this slice extracts. Restrict to
   // PDF (the OM extractor's wheelhouse); a "*OM*.xlsx" is a master sheet, not an
   // OM, and is handled by the tabular branch below.
@@ -149,6 +155,55 @@ export const MULTITENANT_FOLDER_SEGMENT_RES = [/^multi$/i, /^multi[\s_-]?tenant$
 export function isMultiTenantDealFolderPath(folderPath) {
   const segs = String(folderPath || '').replace(/\\/g, '/').split('/').map(s => s.trim()).filter(Boolean);
   return segs.some(seg => MULTITENANT_FOLDER_SEGMENT_RES.some(re => re.test(seg)));
+}
+
+// ── Draft / unexecuted-document guard (Unit 2, 2026-06-16) ──────────────────
+// A doc living under a `/Drafts/` path SEGMENT, or whose FILENAME carries a
+// blackline / redline / draft / "changed pages" / version (vN) marker, is an
+// UNEXECUTED working draft — NOT an authoritative source. The lease enricher
+// must NEVER mint an authoritative lease (data_source='folder_feed_lease') from
+// one (the Federal Way `…/PSA/Drafts/` redline/blackline files that built a
+// phantom 160k-SF / $4M lease on property 3353605, reverted 2026-06-15). Whole-
+// segment folder + anchored filename markers so a legitimately-named executed
+// file ("… Fully Executed v2.pdf") is NOT caught. Mirrors
+// isMultiTenantDealFolderPath — keep the markers small + named, in one place.
+export const DRAFT_FOLDER_SEGMENT_RES = [/^drafts?$/i];
+// Strong, unambiguous draft markers — always a draft.
+const DRAFT_STRONG_FILENAME_RE = /\b(?:blackline|redline|changed\s+pages)\b|\bdraft\b/i;
+// A version tag (v2 / v.3 / "v 4") is a WEAK draft marker — counts only when the
+// name carries no executed/final/signed cue (so "Lease - Executed v2.pdf" passes).
+const DRAFT_VERSION_FILENAME_RE = /\bv\.?\s?\d+\b/i;
+const EXECUTED_FILENAME_RE = /\b(?:fully\s+)?executed\b|\bfinal\b|\bsigned\b/i;
+
+/**
+ * True when a FILENAME (last path segment) carries a draft marker. Pure; no path
+ * needed. Strong markers always match; a bare version tag only matches when the
+ * name carries no executed/final/signed cue.
+ * @param {string} fileName
+ * @returns {boolean}
+ */
+export function filenameLooksDraft(fileName) {
+  const fn = String(fileName || '');
+  if (DRAFT_STRONG_FILENAME_RE.test(fn)) return true;
+  if (DRAFT_VERSION_FILENAME_RE.test(fn) && !EXECUTED_FILENAME_RE.test(fn)) return true;
+  return false;
+}
+
+/**
+ * True when the doc is an unexecuted DRAFT: a `/Drafts/` (whole) folder SEGMENT
+ * anywhere in the path, OR a draft marker in the FILENAME (the last segment).
+ * Call with a full path or a bare filename — the folder-segment test ignores the
+ * filename segment, so a clean name inside `…/PSA/Drafts/` is still caught and a
+ * `redline.pdf` in a clean folder is caught by the filename test.
+ * @param {string} pathRef
+ * @returns {boolean}
+ */
+export function isDraftDocumentPath(pathRef) {
+  const segs = String(pathRef || '').replace(/\\/g, '/').split('/').map(s => s.trim()).filter(Boolean);
+  if (!segs.length) return false;
+  const folderSegs = segs.slice(0, -1);
+  if (folderSegs.some(seg => DRAFT_FOLDER_SEGMENT_RES.some(re => re.test(seg)))) return true;
+  return filenameLooksDraft(segs[segs.length - 1]);
 }
 
 // ── City/ST + street-address + portfolio recovery (Phase 2, Slice 2d.1) ─────
