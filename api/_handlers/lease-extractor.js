@@ -337,6 +337,36 @@ export function operatorFamiliesContradict({ docTenant, propOperator, docParent 
 }
 
 /**
+ * Pick the authoritative dia operator-of-record from already-fetched rows.
+ * PURE + independently unit-testable (the production closure does the I/O, then
+ * calls this). Resolution order, strongest first:
+ *   1. CMS clinic keyed on the property's OWN `medicare_id` — `chain_organization`
+ *      (then `owner_name`). This is GROUND TRUTH (Satellite vs DaVita vs
+ *      Fresenius) and the trusted side of the CMS link.
+ *   2. CMS clinic keyed on `medicare_clinics.property_id` — a SECONDARY CMS
+ *      signal (covers the ~760 dia rows with a property_id-linked clinic but no
+ *      `properties.medicare_id`). Still a real CMS link, so it outranks tenant.
+ *   3. The stored `properties.tenant` — LAST RESORT, only when there is NO CMS
+ *      link. dia `tenant` is frequently a FACILITY NAME (e.g. 30680's "SHC
+ *      BLOSSOM VALLEY"), which carries no operator-family cue → would leave the
+ *      gate blind. Returning the CMS chain instead is what closes the gap.
+ *
+ * @param {{property:?object, clinicByMedicareId:?object, clinicByPropertyId:?object}} rows
+ * @returns {{operator:?string, source:string}}
+ */
+export function resolveDiaPropertyOperator({ property = null, clinicByMedicareId = null, clinicByPropertyId = null } = {}) {
+  const fromClinic = (row) => {
+    if (!row) return null;
+    if (row.chain_organization) return { operator: row.chain_organization, source: 'cms_chain' };
+    if (row.owner_name) return { operator: row.owner_name, source: 'cms_owner' };
+    return null;
+  };
+  return fromClinic(clinicByMedicareId)
+      || fromClinic(clinicByPropertyId)
+      || { operator: (property && property.tenant) || null, source: 'tenant' };
+}
+
+/**
  * Resolve the property the lease belongs to FROM THE FILE — the in-file street
  * address through the injected domain matcher. This is the attach-resolver that
  * path-anchor alone can't do. Returns the same status vocabulary as
@@ -680,21 +710,39 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       if (newId == null) return { ok: false, reason: 'create_no_id' };
       return { ok: true, lease_id: newId, created: true };
     },
-    // Operator-of-record for the operator-agreement gate (Unit 3). PREFERS the
-    // linked CMS clinic's chain_organization (ground truth — Satellite vs DaVita
-    // vs Fresenius) over the stored tenant, which can itself be corrupt (30680's
-    // address is). gov has no CMS → the agency is the operator. Returns
-    // {operator, source}.
+    // Operator-of-record for the operator-agreement gate (Unit 3). For dia the
+    // AUTHORITATIVE signal is the CMS clinic keyed on the property's OWN
+    // `medicare_id` (properties.medicare_id → medicare_clinics.medicare_id →
+    // chain_organization), with `owner_name` as a secondary CMS signal and a
+    // property_id-linked clinic as a further CMS fallback. The stored
+    // `properties.tenant` is the LAST RESORT only when there is no CMS link —
+    // dia tenant is often a FACILITY NAME (30680's "SHC BLOSSOM VALLEY") with no
+    // operator-family cue, which is exactly what left the gate blind. Resolution
+    // is the pure `resolveDiaPropertyOperator`; this closure does only the I/O.
+    // gov has no CMS → the agency is the operator. Returns {operator, source}.
     getPropertyOperator: async ({ domain, propertyId }) => {
       const pid = Number(propertyId);
       if (domain === 'dialysis') {
-        const c = await domainQuery('dialysis', 'GET',
-          `medicare_clinics?property_id=eq.${pid}&chain_organization=not.is.null&select=chain_organization&limit=1`).catch(() => ({ ok: false }));
-        const chain = c.ok && c.data?.[0]?.chain_organization;
-        if (chain) return { operator: chain, source: 'cms_chain' };
         const p = await domainQuery('dialysis', 'GET',
-          `properties?property_id=eq.${pid}&select=tenant&limit=1`).catch(() => ({ ok: false }));
-        return { operator: (p.ok && p.data?.[0]?.tenant) || null, source: 'tenant' };
+          `properties?property_id=eq.${pid}&select=medicare_id,tenant&limit=1`).catch(() => ({ ok: false }));
+        const property = (p.ok && p.data?.[0]) || null;
+        let clinicByMedicareId = null;
+        const mid = property?.medicare_id;
+        if (mid) {
+          const c = await domainQuery('dialysis', 'GET',
+            `medicare_clinics?medicare_id=eq.${encodeURIComponent(mid)}&select=chain_organization,owner_name&limit=1`).catch(() => ({ ok: false }));
+          clinicByMedicareId = (c.ok && c.data?.[0]) || null;
+        }
+        // Secondary CMS signal: a clinic linked by property_id, only consulted
+        // when the authoritative medicare_id link yields no operator.
+        let clinicByPropertyId = null;
+        const idResolved = clinicByMedicareId && (clinicByMedicareId.chain_organization || clinicByMedicareId.owner_name);
+        if (!idResolved) {
+          const c2 = await domainQuery('dialysis', 'GET',
+            `medicare_clinics?property_id=eq.${pid}&or=(chain_organization.not.is.null,owner_name.not.is.null)&select=chain_organization,owner_name&limit=1`).catch(() => ({ ok: false }));
+          clinicByPropertyId = (c2.ok && c2.data?.[0]) || null;
+        }
+        return resolveDiaPropertyOperator({ property, clinicByMedicareId, clinicByPropertyId });
       }
       const p = await domainQuery('government', 'GET',
         `properties?property_id=eq.${pid}&select=agency,agency_full_name&limit=1`).catch(() => ({ ok: false }));
@@ -1134,7 +1182,13 @@ export async function attachLeaseDoc(a, injected = {}) {
         docParent = await deps.resolveOperatorParent(docTenant).catch(() => null);
         propParent = await deps.resolveOperatorParent(propOperator).catch(() => null);
       }
-      if (operatorFamiliesContradict({ docTenant, propOperator, docParent, propParent })) {
+      const familiesContradict = operatorFamiliesContradict({ docTenant, propOperator, docParent, propParent });
+      // Observability (Unit 2): the gate decision is inspectable on every drain
+      // without guessing — emitted AFTER the property match resolves and BEFORE
+      // ensureLeaseRow / any write, so a mismatch can never be masked by the
+      // dateless-active-lease reject inside applyLeaseEnrichment.
+      console.log(`[lease-extractor] operator-gate domain=${resolved.domain} property=${resolved.property_id} doc_operator=${JSON.stringify(docTenant)} property_operator=${JSON.stringify(propOperator)} property_operator_source=${propInfo?.source || 'none'} families_contradict=${familiesContradict} decision=${familiesContradict ? 'operator_mismatch→match_disambiguation' : 'pass'}`);
+      if (familiesContradict) {
         const candidate = {
           domain: DOMAIN_SHORT(resolved.domain), property_id: String(resolved.property_id),
           tenant: propOperator, operator_source: propInfo?.source || null, confidence: 0,
