@@ -248,6 +248,51 @@ export function planExpenseFinancials(normalized) {
 }
 
 /**
+ * Cross-attribution contamination guard (defense in depth, multi-tenant deal
+ * folders). A multi-tenant deal package (e.g. "DaVita Anchored - Springfield,
+ * IL" holding a Hertz car-rental lease) bleeds the anchor's credit family onto
+ * a co-tenant: the extractor read the Hertz lease but stamped "Total Renal Care"
+ * (DaVita's operating entity) as the guarantor. A guarantor whose credit family
+ * CONTRADICTS the tenant's own family is a contamination signal, not a fact —
+ * withhold it (never write the column, never mint the guaranteed_by edge) and
+ * route the disagreement to the Decision Center.
+ *
+ * Pure + deterministic so it is unit-testable. Operator-family identity comes
+ * from the SAME canonicalization the writer uses (`lcc_operator_affiliate_patterns`
+ * → a parent entity id, passed in as tenantParent/guarantorParent) PLUS a
+ * dialysis-operator credit-entity cue set as a no-DB fallback. Conservative — it
+ * only flags when the guarantor clearly belongs to an operator family the tenant
+ * does NOT share, so a normal dialysis lease (operating sub + its credit parent,
+ * both → the same family) is never touched.
+ *
+ * @param {{tenant:?string, guarantor:?string, tenantParent:?string, guarantorParent:?string}} a
+ * @returns {boolean}
+ */
+// Dialysis operator/credit-entity cue — BROADER than folder-feed's vertical
+// DIA_CUES (which deliberately omits bare "renal"). It must catch the DaVita
+// credit entities a guarantor field carries: "Total Renal Care, Inc." and
+// "Renal Treatment Centers …" (DaVita), "Fresenius Medical Care" (FMC/FKC), etc.
+const DIA_OPERATOR_CUE = /\b(dialysis|davita|dva|fresenius|fmcna?|fkc|total\s+renal|renal\s+(?:care|treatment)|american\s+renal|us\s+renal|satellite\s+health|nephrolog|kidney)\b/i;
+export function guarantorContradictsTenant({ tenant, guarantor, tenantParent = null, guarantorParent = null } = {}) {
+  const g = String(guarantor || '').trim();
+  if (!g) return false;                                   // nothing to contradict
+  // Same resolved operator parent → the operating sub + its credit parent.
+  if (tenantParent && guarantorParent && tenantParent === guarantorParent) return false;
+  // Both resolve to a parent but DIFFERENT families → cross-attribution.
+  if (tenantParent && guarantorParent && tenantParent !== guarantorParent) return true;
+  // The guarantor belongs to a known operator family (a resolved parent OR a
+  // dialysis-operator credit-entity cue) while the tenant does NOT share it.
+  const guarIsOperator = !!guarantorParent || DIA_OPERATOR_CUE.test(g);
+  if (!guarIsOperator) return false;
+  const t = String(tenant || '').trim();
+  // Tenant shares the family iff it resolves to the SAME parent (handled above)
+  // OR it carries the same dialysis-operator cue the guarantor does. A tenant
+  // with no operator signal at all (e.g. "THE HERTZ CORPORATION") does NOT.
+  const tenantSharesFamily = DIA_OPERATOR_CUE.test(g) && DIA_OPERATOR_CUE.test(t);
+  return !tenantSharesFamily;
+}
+
+/**
  * Resolve the property the lease belongs to FROM THE FILE — the in-file street
  * address through the injected domain matcher. This is the attach-resolver that
  * path-anchor alone can't do. Returns the same status vocabulary as
@@ -311,8 +356,35 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
   const plan = planLeaseWrites(domain, normalized);
   const out = {
     ok: true, fields_filled: 0, conflicts: 0, ti_rows: 0, financial_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
-    document_id: null, lease_id: leaseId, lease_created: false, warnings: plan.warnings,
+    document_id: null, lease_id: leaseId, lease_created: false, guarantor_withheld: false, warnings: plan.warnings,
   };
+
+  // 0) Cross-attribution contamination guard. A guarantor whose credit family
+  //    contradicts the tenant's own family (the multi-tenant deal-folder bleed —
+  //    a Hertz lease "guaranteed by" Total Renal Care) is contamination, not a
+  //    fact: drop it from the write plan (so neither the create-insert nor the
+  //    fill-blanks patch writes the guarantor column, and the guaranteed_by edge
+  //    is never minted) and route the disagreement to the Decision Center once
+  //    the lease id is known. Operator-family identity reuses the writer's
+  //    lcc_operator_affiliate_patterns canonicalization via the optional
+  //    resolveOperatorParent dep; DIA_CUES is the no-DB fallback.
+  let contaminatedGuarantor = null;
+  const guarCol = LEASE_FIELD_MAP[domain]?.fields?.guarantor || 'guarantor';
+  if (plan.guarantor) {
+    const tenantName = normalized.factual?.tenant || normalized.property_identity?.tenant || null;
+    let tenantParent = null, guarantorParent = null;
+    if (deps.resolveOperatorParent) {
+      tenantParent = await deps.resolveOperatorParent(tenantName).catch(() => null);
+      guarantorParent = await deps.resolveOperatorParent(plan.guarantor).catch(() => null);
+    }
+    if (guarantorContradictsTenant({ tenant: tenantName, guarantor: plan.guarantor, tenantParent, guarantorParent })) {
+      contaminatedGuarantor = plan.guarantor;
+      out.guarantor_withheld = true;
+      out.warnings = [...out.warnings, `guarantor_contradicts_tenant:${contaminatedGuarantor}`];
+      plan.guarantor = null;                      // never mint the entity / edge
+      delete plan.leaseFields[guarCol];           // never write the guarantor column
+    }
+  }
 
   // 1) Resolve OR create the lease row first. Never proceed to guarantor/TI/edge
   //    if the lease can't be created/linked — that's what orphaned the guarantor
@@ -330,6 +402,18 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
     resolvedLeaseId = lr.lease_id;
     out.lease_id = resolvedLeaseId;
     out.lease_created = !!lr.created;
+  }
+
+  // 0b) Route a withheld (contaminated) guarantor to the Decision Center now that
+  //     the lease id is known — record-only, the curated guarantor is never
+  //     overwritten and the contaminated value is never written.
+  if (contaminatedGuarantor && deps.recordConflict) {
+    await deps.recordConflict({
+      domain, table: plan.table, recordPk: resolvedLeaseId, field: guarCol,
+      currentValue: null, attemptedValue: contaminatedGuarantor,
+      reason: 'guarantor_contradicts_tenant',
+    }).catch(() => {});
+    out.conflicts += 1;
   }
 
   // 2) Factual lease fields.
@@ -509,6 +593,11 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
   };
 
   return {
+    // Exposed so the cross-attribution guard (applyLeaseEnrichment step 0) uses
+    // the SAME operator canonicalization the guarantor writer uses — a guarantor
+    // and tenant resolving to different operator families is the contamination
+    // signal. Returns the canonical parent entity id, or null.
+    resolveOperatorParent,
     // Read-only: the active lease_id for a property, or null. Used by the gated
     // dry-run to report whether the real write would CREATE a lease.
     findActiveLeaseId: async ({ domain, propertyId }) => {

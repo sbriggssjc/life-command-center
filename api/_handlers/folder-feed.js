@@ -30,7 +30,7 @@ import { createHash } from 'crypto';
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
 import { stageOmIntake } from '../_shared/intake-om-pipeline.js';
-import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup, isExcludedFolderPath } from '../_shared/folder-feed-classify.js';
+import { classifyFile, parseSubjectHintFromPath, looksLikePortfolioRollup, isExcludedFolderPath, isMultiTenantDealFolderPath } from '../_shared/folder-feed-classify.js';
 import { attachRecognizedDoc } from './folder-feed-attach.js';
 import { attachLeaseDoc } from './lease-extractor.js';
 
@@ -455,9 +455,19 @@ export async function handleFolderFeedTick(req, res) {
       // dry-run reporting and the real attach branch agree.
       const portfolioRollup = attachEligible && looksLikePortfolioRollup(subjectHint);
 
+      // Multi-tenant deal-folder guard: a LEASE under a /Multi/ or /Portfolio/
+      // segment is part of a multi-tenant / portfolio package, NOT a
+      // single-asset lease (the Hertz-in-"DaVita Anchored" contamination). Per
+      // dia/gov single-asset doctrine it must NEVER auto-create / fill a domain
+      // lease — park it as a non-promoting outcome (skipped/multitenant_deferred)
+      // surfaced for mis-ingestion review, never a silent domain write.
+      const multitenantLease = attachEligible && cls.type === 'lease'
+        && isMultiTenantDealFolderPath(item.path);
+
       if (dryRun) {
         // Report-only: what WOULD happen, no writes to LCC or SharePoint.
         if (cls.isOm) folderRep.staged++;
+        else if (multitenantLease) folderRep.skipped++;
         else if (attachEligible && !portfolioRollup) { folderRep.attached = (folderRep.attached || 0) + 1; report.files_attached++; }
         else folderRep.skipped++;
         continue;
@@ -465,6 +475,16 @@ export async function handleFolderFeedTick(req, res) {
 
       // ---- Non-OM recognized doc (enrich) → light attach by path anchor ----
       if (attachEligible) {
+        // Multi-tenant deal-folder lease → park, never a domain lease write.
+        if (multitenantLease) {
+          await upsertSeen({
+            path: item.path, hash, item, status: 'skipped', mode,
+            vertical: subjectHint.vertical, detectedType: 'multitenant_deferred',
+            subjectHint: { ...subjectHint, skip_reason: 'multitenant_deal_folder' }, intakeId: null,
+          });
+          report.files_skipped++; folderRep.skipped++;
+          continue;
+        }
         // Stage B widen: an IN-DOMAIN lease (dia/gov cue) goes through the lease
         // EXTRACTOR (extract → resolve → enrich). Out-of-universe leases (no cue)
         // stay on the light-attach/CRE path, so no AI extraction is wasted on the

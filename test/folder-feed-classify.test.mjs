@@ -9,6 +9,7 @@ import {
   classifyFile, parseSubjectHintFromPath,
   extractCityState, extractStreetAddress, isPortfolioHint, tenantCore,
   parseCityStateFromFilename, looksLikePortfolioRollup, isExcludedFolderPath,
+  isMultiTenantDealFolderPath,
 } from '../api/_shared/folder-feed-classify.js';
 
 describe('folder-feed classifyFile', () => {
@@ -270,6 +271,35 @@ describe('folder-feed isExcludedFolderPath (Slice 2f)', () => {
     assert.equal(isExcludedFolderPath(''), false);
     assert.equal(isExcludedFolderPath(null), false);
     assert.equal(isExcludedFolderPath(`${BASE}\\OLD\\x.pdf`), true);
+  });
+});
+
+describe('folder-feed isMultiTenantDealFolderPath (multi-tenant contamination guard)', () => {
+  const BASE = '/sites/TeamBriggs20/Shared Documents/PROPERTIES';
+  it('flags a lease under a /Multi/ deal folder (the Hertz-in-DaVita-Anchored case)', () => {
+    assert.equal(isMultiTenantDealFolderPath(
+      `${BASE}/Multi/DaVita Anchored - Springfield, IL/Rec'd/Hertz (6994.505)- First Amendment to Lease.pdf`), true);
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/Multi/DaVita Anchored - Springfield, IL`), true);
+  });
+  it('flags /Portfolio/ and /Portfolios/ segments', () => {
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/Portfolio/ARA of 5/lease.pdf`), true);
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/Portfolios/x/lease.pdf`), true);
+  });
+  it('flags a Multitenant segment (any spacing)', () => {
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/Multi-Tenant/x.pdf`), true);
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/Multi Tenant/x.pdf`), true);
+  });
+  it('does NOT flag a substring like "Multimedia" / "Multifoods" (whole-segment match)', () => {
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/M/Multimedia Holdings - Austin, TX/lease.pdf`), false);
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/M/Multifoods - Tracy, CA/OM.pdf`), false);
+  });
+  it('does NOT flag an ordinary single-tenant deal folder', () => {
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}/D/DaVita - Conyers, GA/lease.pdf`), false);
+  });
+  it('tolerates empty / backslash paths', () => {
+    assert.equal(isMultiTenantDealFolderPath(''), false);
+    assert.equal(isMultiTenantDealFolderPath(null), false);
+    assert.equal(isMultiTenantDealFolderPath(`${BASE}\\Portfolio\\x.pdf`), true);
   });
 });
 
