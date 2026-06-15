@@ -953,9 +953,19 @@ export function describeLeaseCreateError(status, data) {
   const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
   const code = String(d.code || '').trim();
   const msg = `${d.message || ''} ${d.details || ''}`;
+  // Trigger-raised rejections carry a plain RAISE message (no `column`/`constraint`
+  // token), so name the real cause instead of a bare SQLSTATE (Unit 1, 2026-06-15).
+  // dia_reject_dateless_active_lease fires when the create would write an ACTIVE
+  // lease with both dates NULL — expected for a base lease whose commencement /
+  // expiration is set by a separate Commencement Date Memorandum. Naming it lets
+  // the deferred tail distinguish "base lease, dates in a memorandum" from bad data.
+  const TRIGGER_DETAIL_RES = [
+    { re: /dateless[_\s]active[_\s]lease|active lease with both dates null/i, label: 'dateless_active_lease' },
+  ];
   const col = msg.match(/column "([^"]+)"/i);
   const con = msg.match(/constraint "([^"]+)"/i);
-  const detail = col ? col[1] : (con ? con[1] : '');
+  const trig = TRIGGER_DETAIL_RES.find(({ re }) => re.test(msg));
+  const detail = trig ? trig.label : (col ? col[1] : (con ? con[1] : ''));
   return [status, code, detail].filter((x) => x !== '' && x != null).join(':');
 }
 

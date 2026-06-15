@@ -2712,3 +2712,68 @@ clean options for a future round: (a) filter `status='archived'` at the rank, or
 (b) reconcile owner_facts/property_attributes against the archived-filtered view
 once Scott blesses pruning soft state. Deferred deliberately — it's a separate
 judgment call from "prune genuinely-gone."
+
+## R23 — exclude soft-archived gov properties from the value-ranking mirror (2026-06-16)
+
+The materially-bigger sibling of R22. R22 cleared 834 genuinely-gone rows and
+DELIBERATELY kept gov's soft-archived rows. But ~6,662 archived gov properties
+(~35% of the gov mirror) carried full attributes (rent) in
+`lcc_property_attributes` / `lcc_property_owner_facts` and fed the R17
+connected-value tier, the representative-property rent fallback, and the
+queue/Decision-Center value ranking — so a gov owner who SOLD / merged / archived
+properties still ranked by those dead assets. The syncs can't self-heal these:
+the gov anon view they read (`v_property_attributes_portfolio`) ALREADY excludes
+archived, so once a synced property is archived in gov it is never refreshed AND
+never returned for removal — permanently stale, distorting 35% of the gov value
+signal. dia HARD-deletes on merge (no soft-archive class) → R22 already covers
+dia; this is gov-specific.
+
+**Doctrine:** archived = NOT a current BD asset. Exclude it from the LCC
+value-ranking mirror (treat archived like gone FOR THE MIRROR). The owner
+RELATIONSHIP persists via their ACTIVE properties; an owner with ALL properties
+archived correctly drops to no-portfolio-value (NULLS-LAST). cmbs_discovery (38)
++ inactive (2) are KEPT — only `archived` is the clear exclude.
+
+### Implementation (recommended approach #1 — extend the R22 reconcile)
+- **Census views carry `status`** — `gov`/`dia` `v_property_id_census` migrations
+  `government/20260616_gov_r23_property_id_census_status.sql` (real gov status) +
+  `dialysis/20260616_dia_r23_property_id_census_status.sql` (constant NULL — dia
+  has no status). **Apply FIRST** (the new fetch's `select=property_id,status`
+  400s without them → completeness guard fails → no prune, graceful).
+- **LCC reconcile** `20260616120000_lcc_r23_archived_mirror_reconcile.sql` — the
+  R22 `lcc_reconcile_mirrors_fetch` now selects `property_id,status`; the apply
+  builds its KEEP set as **`status IS DISTINCT FROM 'archived'`** + a separate
+  ARCHIVED set for reason-tagging. The EXISTING anti-join ("mirror row whose
+  `source_property_id` is NOT in the KEEP set") then prunes BOTH archived AND
+  hard-gone in one pass — reusing all of R22's machinery (paged 1000/row fetch,
+  guards, reversible snapshot to `lcc_mirror_reconcile_deletions`, crons). The
+  apply gains `orphans_gone` / `orphans_archived` return columns (DROP+CREATE; the
+  cron `…apply(false)` ignores result rows). Snapshot rows are tagged `archived`
+  vs `hard_gone` in `note`.
+- **Refined caps (the two prune reasons split):** the R22 anomaly cap
+  (`p_max_prune_frac`, 0.5) now governs the **hard-gone** class ONLY — the
+  truncation-risk class (a census narrowed by accident would make rows look
+  absent), so a legitimate ~35% archived prune no longer trips it. A constant
+  **0.95 archived backstop** guards against a census redefinition that flags
+  ~everything archived (archived is otherwise census-authoritative + complete).
+  Completeness/sanity guards unchanged. Any guard failure SKIPS that mirror's
+  prune; the upsert syncs are untouched (a skipped reconcile only costs
+  staleness). dia stays byte-identical to R22 (its archived set is empty).
+- Going forward, the daily reconcile (`lcc-mirror-reconcile-fetch` 05:10 /
+  `-apply` 05:15) removes a gov property from the mirror the moment it's archived.
+
+### Verified live 2026-06-16 (applied to all three DBs)
+fetch→dry-run grounded the exact split: gov `property_attributes` + `owner_facts`
+each **6,662 orphans, ALL archived** (gone=0), KEEP=12,473 (active 12,433 +
+cmbs_discovery 38 + inactive 2); gov `portfolio_facts` **clean** (no current edge
+points at an archived property); dia all clean. Real apply pruned **13,324 rows**
+(6,662 + 6,662), all snapshotted + tagged `archived` (reversible). After: gov
+`property_attributes`/`owner_facts` 19,124 → **12,462** (the 11-row gap to KEEP is
+inflow lag); gov `portfolio_facts` 4,274 unchanged; **dia untouched**. Idempotent
+re-fetch+reconcile → **0 orphans / all clean** (0 archived remain). Spot-check:
+archived gov ids 16589–16593 are GONE from `lcc_property_attributes` but PRESENT
+in the snapshot backup; active ids 1/10/100/1000 remain. Load-bearing intact —
+`lcc_refresh_entity_connected_value()` (2,961) + `lcc_refresh_priority_queue_resolved()`
+(1,308) both rebuilt cleanly post-prune (no orphaned portfolio edges). Migrations
+additive/idempotent; ≤12 api/*.js (pure-DB round, no JS). Closes R22's deferred
+soft-archive follow-up.
