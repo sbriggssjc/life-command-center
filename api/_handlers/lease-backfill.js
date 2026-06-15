@@ -40,7 +40,18 @@ import { attachLeaseDoc } from './lease-extractor.js';
 
 // Marker keys the backfill stamps onto subject_hint. Stripped before the hint is
 // handed to the extractor so they never leak into a disambiguation decision.
+// `lease_backfill_attempts` (the transient-retry counter) is NOT stripped — it
+// must survive across ticks until the row is terminally marked or dead-lettered.
 const BACKFILL_MARKER_KEYS = ['lease_backfilled_at', 'lease_backfill'];
+
+// Dead-letter cap for genuinely-transient errors (extract/fetch/write failures
+// that may clear). Mirrors LLC_MAX_ATTEMPTS: a "transient" that keeps failing is
+// re-fetched at the head of the id.asc queue every tick, so without a cap it
+// blocks forward progress forever. After this many attempts the row is marked
+// terminal (`error_dead_letter`) and drops out for human follow-up. Deterministic
+// failures (enrich_unprocessable / needs_ocr) are terminal on the FIRST pass and
+// never reach the counter.
+const LEASE_BACKFILL_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.LEASE_BACKFILL_MAX_ATTEMPTS || '3', 10));
 
 function fileNameFromPath(p) {
   const s = String(p || '');
@@ -113,6 +124,22 @@ async function markBackfilled(row, info, deps) {
 }
 
 /**
+ * Bump the transient-retry counter WITHOUT marking the row terminal (no
+ * `lease_backfilled_at`), so it stays eligible and retries on a later tick — but
+ * the count is now durable, so backfillOneLeaseDoc can dead-letter it once it
+ * crosses LEASE_BACKFILL_MAX_ATTEMPTS instead of re-running it at the head of the
+ * queue forever. Preserves the existing hint (incl. the path anchor).
+ */
+async function bumpAttempt(row, attempts, deps) {
+  const q = deps.opsQuery || opsQuery;
+  const merged = { ...cleanHint(row.subject_hint), lease_backfill_attempts: attempts };
+  const r = await q('PATCH', `folder_feed_seen?id=eq.${row.id}`,
+    { subject_hint: merged, last_seen_at: new Date().toISOString() },
+    { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+  return { ok: !!r.ok };
+}
+
+/**
  * Backfill ONE lease doc by re-running the lease extractor through the SAME
  * `attachLeaseDoc` the auto-route uses. Deps injected for testability.
  *
@@ -122,12 +149,21 @@ async function markBackfilled(row, info, deps) {
  *   multitenant_deferred  — under a /Multi/ or /Portfolio/ deal folder; the
  *                           attachLeaseDoc gate refused (no extract, no lease) —
  *                           TERMINAL, marked so it drops out of the eligible queue
- *   needs_ocr             — scanned / no-text-layer PDF (sizes the OCR follow-up)
+ *   needs_ocr             — scanned / no-text-layer PDF, incl. a matched doc whose
+ *                           only text was a thin cover page (sizes the OCR follow-up)
+ *   enrich_unprocessable  — matched, but the doc carries NO usable primary-lease
+ *                           terms (amendment / master / co-tenant / draft /
+ *                           unsupported). DETERMINISTIC → TERMINAL with its reason,
+ *                           joins the OCR/format follow-up tail (never re-runs)
  *   ambiguous             — ≥2 in-domain near-misses → match_disambiguation lane
  *   no_domain             — no in-domain property (captured, tenant-searchable, no guess)
- *   error                 — extract/fetch failure (transient → NOT marked, retries)
+ *   error                 — transient extract/fetch/write failure → NOT marked,
+ *                           retries (bumps the attempt counter)
+ *   error_dead_letter     — a transient error that kept failing past
+ *                           LEASE_BACKFILL_MAX_ATTEMPTS → TERMINAL, so it can't
+ *                           block the head of the id.asc queue forever
  *
- * deps: { attachLeaseDoc, markBackfilled }
+ * deps: { attachLeaseDoc, markBackfilled, bumpAttempt? }
  */
 export async function backfillOneLeaseDoc(row, ctx, deps) {
   const subjectHint = cleanHint(row.subject_hint);
@@ -142,7 +178,9 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
       actorId:     ctx.actorId,
     });
   } catch (err) {
-    return { id: row.id, path: row.path, outcome: 'error', reason: err?.message || 'threw' };
+    // A thrown extractor is transient → fall through to the capped transient
+    // handler (NOT an early return), so it can't re-throw at the head forever.
+    res = { reason: `threw:${err?.message || 'err'}` };
   }
 
   // ---- map the extractor result → a backfill outcome -----------------------
@@ -155,9 +193,11 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
     return { id: row.id, path: row.path, outcome: 'multitenant_deferred', skip_reason: reason };
   }
   if (res?.needs_ocr) {
-    const out = { id: row.id, path: row.path, outcome: 'needs_ocr' };
-    await deps.markBackfilled(row, { outcome: 'needs_ocr' });
-    return out;
+    const info = { outcome: 'needs_ocr' };
+    if (res.reason) info.reason = res.reason;            // 'needs_ocr' | 'thin_text_layer'
+    if (res.text_len != null) info.text_len = res.text_len;
+    await deps.markBackfilled(row, info);
+    return { id: row.id, path: row.path, outcome: 'needs_ocr', reason: res.reason || null, text_len: res.text_len ?? null };
   }
   if (res?.attached && res?.lease) {
     const a = res.applied || {};
@@ -180,6 +220,20 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
     });
     return out;
   }
+  // Matched but the doc has no usable primary-lease terms — DETERMINISTIC, so it
+  // will never succeed on retry. Mark it terminal WITH its reason (queryable tail)
+  // so it drops out of the queue immediately instead of re-running at the head.
+  if (res?.enrich_unprocessable) {
+    const reason = res.reason || 'enrich_unprocessable';
+    await deps.markBackfilled(row, {
+      outcome: 'enrich_unprocessable', reason,
+      domain: res.domain, property_id: res.property_id, text_len: res.text_len ?? null,
+    });
+    return {
+      id: row.id, path: row.path, outcome: 'enrich_unprocessable', reason,
+      domain: res.domain, property_id: res.property_id, text_len: res.text_len ?? null,
+    };
+  }
   if (res?.emitted_disambiguation) {
     await deps.markBackfilled(row, { outcome: 'ambiguous' });
     return { id: row.id, path: row.path, outcome: 'ambiguous' };
@@ -188,9 +242,21 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
     await deps.markBackfilled(row, { outcome: 'no_domain', reason: res.reason || null });
     return { id: row.id, path: row.path, outcome: 'no_domain', reason: res.reason || null };
   }
-  // Anything else (extract_failed, ambiguous-emit failed, write failure) is
-  // treated as transient → NOT marked, so a later tick retries it.
-  return { id: row.id, path: row.path, outcome: 'error', reason: res?.reason || 'unresolved' };
+  // Anything else (extract_failed, enrich write failure, ambiguous-emit failed,
+  // a thrown extractor) is treated as TRANSIENT → retries on a later tick. But a
+  // "transient" that keeps failing sits at the head of the id.asc queue and
+  // re-runs every tick, starving forward progress — so it is dead-lettered after
+  // LEASE_BACKFILL_MAX_ATTEMPTS (mirrors the LLC-tick cap). The attempt count is
+  // persisted (bumpAttempt) WITHOUT marking the row terminal, so it stays eligible
+  // until the cap, then drops out for human follow-up.
+  const reason = res?.reason || 'unresolved';
+  const attempts = Number(row.subject_hint?.lease_backfill_attempts || 0) + 1;
+  if (attempts >= LEASE_BACKFILL_MAX_ATTEMPTS) {
+    await deps.markBackfilled(row, { outcome: 'error_dead_letter', reason, attempts });
+    return { id: row.id, path: row.path, outcome: 'error_dead_letter', reason, attempts };
+  }
+  if (deps.bumpAttempt) await deps.bumpAttempt(row, attempts);
+  return { id: row.id, path: row.path, outcome: 'error', reason, attempts };
 }
 
 const PROD_DEPS = {
@@ -222,6 +288,7 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
   const workerDeps = {
     attachLeaseDoc: deps.attachLeaseDoc || PROD_DEPS.attachLeaseDoc,
     markBackfilled: (row, info) => markBackfilled(row, info, deps),
+    bumpAttempt: (row, attempts) => bumpAttempt(row, attempts, deps),
   };
 
   const eligible = await fetchEligibleLeaseDocs(limit, deps);
@@ -237,9 +304,11 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     enriched: 0,
     multitenant_deferred: 0,
     needs_ocr: 0,
+    enrich_unprocessable: 0,
     ambiguous: 0,
     no_domain: 0,
     error: 0,
+    error_dead_letter: 0,
     // gate metrics
     fields_filled_total: 0,
     conflicts_total: 0,

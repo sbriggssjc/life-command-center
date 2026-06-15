@@ -18,6 +18,7 @@ import {
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
   extractLeaseDoc, planExpenseFinancials, attachLeaseDoc, leaseValuesEqual, runLeaseExtraction,
   guarantorContradictsTenant,
+  leaseEnrichFailureReason, isDeterministicEnrichFailure,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -545,6 +546,38 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
     assert.equal(out.match_status, 'needs_ocr');
   });
 
+  // ── Scott's matched-but-enrich-failed bucket split (2026-06-15) ──────────────
+  it('matched but NO usable lease terms → enrich_unprocessable (terminal, real reason)', async () => {
+    // ensureLeaseRow fails with the deterministic reason; applyLeaseEnrichment
+    // surfaces it as lease_unresolved:no_factual_fields → attachLeaseDoc classifies
+    // it as a TERMINAL unprocessable doc (an amendment/master/draft), not an
+    // opaque retry that blocks the head of the backfill queue.
+    const deps = { ...enrichDeps(), matchAgainstDomain: async () => null,
+      ensureLeaseRow: async () => ({ ok: false, reason: 'no_factual_fields' }) };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'Second Amendment.pdf', subjectHint: { vertical: 'gov', tenant_brand: 'X' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => ({ status: 'matched', domain: 'government', property_id: 555, reason: 'tenant_city' }),
+        emitMatchDisambiguation: async () => {} });
+    assert.equal(out.attached, false);
+    assert.equal(out.enrich_unprocessable, true);
+    assert.equal(out.reason, 'no_factual_fields');
+    assert.equal(out.match_status, 'matched');
+    assert.equal(out.needs_ocr, undefined);   // raw (text_len null) ⇒ not a thin-text reroute
+  });
+
+  it('matched but a transient WRITE failure → retryable error, NOT unprocessable', async () => {
+    const deps = { ...enrichDeps(), matchAgainstDomain: async () => null,
+      ensureLeaseRow: async () => ({ ok: false, reason: 'create_failed:503' }) };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'lease.pdf', subjectHint: { vertical: 'gov', tenant_brand: 'X' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => ({ status: 'matched', domain: 'government', property_id: 555, reason: 'tenant_city' }),
+        emitMatchDisambiguation: async () => {} });
+    assert.equal(out.ok, false);
+    assert.equal(out.attached, false);
+    assert.equal(out.enrich_unprocessable, undefined);   // transient, not deterministic
+    assert.match(out.reason, /create_failed:503/);
+  });
+
   it('dry-run previews the plan + boundary, writes NOTHING', async () => {
     const calls = { writes: 0 };
     const deps = { ...enrichDeps(),
@@ -607,5 +640,21 @@ describe('lease extractor — orchestrator (gated dry-run / real)', () => {
     const out = await extractLeaseDoc({ raw: RAW, domain: 'government', propertyId: 555, dryRun: true }, deps);
     assert.equal(out.resolved.reason, 'caller_pinned');
     assert.equal(out.resolved.property_id, 555);
+  });
+});
+
+// ── enrich-failure classifier (Scott's bucket split, 2026-06-15) ─────────────
+describe('lease extractor — enrich-failure classifier', () => {
+  it('pulls lease_unresolved:<reason> out of applied.warnings', () => {
+    assert.equal(leaseEnrichFailureReason({ warnings: ['x', 'lease_unresolved:no_factual_fields'] }), 'no_factual_fields');
+    assert.equal(leaseEnrichFailureReason({ warnings: ['lease_unresolved:create_failed:503'] }), 'create_failed:503');
+    assert.equal(leaseEnrichFailureReason({ reason: 'enrich_failed', warnings: [] }), 'enrich_failed');
+    assert.equal(leaseEnrichFailureReason({}), 'enrich_failed');
+  });
+  it('only no_factual_fields is deterministic (terminal); writes/throws retry', () => {
+    assert.equal(isDeterministicEnrichFailure('no_factual_fields'), true);
+    assert.equal(isDeterministicEnrichFailure('create_failed:503'), false);
+    assert.equal(isDeterministicEnrichFailure('create_no_id'), false);
+    assert.equal(isDeterministicEnrichFailure('threw:boom'), false);
   });
 });
