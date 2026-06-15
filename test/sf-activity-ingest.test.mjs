@@ -194,3 +194,86 @@ describe('processSfActivityBatch (Unit 2)', () => {
     assert.equal(calls[1].metadata.resolved_via, 'account');
   });
 });
+
+// R24 Unit 2 — inbound-reply capture: a reply detected in the SF mirror tags
+// the activity skip_cadence_advance (so the SQL trigger doesn't also advance),
+// resolves the cadence, and advances it via the single JS advance owner.
+
+import { isInboundReply } from '../api/_handlers/sf-activity-ingest.js';
+
+describe('isInboundReply (R24 Unit 2)', () => {
+  it('detects reply prefixes and explicit inbound flags on email only', () => {
+    assert.equal(isInboundReply('email', {}, 'RE: your OM'), true);
+    assert.equal(isInboundReply('email', {}, 're: thanks'), true);
+    assert.equal(isInboundReply('email', { Incoming: true }, 'New thread'), true);
+    assert.equal(isInboundReply('email', { direction: 'Inbound' }, 'New thread'), true);
+    assert.equal(isInboundReply('email', {}, 'New outreach'), false);
+    // non-email categories never count as an email reply
+    assert.equal(isInboundReply('call', {}, 'RE: call'), false);
+  });
+});
+
+describe('processSfActivityBatch reply capture (R24 Unit 2)', () => {
+  const ctx = { workspaceId: 'ws-1', actorId: 'user-1' };
+
+  it('tags skip_cadence_advance and advances the cadence on a fresh inbound reply', async () => {
+    const { fn, calls } = captureAppend();
+    const advanceCalls = [];
+    const fakeAdvance = async (cadenceId, touchData) => { advanceCalls.push({ cadenceId, touchData }); return { ok: true }; };
+    const fakeResolve = async (entityId) => ({ id: `cad-for-${entityId}`, entity_id: entityId });
+
+    const out = await processSfActivityBatch([
+      { sf_id: 'r1', type: 'Email', subject: 'RE: your offering', who_id: '003aaa', activity_date: '2026-06-05' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      advanceCadence: fakeAdvance, resolveCadenceForEntity: fakeResolve,
+    });
+
+    assert.equal(out.matched, 1);
+    assert.equal(out.inserted, 1);
+    assert.equal(out.replies_captured, 1, 'the reply advanced a cadence');
+    assert.equal(calls[0].metadata.is_reply, true);
+    assert.equal(calls[0].metadata.skip_cadence_advance, 'true', 'trigger must not double-advance');
+    assert.equal(advanceCalls.length, 1);
+    assert.equal(advanceCalls[0].cadenceId, 'cad-for-ent-contact-1');
+    assert.equal(advanceCalls[0].touchData.outcome, 'replied');
+    assert.equal(advanceCalls[0].touchData.direction, 'inbound');
+  });
+
+  it('records the activity but does not advance when no cadence resolves', async () => {
+    const { fn } = captureAppend();
+    const advanceCalls = [];
+    const fakeAdvance = async (id, td) => { advanceCalls.push({ id, td }); return { ok: true }; };
+    const fakeResolveNone = async () => null;
+
+    const out = await processSfActivityBatch([
+      { sf_id: 'r2', type: 'Email', subject: 'RE: hello', who_id: '003aaa' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      advanceCadence: fakeAdvance, resolveCadenceForEntity: fakeResolveNone,
+    });
+
+    assert.equal(out.inserted, 1, 'activity still mirrored');
+    assert.equal(out.replies_captured, 0, 'no cadence → no advance');
+    assert.equal(advanceCalls.length, 0);
+  });
+
+  it('does NOT treat an outbound email as a reply', async () => {
+    const { fn, calls } = captureAppend();
+    const advanceCalls = [];
+    const fakeAdvance = async () => { advanceCalls.push(1); return { ok: true }; };
+    const fakeResolve = async (e) => ({ id: `cad-${e}` });
+
+    const out = await processSfActivityBatch([
+      { sf_id: 'o1', type: 'Email', subject: 'Sent you the OM', who_id: '003aaa' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      advanceCadence: fakeAdvance, resolveCadenceForEntity: fakeResolve,
+    });
+
+    assert.equal(out.replies_captured, 0);
+    assert.equal(advanceCalls.length, 0, 'outbound email is not a reply advance');
+    assert.ok(!calls[0].metadata.is_reply, 'no reply tag on outbound');
+    assert.ok(!('skip_cadence_advance' in calls[0].metadata), 'trigger still owns outbound advance');
+  });
+});

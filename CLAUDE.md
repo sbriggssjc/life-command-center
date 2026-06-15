@@ -2777,3 +2777,107 @@ in the snapshot backup; active ids 1/10/100/1000 remain. Load-bearing intact —
 (1,308) both rebuilt cleanly post-prune (no orphaned portfolio edges). Migrations
 additive/idempotent; ≤12 api/*.js (pure-DB round, no JS). Closes R22's deferred
 soft-archive follow-up.
+
+## R24 — close the self-improvement loops: wire the producers (2026-06-16)
+
+With outreach unblocked (R16/R20: ~217 reachable cadences, 217/412 carrying a
+contact), the template + engagement learning loops should make outreach get
+better over time. They were OPEN: the scaffolds + consumers existed but the
+PRODUCERS weren't wired. Grounded live 2026-06-16: `template_sends`=0,
+`template_refinements`=0, `high_performing_templates` empty, every cadence's
+`last_touch_at` NULL.
+
+### Unit 1 (the headline root cause) — `recordTemplateSend` wrote phantom columns
+`template_sends` is the feed for the whole template loop (the
+`high_performing_templates` signals view + the weekly `lcc-template-health-rollup`
+→ `template_health_history`). But `recordTemplateSend` (both
+`api/_shared/templates.js` AND the `template-service` edge function) POSTed
+`user_id`/`domain`/`context_packet_id`/`rendered_*`/`final_*` — **none of which
+exist** on the live table (canonical cols: `sent_by`/`contact_id`/`entity_type`/
+`packet_snapshot_id`/`subject_line_used`). So EVERY send POST 500'd on a PGRST204
+and `recordTemplateSend` returned **before** even writing the `template_sent`
+signal → both the table AND the signal view stayed at 0. ("The one real send
+didn't write template_sends" = it errored.) Fix: re-map to the canonical columns
+in both writers; add `domain` ADDITIVELY (migration
+`20260616140000_lcc_r24_template_sends_domain.sql`, applied live — the
+`?action=performance` select + the signal payload key on it). Also fixes the
+`performance` action's `select=…,domain` that 400'd on the same missing column.
+
+**Co-location (can't-diverge):** `advanceCadence` (the R10 single advance owner)
+now writes a `template_sends` row on every email advance, in the SAME path that
+bumps `emails_sent`, via `recordTemplateSend` (the single template_sends/signal
+writer). Template = `touchData.template_id || cadence.last_touch_template ||
+next_touch_template`. `record_send` already writes a rich row directly, so it
+passes **`skip_template_send: true`** to its `advanceCadence` call — the two
+writers never both fire for one send. Fire-and-forget; never blocks the advance.
+So ANY email advance (record_send, a `Log touch` of type email, …) feeds the
+loop, not just the draft `record_send`.
+
+### Unit 2 — reply capture → `emails_replied` + the engagement/pause branch
+A reply is a high-signal INBOUND touch, not an outbound send. `advanceCadence`
+gains a **reply branch** (`outcome==='replied' || type==='reply' ||
+direction==='inbound'`): bumps `emails_replied`, resets `consecutive_unopened`,
+and moves the cadence to **`phase='converted'`** (the engine's active-engagement
+state) so the cold prospecting sequence PAUSES and the human takes over — a
+converted cadence drops out of the P0/P6/P7 outreach bands
+(`ACTIVE_CADENCE_PHASES` excludes `converted`) but stays on the cadence
+dashboard. It NEVER increments `emails_sent`/`current_touch` or writes a
+`template_sends` row. Producer: `sf-activity-ingest.js` detects an inbound reply
+(`isInboundReply` — explicit `Incoming`/`direction` flag OR an `RE:`/`AW:`/…
+subject, email category only), tags the mirrored activity
+`metadata.skip_cadence_advance='true'` + `is_reply` (so the SQL trigger does NOT
+also advance — R10 single-advance-owner doctrine), then resolves the cadence
+(`resolveCadenceForEntity` — direct, then the asset→owner `owns` hop the trigger
+uses) and advances it via the single JS owner. Only on a freshly-INSERTED reply
+(never a deduped re-POST). Best-effort: no cadence ⇒ the activity is still
+mirrored, just no advance. The same helpers are reusable for `email_intake`
+inbound replies (follow-up; the SF mirror is the built feed today).
+
+### Unit 3 (correctness guard) — don't penalize "unopened" without open tracking
+The mailto/copy send path has NO open signal, so treating every send as
+`consecutive_unopened++` would wrongly trip the `>=2` phone-recovery
+deprioritization on engaged contacts. `advanceCadence` now only moves the open
+counters when the send carries a REAL open signal (an explicit `opened` boolean
+OR `touchData.open_tracking===true`); a no-open-tracking send leaves
+`consecutive_unopened` untouched. AND `recommendNextTouch` gates the `>=2`
+phone-recovery branch on `openTrackingActive()` (env
+**`CADENCE_OPEN_TRACKING_ACTIVE`**, default **false**; per-call override via
+`options.open_tracking`). So the engine reacts to real unopened signals, never to
+the absence of one. (The SQL organic path's own `email_opened`-NULL→unopened++
+behavior is unchanged — out of scope; the JS send path is the one that ramps.)
+
+### Unit 4 — performance-aware template selection (ships dark)
+`chooseBestTemplate(defaultTemplateId)` (`templates.js`) prefers the
+best-`response_rate_pct` template **of the same category** as the recommended
+default, among candidates that cleared a min-sends floor (default 3 = the
+`high_performing_templates` HAVING floor); cold-start safe (empty perf ⇒ returns
+the default, never crosses category). Wired into the draft `generate` path gated
+on env **`CADENCE_TEMPLATE_AUTOSELECT`** (default OFF) so it ships dark and Scott
+flips it on AFTER Unit 1's sends accrue real data — no point selecting on empty
+performance. When it swaps, the response carries `template_autoselected_from`.
+
+### Unit 5 — enable provenance learning (activation only, Scott's blessing)
+The registry learning loop for `provenance_conflict` `accept_attempted` is built
++ verified (R13 Unit 2) but flag-OFF. To activate: set
+**`DECISION_PROVENANCE_LEARN`** in the Railway env. On a field-provenance
+conflict it then upserts a per-`(target_table, field_name)`
+`manual_decision`@priority-1 rule and applies the attempted value via
+`lcc_merge_field`, so the field stops re-litigating (future captures resolve to
+`skip`, not `conflict`). No R24 code change — documented activation, gated on
+Scott (it writes to the shared priority registry).
+
+### Boundaries / verified (headless 2026-06-16)
+No ESP/open-tracking built (Unit 3 makes the engine correct WITHOUT it).
+dia/gov pipelines untouched (LCC-side cadence/template/signal wiring only). Reused
+the existing send/activity/advance plumbing — `recordTemplateSend` stays the
+single template_sends writer; `advanceCadence` stays the single advance owner.
+`test/cadence-self-improve.test.mjs` (Units 1-3: co-located template_sends + skip
+flag + reply branch + open-tracking-aware counters + the gated recovery branch),
+`test/sf-activity-ingest.test.mjs` (+`isInboundReply` + reply-advance/skip-tag),
+`test/template-select.test.mjs` (Unit 4 cold-start/same-category/min-sends).
+`node --check` clean; `ls api/*.js | wc -l`=12; full suite **899 / 893 pass / 0
+fail / 6 skipped**. Migration additive + cache-or-live safe; JS ships on the
+Railway redeploy. After deploy: a draft `Mark sent` writes a `template_sends`
+row + the `template_sent` signal; once ≥3 sends/template land,
+`high_performing_templates` populates and the weekly rollup has data; a logged
+reply bumps `emails_replied` and pauses the cadence (`converted`).

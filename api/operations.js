@@ -61,7 +61,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/o
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
-import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
+import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance, chooseBestTemplate } from './_shared/templates.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { buildTeamContextWithSales, getTrackRecordSummary } from './_shared/team-context.js';
 import { getCadenceForDraft, advanceCadence, getCadenceState } from './_shared/cadence-engine.js';
@@ -3561,6 +3561,22 @@ async function handleDraftRoute(req, res) {
         return res.status(400).json({ error: 'context object is required (merged packet payload)' });
       }
 
+      // R24 Unit 4 — performance-aware template selection. Gated on
+      // CADENCE_TEMPLATE_AUTOSELECT (default OFF) so it ships dark and Scott
+      // flips it on only AFTER Unit 1's sends have accrued real performance data
+      // (selecting on an empty high_performing_templates view is a no-op anyway —
+      // chooseBestTemplate is cold-start safe and returns the default). Same-
+      // category only, so it tunes voice without changing the sequence intent.
+      let effectiveTemplateId = template_id;
+      if (String(process.env.CADENCE_TEMPLATE_AUTOSELECT || '').toLowerCase() === 'true') {
+        try {
+          effectiveTemplateId = await chooseBestTemplate(template_id, {});
+        } catch (err) {
+          console.warn('[handleDraftRoute] chooseBestTemplate failed (using default):', err.message);
+          effectiveTemplateId = template_id;
+        }
+      }
+
       // Auto-enrich context with team variables if not already provided
       const enrichedContext = await enrichDraftContext(context);
 
@@ -3580,9 +3596,12 @@ async function handleDraftRoute(req, res) {
         }
       }
 
-      const result = await generateDraft(template_id, enrichedContext, { strict: !!strict });
+      const result = await generateDraft(effectiveTemplateId, enrichedContext, { strict: !!strict });
       if (!result.ok) {
         return res.status(422).json(result);
+      }
+      if (effectiveTemplateId !== template_id) {
+        result.template_autoselected_from = template_id;
       }
 
       // Attach cadence info to response if available
@@ -3927,7 +3946,11 @@ async function handleDraftRoute(req, res) {
           cadenceResult = await advanceCadence(cadence_id, {
             type: 'email',
             template_id,
-            outcome: 'sent'
+            outcome: 'sent',
+            // R24 Unit 1 — record_send already wrote a rich template_sends row
+            // above (recordTemplateSend); tell the advance NOT to write a second
+            // one. The two writers never both fire for one send.
+            skip_template_send: true
           });
         } catch (err) {
           console.warn('[record_send] Cadence advance failed (non-blocking):', err.message);
