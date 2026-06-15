@@ -50,12 +50,29 @@ The briefing shows "Partial · Unavailable: global_market_intelligence.structure
 `lcc-briefing-intel-snapshot` cron output / the consumer) and either fix or hide the
 perpetually-empty section.
 
-## Doctrine question for Scott (not a code change)
-The Today NEXT BEST ACTION leads 100% with data-fix tasks (agency drift, research
-owner) — no outreach in the top 10 — while the Priority Queue "DO THIS FIRST" leads
-with P-BUYER outreach. Confirm: (a) should data-fixes outrank high-value outreach in
-the NBA, and (b) should the two surfaces agree on the single "first" action? If they
-should converge, align the NBA ranking with the queue's band priority.
+## Unit 5 (DECIDED doctrine — Scott, 2026-06-15) — NBA = data-gap cockpit, Queue = BD cockpit; keep them DISTINCT
+Decision: the two surfaces answer DIFFERENT questions and stay separate — do NOT
+converge them, do NOT blend outreach into the Today rail.
+
+The Today "NEXT BEST ACTION" rail is, structurally, a **data-quality gap queue ranked
+by property value** (it reads `research_tasks` / the data-gap views; it never contains
+an outreach action). Today it is MISLABELED — "NEXT BEST ACTION" implies it weighs
+outreach vs data-fix, which it cannot. Per Scott's decision, make the label honest
+rather than changing what it ranks:
+- **Rename the Today rail** from "NEXT BEST ACTION" to a data-gap framing, e.g.
+  **"Top Data Gaps to Close"** (or "Data to Connect" — pick the clearest), with a
+  one-line subhead like "highest-value records missing ownership/agency data." Keep
+  its current property-value ranking — that's correct FOR a data-gap queue (close the
+  gaps on your biggest assets first).
+- **Leave the Priority Queue "DO THIS FIRST" exactly as the BD-action cockpit** —
+  P-BUYER / outreach / opportunity-opening, value-ranked by relationship value. It
+  remains the place the operator goes to decide who to pursue.
+- **Do NOT** add outreach to the Today rail and do NOT re-rank the NBA by BD value.
+  Two tools, two questions: Today = "what data should I connect," Queue = "who should
+  I pursue." This is intentional, not a coherence bug.
+- Copy/label only — no ranking-algorithm change, no schema change. If there's a shared
+  header/legend implying the two should match, adjust the wording so they read as
+  complementary tools, not competing "first actions."
 
 ## House rules
 ≤12 `api/*.js`; `node --check`; suite green. Unit 1 is an ORDER BY change (no schema);
