@@ -7074,11 +7074,16 @@ async function loadDailyBriefingData(force = false) {
 window.loadDailyBriefingData = loadDailyBriefingData;
 
 // ============================================================
-// NEXT BEST ACTION — Home rail (Item #4 Phase C, 2026-05-17)
-// Cross-domain prioritized broker queue. Reads from
+// TOP DATA GAPS TO CLOSE — Home rail (Item #4 Phase C, 2026-05-17;
+//   relabeled R25 Unit 5, 2026-06-15). This is the DATA-GAP cockpit:
+//   highest-value records missing ownership/agency data, ranked by
+//   property value. It is deliberately DISTINCT from the Priority Queue
+//   (the BD-action cockpit — who to pursue). Reads from
 //   GET /api/admin?_route=next-best-action&domain={both|dia|gov}&limit=15
-// which fans out across dia + gov v_next_best_action views and returns
-// a globally re-ranked list of the highest-value open gaps.
+//   which fans out across dia + gov v_next_best_action views and returns
+//   a globally re-ranked list of the highest-value open gaps.
+//   (Internal names keep the nba/next-best-action identifiers; only the
+//    user-facing label changed — see index.html #nextBestActionWidget.)
 // ============================================================
 function getNbaDomainView() {
   try {

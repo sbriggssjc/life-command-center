@@ -200,6 +200,8 @@ input, select { font-family: inherit; }
 .db-market-html td, .db-market-html th { border: 1px solid var(--border); padding: 4px 6px; }
 /* Next Best Action — Home rail (Item #4 Phase C, 2026-05-17) */
 #nextBestActionWidget .widget-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.nba-subhead { font-size: 11px; color: var(--text2); line-height: 1.4; margin: -2px 0 10px; text-transform: none; letter-spacing: normal; font-weight: 400; }
+body.compact .nba-subhead { margin: -2px 0 6px; }
 .nba-controls { display: flex; align-items: center; gap: 6px; }
 .nba-domain-switch { display: inline-flex; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; }
 .nba-domain-btn { font-size: 11px; padding: 3px 8px; border: 0; background: transparent; color: var(--text2); border-radius: 6px; cursor: pointer; font-weight: 600; }
