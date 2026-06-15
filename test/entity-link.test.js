@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix,
   isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName,
-  isFieldLabelName, isImplausibleOwnerName } from '../api/_shared/entity-link.js';
+  isFieldLabelName, isImplausibleOwnerName, isJunkProspectName } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
 
@@ -134,6 +134,28 @@ describe('entity-link helper', () => {
     assert.equal(isJunkEntityName('West Mall Dr'), false);
     // Existing structural junk still caught.
     assert.equal(isJunkEntityName('Seller ContactsCraig Burrows(916) 768-5544 (p)'), true);
+  });
+
+  it('flags prospect-junk capture artifacts (R25 Unit 2)', () => {
+    // The live P-CONTACT junk set — all must be caught.
+    for (const junk of [
+      'Realtor', 'Investment Specialist', 'Description:', 'Mill Levy: 92.281',
+      'CPA:16', "GSA (US Gov't)", "GSA (US Gov't) JV US Fed Props Trust Inc",
+      'Mexico', 'France', 'Canada', 'Paris, PAR 75009', 'Pedregal 24 oficina 423',
+    ]) {
+      assert.equal(isJunkProspectName(junk), true, `should flag: ${junk}`);
+      assert.equal(isJunkEntityName(junk), true, `boundary should reject: ${junk}`);
+    }
+    // Must NOT false-positive legit names (address-safe + exact-locale anchored).
+    for (const ok of [
+      'State of New Mexico', '123 Mexico St', 'Paris Capital LLC',
+      'First Realtor Group', 'Northwestern Mutual', 'Foulger Pratt',
+      'Jamestown', 'Boyd Watterson Global', 'NGP Capital',
+    ]) {
+      assert.equal(isJunkProspectName(ok), false, `should NOT flag: ${ok}`);
+    }
+    assert.equal(isJunkProspectName(''), false);
+    assert.equal(isJunkProspectName(null), false);
   });
 
   it('splits pipe-delimited composite owner names (R9 follow-up)', () => {

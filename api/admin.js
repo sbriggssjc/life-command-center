@@ -628,8 +628,23 @@ async function handlePriorityQueueList(req, res) {
   // property's rent, else the P-BUYER SPE rollup) so the dia book (whose
   // portfolio rollup was $0 pre-R11) and the gov P0.4 resolution band (which
   // carry a representative property but no rollup) rank on real money, not noise.
+  //
+  // R25 Unit 1: the CONNECT bands (P0.4 "resolve ownership", P-CONTACT "select
+  // prospecting contact") are not cadence-driven — there is no "most overdue
+  // touch" to lead with, so days_overdue-first buried the highest-value targets
+  // far down the list (live: Northwestern Mutual $26.1M / Foulger Pratt $24.3M /
+  // Jamestown $22.8M sat below dozens of $0 rows). For those two bands, lead with
+  // rank_annual_rent (the value the cards already display) and tie-break on
+  // days_overdue. The cadence/touch bands (P0/P1-P8/P6/P7/P-BUYER) keep
+  // days_overdue-first — urgency genuinely leads there. This only changes order
+  // when a connect band is the active filter (the per-band chip fetch); the "All"
+  // view and every other band are byte-identical.
+  const CONNECT_BANDS = new Set(['P0.4', 'P-CONTACT']);
+  const orderClause = (band && CONNECT_BANDS.has(band))
+    ? 'rank_annual_rent.desc.nullslast,days_overdue.desc.nullslast'
+    : 'priority_band.asc,days_overdue.desc.nullslast,rank_annual_rent.desc.nullslast';
   let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
-    + '&order=priority_band.asc,days_overdue.desc.nullslast,rank_annual_rent.desc.nullslast'
+    + '&order=' + orderClause
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
 
