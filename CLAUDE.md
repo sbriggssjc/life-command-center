@@ -2561,3 +2561,78 @@ alarms); a simulated missing job is detected `down=true` while an active one is
 `down=false`; a seeded stale open alert on an active job auto-resolved. Both
 applied live to LCC Opps; the `lcc-cron-health-check` command now runs both
 functions. DB-only, no Railway dependency; auth schema untouched.
+
+## R20 — a person is their own contact (the near-free outreach unlock, 2026-06-15)
+
+R16 unlocked the 67 SF-mapped prospecting cadences by pulling SF contacts.
+Auditing the remaining "cold" cadences live 2026-06-15 found ~200 of them are
+NOT cold: the cadence is seeded ON an individual (the owner IS a person), the
+person already carries an email/phone on the entity record, but the cadence's
+`contact_id`/`sf_contact_id` is null — so the R16 reachability gate parked them
+in P-CONTACT even though there is a real recipient (the person themself). Pure
+wiring gap. Combined with R16's SF-acquired set, this takes outreach-ready from
+~22 toward ~180 with zero research cost. (The genuine-cold tail — ~100 persons
+with no contact info + ~69 orgs with no person — is separate research work, NOT
+this round.)
+
+### Unit 1 — reachability: a person with email/phone IS reachable
+Migration `20260719124000_lcc_r20_person_self_contact_reachability.sql` adds a
+third reachability tier to `v_priority_queue_live` (alongside the held R16 Unit 2
+gate — the migration reproduces the R16 Unit 2 body verbatim and ADDS one CTE +
+one OR, so applying it lands both reachability changes together and
+consistently). New `self_contactable_person_entities` CTE: `entity_type='person'`
+AND (email OR phone) AND not junk/orphan-flagged AND a plausible human name
+(2-5 words, no digits, length 3-60, no firm suffix — SQL mirror of
+`looksLikePersonName`/`ENTITY_FIRM_SUFFIX_RE`). `reachable_cadence` now also
+passes when the cadence's entity is in that set. Those cadences move out of
+P-CONTACT into the real outreach bands. **Scope:** ONLY the cadence reachability
+predicate changed — P0.4/P0.5 keep `connected_entities` unchanged; the column
+shape is unchanged; touch/value bands unaffected (they don't depend on
+reachability). Validated live (read-only): 196 of 380 contactless-overdue
+cadences become reachable via the new tier; the post-CTE view body is
+byte-identical to R16 Unit 2.
+
+### Unit 2 — self-stamp the contact so the draft path has a recipient
+`api/_handlers/contact-acquisition.js` gains a **Pass 1** that runs on EVERY tick
+**before** (and independent of) the SF-acquisition pass — it needs no Salesforce,
+so it drains even when `SF_LOOKUP_WEBHOOK_URL` is unset. For each contactless
+overdue cadence whose entity `isSelfContactablePerson` (the same guard as Unit 1,
+reused so gate + stamp agree), it stamps `contact_id = entity_id` (the person is
+their own contact) via the shared `stampCadenceContactById` helper (R16,
+single-sourced). Idempotent (the fetch is gated on `contact_id IS NULL`; a
+stamped row leaves the contactless set). Bounded by `CONTACT_ACQ_SELF_STAMP_LIMIT`
+(default 100/tick) + the existing wall-clock budget. Backfill + forward path in
+one place — new person-with-contact cadences are caught automatically. The SF
+pass (Unit 2 of R16) is unchanged except it now skips entities already
+self-stamped this tick. The tick response gains `self_stamp_eligible` /
+`self_stamped`. **Never fabricates contact data — only wires what's already on
+the record. An org never self-stamps; a firm mistyped as a person is rejected by
+`looksLikePersonName`.** dia/gov pipelines untouched (LCC-side cadence/queue
+wiring only).
+
+### Unit 3 — draft resolves the recipient from the person's own email
+`v_bd_cadence_dashboard` (migration `20260719124500`, append-only) now exposes
+`contact_id` + the resolved `contact_email` (LEFT JOIN `entities ce ON
+ce.id = c.contact_id`). `ops.js cadDraft` populates the mailto `to:` from it and
+renders a "To:" line. Resolves identically whether the contact is a separately-
+linked person OR the cadence's own person self-stamped as its own contact
+(`contact_id = entity_id`) — the draft "just works" without assuming a separate
+contact row. Phone-only persons (no email) fall back to the prior empty-`to:`
+behavior (still draftable; the operator fills the recipient).
+
+### Verified (headless 2026-06-15)
+`test/contact-acquisition.test.mjs` 15 → 22 (new `isSelfContactablePerson` cases:
+person+email/phone → self-stamps; person no-contact → cold; org → never;
+firm-suffixed mistyped-person → rejected; junk/orphan-flagged → excluded;
+whitespace-only contact → false). `node --check` clean; `ls api/*.js | wc -l`=12;
+full suite 856 pass / 0 fail / 6 skipped. DB migrations additive + cache-or-live
+safe; JS ships on the Railway redeploy.
+
+### After deploy (verify live)
+The ~196 person-with-contact cadences self-stamp (Pass 1 of the */30 cron) and
+leave P-CONTACT for the outreach bands; outreach-ready jumps from ~22 toward
+~180. A draft for one of them resolves the recipient from the person's own email.
+P-CONTACT shrinks to the genuinely-cold remainder (no-contact persons + orgs).
+DEPLOY ORDER: apply the gate after a worker drain so contacts stamp before the
+rows surface in outreach bands (applying earlier is still safe — P-CONTACT is the
+honest interim state).
