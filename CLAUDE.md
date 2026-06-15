@@ -2636,3 +2636,79 @@ P-CONTACT shrinks to the genuinely-cold remainder (no-contact persons + orgs).
 DEPLOY ORDER: apply the gate after a worker drain so contacts stamp before the
 rows surface in outreach bands (applying earlier is still safe — P-CONTACT is the
 honest interim state).
+
+## R22 — cross-DB mirror deletion propagation (orphan reconcile) (2026-06-15)
+
+The dia/gov → LCC mirror syncs (`lcc_sync_property_attributes`,
+`lcc_sync_property_owner_facts`, `lcc_sync_entity_portfolios`) were
+insert/update-only — they never DELETE a mirror row when its source property is
+merged/removed in domain dedup, so the property-keyed LCC mirrors accumulate
+orphans. R22 reconciles them and makes the sync deletion-aware so the mirrors
+stay a true reflection of the domains. Applied live 2026-06-15; migrations
+committed (idempotent).
+
+### Audit-premise correction (grounded live)
+The audit estimated "gov ~22, owner_facts clean." Grounding refined it:
+- **dia hard-deletes** on merge (no `status` column) → 783 `lcc_property_attributes`
+  orphans, 1 owner_facts, 38 portfolio_facts.
+- **gov SOFT-deletes via `status='archived'`** (6,662 archived). The gov anon
+  portfolio views the syncs read (`v_property_attributes_portfolio` /
+  `v_property_owner_facts_portfolio`) **already exclude archived** (return 12,472
+  of 19,134), so reconciling against *those* would prune ~6,658 soft-archived
+  rows. The audit's own number (22) came from comparing the mirror to the
+  all-status `properties` base and it explicitly scoped the delete to rows
+  "genuinely gone, **not soft state**." So R22 reconciles against an **all-status
+  id-only census** and prunes **only hard-gone rows**: gov 6 + 6 + 0. The 6,662
+  soft-archived gov rows are **deliberately kept** (see follow-up).
+
+### What shipped
+- **Domain census views** (`gov`/`dia` `v_property_id_census`, migrations
+  `government/20260615_gov_r22_property_id_census.sql` +
+  `dialysis/20260615_dia_r22_property_id_census.sql`) — id-only, **ALL-status**
+  (incl. archived), PII-free, owner=postgres so anon bypasses RLS like the
+  sibling `v_*_portfolio` views. **Apply FIRST** (the reconcile fetch 404s
+  gracefully without them → no prune).
+- **LCC reconcile** (migration `20260615123000_lcc_r22_mirror_orphan_reconcile.sql`):
+  - `lcc_mirror_reconcile_inflight` (pg_net tracking) +
+    `lcc_mirror_reconcile_deletions` (full-row-snapshot backup of every pruned
+    orphan — reversible undo path).
+  - `lcc_reconcile_mirrors_fetch(domain)` — pages the census at **1000/page**
+    (PostgREST cap), 31 pages (31k headroom) into the inflight tracker.
+  - `lcc_reconcile_mirrors_apply(p_dry_run default true, …)` — assembles the
+    full live id set, guards, anti-joins each property-keyed mirror
+    (property_attributes / owner_facts / portfolio_facts), snapshots + DELETEs
+    confirmed orphans (or counts on dry-run), then ANALYZEs. Dry-run is
+    **non-destructive** (leaves the census for a follow-up real apply).
+  - **Crons** `lcc-mirror-reconcile-fetch` (05:10) + `lcc-mirror-reconcile-apply`
+    (05:15, REAL) — runs daily after the attribute/owner-facts syncs so orphans
+    can't re-accumulate.
+- **Safe by construction** (a partial/failed census fetch can NEVER mass-delete):
+  (1) completeness — every fired page HTTP 200 AND the max-offset page came back
+  EMPTY (proves we paged past the end); (2) sanity floor — assembled live count
+  ≥ `p_min_live` (1000); (3) anomaly cap — never prune a mirror by > 50% in one
+  pass (a truncated-source regression is skipped + logged, never applied). Any
+  guard failure SKIPS the prune (mirror untouched). The upsert syncs are
+  untouched, so a skipped reconcile only ever costs staleness, never correctness.
+  `lcc_listing_events` (a 30-day event log keyed by sale_id, not a current-state
+  mirror) is intentionally **out of scope** — historical events are not pruned.
+
+### Verified live 2026-06-15
+fetch→dry-run grounded the exact hard-orphan set; real apply pruned **834 rows**
+(dia 783/1/38, gov 6/6/0), all snapshotted to `lcc_mirror_reconcile_deletions`.
+After: dia `lcc_property_attributes` 13,060→12,277 (orphans **0**; the 1-row gap
+to the 12,278 live census is inflow lag, the next attribute sync closes it),
+gov 19,130→19,124. **Idempotent** — a re-fetch + reconcile finds **0 orphans /
+all `clean`** (no re-accumulation). **Load-bearing intact** —
+`lcc_refresh_entity_connected_value()` (2,960) + `lcc_refresh_priority_queue_resolved()`
+(1,308) both rebuild cleanly post-prune (the prune only removed phantom
+references to deleted properties). dia/gov pipelines untouched; ≤12 api/*.js.
+
+### Follow-up (NOT in R22, surfaced not buried)
+The 6,662 **soft-archived gov properties** still sit in `lcc_property_attributes`
+/ `lcc_property_owner_facts` (R22 keeps soft state per the audit's intent). They
+can't be refreshed by the syncs (the anon views exclude archived) and could feed
+stale value into the R17 representative-property / connected-value rank. Two
+clean options for a future round: (a) filter `status='archived'` at the rank, or
+(b) reconcile owner_facts/property_attributes against the archived-filtered view
+once Scott blesses pruning soft state. Deferred deliberately — it's a separate
+judgment call from "prune genuinely-gone."
