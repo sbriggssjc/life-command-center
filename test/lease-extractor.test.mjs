@@ -20,7 +20,7 @@ import {
   guarantorContradictsTenant,
   leaseEnrichFailureReason, isDeterministicEnrichFailure,
   describeLeaseCreateError, isCreateRejectionFailure,
-  dialysisOperatorFamily, operatorFamiliesContradict,
+  dialysisOperatorFamily, operatorFamiliesContradict, resolveDiaPropertyOperator,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -397,6 +397,88 @@ describe('lease extractor — operator-agreement gate (Unit 3, the DaVita→Sate
     assert.equal(out.dry_run, true);
     assert.equal(out.operator_mismatch, true);
     assert.equal(emitted, false, 'dry-run never emits a decision');
+  });
+
+  // The actual resolution bug surface: getPropertyOperator must read the CMS
+  // chain via the property's OWN medicare_id, NOT degrade to the facility-name
+  // tenant. Exercised against the pure resolver with the live 30680 row shapes.
+  it('resolveDiaPropertyOperator: CMS chain (via medicare_id) outranks the facility-name tenant', () => {
+    // 30680-shaped: medicare_id present, clinic chain Satellite, tenant is a
+    // facility name with no operator-family cue → MUST return the CMS chain.
+    assert.deepEqual(
+      resolveDiaPropertyOperator({
+        property: { medicare_id: '552827', tenant: 'SHC BLOSSOM VALLEY' },
+        clinicByMedicareId: { chain_organization: 'Satellite Healthcare', owner_name: 'Satellite Healthcare' },
+      }),
+      { operator: 'Satellite Healthcare', source: 'cms_chain' });
+    // Proof the result is family-discriminable (the tenant alone would not be).
+    assert.equal(dialysisOperatorFamily('SHC BLOSSOM VALLEY'), 'satellite'); // happens to cue here
+    assert.equal(dialysisOperatorFamily(resolveDiaPropertyOperator({
+      property: { medicare_id: '552827', tenant: 'Some Facility' },
+      clinicByMedicareId: { chain_organization: 'Satellite Healthcare' },
+    }).operator), 'satellite');
+  });
+  it('resolveDiaPropertyOperator: owner_name is the secondary CMS signal when chain is null', () => {
+    assert.deepEqual(
+      resolveDiaPropertyOperator({
+        property: { medicare_id: '552827', tenant: 'A Facility' },
+        clinicByMedicareId: { chain_organization: null, owner_name: 'Satellite Healthcare' },
+      }),
+      { operator: 'Satellite Healthcare', source: 'cms_owner' });
+  });
+  it('resolveDiaPropertyOperator: property_id-linked clinic is a CMS fallback (the ~760 with no medicare_id)', () => {
+    assert.deepEqual(
+      resolveDiaPropertyOperator({
+        property: { medicare_id: null, tenant: 'SOME CLINIC NAME' },
+        clinicByMedicareId: null,
+        clinicByPropertyId: { chain_organization: 'Fresenius Medical Care', owner_name: null },
+      }),
+      { operator: 'Fresenius Medical Care', source: 'cms_chain' });
+  });
+  it('resolveDiaPropertyOperator: stored tenant is the LAST resort only when there is no CMS link', () => {
+    assert.deepEqual(
+      resolveDiaPropertyOperator({ property: { medicare_id: null, tenant: 'DaVita Dialysis of X' } }),
+      { operator: 'DaVita Dialysis of X', source: 'tenant' });
+    assert.deepEqual(
+      resolveDiaPropertyOperator({ property: null }),
+      { operator: null, source: 'tenant' });
+  });
+
+  // The DATED cross-operator case the dateless-active-lease path MASKED in the
+  // live re-verification. A doc with FULL dates + a DaVita tenant matched to a
+  // CMS-Satellite property MUST be blocked by the OPERATOR gate (→ disambiguation,
+  // no write) — proving the gate, not the dateless reject, is what stops it.
+  it('DATED DaVita doc vs CMS-Satellite property → operator gate blocks (not the dateless path)', async () => {
+    const DATED_DAVITA_RAW = {
+      property_identity: { address: '1221 S Capitol Ave', city: 'San Jose', state: 'CA', tenant: 'Total Renal Care, Inc.' },
+      factual: {
+        tenant: 'Total Renal Care, Inc.', annual_rent: 250000, lease_structure: 'NNN',
+        commencement_date: '2022-01-01', expiration_date: '2037-12-31',
+      },
+      ti_schedule: [], expense_schedule: [],
+    };
+    let emitted = false;
+    const deps = gateDeps({
+      // The real resolution: medicare_id → CMS chain Satellite (NOT the tenant).
+      getPropertyOperator: async ({ propertyId }) => {
+        assert.equal(propertyId, 30680);
+        return resolveDiaPropertyOperator({
+          property: { medicare_id: '552827', tenant: 'SHC BLOSSOM VALLEY' },
+          clinicByMedicareId: { chain_organization: 'Satellite Healthcare' },
+        });
+      },
+    });
+    const out = await attachLeaseDoc(
+      { raw: DATED_DAVITA_RAW, fileName: 'San Jose DVA Lease.pdf', subjectHint: { vertical: 'dia', tenant_brand: 'DaVita' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => null,
+        emitMatchDisambiguation: async () => { emitted = true; } });
+    assert.equal(out.operator_mismatch, true);
+    assert.equal(out.reason, 'operator_mismatch');
+    assert.equal(out.property_operator, 'Satellite Healthcare');
+    assert.equal(out.property_operator_source, 'cms_chain');
+    assert.equal(out.property_id, 30680);
+    assert.equal(out.match_status, 'review_required');
+    assert.equal(emitted, true, 'a DATED cross-operator doc routes to disambiguation, never writes');
   });
 
   it('a NORMAL single-operator lease (DaVita doc vs DaVita property) still ENRICHES', async () => {
