@@ -246,11 +246,28 @@ function isJunkAddress(addr) {
   return OM_JUNK_ADDRESS_RE.test(s);
 }
 
+// R19 (2026-06-15): link/FK/metadata columns are not contested DATA values —
+// they don't need source precedence and shouldn't sit in the provenance ledger
+// (~1,200 of the 30d writes were these). Excluding them at the single
+// lowest-level recorder covers EVERY provenance path (pushProvenance flush AND
+// the direct recordCoStarFieldsProvenance calls) and keeps
+// v_field_provenance_unranked meaningful (a non-zero count = a NEW gap, not
+// accumulated FK/metadata noise). Returning before the RPC avoids the ledger
+// write entirely.
+const BOOKKEEPING_PROV_FIELDS = new Set([
+  'property_id',  // FK → properties
+  'sale_id',      // FK → sales_transactions
+  'sale_role',    // link role (buyer/seller)
+  'data_source',  // ingest-channel metadata, not a contested value
+]);
+
 async function recordFieldProvenance(args) {
   const { workspaceId, targetDatabase, targetTable, recordPk, fieldName,
           value, source, sourceRunId, confidence, recordedBy } = args;
   if (value === undefined || value === null) return null;
   if (!targetTable || !recordPk || !fieldName || !source) return null;
+  // R19: skip link/FK/metadata fields — never a source-precedence question.
+  if (BOOKKEEPING_PROV_FIELDS.has(fieldName)) return null;
   try {
     const res = await opsQuery('POST', 'rpc/lcc_merge_field', {
       p_workspace_id:     workspaceId || null,
