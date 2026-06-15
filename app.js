@@ -5742,11 +5742,18 @@ async function loadCanonicalData() {
   if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
 
   try {
-    // Fire all three in parallel
-    const [countsRes, workRes, inboxRes] = await Promise.allSettled([
+    // Fire all in parallel. R25 Unit 3: also pull live sync-health here so the
+    // Today-page Team Pulse uses the SAME bounded connector-error count
+    // (summary.error) that the Daily Briefing Team Signals uses — previously
+    // only loadDailyBriefingData populated window._lccLiveSyncErrors, so Team
+    // Pulse rendered before it and fell back to the stale all-time
+    // canonicalCounts.sync_errors (e.g. 2,638) while Team Signals showed the
+    // live 0 — two widgets, one page, contradicting each other.
+    const [countsRes, workRes, inboxRes, syncRes] = await Promise.allSettled([
       fetch('/api/queue-v2?view=work_counts', { headers }),
       fetch('/api/queue-v2?view=my_work&per_page=5&sort=due_date', { headers }),
-      fetch('/api/queue-v2?view=inbox&per_page=6&status=new', { headers })
+      fetch('/api/queue-v2?view=inbox&per_page=6&status=new', { headers }),
+      fetch('/api/sync?action=health', { headers })
     ]);
 
     if (countsRes.status === 'fulfilled' && countsRes.value.ok) {
@@ -5757,6 +5764,12 @@ async function loadCanonicalData() {
     }
     if (inboxRes.status === 'fulfilled' && inboxRes.value.ok) {
       canonicalInbox = await inboxRes.value.json();
+    }
+    if (syncRes.status === 'fulfilled' && syncRes.value.ok) {
+      try {
+        const syncData = await syncRes.value.json();
+        window._lccLiveSyncErrors = syncData?.summary?.error || 0;
+      } catch (_) { /* leave undefined → renderer falls back consistently */ }
     }
   } catch {
     // Ops DB not configured — canonical data stays null, legacy renders apply
@@ -6865,8 +6878,20 @@ function renderDailyBriefingPanel() {
 
   const snap = dailyBriefingSnapshot;
   const status = snap.status || {};
-  const degraded = status.completeness === 'degraded';
-  const missing = Array.isArray(status.missing_sections) ? status.missing_sections : [];
+  const missingRaw = Array.isArray(status.missing_sections) ? status.missing_sections : [];
+  // R25 Unit 4: the morning market-intelligence feed (MORNING_STRUCTURED_URL /
+  // MORNING_HTML_URL on the daily-briefing edge fn) is an OPTIONAL external
+  // source that isn't configured, so the edge fn lists
+  // global_market_intelligence.structured_payload / .html_fragment in
+  // missing_sections on EVERY briefing — a permanent "Partial · Unavailable"
+  // banner for a section that already renders its domain-transaction fallback
+  // summary. Don't let an unconfigured optional feed degrade the briefing's
+  // completeness display: drop those entries and only call the briefing
+  // "Partial" when a REAL section is missing. (The section itself still renders
+  // below with whatever summary/fallback the edge fn produced.)
+  const missing = missingRaw.filter((m) => typeof m === 'string'
+    && !m.startsWith('global_market_intelligence'));
+  const degraded = status.completeness === 'degraded' && missing.length > 0;
   const gmi = snap.global_market_intelligence || {};
   const usp = snap.user_specific_priorities || {};
   const team = snap.team_level_production_signals || {};
@@ -6929,10 +6954,10 @@ function renderDailyBriefingPanel() {
   html += '<div class="db-kpis">';
   html += `<div class="db-kpi"><span>Open</span><strong>${Number(tsOpen || 0).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Inbox New</span><strong>${Number(wc.inbox_new || 0).toLocaleString()}</strong></div>`;
-  // QA-22 (2026-05-18): prefer the live sync-health summary.error over
-  // work_counts.sync_errors (same fix pattern as QA-10's Metrics tile).
-  // window._lccLiveSyncErrors is populated by loadDailyBriefingData.
-  const _qaLiveSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : (wc.sync_errors || 0);
+  // R25 Unit 3: live sync-health summary.error (populated on the Today path by
+  // loadCanonicalData and on the briefing path by loadDailyBriefingData), with a
+  // consistent 0 fallback so this tile and Team Pulse always agree.
+  const _qaLiveSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : 0;
   html += `<div class="db-kpi"><span>Sync Errors</span><strong>${Number(_qaLiveSyncErr).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Overdue</span><strong>${Number(tsOverdue || 0).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Due Today</span><strong>${Number(tsDueToday || 0).toLocaleString()}</strong></div>`;
@@ -7261,11 +7286,12 @@ function renderTeamPulse() {
     <div class="pulse-label">Escalations</div>
   </div>`;
 
-  // Sync errors. QA-22 (2026-05-18): prefer live connector-status count
-  // (window._lccLiveSyncErrors populated by loadDailyBriefingData) over the
-  // stale-prone work_counts.sync_errors row count. Matches the QA-10 fix
-  // applied to the Metrics + Sync Health pages.
-  const _qaSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : (c.sync_errors || 0);
+  // Sync errors. R25 Unit 3: read the live connector-status count
+  // (window._lccLiveSyncErrors, now populated on the Today path by
+  // loadCanonicalData) and fall back to 0 — NOT canonicalCounts.sync_errors,
+  // which is an all-time row total mislabeled as "current" and contradicted the
+  // Daily Briefing Team Signals tile (live 0 vs stale 2,638 on the same page).
+  const _qaSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : 0;
   html += `<div class="pulse-card${_qaSyncErr > 0 ? ' attention' : ''}" onclick="navTo('pageSyncHealth')">
     <div class="pulse-val">${_qaSyncErr}</div>
     <div class="pulse-label">Sync Errors</div>
