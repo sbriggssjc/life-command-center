@@ -621,7 +621,17 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       const row = { property_id: Number(propertyId), ...fields, data_source: 'folder_feed_lease' };
       if (domain === 'dialysis') { row.status = 'active'; row.is_active = true; }  // gov: active == not superseded
       const ins = await domainQuery(domain, 'POST', 'leases', row, { Prefer: 'return=representation' }).catch(() => ({ ok: false }));
-      if (!ins.ok) return { ok: false, reason: `create_failed:${ins.status || ''}` };
+      if (!ins.ok) {
+        // Unit 1 (2026-06-15): surface the REAL rejection, not just the HTTP status.
+        // A PostgREST write 4xx carries {code (SQLSTATE), message, details} — the
+        // SQLSTATE + offending column/constraint is what tells us WHY the insert was
+        // rejected (NOT NULL 23502 / CHECK 23514 / unique 23505 / FK 23503). Thread
+        // it into the reason (queryable per-row via the backfill marker) AND log the
+        // full body to Railway. tail e.g. `create_failed:400:23514:leases_expense_structure_check`.
+        const tag = describeLeaseCreateError(ins.status, ins.data);
+        console.warn(`[lease-extractor] lease create rejected (${domain} property ${propertyId}): status=${ins.status ?? '?'} body=${String(JSON.stringify(ins.data ?? null)).slice(0, 500)}`);
+        return { ok: false, reason: `create_failed:${tag}` };
+      }
       const created = Array.isArray(ins.data) ? ins.data[0] : ins.data;
       const newId = created?.lease_id ?? null;
       if (newId == null) return { ok: false, reason: 'create_no_id' };
@@ -927,6 +937,37 @@ export function leaseEnrichFailureReason(applied) {
 export function isDeterministicEnrichFailure(reason) {
   return reason === 'no_factual_fields';
 }
+
+/**
+ * Build a compact, queryable failure tag from a PostgREST write-error body so the
+ * REAL constraint surfaces instead of a bare HTTP status (Unit 1, 2026-06-15).
+ * PostgREST returns `{code, message, details, hint}` on a write 4xx; `code` is the
+ * SQLSTATE (23502 NOT NULL / 23514 CHECK / 23505 unique / 23503 FK) and the
+ * offending column or constraint name lives in `message`/`details`. Returns
+ * `<status>[:<sqlstate>[:<column-or-constraint>]]`, e.g.
+ * `400:23502:leased_area` or `400:23514:leases_expense_structure_check`. When the
+ * body is empty (a thrown fetch / network drop carries no status) it degrades to
+ * just the status (or '' → reason `create_failed:` → stays transient). Pure.
+ */
+export function describeLeaseCreateError(status, data) {
+  const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  const code = String(d.code || '').trim();
+  const msg = `${d.message || ''} ${d.details || ''}`;
+  const col = msg.match(/column "([^"]+)"/i);
+  const con = msg.match(/constraint "([^"]+)"/i);
+  const detail = col ? col[1] : (con ? con[1] : '');
+  return [status, code, detail].filter((x) => x !== '' && x != null).join(':');
+}
+
+// A create_failed whose HTTP status is 4xx (400 bad payload / 409 conflict / 422
+// unprocessable) is a CONSTRAINT/PAYLOAD rejection — it fails identically on every
+// retry, so it is DETERMINISTIC (terminal on the FIRST pass), distinct from a
+// transient create 5xx / network / threw which may clear. The captured SQLSTATE +
+// column rides in the reason tail (Unit 1) so the terminal mark is queryable.
+const CREATE_REJECT_RE = /^create_failed:(4\d\d)(?::|$)/;
+export function isCreateRejectionFailure(reason) {
+  return CREATE_REJECT_RE.test(String(reason || ''));
+}
 // A no_factual_fields doc with only a thin/partial text layer is really a scanned
 // executed copy whose body never reached pdf-parse (only a cover page of text) —
 // route it to the OCR follow-up tail, not the unprocessable tail (Scott's "fixable
@@ -1042,7 +1083,19 @@ export async function attachLeaseDoc(a, injected = {}) {
         domain: resolved.domain, property_id: resolved.property_id, match_status: 'matched',
       };
     }
-    // Transient WRITE failure (create_failed:* / create_no_id / threw) — retryable.
+    // Create 4xx — a bad-payload / constraint REJECTION (Unit 2, 2026-06-15). It
+    // fails identically on every retry, so 3 attempts only waste budget and delay
+    // the unblock: terminal on the FIRST pass, carrying the captured SQLSTATE +
+    // column reason. A DISTINCT outcome (enrich_create_rejected) so it stays
+    // separable from the benign no-usable-terms (enrich_unprocessable) tail.
+    if (isCreateRejectionFailure(enrichReason)) {
+      return {
+        ok: false, attached: false, enrich_create_rejected: true, reason: enrichReason,
+        text_len: extTextLen, applied,
+        domain: resolved.domain, property_id: resolved.property_id, match_status: 'matched',
+      };
+    }
+    // Transient WRITE failure (create 5xx / create_no_id / network / threw) — retryable.
     return {
       ok: false, attached: false, reason: `enrich_${enrichReason}`, applied,
       domain: resolved.domain, property_id: resolved.property_id, match_status: 'matched',

@@ -155,6 +155,12 @@ async function bumpAttempt(row, attempts, deps) {
  *                           terms (amendment / master / co-tenant / draft /
  *                           unsupported). DETERMINISTIC → TERMINAL with its reason,
  *                           joins the OCR/format follow-up tail (never re-runs)
+ *   enrich_create_rejected— matched, but the lease CREATE was rejected with a 4xx
+ *                           (bad payload / constraint violation — NOT NULL / CHECK
+ *                           / unique / FK). DETERMINISTIC (fails identically on
+ *                           retry) → TERMINAL on the FIRST pass with the captured
+ *                           SQLSTATE + column reason; separable from the benign
+ *                           no-terms tail. (Unit 2, 2026-06-15)
  *   ambiguous             — ≥2 in-domain near-misses → match_disambiguation lane
  *   no_domain             — no in-domain property (captured, tenant-searchable, no guess)
  *   error                 — transient extract/fetch/write failure → NOT marked,
@@ -234,6 +240,22 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
       domain: res.domain, property_id: res.property_id, text_len: res.text_len ?? null,
     };
   }
+  // Matched, but the lease CREATE was REJECTED with a 4xx (bad payload / constraint
+  // violation). DETERMINISTIC — it fails identically on retry, so mark it terminal
+  // on the FIRST pass with the captured SQLSTATE + column reason (queryable tail)
+  // instead of bumping the attempt counter through three wasted ticks to the
+  // dead-letter cap. Separable from enrich_unprocessable (the no-usable-terms tail).
+  if (res?.enrich_create_rejected) {
+    const reason = res.reason || 'enrich_create_rejected';
+    await deps.markBackfilled(row, {
+      outcome: 'enrich_create_rejected', reason,
+      domain: res.domain, property_id: res.property_id, text_len: res.text_len ?? null,
+    });
+    return {
+      id: row.id, path: row.path, outcome: 'enrich_create_rejected', reason,
+      domain: res.domain, property_id: res.property_id, text_len: res.text_len ?? null,
+    };
+  }
   if (res?.emitted_disambiguation) {
     await deps.markBackfilled(row, { outcome: 'ambiguous' });
     return { id: row.id, path: row.path, outcome: 'ambiguous' };
@@ -305,6 +327,7 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     multitenant_deferred: 0,
     needs_ocr: 0,
     enrich_unprocessable: 0,
+    enrich_create_rejected: 0,
     ambiguous: 0,
     no_domain: 0,
     error: 0,

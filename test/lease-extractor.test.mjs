@@ -19,6 +19,7 @@ import {
   extractLeaseDoc, planExpenseFinancials, attachLeaseDoc, leaseValuesEqual, runLeaseExtraction,
   guarantorContradictsTenant,
   leaseEnrichFailureReason, isDeterministicEnrichFailure,
+  describeLeaseCreateError, isCreateRejectionFailure,
 } from '../api/_handlers/lease-extractor.js';
 
 const RAW = {
@@ -575,7 +576,29 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
     assert.equal(out.ok, false);
     assert.equal(out.attached, false);
     assert.equal(out.enrich_unprocessable, undefined);   // transient, not deterministic
+    assert.equal(out.enrich_create_rejected, undefined); // 5xx is transient, not a rejection
     assert.match(out.reason, /create_failed:503/);
+  });
+
+  it('matched but the lease CREATE is REJECTED with a 4xx → enrich_create_rejected (deterministic, real constraint reason)', async () => {
+    // The San Jose DaVita finding: a legit single-tenant base lease whose create
+    // INSERT hits a constraint (e.g. CHECK on expense_structure). 4xx fails
+    // identically on retry → terminal on the FIRST pass, carrying the SQLSTATE +
+    // column so the gate can see exactly which constraint each 400 hit.
+    const deps = { ...enrichDeps(), matchAgainstDomain: async () => null,
+      ensureLeaseRow: async () => ({ ok: false, reason: 'create_failed:400:23514:leases_expense_structure_check' }) };
+    const out = await attachLeaseDoc(
+      { raw: RAW, fileName: 'San Jose DVA Lease - Fully Executed - 7-27-15.pdf', subjectHint: { vertical: 'dia', tenant_brand: 'DaVita' }, workspaceId: 'w', actorId: 'u' },
+      { deps, matchByPathAnchor: async () => ({ status: 'matched', domain: 'dialysis', property_id: 40041, reason: 'tenant_city' }),
+        emitMatchDisambiguation: async () => {} });
+    assert.equal(out.ok, false);
+    assert.equal(out.attached, false);
+    assert.equal(out.enrich_create_rejected, true);
+    assert.equal(out.enrich_unprocessable, undefined);   // separable from the no-terms tail
+    assert.equal(out.reason, 'create_failed:400:23514:leases_expense_structure_check');
+    assert.equal(out.domain, 'dialysis');
+    assert.equal(out.property_id, 40041);
+    assert.equal(out.match_status, 'matched');
   });
 
   it('dry-run previews the plan + boundary, writes NOTHING', async () => {
@@ -656,5 +679,45 @@ describe('lease extractor — enrich-failure classifier', () => {
     assert.equal(isDeterministicEnrichFailure('create_failed:503'), false);
     assert.equal(isDeterministicEnrichFailure('create_no_id'), false);
     assert.equal(isDeterministicEnrichFailure('threw:boom'), false);
+  });
+});
+
+// ── Unit 1: surface the real 400 body / Unit 2: create-4xx is deterministic ──
+describe('lease extractor — describeLeaseCreateError (surface the real constraint)', () => {
+  it('NOT NULL (23502) → status:sqlstate:column from the message', () => {
+    assert.equal(describeLeaseCreateError(400, {
+      code: '23502',
+      message: 'null value in column "leased_area" of relation "leases" violates not-null constraint',
+      details: 'Failing row contains (…).',
+    }), '400:23502:leased_area');
+  });
+  it('CHECK (23514) → status:sqlstate:constraint when no column is named', () => {
+    assert.equal(describeLeaseCreateError(400, {
+      code: '23514',
+      message: 'new row for relation "leases" violates check constraint "leases_expense_structure_check"',
+    }), '400:23514:leases_expense_structure_check');
+  });
+  it('unique (23505 → 409) carries the code even without a parseable detail', () => {
+    assert.equal(describeLeaseCreateError(409, { code: '23505', message: 'duplicate key value' }), '409:23505');
+  });
+  it('empty body (network / thrown fetch, no status) degrades gracefully', () => {
+    assert.equal(describeLeaseCreateError(undefined, undefined), '');
+    assert.equal(describeLeaseCreateError(undefined, null), '');
+  });
+});
+
+describe('lease extractor — isCreateRejectionFailure (4xx is deterministic, 5xx transient)', () => {
+  it('a create 4xx (with or without the captured tail) is a deterministic rejection', () => {
+    assert.equal(isCreateRejectionFailure('create_failed:400'), true);
+    assert.equal(isCreateRejectionFailure('create_failed:400:23514:leases_expense_structure_check'), true);
+    assert.equal(isCreateRejectionFailure('create_failed:409:23505'), true);
+    assert.equal(isCreateRejectionFailure('create_failed:422'), true);
+  });
+  it('a create 5xx / network / threw / no-id is NOT a rejection (stays transient)', () => {
+    assert.equal(isCreateRejectionFailure('create_failed:503'), false);
+    assert.equal(isCreateRejectionFailure('create_failed:'), false);     // network: no status
+    assert.equal(isCreateRejectionFailure('create_no_id'), false);
+    assert.equal(isCreateRejectionFailure('threw:boom'), false);
+    assert.equal(isCreateRejectionFailure('no_factual_fields'), false);
   });
 });

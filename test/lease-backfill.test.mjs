@@ -145,6 +145,25 @@ describe('lease backfill — per-doc outcome mapping', () => {
     assert.equal(marked.text_len, 4200);
   });
 
+  it('create-4xx rejection → enrich_create_rejected, MARKED terminal on the FIRST pass (no attempt bump, no dead-letter)', async () => {
+    let marked = null, bumped = false;
+    const deps = {
+      attachLeaseDoc: async () => ({ ok: false, attached: false, enrich_create_rejected: true,
+        reason: 'create_failed:400:23502:leased_area', domain: 'dialysis', property_id: 40041, text_len: 8400, match_status: 'matched' }),
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+      bumpAttempt: async () => { bumped = true; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), ctx, deps);
+    assert.equal(out.outcome, 'enrich_create_rejected');
+    assert.equal(out.reason, 'create_failed:400:23502:leased_area');
+    assert.equal(out.property_id, 40041);
+    assert.equal(bumped, false, 'a deterministic 4xx is NOT routed through the transient attempt counter');
+    assert.ok(marked, 'create-rejection MARKED → drops out of the id.asc queue on the first pass');
+    assert.equal(marked.outcome, 'enrich_create_rejected');
+    assert.equal(marked.reason, 'create_failed:400:23502:leased_area');
+    assert.equal(marked.text_len, 8400);
+  });
+
   it('needs_ocr carrying a thin-text reason → marked with reason + text_len (the scanned mis-route, fixed)', async () => {
     let marked = null;
     const deps = {
