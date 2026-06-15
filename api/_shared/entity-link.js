@@ -250,6 +250,51 @@ const ENTITY_JUNK_PATTERNS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Prospect-junk guard (R25 Unit 2, 2026-06-15)
+// ---------------------------------------------------------------------------
+// A daily-driver walk found non-targets surfacing as prospecting contacts in the
+// P-CONTACT lane: bare role labels ("Realtor"), label-colon fragments
+// ("Description:", "Mill Levy: 92.281", "CPA:16"), the GSA self artifact
+// ("GSA (US Gov't)"), and locale / foreign-address fragments ("Mexico", "France",
+// "Paris, PAR 75009", "Pedregal 24 oficina 423"). These are capture artifacts,
+// never owners/prospects. Caught here so they route to the junk_entity_name
+// Decision Center lane (soft-flag) instead of polluting the band.
+//
+// ADDRESS-SAFE by construction (every pattern is either anchored ^...$ or carries
+// a strong non-address signal), so it is safe to fold into isJunkEntityName (the
+// universal entity-creation boundary): a US property/asset name is a street
+// address — never bare "Realtor", a "<label>:" fragment, "oficina", or a
+// "PAR 75009" French postal token. Locale matches are EXACT (^mexico$) so legit
+// names that merely contain the word ("State of New Mexico", "123 Mexico St")
+// still pass.
+const PROSPECT_JUNK_PATTERNS = [
+  // Bare CRE role labels (the whole name is just a job title).
+  /^\s*(?:realtor|broker|agent|investment\s+specialist|commercial\s+advisor|listing\s+agent|sales\s+associate|principal\s+broker)\s*$/i,
+  // <label>: or <label>: <number> — colon-delimited data fragments.
+  /^[A-Za-z][A-Za-z .&'/-]*:\s*[\d.,%]*\s*$/,
+  // GSA "U S Gov't" recorded-owner bleed-through (federal anti-pattern sibling).
+  /\bGSA\b\s*\(\s*US\b/i,
+  // Foreign-address fragments.
+  /\boficina\b/i,                                        // "oficina 423" (Spanish "office")
+  /\bPAR\s+\d{4,5}\b/,                                   // "PAR 75009" (French postal/dept)
+  // Bare country / foreign-city names (exact — owners are never just a country).
+  /^\s*(?:mexico|paris|france|canada|spain|london|madrid|toronto|berlin|tokyo|rome|england)\s*$/i,
+];
+
+/**
+ * True when an entity name is a prospect/owner-context capture artifact (bare
+ * role label, label-colon fragment, GSA-self, locale / foreign-address). Used
+ * for the P-CONTACT junk filter (the SQL mirror lives in the R25 Unit 2
+ * migration). Address-safe — see PROSPECT_JUNK_PATTERNS.
+ */
+export function isJunkProspectName(name) {
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  return PROSPECT_JUNK_PATTERNS.some((re) => re.test(trimmed));
+}
+
+// ---------------------------------------------------------------------------
 // Bare street-address fragment guard (R9 follow-up, 2026-06-09)
 // ---------------------------------------------------------------------------
 // The chain-connect drain minted "West Mall Dr" (dia) as an ORGANIZATION — a
@@ -351,7 +396,11 @@ export function isJunkEntityName(name) {
   if (typeof name !== 'string') return false;
   const trimmed = name.trim();
   if (!trimmed) return false;
-  return ENTITY_JUNK_PATTERNS.some((re) => re.test(trimmed));
+  // R25 Unit 2: also reject prospect-junk capture artifacts at the creation
+  // boundary (address-safe — see PROSPECT_JUNK_PATTERNS), so the band-polluting
+  // names never become canonical entities going forward.
+  return ENTITY_JUNK_PATTERNS.some((re) => re.test(trimmed))
+      || isJunkProspectName(trimmed);
 }
 
 // ---------------------------------------------------------------------------
