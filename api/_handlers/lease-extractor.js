@@ -550,7 +550,7 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   const aiText = result.data?.response || result.data?.content || result.data?.choices?.[0]?.message?.content || (typeof result.data === 'string' ? result.data : '') || '';
   const parsed = parseLeaseJson(aiText);
   if (!parsed) throw new Error('no_json_in_ai_response');
-  return { normalized: normalizeLeaseExtraction(parsed), source: 'ai' };
+  return { normalized: normalizeLeaseExtraction(parsed), source: 'ai', text_len: text.length };
 }
 
 const DOMAIN_DB = (d) => (d === 'dialysis' ? 'dia_db' : 'gov_db');
@@ -905,6 +905,34 @@ export async function extractLeaseDoc({ storageRef, fileName, mediaType, raw, do
   return { ok: applied.ok, dry_run: false, resolved, applied, boundary_ok: reported_targets.length === 0 };
 }
 
+// ── matched-but-enrich-failed classifier (Scott's bucket split, 2026-06-15) ──
+// applyLeaseEnrichment returns ok:false in exactly one place — when ensureLeaseRow
+// fails — recording `lease_unresolved:<reason>` in `warnings`. The reason splits
+// the formerly-opaque 'unresolved' error into two outcomes the callers handle
+// differently, so a deterministic dead-end never re-runs at the head of the
+// id.asc backfill queue forever (the head-of-line block):
+//   • no_factual_fields  → DETERMINISTIC: the doc carries no usable primary-lease
+//     terms (amendment / master / co-tenant / draft / unsupported / scanned-thin).
+//     It will NEVER succeed on retry → terminal (enrich_unprocessable / needs_ocr).
+//   • create_failed:* / create_no_id / threw → a transient WRITE failure that may
+//     clear → retryable (the backfill caps the retries so it can't block forever).
+// Pull the reason ensureLeaseRow recorded; fall back to applied.reason.
+export function leaseEnrichFailureReason(applied) {
+  const warnings = Array.isArray(applied?.warnings) ? applied.warnings : [];
+  const hit = warnings.find((w) => typeof w === 'string' && w.startsWith('lease_unresolved:'));
+  if (hit) return hit.slice('lease_unresolved:'.length) || 'unknown';
+  return applied?.reason || 'enrich_failed';
+}
+// Deterministic == will never succeed on retry. Only "no usable lease terms".
+export function isDeterministicEnrichFailure(reason) {
+  return reason === 'no_factual_fields';
+}
+// A no_factual_fields doc with only a thin/partial text layer is really a scanned
+// executed copy whose body never reached pdf-parse (only a cover page of text) —
+// route it to the OCR follow-up tail, not the unprocessable tail (Scott's "fixable
+// scanned-PDF mis-route" case). Tunable; 600 chars ≈ a cover page, not a lease body.
+export const LEASE_THIN_TEXT_CHARS = Math.max(0, parseInt(process.env.LEASE_THIN_TEXT_CHARS || '600', 10));
+
 /**
  * Folder-feed channel entry: extract a lease doc → resolve the property (in-file
  * address FIRST, then the path anchor) → enrich it (real) or preview (dry). This
@@ -944,7 +972,7 @@ export async function attachLeaseDoc(a, injected = {}) {
   const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
   const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
 
-  let normalized;
+  let normalized, extTextLen = null;
   try {
     const ext = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl });
     // Fix #2: scanned / image-only PDF → graceful needs_ocr (folder-feed records
@@ -953,6 +981,7 @@ export async function attachLeaseDoc(a, injected = {}) {
       return { ok: true, attached: false, needs_ocr: true, reason: 'needs_ocr', match_status: 'needs_ocr' };
     }
     ({ normalized } = ext);
+    extTextLen = ext.text_len ?? null;   // drives the scanned-thin-text re-route below
   } catch (e) {
     return { ok: false, attached: false, reason: `extract_failed:${e?.message || 'err'}`, match_status: null };
   }
@@ -986,10 +1015,37 @@ export async function attachLeaseDoc(a, injected = {}) {
       domain: resolved.domain, propertyId: resolved.property_id, normalized,
       doc: fileName ? { fileName, sourceUrl: storageRef } : null,
     }, deps);
+    if (applied.ok) {
+      return {
+        ok: true, attached: true, lease: true,
+        domain: resolved.domain, property_id: resolved.property_id, applied,
+        boundary_ok: reported_targets.length === 0, match_status: 'matched',
+      };
+    }
+    // Matched, but the lease could not be created/linked. Split the failure
+    // (Scott 2026-06-15) so a deterministic dead-end is recorded terminal with
+    // its real reason instead of re-running every tick at the head of the queue.
+    const enrichReason = leaseEnrichFailureReason(applied);
+    if (isDeterministicEnrichFailure(enrichReason)) {
+      // Thin/partial text layer → really a scanned executed copy → OCR tail.
+      if (extTextLen != null && extTextLen < LEASE_THIN_TEXT_CHARS) {
+        return {
+          ok: false, attached: false, needs_ocr: true, reason: 'thin_text_layer',
+          text_len: extTextLen, domain: resolved.domain, property_id: resolved.property_id,
+          match_status: 'needs_ocr',
+        };
+      }
+      // No usable primary-lease terms → terminal; joins the unprocessable tail.
+      return {
+        ok: false, attached: false, enrich_unprocessable: true, reason: enrichReason,
+        text_len: extTextLen, applied,
+        domain: resolved.domain, property_id: resolved.property_id, match_status: 'matched',
+      };
+    }
+    // Transient WRITE failure (create_failed:* / create_no_id / threw) — retryable.
     return {
-      ok: !!applied.ok, attached: !!applied.ok, lease: true,
-      domain: resolved.domain, property_id: resolved.property_id, applied,
-      boundary_ok: reported_targets.length === 0, match_status: 'matched',
+      ok: false, attached: false, reason: `enrich_${enrichReason}`, applied,
+      domain: resolved.domain, property_id: resolved.property_id, match_status: 'matched',
     };
   }
 
