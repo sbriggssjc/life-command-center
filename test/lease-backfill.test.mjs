@@ -129,6 +129,77 @@ describe('lease backfill — per-doc outcome mapping', () => {
     assert.equal(marked, false);
   });
 
+  it('matched-but-no-usable-terms → enrich_unprocessable, MARKED terminal with reason (drops out, never re-runs)', async () => {
+    let marked = null;
+    const deps = {
+      attachLeaseDoc: async () => ({ ok: false, attached: false, enrich_unprocessable: true, reason: 'no_factual_fields', domain: 'government', property_id: 555, text_len: 4200, match_status: 'matched' }),
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), ctx, deps);
+    assert.equal(out.outcome, 'enrich_unprocessable');
+    assert.equal(out.reason, 'no_factual_fields');
+    assert.equal(out.property_id, 555);
+    assert.ok(marked, 'unprocessable doc MARKED → drops out of the id.asc queue immediately (no head-of-line block)');
+    assert.equal(marked.outcome, 'enrich_unprocessable');
+    assert.equal(marked.reason, 'no_factual_fields');
+    assert.equal(marked.text_len, 4200);
+  });
+
+  it('needs_ocr carrying a thin-text reason → marked with reason + text_len (the scanned mis-route, fixed)', async () => {
+    let marked = null;
+    const deps = {
+      attachLeaseDoc: async () => ({ ok: false, attached: false, needs_ocr: true, reason: 'thin_text_layer', text_len: 120, match_status: 'needs_ocr' }),
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), ctx, deps);
+    assert.equal(out.outcome, 'needs_ocr');
+    assert.equal(out.reason, 'thin_text_layer');
+    assert.equal(marked.reason, 'thin_text_layer');
+    assert.equal(marked.text_len, 120);
+  });
+
+  it('transient error UNDER the cap → error, NOT marked, bumps the attempt counter (still retries)', async () => {
+    let marked = false, bumped = null;
+    const deps = {
+      attachLeaseDoc: async () => ({ ok: false, attached: false, reason: 'enrich_create_failed:503', match_status: 'matched' }),
+      markBackfilled: async () => { marked = true; return { ok: true }; },
+      bumpAttempt: async (r, n) => { bumped = n; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), ctx, deps);   // attempts 0 → 1
+    assert.equal(out.outcome, 'error');
+    assert.equal(out.attempts, 1);
+    assert.equal(marked, false, 'still retryable → not terminally marked');
+    assert.equal(bumped, 1, 'attempt counter persisted so the cap can fire later');
+  });
+
+  it('transient error AT the cap → error_dead_letter, MARKED terminal (cannot block the head forever)', async () => {
+    let marked = null;
+    const deps = {
+      attachLeaseDoc: async () => ({ ok: false, attached: false, reason: 'enrich_create_failed:503', match_status: 'matched' }),
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+      bumpAttempt: async () => ({ ok: true }),
+    };
+    // Two prior failures recorded → this attempt reaches LEASE_BACKFILL_MAX_ATTEMPTS (3).
+    const out = await backfillOneLeaseDoc(row({ subject_hint: { vertical: 'dia', lease_backfill_attempts: 2 } }), ctx, deps);
+    assert.equal(out.outcome, 'error_dead_letter');
+    assert.equal(out.attempts, 3);
+    assert.equal(marked.outcome, 'error_dead_letter');
+    assert.equal(marked.attempts, 3);
+  });
+
+  it('a thrown extractor is transient → error (routed through the cap), not an opaque early-return', async () => {
+    let bumped = null;
+    const deps = {
+      attachLeaseDoc: async () => { throw new Error('kaboom'); },
+      markBackfilled: async () => ({ ok: true }),
+      bumpAttempt: async (r, n) => { bumped = n; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), ctx, deps);
+    assert.equal(out.outcome, 'error');
+    assert.match(out.reason, /threw:kaboom/);
+    assert.equal(bumped, 1);
+  });
+
   it('strips backfill marker keys from the hint before re-running (no leak into disambiguation)', async () => {
     let passedHint = null;
     const deps = {

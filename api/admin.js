@@ -7503,7 +7503,7 @@ async function handleGenerateResearchTasks(req, res) {
 
   for (const source of sources) {
     const domain = source === 'dia' ? 'dialysis' : 'government';
-    const summary = { feed: 0, inserted: 0, refreshed: 0, closed: 0, skipped_ignored: 0, errors: [] };
+    const summary = { feed: 0, inserted: 0, refreshed: 0, closed: 0, skipped_ignored: 0, deduped: 0, errors: [] };
     try {
       const feed = await fetchNbaFeed(source, limit, req);
       summary.feed = feed.length;
@@ -7514,10 +7514,25 @@ async function handleGenerateResearchTasks(req, res) {
         (ignoreRes.ok && Array.isArray(ignoreRes.data) ? ignoreRes.data : [])
           .map(r => String(r.entity_id)));
 
-      const openRes = await opsQuery('GET',
-        `research_tasks?select=id,research_type,source_record_id,priority,status` +
-        `&domain=eq.${encodeURIComponent(domain)}&source_table=eq.v_next_best_research&status=eq.queued`);
-      const openTasks = (openRes.ok && Array.isArray(openRes.data) ? openRes.data : []);
+      // R21 Unit 1 root cause: the open-task dedupe fetch must cover EVERY queued
+      // task, not just the first 1000. PostgREST caps a single response at 1000
+      // rows, and the queued backlog ran to ~10k — so the un-paged fetch only
+      // deduped against the first 1000, and every gap beyond that re-inserted on
+      // each tick (the 5.2x dupe explosion). Page through the full open set,
+      // ordered by id for a stable window. The DB-side partial unique index
+      // (uq_research_tasks_open_source) is the hard backstop for any race the
+      // pagination window can't see (concurrent daily + inc ticks).
+      const openTasks = [];
+      for (let off = 0; ; off += 1000) {
+        const pageRes = await opsQuery('GET',
+          `research_tasks?select=id,research_type,source_record_id,priority,status` +
+          `&domain=eq.${encodeURIComponent(domain)}&source_table=eq.v_next_best_research&status=eq.queued` +
+          `&order=id.asc&limit=1000&offset=${off}`,
+          undefined, { countMode: 'none' });
+        const page = (pageRes.ok && Array.isArray(pageRes.data)) ? pageRes.data : [];
+        openTasks.push(...page);
+        if (page.length < 1000) break;
+      }
       const openByKey = new Map(openTasks.map(t => [`${t.research_type}|${t.source_record_id}`, t]));
       const feedKeys = new Set();
 
@@ -7550,6 +7565,10 @@ async function handleGenerateResearchTasks(req, res) {
             metadata:        { entity_kind: row.entity_kind || null, label: row.label || null },
           });
           if (ins.ok) summary.inserted += 1;
+          // 409 = the partial unique index rejected a duplicate OPEN task (a
+          // concurrent tick beat us to it, or the open-set page window missed
+          // it). That is the dedupe guard working as designed, NOT an error.
+          else if (ins.status === 409) summary.deduped += 1;
           else summary.errors.push(`insert ${key}: ${JSON.stringify(ins.data).slice(0, 120)}`);
         }
       }
