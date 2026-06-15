@@ -700,6 +700,15 @@ describe('lease extractor — describeLeaseCreateError (surface the real constra
   it('unique (23505 → 409) carries the code even without a parseable detail', () => {
     assert.equal(describeLeaseCreateError(409, { code: '23505', message: 'duplicate key value' }), '409:23505');
   });
+  it('trigger-raised dateless rejection → names the real cause, not a bare SQLSTATE', () => {
+    // dia_reject_dateless_active_lease raises with errcode 23514 and a plain RAISE
+    // message (no column/constraint token). The honest label distinguishes "base
+    // lease, dates in a Commencement Date Memorandum" from genuinely-bad data.
+    assert.equal(describeLeaseCreateError(400, {
+      code: '23514',
+      message: 'dia_reject_dateless_active_lease: refusing to write active lease with both dates NULL (property_id=30680, tenant=Total Renal Care, Inc.)',
+    }), '400:23514:dateless_active_lease');
+  });
   it('empty body (network / thrown fetch, no status) degrades gracefully', () => {
     assert.equal(describeLeaseCreateError(undefined, undefined), '');
     assert.equal(describeLeaseCreateError(undefined, null), '');
@@ -710,6 +719,7 @@ describe('lease extractor — isCreateRejectionFailure (4xx is deterministic, 5x
   it('a create 4xx (with or without the captured tail) is a deterministic rejection', () => {
     assert.equal(isCreateRejectionFailure('create_failed:400'), true);
     assert.equal(isCreateRejectionFailure('create_failed:400:23514:leases_expense_structure_check'), true);
+    assert.equal(isCreateRejectionFailure('create_failed:400:23514:dateless_active_lease'), true);
     assert.equal(isCreateRejectionFailure('create_failed:409:23505'), true);
     assert.equal(isCreateRejectionFailure('create_failed:422'), true);
   });
