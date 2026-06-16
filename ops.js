@@ -1431,11 +1431,18 @@ async function renderReviewConsolePage() {
   ]);
 
   let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
-  html += '<div class="rc-intro">Every manual decision in one place, organized by the question being asked. Pick a lane, work the top items by value, and record a verdict to move each subject to the next bucket.</div>';
+  html += '<div class="rc-intro">Every manual decision in one place, grouped by the question being asked. Most work is auto-resolved by the pipeline — each lane shows the genuine residue that needs you. Pick a lane, work the top items by value, and record a verdict.</div>';
 
-  const dc = {};
+  // Per-decision_type counts: residue (needs-you), handled (decided+superseded),
+  // auto-resolved (superseded). Counts come straight from /api/decisions?summary=1
+  // so they match the underlying views exactly.
+  const dc = {}, dcRes = {}, dcAuto = {};
   if (decR.ok && decR.data && Array.isArray(decR.data.lanes)) {
-    decR.data.lanes.forEach(function (l) { dc[l.decision_type] = Number(l.n) || 0; });
+    decR.data.lanes.forEach(function (l) {
+      dc[l.decision_type] = Number(l.n) || 0;
+      dcRes[l.decision_type] = Number(l.resolved) || 0;
+      dcAuto[l.decision_type] = Number(l.auto_resolved) || 0;
+    });
   }
   // SOS owner-contact links keep their own (already-decision-shaped) worklist.
   let sosN = 0;
@@ -1443,40 +1450,100 @@ async function renderReviewConsolePage() {
     const s = res.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
     if (s && typeof s.count === 'number') sosN = s.count;
   }
+  dc['sos_owner_links'] = sosN;
 
-  // Lane order: the two Phase-1 ownership lanes first, then the converted lanes
-  // by typical workable value, then the small surfaceless ones.
-  const buyerN = (dc['confirm_buyer_parent'] || 0) + (dc['map_sf_parent_account'] || 0);
-  const DEFS = [
-    { n: dc['confirm_true_owner'] || 0, label: 'Confirm the true owner', sub: 'Stale-vs-current domain owner verdicts', open: "renderDecisionLane('confirm_true_owner')", tone: 'red' },
-    { n: buyerN, label: 'Buyer parents & SF mapping', sub: 'Confirm sponsors · map to Salesforce parent', open: 'renderBuyerParentLane()', tone: 'yellow' },
-    { n: dc['intake_disposition'] || 0, label: 'Staged intake — needs review', sub: 'Create property · re-extract · dismiss', open: "renderFederatedLane('intake_disposition')", tone: 'yellow' },
-    { n: dc['property_merge'] || 0, label: 'Property merges & duplicates', sub: 'Same property? merge or keep distinct', open: "renderFederatedLane('property_merge')", tone: 'yellow' },
-    { n: dc['merge_duplicate_entities'] || 0, label: 'Duplicate entities — merge', sub: 'Same entity? merge or keep separate', open: "renderFederatedLane('merge_duplicate_entities')", tone: 'yellow' },
-    { n: dc['provenance_conflict'] || 0, label: 'Data conflicts & provenance', sub: 'Which value is right?', open: "renderFederatedLane('provenance_conflict')", tone: 'yellow' },
-    { n: dc['pending_update'] || 0, label: 'Pending updates (Gov)', sub: 'Apply or reject proposed updates', open: "renderFederatedLane('pending_update')", tone: '' },
-    { n: dc['cms_link_suspect'] || 0, label: 'CMS ↔ property link suspects', sub: 'Right clinic for this property?', open: "renderFederatedLane('cms_link_suspect')", tone: '' },
-    { n: dc['junk_entity_name'] || 0, label: 'Junk entity names', sub: 'Rename · merge · leave flagged', open: "renderDecisionLane('junk_entity_name')", tone: '' },
-    { n: dc['implausible_value'] || 0, label: 'Implausible values', sub: 'Is this sale price real?', open: "renderFederatedLane('implausible_value')", tone: '' },
-    { n: dc['match_disambiguation'] || 0, label: 'Intake match disambiguation', sub: 'Multiple candidate properties — pick one', open: "renderDecisionLane('match_disambiguation')", tone: 'yellow' },
-    { n: dc['llc_research_dead'] || 0, label: 'LLC research dead-letters', sub: 'Resolve manually · retry · park', open: "renderDecisionLane('llc_research_dead')", tone: '' },
-    { n: dc['availability_checker_botblock'] || 0, label: 'Availability bot-blocks', sub: 'Verify listings manually or acknowledge', open: "renderDecisionLane('availability_checker_botblock')", tone: 'yellow' },
-    { n: sosN, label: 'Owner-contact links to confirm', sub: 'Confirm or reject SOS weak links', open: 'renderSosLinkWorklist()', tone: '' },
+  // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
+  // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
+  const SUBLANES = [
+    { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
+    { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
+    { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
+    { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
+    { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
+    { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
+    { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
+    { dt: 'intake_disposition', label: 'Staged intake — needs review', open: "renderFederatedLane('intake_disposition')" },
+    { dt: 'match_disambiguation', label: 'Intake match disambiguation', open: "renderDecisionLane('match_disambiguation')" },
+    { dt: 'cms_link_suspect', label: 'CMS ↔ property link suspects', open: "renderFederatedLane('cms_link_suspect')" },
+    { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
+    { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
+    { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
+    { dt: 'availability_checker_botblock', label: 'Availability bot-blocks', open: "renderDecisionLane('availability_checker_botblock')" },
   ];
-  html += '<div class="rc-lanes">';
-  DEFS.forEach(function (d) {
-    html += _dcLaneCard(d.n, d.label, d.sub, d.open, (d.n > 0 && d.tone) ? ('rc-lane-' + d.tone) : '');
+  const subN = function (s) { return (dc[s.dt] || 0) + (s.extra ? (dc[s.extra] || 0) : 0); };
+  const subHandled = function (s) { return (dcRes[s.dt] || 0) + (s.extra ? (dcRes[s.extra] || 0) : 0); };
+
+  const laneOf = (typeof laneForDecisionType === 'function') ? laneForDecisionType : function () { return 'automation'; };
+  const lanesDef = (typeof LCC_REVIEW_LANES !== 'undefined' && LCC_REVIEW_LANES) ? LCC_REVIEW_LANES : [];
+  const grouped = {};
+  SUBLANES.forEach(function (s) { const k = laneOf(s.dt) || 'automation'; (grouped[k] = grouped[k] || []).push(s); });
+
+  let totalOpen = 0;
+  html += '<div class="rc-lanes-grouped">';
+  // Render in lane-map order; fall back to a single flat group if the map didn't load.
+  (lanesDef.length ? lanesDef : [{ lane: '_all', title: 'Decisions', question: '' }]).forEach(function (L) {
+    const subs = (L.lane === '_all') ? SUBLANES : (grouped[L.lane] || []);
+    if (!subs.length) return;
+    const need = subs.reduce(function (a, s) { return a + subN(s); }, 0);
+    const handled = subs.reduce(function (a, s) { return a + subHandled(s); }, 0);
+    totalOpen += need;
+    html += '<div class="rc-glane' + (need > 0 ? '' : ' rc-lane-clear') + '">'
+      + '<div class="rc-glane-head"><div class="rc-glane-title">' + esc(L.title) + '</div>'
+      + '<div class="rc-glane-counts">'
+      + (need > 0 ? '<span class="rc-need">' + need + ' need you</span>' : '<span class="rc-clear">✓ clear</span>')
+      + (handled > 0 ? ' <span class="rc-handled">' + handled + ' handled</span>' : '')
+      + '</div></div>'
+      + (L.question ? '<div class="rc-glane-q">' + esc(L.question) + '</div>' : '')
+      + '<div class="rc-sublanes">';
+    subs.forEach(function (s) {
+      const n = subN(s);
+      html += '<button class="rc-sublane' + (n > 0 ? ' has-work' : '') + '" onclick="' + esc(s.open) + '">'
+        + '<span class="rc-sublane-label">' + esc(s.label) + '</span>'
+        + '<span class="rc-sublane-n">' + n + '</span></button>';
+    });
+    html += '</div></div>';
   });
   html += '</div>';
 
-  // C3 (2026-06-06): cache lane counts so an emptied lane can point the user at
-  // the next busiest lane instead of dead-ending on a celebration.
-  _dcLaneSummary = DEFS.map(function (d) { return { label: d.label, open: d.open, n: d.n }; });
+  if (typeof setReviewNavBadge === 'function') setReviewNavBadge(totalOpen);
+
+  // C3 (2026-06-06): cache sub-lane counts so an emptied lane can point the user
+  // at the next busiest lane instead of dead-ending on a celebration.
+  _dcLaneSummary = SUBLANES.map(function (s) { return { label: s.label, open: s.open, n: subN(s) }; });
 
   el.innerHTML = html;
   perf.end();
 }
 window.renderReviewConsolePage = renderReviewConsolePage;
+
+// Decision Center nav badge — total residue (needs-you) across all lanes.
+function setReviewNavBadge(n) {
+  const el = document.getElementById('reviewNavBadge');
+  if (!el) return;
+  if (n && n > 0) { el.textContent = n > 999 ? '999+' : String(n); el.hidden = false; }
+  else { el.textContent = ''; el.hidden = true; }
+}
+window.setReviewNavBadge = setReviewNavBadge;
+
+// Proactively populate the nav badge once on load (cheap summary read) so the
+// operator sees how much review work is waiting without opening the page.
+async function refreshReviewNavBadge() {
+  try {
+    const [r, rc] = await Promise.all([opsApi('/api/decisions?summary=1'), opsApi('/api/review-counts')]);
+    let total = (r.ok && r.data && typeof r.data.total === 'number') ? r.data.total : 0;
+    if (rc.ok && rc.data && Array.isArray(rc.data.lanes)) {
+      const s = rc.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
+      if (s && typeof s.count === 'number') total += s.count;
+    }
+    setReviewNavBadge(total);
+  } catch (_e) { /* best-effort */ }
+}
+window.refreshReviewNavBadge = refreshReviewNavBadge;
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(refreshReviewNavBadge, 2500); });
+  } else { setTimeout(refreshReviewNavBadge, 2500); }
+}
 
 // C3 helper: "Next: <busiest other lane> →" CTA for empty / cleared lane states.
 let _dcLaneSummary = [];
@@ -3120,15 +3187,25 @@ async function cadLogTouch(cadenceId, entityId, touchType, btn) {
 }
 window.cadLogTouch = cadLogTouch;
 
+// Tier 3 Phase 2: deep-link from the read-only Data Quality dashboard into the
+// relevant Decision Center lane. Navigates to the Decision Center, then runs the
+// lane renderer once the page is shown.
+function dqDeepLink(fnName, arg) {
+  if (typeof navTo === 'function') navTo('pageReviewConsole');
+  setTimeout(function () { if (typeof window[fnName] === 'function') window[fnName](arg); }, 180);
+}
+window.dqDeepLink = dqDeepLink;
+
 async function renderDataQualityPage() {
   const el = document.getElementById('dataQualityContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:data_quality');
 
-  const [summaryRes, detailRes] = await Promise.all([
+  const [summaryRes, detailRes, decR] = await Promise.all([
     opsApi('/api/entities?action=quality'),
-    opsApi('/api/entities?action=quality_details')
+    opsApi('/api/entities?action=quality_details'),
+    opsApi('/api/decisions?summary=1')   // unified review-work counts (same source as Decision Center)
   ]);
 
   if (!summaryRes.ok) {
@@ -3142,6 +3219,9 @@ async function renderDataQualityPage() {
   const precedenceRows = detail.source_precedence || [];
 
   let html = '<div class="ops-header"><h2>Data Quality</h2></div>';
+  // Tier 3 Phase 2: Data Quality is a read-only HEALTH DASHBOARD. Every work
+  // item resolves in the Decision Center — the cards below deep-link there.
+  html += '<div class="rc-intro">Read-only health dashboard. Metrics and coverage live here; the actual review work — merges, links, precedence, follow-ups — is worked in the <button class="dq-deeplink" onclick="navTo(\'pageReviewConsole\')">Decision Center →</button>.</div>';
 
   // B8 (2026-05-27): Domain Health Summary tile — hydrated async below.
   // Renders side-by-side dia/gov values + 30-day sparklines for the
@@ -3155,6 +3235,28 @@ async function renderDataQualityPage() {
   html += metricCardHTML('Orphaned Actions', summary.orphaned_actions || 0, 'entity missing', (summary.orphaned_actions || 0) > 0 ? 'red' : 'green');
   html += metricCardHTML('Aliases', summary.total_aliases || 0, 'dedup coverage');
   html += '</div>';
+
+  // Unified review-work counts — read from /api/decisions?summary=1, the SAME
+  // source the Decision Center and nav badge use, so the three never diverge.
+  if (decR.ok && decR.data && Array.isArray(decR.data.lanes)) {
+    const groups = (typeof rollupLaneCounts === 'function')
+      ? rollupLaneCounts(decR.data.lanes.map(function (l) { return { decision_type: l.decision_type, n: l.n }; }))
+      : [];
+    const totalOpen = Number(decR.data.total) || 0;
+    html += '<div class="widget"><div class="widget-title">Review work — Decision Center'
+      + ' <span class="rc-handled">' + totalOpen + ' open</span></div>';
+    if (groups.length) {
+      html += '<div class="rc-sublanes">';
+      groups.forEach(function (g) {
+        if (!g.n) return;
+        html += '<button class="rc-sublane has-work" onclick="dqDeepLink(\'renderReviewConsolePage\')" title="'
+          + esc(g.question) + '"><span class="rc-sublane-label">' + esc(g.title)
+          + '</span><span class="rc-sublane-n">' + g.n + '</span></button>';
+      });
+      html += '</div>';
+    }
+    html += '<div class="dq-readonly-note">Counts match the Decision Center exactly (same source view). Click a lane to work it there.</div></div>';
+  }
 
   // QA-12 (2026-05-18): Title-case the cluster label, and suppress clusters
   // where the canonical name is missing AND the member names look like state
@@ -3173,20 +3275,20 @@ async function renderDataQualityPage() {
     return true;
   });
   const sections = [
-    { title: 'Duplicate Candidates', items: _qaFilteredDupes, render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(_qaTitleCase(item.canonical_name || '') || 'Unnamed')}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.duplicate_count || item.count || 0} matches</span></div></div><div class="q-item-meta">${(item.entity_names || []).map(esc).join(' · ')}</div><div class="q-actions"><button class="q-action" onclick="qualityAddAlias(${jsStringArg(item.entity_ids?.[0])}, ${jsStringArg(item.canonical_name || item.entity_names?.[0] || '')})">Add Alias</button><button class="q-action" onclick="qualityMergeDuplicate(${jsStringArg(JSON.stringify(item.entity_ids || []))}, ${jsStringArg(JSON.stringify(item.entity_names || []))})">Merge First Pair</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Review duplicate entity group: ${item.canonical_name || 'unnamed'}`)})">Create Follow-up</button></div></div>` },
-    { title: 'Unlinked Entities', items: detail.unlinked_entities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-item-meta">${esc([item.city, item.state].filter(Boolean).join(', '))}</div><div class="q-actions"><button class="q-action" onclick="navTo('pageEntities')">Review</button><button class="q-action" onclick="qualityLinkIdentity(${jsStringArg(item.id)}, ${jsStringArg(item.name || 'entity')})">Link Identity</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Link external identity for ${item.name || 'entity'}`)})">Create Follow-up</button></div></div>` },
-    { title: 'Stale Identities', items: detail.stale_identities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.entity_name || item.external_id)}</span><div class="q-item-badges">${item.source_system ? typeBadge(item.source_system) : ''}</div></div><div class="q-item-meta">${freshnessHTML(item.last_synced_at)}</div><div class="q-actions"><button class="q-action" onclick="qualitySetPrecedence('*', ${jsStringArg(item.source_system || '')}, 60)">Prefer Source</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Refresh stale identity for ${item.entity_name || item.external_id || 'entity'}`)})">Create Follow-up</button></div></div>` },
-    { title: 'Low Completeness', items: detail.low_completeness || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.completeness_score || 0}% complete</span></div></div><div class="q-item-meta">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div><div class="q-actions"><button class="q-action" onclick="qualityAddAlias(${jsStringArg(item.id)}, ${jsStringArg(item.name || '')})">Add Alias</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Enrich low-completeness entity: ${item.name || 'entity'}`)})">Create Follow-up</button></div></div>` },
-    { title: 'Orphaned Actions', items: detail.orphaned_actions || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.title)}</span><div class="q-item-badges">${statusBadge(item.status)}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-actions"><button class="q-action primary" onclick="navTo('pageTeamQueue')">Review Queue</button></div></div>` }
+    { title: 'Duplicate Candidates', items: _qaFilteredDupes, render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(_qaTitleCase(item.canonical_name || '') || 'Unnamed')}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.duplicate_count || item.count || 0} matches</span></div></div><div class="q-item-meta">${(item.entity_names || []).map(esc).join(' · ')}</div><div class="q-actions"><button class="dq-deeplink" onclick="dqDeepLink('renderFederatedLane','merge_duplicate_entities')">Merge in Decision Center → Duplicate entities →</button></div></div>` },
+    { title: 'Unlinked Entities', items: detail.unlinked_entities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-item-meta">${esc([item.city, item.state].filter(Boolean).join(', '))}</div><div class="q-actions"><button class="dq-deeplink" onclick="navTo('pageEntities')">Link in Entities →</button></div></div>` },
+    { title: 'Stale Identities', items: detail.stale_identities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.entity_name || item.external_id)}</span><div class="q-item-badges">${item.source_system ? typeBadge(item.source_system) : ''}</div></div><div class="q-item-meta">${freshnessHTML(item.last_synced_at)}</div><div class="q-actions"><button class="dq-deeplink" onclick="dqDeepLink('renderFederatedLane','provenance_conflict')">Resolve in Decision Center → Data conflicts →</button></div></div>` },
+    { title: 'Low Completeness', items: detail.low_completeness || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.completeness_score || 0}% complete</span></div></div><div class="q-item-meta">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div><div class="q-actions"><button class="dq-deeplink" onclick="navTo('pageEntities')">Enrich in Entities →</button></div></div>` },
+    { title: 'Orphaned Actions', items: detail.orphaned_actions || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.title)}</span><div class="q-item-badges">${statusBadge(item.status)}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-actions"><button class="dq-deeplink" onclick="navTo('pageTeamQueue')">Review in Team Queue →</button></div></div>` }
   ];
 
   html += '<div class="widget"><div class="widget-title">Source Precedence</div>';
-  html += `<div class="q-item"><div class="q-item-meta">Use this to prefer a source for a field during manual reconciliation.</div><div class="q-actions"><button class="q-action primary" onclick="qualitySetPrecedence()">Set Precedence</button></div></div>`;
+  html += `<div class="q-item"><div class="q-item-meta">Field-source precedence is set when you resolve a provenance conflict.</div><div class="q-actions"><button class="dq-deeplink" onclick="dqDeepLink('renderFederatedLane','provenance_conflict')">Resolve conflicts in Decision Center →</button></div></div>`;
   if (!precedenceRows.length) {
     html += '<div class="ops-empty">No overrides configured</div>';
   } else {
     precedenceRows.slice(0, 10).forEach(row => {
-      html += `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(row.field_name || '*')}</span><div class="q-item-badges"><span class="q-badge pri-high">${Number(row.precedence || 0)}</span></div></div><div class="q-item-meta">${esc(row.source_system || 'unknown')}</div><div class="q-actions"><button class="q-action" onclick="qualitySetPrecedence(${jsStringArg(row.field_name || '*')}, ${jsStringArg(row.source_system || '')}, ${Number(row.precedence || 50)})">Edit</button></div></div>`;
+      html += `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(row.field_name || '*')}</span><div class="q-item-badges"><span class="q-badge pri-high">${Number(row.precedence || 0)}</span></div></div><div class="q-item-meta">${esc(row.source_system || 'unknown')}</div></div>`;
     });
   }
   html += '</div>';
@@ -4020,6 +4122,10 @@ async function createFollowup(id) {
   if (modalEl) modalEl.classList.add('open');
 }
 
+// Tier 3 Phase 2: route the known-pair entity merge through the ONE shared merge
+// modal (review-shared.js → planMerge → /api/entities?action=merge, which now
+// rides lcc_merge_entity and carries portfolio_facts + identities — no orphans).
+// Falls back to the legacy confirm+post only if the shared modal didn't load.
 async function qualityMergeDuplicate(entityIdsJson, entityNamesJson) {
   let entityIds = [];
   let entityNames = [];
@@ -4027,6 +4133,15 @@ async function qualityMergeDuplicate(entityIdsJson, entityNamesJson) {
   try { entityNames = JSON.parse(entityNamesJson || '[]'); } catch (_) {}
   if (!entityIds || entityIds.length < 2) {
     showToast('Need at least two entities to merge', 'error');
+    return;
+  }
+  if (typeof openMergeModal === 'function') {
+    openMergeModal({
+      kind: 'entity',
+      a: { id: entityIds[0], name: entityNames[0] || entityIds[0] },
+      b: { id: entityIds[1], name: entityNames[1] || entityIds[1] },
+      onDone: function () { if (typeof refreshActiveOpsPage === 'function') refreshActiveOpsPage(); },
+    });
     return;
   }
   const targetId = entityIds[0];
@@ -4385,7 +4500,20 @@ async function submitFollowupModal() {
   }
 }
 
+// Tier 3 Phase 2: route through the ONE shared follow-up component
+// (review-shared.js → planFollowup → /api/actions). The modal captures
+// assignee/due/notes consistently with the other follow-up triggers. Falls back
+// to the legacy fire-and-forget post only if the shared modal didn't load.
 async function createQualityFollowup(title) {
+  if (typeof openFollowupModal === 'function') {
+    openFollowupModal({
+      title: title || '',
+      contextLabel: 'Create a follow-up for this data-quality item.',
+      source: 'data_quality',
+      onDone: function () { if (typeof refreshActiveOpsPage === 'function') refreshActiveOpsPage(); },
+    });
+    return;
+  }
   const res = await opsPost('/api/actions', {
     title,
     action_type: 'follow_up',
