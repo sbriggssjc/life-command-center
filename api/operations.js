@@ -1453,10 +1453,21 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
 async function getCadenceDashboard(req, res, user, workspaceId) {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
   const phase = req.query.phase ? String(req.query.phase).trim() : null;
+  // R34 Unit 2: highest relationship value first (the column the view now
+  // exposes — same source as the priority queue's rank_annual_rent), then
+  // most-overdue. High-value owner relationships lead; brokers/small contacts
+  // fall below — honest ranking, no exclusion.
   let path = 'v_bd_cadence_dashboard?workspace_id=eq.' + pgFilterVal(workspaceId)
-    + '&order=days_overdue.desc.nullslast,next_touch_due.asc.nullslast'
+    + '&order=rank_value.desc.nullslast,days_overdue.desc.nullslast,next_touch_due.asc.nullslast'
     + '&limit=' + limit;
-  if (phase) path += '&phase=eq.' + pgFilterVal(phase);
+  if (phase) {
+    path += '&phase=eq.' + pgFilterVal(phase);
+  } else {
+    // R34 Unit 3: parked/opted-out cadences are not active work — keep them out
+    // of the default dashboard (a paused >180d-overdue row leaves the set).
+    // 'converted' (engaged) and 'dormant' (annual check-in) stay visible.
+    path += '&phase=not.in.(paused,unsubscribed)';
+  }
   const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load cadence dashboard', detail: r.data });
   return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
