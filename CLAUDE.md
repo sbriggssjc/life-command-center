@@ -3011,3 +3011,68 @@ skipped. JS ships on the Railway redeploy; the held docs (Unit 3) + the Decision
 Center rows (Unit 4) are post-deploy/live steps, NOT in this commit. The cleaned/
 reverted records (dia 25312/19530/14365; superseded provenance incl. 25325/25330;
 canonical guaranteed_by edges) were not touched.
+
+## R34 — cadence dashboard value-rank + small hygiene (2026-06-16)
+
+Grounded live before touching anything: the cadence table is HEALTHY — 437
+active cadences, **0 entities with duplicate active cadences** (the "Karinna
+Cassidy appeared twice" was a VIEW fanout, not real dup rows), 0
+`owner_role='broker'` cadences, 1 stale row >180d overdue. So R34 is hygiene +
+presentation, NOT a cleanup. One migration
+(`20260616150000_lcc_r34_cadence_dashboard_value_rank.sql`, LCC Opps, applied
+live) + thin JS (`operations.js` order/filter, `ops.js` render). All three units
+verified live.
+
+### Unit 1 — fanout-proof `v_bd_cadence_dashboard`
+All current joins are 1:≤1 (`v_entity_portfolio_all` is GROUP BY e.id; the
+contact + entity joins are on the PK), so the raw view already returned one row
+per cadence (437=437). Made it an INVARIANT — the SELECT is now `DISTINCT ON
+(c.id)` (+ `ORDER BY c.id`) — so no future join target that isn't unique-per-
+entity can reintroduce fanout. **`v_priority_queue_enriched` carries 153
+duplicate entity_ids and must NEVER be joined to the dashboard naively** — that
+is exactly why Unit 2 does not use it.
+
+### Unit 2 — value-rank the dashboard (the real lever)
+The view had no value column, so the operator couldn't sort by relationship
+value — low-value contacts surfaced at the top of the "ready to send" list. New
+append-only columns: `rank_value` = `COALESCE(NULLIF(portfolio_rollup,0),
+connected_value)` reusing the SAME sources that feed the priority queue's
+`rank_annual_rent` — the portfolio rollup (`v_entity_portfolio_all`, unique) and
+the R17 connected-property value (`lcc_entity_connected_value`, **PK per
+entity** → fanout-safe new LEFT JOIN). `rank_property_count` = the count behind
+whichever value won. The dashboard API/UI orders by `rank_value DESC NULLS
+LAST`, then `days_overdue DESC`. High-value owner relationships now lead
+(Northwestern Mutual $26.1M, Foulger Pratt $24.3M, Jamestown $22.8M, Akridge…);
+brokers/small contacts fall below — **no exclusion, just honest ranking**.
+Genuinely value-less cadences sort NULLS-LAST (no faked rank). The card shows
+`$X (N properties)`. 69/437 carry value (the dominant signal is connected value:
+the cadence owners are CoStar-captured `person`-typed owner contacts with linked
+assets, not portfolio-edge orgs).
+
+### Unit 3 — retire the stale row + light staleness guard
+Paused the single >180d-overdue abandoned onboarding cadence (Steve Gonzalez,
+next_touch_due 2022-11-10 = 1,314 days, last touched 2022-10-13 — historical-
+import dead air) → `phase='paused'`, prior phase + reason stashed in
+`metadata` (reversible, NOT a hard delete). New append-only `review_flag`
+boolean marks any ACTIVE cadence silently >90 days overdue so the UI surfaces a
+"⚠ review" badge — **it surfaces, it does NOT auto-expire** (the goal is to
+prevent a future 1,314-day row, not mass-expire). `getCadenceDashboard` now
+excludes `paused`/`unsubscribed` from the default list (so the paused row leaves
+the active set); `converted` (engaged) and `dormant` (annual) stay visible.
+
+### Verified live (read-only + 1 reversible row) 2026-06-16
+Invariant: `count(*)`=437=`count(distinct cadence_id)`. Steve → `paused`,
+`max_active_overdue` 1314 → **29** (gone from the active set). `review_flag`=0
+(no active row currently >90d overdue — the guard lights when one drifts).
+Dashboard-shape query leads with the high-value owners above, paused row
+excluded. `node --check` clean (operations.js, ops.js); `ls api/*.js | wc -l`=12;
+full suite 969 pass / 0 fail / 6 skipped. Migration additive + cache-or-live
+safe; JS ships on the Railway redeploy. Did NOT touch the cadence engine, the
+reachability gate (R10/R20), or purge any broker cadence.
+
+### Bigger picture (for Scott — NOT in this change)
+R34 fixes the dashboard's ORDER. But the highest-value targets (P-BUYER parents
+like Boyd Watterson Global $163M) are not email-reachable from the cadence
+table — they run the P-BUYER buy-side contact-pick path. The real "first sends"
+lever is working P-BUYER buy-side in-app + R16 SF contact-acquisition for
+high-value owners, not the (already healthy) cadence table.
