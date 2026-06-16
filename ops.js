@@ -2063,9 +2063,18 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'merge_duplicate_entities') {
     const n = c.member_count || ((c.loser_ids || []).length + 1);
+    // Tier-4 Unit 3: flag the SF-link-inheritance bonus so the operator can
+    // prioritize duplicates of an already-SF-linked entity (merge dedups AND
+    // inherits the Salesforce account onto the survivor).
+    const sfBadge = c.sf_inheritance
+      ? '<span class="q-badge type" title="One duplicate already carries a Salesforce account — merging inherits the SF link onto the survivor.">↪ inherits SF link</span>'
+      : '';
+    const sfMeta = c.sf_inheritance
+      ? ' One of these is already linked to a Salesforce account, so the merge also inherits that SF link.'
+      : '';
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.winner_name || c.norm_name || 'Duplicate group') + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + n + ' duplicates</span></div></div>'
-      + '<div class="q-item-meta">' + ((c.loser_ids || []).length) + ' duplicate(s) collapse into this survivor (portfolio + identities + relationships carry over).</div>';
+      + '<div class="q-item-badges">' + sfBadge + '<span class="q-badge">' + n + ' duplicates</span></div></div>'
+      + '<div class="q-item-meta">' + ((c.loser_ids || []).length) + ' duplicate(s) collapse into this survivor (portfolio + identities + relationships carry over).' + sfMeta + '</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'merge\')">Merge duplicates →</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_separate\')">Keep separate</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
