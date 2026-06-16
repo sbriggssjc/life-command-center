@@ -1090,6 +1090,27 @@ async function handleDecisionsList(req, res) {
     }));
     const all = lanes.concat(fed);
     const total = all.reduce((s, l) => s + (Number(l.n) || 0), 0);
+    // Auto-vs-manual split (Tier 3 Phase 2): tally non-open decisions per type so
+    // each lane can show "N need you · M handled". lcc_decisions stays bounded
+    // (seeded-only open rows + the decided/superseded audit trail), so a single
+    // capped pull is cheap. Best-effort — the lane counts above are authoritative.
+    try {
+      const resR = await opsQuery('GET', 'lcc_decisions?status=neq.open&select=decision_type,status&limit=20000');
+      if (resR.ok && Array.isArray(resR.data)) {
+        const byType = {};
+        for (const r of resR.data) {
+          const t = r.decision_type;
+          if (!byType[t]) byType[t] = { resolved: 0, auto_resolved: 0 };
+          byType[t].resolved += 1;
+          if (r.status === 'superseded') byType[t].auto_resolved += 1;
+        }
+        all.forEach((l) => {
+          const b = byType[l.decision_type] || { resolved: 0, auto_resolved: 0 };
+          l.resolved = b.resolved;
+          l.auto_resolved = b.auto_resolved;
+        });
+      }
+    } catch (_e) { /* split is informational; never blocks the summary */ }
     return res.status(200).json({ lanes: all, total });
   }
 
