@@ -864,7 +864,7 @@ const TOOL_HANDLERS = {
 
       const selectCols = [
         'entity_id', 'name', 'vertical', 'priority_band', 'reason', 'days_overdue',
-        'rank_annual_rent', 'source_domain', 'source_property_address',
+        'rank_annual_rent', 'source_domain', 'effective_domain', 'source_property_address',
         'source_property_city', 'source_property_state', 'resolve_true_owner_name',
       ].join(',');
       // The queue is ~1.3k rows (< the 1000-row PostgREST cap per fetch is a
@@ -873,7 +873,11 @@ const TOOL_HANDLERS = {
       // lead, value breaks ties within band.
       let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
         + '&order=rank_annual_rent.desc.nullslast&limit=1000';
-      if (forms) itemsPath += '&source_domain=in.(' + forms.map(enc).join(',') + ')';
+      // R31: filter on effective_domain (= COALESCE(source_domain,
+      // entities.domain)), NOT source_domain — which is NULL on every
+      // owner-entity row, so the old filter returned ~37 of ~545 dia rows. Each
+      // domain is well under the 1000-row fetch cap (dia ~545 / gov ~738).
+      if (forms) itemsPath += '&effective_domain=in.(' + forms.map(enc).join(',') + ')';
 
       // Research-gap universe (the NBA feed) so "what needs to be done" matches
       // what the operator sees — optional/graceful, lives on the domain DBs.
@@ -906,7 +910,7 @@ const TOOL_HANDLERS = {
         reason: r.reason,
         days_overdue: r.days_overdue,
         rank_annual_rent: r.rank_annual_rent,
-        domain: r.source_domain,
+        domain: r.effective_domain || r.source_domain,
         true_owner: r.resolve_true_owner_name || null,
         property: r.source_property_address
           ? { address: r.source_property_address, city: r.source_property_city, state: r.source_property_state }
