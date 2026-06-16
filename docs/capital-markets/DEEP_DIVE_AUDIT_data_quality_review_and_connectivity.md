@@ -188,9 +188,26 @@ Measured live (denominators include the shells, see Finding A):
     intake matcher must EXCLUDE archived/quarantined properties from match candidates (match
     an active property or create one) — same doctrine as the lease-pipeline match guards.
     Fold into Tier 1 or a standalone fix.
-- **Tier 1 — Detector split + auto-resolve.** Split duplicate-address into missing-address
-  / shell / genuine-duplicate; turn on provenance auto-resolve (skip-exclude +
-  same-source). Queues drop ~95%.
+- **Tier 1 — Detector split + provenance auto-resolve + OM-intake guard — ✅ DONE +
+  gate-verified 2026-06-16** (PR `claude/sweet-cannon-o0d6f6`). Verified: dia detector split
+  `duplicate_property` 26 + `missing_address` 16; gov `duplicate_property` 230 +
+  `missing_address` 0; provenance human queue **~16k → 367 cross-source** (+2 same-source
+  riders on a parcel_number record that also carries cross-source — correctly surfaced);
+  skips (12,707) excluded from the human surface, never deleted; Unit 2b root-cause applied
+  (`lcc_merge_field` same-source-same-priority → `refresh`, scoping proven by SQL test — can
+  no longer re-accrue); OM-intake archived guard (718 Robinson St 154 candidates → 1 active).
+  JS (Decision Center cross-source lane, skip exclusion, matcher guard, labels) ships on the
+  Railway redeploy; DB layer already live.
+  - **⚠️ NEW finding surfaced at the gate — gov `expired_lease_not_superseded` = 5,839, an
+    over-firing detector.** Only **136** have a newer co-located lease (genuinely auto-
+    supersedable — gov lacks the dia `auto_supersede_expired_leases()` trigger). The other
+    **5,703 (98%) are expired with NO replacement** — you don't supersede a lease with no
+    successor, so flagging them is a false positive (same over-firing pattern as the
+    duplicate detector). Fix (fold into Tier 1.5 or Tier 2): (a) add a gov auto-supersede
+    trigger for the 136; (b) re-scope the detector to only flag the real supersede
+    candidates; (c) decide what the 5,703 no-replacement expired leases represent
+    (vacant/disposed vs a missing-renewal enrichment gap) — likely a low-priority status
+    signal, not 5,703 human decisions.
 - **Tier 2 — Gated auto-merge** of the genuine (b3) duplicates (needs the merge-function
   hardening first). Tallahassee-class merges happen automatically; only true ambiguity
   reaches a human.
