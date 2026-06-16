@@ -61,14 +61,16 @@ others (null lease number) is a corrupted/placeholder import row. These gov shel
   inflated by ~6,657 un-enrichable junk rows.
 - **Inflate the book** (gov shows 19,148 properties; ~6,657 are junk shells).
 
-**Action (Tier 0, highest leverage, GOV ONLY):** classify + **quarantine** (never hard-
-delete — the project doctrine) the gov junk-shell set by signature: `recorded_owner_id IS
-NULL AND no sale AND no lease AND no listing AND in a ≥10-member same-address cluster`.
-Provenance-tag, set the quarantine status the R23 census/reconcile already understands so
-the LCC mirrors self-prune, exclude from market metrics + the duplicate detector + the
-connectivity denominators, keep reversible. This single action collapses the gov duplicate
-queue, fixes the gov metrics, and de-noises the Data Quality surface. Pair with a root-cause
-trace of which import created them so they stop re-accruing.
+**Action (Tier 0, highest leverage, GOV ONLY):** **the data quarantine is already done** —
+all 6,657 big-cluster junk shells are already `status='archived'`. The actual bug is that
+the review SURFACES don't filter archived: **6,662 of the 6,908 gov duplicate-address
+issues are on archived junk** (only 246 on active properties). So Tier 0 is a surface fix:
+make the duplicate-address detector (`v_data_quality_issues`), the property_merge lane
+source, and the gov market/coverage views EXCLUDE archived — collapsing the gov
+duplicate-address lane from ~6,908 to **~246 active issues** and re-baselining the gov
+metrics. Confirm the R22/R23 reconcile already pruned these from the LCC mirrors (it
+excludes archived). Add an ingest guard so a new junk cluster auto-archives. No data
+re-write — view guards + a detector + root-cause.
 
 **dia is explicitly OUT of Tier 0.** The 4,517 unique-address dia shells are real un-
 enriched clinics (the market universe). They stay in the book; they are a recorded-owner /

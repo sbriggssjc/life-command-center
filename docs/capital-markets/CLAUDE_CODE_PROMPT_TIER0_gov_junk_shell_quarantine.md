@@ -44,25 +44,40 @@ unique-address shells. This is deliberately conservative.
 - Report the BEFORE numbers: gov property count, gov `recorded_owner` coverage %, the gov
   `duplicate_property_address` / property_merge lane count.
 
-## Phase 2 — QUARANTINE (gated, after I verify Phase 1 receipts)
-- **Reversible status, not deletion.** Set a distinct status — prefer a new
-  `status='quarantined_shell'` (so it's separable from legitimately `archived` sold/merged
-  properties) — plus a `metadata.quarantine_reason='tier0_junk_shell_cluster'` and
-  `quarantined_at`. If adding a new status value is heavier than reusing `archived`, use
-  `archived` + the metadata tag, but keep the reason queryable for a clean un-quarantine.
-- **Integrate with the R22/R23 mirror reconcile** so the LCC mirrors self-prune: the gov
-  `v_property_id_census` already exposes `status`; ensure `quarantined_shell` is treated
-  like `archived` (excluded from the KEEP set) so `lcc_property_attributes` /
-  `lcc_property_owner_facts` drop these via the existing daily reconcile — no new mirror
-  logic, reuse R23.
-- **Exclude from the domain surfaces:** the `v_data_quality_issues` duplicate-address
-  detector, the property_merge federated lane source, and any gov market-metric / coverage
-  views must filter out the quarantined status. (Grep the views that read `properties` for
-  market/dup purposes and add the `status NOT IN ('archived','quarantined_shell')` guard.)
-- **Ingest guard:** add a check at the gov property writer (or a `v_data_quality_issues`
-  detector) that flags a NEW ≥10 same-address null-lease-number no-data cluster so this
-  can't silently re-accrue (root-cause from Phase 1 points where).
-- Idempotent migration(s) in `supabase/migrations/government/`; provenance-tagged.
+## Phase 2 — SURFACE EXCLUSION (the data quarantine is ALREADY DONE)
+**Verified live: all 6,657 big-cluster junk shells are already `status='archived'`** (a
+prior round/cron archived them). So Phase 2 does **NOT** re-archive anything. The real bug
+is that the REVIEW SURFACES don't filter archived: **6,662 of the 6,908 gov
+`duplicate_property_address` issues are on archived junk** (only 246 are on active
+properties). Fix the surfaces so archived junk stops appearing as review work:
+- **Do NOT introduce a new status.** Verified live: the entire gov `archived` set IS this
+  junk backfill — all 6,662 archived rows carry `data_source='junk_backfill_archived_
+  2026-06-09'` (6,657 strict shells + 5 near-shells); there are ZERO legitimately-sold/
+  merged archived gov rows to disambiguate from. The discriminator already exists
+  (`status='archived'` + that `data_source`). A new enum value adds status-consumer
+  regression risk for no benefit. Surface exclusion filters on `status='archived'`
+  (unambiguously correct — no real archived to preserve); junk-specific needs (root-cause,
+  ingest guard, un-quarantine) filter on the `data_source` tag.
+- **The duplicate-address detector** (`v_data_quality_issues` and whatever the gov
+  property_merge federated lane reads) must exclude `status='archived'`. This drops the gov
+  duplicate-address lane from ~6,908 to **~246 active-property issues** — the genuine
+  remainder.
+- **Check the 5 near-shells** under the same `data_source` that don't match the strict
+  signature — confirm they're also junk (vs a real property the backfill mis-archived); un-
+  archive any genuine one.
+- **Gov market-metric / coverage / connectivity views** that count `properties` in their
+  denominator must exclude archived, so `recorded_owner` % and the book count re-baseline.
+  (Grep the views reading `properties` for dup/market/coverage and add the guard.)
+- **Confirm the LCC mirrors are already clean** — the R22/R23 reconcile excludes archived,
+  so `lcc_property_attributes` / `lcc_property_owner_facts` should already have dropped
+  these 6,657 ids. Verify (don't rebuild); if any archived shell still has a mirror row,
+  run the existing `lcc_reconcile_mirrors_*`, don't fork new logic.
+- **Ingest guard + root-cause (still do this):** trace which import/`data_source` created
+  the clusters (Phase 1) and add a `v_data_quality_issues` detector (or writer check) that
+  auto-flags/auto-archives a NEW ≥10 same-address null-lease-number no-data cluster, so the
+  junk can't silently re-accrue.
+- Idempotent migration(s) in `supabase/migrations/government/`; no data re-write needed
+  beyond the view guards + the detector.
 
 ## Phase 3 — VERIFY (my independent gate, read-only)
 - Exactly the signature set quarantined (count matches Phase 1); ZERO rows with any
