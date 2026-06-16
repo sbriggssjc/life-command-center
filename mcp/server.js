@@ -76,6 +76,227 @@ function enc(v) {
   return encodeURIComponent(String(v));
 }
 
+// ── DIA domain (optional — Unit 4 dia address fallback) ──────────────────────
+// The MCP server historically configured only OPS + GOV. The gov property
+// fallback (Unit 4) is the live-verified path; the dia leg engages only when a
+// DIA connection is provided, and is a graceful no-op otherwise.
+const DIA_SUPABASE_URL = process.env.DIA_SUPABASE_URL || "";
+const DIA_SUPABASE_KEY =
+  process.env.DIA_SUPABASE_SERVICE_KEY || process.env.DIA_SUPABASE_KEY || "";
+function diaQuery(method, path, body) {
+  return supabaseQuery(DIA_SUPABASE_URL, DIA_SUPABASE_KEY, method, path, body);
+}
+
+// ── R30 discovery-ring helpers ───────────────────────────────────────────────
+
+// Doctrinal priority-band order (mirrors api/admin.js BAND_ORDER). Lower index
+// = more urgent. The pre-aggregated band-counts view and the queue rows are
+// ranked by this, then by value, so the summary leads with the real work.
+const BAND_ORDER = [
+  'P0', 'P0.4', 'P0.5', 'P-BUYER', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7',
+  'P-CONTACT', 'P8',
+];
+function bandRank(b) {
+  const i = BAND_ORDER.indexOf(b);
+  return i === -1 ? BAND_ORDER.length : i;
+}
+
+// Canonical short-form domain mapping. The queue/views + entities.domain use
+// 'dia'/'gov'; agents pass 'dialysis'/'government'/'all'/'both'. Accept BOTH
+// spellings on read so a 'government' filter doesn't silently match nothing
+// (the pre-R30 entities query did `domain=eq.government`, which never matched
+// the canonical 'gov').
+function domainForms(domain) {
+  if (!domain || domain === 'all' || domain === 'both') return null;
+  if (domain === 'government' || domain === 'gov') return ['gov', 'government'];
+  if (domain === 'dialysis' || domain === 'dia') return ['dia', 'dialysis'];
+  return [domain];
+}
+
+// Lightweight street-address normalizer (mirror of api/_shared/entity-link.js
+// normalizeAddress) so the gov/dia property fallback resolves "350 Rhode Island
+// St" the same way the rest of the app does. Kept local — the MCP server is a
+// standalone deploy and does not import the api/ tree.
+function normalizeAddressLite(addr) {
+  if (!addr) return '';
+  return String(addr).split(',')[0].trim()
+    .replace(/\bStreet\b/gi, 'St').replace(/\bAvenue\b/gi, 'Ave')
+    .replace(/\bBoulevard\b/gi, 'Blvd').replace(/\bDrive\b/gi, 'Dr')
+    .replace(/\bRoad\b/gi, 'Rd').replace(/\bLane\b/gi, 'Ln')
+    .replace(/\bCourt\b/gi, 'Ct').replace(/\bPlace\b/gi, 'Pl')
+    .replace(/\bHighway\b/gi, 'Hwy').replace(/\bParkway\b/gi, 'Pkwy')
+    .replace(/\bCircle\b/gi, 'Cir').replace(/\bTrail\b/gi, 'Trl')
+    .replace(/\s+/g, ' ').toLowerCase();
+}
+
+// A query term is address-like when it leads with a street number — used to
+// decide whether to engage the gov/dia property fallback in search.
+function looksLikeAddress(term) {
+  return /^\s*\d/.test(String(term || ''));
+}
+
+// R13/R25 junk guard: rows the entity graph soft-flagged as structural garbage
+// (RCA "by <broker>" capture stubs, phone/email-embedded names, panel-header
+// bleed-through). Excluded from discovery + name resolution.
+function isJunkEntityRow(e) {
+  const m = e && e.metadata;
+  const v = m && m.junk_name_flagged;
+  return v === true || v === 'true';
+}
+
+function entityHasSf(e) {
+  return (e.external_identities || []).some((x) => x.source_system === 'salesforce');
+}
+
+// Resolve a search/contact NAME to its registered canonical buyer-parent entity
+// via the built R5/R6 machinery (lcc_match_buyer_parent_by_name): "Boyd
+// Watterson" / "Boyd Watterson by CBRE" both resolve to Boyd Watterson Global,
+// never an RCA capture stub. Returns {id, name} or null (graceful on any error).
+async function resolveCanonicalParentId(name) {
+  if (!name) return null;
+  try {
+    const r = await opsQuery('POST', 'rpc/lcc_match_buyer_parent_by_name', { p_name: name });
+    const row = r.ok && Array.isArray(r.data) ? r.data[0] : null;
+    if (row && row.parent_entity_id) {
+      return { id: row.parent_entity_id, name: row.parent_name || null };
+    }
+  } catch { /* graceful — fall through to plain ranking */ }
+  return null;
+}
+
+// Batch-fetch the value signal (rank_annual_rent) for a set of entity ids from
+// the materialized priority queue, so discovery leads with the real entity.
+async function fetchEntityValueMap(ids) {
+  const map = new Map();
+  if (!ids.length) return map;
+  try {
+    const vr = await opsQuery(
+      'GET',
+      `v_priority_queue_enriched?entity_id=in.(${ids.map(enc).join(',')})&select=entity_id,rank_annual_rent`
+    );
+    for (const v of vr.data || []) {
+      const cur = map.get(v.entity_id) || 0;
+      const val = Number(v.rank_annual_rent) || 0;
+      if (val > cur) map.set(v.entity_id, val);
+    }
+  } catch { /* graceful — empty value map, ranking falls through */ }
+  return map;
+}
+
+// Pick the canonical/best entity from a candidate set: drop junk, then rank by
+// value (priority-queue rent) → Salesforce identity → has contact info → name.
+async function chooseBestEntity(rows) {
+  const list = (rows || []).filter((e) => !isJunkEntityRow(e));
+  if (list.length <= 1) return list[0] || null;
+  const valueMap = await fetchEntityValueMap(list.map((e) => e.id));
+  list.sort((a, b) => {
+    const va = valueMap.get(a.id) || 0;
+    const vb = valueMap.get(b.id) || 0;
+    if (vb !== va) return vb - va;
+    const sa = entityHasSf(a) ? 1 : 0;
+    const sb = entityHasSf(b) ? 1 : 0;
+    if (sb !== sa) return sb - sa;
+    const ca = (a.email || a.phone) ? 1 : 0;
+    const cb = (b.email || b.phone) ? 1 : 0;
+    if (cb !== ca) return cb - ca;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+  return list[0];
+}
+
+// Find a domain property by address (raw ILIKE, then normalized). Used by the
+// gov/dia get_property_context fallback when no LCC asset entity exists yet.
+async function findDomainProperty(q, raw, extraSelect = '') {
+  const sel = `property_id,address,city,state${extraSelect ? ',' + extraSelect : ''}`;
+  let r = await q('GET', `properties?address=ilike.*${enc(raw)}*&select=${sel}&limit=1`)
+    .catch(() => ({ data: [] }));
+  if (r.data && r.data[0]) return r.data[0];
+  const norm = normalizeAddressLite(raw);
+  if (norm && norm !== String(raw).toLowerCase()) {
+    r = await q('GET', `properties?address=ilike.*${enc(norm)}*&select=${sel}&limit=1`)
+      .catch(() => ({ data: [] }));
+    if (r.data && r.data[0]) return r.data[0];
+  }
+  return null;
+}
+
+// Unit 4: resolve a property by address straight from the domain DBs when no
+// LCC asset entity exists (gov is widely under-represented as entities — only
+// ~1,899 of ~12k gov properties have an asset entity). Mirrors how the operator
+// console surfaces these. Returns a get_property_context-shaped payload or null.
+async function resolvePropertyByAddressFromDomains(address) {
+  if (GOV_SUPABASE_URL && GOV_SUPABASE_KEY) {
+    const hit = await findDomainProperty(govQuery, address, 'agency');
+    if (hit) {
+      const pid = hit.property_id;
+      const [leases, owners, lead] = await Promise.all([
+        govQuery('GET', `gsa_leases?property_id=eq.${enc(pid)}&select=*&limit=5`).catch(() => ({ data: [] })),
+        govQuery('GET', `ownership_history?property_id=eq.${enc(pid)}&select=*&order=transfer_date.desc&limit=10`).catch(() => ({ data: [] })),
+        govQuery('GET', `prospect_leads?property_id=eq.${enc(pid)}&select=*&limit=1`).catch(() => ({ data: [] })),
+      ]);
+      return {
+        resolved_via: 'gov_property_fallback',
+        note: 'No LCC asset entity for this property yet — resolved directly from the government domain by address.',
+        property: { domain: 'gov', ...hit },
+        entity: null,
+        context_packet: null,
+        gov_data: {
+          gsa_leases: leases.data || [],
+          ownership_history: owners.data || [],
+          prospect_lead: (lead.data && lead.data[0]) || null,
+        },
+      };
+    }
+  }
+  if (DIA_SUPABASE_URL && DIA_SUPABASE_KEY) {
+    const hit = await findDomainProperty(diaQuery, address, 'tenant');
+    if (hit) {
+      const leases = await diaQuery('GET', `leases?property_id=eq.${enc(hit.property_id)}&select=*&limit=5`)
+        .catch(() => ({ data: [] }));
+      return {
+        resolved_via: 'dia_property_fallback',
+        note: 'No LCC asset entity for this property yet — resolved directly from the dialysis domain by address.',
+        property: { domain: 'dia', ...hit },
+        entity: null,
+        context_packet: null,
+        dia_data: { leases: leases.data || [] },
+      };
+    }
+  }
+  return null;
+}
+
+// Unit 4: surface gov/dia domain properties that have no LCC asset entity yet,
+// so an address/name search still finds them. Conservative — address-anchored.
+async function searchDomainProperties(term, max) {
+  const out = [];
+  const pull = async (q, dom, extra) => {
+    try {
+      const r = await q(
+        'GET',
+        `properties?or=(address.ilike.*${enc(term)}*,${extra}.ilike.*${enc(term)}*)` +
+          `&select=property_id,address,city,state,${extra}&limit=${max}`
+      );
+      for (const p of r.data || []) {
+        out.push({
+          kind: 'domain_property',
+          source_domain: dom,
+          property_id: p.property_id,
+          name: p.address,
+          address: p.address,
+          city: p.city,
+          state: p.state,
+          [extra]: p[extra],
+          note: `${dom} property — no LCC entity yet; call get_property_context(address) for full context`,
+        });
+      }
+    } catch { /* graceful */ }
+  };
+  if (GOV_SUPABASE_URL && GOV_SUPABASE_KEY) await pull(govQuery, 'gov', 'agency');
+  if (DIA_SUPABASE_URL && DIA_SUPABASE_KEY) await pull(diaQuery, 'dia', 'tenant');
+  return out;
+}
+
 // ── Tool timing wrapper ──────────────────────────────────────────────────────
 
 async function withTiming(toolName, fn) {
@@ -239,21 +460,80 @@ const TOOL_HANDLERS = {
         return textResult({ error: "Search term must be at least 2 characters" });
       }
 
+      const want = Math.min(limit || 10, 50);
+      const ENTITY_COLS =
+        'id,entity_type,name,domain,city,state,email,phone,address,org_type,asset_type,metadata,external_identities(source_system,source_type,external_id)';
+
+      // Over-fetch so junk rows (R13/R25 soft-flagged capture stubs) don't
+      // consume result slots — they're filtered in JS below.
       let path =
         `entities?or=(name.ilike.*${enc(searchTerm)}*,canonical_name.ilike.*${enc(searchTerm.toLowerCase())}*)` +
-        `&select=id,entity_type,name,domain,city,state,email,phone,address,org_type,asset_type,external_identities(source_system,source_type,external_id)`;
+        `&select=${ENTITY_COLS}`;
 
       if (entity_type) {
         path += `&entity_type=eq.${enc(entity_type)}`;
       }
-      if (domain && domain !== "both") {
-        path += `&domain=eq.${enc(domain)}`;
+      // R30: map agent domain spellings to the canonical entities.domain
+      // ('gov'/'dia'), accepting both forms. The pre-R30 `domain=eq.government`
+      // matched nothing (entities store 'gov').
+      const forms = domainForms(domain);
+      if (forms) {
+        path += `&domain=in.(${forms.map(enc).join(',')})`;
       }
 
-      path += `&limit=${Math.min(limit || 10, 50)}&order=name`;
+      path += `&limit=${Math.min(want * 3, 150)}&order=name`;
 
       const result = await opsQuery("GET", path);
-      const entities = result.data || [];
+      let entities = (result.data || []).filter((e) => !isJunkEntityRow(e));
+
+      // Canonical buyer-parent resolution (R5/R6): float the registered parent
+      // to the top so "Boyd Watterson" leads with Boyd Watterson Global, not a
+      // "boyd watterson by <broker>" stub. Fetch the parent if it isn't already
+      // in the result set.
+      const canonical = await resolveCanonicalParentId(searchTerm);
+      const canonicalId = canonical && canonical.id ? canonical.id : null;
+      if (canonicalId && !entities.some((e) => e.id === canonicalId)) {
+        const cr = await opsQuery("GET", `entities?id=eq.${enc(canonicalId)}&select=${ENTITY_COLS}`)
+          .catch(() => ({ data: [] }));
+        if (cr.data && cr.data[0] && !isJunkEntityRow(cr.data[0])) entities.unshift(cr.data[0]);
+      }
+
+      // Value ranking: pull rank_annual_rent for the matched ids so the real,
+      // valuable entity leads (canonical parent always first).
+      const valueMap = await fetchEntityValueMap(entities.map((e) => e.id));
+      entities.sort((a, b) => {
+        if (canonicalId) {
+          if (a.id === canonicalId && b.id !== canonicalId) return -1;
+          if (b.id === canonicalId && a.id !== canonicalId) return 1;
+        }
+        const va = valueMap.get(a.id) || 0;
+        const vb = valueMap.get(b.id) || 0;
+        if (vb !== va) return vb - va;
+        const sa = entityHasSf(a) ? 1 : 0;
+        const sb = entityHasSf(b) ? 1 : 0;
+        if (sb !== sa) return sb - sa;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+
+      // De-dup by id (the canonical unshift can collide) and trim, annotating
+      // the value signal + canonical flag and stripping raw metadata.
+      const seen = new Set();
+      entities = entities.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)));
+      for (const e of entities) {
+        e.rank_annual_rent = valueMap.has(e.id) ? valueMap.get(e.id) : null;
+        if (canonicalId && e.id === canonicalId) e.is_canonical_parent = true;
+        delete e.metadata;
+      }
+      entities = entities.slice(0, want);
+
+      // Unit 4: gov/dia properties without an LCC asset entity (the majority of
+      // gov) are otherwise invisible to search. Surface them as property hits
+      // when the term is address-like or entity matches are sparse.
+      let properties = [];
+      if ((looksLikeAddress(searchTerm) || entities.length < want) &&
+          (!entity_type || entity_type === 'asset')) {
+        properties = await searchDomainProperties(searchTerm, Math.min(want, 10));
+      }
 
       // Cross-deal tenant/guarantor resolution (Stage B widen): for every
       // org/person match, attach the DEALS where it is the tenant or guarantor,
@@ -291,8 +571,9 @@ const TOOL_HANDLERS = {
 
       return textResult({
         query: searchTerm,
-        count: result.count || entities.length,
+        count: entities.length,
         entities,
+        properties,
       });
     });
   },
@@ -320,6 +601,13 @@ const TOOL_HANDLERS = {
       }
 
       if (!entity) {
+        // Unit 4: no LCC asset entity — fall back to resolving the address
+        // directly against the gov (and dia, if configured) domain DBs, the way
+        // the operator console surfaces gov properties that have no entity yet.
+        if (address) {
+          const fb = await resolvePropertyByAddressFromDomains(address);
+          if (fb) return textResult(fb);
+        }
         return textResult({ error: "Property not found", entity_id, address });
       }
 
@@ -443,26 +731,47 @@ const TOOL_HANDLERS = {
         return textResult({ error: "OPS database not configured" });
       }
 
-      // Resolve entity
+      // Resolve entity. R30: stop landing on junk/fragment stubs — exclude
+      // junk-flagged rows, prefer the registered canonical buyer-parent, and
+      // among remaining candidates pick the highest-value real entity.
       let entity = null;
+      let canonicalResolution = null;
       if (entity_id) {
+        // An id is an id — don't force entity_type=person (a buyer parent is an
+        // organization).
         const res = await opsQuery(
           "GET",
-          `entities?id=eq.${enc(entity_id)}&entity_type=eq.person&select=*,external_identities(*)`
+          `entities?id=eq.${enc(entity_id)}&select=*,metadata,external_identities(*)`
         );
         entity = res.data?.[0] || null;
       } else if (email) {
         const res = await opsQuery(
           "GET",
-          `entities?entity_type=eq.person&email=eq.${enc(email)}&select=*,external_identities(*)&limit=1`
+          `entities?entity_type=eq.person&email=eq.${enc(email)}&select=*,metadata,external_identities(*)&limit=10`
         );
-        entity = res.data?.[0] || null;
+        entity = await chooseBestEntity(res.data);
       } else if (name) {
-        const res = await opsQuery(
-          "GET",
-          `entities?entity_type=eq.person&or=(name.ilike.*${enc(name)}*,canonical_name.ilike.*${enc(name.toLowerCase())}*)&select=*,external_identities(*)&limit=1`
-        );
-        entity = res.data?.[0] || null;
+        // 1) Canonical buyer-parent (R5/R6): "Boyd Watterson" → Boyd Watterson
+        //    Global, never "boyd watterson by cbre".
+        const canonical = await resolveCanonicalParentId(name);
+        if (canonical && canonical.id) {
+          const cr = await opsQuery(
+            "GET",
+            `entities?id=eq.${enc(canonical.id)}&select=*,metadata,external_identities(*)`
+          ).catch(() => ({ data: [] }));
+          if (cr.data && cr.data[0]) {
+            entity = cr.data[0];
+            canonicalResolution = { resolved_to_parent: canonical.name || entity.name };
+          }
+        }
+        // 2) Otherwise, the best non-junk candidate by value (person OR org).
+        if (!entity) {
+          const res = await opsQuery(
+            "GET",
+            `entities?or=(name.ilike.*${enc(name)}*,canonical_name.ilike.*${enc(name.toLowerCase())}*)&select=*,metadata,external_identities(*)&limit=25`
+          );
+          entity = await chooseBestEntity(res.data);
+        }
       }
 
       if (!entity) {
@@ -473,6 +782,7 @@ const TOOL_HANDLERS = {
           email,
         });
       }
+      if (entity.metadata) delete entity.metadata;
 
       const eid = entity.id;
 
@@ -527,6 +837,7 @@ const TOOL_HANDLERS = {
 
       return textResult({
         entity,
+        canonical_resolution: canonicalResolution,
         salesforce_id: sfIdentity?.external_id || null,
         last_touch_date: lastTouch,
         touchpoint_count: touchpoints,
@@ -544,137 +855,202 @@ const TOOL_HANDLERS = {
         return textResult({ error: "OPS database not configured" });
       }
 
-      let path =
-        `action_items?select=id,title,status,priority,due_date,action_type,entity_id,domain,created_at,assigned_to`;
+      // R30 Unit 1: read the OPERATOR'S REAL WORK — the materialized, value-
+      // ranked priority queue (v_priority_queue_enriched) — NOT action_items
+      // (a near-empty legacy table that left this tool blind to the ~1,300-row
+      // queue). Mirrors api/admin.js handlePriorityQueueList.
+      const max = Math.min(limit || 25, 100);
+      const forms = domainForms(domain);
 
-      // Status filter
-      if (status === "pending") {
-        path += `&status=eq.open`;
-      } else if (status === "in_progress") {
-        path += `&status=eq.in_progress`;
-      } else {
-        path += `&status=in.(open,in_progress,waiting)`;
-      }
+      const selectCols = [
+        'entity_id', 'name', 'vertical', 'priority_band', 'reason', 'days_overdue',
+        'rank_annual_rent', 'source_domain', 'source_property_address',
+        'source_property_city', 'source_property_state', 'resolve_true_owner_name',
+      ].join(',');
+      // The queue is ~1.3k rows (< the 1000-row PostgREST cap per fetch is a
+      // risk, so order by value and take the page that matters); fetch ordered
+      // by value, then re-sort by doctrinal band priority in JS so urgent bands
+      // lead, value breaks ties within band.
+      let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
+        + '&order=rank_annual_rent.desc.nullslast&limit=1000';
+      if (forms) itemsPath += '&source_domain=in.(' + forms.map(enc).join(',') + ')';
 
-      // Domain filter
-      if (domain && domain !== "all") {
-        path += `&domain=eq.${enc(domain)}`;
-      }
+      // Research-gap universe (the NBA feed) so "what needs to be done" matches
+      // what the operator sees — optional/graceful, lives on the domain DBs.
+      const govGapP = (GOV_SUPABASE_URL && GOV_SUPABASE_KEY)
+        ? govQuery('GET', 'v_next_best_research?select=*&limit=1').catch(() => ({ count: 0 }))
+        : Promise.resolve({ count: 0 });
+      const diaGapP = (DIA_SUPABASE_URL && DIA_SUPABASE_KEY)
+        ? diaQuery('GET', 'v_next_best_research?select=*&limit=1').catch(() => ({ count: 0 }))
+        : Promise.resolve({ count: 0 });
 
-      path += `&order=priority.asc,due_date.asc.nullslast&limit=${Math.min(limit || 20, 50)}`;
-
-      const result = await opsQuery("GET", path);
-
-      // Also get counts by status for the summary header
-      const [openCount, inProgressCount, waitingCount] = await Promise.all([
-        opsQuery("GET", `action_items?status=eq.open&select=id&limit=0`),
-        opsQuery("GET", `action_items?status=eq.in_progress&select=id&limit=0`),
-        opsQuery("GET", `action_items?status=eq.waiting&select=id&limit=0`),
+      const [itemsR, countsR, govGap, diaGap] = await Promise.all([
+        opsQuery('GET', itemsPath),
+        opsQuery('GET', 'v_priority_queue_band_counts?select=priority_band,n')
+          .catch(() => ({ ok: false, data: null })),
+        govGapP,
+        diaGapP,
       ]);
 
+      if (!itemsR.ok) {
+        return textResult({ error: 'queue_read_failed', detail: itemsR.data });
+      }
+      const all = Array.isArray(itemsR.data) ? itemsR.data : [];
+      // Doctrinal band-priority order; within a band the rank-desc fetch order
+      // is preserved (V8 stable sort).
+      all.sort((a, b) => bandRank(a.priority_band) - bandRank(b.priority_band));
+      const items = all.slice(0, max).map((r) => ({
+        entity_id: r.entity_id,
+        name: r.name,
+        priority_band: r.priority_band,
+        reason: r.reason,
+        days_overdue: r.days_overdue,
+        rank_annual_rent: r.rank_annual_rent,
+        domain: r.source_domain,
+        true_owner: r.resolve_true_owner_name || null,
+        property: r.source_property_address
+          ? { address: r.source_property_address, city: r.source_property_city, state: r.source_property_state }
+          : null,
+      }));
+
+      // Band counts: pre-aggregated view for the unfiltered total (exact); when
+      // a domain filter is set the queue (<1000) is fully fetched, so derive
+      // filtered counts from the items.
+      const bandCounts = {};
+      let total = 0;
+      if (forms) {
+        for (const r of all) {
+          const b = r.priority_band || '?';
+          bandCounts[b] = (bandCounts[b] || 0) + 1;
+          total += 1;
+        }
+      } else if (countsR.ok && Array.isArray(countsR.data)) {
+        for (const r of countsR.data) {
+          const n = Number(r.n) || 0;
+          bandCounts[r.priority_band || '?'] = n;
+          total += n;
+        }
+      }
+      const bands = Object.keys(bandCounts)
+        .sort((a, b) => bandRank(a) - bandRank(b))
+        .map((b) => ({ band: b, n: bandCounts[b] }));
+
       return textResult({
+        source: 'priority_queue',
         summary: {
-          open: openCount.count || 0,
-          in_progress: inProgressCount.count || 0,
-          waiting: waitingCount.count || 0,
+          total,
+          bands,
+          research_gaps: {
+            government: govGap.count || 0,
+            dialysis: diaGap.count || 0,
+          },
         },
-        filters: { domain, status },
-        items: result.data || [],
-        total_matching: result.count || (result.data || []).length,
+        filters: { domain: domain || 'all', status: status || 'all' },
+        items,
       });
     });
   },
 
   get_pipeline_health: async () => {
     return withTiming("get_pipeline_health", async () => {
-      if (!GOV_SUPABASE_URL || !GOV_SUPABASE_KEY) {
-        return textResult({ error: "GOV database not configured — pipeline health unavailable" });
-      }
-
-      // Query ingestion_tracker for recent runs
-      const trackerRes = await govQuery(
-        "GET",
-        `ingestion_tracker?select=id,source,status,started_at,completed_at,records_processed,records_failed,error_message&order=started_at.desc&limit=50`
-      );
-
-      if (!trackerRes.ok || !Array.isArray(trackerRes.data)) {
-        const errMsg = trackerRes.data?.message || trackerRes.data?.error || 'No pipeline data available';
-        return textResult({
-          status: 'unavailable',
-          message: `Pipeline health data not yet available: ${errMsg}`,
-          recommendation: 'Run the GSA pipeline at least once to populate pipeline health data. Use the trigger server at /trigger/gsa-diff.',
-        });
-      }
-      const runs = trackerRes.data;
-
-      // Group by source
-      const bySource = {};
-      for (const run of runs) {
-        const src = run.source || "unknown";
-        if (!bySource[src]) bySource[src] = [];
-        bySource[src].push(run);
-      }
-
-      const lastRunBySource = {};
-      const successRateBySource = {};
-      const failedRuns = [];
-      let oldestSuccessfulRun = null;
-
-      for (const [source, sourceRuns] of Object.entries(bySource)) {
-        lastRunBySource[source] = sourceRuns[0]?.completed_at || sourceRuns[0]?.started_at || null;
-
-        const total = sourceRuns.length;
-        const successes = sourceRuns.filter((r) => r.status === "success" || r.status === "completed").length;
-        successRateBySource[source] = total > 0 ? Math.round((successes / total) * 100) : 0;
-
-        const failures = sourceRuns.filter((r) => r.status === "failed" || r.status === "error");
-        failedRuns.push(...failures.map((r) => ({ ...r, source })));
-
-        // Track oldest successful run
-        const lastSuccess = sourceRuns.find((r) => r.status === "success" || r.status === "completed");
-        if (lastSuccess) {
-          const ts = lastSuccess.completed_at || lastSuccess.started_at;
-          if (!oldestSuccessfulRun || ts < oldestSuccessfulRun) {
-            oldestSuccessfulRun = ts;
-          }
-        }
-      }
-
-      // Build recommendation
       const recommendations = [];
-      for (const [source, lastRun] of Object.entries(lastRunBySource)) {
-        if (!lastRun) {
-          recommendations.push(`${source}: no completed runs found`);
-          continue;
-        }
-        const daysSince = Math.floor(
-          (Date.now() - new Date(lastRun).getTime()) / 86400000
-        );
-        if (daysSince >= 3) {
-          recommendations.push(
-            `${source} last ran ${daysSince} days ago — consider manual trigger`
-          );
-        }
-      }
-      if (failedRuns.length > 0) {
-        recommendations.push(
-          `${failedRuns.length} failed run(s) in recent history — review error messages`
-        );
+      const out = { domains: {}, lcc_health_alerts: [], recommendation: "" };
+
+      // R30 Unit 2: the gov ingestion_tracker columns are run_status /
+      // started_at / finished_at / rows_upserted / rows_errored / error_log /
+      // task_name — NOT status/completed_at/records_*/error_message (the pre-R30
+      // query referenced columns that don't exist, so this tool always returned
+      // "unavailable").
+      const govReady = !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY);
+      const diaReady = !!(DIA_SUPABASE_URL && DIA_SUPABASE_KEY);
+
+      const trackerCols =
+        "source,task_name,run_status,rows_fetched,rows_upserted,rows_errored,error_log,started_at,finished_at";
+      const [govR, diaR, alertsR] = await Promise.all([
+        govReady
+          ? govQuery("GET", `ingestion_tracker?select=${trackerCols}&order=started_at.desc&limit=120`)
+              .catch((e) => ({ ok: false, data: { error: e?.message } }))
+          : Promise.resolve(null),
+        diaReady
+          ? diaQuery("GET", `ingestion_tracker?select=${trackerCols}&order=started_at.desc&limit=120`)
+              .catch((e) => ({ ok: false, data: { error: e?.message } }))
+          : Promise.resolve(null),
+        // LCC Opps automation health — the same open-alert feed the operator
+        // console + cron-health surface use.
+        opsQuery(
+          "GET",
+          "v_cron_health_summary?select=alert_kind,source,severity,summary,detected_at&resolved_at=is.null&order=detected_at.desc&limit=25"
+        ).catch(() => ({ ok: false, data: [] })),
+      ]);
+
+      out.domains.government = govReady
+        ? summarizePipelineRuns(govR, recommendations, "government")
+        : { status: "not_configured" };
+      out.domains.dialysis = diaReady
+        ? summarizePipelineRuns(diaR, recommendations, "dialysis")
+        : { status: "not_configured" };
+
+      out.lcc_health_alerts = (alertsR && Array.isArray(alertsR.data)) ? alertsR.data : [];
+      if (out.lcc_health_alerts.length) {
+        recommendations.push(`${out.lcc_health_alerts.length} open LCC automation alert(s) — review Ops Health`);
       }
 
-      return textResult({
-        last_run_by_source: lastRunBySource,
-        success_rate_by_source: successRateBySource,
-        failed_runs: failedRuns.slice(0, 10),
-        oldest_successful_run: oldestSuccessfulRun,
-        recommendation:
-          recommendations.length > 0
-            ? recommendations.join("; ")
-            : "All pipelines healthy",
-      });
+      out.recommendation = recommendations.length ? recommendations.join("; ") : "All pipelines healthy";
+      return textResult(out);
     });
   },
 };
+
+// Summarize a domain's ingestion_tracker runs into per-pipeline last-run /
+// success-rate / failure rows. Groups by task_name (the human label), reads the
+// real column names. Pushes staleness/failure notes into `recommendations`.
+function summarizePipelineRuns(res, recommendations, label) {
+  if (!res || !res.ok || !Array.isArray(res.data)) {
+    const why = res && res.data && (res.data.message || res.data.error);
+    return { status: "unavailable", detail: why || "no pipeline data" };
+  }
+  const runs = res.data;
+  const SUCCESS = new Set(["completed", "success", "ok", "done"]);
+  const FAIL = new Set(["failed", "error", "errored"]);
+  const byTask = {};
+  for (const run of runs) {
+    const k = run.task_name || run.source || "unknown";
+    (byTask[k] = byTask[k] || []).push(run);
+  }
+  const pipelines = [];
+  const failedRecent = [];
+  for (const [task, list] of Object.entries(byTask)) {
+    const last = list[0];
+    const lastRun = last.finished_at || last.started_at || null;
+    const total = list.length;
+    const succ = list.filter((r) => SUCCESS.has(String(r.run_status || "").toLowerCase())).length;
+    const lastStatus = String(last.run_status || "").toLowerCase();
+    const daysSince = lastRun ? Math.floor((Date.now() - new Date(lastRun).getTime()) / 86400000) : null;
+    const entry = {
+      pipeline: task,
+      source: last.source || null,
+      last_run: lastRun,
+      last_status: last.run_status || null,
+      last_rows_upserted: last.rows_upserted ?? null,
+      last_rows_errored: last.rows_errored ?? null,
+      success_rate_pct: total ? Math.round((succ / total) * 100) : 0,
+      runs_considered: total,
+    };
+    if (FAIL.has(lastStatus)) {
+      entry.last_error = last.error_log || null;
+      failedRecent.push(task);
+    }
+    if (daysSince !== null && daysSince >= 3) {
+      recommendations.push(`${label}: ${task} last ran ${daysSince}d ago`);
+    }
+    pipelines.push(entry);
+  }
+  pipelines.sort((a, b) => String(b.last_run || "").localeCompare(String(a.last_run || "")));
+  if (failedRecent.length) {
+    recommendations.push(`${label}: recent failure(s) — ${failedRecent.slice(0, 5).join(", ")}`);
+  }
+  return { status: pipelines.length ? "ok" : "no_runs", pipelines };
+}
 
 // ── Express HTTP Transport ──────────────────────────────────────────────────
 
