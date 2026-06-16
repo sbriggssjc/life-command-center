@@ -1578,14 +1578,34 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
 // by the value of the property they were captured on (rank_value). `total` is
 // the full workable universe; `items` is the top-N to actually work.
 // ============================================================================
+// R29 Unit 2 — a CONTACT-qualify worklist must contain only real qualifiable
+// contacts. The view already drops junk/orphan-flagged rows, but it can't
+// express the R20 person-name-shape guard, so firms mistyped as persons
+// (entity_type='person' with a firm-shaped / single-token name — Jamestown,
+// Akridge, MetLife …) still leak in and pollute the qualify pile. Exclude them
+// with the SAME looksLikePersonName guard the contact picker / reachability gate
+// use (reuse, don't reinvent). Non-person rows (organizations) pass untouched.
+// Pure + exported so the exclusion is unit-tested.
+export function filterQualifiableContacts(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row) =>
+    String(row && row.entity_type) !== 'person' || looksLikePersonName(row && row.contact_name));
+}
+
 async function getContactQualifyWorklist(req, res, user, workspaceId) {
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  // R28 ordering (emailable first, then by captured-property value) is the
+  // single ordering source. Fetch the full ordered workable page (PostgREST
+  // caps responses at 1000 rows), apply the R29 firm-as-person exclusion, then
+  // slice to `limit` so BOTH `items` and `total` reflect the post-exclusion
+  // universe (honest count — the old `total` counted the leaked firms too).
   const path = 'v_lcc_contact_qualify_worklist?workspace_id=eq.' + pgFilterVal(workspaceId)
     + '&order=has_email.desc,rank_value.desc.nullslast,received_at.asc'
-    + '&limit=' + limit;
-  const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
+    + '&limit=1000';
+  const r = await opsQuery('GET', path, undefined, { countMode: 'none' });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load contact-qualify worklist', detail: r.data });
-  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
+  const qualifiable = filterQualifiableContacts(Array.isArray(r.data) ? r.data : []);
+  return res.status(200).json({ ok: true, items: qualifiable.slice(0, limit), total: qualifiable.length });
 }
 
 // ============================================================================
