@@ -928,19 +928,26 @@ async function fetchFederatedSource(type, cap) {
   }
 
   if (type === 'merge_duplicate_entities') {
-    // R17 Unit 2: high-confidence auto_mergeable duplicate-entity groups. One
-    // row per surviving (winner) entity; merging collapses the loser_ids into it.
-    const r = await opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count'
-      + '&auto_mergeable=eq.true&order=member_count.desc&limit=' + cap);
+    // R17 Unit 2 + Tier-4 Unit 3: high-confidence auto_mergeable duplicate-entity
+    // groups PLUS sf_inheritance groups (a duplicate of an already-SF-linked
+    // entity — merging dedups the graph AND inherits the SF link, since
+    // lcc_merge_entity moves external_identities onto the survivor). Merges stay
+    // HUMAN (no auto-merge cron); the lane verdict is what triggers the merge.
+    // One row per surviving (winner) entity; merging collapses the loser_ids in.
+    const mergeFilter = 'or=(auto_mergeable.eq.true,sf_inheritance.eq.true)';
+    const r = await opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,sf_inheritance,sf_linked_member_count'
+      + '&' + mergeFilter + '&order=sf_inheritance.desc,member_count.desc&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
       subject_ref: 'mergegrp:' + row.winner_id,
       subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
-      rank_value: Number(row.member_count) || 0,
+      // SF-inheritance merges sort first (the bonus dedup+inherit-link win), then by size.
+      rank_value: (row.sf_inheritance === true ? 1000000 : 0) + (Number(row.member_count) || 0),
       context: { winner_id: row.winner_id, winner_name: row.winner_name, norm_name: row.norm_name,
-        loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0 },
+        loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
+        sf_inheritance: row.sf_inheritance === true, sf_linked_member_count: Number(row.sf_linked_member_count) || 0 },
     }));
-    out.total = await opsCnt('v_lcc_merge_candidates?auto_mergeable=eq.true');
+    out.total = await opsCnt('v_lcc_merge_candidates?' + mergeFilter);
     return out;
   }
 
