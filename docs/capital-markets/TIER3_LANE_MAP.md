@@ -88,9 +88,21 @@ collapse to 8 logical lanes keyed by **the question being asked**:
   verdict machinery is untouched. (Domain-DB triage widgets — dia/gov
   `v_data_quality_issues` — keep a unified "Create follow-up" via the shared
   component, since those domain issues have no decision lane to deep-link to.)
-- **Phase 3:** retire the redundant ACTION surfaces behind a feature flag; keep the
-  search/browse surfaces. The map's `merges` flags are how each retired merge
-  button finds the shared modal.
+- **Phase 3 (DONE, this round):** the redundant merge ACTION surfaces route to the
+  ONE shared modal behind the reversible `unified_merge_modal` flag (default ON;
+  flip OFF restores the legacy path). `planMerge` gained a `kind:'contact'`
+  (→ `/api/contacts?action=merge` on the gov `unified_contacts` backend — a
+  genuinely separate concept from entity merge), so the modal now covers all three
+  kinds. **Unified Contacts "Merge Queue"** → the per-pair Merge button opens the
+  shared modal (contact kind) via `cuiMergePair` (flag OFF ⇒ legacy
+  `executeMerge`); the merge-queue LIST + contact search/browse stay intact. The
+  **Entities** surface gained a gated "Merge…" on each card that opens the shared
+  modal in **find-target** mode (side A = the card entity; an inline entity search
+  picks the duplicate) → routes through the canonical `lcc_merge_entity` path; the
+  click-to-view + search/browse are unchanged. With every review lane already in
+  the Decision Center (Phase 2), all manual-review work — including every merge —
+  is now reachable from the consolidated surfaces. The `decision_type` enumeration
+  and the verdict machinery are untouched.
 
 ## Doctrine guardrail (unchanged)
 

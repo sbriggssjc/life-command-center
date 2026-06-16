@@ -784,7 +784,7 @@ function buildMergeQueue() {
         </div>
       </div>
       <div class="uc-merge-actions">
-        <button class="btn-submit" onclick="executeMerge(decodeURIComponent('${encodeURIComponent(m.queue_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_a_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_b_id)}'))">Merge</button>
+        <button class="btn-submit" onclick="cuiMergePair(decodeURIComponent('${encodeURIComponent(m.queue_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_a_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_a_name || m.contact_a_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_b_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_b_name || m.contact_b_id)}'))">Merge</button>
         <button class="btn-cancel" onclick="dismissMergeAction(decodeURIComponent('${encodeURIComponent(m.queue_id)}'))">Dismiss</button>
       </div>
     </div>`;
@@ -803,6 +803,28 @@ async function loadMergeQueue() {
   }
   renderContactsPage();
 }
+
+// Tier 3 Phase 3: route the contact merge through the ONE shared merge modal
+// (review-shared.js → planMerge → /api/contacts?action=merge) so the operator
+// can pick the survivor consistently with entity/property merges. Flag-gated +
+// reversible: with `unified_merge_modal` OFF (or the modal unavailable) it falls
+// back to the legacy immediate merge. The merge-queue LIST + search/browse are
+// unchanged — only the ACTION consolidates.
+function cuiMergePair(queueId, aId, aName, bId, bName) {
+  var flagOn = (typeof checkFlag !== 'function') || checkFlag('unified_merge_modal');
+  if (flagOn && typeof openMergeModal === 'function') {
+    openMergeModal({
+      kind: 'contact',
+      queueId: queueId,
+      a: { id: aId, name: aName || aId },
+      b: { id: bId, name: bName || bId },
+      onDone: function () { _cui.loaded = false; loadMergeQueue(); },
+    });
+    return;
+  }
+  executeMerge(queueId, aId, bId); // legacy path (flag off)
+}
+if (typeof window !== 'undefined') window.cuiMergePair = cuiMergePair;
 
 async function executeMerge(queueId, contactA, contactB) {
   try {

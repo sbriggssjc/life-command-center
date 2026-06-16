@@ -71,11 +71,35 @@ describe('planMerge — property', () => {
   });
 });
 
+describe('planMerge — contact', () => {
+  it('routes to the contacts merge endpoint with keep/merge ids', () => {
+    const p = planMerge({ kind: 'contact', survivor: { id: 'c-keep', name: 'Keep' }, loser: { id: 'c-drop', name: 'Drop' } });
+    assert.equal(p.ok, true);
+    assert.equal(p.endpoint, '/api/contacts?action=merge');
+    assert.deepEqual(p.body, { keep_id: 'c-keep', merge_id: 'c-drop' });
+  });
+
+  it('passes the queue_id through when provided', () => {
+    const p = planMerge({ kind: 'contact', queueId: 'q-9', survivor: { id: 'a' }, loser: { id: 'b' } });
+    assert.equal(p.body.queue_id, 'q-9');
+  });
+
+  it('omits queue_id when absent', () => {
+    const p = planMerge({ kind: 'contact', survivor: { id: 'a' }, loser: { id: 'b' } });
+    assert.equal('queue_id' in p.body, false);
+  });
+
+  it('rejects merging a contact into itself', () => {
+    const p = planMerge({ kind: 'contact', survivor: { id: 'a' }, loser: { id: 'a' } });
+    assert.equal(p.ok, false);
+  });
+});
+
 describe('planMerge — guards', () => {
   it('rejects an unknown kind', () => {
-    const p = planMerge({ kind: 'contact', survivor: { id: UUID_A }, loser: { id: UUID_B } });
+    const p = planMerge({ kind: 'lease', survivor: { id: UUID_A }, loser: { id: UUID_B } });
     assert.equal(p.ok, false);
-    assert.match(p.error, /entity.*property/);
+    assert.match(p.error, /entity.*property.*contact/);
   });
 });
 

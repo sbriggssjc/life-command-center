@@ -47,6 +47,7 @@ const LCC_FLAGS = {
   ops_pages_enabled: true,
   more_drawer_enabled: true,
   freshness_indicators: true,
+  unified_merge_modal: true,
   _loaded: false
 };
 
