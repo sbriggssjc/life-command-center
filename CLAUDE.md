@@ -2882,7 +2882,6 @@ row + the `template_sent` signal; once ≥3 sends/template land,
 `high_performing_templates` populates and the weekly rollup has data; a logged
 reply bumps `emails_replied` and pauses the cadence (`converted`).
 
-<<<<<<< HEAD
 ## R25 — daily-driver UX last-mile + the two-cockpit doctrine (2026-06-15)
 
 The value-ranking backend (R11/R14/R17) was all built and DISPLAYED but didn't drive
@@ -2913,7 +2912,7 @@ separation is intentional. Today = "what data should I connect"; Queue = "who sh
 pursue". Unit 5 was copy/label only (`index.html`/`styles.css`/`app.js`, commit
 `cb4e873`); the property-value ranking + internal `nba`/`next-best-action` identifiers
 were left untouched.
-=======
+
 ## Stage B — location-agreement guard + draft-document policy (2026-06-16)
 
 The corpus lease backfill is COMPLETE and the end-gate held the structural
@@ -3012,4 +3011,3 @@ skipped. JS ships on the Railway redeploy; the held docs (Unit 3) + the Decision
 Center rows (Unit 4) are post-deploy/live steps, NOT in this commit. The cleaned/
 reverted records (dia 25312/19530/14365; superseded provenance incl. 25325/25330;
 canonical guaranteed_by edges) were not touched.
->>>>>>> 09d5238e1de0cda3391f38b161a73f95f3467b24
