@@ -277,3 +277,59 @@ The genuine-duplicate lane (dia 26 + gov 230) is the clean input to **Tier 2**.
 4. Decision Center consolidation (single surface, reusable merge modal, unified follow-up,
    lane rationalization, auto-vs-manual split).
 5. SF-link backfill (A7) + recorded-owner backfill + gov metric wiring, re-baselined.
+
+## Tier 2 — DONE (pure detector re-scoping; no auto-merge, no auto-supersede) — 2026-06-16
+
+Grounded live before any change; the audit's premises were corrected by the data
+and the decision (Scott) is: **Tier 2 ships as detector re-scoping only.** The
+irreversible merge/supersede judgments stay with the human on the existing
+Consolidate / review surfaces. Both migrations are **VIEWS only** — no data was
+mutated, fully reversible.
+
+**Prereq (confirmed LIVE, no work needed):** `gov_merge_property` /
+`dia_merge_property` are the hardened `*_2026_06_16` versions (collision-fallback
+DELETE wrapped in its own `BEGIN…EXCEPTION` → records to `rewired`, never aborts;
+final property DELETE guarded). Every child FK to `sales_transactions` is
+`ON DELETE SET NULL` on both gov + dia.
+
+**Unit 1 — same-address ≠ duplicate.** The Decision-Center merge lane reads
+`v_property_merge_lane`. Re-scoped to the genuine predicate (same real **street**
+address + same operator/agency + ≤1 distinct non-null lease/CMS identity + group
+≤4):
+- **gov `v_property_merge_lane`: 8 → 7 groups.** Relabeled out (into
+  `v_data_quality_issues`): `colocated_multitenant` (15 groups / 28 rows — same
+  address, different agency = multi-tenant federal buildings), `colocated_distinct_lease`
+  (92 groups / 182 rows — distinct GSA leases sharing a building), + 3 city-only
+  address keys excluded by the real-street requirement.
+- **dia `v_property_merge_lane`: 56 → 5 groups.** (`v_property_merge_candidates`
+  had NO operator check.) Relabeled: `colocated_distinct_operator` (co-located
+  distinct clinics), `colocated_distinct_clinic` (same operator, different
+  medicare_id). The dia city-only false-cluster bug (multiple distinct clinics of
+  one operator collapsing under "Los Angeles, CA") is closed by the real-street +
+  operator/CMS gate.
+- Net genuine manual-merge residue = **gov 7 + dia 5 = 12** clean same-address /
+  same-operator pairs → the human Consolidate surface (now FK-unblocked + the
+  hardened merge RPC).
+- **No auto-merge engine** — grounding found 0 *clean* auto-mergeable groups
+  under the strict identity gate (every candidate is either distinct GSA leases,
+  co-located distinct operators, or carries independent sale/financial data on
+  both sides). A blind batch would have merged distinct properties.
+
+**Unit 3 — gov expired-lease detector over-fired.** `expired_lease_not_superseded`
+flagged 5,727, but only 6 have a newer ACTIVE successor lease and even those are a
+different tenant commencing later (the overlapping case dia's
+`auto_supersede_expired_leases()` doctrine refuses to touch). **No gov
+auto-supersede trigger built.** The detector is re-scoped:
+- `expired_no_renewal` (no other active lease on the property) = **5,596** —
+  low-priority status signal (vacated/disposed or missing-renewal enrichment gap).
+- `expired_colocated_active` (property still has an active lease, incl. the 6) =
+  **131** — human review, never auto-supersede.
+- `expired_lease_not_superseded` retired → **~0 actionable supersede.**
+
+**Migrations (idempotent, applied live):**
+- `government-lease/sql/20260616_gov_tier2_rescope_duplicate_and_expired_lanes.sql`
+- `life-command-center/supabase/migrations/dialysis/20260616_dia_tier2_rescope_merge_lane.sql`
+
+After Tier 2 the duplicate + expired-lease lanes are precise: a ~12-item genuine
+manual merge lane + a re-scoped expired-lease surface (status signal + human
+review), with every irreversible decision left to the human.
