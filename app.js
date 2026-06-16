@@ -7301,14 +7301,16 @@ function renderTeamPulse() {
     <div class="pulse-label">Escalations</div>
   </div>`;
 
-  // Sync errors. R25 Unit 3: read the live connector-status count
-  // (window._lccLiveSyncErrors, now populated on the Today path by
-  // loadCanonicalData) and fall back to 0 — NOT canonicalCounts.sync_errors,
-  // which is an all-time row total mislabeled as "current" and contradicted the
-  // Daily Briefing Team Signals tile (live 0 vs stale 2,638 on the same page).
-  const _qaSyncErr = (typeof window._lccLiveSyncErrors === 'number') ? window._lccLiveSyncErrors : 0;
-  html += `<div class="pulse-card${_qaSyncErr > 0 ? ' attention' : ''}" onclick="navTo('pageSyncHealth')">
-    <div class="pulse-val">${_qaSyncErr}</div>
+  // Sync errors. R25 Unit 3 / R29 Unit 1: read the LIVE connector-status count
+  // (`liveSyncErr` = window._lccLiveSyncErrors, /api/sync?action=health
+  // summary.error, populated on the Today path by loadCanonicalData) — the SAME
+  // bounded source the Daily Briefing Team Signals tile uses, so both agree on
+  // one load. NEVER read canonicalCounts.sync_errors here (it was the stale
+  // all-time/4-day source that showed 2,638 then 2,107 on the deployed build);
+  // reuse the single `liveSyncErr` computed above so a future edit can't
+  // reintroduce a divergent source.
+  html += `<div class="pulse-card${liveSyncErr > 0 ? ' attention' : ''}" onclick="navTo('pageSyncHealth')">
+    <div class="pulse-val">${liveSyncErr}</div>
     <div class="pulse-label">Sync Errors</div>
   </div>`;
 
