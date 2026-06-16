@@ -893,13 +893,22 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       const targetEntity = targetRes.data[0];
       const sourceEntity = sourceRes.data[0];
 
-      // Move external identities from source to target
-      await opsQuery('PATCH',
-        `external_identities?entity_id=eq.${source_id}&workspace_id=eq.${workspaceId}`,
-        { entity_id: target_id }
-      );
+      // Canonical merge (Tier 3 Phase 2, 2026-06-16): route through
+      // lcc_merge_entity FIRST — the BD-doctrine merge that PK-safely carries
+      // lcc_entity_portfolio_facts + external_identities and tombstones the
+      // loser. The older hand-rolled path moved aliases/relationships/ops rows
+      // but DROPPED the portfolio edges entirely, silently orphaning BD-graph
+      // data on every merge. We now do BOTH: the RPC owns the BD graph
+      // (portfolio_facts + external_identities), and the PATCHes below move only
+      // the ops tables the RPC does NOT cover — no orphans on either graph.
+      const mergeRpc = await opsQuery('POST', 'rpc/lcc_merge_entity',
+        { p_loser: source_id, p_winner: target_id });
+      if (!mergeRpc.ok) {
+        return res.status(502).json({ error: 'merge_failed', detail: mergeRpc.data });
+      }
 
-      // Move aliases from source to target
+      // Move aliases from source to target (external_identities already moved by
+      // the RPC).
       await opsQuery('PATCH',
         `entity_aliases?entity_id=eq.${source_id}&workspace_id=eq.${workspaceId}`,
         { entity_id: target_id }
@@ -965,15 +974,24 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         occurred_at: new Date().toISOString()
       });
 
-      // Delete source entity (all moved relationships now point to target)
+      // Merges change entity membership (SPE/parent + queue) — refresh the
+      // caches, parity with the Decision Center merge_duplicate_entities path.
+      try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+      // Delete source entity (portfolio + identities now live on target via the
+      // RPC; aliases/relationships/ops rows moved above).
       await opsQuery('DELETE',
         `entities?id=eq.${source_id}&workspace_id=eq.${workspaceId}`
       );
 
+      const mergeStats = (Array.isArray(mergeRpc.data) && mergeRpc.data[0]) ? mergeRpc.data[0] : {};
       return res.status(200).json({
         merged: true,
         target: targetEntity,
         source_removed: sourceEntity,
+        portfolio_edges_moved: mergeStats.portfolio_edges_moved ?? null,
+        external_identities_moved: mergeStats.external_identities_moved ?? null,
         message: `"${sourceEntity.name}" merged into "${targetEntity.name}". Source entity deleted.`
       });
     }

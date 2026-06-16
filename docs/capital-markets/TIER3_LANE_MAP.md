@@ -51,7 +51,13 @@ collapse to 8 logical lanes keyed by **the question being asked**:
 ## Overlap targets this map closes (from the audit)
 
 - **Entity merge in 5 places** → all route through the one `planMerge({kind:'entity'})`
-  → `POST /api/entities?action=merge` (→ `lcc_merge_entity` semantics). Surfaces:
+  → `POST /api/entities?action=merge`. **Phase 2 re-pointed that endpoint at
+  `lcc_merge_entity(p_loser, p_winner)`** — the BD-doctrine merge that PK-safely
+  carries `lcc_entity_portfolio_facts` + `external_identities` and tombstones the
+  loser — plus the ops-table moves (`entity_aliases` / `entity_relationships` /
+  `action_items` / `activity_events` / `watchers`) the RPC does not cover. The
+  OLD hand-rolled body silently **dropped the portfolio edges on every merge**
+  (BD-graph orphan); the unified path no longer does, on either graph. Surfaces:
   Data Quality "Duplicate Candidates", Decision Center `merge_duplicate_entities`,
   `junk_entity_name`, Unified Contacts "Merge Queue", Entities detail panel.
 - **Property merge in 2 places** → `planMerge({kind:'property'})` →
@@ -67,12 +73,21 @@ collapse to 8 logical lanes keyed by **the question being asked**:
 - **Phase 1 (this round):** the map + `planMerge` + `planFollowup` + the shared
   modals exist and are unit-tested. Nothing is removed; every old surface still
   works.
-- **Phase 2:** the Decision Center renders these 8 lanes (auto-resolved vs
-  needs-you split, per-lane open counts in nav); Data Quality becomes a read-only
-  dashboard whose actions deep-link into the matching lane; the merge/follow-up
-  surfaces on Data Quality / Unified Contacts / Entities re-point at the shared
-  components. The `decision_type` enumeration is **not** changed — the map is a UI
-  grouping over the existing types, so the backend verdict machinery is untouched.
+- **Phase 2 (DONE, this round):** the Decision Center renders the 8 grouped lanes
+  (each a residue "N need you" + "M handled" auto-vs-manual split; member
+  sub-lanes preserved — nothing lost), with the total residue surfaced as a nav
+  badge. Counts come straight from `/api/decisions?summary=1` so they match the
+  underlying views exactly. Data Quality is now a **read-only dashboard**: the
+  entity-quality action rows (merge / link / precedence) are deep-links into the
+  matching Decision Center lane, and a "Review work — Decision Center" widget
+  reads the SAME summary endpoint so DQ, the Decision Center, and the nav badge
+  never diverge. The entity-merge endpoint was re-pointed at `lcc_merge_entity`
+  (above); `qualityMergeDuplicate` / `createQualityFollowup` route through the
+  shared modal / follow-up component. The `decision_type` enumeration is **not**
+  changed — the map is a UI grouping over the existing types, so the backend
+  verdict machinery is untouched. (Domain-DB triage widgets — dia/gov
+  `v_data_quality_issues` — keep a unified "Create follow-up" via the shared
+  component, since those domain issues have no decision lane to deep-link to.)
 - **Phase 3:** retire the redundant ACTION surfaces behind a feature flag; keep the
   search/browse surfaces. The map's `merges` flags are how each retired merge
   button finds the shared modal.
