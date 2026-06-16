@@ -84,10 +84,15 @@ export async function stampCadenceContactById(cadenceId, { contactEntityId, sfCo
  * @returns {Promise<{ok:boolean, cadenceId?:string, cadenceOppId?:string|null,
  *                     cadenceNextDue?:string|null, reason?:string, detail?:any}>}
  */
-export async function stampContactOnActiveCadence({ entityId, contactEntityId, sfContactId }) {
+export async function stampContactOnActiveCadence({ entityId, contactEntityId, sfContactId, onlyContactless = false }) {
   if (!contactEntityId && !sfContactId) return { ok: true, reason: 'no_contact_to_stamp' };
+  // R28: onlyContactless restricts the target to a cadence that has no contact
+  // yet, so qualifying a captured contact onto an owner never clobbers an
+  // existing prospecting contact (it only FILLS a contactless cadence).
+  const contactlessFilter = onlyContactless ? '&contact_id=is.null&sf_contact_id=is.null' : '';
   const cadGet = await opsQuery('GET', 'touchpoint_cadence?entity_id=eq.' + pgFilterVal(entityId)
     + '&phase=in.(' + ACTIVE_CADENCE_PHASES.join(',') + ')'
+    + contactlessFilter
     + '&order=next_touch_due.asc.nullslast&select=id,bd_opportunity_id,next_touch_due,metadata&limit=1');
   const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
   if (!cadRow) return { ok: false, reason: 'no_active_cadence' };
