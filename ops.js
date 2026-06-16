@@ -1257,7 +1257,14 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
       null, null
     );
   } else {
+    // Tier 3 Phase 3: entity merge is reachable from the Entities surface via the
+    // ONE shared modal (find-target search picks the duplicate). Gated on
+    // `unified_merge_modal` — flag OFF restores the legacy no-merge-here behavior.
+    const canMerge = (typeof checkFlag !== 'function') || checkFlag('unified_merge_modal');
     filtered.forEach(entity => {
+      const mergeBtn = canMerge
+        ? `<button class="dq-deeplink" style="margin-top:6px" onclick="event.stopPropagation(); entityMergeFrom(decodeURIComponent('${encodeURIComponent(entity.id)}'), decodeURIComponent('${encodeURIComponent(entity.name || '')}'))">Merge…</button>`
+        : '';
       html += `<div class="entity-card" onclick="viewEntity(decodeURIComponent('${encodeURIComponent(entity.id)}'))">
         <div class="entity-card-header">
           <span class="entity-card-name">${esc(entity.name)}</span>
@@ -1269,6 +1276,7 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
           ${entity.city || entity.state ? `<span>${esc([entity.city, entity.state].filter(Boolean).join(', '))}</span>` : ''}
           ${freshnessHTML(entity.updated_at)}
         </div>
+        ${mergeBtn}
       </div>`;
     });
   }
@@ -3941,6 +3949,21 @@ async function renderOpsDataQualityWidgets() {
 
   host.innerHTML = html;
 }
+
+// Tier 3 Phase 3: open the ONE shared merge modal from the Entities surface in
+// find-target mode (side A = this entity; search picks the duplicate). Routes
+// through the canonical lcc_merge_entity path (planMerge → /api/entities?action=merge).
+function entityMergeFrom(entityId, entityName) {
+  if (typeof openMergeModal !== 'function') { showToast('Merge unavailable', 'error'); return; }
+  openMergeModal({
+    kind: 'entity',
+    a: { id: entityId, name: entityName || entityId },
+    findTarget: true,
+    searchEndpoint: '/api/entities?action=search&q=',
+    onDone: function () { if (typeof renderEntitiesPage === 'function') renderEntitiesPage(); },
+  });
+}
+window.entityMergeFrom = entityMergeFrom;
 
 async function viewEntity(entityId) {
   if (!entityId) { showToast('No entity ID', 'error'); return; }

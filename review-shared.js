@@ -99,8 +99,8 @@ function planMerge(opts) {
   var loser = opts.loser || {};
   var sId = survivor.id != null ? String(survivor.id) : '';
   var lId = loser.id != null ? String(loser.id) : '';
-  if (kind !== 'entity' && kind !== 'property') {
-    return { ok: false, error: "merge kind must be 'entity' or 'property'" };
+  if (kind !== 'entity' && kind !== 'property' && kind !== 'contact') {
+    return { ok: false, error: "merge kind must be 'entity', 'property', or 'contact'" };
   }
   if (!sId || !lId) return { ok: false, error: 'survivor and loser ids are required' };
   if (sId === lId) return { ok: false, error: 'cannot merge a record into itself' };
@@ -119,6 +119,19 @@ function planMerge(opts) {
       ok: true, kind: 'entity', method: 'POST',
       endpoint: '/api/entities?action=merge',
       body: { target_id: sId, source_id: lId },
+      confirmText: confirmText,
+    };
+  }
+
+  if (kind === 'contact') {
+    // Unified Contacts merge — a separate backend (unified_contacts in the gov
+    // DB), keyed by unified_id. keep_id = survivor, merge_id = loser.
+    var body = { keep_id: sId, merge_id: lId };
+    if (opts.queueId != null && opts.queueId !== '') body.queue_id = String(opts.queueId);
+    return {
+      ok: true, kind: 'contact', method: 'POST',
+      endpoint: '/api/contacts?action=merge',
+      body: body,
       confirmText: confirmText,
     };
   }
@@ -202,53 +215,110 @@ if (typeof document !== 'undefined') {
       return ov;
     }
 
-    // ── Shared merge modal ──────────────────────────────────────────────────
+    // ── Shared merge modal (entity / property / contact) ────────────────────
     var _mergeState = null;
+    var _KIND_LABEL = { entity: 'entities', property: 'properties', contact: 'contacts' };
+
+    function _mergeCard(s, rec, side) {
+      var isSurv = s.survivorId === String(rec.id);
+      return '<div class="lcc-merge-card' + (isSurv ? ' is-survivor' : '') + '" '
+        + 'onclick="mergeModalSetSurvivor(\'' + _esc(side) + '\')" '
+        + 'style="border:2px solid ' + (isSurv ? 'var(--accent,#003DA5)' : 'var(--border,#ccc)')
+        + ';border-radius:8px;padding:12px;cursor:pointer;flex:1">'
+        + '<div style="font-weight:600">' + _esc(rec.name || rec.id) + '</div>'
+        + '<div style="font-size:12px;color:var(--text2,#888)">' + _esc(String(rec.id)) + '</div>'
+        + (rec.meta ? '<div style="font-size:12px;color:var(--text2,#888);margin-top:4px">' + _esc(rec.meta) + '</div>' : '')
+        + '<div style="font-size:12px;margin-top:6px;font-weight:600;color:' + (isSurv ? 'var(--accent,#003DA5)' : 'var(--text2,#888)') + '">'
+        + (isSurv ? '✓ Keep this (survivor)' : 'Keep this') + '</div></div>';
+    }
 
     function _renderMergeModal() {
       var ov = _ensureOverlay('lccMergeModal');
       var s = _mergeState;
-      var kindLabel = s.kind === 'property' ? 'properties' : 'entities';
-      function card(rec, side) {
-        var isSurv = s.survivorId === String(rec.id);
-        return '<div class="lcc-merge-card' + (isSurv ? ' is-survivor' : '') + '" '
-          + 'onclick="mergeModalSetSurvivor(\'' + _esc(side) + '\')" '
-          + 'style="border:2px solid ' + (isSurv ? 'var(--accent,#003DA5)' : 'var(--border,#ccc)')
-          + ';border-radius:8px;padding:12px;cursor:pointer;flex:1">'
-          + '<div style="font-weight:600">' + _esc(rec.name || rec.id) + '</div>'
-          + '<div style="font-size:12px;color:var(--text2,#888)">' + _esc(String(rec.id)) + '</div>'
-          + (rec.meta ? '<div style="font-size:12px;color:var(--text2,#888);margin-top:4px">' + _esc(rec.meta) + '</div>' : '')
-          + '<div style="font-size:12px;margin-top:6px;font-weight:600;color:' + (isSurv ? 'var(--accent,#003DA5)' : 'var(--text2,#888)') + '">'
-          + (isSurv ? '✓ Keep this (survivor)' : 'Keep this') + '</div></div>';
+      var kindLabel = _KIND_LABEL[s.kind] || 'records';
+      var bodyHtml;
+      if (!s.b) {
+        // Find-target mode: side A known, search for the record to merge.
+        bodyHtml = '<div style="font-size:13px;color:var(--text2,#888);margin-bottom:8px">'
+          + 'Merging <b>' + _esc(s.a.name || s.a.id) + '</b>. Search for the duplicate to merge with it.</div>'
+          + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+          + '<input id="lccMergeSearch" type="text" placeholder="Search by name…" '
+          + 'style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px" '
+          + 'onkeydown="if(event.key===\'Enter\')mergeModalSearch()">'
+          + '<button class="btn-submit" onclick="mergeModalSearch()">Search</button></div>'
+          + '<div id="lccMergeResults"></div>';
+        ov.innerHTML = '<div class="modal"><div class="modal-head"><h3>Merge ' + kindLabel + '</h3>'
+          + '<button class="modal-close" onclick="closeMergeModal()" aria-label="Close">&times;</button></div>'
+          + '<div class="modal-body">' + bodyHtml + '</div>'
+          + '<div class="modal-foot"><button class="btn-cancel" onclick="closeMergeModal()">Cancel</button></div></div>';
+        ov.classList.add('open');
+        return;
       }
+      bodyHtml = '<div style="font-size:13px;color:var(--text2,#888);margin-bottom:12px">'
+        + 'Pick the record to KEEP. The other is merged into it and removed.</div>'
+        + '<div style="display:flex;gap:12px;align-items:stretch">' + _mergeCard(s, s.a, 'a')
+        + '<div style="align-self:center;font-size:20px;color:var(--text2,#888)">&larr;</div>'
+        + _mergeCard(s, s.b, 'b') + '</div>';
       ov.innerHTML = '<div class="modal"><div class="modal-head"><h3>Merge ' + kindLabel + '</h3>'
         + '<button class="modal-close" onclick="closeMergeModal()" aria-label="Close">&times;</button></div>'
-        + '<div class="modal-body"><div style="font-size:13px;color:var(--text2,#888);margin-bottom:12px">'
-        + 'Pick the record to KEEP. The other is merged into it and removed.</div>'
-        + '<div style="display:flex;gap:12px;align-items:stretch">' + card(s.a, 'a')
-        + '<div style="align-self:center;font-size:20px;color:var(--text2,#888)">&larr;</div>'
-        + card(s.b, 'b') + '</div></div>'
+        + '<div class="modal-body">' + bodyHtml + '</div>'
         + '<div class="modal-foot"><button class="btn-cancel" onclick="closeMergeModal()">Cancel</button>'
         + '<button class="btn-submit" id="lccMergeSubmit" onclick="submitMergeModal()">Merge</button></div></div>';
       ov.classList.add('open');
     }
 
-    // openMergeModal({ kind, domain, a:{id,name,meta}, b:{id,name,meta}, survivorId?, onDone? })
+    // openMergeModal({ kind, domain?, queueId?, a:{id,name,meta}, b?:{id,name,meta},
+    //   survivorId?, findTarget?, searchEndpoint?, onDone? })
+    // b omitted + findTarget:true ⇒ search for the record to merge (entity only).
     window.openMergeModal = function (opts) {
       opts = opts || {};
-      if (!opts.a || !opts.b) { _toast('Merge needs two records', 'error'); return; }
+      var kind = (opts.kind === 'property' || opts.kind === 'contact') ? opts.kind : 'entity';
+      if (!opts.a) { _toast('Merge needs a starting record', 'error'); return; }
+      if (!opts.b && !opts.findTarget) { _toast('Merge needs two records', 'error'); return; }
       _mergeState = {
-        kind: opts.kind === 'property' ? 'property' : 'entity',
+        kind: kind,
         domain: opts.domain || null,
-        a: opts.a, b: opts.b,
+        queueId: opts.queueId != null ? opts.queueId : null,
+        a: opts.a, b: opts.b || null,
         survivorId: String((opts.survivorId != null ? opts.survivorId : opts.a.id)),
+        searchEndpoint: opts.searchEndpoint || '/api/entities?action=search&q=',
         onDone: typeof opts.onDone === 'function' ? opts.onDone : null,
       };
       _renderMergeModal();
     };
 
+    window.mergeModalSearch = async function () {
+      var s = _mergeState; if (!s) return;
+      var input = document.getElementById('lccMergeSearch');
+      var q = input ? String(input.value || '').trim() : '';
+      var slot = document.getElementById('lccMergeResults');
+      if (q.length < 2) { if (slot) slot.innerHTML = '<div style="font-size:12px;color:var(--text2,#888)">Type at least 2 characters.</div>'; return; }
+      if (slot) slot.innerHTML = '<div style="font-size:12px;color:var(--text2,#888)">Searching…</div>';
+      var res = (typeof opsApi === 'function') ? await opsApi(s.searchEndpoint + encodeURIComponent(q)) : { ok: false };
+      var rows = (res && res.data && (res.data.entities || res.data.items || (Array.isArray(res.data) ? res.data : []))) || [];
+      rows = rows.filter(function (r) { return String(r.id) !== String(s.a.id); }).slice(0, 12);
+      if (!rows.length) { if (slot) slot.innerHTML = '<div style="font-size:12px;color:var(--text2,#888)">No other records matched.</div>'; return; }
+      _mergeState._cand = rows;
+      var html = '';
+      rows.forEach(function (r, i) {
+        var meta = [r.entity_type, r.domain, [r.city, r.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px">'
+          + '<div><div style="font-weight:600">' + _esc(r.name || r.id) + '</div>'
+          + (meta ? '<div style="font-size:12px;color:var(--text2,#888)">' + _esc(meta) + '</div>' : '') + '</div>'
+          + '<button class="btn-submit" onclick="mergeModalPickTarget(' + i + ')">Select</button></div>';
+      });
+      if (slot) slot.innerHTML = html;
+    };
+
+    window.mergeModalPickTarget = function (i) {
+      var s = _mergeState; if (!s || !s._cand) return;
+      var r = s._cand[i]; if (!r) return;
+      s.b = { id: r.id, name: r.name || r.id, meta: [r.entity_type, r.domain].filter(Boolean).join(' · ') };
+      _renderMergeModal();
+    };
+
     window.mergeModalSetSurvivor = function (side) {
-      if (!_mergeState) return;
+      if (!_mergeState || !_mergeState[side]) return;
       _mergeState.survivorId = String(_mergeState[side].id);
       _renderMergeModal();
     };
@@ -261,10 +331,10 @@ if (typeof document !== 'undefined') {
 
     window.submitMergeModal = async function () {
       var s = _mergeState;
-      if (!s) return;
+      if (!s || !s.b) return;
       var survivor = s.survivorId === String(s.a.id) ? s.a : s.b;
       var loser = s.survivorId === String(s.a.id) ? s.b : s.a;
-      var plan = planMerge({ kind: s.kind, domain: s.domain, survivor: survivor, loser: loser });
+      var plan = planMerge({ kind: s.kind, domain: s.domain, queueId: s.queueId, survivor: survivor, loser: loser });
       if (!plan.ok) { _toast(plan.error, 'error'); return; }
       var btn = document.getElementById('lccMergeSubmit');
       if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
@@ -273,7 +343,7 @@ if (typeof document !== 'undefined') {
         : { ok: false, error: 'opsPost unavailable' };
       if (btn) { btn.disabled = false; btn.textContent = 'Merge'; }
       if (res && res.ok) {
-        _toast(s.kind === 'property' ? 'Properties merged' : 'Entities merged', 'success');
+        _toast((_KIND_LABEL[s.kind] || 'records') + ' merged', 'success');
         var done = s.onDone;
         window.closeMergeModal();
         if (done) done(res);
