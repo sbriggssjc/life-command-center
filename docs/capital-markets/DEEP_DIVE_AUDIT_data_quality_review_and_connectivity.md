@@ -210,9 +210,21 @@ Measured live (denominators include the shells, see Finding A):
     `expired_no_renewal` (status signal); ~133 overlapping → human multi-active-lease lane;
     nothing auto-superseded. Same lesson as the duplicate lane: under correct scoping the
     "auto-resolve" set is ~0; the value is de-noising the over-firing detector.
-- **Tier 2 — Gated auto-merge** of the genuine (b3) duplicates (needs the merge-function
-  hardening first). Tallahassee-class merges happen automatically; only true ambiguity
-  reaches a human.
+- **Tier 2 — duplicate + expired-lease detector re-scope — ✅ DONE + gate-verified
+  2026-06-16** (PRs lcc #1221, government-lease #269). Grounding overturned the auto-merge
+  premise: under strict scoping there were **0** clean auto-merge candidates and **0** clean
+  auto-supersede candidates, so Tier 2 shipped as **pure detector re-scoping (views only, no
+  data mutated, reversible)**. Verified: gov merge lane → 7 genuine groups (`colocated_
+  multitenant` 28 + `colocated_distinct_lease` 182 relabeled out); dia → 5 genuine groups
+  (`colocated_distinct_operator` 98 + `colocated_distinct_clinic` 4 relabeled); gov
+  `expired_lease_not_superseded` retired → `expired_no_renewal` 5,596 + `expired_colocated_
+  active` 131; the 5,839 expired leases UNCHANGED in data (nothing auto-superseded), no
+  property merged. Genuine manual residue = **gov 7 + dia 5 = 12** same-address/same-operator
+  pairs → human Consolidate surface.
+  - **Meta-finding across Tiers 0–2:** every "auto-resolve/auto-merge" set collapsed to ~0
+    under correct strict scoping. The entire value was **de-noising over-firing detectors**,
+    not auto-executing. The irreversible judgments (merge, supersede) correctly stay human on
+    a now-tiny, precise lane.
 - **Tier 3 — Surface consolidation.** Decision Center becomes the single action surface;
   Data Quality becomes a read-only dashboard; one merge modal, one follow-up, ~8 lanes,
   auto-vs-manual split per lane.
