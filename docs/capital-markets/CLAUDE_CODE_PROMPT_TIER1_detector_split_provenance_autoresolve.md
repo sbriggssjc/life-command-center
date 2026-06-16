@@ -51,6 +51,31 @@ conflict stays.
 outcome-truthful, reversible, and bounded (a capped batch first, receipts to me, then the
 rest). Do NOT auto-resolve cross-source.
 
+### Unit 2b — root-cause fix in `lcc_merge_field` (the durability layer — APPLY FIRST)
+The drain clears the existing 2,975 same-source conflicts, but new captures re-mint them
+unless the arbiter itself stops treating a same-source refresh as a conflict. Fix
+`lcc_merge_field`: when **`current_source = attempted_source` AND same priority**, record a
+distinct **`decision='refresh'`** (apply newest-same-source) instead of `'conflict'`.
+**Order: apply this FIRST, then drain** — so the backlog can't refill during the drain.
+Exact scoping (this is the core arbiter — every writer routes through it, so precision is
+mandatory):
+- **ONLY same-source.** A different source disagreeing (even at equal priority) MUST still
+  log `'conflict'` — the genuine 367 cross-source set is untouched.
+- **Respects the priority ladder by construction.** If a higher-priority source
+  (manual_decision@1, curated) is the current authority, then a lower source's attempt has
+  `attempted_source ≠ current_source` → NOT same-source → stays `skip`/`conflict`. A
+  same-source refresh can NEVER override a higher-priority curated/manual value. Prove it.
+- **`refresh` is a distinct decision** (auditable, countable, reversible — superseded prior
+  value retained). In `record_only` fields this only relabels (no data change); in
+  `warn`/`strict` the newest-same-source value now applies (correct refresh behavior).
+- **Skip and cross-source paths unchanged.**
+Tests (mandatory): same-source same-priority → `refresh` (newest applied, no conflict);
+cross-source same-priority → still `conflict`; lower source vs higher-priority current
+authority → still `skip` (not overridden); record_only vs warn/strict behavior asserted.
+Gate: after deploy, a simulated same-source re-capture records `refresh` not `conflict`
+(accrual stops); cross-source still logs `conflict`; a strict higher-priority field stays
+protected.
+
 ## Unit 3 — fix OM-intake matching onto archived/quarantined shells (the active bug)
 Tier 0 found the OM-intake pipeline attached **5 real offerings onto archived junk-shell
 property_ids** on 2026-06-10/11 (e.g. property 18381 = `718 Robinson St`, a junk-cluster
