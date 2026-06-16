@@ -173,10 +173,21 @@ Measured live (denominators include the shells, see Finding A):
 4. Drain the 97 unlinked / 966 stale via the existing entity-link machinery (small).
 
 ## Recommended sequencing (each tier de-noises the next)
-- **Tier 0 — gov junk-shell quarantine** (6,657 big-cluster shells; GOV ONLY). Biggest
-  single unlock: collapses the gov duplicate queue, fixes the gov connectivity denominators,
-  de-inflates the book. Reversible, provenance-tagged, with a root-cause trace of the source
-  import. dia shells are NOT in scope (they're real un-enriched clinics → backfill).
+- **Tier 0 — gov junk-shell surface exclusion — ✅ DONE + gate-verified 2026-06-16**
+  (PR #268). The shells were already archived (`data_source='junk_backfill_archived_
+  2026-06-09'`); the fix was making the surfaces filter `status='archived'`. Verified:
+  dup-address lane **6,908 → 230 (all active)**; archived = **6,657 strict junk, 0 with any
+  owner/lease/sale/listing**; **5 real offerings rescued** (un-archived: 17465/18381/20943/
+  21514/23118 — all active with listings); LCC mirrors already clean (12,482); an
+  auto-quarantine detector + weekly cron prevents re-accrual.
+  **Post-Tier-0 gov baseline:** active 12,451 · archived 6,657 (junk) · cmbs_discovery 38 ·
+  inactive 2 · book 12,491; recorded_owner coverage **67.6% (active)** vs 44.0% (all-status);
+  duplicate-address lane **230** (the genuine remainder → Tier 1/2). dia NOT touched.
+  - **⚠️ Follow-up surfaced (not in Tier 0):** the OM-intake matcher attached 5 real
+    offerings onto archived junk-shell ids on 2026-06-10/11 (after the archive pass). The
+    intake matcher must EXCLUDE archived/quarantined properties from match candidates (match
+    an active property or create one) — same doctrine as the lease-pipeline match guards.
+    Fold into Tier 1 or a standalone fix.
 - **Tier 1 — Detector split + auto-resolve.** Split duplicate-address into missing-address
   / shell / genuine-duplicate; turn on provenance auto-resolve (skip-exclude +
   same-source). Queues drop ~95%.
