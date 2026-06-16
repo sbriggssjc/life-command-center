@@ -8004,7 +8004,9 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
       title: 'Property link approved',
       domain: 'dialysis',
       source_system: 'dia',
-      external_id: String(clinicId),
+      // R35: the dia ASSET identity is the property_id, NOT the clinic CCN.
+      // Passing the CCN here used to mint a (dia, asset, <CCN>) junk identity.
+      external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       metadata: { clinic_id: clinicId, property_id: propertyId, source: 'one_click_candidate' }
     });
@@ -8223,7 +8225,8 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
       title: 'Clinic lead outcome recorded',
       domain: 'dialysis',
       source_system: 'dia',
-      external_id: String(clinicId),
+      // R35: dia ASSET identity is the property_id, not the clinic CCN.
+      external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       metadata: { clinic_id: clinicId, status: status, notes: notes, property_id: propertyId }
     });
@@ -8316,7 +8319,8 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source
       title: 'Research outcome saved',
       domain: 'dialysis',
       source_system: 'dia',
-      external_id: String(clinicId),
+      // R35: dia ASSET identity is the property_id, not the clinic CCN.
+      external_id: String(propId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes, source: source, lease_term: term, annual_rent: rent, rent_per_sf: rentSF }
     });
