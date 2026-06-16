@@ -2881,3 +2881,34 @@ Railway redeploy. After deploy: a draft `Mark sent` writes a `template_sends`
 row + the `template_sent` signal; once ≥3 sends/template land,
 `high_performing_templates` populates and the weekly rollup has data; a logged
 reply bumps `emails_replied` and pauses the cadence (`converted`).
+
+## R25 — daily-driver UX last-mile + the two-cockpit doctrine (2026-06-15)
+
+The value-ranking backend (R11/R14/R17) was all built and DISPLAYED but didn't drive
+in-band display order, and junk polluted the prospecting list. R25 is the last mile of
+presentation (PR #1209, branch `claude/keen-fermat-6cw4sl`): Unit 1 — connect bands
+(P0.4 / P-CONTACT) ordered by `rank_annual_rent DESC NULLS LAST` in `admin.js` so the
+highest-value targets the cards already show sit at the top; Unit 2 —
+`isJunkProspectName()` (`entity-link.js`) + migration `20260615210000` excludes
+`junk_name_flagged` from the P-CONTACT branch of `v_priority_queue_live` (the
+long-deferred R11 follow-up); Unit 3 — both Today sync-error widgets read the bounded
+live count (no more stale all-time 2,638); Unit 4 — the daily briefing no longer shows
+perpetual "Partial · Unavailable" for the unconfigured market-intel feed. DB views for
+Units 1-2 applied live; JS ships on the Railway redeploy of merged `main`.
+
+### NBA doctrine — DECIDED (Scott, 2026-06-15): two distinct cockpits, kept separate
+The Today **"NEXT BEST ACTION"** rail and the Priority Queue **"DO THIS FIRST"** hero led
+with DIFFERENT "first" actions (Today: data-fix tasks ranked by PROPERTY value — agency
+drift, research owner; Queue: P-BUYER outreach ranked by RELATIONSHIP value). This is NOT
+a coherence bug to fix by converging them. **Decision: they answer different questions and
+stay distinct.** The Today rail is structurally a **data-quality gap queue** (reads
+`research_tasks` / data-gap views; it never contains an outreach action), correctly ranked
+by property value — so it was RELABELED to be honest ("Top Data Gaps to Close", subhead
+"Highest-value records missing ownership / agency data") rather than re-ranked. The
+Priority Queue stays the **BD-action cockpit** (who to pursue), value-ranked by
+relationship value, unchanged. **Do NOT** blend outreach into the Today rail, re-rank the
+NBA by BD value, or try to make the two surfaces agree on one "first" action — that
+separation is intentional. Today = "what data should I connect"; Queue = "who should I
+pursue". Unit 5 was copy/label only (`index.html`/`styles.css`/`app.js`, commit
+`cb4e873`); the property-value ranking + internal `nba`/`next-best-action` identifiers
+were left untouched.

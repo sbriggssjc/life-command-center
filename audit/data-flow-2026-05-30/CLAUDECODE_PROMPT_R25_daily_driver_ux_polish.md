@@ -44,6 +44,20 @@ same page. Point both at one source and confirm the real number (the 2,638 is li
 the all-time `ingest_write_failures`/`sf_sync_log` total mislabeled as current — show
 a bounded recent window, consistent with the cron-health 24h convention).
 
+## Unit 3 FOLLOW-UP (verified live 2026-06-15 — only half-landed)
+The redeploy fixed ONE of the two widgets: TEAM SIGNALS "Sync Errors" now reads **0**
+(bounded source, correct). But TEAM PULSE "SYNC ERRORS" still shows **2638** on a
+hard-reloaded page (`?nocache=1`) — so it's a genuinely-missed second widget, NOT a
+browser cache. 2638 matches NO current source in any window (verified live on LCC Opps:
+sf_sync_log errors all-time=117 / 24h=0; ingest_write_failures 24h=482 / 48h=1045 /
+7d=4244 / 30d=48484) — so the TEAM PULSE widget reads a **stale precomputed/cached
+metric** (likely a frozen work-counts / perf-metrics / daily-briefing field), not a live
+query.
+- Find the TEAM PULSE "SYNC ERRORS" value's source (the metrics/pulse endpoint field the
+  TEAM PULSE card renders, in `app.js`/`ops.js` + its API) and point it at the SAME
+  bounded source TEAM SIGNALS now uses (the 24h/recent window, cron-health convention),
+  so both widgets agree. After: both show the same bounded number on one page load.
+
 ## Unit 4 (LOW) — daily-briefing market-intelligence component
 The briefing shows "Partial · Unavailable: global_market_intelligence.structured_payload
 / html_fragment" persistently. Diagnose why that fragment never loads (the
