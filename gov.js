@@ -132,6 +132,13 @@ async function govQuery(table, select, params = {}) {
     return { data: [], count: 0 };
   }
 }
+// Tier-4 Unit 1: expose the REAL govQuery on window (mirrors dialysis.js's
+// `window.diaQuery = diaQuery`). app.js declares a no-op `function govQuery`
+// stub; without this rebind, any surface that calls the global `govQuery`
+// (e.g. ops.js renderDomainHealthSummary) can resolve to the stub and render
+// blank when a stale-cached gov.js is served. Binding here guarantees the real
+// proxy-backed reader wins regardless of script load/cache order.
+window.govQuery = govQuery;
 
 // Gov write service — routes through /api/gov-write
 // (R5-FE-1, 2026-05-20: was /api/data-proxy?_route=gov-write — data-proxy was
