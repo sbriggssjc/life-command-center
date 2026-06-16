@@ -2393,7 +2393,8 @@ async function renderPriorityQueuePage(band) {
   var counts = Array.isArray(data.counts) ? data.counts : [];
   var total = data.total || 0;
   var html = '<div class="ops-header"><h2>Priority Queue</h2>'
-    + '<button class="q-action" onclick="renderCadenceDashboard()">Cadence dashboard →</button></div>';
+    + '<button class="q-action" onclick="renderCadenceDashboard()">Cadence dashboard →</button>'
+    + '<button class="q-action" onclick="renderContactQualifyWorklist()">Qualify contacts →</button></div>';
   html += '<div class="rc-intro">Start here. Your highest-leverage BD targets, most urgent band first. Each row routes straight to the property so you can resolve the owner, confirm the CRM link, and open a lead.</div>';
   // Band filter chips.
   html += '<div class="pq-chips">';
@@ -2929,6 +2930,80 @@ async function renderCadenceDashboard() {
   el.innerHTML = html;
 }
 window.renderCadenceDashboard = renderCadenceDashboard;
+
+// ============================================================================
+// R28 Unit 2 — Contact-qualify worklist (activate captured contacts)
+// Lists the value-ranked v_lcc_contact_qualify_worklist (junk excluded, persons-
+// with-email first). "Qualify →" links the captured person to the property's
+// owner and stamps a contactless cadence, feeding the outreach engine, then the
+// row leaves the pile.
+// ============================================================================
+async function renderContactQualifyWorklist() {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/operations?action=contact_qualify_worklist&limit=50');
+  if (!res.ok || !res.data || !res.data.ok) {
+    el.innerHTML = opsErrorState(res, 'renderContactQualifyWorklist()', 'Could not load the contact-qualify worklist');
+    return;
+  }
+  var items = Array.isArray(res.data.items) ? res.data.items : [];
+  var total = res.data.total != null ? res.data.total : items.length;
+  var html = '<div class="ops-header"><h2>Qualify Captured Contacts</h2>'
+    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div>';
+  html += '<div class="rc-intro">Real captured contacts waiting to be activated. Highest-value first (by the property they were captured on). '
+    + 'Qualifying links the contact to the property owner and feeds it to a cadence that lacked a recipient.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No contacts to qualify. ✓</div>'; el.innerHTML = html; return; }
+  html += '<div class="q-item-meta" style="margin:6px 0">' + esc(String(total)) + ' contact' + (total === 1 ? '' : 's') + ' to qualify</div>';
+  items.forEach(function (it, ix) {
+    var iid = it.inbox_item_id == null ? '' : String(it.inbox_item_id);
+    var ctx = [];
+    if (it.role) ctx.push(esc(it.role));
+    if (it.contact_company) ctx.push(esc(it.contact_company));
+    if (it.contact_email) ctx.push(esc(it.contact_email));
+    else ctx.push('no email');
+    if (it.rank_value != null) {
+      var v = Number(it.rank_value);
+      if (isFinite(v) && v > 0) ctx.push('$' + Math.round(v).toLocaleString() + ' property' + (it.source_domain ? ' (' + esc(it.source_domain) + ')' : ''));
+    }
+    var action = iid
+      ? '<button class="q-action primary" onclick="qualifyContact(' + jsStringArg(iid) + ', this)">Qualify →</button>'
+      : '<span class="q-badge">no id</span>';
+    html += '<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '" data-inbox-id="' + esc(iid) + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.contact_name || 'Contact') + '</span>'
+      + '<div class="q-item-badges">' + (it.has_email ? '<span class="q-badge">email</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc(ctx.join(' · ')) + '</div>'
+      + '<div class="q-actions">' + action + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderContactQualifyWorklist = renderContactQualifyWorklist;
+
+// Qualify one captured contact → link to owner + stamp a contactless cadence.
+async function qualifyContact(inboxItemId, btn) {
+  var card = (btn && btn.closest) ? btn.closest('.q-item') : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Qualifying…'; }
+  var res = await opsPost('/api/operations?action=qualify_contact', { inbox_item_id: inboxItemId });
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast('Could not qualify: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Qualify →'; }
+    return;
+  }
+  var d = res.data;
+  var msg = '✓ Qualified';
+  if (d.cadence_stamped) {
+    msg += d.cadence_stamped.target === 'owner' ? ' — stamped onto the owner’s cadence' : ' — stamped as its own cadence contact';
+  } else if (d.linked) {
+    msg += ' — linked to the owner';
+  }
+  if (card) {
+    var act = card.querySelector('.q-actions');
+    if (act) act.innerHTML = '<span class="q-badge success">' + esc(msg) + '</span>';
+    card.classList.add('q-item-resolved');
+  }
+  showToast(msg, 'success');
+}
+window.qualifyContact = qualifyContact;
 
 // Generate the next-touch email inline (no sending — copy / mailto / mark sent).
 async function cadDraft(cadenceId, entityId, templateId, name, domain, contactEmail, btn) {

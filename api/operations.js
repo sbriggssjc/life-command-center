@@ -228,7 +228,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'watchers':    return await getWatchers(req, res, user, workspaceId);
       case 'buyer_contacts': return await getBuyerContacts(req, res, user, workspaceId);
       case 'cadence_dashboard': return await getCadenceDashboard(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard' });
+      case 'contact_qualify_worklist': return await getContactQualifyWorklist(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, contact_qualify_worklist' });
     }
   }
 
@@ -250,6 +251,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'open_government_buyer': return await bridgeOpenGovernmentBuyer(req, res, user, workspaceId);
       case 'select_buyer_contact': return await bridgeSelectBuyerContact(req, res, user, workspaceId);
       case 'select_prospecting_contact': return await bridgeSelectProspectingContact(req, res, user, workspaceId);
+      case 'qualify_contact':    return await bridgeQualifyContact(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
@@ -1565,6 +1567,143 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
     sf_contact_id: sfContactId, contact_name: contactName, cadence_id: cadenceId,
     sf_task_id: sfTaskId, sf_task_status: sfTaskStatus,
   });
+}
+
+// ============================================================================
+// GET contact_qualify_worklist (R28 Unit 2) — value-ranked captured contacts
+//
+// The ~421 new_contact_qualify inbox rows are real CoStar-captured contacts,
+// connected to the entity graph but never activated. This lists them as a
+// bounded worklist (junk excluded at the view), persons-with-email first then
+// by the value of the property they were captured on (rank_value). `total` is
+// the full workable universe; `items` is the top-N to actually work.
+// ============================================================================
+async function getContactQualifyWorklist(req, res, user, workspaceId) {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const path = 'v_lcc_contact_qualify_worklist?workspace_id=eq.' + pgFilterVal(workspaceId)
+    + '&order=has_email.desc,rank_value.desc.nullslast,received_at.asc'
+    + '&limit=' + limit;
+  const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load contact-qualify worklist', detail: r.data });
+  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
+}
+
+// ============================================================================
+// BRIDGE: Qualify a captured contact (R28 Unit 2) — the "activate" terminal
+//
+// Turns a parked new_contact_qualify inbox row into an active relationship that
+// feeds the (contact-starved) outreach engine, then dispositions the inbox row
+// terminal so it leaves the pile. Reuses the R16/R20 contact-attach machinery:
+//   1. Resolve the OWNER of the property the contact was captured on (owns edge).
+//   2. Link the captured person → owner (associated_with, dupe-guarded).
+//   3. Stamp the contact onto a CONTACTLESS active cadence — the owner's first
+//      (so it never clobbers an existing contact), else the person's OWN cadence
+//      (R20: a person is their own contact), so a real recipient lands on a
+//      cadence that lacked one.
+//   4. Set the inbox row → 'promoted' (the activate terminal) — the guaranteed
+//      effect even when no cadence is stampable; link/stamp are best-effort and
+//      reported (outcome-truthful).
+// ============================================================================
+// Deps-injected core (testable, mirrors performCreRegister / performDocWriteback).
+// deps: { getRow, resolveOwner, linkPerson, stampCadence, dispositionInbox, refreshQueue }
+export async function performContactQualify({ inboxItemId, workspaceId }, deps) {
+  if (!/^[0-9a-fA-F-]{36}$/.test(String(inboxItemId || ''))) {
+    return { status: 400, body: { error: 'inbox_item_id (uuid) is required' } };
+  }
+  const row = await deps.getRow(inboxItemId, workspaceId);
+  if (!row) return { status: 404, body: { error: 'contact_qualify_row_not_found' } };
+  if (row.status !== 'new') {
+    return { status: 200, body: { ok: true, already_qualified: true, status: row.status } };
+  }
+  const personId = row.entity_id;
+  if (!personId) return { status: 400, body: { error: 'inbox row has no entity_id (no contact to qualify)' } };
+
+  const meta = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
+  const propEid = (typeof meta.property_entity_id === 'string' && /^[0-9a-fA-F-]{36}$/.test(meta.property_entity_id))
+    ? meta.property_entity_id : null;
+  const sfContactId = (typeof meta.sf_contact_id === 'string' && meta.sf_contact_id.trim()) ? meta.sf_contact_id.trim() : null;
+
+  // 1. Resolve the owner of the captured property (the cadence-bearing entity).
+  let ownerId = propEid ? await deps.resolveOwner(propEid) : null;
+
+  // 2. Link person → owner (associated_with) — best-effort, dupe-guarded.
+  let linked = false;
+  if (ownerId && ownerId !== personId) {
+    const link = await deps.linkPerson(ownerId, personId);
+    linked = !!(link && link.ok);
+  }
+
+  // 3. Stamp a CONTACTLESS cadence — owner first (never clobbers an existing
+  //    contact), else the person's OWN cadence (R20: a person is their contact).
+  let cadenceStamped = null;
+  if (ownerId) {
+    const s = await deps.stampCadence(ownerId, { contactEntityId: personId, sfContactId, onlyContactless: true });
+    if (s && s.ok && s.cadenceId) cadenceStamped = { target: 'owner', entity_id: ownerId, cadence_id: s.cadenceId };
+  }
+  if (!cadenceStamped) {
+    const s = await deps.stampCadence(personId, { contactEntityId: personId, sfContactId, onlyContactless: true });
+    if (s && s.ok && s.cadenceId) cadenceStamped = { target: 'self', entity_id: personId, cadence_id: s.cadenceId };
+  }
+
+  // 4. Disposition the inbox row terminal (the guaranteed effect). A failed PATCH
+  //    keeps the row 'new' (the link/stamp above are idempotent on a retry).
+  const nowIso = new Date().toISOString();
+  const disp = await deps.dispositionInbox(inboxItemId, {
+    status: 'promoted',
+    triaged_at: nowIso,
+    metadata: Object.assign({}, meta, {
+      contact_qualify: {
+        at: nowIso,
+        linked_owner_entity_id: linked ? ownerId : null,
+        cadence_stamped: cadenceStamped,
+        source: 'r28_unit2',
+      },
+    }),
+    updated_at: nowIso,
+  });
+  if (!disp || !disp.ok) {
+    return { status: 502, body: { error: 'inbox_disposition_failed', detail: disp && disp.detail } };
+  }
+
+  // Staleness hook: a stamped cadence may now be reachable / leave P-CONTACT.
+  if (cadenceStamped && deps.refreshQueue) { try { await deps.refreshQueue(); } catch (_e) { /* soft */ } }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      inbox_item_id: inboxItemId,
+      person_entity_id: personId,
+      owner_entity_id: ownerId,
+      linked,
+      cadence_stamped: cadenceStamped,
+      status: 'promoted',
+    },
+  };
+}
+
+async function bridgeQualifyContact(req, res, user, workspaceId) {
+  const inboxItemId = String((req.body || {}).inbox_item_id || '').trim();
+  const deps = {
+    getRow: async (id, ws) => {
+      const get = await opsQuery('GET', 'inbox_items?id=eq.' + pgFilterVal(id)
+        + '&workspace_id=eq.' + pgFilterVal(ws)
+        + '&source_type=eq.new_contact_qualify'
+        + '&select=id,entity_id,status,metadata&limit=1');
+      return (get.ok && Array.isArray(get.data)) ? (get.data[0] || null) : null;
+    },
+    resolveOwner: async (propEid) => {
+      const own = await opsQuery('GET', 'entity_relationships?to_entity_id=eq.' + pgFilterVal(propEid)
+        + '&relationship_type=eq.owns&select=from_entity_id&limit=1');
+      return (own.ok && Array.isArray(own.data) && own.data[0]) ? (own.data[0].from_entity_id || null) : null;
+    },
+    linkPerson: (ownerId, personId) => linkPersonToEntity({ workspaceId, entityId: ownerId, contactEntityId: personId, role: 'prospecting_contact', via: 'contact_qualify' }),
+    stampCadence: (entityId, args) => stampContactOnActiveCadence(Object.assign({ entityId }, args)),
+    dispositionInbox: (id, patch) => opsQuery('PATCH', 'inbox_items?id=eq.' + pgFilterVal(id) + '&status=eq.new', patch),
+    refreshQueue: () => opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}),
+  };
+  const out = await performContactQualify({ inboxItemId, workspaceId }, deps);
+  return res.status(out.status).json(out.body);
 }
 
 // ============================================================================
