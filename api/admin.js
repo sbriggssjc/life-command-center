@@ -595,6 +595,19 @@ async function handlePriorityQueueList(req, res) {
   const limit = Math.min(300, Math.max(1, parseInt(req.query.limit || '150', 10)));
   const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
 
+  // R31: domain attribution. Filter on `effective_domain` (= COALESCE(
+  // source_domain, entities.domain) on the view), NOT source_domain — which is
+  // NULL on every owner-entity row (P0.4/P0.5/P-CONTACT/P-BUYER/most P7), so a
+  // source_domain filter hid the bulk of each domain's work (dia showed ~37 of
+  // ~545; gov ~448 of ~738). effective_domain is canonical short-form; accept
+  // both spellings on input. 'all'/'both'/empty ⇒ no filter (byte-identical to
+  // the pre-R31 unfiltered page).
+  const domainRaw = req.query.domain ? String(req.query.domain).toLowerCase() : '';
+  const domainFilter = (domainRaw === 'government' || domainRaw === 'gov') ? 'gov'
+                     : (domainRaw === 'dialysis' || domainRaw === 'dia') ? 'dia'
+                     : (domainRaw && domainRaw !== 'all' && domainRaw !== 'both') ? domainRaw
+                     : null;
+
   const selectCols = [
     'entity_id', 'name', 'vertical', 'priority_band', 'reason', 'days_overdue',
     'next_touch_due', 'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
@@ -649,11 +662,16 @@ async function handlePriorityQueueList(req, res) {
     + '&order=' + orderClause
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
+  if (domainFilter) itemsPath += '&effective_domain=eq.' + pgFilterVal(domainFilter);
 
-  // Per-band counts for the chip row. Read the pre-aggregated view so the
-  // 1000-row PostgREST cap can't truncate the tally (QA#3). The view collapses
-  // the queue to one row per band, so a plain select returns every band.
-  const countsPath = 'v_priority_queue_band_counts?select=priority_band,n';
+  // Per-band counts for the chip row. Unfiltered: read the pre-aggregated view
+  // so the 1000-row PostgREST cap can't truncate the tally (QA#3) — the view
+  // collapses the queue to one row per band. Domain-filtered (R31): the
+  // band-counts view isn't domain-aware, so count from the enriched view scoped
+  // to effective_domain (bounded — dia/gov are each well under 1000 rows).
+  const countsPath = domainFilter
+    ? ('v_priority_queue_enriched?select=priority_band&effective_domain=eq.' + pgFilterVal(domainFilter) + '&limit=2000')
+    : 'v_priority_queue_band_counts?select=priority_band,n';
 
   // R7 Phase 0 (2026-06-07): the ~5-7s queue floor is gone. v_priority_queue
   // and its buyer-SPE root are now materialized into cron-refreshed cache
@@ -692,10 +710,18 @@ async function handlePriorityQueueList(req, res) {
   const countMap = {};
   let total = 0;
   if (countsR.ok && Array.isArray(countsR.data)) {
-    for (const r of countsR.data) {
-      const b = r.priority_band || '?';
-      const n = Number(r.n) || 0;
-      countMap[b] = n; total += n;
+    if (domainFilter) {
+      // Domain-filtered source returns one row per queue item — aggregate here.
+      for (const r of countsR.data) {
+        const b = r.priority_band || '?';
+        countMap[b] = (countMap[b] || 0) + 1; total += 1;
+      }
+    } else {
+      for (const r of countsR.data) {
+        const b = r.priority_band || '?';
+        const n = Number(r.n) || 0;
+        countMap[b] = n; total += n;
+      }
     }
   }
   // Stable doctrinal order for the chips.
@@ -704,7 +730,7 @@ async function handlePriorityQueueList(req, res) {
     .sort((a, b) => (BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b)))
     .map(b => ({ band: b, n: countMap[b] }));
 
-  return res.status(200).json({ counts, total, band: band || null, items });
+  return res.status(200).json({ counts, total, band: band || null, domain: domainFilter || null, items });
 }
 
 // ============================================================================
