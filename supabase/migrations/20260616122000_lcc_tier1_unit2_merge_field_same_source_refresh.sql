@@ -1,31 +1,30 @@
 -- ============================================================================
--- TIER 1 · Unit 2 (root-cause) — lcc_merge_field: same-source = refresh, not conflict
+-- TIER 1 · Unit 2b (root-cause) — lcc_merge_field: same-source = refresh, not conflict
 --
 -- Target: LCC Opps (OPS_SUPABASE_URL, ref xengecqvemvfknjvbvrq)
 --
--- ⚠️ HELD — NOT APPLIED LIVE IN THE TIER-1 SESSION. lcc_merge_field is the core
---    shared function every capture path (CoStar sidebar, OM promoter, lease
---    extractor, availability scraper, …) calls. Applying it changes capture-path
---    behavior, so it ships only on Scott's explicit blessing (same posture as the
---    gov true_owner write-back / DECISION_PROVENANCE_LEARN). The one-time backlog
---    is drained separately by lcc_autoresolve_same_source_provenance(); this
---    migration stops the class from RE-ACCRUING going forward.
+-- APPLIED LIVE 2026-06-16 with Scott's blessing (fix-first, then drain). The
+-- scoping is proven by test/sql/tier1_unit2b_merge_field_scoping.sql (run live,
+-- 0 residue): A same-source same-priority diff value -> refresh/WRITE + prior
+-- value retained as a recoverable superseded row; B different source same
+-- priority -> CONFLICT (the 367 cross-source set's mechanism intact); C a lower
+-- source vs a higher-priority current authority -> SKIP (manual@1/curated never
+-- overridden); C2 a higher-priority source refreshing itself -> refresh.
 --
--- The fix: at equal priority with a DIFFERENT value, the function used to always
+-- Why: at equal priority with a DIFFERENT value, the function used to always
 -- record 'conflict'. But when the incoming source is the SAME as the current
 -- authoritative source, that is the source disagreeing with its OWN earlier
 -- capture — a refresh, where the newest value should win — not a cross-source
--- dispute needing human judgment. So same-source same-priority different-value
--- now resolves to 'write' (newest wins, supersedes the prior same-source write);
--- only a DIFFERENT same-priority source still records 'conflict'.
+-- dispute. So same-source same-priority different-value now resolves to 'write'
+-- (newest wins, supersedes the prior same-source write, which stays recoverable);
+-- only a DIFFERENT same-priority source still records 'conflict'. The one-time
+-- backlog was drained by lcc_autoresolve_same_source_provenance(); this stops the
+-- class from RE-ACCRUING going forward.
 --
 -- Strictly a reduction in false conflicts: cross-source behavior is byte-identical;
 -- the higher/lower-priority branches are untouched. Reversible (re-deploy prior
--- def). After this lands, future captures stop producing same-source conflicts,
--- so Tier-1 Unit-1's cross-source-only lane stays clean without re-accrual.
---
--- Idempotent (CREATE OR REPLACE). Body reproduces the live function verbatim and
--- changes ONLY the `v_new_priority = v_current_priority` branch.
+-- def). Idempotent (CREATE OR REPLACE). Body reproduces the live function verbatim
+-- and changes ONLY the `v_new_priority = v_current_priority` branch.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.lcc_merge_field(
