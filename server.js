@@ -11,7 +11,7 @@ import express from 'express';
 import cors from 'cors';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, extname } from 'path';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -53,13 +53,20 @@ const app = express();
 // Railway injects RAILWAY_GIT_COMMIT_SHA / RAILWAY_DEPLOYMENT_ID; if neither is
 // present (local/other host) we fall back to server-start time, which still
 // changes on every restart/redeploy.
-const DEPLOY_VERSION = (
-  process.env.RAILWAY_GIT_COMMIT_SHA ||
-  process.env.RAILWAY_DEPLOYMENT_ID ||
-  process.env.RENDER_GIT_COMMIT ||
-  process.env.SOURCE_VERSION ||
-  String(Date.now())
-).slice(0, 12);
+// R32 (2026-06-16): also record WHICH source supplied the token so the
+// /version diagnostics endpoint can confirm the deploy is git-pinned (and not
+// silently falling back to a boot timestamp, which still busts caches but isn't
+// stable across replicas).
+const [DEPLOY_VERSION_RAW, DEPLOY_VERSION_SOURCE] = (
+  (process.env.RAILWAY_GIT_COMMIT_SHA && [process.env.RAILWAY_GIT_COMMIT_SHA, 'railway_git_commit_sha']) ||
+  (process.env.RAILWAY_DEPLOYMENT_ID && [process.env.RAILWAY_DEPLOYMENT_ID, 'railway_deployment_id']) ||
+  (process.env.RENDER_GIT_COMMIT && [process.env.RENDER_GIT_COMMIT, 'render_git_commit']) ||
+  (process.env.SOURCE_VERSION && [process.env.SOURCE_VERSION, 'source_version']) ||
+  [String(Date.now()), 'boot_timestamp']
+);
+const DEPLOY_VERSION = DEPLOY_VERSION_RAW.slice(0, 12);
+// Expose for any handler / template that wants the active asset version.
+app.locals.assetVersion = DEPLOY_VERSION;
 
 // Serve index.html with (a) every asset `?v=…` rewritten to DEPLOY_VERSION and
 // (b) a no-cache header on the HTML itself, so a redeployed bundle is always
@@ -352,6 +359,19 @@ app.all('/api/intake-share', intakeShareHandler);
 // ── Legal pages (required by Teams manifest) ──────────────────────────────
 // ── Health check — no auth, no DB, used by Railway deployment healthcheck ──
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
+
+// R32 (2026-06-16): deploy-version diagnostics. Confirms which token the served
+// `?v=` cache-buster is stamped with and whether it's git-pinned. `no-store` so
+// the endpoint itself is never cached.
+app.get('/version', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json({
+    version: DEPLOY_VERSION,
+    source: DEPLOY_VERSION_SOURCE,
+    git_pinned: DEPLOY_VERSION_SOURCE !== 'boot_timestamp',
+    ts: Date.now()
+  });
+});
 app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
 
 app.get('/privacy', (req, res) => res.type('text/plain').send(
@@ -399,9 +419,31 @@ app.get('/office-addins/:addin/manifest.xml', (req, res) => {
 // index:false so express.static never serves the *unstamped* index.html — the
 // explicit `/` + `/index.html` routes above (and the SPA fallback below) own
 // index delivery and inject the deploy-version cache-buster (R4-D #4).
+//
+// R32 (2026-06-16): belt-and-suspenders cache headers on the app's own JS/CSS.
+// The deploy-stamped URLs (`/app.js?v=<sha>`) change every deploy, so a
+// versioned request is safe to cache hard (immutable, 1yr). An UNversioned
+// request (`/app.js` with no `?v=`) must always revalidate so a redeploy is
+// never shadowed by a stale heuristic cache — correctness over efficiency.
+// express.static's own cacheControl is disabled so the header set here is the
+// authoritative one (`send` only sets Cache-Control when cacheControl:true).
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const ext = extname(req.path).toLowerCase();
+  if (ext === '.js' || ext === '.css') {
+    res.setHeader(
+      'Cache-Control',
+      req.query.v
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache, must-revalidate'
+    );
+  }
+  next();
+});
 app.use(express.static(__dirname, {
   index: false,
-  extensions: ['html']
+  extensions: ['html'],
+  cacheControl: false
 }));
 
 // SPA fallback — serve the version-stamped index.html for unmatched routes
