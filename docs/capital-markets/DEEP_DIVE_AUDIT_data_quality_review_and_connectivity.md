@@ -89,8 +89,11 @@ property_merge lane) mixes:
   n, BOTH sides carrying real data (the Tallahassee class: 1530 Commonwealth, GSA-ICE,
   4 sales). **This** is the auto-merge-safe set, and it is small.
 
-**Action:** split the one noisy detector into three precise lanes; only (b3) is "merge",
-and (b3) is safe to **auto-merge** under a strict gate (below).
+**Action:** split the one noisy detector into three precise lanes; only (b3) is "merge".
+**Tier-2 grounding update (2026-06-16):** (b3) turned out to be ~9 groups total (gov 7 +
+dia 2), and even the cleanest (Tallahassee) combines split sales on merge — so it is NOT
+auto-merged; it's a tiny clean MANUAL lane on the Consolidate surface. Auto-merge deferred
+(0 truly-clean candidates). The big win is the detector re-scope, not an auto-merge engine.
 
 ## Finding C — auto-merge policy (do this, but gated)
 Scott's ask — don't make a human click "merge" on an obvious identical-address duplicate —
@@ -199,15 +202,14 @@ Measured live (denominators include the shells, see Finding A):
   JS (Decision Center cross-source lane, skip exclusion, matcher guard, labels) ships on the
   Railway redeploy; DB layer already live.
   - **⚠️ NEW finding surfaced at the gate — gov `expired_lease_not_superseded` = 5,839, an
-    over-firing detector.** Only **136** have a newer co-located lease (genuinely auto-
-    supersedable — gov lacks the dia `auto_supersede_expired_leases()` trigger). The other
-    **5,703 (98%) are expired with NO replacement** — you don't supersede a lease with no
-    successor, so flagging them is a false positive (same over-firing pattern as the
-    duplicate detector). Fix (fold into Tier 1.5 or Tier 2): (a) add a gov auto-supersede
-    trigger for the 136; (b) re-scope the detector to only flag the real supersede
-    candidates; (c) decide what the 5,703 no-replacement expired leases represent
-    (vacant/disposed vs a missing-renewal enrichment gap) — likely a low-priority status
-    signal, not 5,703 human decisions.
+    over-firing detector (handled in Tier 2 Unit 3).** Tightening scope: 136 have any newer
+    co-located lease → **6** have a strict successor (commencement > expiration) → **0** of
+    those are the same tenant. So the clean auto-supersede population is **0** (the 6 are
+    different-tenant = ambiguous re-let/multi-tenant, which the dia doctrine leaves for
+    humans). Fix = detector re-scope, NOT auto-supersede: 5,703 no-replacement → relabel
+    `expired_no_renewal` (status signal); ~133 overlapping → human multi-active-lease lane;
+    nothing auto-superseded. Same lesson as the duplicate lane: under correct scoping the
+    "auto-resolve" set is ~0; the value is de-noising the over-firing detector.
 - **Tier 2 — Gated auto-merge** of the genuine (b3) duplicates (needs the merge-function
   hardening first). Tallahassee-class merges happen automatically; only true ambiguity
   reaches a human.
