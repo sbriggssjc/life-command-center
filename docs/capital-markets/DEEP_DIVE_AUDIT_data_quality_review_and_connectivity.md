@@ -226,15 +226,22 @@ JS ships on the Railway redeploy of merged `main`.
   - New `v_field_provenance_conflict_classified` classifies each conflict; the
     Decision Center lane + the `data_conflicts` headline now read
     `conflict_class=cross_source` → **the human queue is 367** (was ~16k).
-  - `lcc_autoresolve_same_source_provenance(limit, dry_run, batch)` drains the
+  - `lcc_autoresolve_same_source_provenance(limit, dry_run, batch)` drained the
     same-source class (newest-same-source wins; promote/supersede in the
-    provenance log only — no domain write). **852 eligible fields** (= the 3,125
-    rows). Reversible (`lcc_undo_same_source_autoresolve`); proven by a 3-field
-    resolve→undo round-trip (0 residue). **Capped batch run live: 50 fields /
-    150 rows** (same_source 3,125 → 2,975; cross_source 367 untouched). The
-    remaining 802 fields / 2,975 rows are HELD for Scott's go on the full drain.
-  - The `lcc_merge_field` root-cause (same-source same-priority = refresh, not
-    conflict) is committed but **HELD** (core capture function) pending blessing.
+    provenance log only — no domain write). Reversible
+    (`lcc_undo_same_source_autoresolve`); proven by a 3-field resolve→undo
+    round-trip (0 residue). **FULL DRAIN run live (Scott's go 2026-06-16): 852
+    fields / 4,054 rows reversible.** End-state: **same-source pure class = 0**
+    (2 residual rows are riders on `dia.properties.parcel_number` records that
+    ALSO carry a cross-source conflict — correctly left for human judgment);
+    **cross_source = 367 (exact, intact)**; **no_current_authority 249 untouched**;
+    **skip 12,707 un-resolved** (excluded from the human surface, never deleted).
+  - **Unit 2b — `lcc_merge_field` root-cause APPLIED LIVE 2026-06-16 (fix-first,
+    then drain).** same-source same-priority diff value = refresh (newest wins),
+    not conflict; different source still conflicts; a lower source vs a
+    higher-priority authority still skips. Scoping proven by
+    `test/sql/tier1_unit2b_merge_field_scoping.sql` (live, 0 residue). This stops
+    same-source conflicts from re-accruing from new captures.
 - **Unit 3 — OM-intake archived guard.** The matcher excludes
   `status='archived'` gov shells from every candidate query (gov-only, NULL-safe;
   dia has no status column). Verified: "718 Robinson St" collapsed 154 candidates
