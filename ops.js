@@ -2908,7 +2908,14 @@ async function renderCadenceDashboard() {
     var ctx = [esc(it.phase || '—'), 'touch ' + esc(String(it.current_touch != null ? it.current_touch : 0)),
                esc(dueLbl), lastOutcome];
     if (stats.length) ctx.push(stats.join(', '));
-    if (it.total_property_count) ctx.push(esc(String(it.total_property_count)) + ' props');
+    // R34 Unit 2: lead with relationship value (the dashboard is value-ranked).
+    var valStr = _dcMoney(it.rank_value);
+    if (valStr) {
+      var pc = Number(it.rank_property_count);
+      ctx.unshift(valStr + (isFinite(pc) && pc > 0 ? ' (' + pc + ' propert' + (pc === 1 ? 'y' : 'ies') + ')' : ''));
+    } else if (it.total_property_count) {
+      ctx.push(esc(String(it.total_property_count)) + ' props');
+    }
     var tmpl = it.next_touch_template ? String(it.next_touch_template) : '';
     var action;
     if (isEmail && cid && eid && tmpl) {
@@ -2921,9 +2928,12 @@ async function renderCadenceDashboard() {
     } else {
       action = '<span class="q-badge">no cadence id</span>';
     }
+    // R34 Unit 3: surface the >90d-overdue staleness guard so a row can't
+    // silently rot into another 1,314-day cadence (review / re-pace / expire).
+    var reviewBadge = it.review_flag ? '<span class="q-badge pri-high" title="Active cadence > 90 days overdue — review, re-pace, or pause">⚠ review</span>' : '';
     html += '<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '" data-cad-id="' + esc(cid) + '">'
       + '<div class="q-item-header"><span class="q-item-title">' + esc(it.entity_name || 'Cadence') + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(it.next_touch_type || 'email') + '</span></div></div>'
+      + '<div class="q-item-badges">' + reviewBadge + '<span class="q-badge">' + esc(it.next_touch_type || 'email') + '</span></div></div>'
       + '<div class="q-item-meta">' + esc(ctx.join(' · ')) + '</div>'
       + '<div class="q-actions">' + action + '</div></div>';
   });
