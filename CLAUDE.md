@@ -3076,3 +3076,87 @@ like Boyd Watterson Global $163M) are not email-reachable from the cadence
 table — they run the P-BUYER buy-side contact-pick path. The real "first sends"
 lever is working P-BUYER buy-side in-app + R16 SF contact-acquisition for
 high-value owners, not the (already healthy) cadence table.
+
+## R35 — reconcile external_identities asset links (the table R22/R23 missed) (2026-06-16)
+
+The capstone on the cross-DB integrity work (AUDIT 2026-06-16). R22/R23 made the
+property-keyed VALUE mirrors a true reflection of the domains, but the ONE table
+they never reconciled was `external_identities` asset rows
+(`source_type='asset'`) — the entity-graph linkage between a property-anchor
+entity and its domain property. Grounding refined the audit's three classes:
+
+### Unit 1 — retype the dia CCN-mislabels (don't delete; the CCN values are valid)
+359 dia asset rows had a 6-digit `external_id`. Cross-checking dia: **345 are CMS
+Medicare CCNs** (in `dia.medicare_clinics.medicare_id`, NOT `dia.properties`) —
+the mislabels; the other **14 are real 6-digit dia property_ids** (kept as asset).
+**The audit premise that these were "valid clinic identities on valid entities"
+did NOT hold:** 343 of the 345 hang off a SINGLE junk-named entity **"Property
+link approved"** (a captured UI status string), +2 on "Clinic lead outcome
+recorded"/"Research outcome saved". Root cause: `api/operations.js`
+`bridgeLogActivity` minted a `(dia, asset, <external_id>)` identity from the
+activity TITLE, fed by `dialysis.js` property-review `log_activity` calls passing
+the clinic **CCN** as `external_id` (all collapsing to one entity by
+canonical_name).
+- **Retype (reversible relabel, never delete):** the 345 CCN-only rows →
+  `(source_system='cms', source_type='medicare_ccn')` — records the true CMS
+  clinic identity AND removes them from the `(dia, asset, *)` space so Unit 2's
+  census prune can't falsely treat a CCN (not a property_id ⇒ absent from the
+  property census) as a hard-gone orphan. Migration
+  `20260616160000_lcc_r35_unit1_retype_ccn_asset_identities.sql` (embeds the
+  grounded 345-CCN list; idempotent). `cms` added to the LIVE + VALIDATED
+  `chk_external_identities_source_system` allow-list first
+  (`20260616155000`, mirrored into the canonical `20260604121000`) — the
+  constraint is applied + validated (NOT "deferred"), so the retype 23514s
+  without the widen.
+- **Forward guard (R4-A choke point):** new `resolveOnly` option on
+  `ensureEntityLink` (`entity-link.js`) — resolve by entity_id / existing
+  external-identity ONLY, never create an entity, never write an
+  external_identities row. `bridgeLogActivity` passes `resolveOnly:true`, so a
+  log_activity can never again mint a `(dia,asset,<anything>)` identity from an
+  activity title, regardless of id shape. The 3 dia property-review callers also
+  fixed to pass the real `property_id` (the actual asset), not the clinic CCN.
+- The junk entity "Property link approved" itself is a writer-bug artifact —
+  **surfaced for Scott, NOT touched** (its 343 cms identities still point at it;
+  separate cleanup).
+
+### Unit 2 + 3 — prune true orphans (census-based, reversible) + forward reconcile
+Folded an `external_identities` asset-orphan prune into the EXISTING R22/R23
+reconcile (`lcc_reconcile_mirrors_apply`, migration
+`20260616161000_lcc_r35_unit2_external_identities_asset_reconcile.sql`,
+`CREATE OR REPLACE` — same signature/return shape, just more `RETURN NEXT`
+rows tagged `mirror='external_identities_asset'`). So it rides the EXISTING daily
+cron (`lcc-mirror-reconcile-fetch` 05:10 / `-apply` 05:15) — Unit 3 done, no new
+cron, no extra pg_net (consumes the same census fetch).
+- **⚠️ The critical safety rule (the sweep proved it):** the orphan test is the
+  all-status `v_property_id_census`, **NOT `lcc_property_attributes`** — the
+  audit's "~17 gov flagged" was the mirror test, which flags ACTIVE gov
+  properties (the mirror has coverage gaps). Against the census, gov true orphans
+  = **4** (the active ones are present ⇒ kept).
+- **Doctrine difference vs R23:** the entity-graph linkage uses the **FULL
+  all-status census** as its KEEP set (`_r22_live ∪ _r23_archived`) — an ARCHIVED
+  property's entity-link is meaningful history and is **NOT** pruned (R23 prunes
+  archived only from the value-ranking mirrors). Confirmed live: the
+  `external_identities_asset` row reports `live_ids`=19,152 (full gov census) vs
+  12,495 for the value mirrors.
+- Reuses every R22/R23 guard (completeness, sanity floor 1000, anomaly cap 0.5,
+  reversible snapshot to `lcc_mirror_reconcile_deletions`).
+
+### Verified live 2026-06-16 (applied to LCC Opps)
+Unit 1: 345 retyped dia/asset → cms/medicare_ccn; 14 real 6-digit properties
+kept; dia/asset 2172→1827. Unit 2 real apply pruned **279 asset orphans** (dia
+275, gov 4) = **57 malformed_uuid + 222 hard_gone**, all snapshotted (reversible,
+tagged in `note`). Property mirrors clean (R22/R23 holding). **Idempotent** — a
+re-fetch + re-apply finds **0 orphans / clean** both domains. **Load-bearing
+intact** — `lcc_refresh_entity_connected_value()` (2,980) +
+`lcc_refresh_priority_queue_resolved()` (1,292) rebuild cleanly post-prune. dia
+property census 12,279; gov full census 19,152 (active+archived 12,495 active).
+`node --check` clean (entity-link.js, operations.js, dialysis.js); full suite
+**969 pass / 0 fail / 6 skipped**; `ls api/*.js | wc -l`=12.
+
+### Surfaced (NOT fixed here)
+- **gov mirror-coverage gap:** **14** active gov properties carry an
+  `external_identities` asset row but NO `lcc_property_attributes` row (present in
+  census ⇒ NOT orphans, correctly kept) — a separate sync-coverage round.
+- The junk entity **"Property link approved"** (+2 status-string asset entities)
+  still hold the 343/2 now-`cms` identities — a writer-bug artifact for a
+  separate cleanup (the forward guard stops new ones).

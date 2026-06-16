@@ -291,10 +291,19 @@ async function bridgeLogActivity(req, res, user, workspaceId) {
 
   let resolvedEntityId = entity_id;
   if (!resolvedEntityId && external_id && source_system) {
+    // R35 (2026-06-16): resolve-only — an activity log ATTACHES to an existing
+    // entity, it must never MINT one. The old create path used the activity
+    // `title` as the entity name and the caller-supplied `external_id` as the
+    // identity, so dia property-review logs (passing a clinic CCN as external_id
+    // with title "Property link approved" / "Clinic lead outcome recorded" /
+    // "Research outcome saved") piled 345 (dia, asset, <CCN>) rows onto a single
+    // junk-named entity. resolveOnly stops that recurrence at the choke point:
+    // unresolved => the activity still logs, just unlinked.
     const link = await ensureEntityLink({
       workspaceId, userId: user.id, sourceSystem: source_system,
       sourceType: source_type || 'asset', externalId: external_id,
-      domain, seedFields: { name: title, metadata }
+      domain, seedFields: { name: title, metadata },
+      resolveOnly: true
     });
     if (link.ok) resolvedEntityId = link.entityId;
   }

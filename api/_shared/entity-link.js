@@ -665,7 +665,17 @@ export async function ensureEntityLink({
   domain,
   entityId,
   seedFields = {},
-  metadata = {}
+  metadata = {},
+  // R35 (2026-06-16): resolve-only mode — look the entity up by id / existing
+  // external-identity but NEVER create an entity and NEVER write an
+  // external_identities row. The choke-point guard for the activity-log path:
+  // bridgeLogActivity used to mint a (dia, asset, <external_id>) identity from
+  // the activity TITLE, so dia property-review logs that passed a clinic CCN as
+  // external_id piled 343 (dia, asset, <CCN>) rows onto one junk entity
+  // ("Property link approved"). With resolveOnly an activity log can only ATTACH
+  // to a pre-existing entity — it can never fabricate one (or a CCN-as-asset
+  // identity) again, regardless of the id shape the caller passes.
+  resolveOnly = false
 }) {
   let resolvedEntity = null;
   let createdEntity = false;
@@ -708,6 +718,25 @@ export async function ensureEntityLink({
     if (lookup.ok && lookup.data?.length) {
       resolvedEntity = await fetchEntityById(lookup.data[0].entity_id, workspaceId);
     }
+  }
+
+  // R35: resolve-only short-circuit. We've tried entity_id + the existing
+  // external-identity lookup; that is the entire resolution surface a write-free
+  // caller (log_activity) is allowed. No name-match (an activity TITLE is not an
+  // entity name), no entity create, no identity upsert. Unresolved => skip and
+  // let the caller log the activity unlinked.
+  if (resolveOnly) {
+    if (resolvedEntity) {
+      return {
+        ok: true,
+        entityId: resolvedEntity.id,
+        entity: resolvedEntity,
+        createdEntity: false,
+        createdIdentity: false,
+        resolveOnly: true,
+      };
+    }
+    return { ok: false, skipped: 'no_existing_entity', resolveOnly: true };
   }
 
   let candidateName = seedFields.name

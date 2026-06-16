@@ -14,9 +14,13 @@
 -- Pre-apply check (must return 0):
 --   SELECT count(*) FROM external_identities
 --   WHERE source_system NOT IN (
---     'dia','gov','salesforce','sf','costar','rca','crexi','loopnet',
+--     'dia','gov','cms','salesforce','sf','costar','rca','crexi','loopnet',
 --     'outlook','email_intake','intake_email','sharepoint','calendar',
 --     'availability_scraper');
+--
+-- NOTE (R35, 2026-06-16): 'cms' added to the allow-list — the dia CCN-mislabel
+-- asset rows were retyped to (source_system='cms', source_type='medicare_ccn')
+-- (migration 20260616160000). CMS is the authoritative vendor for Medicare CCNs.
 --
 -- The allow-list = canonical domains ('dia','gov') + the external vendor /
 -- channel systems actually written by the codebase. Extend it (here) when a
@@ -35,7 +39,7 @@ ALTER TABLE public.external_identities
 ALTER TABLE public.external_identities
   ADD CONSTRAINT chk_external_identities_source_system
   CHECK (source_system IN (
-    'dia', 'gov',
+    'dia', 'gov', 'cms',
     'salesforce', 'sf',
     'costar', 'rca', 'crexi', 'loopnet',
     'outlook', 'email_intake', 'intake_email',
