@@ -8,7 +8,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { performContactQualify } from '../api/operations.js';
+import { performContactQualify, filterQualifiableContacts } from '../api/operations.js';
 import { stampContactOnActiveCadence } from '../api/_shared/contact-attach.js';
 
 const UUID_A = '11111111-1111-1111-1111-111111111111'; // inbox item
@@ -106,6 +106,36 @@ describe('performContactQualify (R28 Unit 2)', () => {
     const { deps } = recordingDeps({ getRow: async () => null });
     assert.equal((await performContactQualify({ inboxItemId: UUID_A, workspaceId: 'ws' }, deps)).status, 404);
     assert.equal((await performContactQualify({ inboxItemId: 'not-a-uuid', workspaceId: 'ws' }, deps)).status, 400);
+  });
+});
+
+describe('filterQualifiableContacts (R29 Unit 2 — firm-as-person exclusion)', () => {
+  it('keeps real person names; drops firms mistyped as persons', () => {
+    const rows = [
+      { entity_type: 'person', contact_name: 'Jane A. Smith', has_email: true },   // real human → keep
+      { entity_type: 'person', contact_name: "Sean O'Brien", has_email: true },    // real human → keep
+      { entity_type: 'person', contact_name: 'Jamestown' },                        // single-token firm → drop
+      { entity_type: 'person', contact_name: 'MetLife' },                          // single-token firm → drop
+      { entity_type: 'person', contact_name: 'Akridge' },                          // single-token firm → drop
+      { entity_type: 'person', contact_name: 'Foulger Pratt Capital LLC' },        // firm suffix → drop
+    ];
+    const kept = filterQualifiableContacts(rows);
+    assert.deepEqual(kept.map((r) => r.contact_name), ['Jane A. Smith', "Sean O'Brien"]);
+  });
+
+  it('passes non-person rows (organizations) untouched regardless of name shape', () => {
+    const rows = [
+      { entity_type: 'organization', contact_name: 'Northwestern Mutual' },
+      { entity_type: 'organization', contact_name: 'Jamestown' },
+    ];
+    assert.equal(filterQualifiableContacts(rows).length, 2);
+  });
+
+  it('drops person rows with a missing / blank name; tolerates non-array input', () => {
+    assert.equal(filterQualifiableContacts([{ entity_type: 'person', contact_name: null }]).length, 0);
+    assert.equal(filterQualifiableContacts([{ entity_type: 'person', contact_name: '' }]).length, 0);
+    assert.deepEqual(filterQualifiableContacts(null), []);
+    assert.deepEqual(filterQualifiableContacts(undefined), []);
   });
 });
 
