@@ -197,6 +197,41 @@ Measured live (denominators include the shells, see Finding A):
 - Receipts-first; each tier is independently verified at the gate before the next.
 - Root-cause each junk source so it stops re-accruing (don't just sweep).
 
+## Post-Tier-1 results (applied + verified live 2026-06-16)
+Tier 1 (detector split + provenance auto-resolve + OM-intake archived guard).
+Branch `claude/sweet-cannon-o0d6f6`. DB view/function changes applied live;
+JS ships on the Railway redeploy of merged `main`.
+
+- **Unit 1 — duplicate detector split** (`v_data_quality_issues`, dia + gov).
+  - dia: `duplicate_property_address` 42 → **`duplicate_property` 26** +
+    **`missing_address` 16** (placeholders "dialysis unit"/"tbd" carved out of the
+    grouping key). gov: **`duplicate_property` 230** + `missing_address` 0 (no
+    active gov placeholder clusters today — the branch is defensive). Shared
+    `lcc_addr_is_placeholder()` helper on both DBs; gov `v_property_merge_lane`
+    also excludes placeholder groups so Tier-2 auto-merge never sees one.
+- **Unit 2 — provenance auto-resolve.** Of the warn/strict actionable set:
+  skip 12,707 (telemetry — excluded from every human surface), conflict
+  **same_source 3,125 / cross_source 367 / no_current_authority 249**.
+  - New `v_field_provenance_conflict_classified` classifies each conflict; the
+    Decision Center lane + the `data_conflicts` headline now read
+    `conflict_class=cross_source` → **the human queue is 367** (was ~16k).
+  - `lcc_autoresolve_same_source_provenance(limit, dry_run, batch)` drains the
+    same-source class (newest-same-source wins; promote/supersede in the
+    provenance log only — no domain write). **852 eligible fields** (= the 3,125
+    rows). Reversible (`lcc_undo_same_source_autoresolve`); proven by a 3-field
+    resolve→undo round-trip (0 residue). **Capped batch run live: 50 fields /
+    150 rows** (same_source 3,125 → 2,975; cross_source 367 untouched). The
+    remaining 802 fields / 2,975 rows are HELD for Scott's go on the full drain.
+  - The `lcc_merge_field` root-cause (same-source same-priority = refresh, not
+    conflict) is committed but **HELD** (core capture function) pending blessing.
+- **Unit 3 — OM-intake archived guard.** The matcher excludes
+  `status='archived'` gov shells from every candidate query (gov-only, NULL-safe;
+  dia has no status column). Verified: "718 Robinson St" collapsed 154 candidates
+  → 1 active offering (18381). The 5 prior mis-matches
+  (17465/18381/20943/21514/23118) are confirmed active (Tier-0 un-archived).
+
+The genuine-duplicate lane (dia 26 + gov 230) is the clean input to **Tier 2**.
+
 ## Suggested CC prompts (one per tier — to be drafted on Scott's go)
 1. Empty-shell classifier + quarantine (gov+dia) + source-import root-cause.
 2. Duplicate-detector split (missing-address / shell / genuine) + provenance auto-resolve

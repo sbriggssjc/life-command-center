@@ -40,6 +40,24 @@ export const DIALYSIS_KEYWORDS =
   /davita|fresenius|dialysis|kidney|renal|nephrolog|bio[-\s]?medical\s+applications|satellite\s+health|\bdci\b|total\s+renal/i;
 
 // ============================================================================
+// JUNK-SHELL / ARCHIVE GUARD (TIER 1 · Unit 3, 2026-06-16)
+// ============================================================================
+// The gov property book carries ~6,657 quarantined empty-shell rows
+// (status='archived', the Tier-0 junk_backfill set). The OM-intake matcher was
+// status-blind, so a new OM whose address landed on a junk-cluster address
+// (e.g. "718 Robinson St") attached the real offering onto a dead shell. The
+// guard excludes archived properties from EVERY match-candidate query so the
+// matcher resolves to an ACTIVE property or returns no-match (→ create a new
+// property / route to match_disambiguation) — never resurrecting a dead id.
+//
+// NULL-safe (mirrors the views' COALESCE(status,'active') semantics) and
+// gov-only: the dialysis `properties` table has no `status` column, so adding
+// the filter there would 400. Returns a raw PostgREST clause (no leading '&').
+export function activePropsClause(domain) {
+  return domain === 'government' ? 'or=(status.is.null,status.neq.archived)' : '';
+}
+
+// ============================================================================
 // LEVENSHTEIN DISTANCE — for fuzzy address matching
 // ============================================================================
 
@@ -139,6 +157,8 @@ async function canonicalDomainMatch(domain, address, state, city) {
   const filters = [`state=eq.${encodeURIComponent(state)}`];
   const num = leadingStreetNumber(address);
   if (num) filters.push(`address=ilike.${encodeURIComponent(num + '%')}`);
+  const statusGuard = activePropsClause(domain);
+  if (statusGuard) filters.push(statusGuard);
   filters.push(`select=${cols}`, 'limit=200');
 
   const result = await domainQuery(domain, 'GET', `properties?${filters.join('&')}`);
@@ -190,9 +210,11 @@ async function canonicalLccMatch(address, state, city) {
  */
 async function exactAddressMatch(domain, address, state) {
   const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+  const sg = activePropsClause(domain);
   const result = await domainQuery(domain, 'GET',
     `properties?address=eq.${encodeURIComponent(address)}` +
     `&state=eq.${encodeURIComponent(state)}` +
+    (sg ? `&${sg}` : '') +
     `&select=${selectCols}&limit=3`
   );
   if (result.ok && result.data?.length) {
@@ -213,9 +235,11 @@ async function exactAddressMatch(domain, address, state) {
  */
 async function normalizedAddressMatch(domain, normalizedAddr, state) {
   const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+  const sg = activePropsClause(domain);
   const result = await domainQuery(domain, 'GET',
     `properties?address=ilike.${encodeURIComponent(normalizedAddr)}` +
     `&state=eq.${encodeURIComponent(state)}` +
+    (sg ? `&${sg}` : '') +
     `&select=${selectCols}&limit=3`
   );
   if (result.ok && result.data?.length) {
@@ -238,8 +262,10 @@ async function normalizedAddressMatch(domain, normalizedAddr, state) {
 async function fuzzyAddressMatch(domain, normalizedAddr, state) {
   // Fetch properties in the same state to compare against
   const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+  const sg = activePropsClause(domain);
   const result = await domainQuery(domain, 'GET',
     `properties?state=eq.${encodeURIComponent(state)}` +
+    (sg ? `&${sg}` : '') +
     `&select=${selectCols}&limit=50`
   );
   if (!result.ok || !result.data?.length) return null;
@@ -308,6 +334,8 @@ async function tenantCityStateMatch(domain, tenant, city, state) {
   const filters = [`${tenantCol}=ilike.*${encodeURIComponent(tenant)}*`];
   if (city) filters.push(`city=ilike.${encodeURIComponent(city)}`);
   if (state) filters.push(`state=eq.${encodeURIComponent(state)}`);
+  const statusGuard = activePropsClause(domain);
+  if (statusGuard) filters.push(statusGuard);
   filters.push(`select=${selectCols}`, 'limit=3');
 
   const result = await domainQuery(domain, 'GET',
@@ -597,8 +625,10 @@ async function collectAmbiguousCandidates(address, state, primaryDomain) {
   const secondary = primaryDomain === 'dialysis' ? 'government' : 'dialysis';
   const fetchDom = async (domain) => {
     const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+    const sg = activePropsClause(domain);
     const result = await domainQuery(domain, 'GET',
-      `properties?state=eq.${encodeURIComponent(state)}&select=${selectCols}&limit=80`);
+      `properties?state=eq.${encodeURIComponent(state)}` + (sg ? `&${sg}` : '') +
+      `&select=${selectCols}&limit=80`);
     if (!result.ok || !result.data?.length) return [];
     const queryNoDir = stripDirectional(norm);
     const out = [];

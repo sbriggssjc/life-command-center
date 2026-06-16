@@ -3482,6 +3482,8 @@ async function renderDiaDataQualityWidgets() {
 
   // Pretty-name each issue_kind so the cards stay scannable.
   const KIND_LABELS = {
+    duplicate_property:                 'Duplicate property (real address)',
+    missing_address:                    'Missing / placeholder address',
     duplicate_property_address:         'Duplicate property address',
     multi_active_lease:                 'Multi-active lease (one property, multiple active leases)',
     listing_after_sale:                 'Listing after sale',
@@ -3490,6 +3492,8 @@ async function renderDiaDataQualityWidgets() {
     listing_active_no_verification_due: 'Active listing missing verification_due_at',
   };
   const KIND_HINTS = {
+    duplicate_property:                 'Genuine duplicates: same REAL address+state under multiple property_ids — the clean input to the gated auto-merge.',
+    missing_address:                    'Placeholder/empty address ("Dialysis Unit", "TBD") shared by several rows — NOT a merge. Backfill the real street address (geocode / CMS / county).',
     duplicate_property_address:         'Auto-merge cron handles 5/min. Remaining are placeholder addresses needing manual review.',
     multi_active_lease:                 'Auto-supersede only resolves cleanly disjoint terms — these have overlapping or unclear chains.',
     listing_after_sale:                 'Closed-on-sale trigger missed; flip status to Sold.',
@@ -3623,6 +3627,8 @@ async function renderGovDataQualityWidgets() {
   const issues  = issuesRes?.data  || [];
 
   const KIND_LABELS = {
+    duplicate_property:                 'Duplicate property (real address)',
+    missing_address:                    'Missing / placeholder address',
     duplicate_property_address:         'Duplicate property address',
     listing_after_sale:                 'Listing after sale',
     orphan_listing:                     'Orphan listing (property missing)',
@@ -3630,6 +3636,8 @@ async function renderGovDataQualityWidgets() {
     listing_active_no_verification_due: 'Active listing missing verification_due_at',
   };
   const KIND_HINTS = {
+    duplicate_property:                 'Genuine duplicates: same REAL address+state under multiple property_ids — the clean input to the gated auto-merge.',
+    missing_address:                    'Placeholder/empty address shared by several rows — NOT a merge. Backfill the real street address.',
     duplicate_property_address:         'Same normalized address+state under multiple property_ids — manual merge needed.',
     listing_after_sale:                 'Active listing on a property that already has a sale recorded. Run the listing-close backfill or flip status to Sold.',
     orphan_listing:                     'Property was deleted — listing should be removed or repointed.',

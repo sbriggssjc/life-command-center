@@ -199,12 +199,16 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     if (action === 'quality_provenance') {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
       const [actionable, summary, unranked] = await Promise.all([
+        // TIER 1 Unit 2: exclude decision='skip' telemetry from the rendered
+        // "Provenance conflicts" list — a skip is the registry correctly choosing
+        // a higher-priority source, not a human decision. (The summary_7d
+        // aggregate below still buckets skip vs conflict as drift telemetry.)
         opsQuery('GET',
           `v_field_provenance_actionable?` +
           `select=provenance_id,recorded_at,target_database,target_table,record_pk_value,` +
           `field_name,attempted_value,attempted_source,attempted_priority,enforce_mode,` +
           `decision,decision_reason,current_source,current_value` +
-          `&order=recorded_at.desc&limit=${limit}`
+          `&decision=eq.conflict&order=recorded_at.desc&limit=${limit}`
         ),
         // Summary: by target_table+field, how many would-have-blocked rows
         // in the last 7 days. We can't GROUP BY in PostgREST — fold in JS

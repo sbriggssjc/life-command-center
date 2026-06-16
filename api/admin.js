@@ -320,7 +320,7 @@ async function handleReviewCounts(req, res) {
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
     govDupAddr, govPending, govSosLinks, stagedIntakeReview,
   ] = await Promise.all([
-    opsLane('data_conflicts',    'v_field_provenance_actionable'),
+    opsLane('data_conflicts',    'v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
     opsLane('stale_identities',  'v_stale_identities'),
     opsLane('unlinked_entities', 'v_unlinked_entities'),
     withLaneTimeout(domCount('dia', 'v_next_best_research', 'estimated')),
@@ -919,20 +919,22 @@ async function fetchFederatedSource(type, cap) {
   }
 
   if (type === 'provenance_conflict') {
-    // LCC field-provenance conflicts (the bulk) + dia sales-price xref conflicts.
-    // R13 Unit 1: surface ONLY decision='conflict' (same-priority disagreements
-    // that need Scott's judgment). decision='skip' rows (~78% of the view) are
-    // the registry working as designed — a higher-priority source correctly beat
-    // a lower-priority write — i.e. warn/strict-mode TELEMETRY, not a human
-    // decision. They stay available for audit via the view / provenance panels,
-    // just not in this operator decision lane.
+    // LCC field-provenance conflicts (the genuine human set) + dia sales-price
+    // xref conflicts.
+    // R13 Unit 1 excluded skip telemetry; TIER 1 Unit 2 narrows further to ONLY
+    // cross-source conflicts (a lower/equal-priority source genuinely disagreeing
+    // with a DIFFERENT current authoritative source — real judgment, ~367).
+    // Excluded from this lane: skip telemetry (~12.7k), same-source refreshes
+    // (~3.1k, drained by lcc_autoresolve_same_source_provenance), and
+    // no_current_authority conflicts (~249) — all still queryable via
+    // v_field_provenance_conflict_classified.
     const [pv, xr, pc, xc] = await Promise.all([
-      opsQuery('GET', 'v_field_provenance_actionable?select=provenance_id,target_database,target_table,'
+      opsQuery('GET', 'v_field_provenance_conflict_classified?select=provenance_id,target_database,target_table,'
         + 'record_pk_value,field_name,attempted_value,attempted_source,current_value,current_source,'
-        + 'decision,enforce_mode,recorded_at&decision=eq.conflict&order=recorded_at.desc&limit=' + cap),
+        + 'decision,enforce_mode,recorded_at&conflict_class=eq.cross_source&order=recorded_at.desc&limit=' + cap),
       domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
         + '&issue_kind=eq.sales_price_xref_conflict&order=severity.desc&limit=' + cap),
-      opsCnt('v_field_provenance_actionable?decision=eq.conflict'),
+      opsCnt('v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
       domCnt('dia', 'v_data_quality_issues?issue_kind=eq.sales_price_xref_conflict'),
     ]);
     const pvRows = (pv.ok && Array.isArray(pv.data)) ? pv.data : [];
