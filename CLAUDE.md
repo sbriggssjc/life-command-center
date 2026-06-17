@@ -3160,3 +3160,82 @@ property census 12,279; gov full census 19,152 (active+archived 12,495 active).
 - The junk entity **"Property link approved"** (+2 status-string asset entities)
   still hold the 343/2 now-`cms` identities — a writer-bug artifact for a
   separate cleanup (the forward guard stops new ones).
+
+## R39 — contact/entity dedup: email as a write-time key + auto-work merge candidates (2026-06-16)
+
+Completes the dedup-at-source sweep after R37 (sales) / R38 (listings). The
+entity graph had the same re-capture duplication shape at modest scale, and the
+merge machinery already existed — so this is a wiring/adoption fix, not a new
+build. Grounded live 2026-06-16 (audit premise refined down from "898/436"):
+**251 non-generic email groups / 682 active person entities share an email**
+(`ensureEntityLink` resolved by canonical_name / external_identity but NOT by
+email, so the same person captured under a slightly-different name with the same
+email minted a fresh duplicate, ~11/week). `v_lcc_merge_candidates` is
+**org-only**, so persons were never surfaced for merge.
+
+### Unit 1 — email as a write-time resolution key (prevent-at-write, the leverage)
+`api/_shared/entity-link.js`: new `normalizeEmail()` + `isGenericInboxEmail()`
+(role-inbox denylist: info/sales/leasing/…, plus-addressing aware) and an
+**email-resolution tier** in `ensureEntityLink` — after the canonical_name match,
+before create. When a **person** carries an email that already belongs to an
+active person entity, it ATTACHES (picks up the inbound external identity) instead
+of minting a duplicate. Conservative: persons only (a shared firm inbox identifies
+an org mailbox, not a person), generic/role inboxes skipped, implausible names
+never resolved here. ilike is case-insensitive so the match is re-verified exactly
+in JS (`_` is a LIKE wildcard and legal in a local-part). Return payload gains
+`resolvedByEmail`. Stops the recurring inflow at the choke point.
+
+### Unit 0 (engine) — make `lcc_merge_entity` person-complete (grounding refuted the premise)
+The audit assumed "lcc_merge_entity already snapshots backrefs / just reuse it,"
+but live grounding showed the engine moved only `lcc_entity_portfolio_facts` +
+`external_identities`, while **ALL 682 dup persons carry `entity_relationships`
+and 74 are cadence contacts** — a naive person merge would ORPHAN those edges and
+leave cadences pointing at a tombstoned loser. The engine now ALSO dedup-safe
+repoints `entity_relationships` (both directions, content-dedup + self-loop drop),
+`watchers` (unique on workspace,user,entity → dedup), and blind-repoints
+`touchpoint_cadence.contact_id` / `activity_events` / `action_items` /
+`inbox_items` / `research_tasks` / `entity_aliases` (no unique on entity_id). The
+portfolio/external_identities/`merged_into` logic and the **2-col return signature
+are byte-identical**, so the org auto-merge cron / exact-merge worker / Decision
+Center org-merge lane are unaffected (and strictly more correct — orgs also carry
+relationships). Validated on synthetic persons in a rolled-back tx (0 residue):
+relationships repointed+deduped, self-loop dropped, cadence contact repointed, SF
+identity moved, loser tombstoned — all assertions pass.
+
+### Unit 2 — auto-work the high-confidence slice; route the rest to review
+Migration `20260719140000_lcc_r39_contact_email_dedup.sql` (LCC Opps, applied
+live, idempotent): `lcc_normalize_person_name()`,
+**`v_lcc_person_email_merge_candidates`** (person email groups, generic-inbox +
+junk-name excluded, winner = richest [SF-linked > completeness > longest name],
+`name_compatible` = no multi-person composite in the group AND every loser's
+normalized name equals / is a ≥4-char substring of the winner's), and
+**`lcc_apply_person_email_merges(dry_run default true)`**. Ran the one-shot live
+for the **name-compatible slice = 36 groups / 36 persons** (active persons
+4001→3965); the **multi-person composite** case (`"Daniel Chumbley, Sean Sharko,
+Austin Weisenbeck"` sharing an email with `"Daniel Chumbley"`) is deliberately
+routed to review, not auto-merged. **208 ambiguous groups** remain for human
+judgment. Verified: 0 relationships/cadences left on a just-merged tombstone; the
+three load-bearing caches (`lcc_refresh_priority_queue_resolved` 1279,
+`_entity_connected_value` 2975, `_buyer_spe_resolved` 596) rebuild cleanly. No
+auto-merge cron — Unit 1 + the candidates view keep it clean going forward.
+
+### Unit 3 — surface the ambiguous remainder in the Decision Center
+`api/admin.js`: the existing **`merge_duplicate_entities`** lane now ALSO lists
+`v_lcc_person_email_merge_candidates?name_compatible=eq.false` (subject_ref
+`mergegrp:<winner_id>`, context `kind:'person_email'`); the `merge` verdict
+re-fetches the fresh loser set from the person view for those subjects and rides
+the now-person-complete `lcc_merge_entity`. `keep_separate`/`research` unchanged.
+
+### Verified (headless 2026-06-16)
+`test/entity-link.test.js` +5 (normalizeEmail/isGenericInboxEmail; email-attach
+to existing person = no new entity, `resolvedByEmail`; generic inbox → mints new,
+no email lookup). `node --check` clean (entity-link.js, admin.js); `ls api/*.js |
+wc -l`=12; full suite **992 pass / 0 fail / 6 skipped**. JS ships on the Railway
+redeploy; DB applied live + committed.
+
+### Follow-ups (NOT in R39)
+The 208 ambiguous person-email groups are operator-worked via the lane (not
+auto-merged). dia/gov domain `contacts` tables are the upstream feeders (via the
+sidebar → entities); fixing the `ensureEntityLink` choke point is the leverage
+point, but a domain-contacts-level dedup pass is a separate follow-up if the
+upstream is also duplicating.
