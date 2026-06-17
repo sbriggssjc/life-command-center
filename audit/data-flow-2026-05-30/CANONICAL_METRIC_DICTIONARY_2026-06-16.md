@@ -39,10 +39,17 @@ non-market rows); price-less rows are NEVER counted as transactions.
 - **Sub-cuts exposed:** total; `nm_on_market` (= `is_active` + `is_northmarq`); by domain.
 - **Canonical today (gov):** **628** (the authoritative `v_available_listings` figure) — NOT
   854 (briefing, which wrongly drops NM and skips the overlap/flag filters) and NOT 868 (raw).
-- **dia caveat:** dia `available_listings` lacks `exclude_from_listing_metrics` /
-  `is_northmarq` / `transaction_state` (schema drift). Either add those columns to dia for
-  parity, or dia on-market = `is_active` + sale-overlap only, documented as a known
-  per-domain difference until parity lands.
+- **dia parity (DECIDED 2026-06-16):** dia `available_listings` lacks
+  `exclude_from_listing_metrics` / `is_northmarq`. **Add both columns to dia (additive,
+  default false)** so the canonical M1 SQL is IDENTICAL across domains — no forked
+  definition. They default false (no current dia source populates them), so dia
+  `nm_on_market` reads 0 and `exclude_from_listing_metrics` excludes nothing until writers
+  populate them. **Follow-up:** teach the dia listing-capture path (sidebar) to set
+  `is_northmarq` when a Northmarq-broker dia listing is captured (and the curation flow to
+  set `exclude_from_listing_metrics`), so dia NM identification fills in over time. The
+  live-sale-overlap exclusion works on dia TODAY (dia `sales_transactions` has
+  `transaction_state` / `sale_date`), so dia on-market = `is_active` + sale-overlap +
+  (all-false) flags = identical formula, honest values.
 
 ### M2 — Sold (trailing 12 months): transaction count + volume
 - **Definition:** closed, arm's-length market sales in the last 365 days.
