@@ -1,0 +1,87 @@
+# Connectivity-gap audit — where the data graph isn't fully connected (2026-06-17)
+
+> Scott's directive: search for connection gaps that leave components not fully connected.
+> Method: probed the core join/resolution chains across dia (`zqzrriwuavgrquhisnoa`), gov
+> (`scknotsqkcheojiaewwh`), and LCC Opps (`xengecqvemvfknjvbvrq`) — orphans, dangling refs,
+> resolution-chain breaks, domain↔entity bridges, and cross-store fragmentation. Read-only.
+
+## Headline
+The **hard FK links are clean** (0 orphan sales/leases, 0 dangling owner FKs) — structural
+integrity is good. The gaps are in the **resolution + bridge layer**: the ownership graph
+(`property → recorded_owner → true_owner → LCC entity → Salesforce`) is **fragmented at
+every hop after the property**, so the BD pipeline (priority queue, portfolio, outreach,
+Salesforce) "sees" only ~20% of the owner intelligence that actually exists in the domain
+DBs. The data is there; it just isn't connected to the central graph.
+
+## The chain, hop by hop (measured live)
+1. **property → recorded_owner** — clean (0 dangling), but coverage is partial: dia 45.8%
+   linked (post-Tier-4), gov 67.4%. (Known; Tier-4 territory.)
+2. **recorded_owner → true_owner** — **dia: 2,845 of 6,850 (42%) have no `true_owner_id`**
+   — 42% of recorded owners are not resolved to a canonical/beneficial owner. **Real,
+   fixable chain gap.** (gov uses a different model — `recorded_owners` has no `true_owner`
+   FK at all (only `recorded_owner_id`, `entity_type`, `merged_into_recorded_owner_id`); the
+   gov recorded→true linkage path needs mapping — a structural gap of its own.)
+3. **true_owner → LCC entity** — **the big one.** dia: only ~679 of 3,985 true_owners are in
+   the entity graph (~17%); gov ~3,404 of 14,150 (~24%). This is NOT a deliberate
+   classified-only filter: **97% of dia true_owners are classified (`owner_role` set) and
+   1,337 actively own property**, yet only ~679 are bridged. The dia entity-sync
+   (true_owners → entities) is largely incomplete — consistent with the dia owner legs being
+   added late (R8). ~3,000 dia + ~10,700 gov real owners are absent from the BD graph.
+4. **true_owner → Salesforce** — **fragmented across two unreconciled stores:**
+   `true_owners.salesforce_id` (720 dia) vs `external_identities(salesforce, Account)`
+   (2,009). A true_owner can have a domain-side SF id with no LCC SF identity, or vice
+   versa — so "is this owner in Salesforce?" has two answers that don't agree.
+
+## Other gaps found
+- **`true_owners.lcc_canonical_entity_id` is DORMANT** — the column exists in BOTH domain
+  schemas to point a true_owner back at its LCC canonical entity, but it's **0% populated**
+  (0/3,985 dia, 0/14,150 gov). A designed connection that's never written; any domain-side
+  query relying on it gets nothing.
+- **348 dia orphan true_owners** — true_owners no recorded_owner references (unused;
+  candidates for merge/cleanup, not connection).
+- **cms medicare_ccn cluster** — 345 `external_identities` rows collapse onto **3 entities**
+  (the R35 "Property link approved" writer-bug artifact) — known, separate cleanup.
+- **Within-domain FK integrity: clean** — no orphan sales/leases, no dangling
+  recorded_owner FKs. The base graph is sound; the gaps are all in resolution/bridging.
+
+## Impact (why it matters)
+Every BD capability that ranks/finds "who owns this / who do we know" reads the **LCC entity
+graph**. With ~80% of true owners unbridged, the priority queue, portfolio rollups,
+connected-value ranking, and Salesforce joins are computed over a fraction of the real owner
+universe — owners that the domain DBs already know (classified, property-owning, some even
+SF-linked) are invisible to BD because the bridge never ran.
+
+## Proposed remediation (gated, receipts-first, in leverage order)
+1. **Classify the un-classified active owners → the existing sync bridges them (the big
+   unlock).** GROUNDED ROOT CAUSE (corrects the first framing): the sync is NOT broken — it
+   bridges *classified* owners (~655 dia, matching the ~679 bridged). The break is upstream:
+   **2,956 in-use dia true_owners have `owner_role='unknown'` AND `owner_role_source IS NULL`
+   — the behavioral classifier never ran on them** — yet they are real active owners (2,193
+   have txn activity, 757 own property, 442 have a `salesforce_id`). Fix = run the existing
+   owner-role classifier (`acquired_after_lease`/`tenant_relationship_value_creation`/manual)
+   over them; the ~2,193 with signals classify; the existing every-4h `lcc_sync_classified_
+   owners` then mints their entities + `external_identities` automatically (no sync change).
+   Gated/capped/reversible, reusing the `ensureEntityLink` junk/operator guards. Expected:
+   ~2,000+ dia owners bridged into the BD graph; same pattern for gov. **(Prompt:
+   `CLAUDE_CODE_PROMPT_CONNECTIVITY1_classify_owners_to_bridge.md`.)**
+2. **Resolve recorded_owner → true_owner (dia 2,845).** Resolve each unresolved
+   recorded_owner to a canonical true_owner (find-or-create, dedup, junk-guard). Many are
+   the same name as an existing true_owner → a linking job, not external.
+3. **Reconcile the two Salesforce stores.** Make `true_owners.salesforce_id` and
+   `external_identities(salesforce, Account)` agree — one canonical SF link per owner;
+   surface mismatches in the Decision Center. (Pairs with the deferred connector-gated
+   SF-link backfill.)
+4. **Map the gov recorded → true owner linkage** — gov has no `true_owner` FK on
+   recorded_owners; establish/repair the path so gov's chain matches dia's.
+5. **Decide `lcc_canonical_entity_id`** — either populate it as the canonical back-reference
+   (write it when the bridge runs) or retire the dormant column. Don't leave a designed
+   connection permanently empty.
+6. (Cleanup) 348 dia orphan true_owners + the cms medicare_ccn artifact — small, separate.
+
+## Guardrails (carry the project doctrine)
+- Each remediation: ground first (gap vs by-design), capped batch → gate → drain;
+  reversible; junk/operator guards on every entity mint (reuse `ensureEntityLink`,
+  `lcc_normalize_entity_name`, the operator-agreement machinery); conflicts → Decision
+  Center. Never overwrite curated links; never mint garbage entities.
+- The bridge is the highest leverage — it's what makes the rest of the graph (and all the
+  prior tiers' work) actually visible to BD.
