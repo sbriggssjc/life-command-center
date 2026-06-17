@@ -47,7 +47,7 @@ language sql stable as $$
            coalesce(s.cap_rate, s.calculated_cap_rate, s.stated_cap_rate)::numeric cr,
            coalesce(s.is_northmarq,false) nm,
            s.cap_rate_quality cq
-    from sales_transactions s
+    from public.sales_transactions s
     where s.sale_date >= current_date - p_days
       and s.sold_price is not null and s.sold_price > 100000
       and s.transaction_state = 'live'
@@ -61,18 +61,18 @@ language sql stable as $$
   onmkt as (
     select coalesce(l.is_northmarq,false) nm,
            coalesce(l.last_price,l.initial_price)::numeric price
-    from available_listings l
+    from public.available_listings l
     where coalesce(l.is_active,false) = true
       and l.exclude_from_listing_metrics is not true
       and not exists (
-        select 1 from sales_transactions s2
+        select 1 from public.sales_transactions s2
         where s2.property_id = l.property_id
           and s2.transaction_state = 'live'
           and s2.sale_date >= current_date - 60)
   )
   select
     p_days,
-    (select count(*) from properties),
+    (select count(*) from public.properties),
     (select count(*) from onmkt),
     (select coalesce(sum(price),0) from onmkt where price is not null),
     (select count(*) from onmkt where nm),
