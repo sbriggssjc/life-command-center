@@ -438,11 +438,21 @@ export function isImplausiblePersonName(name) {
 
 // The implausible-person signals MINUS the firm-suffix pattern — i.e. the
 // deal/attribution/amount tokens a real firm NAME never carries ("X by
-// <broker>", JV, CMBS codes, year-series, $/approx/parenthesized amounts).
-// Used by ensureEntityLink to decide whether a firm-suffixed inferred-person is
-// a mistyped ORGANIZATION (retype) vs a deal-capture artifact (reject).
+// <broker>", "X via <fund>", "X AKA <alias>", "X c/o <people>", JV, CMBS codes,
+// year-series, $/approx/parenthesized amounts, sentence fragments). Used by
+// ensureEntityLink to decide whether a firm-suffixed inferred-person is a
+// mistyped ORGANIZATION (retype) vs a deal-capture artifact (reject).
+//
+// The via/aka attribution markers are anchored MID-STRING (`\S\s+via`) so a
+// legitimate leading-word name ("Via Verde Capital", "Aka Partners") is NOT
+// false-rejected — only "<Org> via/aka <X>" attribution trips. The junk-lane
+// rescope follow-up (Unit B, 2026-06-17) added via/aka/c-o + the sentence
+// markers so the bulk-retype correction (Unit A) and this forward guard agree:
+// a firm-suffixed inferred-person whose name is ALSO a deal-string artifact
+// stays `person` → rejected by the implausible-person guard, never minted as a
+// dirty-named org.
 const DEAL_STRING_RE =
-  /\bby\s+\w|\bJV\b|\b(?:CMBS|BBCMS|CDCMT|ML-?CFC)\b|\b\d{4}-[A-Z]?\d|\bapprox\b|\$|\([^)]*\d[^)]*\)/i;
+  /\bby\s+\w|\S\s+via\s+\w|\S\s+aka\s+\w|\bc\/o\b|\bJV\b|\b(?:CMBS|BBCMS|CDCMT|ML-?CFC)\b|\b\d{4}-[A-Z]?\d|\bapprox\b|\$|\([^)]*\d[^)]*\)|\b(?:is currently|the property|square feet)\b|\boccupied\b/i;
 
 // True only for a plausible human name: a first + last (+ optional middle/
 // initial/suffix), all alpha tokens, no digits, no firm/deal tokens.
