@@ -582,6 +582,44 @@ export function parseContactFromJunk(raw) {
   return { name, phone, email, role, title };
 }
 
+// ---------------------------------------------------------------------------
+// Email as a write-time resolution key (R39 Unit 1, 2026-06-16)
+// ---------------------------------------------------------------------------
+// ensureEntityLink resolves by entity_id / external_identity / canonical_name,
+// but NOT by email — so the same person captured under a slightly-different
+// name with the SAME email mints a fresh duplicate person (~11/week live). The
+// email tier (below, in ensureEntityLink) closes that at the choke point.
+//
+// Email is a strong-but-imperfect key: a shared firm/role inbox (info@, sales@)
+// identifies an ORGANIZATION mailbox, not a person, so those addresses are
+// excluded from the auto-attach. Persons only — an org sharing a general inbox
+// is a weaker signal and stays name-keyed.
+const GENERIC_INBOX_LOCALPARTS = new Set([
+  'info', 'sales', 'leasing', 'admin', 'contact', 'contacts', 'office', 'hello',
+  'support', 'team', 'marketing', 'hr', 'jobs', 'careers', 'noreply', 'no-reply',
+  'donotreply', 'accounting', 'billing', 'legal', 'mail', 'email', 'general',
+  'inquiries', 'enquiries', 'help', 'service', 'services', 'webmaster', 'postmaster',
+]);
+
+// Lowercase + trim an email; return '' unless it has the basic local@domain.tld
+// shape (so a junk/partial value never becomes a resolution key).
+export function normalizeEmail(email) {
+  if (typeof email !== 'string') return '';
+  const e = email.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return '';
+  return e;
+}
+
+// True for a shared/role mailbox (info@, sales@, leasing@, …) that identifies a
+// firm inbox rather than a specific person. Such addresses must NOT auto-attach
+// two distinct people. Plus-addressing (foo+tag@) is reduced to the base local.
+export function isGenericInboxEmail(email) {
+  const e = normalizeEmail(email);
+  if (!e) return false;
+  const local = e.split('@')[0].split('+')[0];
+  return GENERIC_INBOX_LOCALPARTS.has(local);
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
@@ -807,6 +845,31 @@ export async function ensureEntityLink({
     }
   }
 
+  // R39 Unit 1: email as a write-time resolution key. When canonical_name didn't
+  // resolve, a PERSON carrying an email that ALREADY belongs to an active person
+  // entity ATTACHES to that entity (and picks up the inbound external identity)
+  // instead of minting a duplicate. Conservative: persons only, generic/shared
+  // inboxes (info@/sales@/…) skipped, junk/implausible names never resolved here.
+  let resolvedByEmail = false;
+  if (!resolvedEntity && entityType === 'person') {
+    const normEmail = normalizeEmail(seedFields.email);
+    if (normEmail && !isGenericInboxEmail(normEmail) && !isImplausiblePersonName(candidateName)) {
+      // ilike is case-insensitive; '_' is a single-char wildcard in LIKE and is
+      // legal in an email local-part, so re-verify the exact normalized address
+      // in JS before resolving (never over-match "john_doe@" to "johnXdoe@").
+      let epath = `entities?workspace_id=eq.${workspaceId}`
+        + '&entity_type=eq.person&merged_into_entity_id=is.null'
+        + `&email=ilike.${encodeURIComponent(normEmail)}`
+        + '&select=*&order=created_at.asc&limit=10';
+      if (domain) epath += `&domain=eq.${pgFilterVal(domain)}`;
+      const em = await opsQuery('GET', epath);
+      if (em.ok && Array.isArray(em.data) && em.data.length) {
+        const exact = em.data.find((e) => normalizeEmail(e.email) === normEmail);
+        if (exact) { resolvedEntity = exact; resolvedByEmail = true; }
+      }
+    }
+  }
+
   if (!resolvedEntity) {
     // R4-A: junk-name guard at the creation boundary. Don't mint a canonical
     // entity from CoStar panel-header / phone / email garbage. Asset names are
@@ -987,6 +1050,7 @@ export async function ensureEntityLink({
     entityId: resolvedEntity.id,
     createdEntity,
     createdIdentity,
+    resolvedByEmail,
     salesforce,
     compositeContactId,
   };

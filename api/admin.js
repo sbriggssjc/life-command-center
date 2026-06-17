@@ -935,10 +935,19 @@ async function fetchFederatedSource(type, cap) {
     // HUMAN (no auto-merge cron); the lane verdict is what triggers the merge.
     // One row per surviving (winner) entity; merging collapses the loser_ids in.
     const mergeFilter = 'or=(auto_mergeable.eq.true,sf_inheritance.eq.true)';
-    const r = await opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,sf_inheritance,sf_linked_member_count'
-      + '&' + mergeFilter + '&order=sf_inheritance.desc,member_count.desc&limit=' + cap);
+    const [r, pr] = await Promise.all([
+      opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,sf_inheritance,sf_linked_member_count'
+        + '&' + mergeFilter + '&order=sf_inheritance.desc,member_count.desc&limit=' + cap),
+      // R39: ambiguous person email-share groups (same email, name-INcompatible)
+      // need human judgment — a shared firm/assistant inbox vs the same person.
+      // The name-compatible slice is auto-worked by lcc_apply_person_email_merges,
+      // so it never reaches this lane.
+      opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,winner_name,winner_id,loser_ids,member_count,sf_linked_member_count'
+        + '&name_compatible=eq.false&order=member_count.desc&limit=' + cap),
+    ]);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
-    out.items = rows.map((row) => ({
+    const prows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+    const orgItems = rows.map((row) => ({
       subject_ref: 'mergegrp:' + row.winner_id,
       subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
       // SF-inheritance merges sort first (the bonus dedup+inherit-link win), then by size.
@@ -947,7 +956,20 @@ async function fetchFederatedSource(type, cap) {
         loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
         sf_inheritance: row.sf_inheritance === true, sf_linked_member_count: Number(row.sf_linked_member_count) || 0 },
     }));
-    out.total = await opsCnt('v_lcc_merge_candidates?' + mergeFilter);
+    const personItems = prows.map((row) => ({
+      subject_ref: 'mergegrp:' + row.winner_id,
+      subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
+      rank_value: (Number(row.member_count) || 0),
+      context: { kind: 'person_email', winner_id: row.winner_id, winner_name: row.winner_name,
+        email: row.email, loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
+        sf_linked_member_count: Number(row.sf_linked_member_count) || 0 },
+    }));
+    out.items = orgItems.concat(personItems).sort((a, b) => b.rank_value - a.rank_value);
+    const [oc, pc] = await Promise.all([
+      opsCnt('v_lcc_merge_candidates?' + mergeFilter),
+      opsCnt('v_lcc_person_email_merge_candidates?name_compatible=eq.false'),
+    ]);
+    out.total = (oc == null && pc == null) ? null : (oc || 0) + (pc || 0);
     return out;
   }
 
@@ -1913,8 +1935,13 @@ async function handleDecisionVerdict(req, res) {
       if (verdict === 'merge') {
         if (!winnerId) return res.status(400).json({ error: 'merge requires a winner entity' });
         // Re-fetch the CURRENT group (fresh loser set; no-op if already drained).
-        const gr = await opsQuery('GET', 'v_lcc_merge_candidates?select=loser_ids&auto_mergeable=eq.true&winner_id=eq.'
-          + pgFilterVal(winnerId) + '&limit=1');
+        // R39: a person email-share group resolves from the person view; org
+        // duplicate groups from v_lcc_merge_candidates. Both expose winner_id +
+        // loser_ids, and the now-person-complete lcc_merge_entity collapses either.
+        const groupView = (c.kind === 'person_email')
+          ? 'v_lcc_person_email_merge_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1'
+          : 'v_lcc_merge_candidates?select=loser_ids&auto_mergeable=eq.true&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1';
+        const gr = await opsQuery('GET', groupView);
         const losers = (gr.ok && Array.isArray(gr.data) && gr.data[0] && Array.isArray(gr.data[0].loser_ids))
           ? gr.data[0].loser_ids : [];
         let merged = 0;
