@@ -570,7 +570,8 @@ function renderMarketStats({ marketStats }) {
       marketTileGroup('Dialysis',     BRAND.sky,    dia) +
       marketTileGroup('Government',   BRAND.blueMid, gov) +
       `<div style="${FONT}font-size:10px;color:${BRAND.textMuted};margin:8px 0 14px 0;font-style:italic;">` +
-      `Excludes NM-listed deals and flagged outliers. Cap-rate distribution filtered to 2-20% range.</div>`,
+      `Canonical market metrics (R36): closed sales &gt; $100k in the trailing 12 months. ` +
+      `Northmarq deals are included; flagged/curation rows excluded. Cap-rate distribution filtered to 1-25%.</div>`,
     );
 }
 
