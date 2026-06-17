@@ -436,6 +436,14 @@ export function isImplausiblePersonName(name) {
   return PERSON_IMPLAUSIBLE_PATTERNS.some((re) => re.test(t));
 }
 
+// The implausible-person signals MINUS the firm-suffix pattern — i.e. the
+// deal/attribution/amount tokens a real firm NAME never carries ("X by
+// <broker>", JV, CMBS codes, year-series, $/approx/parenthesized amounts).
+// Used by ensureEntityLink to decide whether a firm-suffixed inferred-person is
+// a mistyped ORGANIZATION (retype) vs a deal-capture artifact (reject).
+const DEAL_STRING_RE =
+  /\bby\s+\w|\bJV\b|\b(?:CMBS|BBCMS|CDCMT|ML-?CFC)\b|\b\d{4}-[A-Z]?\d|\bapprox\b|\$|\([^)]*\d[^)]*\)/i;
+
 // True only for a plausible human name: a first + last (+ optional middle/
 // initial/suffix), all alpha tokens, no digits, no firm/deal tokens.
 export function looksLikePersonName(name) {
@@ -765,7 +773,20 @@ export async function ensureEntityLink({
     }
   }
   const canonicalName = normalizeCanonicalName(candidateName);
-  const entityType = inferEntityType(sourceType, seedFields);
+  let entityType = inferEntityType(sourceType, seedFields);
+  // Follow-up (junk-lane rescope, Unit 2): a firm-suffixed inferred-PERSON is a
+  // mistyped ORGANIZATION, not junk. Retype here — at inference, before dedup
+  // match / the guards / create — so the person-plausibility guard below no
+  // longer junk-flags real firm names ("Acadia Realty", "256 Realty Co",
+  // "Acquisition Fund"). Deal/attribution strings ("X by <broker>", JV/CMBS/$)
+  // stay `person` and are still rejected by the implausible-person guard; the
+  // structural junk guard (isJunkEntityName) is unchanged.
+  if (entityType === 'person'
+      && hasFirmSuffix(candidateName)
+      && !DEAL_STRING_RE.test(candidateName)
+      && !isJunkEntityName(candidateName)) {
+    entityType = 'organization';
+  }
 
   if (!resolvedEntity && canonicalName) {
     let path = `entities?workspace_id=eq.${workspaceId}&canonical_name=eq.${encodeURIComponent(canonicalName)}&select=*&limit=5`;
