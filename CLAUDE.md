@@ -3239,3 +3239,93 @@ auto-merged). dia/gov domain `contacts` tables are the upstream feeders (via the
 sidebar → entities); fixing the `ensureEntityLink` choke point is the leverage
 point, but a domain-contacts-level dedup pass is a separate follow-up if the
 upstream is also duplicating.
+
+## R40 — reconcile historical merge-orphans + consolidate cadence on merge (2026-06-16)
+
+R39 made `lcc_merge_entity` person-complete, so NEW merges repoint backrefs
+correctly — but the engine was incomplete historically (it moved only
+`portfolio_facts` + `external_identities`, and **never repointed
+`touchpoint_cadence.entity_id` at all**), so the 862 historical tombstones left
+backrefs dangling on dead nodes. These don't leak into the priority queue /
+cadence dashboard (those filter `merged_into_entity_id IS NULL`), so it wasn't a
+visible bug — but the entity graph was INACCURATE, and anything traversing
+relationships directly (context packets, MCP, owner→asset rollups) hit dead
+nodes. R40 reconciles every backref to its **final** survivor, reversibly.
+
+### Grounded live 2026-06-16 (refined the audit premise)
+862 tombstones (chain depth ≤ 2, all resolve to a real non-tombstone survivor).
+Dangling-on-tombstone: `entity_relationships` 6,123 (the big one; +12 rows with
+BOTH endpoints tombstoned), `lcc_entity_portfolio_facts` **45** (audit didn't
+flag these — the engine moves them but old merges left orphans),
+`touchpoint_cadence.entity_id` 19 (**14 the survivor ALSO has a cadence →
+consolidate; 5 → repoint**), `activity_events` 17, `inbox_items` 13,
+`research_tasks` 1, `external_identities` 5, `touchpoint_cadence.contact_id` 0,
+`watchers`/`action_items`/`entity_aliases` 0, merged_into chains 2. Also surfaced
+(NOT in the audit list but real stale refs): `lcc_buyer_parents` 1 +
+`lcc_operator_affiliate_patterns` 3 — all one clean UIRC duplicate (survivor
+absent from both registries → safe to follow the survivor).
+
+### Single source of truth (the design rule the task demanded)
+**`lcc_reconcile_tombstone_backrefs(p_loser, p_winner, p_snapshot)`** is the ONE
+place "move backrefs loser→winner" lives. It does the merge engine's dedup-safe
+move set (portfolio_facts, external_identities, entity_relationships [self-loop
+drop + both-direction content-dedup + repoint], watchers, contact_id blind
+repoint, activity/action/inbox/research/aliases blind repoints) **plus the NEW
+`entity_id` consolidate-or-repoint** (Unit 2). Returns a jsonb of per-table
+counts. `p_snapshot` (default false) writes the reversible
+`r40_merge_reconcile_backup` ledger; cadence-consolidation DELETEs snapshot
+**unconditionally** (the one destructive drop, so even forward merges are
+reversible). **`lcc_merge_entity` is now a thin wrapper** over the helper —
+**byte-identical 2-col return** (`portfolio_edges_moved`/
+`external_identities_moved`), so the org auto-merge cron / exact-merge worker /
+Decision Center merge lane / R39 person-email merges are unaffected, and the
+forward merge now ALSO consolidates `entity_id` cadences (no future tombstone can
+leave a cadence dangling). Migration `20260719150000_lcc_r40_merge_orphan_reconcile.sql`.
+
+### Unit 1 — the one-time historical pass
+**`lcc_r40_reconcile_merge_orphans(p_dry_run default TRUE)`** — resolves every
+tombstone to its **final** survivor via a cycle-guarded, depth-capped (50)
+recursive CTE (handles the 2 chains; aborts if any survivor is unresolved/cyclic/
+still-a-tombstone), then loops the helper per tombstone (`p_snapshot=true`),
+reconciles the registry refs (`lcc_buyer_parents` dedup-then-move,
+`lcc_operator_affiliate_patterns` + `lcc_cre_properties` repoint), collapses the
+2 merged_into chains to the final survivor, and refreshes the priority-queue
+cache. Dry-run writes NOTHING and returns the per-table report. **Reversible**
+(every change snapshotted), **idempotent** (re-run finds 0), **chain/cycle-safe**,
+**content-dedup** (a repoint never creates a duplicate edge or a `(C,C)`
+self-loop — loser self-loops + both-→-same-survivor edges are dropped).
+
+### Unit 2 — consolidate cadence on merge (engine + the existing 19)
+The uq index `uq_cadence_contact_property` keys on `(COALESCE(entity_id,zero),
+COALESCE(property_id,zero), COALESCE(sf_contact_id,''))`, so a blind `entity_id`
+repoint 23505s when the survivor already carries a cadence with the same
+(property,sf) key. The helper instead **folds the loser's engagement into the
+survivor** (sum emails/calls/meetings, `GREATEST` current_touch + last_touch_at/
+flyer/meeting, keep the further-along `phase` via `lcc_cadence_phase_rank`,
+`COALESCE` bd_opportunity_id) then DROPs the loser cadence (snapshotted). When
+the survivor has no colliding cadence it blind-repoints (the existing 5 case).
+
+### Verified live 2026-06-16 (applied to LCC Opps)
+Dry-run report matched grounding exactly. Forward-engine synthetic test (DO block
+that RAISEs to self-rollback — **0 residue**): two persons each with a colliding
+cadence + a duplicate relationship + an SF id → merge folded counters
+(emails 5+2=7, touch GREATEST=3, phase kept onboarding), loser cadence gone,
+relationship deduped, SF id moved, 1 `cadence_consolidate` backup row, 2-col
+return intact. **Real one-time apply:** reconciled 6,135 ER / 5 xid / 45
+portfolio / 19 cadence (14 consolidate / 5 repoint) / 17 activity / 13 inbox / 1
+research / 1 buyer_parent / 3 affiliate / 2 chain — **6,229 reversible backup
+rows** (5,553 repoint, 655 dedup_delete, 14 cadence_consolidate, 5 cadence_repoint,
+2 chain_collapse; 0 self_loop_delete — no two tombstones sharing an edge merged to
+the same survivor). After: **0 dangling across every table, 0 chains remaining**;
+**idempotent** re-run = 0; load-bearing caches rebuild cleanly
+(`lcc_refresh_priority_queue_resolved` 1,284, `_entity_connected_value` 2,928,
+`_buyer_spe_resolved` 633); UIRC survivor now in both registries; **R40 created
+ZERO self-loops** (the 99 pre-existing `from=to` rows are untouched — separate
+old-data matter). `node --check` clean; suite 992 pass / 0 fail / 6 skipped;
+`ls api/*.js | wc -l`=12. LCC-Opps only — no dia/gov writes, auth schema
+untouched. Reverse any change from `r40_merge_reconcile_backup`.
+
+### Surfaced (NOT fixed here)
+99 pre-existing `entity_relationships` self-loops (`from_entity_id =
+to_entity_id`) — an entity related to itself, from old captures, unrelated to the
+merge graph. A separate dedup/cleanup round.
