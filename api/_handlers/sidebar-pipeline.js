@@ -538,6 +538,48 @@ export async function detectSalePriceBleed(domain, propertyId, soldPrice, datePa
   return out;
 }
 
+// R37 (2026-06-17): does this property already carry a LIVE priced sale?
+// The sidebar minted a new price-less sales_transactions row on every
+// re-capture of a property (the ±14d lookup misses when there is no priced
+// row to match), piling up needs_review placeholders — 86% of which sat on a
+// property that already had a real, priced live sale. This probe lets the
+// writer refuse the placeholder at the source. `transaction_state='live'`
+// matches the R36 canonical-metric definition; `sold_price>0` is a real price.
+export async function propertyHasLivePricedSale(domain, propertyId) {
+  if (propertyId == null) return false;
+  const res = await domainQuery(domain, 'GET',
+    `sales_transactions?property_id=eq.${propertyId}` +
+    `&transaction_state=eq.live&sold_price=gt.0&select=sale_id&limit=1`
+  ).catch(() => ({ ok: false, data: [] }));
+  return !!(res.ok && Array.isArray(res.data) && res.data.length > 0);
+}
+
+// R37 (2026-06-17): decide what an incoming sidebar sale should do BEFORE any
+// write. Pure — all I/O is resolved by the caller and passed in as booleans so
+// this is unit-testable and the policy lives in one place.
+//
+//   lookupMatched     — an existing sale row matched (document_number, the
+//                       price±5%/date±14d window, or the R37 dedup-key window).
+//   incomingHasPrice  — the CAPTURE carried a positive sold_price. This is the
+//                       raw page price, NOT the written price: a portfolio
+//                       aggregate is nulled on write but is still a real,
+//                       identified sale, so it is allowed to insert.
+//   propertyHasLiveSale — the property already has a 'live' priced sale.
+//
+// Returns { action: 'patch' | 'insert' | 'skip', reason }.
+//   patch  → idempotently refresh the matched row (never a second row).
+//   insert → a genuinely new priced transaction.
+//   skip   → a price-less page reference is not a closed transaction; never
+//            mint a placeholder into the live transactions table. Re-captures
+//            are naturally idempotent because nothing is written.
+export function classifySaleWrite({ lookupMatched, incomingHasPrice, propertyHasLiveSale }) {
+  if (lookupMatched) return { action: 'patch', reason: 'matched_existing' };
+  if (incomingHasPrice) return { action: 'insert', reason: 'new_priced_sale' };
+  return propertyHasLiveSale
+    ? { action: 'skip', reason: 'priceless_redundant_live_sale_exists' }
+    : { action: 'skip', reason: 'priceless_no_live_sale' };
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -4760,6 +4802,11 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
   }
 
   let count = 0;
+  // R37 (2026-06-17) prevent-at-write telemetry: skipped price-less
+  // placeholders (split redundant vs genuinely-new) and dedup-window
+  // collapses that avoided an insert→supersede churn row.
+  let skippedPriceless = 0, skippedPricelessRedundant = 0, skippedPricelessNew = 0;
+  let dedupCollapsed = 0;
   for (const sale of sales) {
     const saleDate = parseDate(sale.sale_date);
     if (!saleDate) continue;
@@ -4850,6 +4897,38 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
             return delta <= 0.05;
           });
           if (compatible) lookup = { ok: true, data: [compatible] };
+        }
+      }
+    }
+
+    // Stage 3 (R37, 2026-06-17): prevent-at-write the duplicate_superseded
+    // churn. The sales_dedup_tick cron quarantines a NEW priced row when an
+    // existing LIVE sale on the same property is within $1,000 and 60 days
+    // (its cross-month proximity pass). Rather than insert a row the cron will
+    // immediately supersede (~335/mo), match the survivor here and PATCH it in
+    // place. Bounded by an ABSOLUTE $1,000 price window (not the relative ±5%
+    // of Stage 2) so a $10K seed transfer never collapses into a $45M
+    // acquisition; only a genuine re-capture of the same sale collapses.
+    if ((!lookup.ok || !lookup.data?.length) && soldPrice != null && soldPrice > 0) {
+      const lo60 = new Date(saleD); lo60.setDate(lo60.getDate() - 60);
+      const hi60 = new Date(saleD); hi60.setDate(hi60.getDate() + 60);
+      const dedupLookup = await domainQuery(domain, 'GET',
+        `sales_transactions?property_id=eq.${propertyId}` +
+        `&transaction_state=eq.live` +
+        `&sale_date=gte.${lo60.toISOString().split('T')[0]}` +
+        `&sale_date=lte.${hi60.toISOString().split('T')[0]}` +
+        `&select=${lookupSelect}&limit=10`
+      ).catch(() => ({ ok: false, data: [] }));
+      if (dedupLookup.ok && Array.isArray(dedupLookup.data) && dedupLookup.data.length) {
+        const cand = dedupLookup.data
+          .filter(r => Number.isFinite(Number(r.sold_price))
+                    && Math.abs(Number(r.sold_price) - soldPrice) <= 1000)
+          .sort((a, b) =>
+            Math.abs(new Date(a.sale_date).getTime() - saleD.getTime()) -
+            Math.abs(new Date(b.sale_date).getTime() - saleD.getTime()))[0];
+        if (cand) {
+          lookup = { ok: true, data: [cand] };
+          dedupCollapsed++;
         }
       }
     }
@@ -5189,7 +5268,32 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // so we can emit a single diagnostic per iteration at the end.
     let loopSaleId = null;
 
-    if (lookup.ok && lookup.data?.length) {
+    // R37 (2026-06-17): resolve the write action at the source. A price-less
+    // capture (no price on the page) that matches no existing row is NOT a
+    // closed transaction — never mint a placeholder into the live table. Use
+    // the raw `soldPrice` signal (an aggregate-nulled but genuinely-priced
+    // sale still has soldPrice>0 and is allowed to insert).
+    const lookupMatched = !!(lookup.ok && lookup.data?.length);
+    const incomingHasPrice = soldPrice != null && Number(soldPrice) > 0;
+    let writeAction;
+    if (lookupMatched) {
+      writeAction = { action: 'patch', reason: 'matched_existing' };
+    } else if (incomingHasPrice) {
+      writeAction = { action: 'insert', reason: 'new_priced_sale' };
+    } else {
+      const propertyHasLiveSale = await propertyHasLivePricedSale(domain, propertyId);
+      writeAction = classifySaleWrite({ lookupMatched, incomingHasPrice, propertyHasLiveSale });
+    }
+
+    if (writeAction.action === 'skip') {
+      skippedPriceless++;
+      if (writeAction.reason === 'priceless_redundant_live_sale_exists') skippedPricelessRedundant++;
+      else skippedPricelessNew++;
+      console.log(`[upsertDomainSales] R37 skip price-less ${writeAction.reason} domain=${domain} property=${propertyId} date=${datePart} — no placeholder minted`);
+      continue;
+    }
+
+    if (writeAction.action === 'patch') {
       const existing = lookup.data[0];
       loopSaleId = existing.sale_id;
 
@@ -5395,6 +5499,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       isCurrent:              isCurrentSale,
       brokerFallbackAllowed:  brokerFallbackAllowed,
     });
+  }
+
+  // R37 (2026-06-17): surface prevent-at-write outcomes in the function logs
+  // so the cron-log audit can confirm the sidebar stopped minting placeholders.
+  if (skippedPriceless > 0 || dedupCollapsed > 0) {
+    console.log(`[upsertDomainSales] R37 summary domain=${domain} property=${propertyId} wrote=${count} skipped_priceless=${skippedPriceless} (redundant=${skippedPricelessRedundant} new=${skippedPricelessNew}) dedup_collapsed=${dedupCollapsed}`);
   }
 
   return count;
