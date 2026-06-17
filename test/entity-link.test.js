@@ -2,7 +2,8 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix,
   isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName,
-  isFieldLabelName, isImplausibleOwnerName, isJunkProspectName } from '../api/_shared/entity-link.js';
+  isFieldLabelName, isImplausibleOwnerName, isJunkProspectName,
+  normalizeEmail, isGenericInboxEmail } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
 
@@ -315,6 +316,68 @@ describe('entity-link helper', () => {
     assert.ok(posts.some(p => p.kind === 'relationship' && p.type === 'associated_with'
       && p.metadata && p.metadata.via === 'composite_owner_split'));
     assert.ok(result.compositeContactId);
+  });
+
+  // R39 Unit 1 — email as a write-time resolution key.
+  it('normalizeEmail / isGenericInboxEmail', () => {
+    assert.equal(normalizeEmail('  John.Doe@Example.COM '), 'john.doe@example.com');
+    assert.equal(normalizeEmail('not-an-email'), '');
+    assert.equal(normalizeEmail('a@b'), '');           // no TLD
+    assert.equal(normalizeEmail(null), '');
+    assert.equal(isGenericInboxEmail('info@acme.com'), true);
+    assert.equal(isGenericInboxEmail('sales+nyc@acme.com'), true);   // plus-addressing
+    assert.equal(isGenericInboxEmail('Leasing@acme.com'), true);
+    assert.equal(isGenericInboxEmail('jane.smith@acme.com'), false);
+    assert.equal(isGenericInboxEmail('not-an-email'), false);
+  });
+
+  it('attaches a re-captured person to the existing entity by email (no new entity)', async () => {
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url); const method = opts.method || 'GET';
+      calls.push({ u, method });
+      if (method === 'GET' && u.includes('/external_identities?')) return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      // canonical_name lookup misses; the email lookup hits.
+      if (method === 'GET' && u.includes('/entities?') && u.includes('email=ilike.')) {
+        return jsonResponse([{ id: 'person-existing', entity_type: 'person', name: 'Jane Q. Smith', email: 'jane.smith@acme.com' }]);
+      }
+      if (method === 'GET' && u.includes('/entities?')) return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (method === 'POST' && u.endsWith('/entities')) throw new Error('must NOT create a new entity when email resolves');
+      if (method === 'POST' && /\/external_identities(\?|$)/.test(u)) return jsonResponse([{ id: 'ext-1', ...JSON.parse(opts.body) }]);
+      return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+    };
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1', userId: 'user-1', sourceSystem: 'costar', sourceType: 'person',
+      externalId: 'contact-9', domain: 'dia',
+      seedFields: { name: 'Jane Smith', email: 'JANE.SMITH@acme.com' },  // different name, same email
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.entityId, 'person-existing');
+    assert.equal(result.createdEntity, false);
+    assert.equal(result.resolvedByEmail, true);
+    assert.ok(calls.some((c) => c.method === 'POST' && /\/external_identities/.test(c.u)));
+  });
+
+  it('does NOT email-attach on a generic/shared inbox (mints a new person)', async () => {
+    let created = 0;
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url); const method = opts.method || 'GET';
+      if (method === 'GET' && u.includes('/external_identities?')) return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      // An email lookup must never even be issued for a generic inbox.
+      if (method === 'GET' && u.includes('email=ilike.')) throw new Error('must not look up a generic inbox by email');
+      if (method === 'GET' && u.includes('/entities?')) return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (method === 'POST' && u.endsWith('/entities')) { created += 1; return jsonResponse([{ id: 'person-new', ...JSON.parse(opts.body) }]); }
+      if (method === 'POST' && /\/external_identities(\?|$)/.test(u)) return jsonResponse([{ id: 'ext-1' }]);
+      return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+    };
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1', userId: 'user-1', sourceSystem: 'costar', sourceType: 'person',
+      externalId: 'contact-10', domain: 'dia',
+      seedFields: { name: 'Front Desk', email: 'info@acme.com' },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(created, 1);
+    assert.equal(result.resolvedByEmail, false);
   });
 
   it('returns an error when external identity creation fails after entity creation', async () => {
