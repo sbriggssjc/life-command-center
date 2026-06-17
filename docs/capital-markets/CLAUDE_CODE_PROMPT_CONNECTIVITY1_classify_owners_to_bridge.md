@@ -21,27 +21,36 @@
   `manual_operator_flag` (→operator). It derives the role from the owner's
   transaction/ownership signals — signals 2,193 of the 2,956 already have.
 
-## Unit 1 — run the owner-role classifier on the un-classified active owners
-- **Locate the classifier** that produced `acquired_after_lease` /
-  `tenant_relationship_value_creation` (the function/job/RPC; likely keyed off
-  `acquisition_count` / lease-vs-sale timing / `v_dia_owner_role_classification`). It exists
-  — it set ~655 roles; it just was never run over the rest.
-- Run it on the **2,956 un-classified in-use dia true_owners** (`owner_role='unknown' AND
-  owner_role_source IS NULL AND` referenced by ≥1 recorded_owner). Fill-blanks only — never
-  overwrite an already-classified role; stamp `owner_role_source` + confidence so it's
-  auditable + reversible. Capped batch first → receipts to me → then the rest.
-- The ~2,193 with transaction signals should classify (buyer/developer/operator); the
-  signal-less ~763 may stay `unknown` (genuinely low-info) — that's fine, a smaller honest
-  residue, NOT force-classified.
+## Unit 1 — bridge in-use owners regardless of archetype (the classifier path is a no-op)
+**CORRECTION (CC grounding): re-running the classifier reaches 0 of the 2,956 dia / 3,530
+gov unclassified owners** — they genuinely don't fit the three behavioral archetypes
+(`acquired_after_lease`/`tenant_relationship`/manual). They are real owners with an
+UNDETERMINED archetype, not classifiable-but-unrun. So do NOT force a fake archetype.
+- **The real over-restriction is the sync's `classified`-only eligibility.** Archetype
+  (buyer/developer/operator) is ENRICHMENT, not a prerequisite for existing in the entity
+  graph. An in-use true_owner (resolved from a recorded *property* owner) is a real owner and
+  belongs in the graph with `owner_role='unknown'` (honest) until enriched.
+- **Expand bridge eligibility** from "classified" to "**in-use real owner**" (referenced by
+  ≥1 recorded_owner). Start CONSERVATIVE with the **757 that currently own property**
+  (`current_property_count > 0` — unambiguous owners), then the broader in-use set. Keep
+  `owner_role` as-is. Implement as a sync-scope change OR a parallel bridge path — reuse
+  `lcc_sync_classified_owners`'s entity-mint machinery, just widen the WHERE.
+- **Every mint passes the existing `ensureEntityLink` junk/operator/implausible guards**, so
+  a seller/broker/lender mis-recorded into recorded_owners (or a junk name, or an operator
+  like DaVita) is still filtered — that's the protection against bridging non-owners.
+- **Spot-check first:** confirm the in-use `unknown` set is genuinely owners (resolved from
+  recorded property owners), not contaminated with sellers/brokers. Clean → bridge; murky →
+  tighten to the property-owning subset.
 
-## Unit 2 — let the existing sync bridge them (verify, don't rebuild)
-- After classification, the every-4h `lcc_sync_classified_owners` should pick up the newly-
-  classified owners and create their LCC entities + `external_identities(dia, true_owner)`
-  links. Verify it does (or trigger one run). **No sync change** — it already works; we just
-  fed it. Re-baseline: dia true_owner→entity bridge should jump from ~679 toward ~655+2,193.
+## Unit 2 — run the widened bridge + verify
+- With the eligibility widened (Unit 1), run/trigger the bridge over the in-use owners and
+  confirm it mints their LCC entities + `external_identities(dia, true_owner)` links, reusing
+  the existing entity-mint machinery (don't fork it — widen the WHERE only). Capped batch
+  first → receipts → drain. Re-baseline: dia true_owner→entity bridge should jump from ~679
+  toward ~3,000 (or the property-owning subset first, ~757+).
 - Every entity it mints goes through the existing `ensureEntityLink` junk/operator/implausible
   guards (so DaVita/Fresenius operator owners and junk names are handled correctly) — confirm
-  no garbage entities created.
+  no garbage/non-owner entities created.
 
 ## Unit 3 — gov (same gap, ground first)
 - gov very likely has the identical classification gap (14,150 true_owners, ~3,404 bridged).
