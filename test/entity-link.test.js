@@ -111,6 +111,44 @@ describe('entity-link helper', () => {
     assert.ok(calls.some(call => call.url.includes('/external_identities') && call.method === 'POST'));
   });
 
+  it('retypes a firm-suffixed inferred-person to organization (junk-lane rescope Unit 2)', async () => {
+    const created = [];
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/external_identities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (u.includes('/entities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (u.endsWith('/entities') && opts.method === 'POST') {
+        const body = JSON.parse(opts.body); created.push(body);
+        return jsonResponse([{ id: 'entity-org', ...body }]);
+      }
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') return jsonResponse([{ id: 'ext-1', ...JSON.parse(opts.body) }]);
+      throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+    };
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1', userId: 'user-1', sourceSystem: 'costar', sourceType: 'person',
+      externalId: 'buyer-1', domain: 'government', seedFields: { name: 'Acadia Realty' },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(created.length, 1);
+    assert.equal(created[0].entity_type, 'organization');  // mistyped firm recovered
+  });
+
+  it('still rejects a deal/attribution string even with a firm token', async () => {
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/external_identities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (u.includes('/entities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (u.endsWith('/entities') && opts.method === 'POST') throw new Error('must not create an entity for a deal string');
+      throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+    };
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1', userId: 'user-1', sourceSystem: 'costar', sourceType: 'person',
+      externalId: 'buyer-2', domain: 'government', seedFields: { name: 'Townsend Capital by NAI ($5.0m approx)' },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.skipped, 'implausible_person_name');
+  });
+
   it('flags bare street-address fragments (R9 follow-up)', () => {
     // The chain-connect drain minted these as organizations — must be rejected.
     assert.equal(isStreetFragmentName('West Mall Dr'), true);
