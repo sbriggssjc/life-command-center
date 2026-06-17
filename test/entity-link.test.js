@@ -149,6 +149,55 @@ describe('entity-link helper', () => {
     assert.equal(result.skipped, 'implausible_person_name');
   });
 
+  // Junk-lane rescope follow-up (Unit B, 2026-06-17): the via/aka/c-o/sentence
+  // attribution classes are now in DEAL_STRING_RE too, so a firm-suffixed
+  // inferred-person carrying one stays `person` → rejected, never minted as a
+  // dirty-named org (matches the Unit-A bulk correction).
+  for (const dirty of [
+    'Prime Property Fund via Morgan Stanley Prime Property Fund',
+    'American Realty Capital AKA AR Global Investments',
+    '150 Spear Street Associates c/o Alex Freemon Greg Freemon',
+    'The property is currently 100% occupied by DaVita Dialysis',
+  ]) {
+    it(`rejects deal/attribution artifact (not retyped to org): ${dirty.slice(0, 32)}…`, async () => {
+      global.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        if (u.includes('/external_identities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+        if (u.includes('/entities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+        if (u.endsWith('/entities') && opts.method === 'POST') throw new Error('must not create an entity for a deal/attribution artifact');
+        throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+      };
+      const result = await ensureEntityLink({
+        workspaceId: 'ws-1', userId: 'user-1', sourceSystem: 'costar', sourceType: 'person',
+        externalId: 'buyer-x', domain: 'government', seedFields: { name: dirty },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.skipped, 'implausible_person_name');
+    });
+  }
+
+  it('does NOT false-reject a legit leading-"Via"/"Aka" firm name (mid-string anchor)', async () => {
+    const created = [];
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/external_identities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (u.includes('/entities?') && opts.method === 'GET') return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      if (u.endsWith('/entities') && opts.method === 'POST') {
+        const body = JSON.parse(opts.body); created.push(body);
+        return jsonResponse([{ id: 'entity-org', ...body }]);
+      }
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') return jsonResponse([{ id: 'ext-1', ...JSON.parse(opts.body) }]);
+      throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+    };
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1', userId: 'user-1', sourceSystem: 'costar', sourceType: 'person',
+      externalId: 'buyer-via', domain: 'government', seedFields: { name: 'Via Verde Capital' },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(created.length, 1);
+    assert.equal(created[0].entity_type, 'organization');  // leading "Via" is not attribution
+  });
+
   it('flags bare street-address fragments (R9 follow-up)', () => {
     // The chain-connect drain minted these as organizations — must be rejected.
     assert.equal(isStreetFragmentName('West Mall Dr'), true);
