@@ -48,7 +48,36 @@ the CM views use, kept fresh by Unit 1), falling back to the legacy column ladde
 only where of-record is NULL — so the bypass loader, the projecting view, and the
 ledger agree, and no comp that shows a cap today blanks.
 
-## Unit 2 — SCOPED backfill (R42.1; NOT run; needs Scott's sign-off)
+## ✅ APPLIED 2026-06-18 (Scott signed off; timed with the marketing heads-up)
+The scoped backfill was run live on both DBs and verified.
+
+| DB  | run_tag | applied | review | verification |
+|-----|---------|---------|--------|--------------|
+| gov | `r42_backfill_20260618144329` | 538 ledger caps | 169 (103 low-conf · 47 OOB · 19 bad_rent) | 538 = backup rows · 0 out-of-band · 0 non-ledger writes (raw `sold_cap_rate`/`ingested` untouched) |
+| dia | `r42_backfill_20260618144401` | 288 ledger + 282 `calculated_cap_rate`/`rent_at_sale` | 244 (227 low-conf · 17 OOB) | 0 out-of-band · `cap_rate_final` refreshed where noi_derived (19), kept raw reported cap (148), 0 manual writes |
+
+**Reverse a run** (if ever needed) — keyed on the run_tag above:
+```sql
+-- ledger (both DBs):
+UPDATE public.cap_rate_history h SET cap_rate = b.old_value
+FROM public.cap_recompute_backup b
+WHERE b.run_tag='<run_tag>' AND b.col='cap_rate' AND b.ref_id = h.id;
+-- dia displayed (calculated_cap_rate + rent_at_sale -> of-record trigger re-derives cap_rate_final):
+UPDATE public.sales_transactions s SET calculated_cap_rate=b.old_value
+FROM public.cap_recompute_backup b WHERE b.run_tag='<run_tag>' AND b.col='calculated_cap_rate' AND b.ref_id=s.sale_id;
+UPDATE public.sales_transactions s SET rent_at_sale=b.old_value
+FROM public.cap_recompute_backup b WHERE b.run_tag='<run_tag>' AND b.col='rent_at_sale' AND b.ref_id=s.sale_id;
+```
+
+**Two follow-ups (run separately):**
+1. **Work the review list** — gov 169 / dia 244 low-conf + out-of-band movers in
+   `caprate_recompute_review` (a human decides; nothing auto-published).
+2. **Feed the 19 gov `bad_rent` rows to the upstream lease-data fix** — the
+   recompute surfaced genuinely bad leases (implausible gross yield > 25%, e.g.
+   prop 1152). Fix the rent at the source; mark the review row
+   `resolved_at`/`resolution` when done.
+
+## Unit 2 — SCOPED backfill (R42.1; the gated procedure, now applied above)
 The first R42 dry-run was a **blanket** apply (gov 1,034 / dia 532 events). Review
 found it would fix hundreds of garbage ingest caps but also publish a few
 **bad-rent** caps (prop 1152: rent $1.77M on a $4.36M sale → 40% gross yield →
