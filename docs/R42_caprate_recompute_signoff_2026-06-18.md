@@ -48,33 +48,52 @@ the CM views use, kept fresh by Unit 1), falling back to the legacy column ladde
 only where of-record is NULL — so the bypass loader, the projecting view, and the
 ledger agree, and no comp that shows a cap today blanks.
 
-## Unit 2 — GATED backfill (NOT run; needs Scott's sign-off)
-`{gov,dia}_recompute_caps_backfill(p_dry_run boolean DEFAULT true)` —
-`p_dry_run=true` writes nothing and returns the before/after diff. A real run
-(`false`) snapshots every overwritten value to `public.cap_recompute_backup`
-(reversible) first.
+## Unit 2 — SCOPED backfill (R42.1; NOT run; needs Scott's sign-off)
+The first R42 dry-run was a **blanket** apply (gov 1,034 / dia 532 events). Review
+found it would fix hundreds of garbage ingest caps but also publish a few
+**bad-rent** caps (prop 1152: rent $1.77M on a $4.36M sale → 40% gross yield →
+29% cap; old 4.05% → new 29.4% is a *regression*). **R42.1 scopes it.**
 
-**Dry-run before/after (2026-06-18):**
+`{gov,dia}_recompute_caps_backfill(p_dry_run DEFAULT true, p_min_drift, p_band_lo,
+p_band_hi, p_max_yield, p_max_props)` now auto-applies a recompute **only when ALL
+hold**: `income_confidence='high'` · recomputed cap in band (gov `[0.04,0.12]`,
+dia `[0.045,0.11]` — from the live high-conf distribution) · implied gross yield
+`rent/price ≤ 0.25` (the bad-rent signal). Everything excluded is routed to
+`public.caprate_recompute_review` (with `reason` + a `bad_rent` tag for
+implausible yield) and **not applied**. Real run snapshots every applied value to
+`public.cap_recompute_backup` (reversible) first.
 
-| DB  | drifting props | drifting events | avg cap before → after | events ≥500bps | max |Δ| |
-|-----|---------------:|----------------:|------------------------|---------------:|------:|
-| gov | 504 | 1,034 | 9.92% → 8.36% (−1.56 pts) | 197 | 28.1 pts |
-| dia | 434 |   532 | 7.02% → 7.90% (+0.88 pts) |  24 | 13.8 pts |
+**Scoped before/after (2026-06-18):**
 
-These move published-adjacent CM numbers in bulk → **sign-off required.**
+| DB  | auto-apply events / props | avg cap before → after | max \|Δ\| | → review (low/med-conf · out-of-band · bad_rent) |
+|-----|--------------------------:|------------------------|----------:|--------------------------------------------------|
+| gov | **538 / 396** | 10.29% → 7.82% (−2.47 pts) | 13.3 pts | **169** (103 · 47 · 19) |
+| dia | **288 / 236** |  6.86% → 7.73% (+0.87 pts) |  8.8 pts | **244** (227 · 17 · 0) |
 
-### To inspect the full diff (read-only, anytime)
+Apply-set max moves are legit corrections (e.g. 22.8% → 9.5% garbage-cap fixes,
+all high-conf in-band); the 25–28 pt bad-rent outliers are now in **review**, not
+applied. Still moves published CM numbers → **sign-off required.**
+
+### To inspect the scoped diff (read-only, anytime)
 ```sql
--- gov / dia — full list, writes nothing:
-SELECT public.gov_recompute_caps_backfill(true, 0.005, NULL);   -- on gov DB
-SELECT public.dia_recompute_caps_backfill(true, 0.005, NULL);   -- on dia DB
+SELECT public.gov_recompute_caps_backfill(true);   -- on gov DB — {apply, review_by_reason, sample_apply, sample_review}
+SELECT public.dia_recompute_caps_backfill(true);   -- on dia DB
 ```
 
-### To apply the backfill (after sign-off)
+### To apply the scoped backfill (after sign-off)
 ```sql
-SELECT public.gov_recompute_caps_backfill(false, 0.005, NULL);  -- on gov DB
-SELECT public.dia_recompute_caps_backfill(false, 0.005, NULL);  -- on dia DB
--- returns {run_tag, properties_recomputed, caps_updated}
+SELECT public.gov_recompute_caps_backfill(false);  -- on gov DB → {run_tag, caps_applied, review_emitted}
+SELECT public.dia_recompute_caps_backfill(false);  -- on dia DB → {run_tag, ledger_applied, sales_applied, review_emitted}
+-- tune the band/yield via the params if needed, e.g. (false,0.005,0.04,0.12,0.25,NULL)
+```
+
+### Review list (suspect movers + bad rent) — Units 2 & 4
+A real run populates `public.caprate_recompute_review` on each DB:
+```sql
+SELECT reason, tag, count(*) FROM public.caprate_recompute_review WHERE resolved_at IS NULL GROUP BY 1,2;
+-- bad_rent rows are the implausible-rent (gross yield > 25%) leases the recompute
+-- SURFACED — Unit 4: fix the underlying lease data at the source, don't auto-correct
+-- rent here. Mark a row done by setting resolved_at + resolution.
 ```
 
 ### To revert a backfill run (per `run_tag`)
