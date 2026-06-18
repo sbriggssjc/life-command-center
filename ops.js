@@ -1465,6 +1465,8 @@ async function renderReviewConsolePage() {
   const SUBLANES = [
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
+    { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
+    { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
@@ -1732,6 +1734,28 @@ function _dcCardHTML(it, isNext) {
       + '<div class="q-item-meta">' + esc(c.summary || 'The availability-checker is being bot-blocked. Verify the top listings manually, or acknowledge.') + '</div>';
     actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'verify\')">Verify top 5 manually</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'acknowledge\')">Acknowledge</button>';
+  } else if (it.decision_type === 'sf_link_conflict') {
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.owner_entity_name || 'Owner entity') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '?') + '</span></div></div>'
+      + '<div class="q-item-meta">LCC entity is linked to SF Account <b>' + esc(c.lcc_sf_id || '—') + '</b>, '
+      + 'but the domain owner carries <b>' + esc(c.domain_sf_id || '—') + '</b>. Which is canonical?</div>';
+    actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'keep_current\')">Keep current (LCC)</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'accept_domain\')">Accept domain id</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
+  } else if (it.decision_type === 'sf_link_collision') {
+    const ents = Array.isArray(c.entities) ? c.entities : [];
+    const kindLabel = c.kind === 'dup_sfid' ? 'One Salesforce Account is on ' + ents.length + ' domain owners'
+      : 'This Salesforce Account is already on another entity';
+    body = '<div class="q-item-header"><span class="q-item-title">SF Account ' + esc(c.sf_account_id || '') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '?') + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(kindLabel) + ' — same owner, ' + ents.length + ' entities. Keep one and merge the rest in, or keep separate.</div>';
+    ents.forEach(function (e) {
+      body += '<div class="q-item-meta">• <b>' + esc(e.name || e.entity_id) + '</b>'
+        + (e.source ? ' <span class="q-badge">' + esc(e.source === 'sf_linked' ? 'SF-linked' : 'domain owner') + '</span>' : '')
+        + ' <button class="q-action" onclick="dcVerdict(' + id + ',\'merge\',{winner_entity_id:\'' + esc(e.entity_id) + '\'})">Keep this — merge others in →</button></div>';
+    });
+    actions = '<button class="q-action" onclick="dcVerdict(' + id + ',\'keep_separate\')">Keep separate</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -1785,13 +1809,16 @@ async function renderDecisionLane(type) {
   const total = res.data ? res.data.total : null;
   const titles = { confirm_true_owner: 'Confirm the true owner', junk_entity_name: 'Junk entity names',
     match_disambiguation: 'Intake match disambiguation', llc_research_dead: 'LLC research dead-letters',
-    availability_checker_botblock: 'Availability bot-blocks' };
+    availability_checker_botblock: 'Availability bot-blocks',
+    sf_link_conflict: 'Salesforce link conflicts', sf_link_collision: 'Salesforce link — same owner, two entities' };
   const intros = {
     confirm_true_owner: 'The domain true owner may be stale (pre-acquisition). Confirm it’s current and connect, mark it stale with the new owner (recorded now; write-back ships in Slice 3), or send to research.',
     junk_entity_name: 'Entities soft-flagged with structural-garbage names (phone/email/panel-header bleed-through). Rename to the real name, merge into the correct entity, or leave flagged.',
     match_disambiguation: 'The intake matcher found multiple candidate properties above threshold (rather than auto-attaching the wrong one). Pick the right property, or create a new one.',
     llc_research_dead: 'Automated owner-LLC research dead-lettered after the attempt cap. Resolve it via the Secretary of State (research task), retry the lookup, or park it.',
     availability_checker_botblock: 'The availability-checker is being bot-blocked (high unreachable share). Verify the top listings by hand, or acknowledge the alert (resolves it).',
+    sf_link_conflict: 'The bridged owner entity already has a Salesforce Account link that disagrees with the domain’s. Keep the current LCC link, accept the domain id, or research. Never auto-overwritten.',
+    sf_link_collision: 'The same Salesforce Account resolves to two entities (a collision, or one SF id on multiple domain owners). Same owner, two entities — keep one and merge the rest in, or keep separate.',
   };
   let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
