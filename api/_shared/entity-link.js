@@ -327,6 +327,11 @@ const PLACEHOLDER_OWNER_PATTERNS = [
   /^\s*(?:1031\s+)?exchange\s+buyer\s*$/i,
   // Bare transaction-role descriptor (the WHOLE name).
   /^\s*(?:buyer|seller|escrow)\s*$/i,
+  // Null-ish "no owner known" placeholder cell (CONNECTIVITY #1b drain gate):
+  // "Unknown" / "Unknown Owner" / "N/A" / "None" / "TBD" / "Undisclosed" /
+  // "Various". Whole-name anchored so a real owner ("Various Partners LLC")
+  // still passes.
+  /^\s*(?:unknown(?:\s+owner)?|n\/?a|n\.a\.?|none|tbd|not\s+available|undisclosed|various)\s*$/i,
 ];
 
 /**
