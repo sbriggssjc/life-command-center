@@ -52,8 +52,45 @@ universe — owners that the domain DBs already know (classified, property-ownin
 SF-linked) are invisible to BD because the bridge never ran.
 
 ## Proposed remediation (gated, receipts-first, in leverage order)
-1. **Classify the un-classified active owners → the existing sync bridges them (the big
-   unlock).** GROUNDED ROOT CAUSE (corrects the first framing): the sync is NOT broken — it
+1. **✅ DONE 2026-06-18 — bridge in-use real owners regardless of archetype (the big unlock).**
+   Shipped on PR #1235 (`claude/confident-ride-pmo1et`), applied live + verified by the
+   independent gate. FINAL FRAMING (supersedes the "classify first" framing below): re-running
+   the classifier reaches 0 of the unclassified owners — they are real owners with an
+   *undetermined* archetype, not classifiable-but-unrun. So the fix was to **widen bridge
+   eligibility from "classified" to "in-use real owner"** (per-domain `v_bridge_eligible_owners`
+   off the live `ownership_history` / `properties.true_owner_id` join — NOT the stale
+   `current_property_count` counter, which undercounted current owners 395 vs 1,020),
+   minting via the existing `ensureEntityLink` / `lcc_finalize_bridge_eligible_owners`
+   machinery with `owner_role='unknown'` (honest), reversible by
+   `metadata.bridge_source='connectivity_inuse_owner'`.
+   - **Result: dia true_owner bridge 679 → 3,570; gov 3,404 → 6,935** (from ~20% bridged to
+     the real owner universe). All `owner_role='unknown'`, all linked (mint/link parity, 0
+     missing identity), 0 unflagged artifacts.
+   - **Drains (each independently gated):** dia conservative +372, gov conservative +3,531,
+     broad dia +2,088. gov has no broad-only tier (eligibility = current title holder).
+   - **Three broad-gate safeguards built first:** (a) auto-merge pin —
+     `v_lcc_merge_candidates.auto_mergeable` forced FALSE for any group touching a bridged
+     `unknown` owner (27→0; re-opens once the classified cron enriches off `unknown`);
+     (b) all-canonical twin surfacing — `v_lcc_canonical_twin_candidates` (1,016+ groups
+     visible vs 22) into the Decision Center merge lane, surface-not-merge; (c) `;`-composite
+     split wired into the SQL bridge (firm-most segment + `metadata.composite_source_name`).
+   - **Contamination guard (broad/prior-seller tier):** narrow, defensible artifact set
+     (`$/approx/paren-amount/OBO/X by Y/Since <date>/Month D, YYYY`) added to the
+     owner-scoped SQL guard + both eligibility views; the gate caught + corrected an interim
+     over-reach (CMBS-shelf-code/year-series patterns wrongly snagged real CMBS-REO SPE +
+     street-range LLC title holders — released, guard narrowed). Battery verified both
+     directions (8/8 artifacts caught, 8/8 legit owners incl. CMBS-REO SPEs spared).
+   - **Steady-state:** crons `lcc-bridge-eligible-fire` (`50 */4`) + `-finalize` (`55 */4`),
+     both active — new in-use owners auto-bridge; the classified cron enriches `unknown`→real
+     archetype on top.
+   - **Follow-ups logged:** (i) the 17 dia + 2 gov `;`-composites bridged in the *conservative*
+     pass (pre-#2) remain single entities — run the split helper retroactively anytime;
+     (ii) `current_property_count` denormalized-counter drift (395 vs 1,020 live) — separate
+     data-quality fix, likely undercounts elsewhere (any ranking/filter reading it).
+
+   ---
+   *Original framing (kept for the record; superseded by the DONE note above):*
+   GROUNDED ROOT CAUSE (corrects the first framing): the sync is NOT broken — it
    bridges *classified* owners (~655 dia, matching the ~679 bridged). The break is upstream:
    **2,956 in-use dia true_owners have `owner_role='unknown'` AND `owner_role_source IS NULL`
    — the behavioral classifier never ran on them** — yet they are real active owners (2,193
