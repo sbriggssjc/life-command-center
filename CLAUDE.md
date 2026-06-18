@@ -3415,3 +3415,40 @@ attach / already-linked 15↔18 / conflict / collision / dup-sfid / same-entity
 attaches-once / unbridged). `node --check` clean (sf-id, sf-link-reconcile,
 operations, admin, ops, server); `ls api/*.js | wc -l`=12; vercel.json valid;
 full suite 1017 pass / 0 fail / 6 skipped.
+
+### Live drain executed (2026-06-18, gated method)
+The HTTP endpoint wasn't deployed yet (PR #1244 unmerged), so the worker's exact
+logic (`planSfLinkReconcile` + the `ensureEntityLink`-equivalent attach with the
+worker `metadata.batch_tag`) was reproduced against the live DBs via MCP and the
+full capped→gate→drain was run:
+- **Dry-run plan** (768 Account owners): dia 311 bridged / gov 387; **512 ATTACH**
+  (dia 192 + gov 320), **6 CONFLICT**, **103 COLLISION**, **11 DUP-SFID** groups
+  (35 entities), 70 unbridged (out of scope), 360 dia Contact ids deferred.
+  Collisions spot-checked genuine (two near-identical active orgs sharing one SF
+  account, e.g. "12 Stonewall LLC"↔"12 Stonewall LLC"), no tombstones.
+- **Attach drain (512 total):** capped batch of 25 (tag `sflink_2026-06-18_gate25`)
+  then the remaining 487 in 2 capped batches of ≤250 (tag `sflink_2026-06-18_drain`).
+  Gate: 512 attached · **0 Contact leak · all 18-char · 512 distinct entities ·
+  0 entities double-linked · 0 remaining attach candidates**; gov slice
+  **320/320 left-15 match, 0 mismatch**. Queue cache refreshed (owners now
+  connected → leave P0.4). REVERSIBLE: `DELETE FROM external_identities WHERE
+  source_system='salesforce' AND source_type='Account' AND
+  metadata->>'via'='sf_link_reconcile'` (both batch tags).
+- **Decisions seeded (review-only, no auto-resolution):** `sf_link_conflict`=6,
+  `sf_link_collision`=114 (103 collision + 11 dup_sfid). Contexts verified to
+  match the ops.js card shape.
+- **Scaffold dropped (0 residue).** The `_sflink_stage` table + `_sf18` repro
+  function were temporary; both removed.
+
+### TWO CARRY-FORWARD CONDITIONS before the cron `20260719170000` goes live
+1. **Real-endpoint parity check (required).** The deployed worker JS has not been
+   exercised end to end (the drain above used the SQL reproduction). After PR
+   #1244 merges + Railway redeploys, run ONE real `GET
+   /api/sf-link-reconcile-tick` dry-run and confirm the plan matches
+   **512 / 6 / 103 / 35** before enabling the cron. (The 512 attaches are already
+   applied, so the live dry-run's *attach* count will read ~0 — verify instead
+   that the CONFLICT/COLLISION/DUP classification + already-linked totals
+   reconcile; i.e. already-linked ≈ 512 + the original 42.)
+2. **Cron stays `active=false`** until that real-endpoint dry-run confirms parity.
+   Do NOT apply the cron migration before then.
+
