@@ -190,6 +190,15 @@ export default withErrorHandler(async function handler(req, res) {
     return handleContactAcquisitionTick(req, res);
   }
 
+  // CONNECTIVITY #3 — Salesforce link-store reconcile (via vercel.json
+  // _route=sf-link-reconcile-tick). GET=dry-run / POST=drain. Mirrors domain
+  // owner SF Account links onto the bridged entity; surfaces conflicts/
+  // collisions to the Decision Center. Authenticates internally.
+  if (req.query._route === 'sf-link-reconcile-tick') {
+    const { handleSfLinkReconcileTick } = await import('./_handlers/sf-link-reconcile.js');
+    return handleSfLinkReconcileTick(req, res);
+  }
+
   // Context broker route (via vercel.json _route=context)
   // When edge_context_broker flag is enabled, proxy to Supabase Edge Function
   if (req.query._route === 'context') {

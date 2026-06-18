@@ -3329,3 +3329,89 @@ untouched. Reverse any change from `r40_merge_reconcile_backup`.
 99 pre-existing `entity_relationships` self-loops (`from_entity_id =
 to_entity_id`) — an entity related to itself, from old captures, unrelated to the
 merge graph. A separate dedup/cleanup round.
+
+## CONNECTIVITY #3 — reconcile the two Salesforce link stores (2026-06-18)
+
+Remediation #3 of `CONNECTIVITY_GAP_AUDIT_2026-06-17.md` (after the #1 owner
+bridge + #2/#4 owner-resolution passes). The domain DBs hold ~768 owner→SF
+ACCOUNT links the BD graph couldn't see — the link lived on `true_owners` (dia
+`salesforce_id` / gov `sf_account_id`) but was never mirrored onto the bridged
+LCC owner entity. This round makes the two stores agree: one canonical,
+BD-actionable SF Account link per owner. Receipts-first, capped, reversible,
+ambiguity surfaced (never guessed). JS ships on the Railway redeploy; the cron
+migration is applied AFTER the first gated drain.
+
+### Grounding (live 2026-06-18)
+- LCC `external_identities(salesforce, Account)` = 2,027, **all 18-char**;
+  `(salesforce, Contact)` = 864. Bridge `external_identities(<dia|gov>,
+  true_owner, external_id=true_owner_id)` = 6,406 dia / 8,234 gov, one workspace.
+- **dia active true_owners** `salesforce_id`: 326 Account (001) + 360 Contact
+  (003), 0 other. **gov** `sf_account_id`: 442, all Account, mixed 15/18 (301/141).
+- **Id-length mismatch is the trap:** domain ids are 15-char case-sensitive (a
+  few 18); LCC is uniformly 18. Raw `=` reads every real match as a mismatch.
+- dia 250-owner cross-DB sample: 235 bridged, 36 already carry an SF Account
+  link → 30 MATCH (15↔18), 6 CONFLICT. Validated the whole join.
+
+### Unit 0 — the matching helper (`api/_shared/sf-id.js`, ONE place)
+`sf15` (15-char base), `sfIdsMatch` (compare by left-15, case-sensitive, 15↔18
+safe), `toSf18` (standard SF checksum — what we WRITE so the store stays 18;
+anchored against live ids `0011I00000h7mHE→…QAY`, `0011I00000h7yOi→…QAI`),
+`classifySfId`/`isAccountId`/`isContactId` (key-prefix object type). **Only
+Account (001) ids flow into the reconcile** — the classifier is what keeps a
+Contact (003) id out of the Account store.
+
+### Unit 1-3 — the worker (`api/_handlers/sf-link-reconcile.js`, no new api/*.js)
+`?_route=sf-link-reconcile-tick` (sub-route of operations.js). GET=dry-run /
+POST=drain, capped (`limit`, default 25) + wall-clock-budgeted (~22s). Per domain:
+walk Account-id active true_owners → resolve the bridged owner entity →
+`planSfLinkReconcile` (pure, unit-tested) classifies each:
+- **ATTACH** (Unit 1, the win) — bridged owner, no SF link, id not on any other
+  entity → `ensureEntityLink(entityId, salesforce/Account, toSf18(id))`.
+  Fill-blanks (skips an entity that already has a link); reversible via
+  `external_identities.metadata.batch_tag`. Attaching makes the owner
+  "connected" (R6) → it can leave P0.4, so a drain refreshes the queue cache.
+- **CONFLICT** (Unit 2) — entity already linked to a DIFFERENT account → seeded
+  `sf_link_conflict` decision (never auto-overwrite).
+- **COLLISION** (Unit 1) — the id already lives on a different entity → seeded
+  `sf_link_collision` decision (same owner, two entities → merge); NOT a second
+  link, NOT a blind merge.
+- **DUP-SFID** (Unit 3) — one SF id on >1 domain owner → distinct entities →
+  seeded `sf_link_collision`. (Two owners → the SAME entity attaches once, not a
+  dup — deduped by entity in the per-owner pass.)
+- **dia Contact (003) ids** (Unit 3) — NOT Account links; reported as a
+  data-quality `contact_id_class` count and DEFERRED (a future pass can
+  reconcile them to `external_identities(salesforce, Contact)`); never forced
+  into the Account store.
+
+### Decision Center — two new SEEDED lanes (free-form decision_type, no schema)
+`admin.js` verdict dispatch:
+- `sf_link_conflict`: `keep_current` (record-only) / `accept_domain` (ADDITIVELY
+  attach the domain id via ensureEntityLink — existing link never deleted) /
+  `research`. Idempotent producer subject_ref `sfconf:<entity_id>`.
+- `sf_link_collision`: `merge` (operator picks `winner_entity_id`; every OTHER
+  context entity is merged in via `lcc_merge_entity`) / `keep_separate` /
+  `research`. subject_ref `sfcoll:<entity_id>` (collision) / `sfdup:<dom>:<sf15>`
+  (dup). `ops.js` renders both cards (`_dcCardHTML`) + SUBLANES + titles/intros;
+  `?v=` bumped. `v_lcc_decision_open_counts` counts all open types, so the chips
+  appear automatically.
+
+### Steady state / rollout
+Cron `lcc-sf-link-reconcile` (daily 06:40, `?domain=both&limit=100`) — migration
+`20260719170000`, **applied AFTER the first gated drain** (it auto-drains, so it
+must not fire before the human-gated capped pass). Reversible: revert a batch via
+`DELETE FROM external_identities WHERE source_system='salesforce' AND
+source_type='Account' AND metadata->>'via'='sf_link_reconcile' AND
+metadata->>'batch_tag'=<tag>`.
+
+### Out of scope (documented)
+Owners with NO domain SF id (connector-gated live SF lookup); the dia Contact-id
+class (deferred — surfaced as a count); `lcc_canonical_entity_id` (#5);
+orphan/cms cleanup (#6).
+
+### Verified (headless 2026-06-18)
+`test/sf-id.test.mjs` (sf15/toSf18 checksum anchored to live ids/sfIdsMatch
+case-sensitive/classify) + `test/sf-link-reconcile.test.mjs` (planSfLinkReconcile:
+attach / already-linked 15↔18 / conflict / collision / dup-sfid / same-entity
+attaches-once / unbridged). `node --check` clean (sf-id, sf-link-reconcile,
+operations, admin, ops, server); `ls api/*.js | wc -l`=12; vercel.json valid;
+full suite 1017 pass / 0 fail / 6 skipped.

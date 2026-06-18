@@ -1940,6 +1940,95 @@ async function handleDecisionVerdict(req, res) {
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }
 
+    // ---- sf_link_conflict (seeded, CONNECTIVITY #3 Unit 2) -----------------
+    // "This owner entity already has a Salesforce Account link that disagrees
+    // with the domain. Which is canonical?" Never auto-overwrites either store.
+    //   keep_current  → record only (the LCC link stays authoritative).
+    //   accept_domain → ADDITIVELY attach the domain's SF Account id via
+    //                   ensureEntityLink (the entity now carries both; the
+    //                   existing link is never deleted — surface, don't clobber).
+    //   research      → research_task.
+    if (decision.decision_type === 'sf_link_conflict') {
+      const ctx = decision.context || {};
+      if (verdict === 'keep_current') {
+        await record('keep_current', 'decided', payload, { sf_link: 'kept_current', lcc_sf_id: ctx.lcc_sf_id || null });
+        return res.status(200).json({ ok: true, verdict: 'keep_current' });
+      }
+      if (verdict === 'accept_domain') {
+        const domSf = String(payload.sf_account_id || ctx.domain_sf_id || '').trim();
+        const eid = decision.subject_entity_id;
+        if (!domSf || !eid) return res.status(400).json({ error: 'domain sf id / subject entity missing' });
+        let linked = false;
+        try {
+          const { ensureEntityLink } = await import('./_shared/entity-link.js');
+          const link = await ensureEntityLink({
+            workspaceId: decision.workspace_id || null, userId: user.id,
+            sourceSystem: 'salesforce', sourceType: 'Account', externalId: domSf, entityId: eid,
+            metadata: { via: 'sf_link_reconcile', batch_tag: 'decision_accept_domain', source: 'manual_decision', decision_id: decisionId },
+          });
+          linked = !!(link && link.ok);
+        } catch (e) { console.warn('[decision-verdict] accept_domain link skipped:', e?.message || e); }
+        if (!linked) { await recordEffectFailure({ external_identity: false }); return res.status(502).json({ error: 'accept_domain_link_failed' }); }
+        await record('accept_domain', 'decided', { sf_account_id: domSf }, { external_identity: true, sf_account_id: domSf });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict: 'accept_domain', sf_account_id: domSf });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'sf_link_conflict',
+          title: 'Reconcile conflicting Salesforce links for ' + (ctx.owner_entity_name || decision.subject_entity_id),
+          instructions: 'Decision Center: the LCC entity is linked to SF Account ' + (ctx.lcc_sf_id || '?')
+            + ' but the domain owner carries ' + (ctx.domain_sf_id || '?') + '. Confirm the canonical account.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      if (verdict === 'skip') { await record('skip', 'skipped', null, null); return res.status(200).json({ ok: true, verdict: 'skip' }); }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- sf_link_collision (seeded, CONNECTIVITY #3 Unit 1/3) ---------------
+    // "Same Salesforce Account on two entities (collision) / one SF id on >1
+    // domain owner (dup-sfid) — same owner, two entities. Merge?" The merge
+    // direction is the operator's judgment: payload.winner_entity_id is kept,
+    // every OTHER entity in context is merged into it (lcc_merge_entity moves
+    // external_identities + relationships onto the survivor). Never auto-merges.
+    if (decision.decision_type === 'sf_link_collision') {
+      const ctx = decision.context || {};
+      const entities = Array.isArray(ctx.entities) ? ctx.entities : [];
+      if (verdict === 'merge') {
+        const winner = String(payload.winner_entity_id || '').trim();
+        if (!winner) return res.status(400).json({ error: 'payload.winner_entity_id required' });
+        const losers = entities.map((e) => String(e.entity_id)).filter((id) => id && id !== winner);
+        if (!losers.length) return res.status(400).json({ error: 'no_losers_to_merge' });
+        const merged = [];
+        for (const loser of losers) {
+          const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: loser, p_winner: winner });
+          if (!mr.ok) { await recordEffectFailure({ merge: false, merged, error: mr.data }); return res.status(502).json({ error: 'merge_failed', merged, detail: mr.data }); }
+          merged.push(loser);
+        }
+        await record('merge', 'decided', { winner_entity_id: winner, loser_entity_ids: losers }, { lcc_merge_entity: 'merged', merged });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict: 'merge', winner, merged });
+      }
+      if (verdict === 'keep_separate') {
+        await record('keep_separate', 'decided', payload, { sf_link: 'kept_separate' });
+        return res.status(200).json({ ok: true, verdict: 'keep_separate' });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'sf_link_collision',
+          title: 'Reconcile shared Salesforce Account ' + (ctx.sf_account_id || '') + ' across entities',
+          instructions: 'Decision Center: the same Salesforce Account is linked to ' + entities.length
+            + ' entities. Confirm they are the same owner before merging.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      if (verdict === 'skip') { await record('skip', 'skipped', null, null); return res.status(200).json({ ok: true, verdict: 'skip' }); }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
     const c = decision.context || {};
 
     // ---- intake_disposition (federated) ------------------------------------
