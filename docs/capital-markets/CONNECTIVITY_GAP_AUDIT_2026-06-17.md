@@ -101,9 +101,31 @@ SF-linked) are invisible to BD because the bridge never ran.
    Gated/capped/reversible, reusing the `ensureEntityLink` junk/operator guards. Expected:
    ~2,000+ dia owners bridged into the BD graph; same pattern for gov. **(Prompt:
    `CLAUDE_CODE_PROMPT_CONNECTIVITY1_classify_owners_to_bridge.md`.)**
-2. **Resolve recorded_owner → true_owner (dia 2,845).** Resolve each unresolved
-   recorded_owner to a canonical true_owner (find-or-create, dedup, junk-guard). Many are
-   the same name as an existing true_owner → a linking job, not external.
+2. **✅ DONE 2026-06-18 — resolve recorded_owner → true_owner (dia).** Branch
+   `claude/nifty-darwin-qqzbpw`, migration
+   `20260618_dia_connectivity2_recorded_owner_resolution.sql`, applied live + gate-verified.
+   GROUNDING REFINED the audit framing: of the 2,842 unresolved, **2,838 were IN-USE**
+   (referenced by a live `properties.recorded_owner_id`) and **0 were name-linkable to an
+   existing true_owner** — so it was a find-or-create, not a linking job. Reused the existing
+   `dia_resolve_canonical_true_owner_id` (get-or-create) + the recorded→property propagate
+   trigger; added a mint-time artifact guard (`dia_is_artifact_owner_name`, factored verbatim
+   from `v_bridge_eligible_owners`).
+   - **Result:** in-use unresolved 2,838 → 2 (the 2 artifact-named rows correctly held to
+     junk/review, 0 artifact true_owners minted); 2,836 true_owners minted
+     (`source='connectivity2_recorded_resolution'`, reversible) + logged in
+     `dia_connectivity2_resolution_log` (2,836 rows). Fill-blanks held — 0 pre-resolved
+     `properties.true_owner_id` clobbered, no merged row touched.
+   - **Bridge fired (Unit 2):** all 2,836 were the broad tier (no active ownership_history);
+     ran an explicit `p_current_only=false` pass to cover the ~325 tail beyond the cron's
+     6,000/tick. dia connectivity-bridged entities 2,499 → 5,335 (delta 2,836, all org, 0
+     missing identity); all-sources dia true_owner bridge 3,570 → 6,406. All
+     `owner_role='unknown'` (classified cron enriches on top).
+   - **Remaining:** the 2 artifact rows (junk/review lane) + the 3 truly-dangling rows
+     (audit #6 cleanup).
+
+   *Original framing (superseded): Resolve each unresolved recorded_owner to a canonical
+   true_owner (find-or-create, dedup, junk-guard). Many are the same name as an existing
+   true_owner → a linking job, not external.*
 3. **Reconcile the two Salesforce stores.** Make `true_owners.salesforce_id` and
    `external_identities(salesforce, Account)` agree — one canonical SF link per owner;
    surface mismatches in the Decision Center. (Pairs with the deferred connector-gated
