@@ -824,6 +824,9 @@ const FEDERATED_DECISION_TYPES = new Set([
   // 430 auto_mergeable groups was drained live; new auto_mergeable groups
   // surface here as a one-click operator merge (human-in-the-loop, NOT a cron).
   'merge_duplicate_entities',
+  // R43: the parked cap-rate review queue (suspect movers, value-ranked by $
+  // impact) + the bad-rent leases the recompute surfaced (fix-at-source).
+  'caprate_review', 'bad_rent_lease',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -838,6 +841,8 @@ function federatedSubjectRef(type, s) {
     case 'cms_link_suspect':   return (s.medicare_id != null && s.property_id != null) ? 'cms:dia:' + s.medicare_id + ':' + s.property_id : null;
     case 'implausible_value':  return (s.domain && s.sale_id != null) ? 'implausible:' + s.domain + ':' + s.sale_id : null;
     case 'merge_duplicate_entities': return s.winner_id ? 'mergegrp:' + s.winner_id : null;
+    case 'caprate_review':     return (s.domain && s.review_id != null) ? 'caprate:' + s.domain + ':' + s.review_id : null;
+    case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
   }
   return null;
 }
@@ -1098,6 +1103,62 @@ async function fetchFederatedSource(type, cap) {
     const [g, d, gc, dc] = await Promise.all([
       fetchDom('gov'), fetchDom('dia'),
       domCnt('gov', 'v_implausible_sale_values'), domCnt('dia', 'v_implausible_sale_values'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? out.items.length : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  // R43: parked cap-rate review queue — suspect movers ranked by $ impact.
+  if (type === 'caprate_review') {
+    const fetchDom = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'v_caprate_review_worklist?select=review_id,property_id,'
+        + 'address,city,state,label,event_type,event_date,price,old_cap,recomputed_cap,cap_drift,reason,'
+        + 'rent_used,gross_yield,income_confidence,dollar_impact&order=dollar_impact.desc.nullslast&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'caprate:' + dom + ':' + row.review_id,
+        subject_domain: dom, subject_property_id: row.property_id != null ? String(row.property_id) : null, subject_entity_id: null,
+        rank_value: Number(row.dollar_impact) || 0,
+        context: { domain: dom, review_id: row.review_id, property_id: row.property_id,
+          address: row.address, city: row.city, state: row.state, label: row.label,
+          event_type: row.event_type, event_date: row.event_date, price: row.price,
+          old_cap: row.old_cap, recomputed_cap: row.recomputed_cap, cap_drift: row.cap_drift,
+          reason: row.reason, income_confidence: row.income_confidence, dollar_impact: row.dollar_impact },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov'), fetchDom('dia'),
+      domCnt('gov', 'v_caprate_review_worklist'), domCnt('dia', 'v_caprate_review_worklist'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? out.items.length : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  // R43: bad-rent leases the recompute surfaced — fix the rent at SOURCE.
+  if (type === 'bad_rent_lease') {
+    const fetchDom = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'v_bad_rent_leases?select=review_id,property_id,address,city,state,'
+        + 'label,event_type,event_date,price,old_cap,recomputed_cap,rent_used,implied_gross_yield,lease_id,'
+        + 'lease_annual_rent,plausible_rent_low,plausible_rent_high,income_confidence&order=price.desc.nullslast&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'badrent:' + dom + ':' + row.review_id,
+        subject_domain: dom, subject_property_id: row.property_id != null ? String(row.property_id) : null, subject_entity_id: null,
+        rank_value: Number(row.price) || 0,
+        context: { domain: dom, review_id: row.review_id, property_id: row.property_id,
+          address: row.address, city: row.city, state: row.state, label: row.label,
+          event_type: row.event_type, event_date: row.event_date, price: row.price,
+          old_cap: row.old_cap, recomputed_cap: row.recomputed_cap, rent_used: row.rent_used,
+          implied_gross_yield: row.implied_gross_yield, lease_id: row.lease_id,
+          lease_annual_rent: row.lease_annual_rent, plausible_rent_low: row.plausible_rent_low,
+          plausible_rent_high: row.plausible_rent_high, income_confidence: row.income_confidence },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov'), fetchDom('dia'),
+      domCnt('gov', 'v_bad_rent_leases'), domCnt('dia', 'v_bad_rent_leases'),
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? out.items.length : (gc || 0) + (dc || 0);
@@ -2271,6 +2332,95 @@ async function handleDecisionVerdict(req, res) {
           { resolved_at: new Date().toISOString(), resolved_note: 'acknowledged via Decision Center' });
         await record('acknowledge', 'decided', payload, { botblock: 'acknowledged', alert_resolved: !!(ar && ar.ok) });
         return res.status(200).json({ ok: true, verdict: 'acknowledge', alert_resolved: !!(ar && ar.ok) });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- caprate_review (R43 — parked suspect cap-rate movers) --------------
+    // "Is the recomputed cap right?" apply writes it via the bounded R42 Unit-1
+    // recompute (reversible); keep_old retains the original; needs_rent_fix
+    // re-routes the row to the bad-rent lane (the cap is wrong because the RENT
+    // is wrong); research.
+    if (decision.decision_type === 'caprate_review') {
+      const dom = c.domain === 'gov' ? 'gov' : c.domain === 'dia' ? 'dia' : null;
+      if (!dom || c.review_id == null) return res.status(400).json({ error: 'caprate_review needs domain + review_id in context' });
+      const stamp = { resolved_at: new Date().toISOString() };
+      if (verdict === 'apply') {
+        const fn = dom === 'gov' ? 'rpc/gov_apply_caprate_review' : 'rpc/dia_apply_caprate_review';
+        const ar = await domainQuery(dom, 'POST', fn,
+          { p_review_id: c.review_id, p_actor: (user.email || user.id || 'lcc') });
+        const ok = ar.ok && ar.data && (ar.data.ok === true || (Array.isArray(ar.data) && ar.data[0] && ar.data[0].ok === true));
+        if (!ok) { await recordEffectFailure({ caprate_apply: false, error: ar.data }); return res.status(502).json({ error: 'caprate_apply_failed', detail: ar.data }); }
+        await record('apply', 'decided', payload, { caprate_review: 'applied', rpc: (Array.isArray(ar.data) ? ar.data[0] : ar.data) });
+        return res.status(200).json({ ok: true, verdict: 'apply', review_id: c.review_id, result: (Array.isArray(ar.data) ? ar.data[0] : ar.data) });
+      }
+      if (verdict === 'keep_old') {
+        const pr = await domainQuery(dom, 'PATCH', 'caprate_recompute_review?id=eq.' + encodeURIComponent(c.review_id),
+          Object.assign({ resolution: 'kept' }, stamp));
+        if (!pr.ok) { await recordEffectFailure({ keep_old: false, error: pr.data }); return res.status(502).json({ error: 'keep_old_failed', detail: pr.data }); }
+        await record('keep_old', 'decided', null, { caprate_review: 'kept' });
+        return res.status(200).json({ ok: true, verdict: 'keep_old', review_id: c.review_id });
+      }
+      if (verdict === 'needs_rent_fix') {
+        // The cap is suspect because the RENT is bad → re-tag so the row leaves
+        // this lane and enters the bad_rent_lease worklist (resolved_at stays
+        // NULL — it is not resolved, just re-routed). The recorded verdict here
+        // excludes it from THIS lane (fetchExcludedRefs); the bad_rent lane keys
+        // on a different subject_ref prefix so it surfaces fresh there.
+        const pr = await domainQuery(dom, 'PATCH', 'caprate_recompute_review?id=eq.' + encodeURIComponent(c.review_id),
+          { reason: 'implausible_yield', tag: 'bad_rent' });
+        if (!pr.ok) { await recordEffectFailure({ needs_rent_fix: false, error: pr.data }); return res.status(502).json({ error: 'needs_rent_fix_failed', detail: pr.data }); }
+        await record('needs_rent_fix', 'decided', null, { caprate_review: 'rerouted_to_bad_rent' });
+        return res.status(200).json({ ok: true, verdict: 'needs_rent_fix', review_id: c.review_id,
+          next: { action: 'bad_rent_lane' } });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'caprate_review',
+          title: 'Review cap-rate recompute for property ' + (c.property_id || ''),
+          instructions: 'Decision Center: the recompute moved this ' + (c.domain || '') + ' cap from '
+            + (c.old_cap != null ? (Number(c.old_cap) * 100).toFixed(2) + '%' : '?') + ' to '
+            + (c.recomputed_cap != null ? (Number(c.recomputed_cap) * 100).toFixed(2) + '%' : '?')
+            + ' (' + (c.reason || '') + ', ' + (c.income_confidence || '') + ' confidence, $'
+            + Number(c.price || 0).toLocaleString() + ' ' + (c.event_type || '') + '). Decide apply vs keep, or fix the rent.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- bad_rent_lease (R43 — fix the rent at SOURCE) ----------------------
+    // "The rent is bad (implausible gross yield) — fix it at the lease." The cap
+    // is NEVER applied here (a bad rent makes a bad cap). research spawns the
+    // lease-fix task; mark_fixed resolves it (the R42 recompute then refreshes
+    // the caps when the lease changes); confirm_rent resolves it as a genuine
+    // (real) high yield. Rent is NOT auto-corrected — operator judgment.
+    if (decision.decision_type === 'bad_rent_lease') {
+      const dom = c.domain === 'gov' ? 'gov' : c.domain === 'dia' ? 'dia' : null;
+      if (!dom || c.review_id == null) return res.status(400).json({ error: 'bad_rent_lease needs domain + review_id in context' });
+      const stamp = { resolved_at: new Date().toISOString() };
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'bad_rent_lease',
+          title: 'Fix bad rent for property ' + (c.property_id || '') + ' (lease ' + (c.lease_id || '?') + ')',
+          instructions: 'Decision Center: the recompute flagged an implausible '
+            + (c.implied_gross_yield != null ? (Number(c.implied_gross_yield) * 100).toFixed(1) + '%' : '?')
+            + ' gross yield — rent $' + Number(c.rent_used || 0).toLocaleString() + ' on a $'
+            + Number(c.price || 0).toLocaleString() + ' ' + (c.event_type || '') + '. A sane cap implies rent ~$'
+            + Number(c.plausible_rent_low || 0).toLocaleString() + '–$' + Number(c.plausible_rent_high || 0).toLocaleString()
+            + '. Verify + correct the lease rent at source (lease ' + (c.lease_id || 'unknown') + ').' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      if (verdict === 'mark_fixed' || verdict === 'confirm_rent') {
+        const resolution = verdict === 'mark_fixed' ? 'rent_fixed' : 'rent_confirmed';
+        const pr = await domainQuery(dom, 'PATCH', 'caprate_recompute_review?id=eq.' + encodeURIComponent(c.review_id),
+          Object.assign({ resolution }, stamp));
+        if (!pr.ok) { await recordEffectFailure({ [verdict]: false, error: pr.data }); return res.status(502).json({ error: verdict + '_failed', detail: pr.data }); }
+        await record(verdict, 'decided', null, { bad_rent_lease: resolution });
+        return res.status(200).json({ ok: true, verdict, review_id: c.review_id, resolution });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }
