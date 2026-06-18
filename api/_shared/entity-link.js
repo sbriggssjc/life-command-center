@@ -295,6 +295,54 @@ export function isJunkProspectName(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Generic placeholder / form-field owner names (CONNECTIVITY #1b, 2026-06-17)
+// ---------------------------------------------------------------------------
+// The owner-bridge sweep before scaling (CONNECTIVITY #1b) found a handful of
+// placeholder slips that the structural / prospect guards above do NOT catch —
+// they came in as recorded-owner cells that are not owners at all:
+//   * "1031 Exchange Buyer", "200512484 IRA", "Buyer 1031 Exchange: Yes".
+// These are 1031-exchange escrow placeholders, bare account/IRA numbers, and
+// form-field "answer" cells. Extending the guard here (the single
+// `isJunkEntityName` choke point) makes the gov + broad-pass scaling inherit the
+// rejection automatically — the SQL mirror lives in `public.lcc_owner_name_is_junk`.
+//
+// ADDRESS-SAFE + OWNER-SAFE by construction (verified against the live #1b set):
+//   * a pure-numeric account number (optionally + an entity word) — a real
+//     street-numbered owner ("1121 California Avenue LLC", "5311 Clyde LLC",
+//     "850 & 6651 Des Moines LLC") carries a street WORD between the number and
+//     the suffix, so the whole-string anchor never matches it;
+//   * a trailing ": Yes" / ": No" form-answer;
+//   * the WHOLE name being a bare transaction-role / 1031 placeholder
+//     ("Buyer", "Seller", "Escrow", "Exchange Buyer", "1031 Exchange Buyer").
+// Names that merely CONTAIN "1031" ("Cottonwood 1031 Properties", "Cs1031
+// Birmingham Mob Dst") or a label word still pass.
+const PLACEHOLDER_OWNER_PATTERNS = [
+  // Bare account / IRA / entity-shell number (optionally + an entity word).
+  /^\s*\d{5,}\s*(?:ira|llc|l\.l\.c|lp|llp|inc|corp|trust)?\s*$/i,
+  // "<digits> IRA" — an account-number IRA.
+  /^\s*\d{4,}\s+ira\s*$/i,
+  // Form-field bleed: a trailing ": Yes" / ": No" answer.
+  /:\s*(?:yes|no)\s*$/i,
+  // Bare 1031-exchange placeholder descriptor (the WHOLE name).
+  /^\s*(?:1031\s+)?exchange\s+buyer\s*$/i,
+  // Bare transaction-role descriptor (the WHOLE name).
+  /^\s*(?:buyer|seller|escrow)\s*$/i,
+];
+
+/**
+ * True when an entity name is a generic placeholder / form-field / account-number
+ * cell that must never be minted as an owner (CONNECTIVITY #1b). Address-safe +
+ * owner-safe — see PLACEHOLDER_OWNER_PATTERNS. The SQL mirror is
+ * `public.lcc_owner_name_is_junk`.
+ */
+export function isPlaceholderOwnerName(name) {
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  return PLACEHOLDER_OWNER_PATTERNS.some((re) => re.test(trimmed));
+}
+
+// ---------------------------------------------------------------------------
 // Bare street-address fragment guard (R9 follow-up, 2026-06-09)
 // ---------------------------------------------------------------------------
 // The chain-connect drain minted "West Mall Dr" (dia) as an ORGANIZATION — a
@@ -356,9 +404,22 @@ export function isStreetFragmentName(name) {
 //     one, else the trailing segment per convention) and stashes the original.
 //   * null when there is no pipe / nothing to split.
 export function splitCompositeOwnerName(raw) {
-  if (typeof raw !== 'string' || raw.indexOf('|') === -1) return null;
-  const segments = raw.split('|').map((s) => s.replace(/,\s*$/, '').trim()).filter(Boolean);
+  if (typeof raw !== 'string') return null;
+  const hasPipe = raw.indexOf('|') !== -1;
+  // CONNECTIVITY #1b: also recognize ';'-joined ORG composites
+  // ("919 Investments LLC; Smbc Leasing & Finance Inc", "Dfwlt 821 Cleveland
+  // LLC; Wcol LLC") so the bridge resolves to the firm-most segment and stashes
+  // the original, instead of minting one dirty composite entity. Semicolon names
+  // with NO firm suffix on any segment are AMBIGUOUS by data (person-couples
+  // "Irwin Sherry; Dalia Sherry", trust+surname) and must mint whole — they are
+  // not junk — so they fall through to null below. Pipe ('|') keeps its original
+  // always-split behavior (the CoStar "<person> | <firm>" capture convention).
+  const hasSemi = raw.indexOf(';') !== -1;
+  if (!hasPipe && !hasSemi) return null;
+  const delim = hasPipe ? '|' : ';';
+  const segments = raw.split(delim).map((s) => s.replace(/,\s*$/, '').trim()).filter(Boolean);
   if (segments.length < 2) return null;
+  if (delim === ';' && !segments.some((s) => ENTITY_FIRM_SUFFIX_RE.test(s))) return null;
 
   // Clean "<person> | <firm>": exactly two parts, exactly one a plausible person
   // (and not itself firm-suffixed), the other carrying a firm suffix.
@@ -399,8 +460,12 @@ export function isJunkEntityName(name) {
   // R25 Unit 2: also reject prospect-junk capture artifacts at the creation
   // boundary (address-safe — see PROSPECT_JUNK_PATTERNS), so the band-polluting
   // names never become canonical entities going forward.
+  // CONNECTIVITY #1b: also reject generic placeholder / form-field / account-
+  // number owner cells (address-safe — see PLACEHOLDER_OWNER_PATTERNS) so the
+  // gov + broad owner-bridge passes inherit the rejection at this one choke point.
   return ENTITY_JUNK_PATTERNS.some((re) => re.test(trimmed))
-      || isJunkProspectName(trimmed);
+      || isJunkProspectName(trimmed)
+      || isPlaceholderOwnerName(trimmed);
 }
 
 // ---------------------------------------------------------------------------
