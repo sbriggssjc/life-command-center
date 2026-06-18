@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix,
   isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName,
   isFieldLabelName, isImplausibleOwnerName, isJunkProspectName,
+  isPlaceholderOwnerName,
   normalizeEmail, isGenericInboxEmail } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
@@ -244,6 +245,50 @@ describe('entity-link helper', () => {
     }
     assert.equal(isJunkProspectName(''), false);
     assert.equal(isJunkProspectName(null), false);
+  });
+
+  it('flags generic placeholder / form-field / account-number owner cells (CONNECTIVITY #1b)', () => {
+    // The live #1b placeholder slips — all must be caught at the mint boundary.
+    for (const junk of [
+      '1031 Exchange Buyer', '200512484 IRA', 'Buyer 1031 Exchange: Yes',
+      '200512484', 'Buyer', 'Seller', 'Escrow', 'Exchange Buyer',
+      '987654321 LLC', 'Title Held: No',
+    ]) {
+      assert.equal(isPlaceholderOwnerName(junk), true, `should flag: ${junk}`);
+      assert.equal(isJunkEntityName(junk), true, `boundary should reject: ${junk}`);
+    }
+    // MUST PASS — real owners (the #1b regression set): never false-rejected.
+    for (const ok of [
+      '1121 California Avenue LLC', '5311 Clyde LLC', '850 & 6651 Des Moines LLC',
+      'The Granger Group', 'Cottonwood 1031 Properties', 'Cs1031 Birmingham Mob Dst',
+      'The DeCarion Living Trust', 'John Smith IRA', "Buyer's Edge Capital LLC",
+      '123 Main St',  // address-safe
+    ]) {
+      assert.equal(isPlaceholderOwnerName(ok), false, `should NOT flag: ${ok}`);
+      assert.equal(isJunkEntityName(ok), false, `should NOT reject: ${ok}`);
+    }
+    assert.equal(isPlaceholderOwnerName(''), false);
+    assert.equal(isPlaceholderOwnerName(null), false);
+  });
+
+  it('splits ;-joined ORG composites; mints person-couples whole (CONNECTIVITY #1b)', () => {
+    // Org;org composite -> resolve to the firm-most segment, stash the original.
+    const org = splitCompositeOwnerName('919 Investments LLC; Smbc Leasing & Finance Inc');
+    assert.equal(org.ambiguous, true);
+    assert.equal(org.firm, '919 Investments LLC');
+    assert.equal(org.original, '919 Investments LLC; Smbc Leasing & Finance Inc');
+
+    const org2 = splitCompositeOwnerName('Dfwlt 821 Cleveland LLC; Wcol LLC');
+    assert.equal(org2.firm, 'Dfwlt 821 Cleveland LLC');
+
+    // Trust+surname carries a firm token (Trust) -> resolves to the trust.
+    const trust = splitCompositeOwnerName('JAMES FALASCHI LIVING TRUST; FALASCHI');
+    assert.equal(trust.firm, 'JAMES FALASCHI LIVING TRUST');
+
+    // Person-couple (no firm suffix) -> NOT split, mints whole (not junk).
+    assert.equal(splitCompositeOwnerName('Irwin Sherry; Dalia Sherry'), null);
+    assert.equal(splitCompositeOwnerName('SAYEED MIRZA; NASIM MIRZA'), null);
+    assert.equal(splitCompositeOwnerName('No semicolon here'), null);
   });
 
   it('splits pipe-delimited composite owner names (R9 follow-up)', () => {
