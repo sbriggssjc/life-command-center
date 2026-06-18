@@ -642,11 +642,15 @@ function normalizeSalesTxnRow(r, lookups) {
   if (pricePick.source && pricePick.source !== 'sales_transactions') prov.price = pricePick.source;
   const soldPrice = pricePick.value != null ? Number(pricePick.value) : null;
 
-  // -- Cap rate: sales_transactions cap columns → ownership_history.cap_rate
-  //    → available_listings cap_rate (asking → sold proxy). The listing cap
-  //    is the asking cap and typically tracks the sold cap within ~50bps;
-  //    we use it only when nothing else is available.
+  // -- Cap rate: prefer the canonical cap-of-record (cap_rate_final) so the
+  //    bypass loader agrees with the CM views (which read cap_rate_final) and
+  //    the stored ledger. cap_rate_final is kept fresh by R42 — when rent/NOI is
+  //    learned after a sale, the recompute refreshes the noi_derived of-record
+  //    (the projecting view, this loader, and cap_rate_history then agree).
+  //    Falls back to the legacy column ladder only where of-record is NULL, so a
+  //    comp that shows a cap today never blanks.
   const capPick = pickBest(
+    [r.cap_rate_final, 'sales_transactions.cap_rate_final'],
     [r.cap_rate, 'sales_transactions.cap_rate'],
     [r.calculated_cap_rate, 'sales_transactions.calculated_cap_rate'],
     [r.stated_cap_rate, 'sales_transactions.stated_cap_rate'],
