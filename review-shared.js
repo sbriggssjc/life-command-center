@@ -54,6 +54,8 @@ var LCC_DECISION_LANE_MAP = {
   property_merge:                { lane: 'property_merge', merges: 'property' },
   provenance_conflict:           { lane: 'provenance',    merges: false },
   pending_update:                { lane: 'provenance',    merges: false },
+  caprate_review:                { lane: 'provenance',    merges: false },
+  bad_rent_lease:                { lane: 'provenance',    merges: false },
   intake_disposition:            { lane: 'intake',        merges: false },
   match_disambiguation:          { lane: 'intake',        merges: false },
   cms_link_suspect:              { lane: 'linkage',       merges: false },

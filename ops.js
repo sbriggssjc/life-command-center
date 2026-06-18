@@ -1470,6 +1470,8 @@ async function renderReviewConsolePage() {
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
+    { dt: 'caprate_review', label: 'Cap-rate review — suspect movers', open: "renderFederatedLane('caprate_review')" },
+    { dt: 'bad_rent_lease', label: 'Bad-rent leases — fix at source', open: "renderFederatedLane('bad_rent_lease')" },
     { dt: 'intake_disposition', label: 'Staged intake — needs review', open: "renderFederatedLane('intake_disposition')" },
     { dt: 'match_disambiguation', label: 'Intake match disambiguation', open: "renderDecisionLane('match_disambiguation')" },
     { dt: 'cms_link_suspect', label: 'CMS ↔ property link suspects', open: "renderFederatedLane('cms_link_suspect')" },
@@ -1980,6 +1982,10 @@ const _DC_FED_META = {
     intro: 'Sales over the per-domain magnitude soft-ceiling, retained for review. Confirm the price as real, correct it, void it (queued), or research.' },
   merge_duplicate_entities: { title: 'Duplicate entities — merge',
     intro: 'High-confidence duplicate-entity groups (same normalized name). Merge collapses the duplicates into the surviving entity (carries portfolio + identities + relationships); keep separate if they are genuinely distinct, or research.' },
+  caprate_review: { title: 'Cap-rate review — suspect movers',
+    intro: 'Parked cap-rate recomputes (low-confidence or out-of-band), ranked by $ impact = price × |old − recomputed cap|. Apply the recompute (bounded, reversible), keep the original, route to the bad-rent lane (the cap is wrong because the rent is), or research.' },
+  bad_rent_lease: { title: 'Bad-rent leases — fix at source',
+    intro: 'Cap-review rows flagged as bad RENT (implausible gross yield), ranked by $ value, with the plausible rent band + the offending lease. Fix the rent AT SOURCE (never auto-corrected) — the recompute then refreshes the caps. Mark fixed, confirm the rent is genuinely right, or research.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2078,6 +2084,37 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'merge\')">Merge duplicates →</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_separate\')">Keep separate</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'caprate_review') {
+    const pct = (v) => (v != null && isFinite(Number(v))) ? (Number(v) * 100).toFixed(2) + '%' : '?';
+    const openDetail = (c.domain && c.property_id != null && typeof openUnifiedDetail === 'function')
+      ? '<button class="q-action" onclick="openUnifiedDetail(\'' + esc(c.domain) + '\', {property_id: ' + esc(String(c.property_id)) + '}, {}, \'Overview\')">Open property →</button>' : '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || c.label || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge pri-high">' + _fedMoney(c.dollar_impact) + ' impact</span>'
+      + '<span class="q-badge">' + esc(c.reason || '') + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(c.label || '') + (c.city ? ' · ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '')
+      + ' · ' + esc(c.event_type || '') + ' ' + _fedMoney(c.price) + ' · ' + esc(c.income_confidence || '') + ' conf</div>'
+      + '<div class="q-item-meta">Cap <b>' + pct(c.old_cap) + '</b> → <b>' + pct(c.recomputed_cap) + '</b></div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'apply\')">Apply recompute →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_old\')">Keep old</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'needs_rent_fix\')">Bad rent →</button>'
+      + openDetail
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'bad_rent_lease') {
+    const yld = (c.implied_gross_yield != null && isFinite(Number(c.implied_gross_yield)))
+      ? (Number(c.implied_gross_yield) * 100).toFixed(1) + '%' : '?';
+    const openDetail = (c.domain && c.property_id != null && typeof openUnifiedDetail === 'function')
+      ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(c.domain) + '\', {property_id: ' + esc(String(c.property_id)) + '}, {}, \'Overview\')">Open property / lease →</button>' : '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || c.label || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge pri-high">' + yld + ' yield</span></div></div>'
+      + '<div class="q-item-meta">' + esc(c.label || '') + (c.city ? ' · ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '') + '</div>'
+      + '<div class="q-item-meta">Rent <b>' + _fedMoney(c.rent_used) + '</b> on ' + esc(c.event_type || '') + ' ' + _fedMoney(c.price)
+      + ' · plausible rent <b>' + _fedMoney(c.plausible_rent_low) + '–' + _fedMoney(c.plausible_rent_high) + '</b></div>';
+    actions = openDetail
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_fixed\')">Mark rent fixed</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'confirm_rent\')">Rent is correct</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -2138,6 +2175,8 @@ async function dcFed(i, verdict, payload) {
       fwd = ' <button class="q-action primary" onclick="dcCmsUnlink(' + esc(String(nx.property_id)) + ')">Break link in cms-match →</button>';
     } else if (nx && (nx.action === 'intake_create_property' || nx.action === 'intake_reextract')) {
       fwd = ' <button class="q-action primary" onclick="navTo(\'pageInbox\')">Finish in Inbox →</button>';
+    } else if (nx && nx.action === 'bad_rent_lane') {
+      fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'bad_rent_lease\')">Open bad-rent lane →</button>';
     }
     if (typeof showToast === 'function') showToast('Recorded', 'success');
     if (row) {
