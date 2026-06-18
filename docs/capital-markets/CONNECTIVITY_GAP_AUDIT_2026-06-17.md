@@ -130,8 +130,29 @@ SF-linked) are invisible to BD because the bridge never ran.
    `external_identities(salesforce, Account)` agree — one canonical SF link per owner;
    surface mismatches in the Decision Center. (Pairs with the deferred connector-gated
    SF-link backfill.)
-4. **Map the gov recorded → true owner linkage** — gov has no `true_owner` FK on
-   recorded_owners; establish/repair the path so gov's chain matches dia's.
+4. **✅ DONE 2026-06-18 — resolve gov property owners (recorded-owner-backed set).** Branch
+   `claude/magical-ramanujan-p4ile5`, migration
+   `sql/20260618_gov_connectivity4_recorded_owner_resolution.sql`, applied live + gate-verified.
+   GROUNDING: gov has 5,389 active props with no `true_owner_id` — 1,769 have a recorded owner
+   (resolvable), 3,620 have none (external county/deed data → out of scope). gov's model
+   differs (no recorded→true FK, no lightweight resolver), so built the deliberate parallel of
+   dia's: `gov_resolve_canonical_true_owner_id` (keys on `canonical_name` so merged tombstones
+   resolve to survivor), `gov_is_artifact_owner_name` guard, `gov_connectivity4_resolve_owners`
+   (sets `properties.true_owner_id` directly, fill-blanks only, `field_value_provenance` rank
+   35 < manual 90, reversible `gov_connectivity4_resolution_log` ledger). Two additive schema
+   supersets: `true_owners.source`, widened `field_value_provenance.authority_source` allowlist.
+   - **Result:** 1,739 of 1,769 resolved (1,224 minted + 515 linked/dedup'd; 1,393 distinct
+     owners); props-with-owner 7,112 → 8,854; 0 artifacts minted; fill-blanks held (resolvable
+     remaining 29 = 24 artifact + 5 merged-recorded-owner). Gate caught + fixed a
+     display-name-degradation bug on the capped 25 before draining.
+   - **Bridge fired (Unit 2):** broad sync + finalize minted 1,298 entities +
+     `external_identities(gov, true_owner)`, all `owner_role='unknown'`; gov connectivity-bridged
+     2,531→4,829... (delta 1,298); all-sources gov true_owner bridge 6,935 → 8,233.
+   - **Remaining (out of scope):** the 3,620 no-recorded-owner tail (external data), the 24
+     artifact names (junk/review), the 5 merged-recorded-owner edge rows.
+
+   *Original framing (superseded): Map the gov recorded → true owner linkage — gov has no
+   `true_owner` FK on recorded_owners; establish/repair the path so gov's chain matches dia's.*
 5. **Decide `lcc_canonical_entity_id`** — either populate it as the canonical back-reference
    (write it when the bridge runs) or retire the dormant column. Don't leave a designed
    connection permanently empty.
