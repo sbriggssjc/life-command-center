@@ -1,4 +1,4 @@
-import { opsQuery, pgFilterVal } from './ops-db.js';
+import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
 import { syncSalesforceForEntity } from './salesforce-sync.js';
 
 export function normalizeCanonicalName(name) {
@@ -1029,7 +1029,7 @@ export async function ensureEntityLink({
           + `&from_entity_id=eq.${pgFilterVal(resolvedEntity.id)}`
           + `&to_entity_id=eq.${pgFilterVal(personLink.entityId)}&limit=1`);
         if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
-          await opsQuery('POST', 'entity_relationships', {
+          await insertEntityRelationship({
             workspace_id: workspaceId,
             from_entity_id: resolvedEntity.id,
             to_entity_id: personLink.entityId,
