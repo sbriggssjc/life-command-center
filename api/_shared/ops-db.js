@@ -119,6 +119,32 @@ export async function opsQuery(method, path, body, opts = {}) {
   return { ok: res.ok, status: res.status, data, count };
 }
 
+/**
+ * Single choke point for creating `entity_relationships` rows (R41 graph
+ * hygiene). A self-relationship (`from_entity_id === to_entity_id`) is never
+ * meaningful — an entity can't own / purchase / sell / be associated with
+ * itself — so it is SKIPPED before it reaches the DB. This mirrors the DB
+ * CHECK `chk_entity_relationships_no_self_loop`; the JS guard means well-behaved
+ * writers never even attempt the insert. Every edge writer routes through here.
+ *
+ * @param {object} row - entity_relationships row (must carry from_entity_id /
+ *   to_entity_id; workspace_id / relationship_type / metadata as usual)
+ * @param {object} [opts] - opsQuery opts (e.g. { Prefer: 'return=minimal' })
+ * @returns {Promise<{ ok: boolean, status?: number, data?: any, skipped?: string }>}
+ *   On a self-loop returns `{ ok: false, skipped: 'self_loop' }` (no DB call).
+ */
+export async function insertEntityRelationship(row, opts) {
+  const from = row ? row.from_entity_id : null;
+  const to = row ? row.to_entity_id : null;
+  if (from == null || to == null) {
+    return { ok: false, status: 400, skipped: 'missing_endpoint' };
+  }
+  if (String(from) === String(to)) {
+    return { ok: false, skipped: 'self_loop' };
+  }
+  return opsQuery('POST', 'entity_relationships', row, opts);
+}
+
 export async function logPerfMetric(workspaceId, userId, metricType, endpoint, durationMs, metadata) {
   if (!isOpsConfigured()) return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
   try {

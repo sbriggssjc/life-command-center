@@ -17,7 +17,7 @@
 // ============================================================================
 
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem } from '../_shared/entity-link.js';
-import { opsQuery } from '../_shared/ops-db.js';
+import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { getCadenceState } from '../_shared/cadence-engine.js';
@@ -1570,7 +1570,7 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
     const role = contact.role || 'unknown';
     const relationshipType = ROLE_TO_RELATIONSHIP[role] || 'associated_with';
 
-    await opsQuery('POST', 'entity_relationships', {
+    await insertEntityRelationship({
       workspace_id: workspaceId,
       from_entity_id: link.entityId,
       to_entity_id: propertyEntityId,
@@ -1656,7 +1656,7 @@ async function unpackTenant(propertyEntityId, metadata, workspaceId, userId, dom
   // Lease relationship for the primary tenant. Carries the lease scalars from
   // metadata when available (lease_term / occupancy / lease_type) plus the
   // per-tenant SF / suite when the page surfaced it.
-  await opsQuery('POST', 'entity_relationships', {
+  await insertEntityRelationship({
     workspace_id: workspaceId,
     from_entity_id: tenantLink.entityId,
     to_entity_id: propertyEntityId,
@@ -1792,7 +1792,7 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
         const saleIdx = sales.indexOf(sale);
         const nextSaleDate = saleIdx > 0 ? parseDate(sales[saleIdx - 1].sale_date) : null;
 
-        await opsQuery('POST', 'entity_relationships', {
+        await insertEntityRelationship({
           workspace_id: workspaceId,
           from_entity_id: buyerLink.entityId,
           to_entity_id: propertyEntityId,
@@ -1820,7 +1820,7 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
       });
 
       if (sellerLink.ok) {
-        await opsQuery('POST', 'entity_relationships', {
+        await insertEntityRelationship({
           workspace_id: workspaceId,
           from_entity_id: sellerLink.entityId,
           to_entity_id: propertyEntityId,
@@ -1844,7 +1844,7 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
       });
 
       if (lenderLink.ok) {
-        await opsQuery('POST', 'entity_relationships', {
+        await insertEntityRelationship({
           workspace_id: workspaceId,
           from_entity_id: lenderLink.entityId,
           to_entity_id: propertyEntityId,
