@@ -253,6 +253,7 @@ describe('entity-link helper', () => {
       '1031 Exchange Buyer', '200512484 IRA', 'Buyer 1031 Exchange: Yes',
       '200512484', 'Buyer', 'Seller', 'Escrow', 'Exchange Buyer',
       '987654321 LLC', 'Title Held: No',
+      'Unknown', 'Unknown Owner', 'N/A', 'None', 'TBD', 'Undisclosed', 'Various',
     ]) {
       assert.equal(isPlaceholderOwnerName(junk), true, `should flag: ${junk}`);
       assert.equal(isJunkEntityName(junk), true, `boundary should reject: ${junk}`);
@@ -263,6 +264,7 @@ describe('entity-link helper', () => {
       'The Granger Group', 'Cottonwood 1031 Properties', 'Cs1031 Birmingham Mob Dst',
       'The DeCarion Living Trust', 'John Smith IRA', "Buyer's Edge Capital LLC",
       '123 Main St',  // address-safe
+      'Various Partners LLC', 'Unknown Holdings LLC',  // null-ish word as a token, not bare
     ]) {
       assert.equal(isPlaceholderOwnerName(ok), false, `should NOT flag: ${ok}`);
       assert.equal(isJunkEntityName(ok), false, `should NOT reject: ${ok}`);
