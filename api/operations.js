@@ -57,7 +57,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler, insertEntityRelationship } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
@@ -1358,7 +1358,7 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
       const exists = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
         + '&from_entity_id=eq.' + pgFilterVal(entityId) + '&to_entity_id=eq.' + pgFilterVal(contactEntityId) + '&limit=1');
       if (!(exists.ok && Array.isArray(exists.data) && exists.data[0])) {
-        await opsQuery('POST', 'entity_relationships', {
+        await insertEntityRelationship({
           workspace_id: workspaceId, from_entity_id: entityId, to_entity_id: contactEntityId,
           relationship_type: 'associated_with', metadata: { role: 'buy_side_contact', via: 'priority_queue' },
         });

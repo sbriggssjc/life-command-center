@@ -25,7 +25,7 @@ import { createRequire } from 'module';
 import { isReportedField } from '../_shared/extraction-field-policy.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
-import { opsQuery, pgFilterVal, fetchWithTimeout } from '../_shared/ops-db.js';
+import { opsQuery, pgFilterVal, fetchWithTimeout, insertEntityRelationship } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
@@ -1007,7 +1007,7 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
       // workspace_id is NOT NULL on entity_relationships (FK → workspaces); every
       // other writer passes it. Omitting it was the silent INSERT failure that left
       // the guarantor with zero relationships.
-      const edge = await opsQuery('POST', 'entity_relationships', {
+      const edge = await insertEntityRelationship({
         workspace_id: workspaceId,
         from_entity_id: guarId,
         to_entity_id: assetId,

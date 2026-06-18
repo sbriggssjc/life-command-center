@@ -23,7 +23,7 @@
 // never forked.
 // ============================================================================
 
-import { opsQuery, pgFilterVal } from './ops-db.js';
+import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
 
 // Active cadence phases — the ones the priority queue treats as a live next
 // action (must match the reachability/cadence bands + the picker query).
@@ -42,10 +42,11 @@ export async function linkPersonToEntity({ workspaceId, entityId, contactEntityI
     const exists = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
       + '&from_entity_id=eq.' + pgFilterVal(entityId) + '&to_entity_id=eq.' + pgFilterVal(contactEntityId) + '&limit=1');
     if (exists.ok && Array.isArray(exists.data) && exists.data[0]) return { ok: true, existed: true };
-    const ins = await opsQuery('POST', 'entity_relationships', {
+    const ins = await insertEntityRelationship({
       workspace_id: workspaceId, from_entity_id: entityId, to_entity_id: contactEntityId,
       relationship_type: 'associated_with', metadata: { role, via },
     });
+    if (ins.skipped) return { ok: false, skipped: ins.skipped };
     return { ok: !!ins.ok, linked: !!ins.ok, detail: ins.ok ? undefined : ins.data };
   } catch (e) {
     return { ok: false, detail: String(e && e.message || e) };
