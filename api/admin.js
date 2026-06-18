@@ -935,7 +935,7 @@ async function fetchFederatedSource(type, cap) {
     // HUMAN (no auto-merge cron); the lane verdict is what triggers the merge.
     // One row per surviving (winner) entity; merging collapses the loser_ids in.
     const mergeFilter = 'or=(auto_mergeable.eq.true,sf_inheritance.eq.true)';
-    const [r, pr] = await Promise.all([
+    const [r, pr, cr] = await Promise.all([
       opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,sf_inheritance,sf_linked_member_count'
         + '&' + mergeFilter + '&order=sf_inheritance.desc,member_count.desc&limit=' + cap),
       // R39: ambiguous person email-share groups (same email, name-INcompatible)
@@ -944,9 +944,17 @@ async function fetchFederatedSource(type, cap) {
       // so it never reaches this lane.
       opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,winner_name,winner_id,loser_ids,member_count,sf_linked_member_count'
         + '&name_compatible=eq.false&order=member_count.desc&limit=' + cap),
+      // CONNECTIVITY #1b: ALL same-canonical org twin groups (canonical_name
+      // grouping catches the freshly-bridged-owner twins that the narrower
+      // lcc_normalize_entity_name grouping in v_lcc_merge_candidates missed).
+      // Surface-only view → never auto-merged; the merge is the human verdict.
+      // Floated bridged twins first so the #1b set is worked.
+      opsQuery('GET', 'v_lcc_canonical_twin_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,domains,has_bridged_owner'
+        + '&order=has_bridged_owner.desc,member_count.desc&limit=' + cap),
     ]);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     const prows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+    const crows = (cr.ok && Array.isArray(cr.data)) ? cr.data : [];
     const orgItems = rows.map((row) => ({
       subject_ref: 'mergegrp:' + row.winner_id,
       subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
@@ -964,12 +972,30 @@ async function fetchFederatedSource(type, cap) {
         email: row.email, loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
         sf_linked_member_count: Number(row.sf_linked_member_count) || 0 },
     }));
-    out.items = orgItems.concat(personItems).sort((a, b) => b.rank_value - a.rank_value);
-    const [oc, pc] = await Promise.all([
+    const canonicalItems = crows.map((row) => ({
+      subject_ref: 'mergegrp:' + row.winner_id,
+      subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
+      // Bridged-owner twins float above non-bridged; then by group size.
+      rank_value: (row.has_bridged_owner === true ? 100000 : 0) + (Number(row.member_count) || 0),
+      context: { kind: 'canonical_twin', winner_id: row.winner_id, winner_name: row.winner_name,
+        norm_name: row.norm_name, loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
+        domains: row.domains || [], has_bridged_owner: row.has_bridged_owner === true },
+    }));
+    // Dedupe by subject_ref (winner_id) — a group already surfaced via
+    // v_lcc_merge_candidates / the person view wins; the canonical-twin view only
+    // ADDS the previously-invisible groups. So the lane shows every twin once.
+    const seenRefs = new Set();
+    out.items = orgItems.concat(personItems).concat(canonicalItems)
+      .sort((a, b) => b.rank_value - a.rank_value)
+      .filter((it) => { if (seenRefs.has(it.subject_ref)) return false; seenRefs.add(it.subject_ref); return true; });
+    const [oc, pc, cc] = await Promise.all([
       opsCnt('v_lcc_merge_candidates?' + mergeFilter),
       opsCnt('v_lcc_person_email_merge_candidates?name_compatible=eq.false'),
+      opsCnt('v_lcc_canonical_twin_candidates?select=winner_id'),
     ]);
-    out.total = (oc == null && pc == null) ? null : (oc || 0) + (pc || 0);
+    // Count is an upper bound (canonical-twin overlaps the org lane by winner_id);
+    // the deduped item list is the authoritative worklist.
+    out.total = (oc == null && pc == null && cc == null) ? null : (oc || 0) + (pc || 0) + (cc || 0);
     return out;
   }
 
@@ -1940,6 +1966,11 @@ async function handleDecisionVerdict(req, res) {
         // loser_ids, and the now-person-complete lcc_merge_entity collapses either.
         const groupView = (c.kind === 'person_email')
           ? 'v_lcc_person_email_merge_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1'
+          // CONNECTIVITY #1b: same-canonical twin groups (incl. freshly-bridged
+          // owners) resolve from the surface-only canonical-twin view. No
+          // auto_mergeable filter there — the merge is the human verdict.
+          : (c.kind === 'canonical_twin')
+          ? 'v_lcc_canonical_twin_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1'
           : 'v_lcc_merge_candidates?select=loser_ids&auto_mergeable=eq.true&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1';
         const gr = await opsQuery('GET', groupView);
         const losers = (gr.ok && Array.isArray(gr.data) && gr.data[0] && Array.isArray(gr.data[0].loser_ids))
