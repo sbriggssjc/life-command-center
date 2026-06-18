@@ -155,9 +155,12 @@ describe('lane rationalization map', () => {
     }
   });
 
-  it('collapses 15 decision types into the 8 logical lanes', () => {
+  it('collapses 17 decision types into the 8 logical lanes', () => {
     assert.equal(LCC_REVIEW_LANES.length, 8);
-    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 15);
+    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 17);
+    // R43: cap-rate review + bad-rent leases group under the provenance lane.
+    assert.equal(laneForDecisionType('caprate_review'), 'provenance');
+    assert.equal(laneForDecisionType('bad_rent_lease'), 'provenance');
   });
 
   it('flags the merge-capable lanes with their kind', () => {
