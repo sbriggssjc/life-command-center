@@ -1465,6 +1465,7 @@ async function renderReviewConsolePage() {
   const SUBLANES = [
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
+    { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
@@ -2013,6 +2014,8 @@ const _DC_FED_META = {
     intro: 'Parked cap-rate recomputes (low-confidence or out-of-band), ranked by $ impact = price × |old − recomputed cap|. Apply the recompute (bounded, reversible), keep the original, route to the bad-rent lane (the cap is wrong because the rent is), or research.' },
   bad_rent_lease: { title: 'Bad-rent leases — fix at source',
     intro: 'Cap-review rows flagged as bad RENT (implausible gross yield), ranked by $ value, with the plausible rent band + the offending lease. Fix the rent AT SOURCE (never auto-corrected) — the recompute then refreshes the caps. Mark fixed, confirm the rent is genuinely right, or research.' },
+  resolve_owner_parent: { title: 'Owner → ultimate parent',
+    intro: 'Sponsor clusters mined from UNRESOLVED current-owner LLC/LP shells (gov + dia), ranked by $ rent. “high” = a fund numeral varies across the shells (SPUS6/7/8…). Confirm the controlling parent (registers it + rolls the shells up to it), name the parent yourself, or mark the owner a genuine independent. Never auto-merged — you confirm.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2142,6 +2145,21 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_fixed\')">Mark rent fixed</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'confirm_rent\')">Rent is correct</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'resolve_owner_parent') {
+    const samples = (c.sample_owner_names || []).slice(0, 4).join(' · ');
+    const confBadge = c.confidence === 'high'
+      ? '<span class="q-badge type" title="A fund numeral varies across these shells — almost certainly one sponsor.">↪ numeral family</span>'
+      : '<span class="q-badge">review</span>';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.suggested_parent_name || c.cluster_token) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>' + confBadge
+      + '<span class="q-badge">' + (c.shells || 0) + ' shells</span>'
+      + '<span class="q-badge pri-high">' + _fedMoney(c.annual_rent) + ' rent</span></div></div>'
+      + '<div class="q-item-meta">token <b>' + esc(c.cluster_token || '') + '</b> · ' + (c.props || 0) + ' properties</div>'
+      + (samples ? '<div class="q-item-meta">' + esc(samples) + '</div>' : '');
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_parent\')">Confirm parent: ' + esc(c.suggested_parent_name || c.cluster_token) + ' →</button>'
+      + '<button class="q-action" onclick="dcOwnerParentSet(' + i + ')">Name parent…</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_independent\')">Independent</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -2188,6 +2206,23 @@ async function dcImplausibleCorrect(i) {
   dcFed(i, 'correct', { corrected_price: n });
 }
 window.dcImplausibleCorrect = dcImplausibleCorrect;
+
+// R47: name the controlling parent for an owner cluster, then register it.
+async function dcOwnerParentSet(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const samples = (c.sample_owner_names || []).slice(0, 4).join('\n  ');
+  const def = c.suggested_parent_name || '';
+  const msg = 'Name the controlling parent for these shells (token "' + (c.cluster_token || '') + '"):'
+    + (samples ? '\n\n  ' + samples : '') + '\n\nParent account name:';
+  const v = typeof lccPrompt === 'function' ? await lccPrompt(msg, def)
+    : (typeof prompt === 'function' ? prompt(msg, def) : '');
+  if (v == null) return;
+  const name = String(v).trim();
+  if (!name) { if (typeof showToast === 'function') showToast('Enter a parent name', 'error'); return; }
+  dcFed(i, 'set_parent', { parent_name: name });
+}
+window.dcOwnerParentSet = dcOwnerParentSet;
 
 async function dcFed(i, verdict, payload) {
   const it = _dcFedArr[i]; if (!it) return;
