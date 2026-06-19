@@ -2599,6 +2599,7 @@ async function renderPriorityQueuePage(band) {
   var counts = Array.isArray(data.counts) ? data.counts : [];
   var total = data.total || 0;
   var html = '<div class="ops-header"><h2>Priority Queue</h2>'
+    + '<button class="q-action" onclick="renderNextBestTouchpoint()">Next best touchpoint →</button>'
     + '<button class="q-action" onclick="renderCadenceDashboard()">Cadence dashboard →</button>'
     + '<button class="q-action" onclick="renderContactQualifyWorklist()">Qualify contacts →</button></div>';
   html += '<div class="rc-intro">Start here. Your highest-leverage BD targets, most urgent band first. Each row routes straight to the property so you can resolve the owner, confirm the CRM link, and open a lead.</div>';
@@ -3146,6 +3147,70 @@ async function renderCadenceDashboard() {
   el.innerHTML = html;
 }
 window.renderCadenceDashboard = renderCadenceDashboard;
+
+// ============================================================================
+// NBT #1 Slice 1c — Next best touchpoint surface
+//
+// Points the operator at v_next_best_touchpoint: Scott's real SF book ∪ open
+// BD-opp accounts, value-ranked by rank_value, each row showing its state-aware
+// next_action. The honest truth grounded live: ~98% of the valued book is
+// CONTACTLESS, so most rows route to "Acquire contact" — not a dead row, the
+// real next step. Rows render as .q-item cards so the EXISTING contact-pick
+// pickers (pqSelectProspectingContact / pqSelectBuyerContact) attach inline.
+// ============================================================================
+async function renderNextBestTouchpoint() {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/operations?action=next_best_touchpoint&limit=200');
+  if (!res.ok || !res.data || !res.data.ok) {
+    el.innerHTML = opsErrorState(res, 'renderNextBestTouchpoint()', 'Could not load next best touchpoint');
+    return;
+  }
+  var items = Array.isArray(res.data.items) ? res.data.items : [];
+  var total = res.data.total != null ? res.data.total : items.length;
+  var html = '<div class="ops-header"><h2>Next Best Touchpoint</h2>'
+    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div>';
+  html += '<div class="rc-intro">Your real Salesforce book ∪ open opportunities, value-ranked. '
+    + 'Each row shows its next step: <b>acquire the contact</b> (most of the book is contactless — that is the real bottleneck), '
+    + 'open a <b>buy-side</b> relationship, or <b>work the cadence</b>.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No accounts. ✓</div>'; el.innerHTML = html; return; }
+  html += '<div class="q-item-meta" style="margin:6px 0">' + esc(String(total)) + ' account' + (total === 1 ? '' : 's') + ', highest value first</div>';
+  items.forEach(function (it, ix) {
+    var eid = it.entity_id == null ? '' : String(it.entity_id);
+    var nm = it.name || 'Account';
+    var na = String(it.next_action || 'acquire_contact');
+    var ctx = [];
+    var valStr = _dcMoney(it.rank_value);
+    if (valStr) {
+      var pc = Number(it.rank_property_count);
+      ctx.push(valStr + (isFinite(pc) && pc > 0 ? ' (' + pc + ' propert' + (pc === 1 ? 'y' : 'ies') + ')' : ''));
+    }
+    if (it.priority_band) ctx.push('band ' + esc(String(it.priority_band)));
+    if (it.has_open_opportunity) ctx.push('open opportunity');
+    var dst = Number(it.days_since_touch);
+    ctx.push(it.last_touch_at && isFinite(dst) ? esc(String(dst)) + 'd since last touch' : 'never contacted');
+    var naLabel = { open_buy_side: 'buy-side', cadence_touch: 'cadence', acquire_contact: 'acquire contact' }[na] || na;
+    var action;
+    if (!eid) {
+      action = '<span class="q-badge">no entity</span>';
+    } else if (na === 'open_buy_side') {
+      action = '<button class="q-action primary" onclick="pqSelectBuyerContact(' + jsStringArg(eid) + ', \'\', ' + jsStringArg(nm) + ', this)">Open buy-side →</button>';
+    } else if (na === 'cadence_touch') {
+      action = '<button class="q-action primary" onclick="renderCadenceDashboard()">Work cadence →</button>';
+    } else {
+      // acquire_contact (the dominant state) — the existing contact-pick path.
+      action = '<button class="q-action primary" onclick="pqSelectProspectingContact(' + jsStringArg(eid) + ', ' + jsStringArg(nm) + ', this)">Acquire contact →</button>';
+    }
+    html += '<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '" data-entity-id="' + esc(eid) + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(nm) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(naLabel) + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(ctx.join(' · ')) + '</div>'
+      + '<div class="q-actions">' + action + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderNextBestTouchpoint = renderNextBestTouchpoint;
 
 // ============================================================================
 // R28 Unit 2 — Contact-qualify worklist (activate captured contacts)

@@ -237,8 +237,9 @@ export default withErrorHandler(async function handler(req, res) {
       case 'watchers':    return await getWatchers(req, res, user, workspaceId);
       case 'buyer_contacts': return await getBuyerContacts(req, res, user, workspaceId);
       case 'cadence_dashboard': return await getCadenceDashboard(req, res, user, workspaceId);
+      case 'next_best_touchpoint': return await getNextBestTouchpoint(req, res, user, workspaceId);
       case 'contact_qualify_worklist': return await getContactQualifyWorklist(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, contact_qualify_worklist' });
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist' });
     }
   }
 
@@ -1488,6 +1489,27 @@ async function getCadenceDashboard(req, res, user, workspaceId) {
   }
   const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load cadence dashboard', detail: r.data });
+  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
+}
+
+// ============================================================================
+// GET next_best_touchpoint (NBT #1 Slice 1c) — render v_next_best_touchpoint
+//
+// One row per Scott-relevant account (SF-linked owners ∪ open BD-opp accounts),
+// value-ranked by rank_value, carrying next_action (open_buy_side /
+// cadence_touch / acquire_contact). The state-aware "who is the next biggest
+// value touchpoint" surface — the engine points at the real book, not the cold
+// auto-prospects. Read-only; ordered highest value first.
+// ============================================================================
+async function getNextBestTouchpoint(req, res, user, workspaceId) {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const action = req.query.next_action ? String(req.query.next_action).trim() : null;
+  let path = 'v_next_best_touchpoint?workspace_id=eq.' + pgFilterVal(workspaceId)
+    + '&order=rank_value.desc.nullslast,days_since_touch.desc.nullslast'
+    + '&limit=' + limit;
+  if (action) path += '&next_action=eq.' + pgFilterVal(action);
+  const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load next best touchpoint', detail: r.data });
   return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
 }
 
