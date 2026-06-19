@@ -3415,3 +3415,82 @@ attach / already-linked 15↔18 / conflict / collision / dup-sfid / same-entity
 attaches-once / unbridged). `node --check` clean (sf-id, sf-link-reconcile,
 operations, admin, ops, server); `ls api/*.js | wc -l`=12; vercel.json valid;
 full suite 1017 pass / 0 fail / 6 skipped.
+
+## CONNECTIVITY #5 + #6 — retire the dormant back-ref column + surface the residue (2026-06-19)
+
+Closes the connectivity arc (`CONNECTIVITY_GAP_AUDIT_2026-06-17.md`) after #1 (bridge),
+#2/#4 (owner resolution), #3 (SF reconcile). Both are small, reversible, **zero
+hard-deletes**. Grounded live across dia (`zqzrriwuavgrquhisnoa`), gov
+(`scknotsqkcheojiaewwh`), LCC Opps (`xengecqvemvfknjvbvrq`); DB applied live + committed.
+
+### #5 — `true_owners.lcc_canonical_entity_id`: RETIRE (document deprecated, do NOT drop)
+Grounded **0% populated** (0/6,821 dia, 0/15,394 gov — never written). The canonical
+true_owner→LCC-entity back-reference lives AUTHORITATIVELY on LCC Opps in
+`external_identities(source_system='dia'|'gov', source_type='true_owner',
+external_id=true_owner_id)` (the #1 bridge). A domain-side denormalized copy was rejected:
+cross-DB LCC→domain write + merge drift, for a value already derivable by joining
+`external_identities`. **Decision: deprecate, keep the column** — grep found NO live
+`api/*.js`/server reader; the only references are the passthrough view
+`v_true_owners_effective_role` and the one-shot `scripts/A9b_dia_property_unified_id.mjs`
+(which already handles it empty), so per the audit rule it is NOT dropped. Metadata-only
+`COMMENT` applied live to both domains marking it deprecated (migrations
+`Dialysis/.../20260619_dia_connectivity5_deprecate_lcc_canonical_entity_id.sql`,
+`government-lease/sql/20260619_gov_connectivity5_…`). The column, its index, and the view
+are retained; add no new readers.
+
+### #6 — clean the residue (surface, don't mislabel; reversible; no hard-delete)
+Grounding **refuted two audit premises**, so #6 is surface-first, not bulk row-flagging:
+
+1. **The artifact-name guard over-matches legitimate owners.** `*_is_artifact_owner_name`
+   (a conservative MINT-TIME reject) catches real trusts via its date rule ("1984 Levin
+   Living Trust Dated July 31, 1984", "Andrew S Pappas Family Trust Dated August 29, 2022")
+   and real names via its `by <word>` rule ("Development By Blue Heron LLC", "Down By The
+   Riverside LP", "Riverside By Sy LLC"). Flagging those as junk would mislabel real owners.
+   AND every artifact-named active owner is **already bridge-excluded** (the bridge bakes the
+   same guard — verified: dia 116 artifact-named active, **0** in `v_bridge_eligible_owners`).
+   → So instead of a junk verdict, a new **`<domain>.v_owner_residue_review`** view
+   CATALOGUES the residue (no row mutation), sub-classifying each artifact match as
+   `strong_junk` (unambiguous garbage — numeric / N/A / $-amount / CMBS-code / 1031-buyer /
+   phone-email, via new `*_is_strong_junk_owner_name`) vs `needs_review` (the date-trust /
+   `by`-name false positives). dia: 116 artifact (59 strong / 57 review) + 2 recorded-owner
+   stragglers + 79 orphans. gov: 17 artifact (**only 3 strong / 14 review** — most are legit
+   trusts) + 22 recorded-owner stragglers + 5 merged-recorded props + orphans. For
+   human/Decision-Center disposition; drop the view → zero trace. Migrations
+   `Dialysis/.../20260619_dia_connectivity6_owner_residue_review.sql`,
+   `government-lease/sql/20260619_gov_connectivity6_…`.
+
+2. **Orphan true_owners — truly-unreferenced (no row in ANY uuid base table that carries
+   `true_owner_id`):** dia **93** (14 carry `salesforce_id` → KEEP, CRM-tracked; 79 no-SF);
+   gov **3,249** (30 SF → KEEP; 3,219 no-SF). The audit's dia 196/177 used a narrow 3-table
+   definition; the truly-unreferenced set is the defensible "unused" one. **gov's 3,219 is a
+   LARGE legacy-ingest residue, NOT the small set symmetric to dia the audit assumed** (gov's
+   model differs — `recorded_owners` has no true_owner FK; the Excel master minted a
+   true_owner per owner string, many never referenced). Per doctrine (ground-before-acting;
+   surface, don't rush a separate job) the full set is SURFACED in the review view for a
+   **dedicated future dispositioning round**, not bulk-mutated now. **All SF-linked orphans
+   are excluded from the view → untouched.**
+
+3. **cms writer-bug junk entities (LCC Opps) — the one clean disposition.** R35 retyped 345
+   dia Medicare CCN identities onto 3 placeholder ASSET entities ("property link approved"
+   343, "clinic lead outcome recorded" 1, "research outcome saved" 1) and left them. Grounded
+   each has **zero other footprint** (no non-cms identity, no relationship/portfolio/cadence)
+   → soft-flagged `metadata.junk_name_flagged=true` + `junk_name_reviewed=true` (so the junk
+   lane doesn't re-ask) + `junk_name_source='connectivity6_cms_writer_artifact'` (reversible
+   by tag). Migration `20260619120000_lcc_connectivity6_cms_junk_entity_flag.sql`. The **345
+   (cms, medicare_ccn) ids are VALID and LEFT PARKED** (not deleted).
+
+### Follow-ups (documented, NOT in this pass)
+- **cms CCN re-homing** — attach each of the 345 (cms, medicare_ccn) ids to its real
+  clinic/property entity (`dia.medicare_clinics.medicare_id` → the property's asset entity),
+  then merge away the 3 placeholders. A distinct, separately-grounded job.
+- **gov orphan true_owner dispositioning** — the 3,219 no-SF legacy orphans (surfaced in
+  `gov.v_owner_residue_review`) need their own grounded round (merge dups / confirm / retire);
+  gov's ownership model makes this materially larger than dia's.
+- The artifact `needs_review` rows (legit trusts / `by`-names) want a human pass to rescue
+  the false positives and confirm the genuine junk.
+
+### Verified live (read-only / reversible) 2026-06-19
+#5: deprecation COMMENT on both domains. #6: dia/gov `v_owner_residue_review` reconcile to
+grounding (dia 116/2/79; gov 17/22/5/3,212); the 3 cms entities flagged with the 345 CCN ids
+preserved; SF-linked orphans untouched. ZERO hard-deletes; every change reversible by tag /
+DROP. No `api/*.js` change (pure DB + docs); `ls api/*.js | wc -l`=12.
