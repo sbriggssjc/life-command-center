@@ -175,10 +175,43 @@ SF-linked) are invisible to BD because the bridge never ran.
 
    *Original framing (superseded): Map the gov recorded → true owner linkage — gov has no
    `true_owner` FK on recorded_owners; establish/repair the path so gov's chain matches dia's.*
-5. **Decide `lcc_canonical_entity_id`** — either populate it as the canonical back-reference
-   (write it when the bridge runs) or retire the dormant column. Don't leave a designed
-   connection permanently empty.
-6. (Cleanup) 348 dia orphan true_owners + the cms medicare_ccn artifact — small, separate.
+5. **✅ DONE 2026-06-18 — `lcc_canonical_entity_id`: RETIRED (deprecated, not dropped).** Branch
+   `claude/bold-tesla-b3totg` (gov PR #279, LCC PR #1246, dia branch). GROUNDING: 0% populated
+   (0/6,821 dia, 0/15,394 gov); the back-reference now lives authoritatively in
+   `external_identities(domain, true_owner)` (the #1 bridge). Only a passthrough view + a
+   one-shot script reference it (script SELECTs it → keep-not-drop per the prompt rule). A
+   deprecation `COMMENT` was applied live on both domains pointing readers to
+   `external_identities` as canonical; column retained. Decision: do NOT populate (a denormalized
+   domain copy would drift on merges — the `current_property_count` failure mode — for a
+   derivable value).
+6. **✅ DONE 2026-06-18 — residue cleanup (surface-first, zero hard-deletes, reversible).** Same
+   branch. cms artifact: the 3 placeholder junk entities (`property link approved` 343 / `clinic
+   lead outcome recorded` 1 / `research outcome saved` 1) soft-flagged (`junk_name_reviewed`,
+   reversible); the 345 valid `cms, medicare_ccn` ids left parked (re-homing onto real clinic
+   entities documented as a separate follow-up). Artifact-named + orphan owners surfaced via new
+   `v_owner_residue_review` views (dia + gov, no row mutation), SF-linked orphans excluded.
+   - **Gate-driven correction (endorsed):** the prompt asked to per-row soft-flag artifact-named
+     owners; grounding refuted it — the guard over-matches **real owners** (family/living trusts
+     caught by the date rule like `Kupsch Trust Dated May 4, 2001`; real names caught by the `by`
+     rule like `Down By The Riverside LP`). CC surfaced-for-review (sub-classed `strong_junk` vs
+     `needs_review`) instead of asserting a junk verdict. Independently confirmed.
+   - **Bridge false-negative check (gate, came back clean):** since the same guard is baked into
+     `v_bridge_eligible_owners`, checked whether it excludes real IN-USE owners. It does not —
+     every in-use guard-hit is a genuine artifact (gov 2 junk; the dia "trust"-containing hits are
+     deal strings like `Elliott Bay Capital Trust Capital One ($1.1m alloc'd)` / broker
+     attributions). The over-match is confined to ORPHAN (non-in-use) owners = table noise,
+     correctly surfaced. **No guard refinement needed.**
+   - **Remaining (deferred, documented):** the 345 cms CCN re-homing; the gov orphan tail (~3,212,
+     16× dia — a separate legacy-ingest round); the `needs_review` residue worked via the views.
+
+## Status: connectivity arc CLOSED (2026-06-18)
+All six remediations addressed. #1 bridge (owner graph ~20% → dia 6,406 + gov 8,233), #2 dia +
+#4 gov owner resolution (2,836 + 1,739 owners made visible), #3 SF reconciliation (512 owners
+linked + decisions seeded), #5 column retired, #6 residue quarantined. **Post-deploy carry-forward:**
+the #3 real-endpoint JS↔SQL parity check + enabling cron `20260719170000` (after PR #1244 deploys).
+**Deferred (documented):** 360 dia Contact ids, the 3,620 gov no-recorded-owner tail (external
+data), the 345 cms CCN re-homing, working the 120 seeded SF decisions + the `v_owner_residue_review`
+queues.
 
 ## Guardrails (carry the project doctrine)
 - Each remediation: ground first (gap vs by-design), capped batch → gate → drain;
