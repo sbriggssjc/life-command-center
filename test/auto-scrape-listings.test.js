@@ -86,7 +86,7 @@ describe('admin /_route=auto-scrape-listings', () => {
       }
 
       // The active-listings list — we serve one overdue listing.
-      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+      if (target.includes('/rest/v1/available_listings?listing_status=in.')) {
         return jsonResponse([{
           listing_id: 42,
           property_id: 100,
@@ -157,7 +157,7 @@ describe('admin /_route=auto-scrape-listings', () => {
           workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
         }]);
       }
-      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+      if (target.includes('/rest/v1/available_listings?listing_status=in.')) {
         return jsonResponse([{
           listing_id: 99, property_id: 200,
           listing_date: '2026-04-15',
@@ -206,7 +206,7 @@ describe('admin /_route=auto-scrape-listings', () => {
           workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
         }]);
       }
-      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+      if (target.includes('/rest/v1/available_listings?listing_status=in.')) {
         return jsonResponse([{
           listing_id: 1, property_id: 1,
           listing_date: '2026-04-01',
@@ -308,7 +308,7 @@ describe('admin /_route=auto-scrape-listings', () => {
           workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
         }]);
       }
-      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+      if (target.includes('/rest/v1/available_listings?listing_status=in.')) {
         return jsonResponse([]);
       }
       throw new Error(`Unexpected fetch: ${method} ${target}`);
@@ -324,21 +324,28 @@ describe('admin /_route=auto-scrape-listings', () => {
       mockRes()
     );
 
-    const listingsCall = calls.find((c) => c.url.includes('/rest/v1/available_listings?listing_status=eq.active'));
+    const listingsCall = calls.find((c) => c.url.includes('/rest/v1/available_listings?listing_status=in.'));
     assert.ok(listingsCall, 'expected listings fetch');
-    // The new filter is: or=(verification_due_at.is.null,and(...gte...,...lte...))
+    // R48 Unit 3: the filter is or=(verification_due_at.is.null,verification_due_at.lte.NOW)
+    // — NULL-inclusive, with the upper "due by now" bound but NO lower cutoff
+    // (the lower gte bound stranded very-overdue listings, so it was removed).
     assert.ok(
       listingsCall.url.includes('or=(verification_due_at.is.null'),
       `expected NULL-inclusive OR filter in URL: ${listingsCall.url}`
     );
-    // The window bounds (gte cutoff, lte now) must be inside the AND group.
-    assert.ok(
-      listingsCall.url.includes('and(verification_due_at.gte.'),
-      `expected AND-grouped non-NULL window in URL: ${listingsCall.url}`
-    );
     assert.ok(
       listingsCall.url.includes('verification_due_at.lte.'),
-      `expected upper bound in URL: ${listingsCall.url}`
+      `expected upper "due by now" bound in URL: ${listingsCall.url}`
+    );
+    // The stranding lower bound must be GONE (R48): no gte cutoff anymore.
+    assert.ok(
+      !listingsCall.url.includes('verification_due_at.gte.'),
+      `R48 removed the lower cutoff that stranded very-overdue listings: ${listingsCall.url}`
+    );
+    // gov scan set now includes under_contract (R48 Unit 3).
+    assert.ok(
+      listingsCall.url.includes('listing_status=in.(active,under_contract)'),
+      `expected gov filter to include under_contract: ${listingsCall.url}`
     );
     // The old flat-filter form must be gone — those would silently exclude NULLs.
     assert.ok(
@@ -366,7 +373,7 @@ describe('admin /_route=auto-scrape-listings', () => {
       }
       // The bug case: listing with NULL verification_due_at. Cron should
       // pick it up via the new OR filter, then process it normally.
-      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+      if (target.includes('/rest/v1/available_listings?listing_status=in.')) {
         return jsonResponse([{
           listing_id: 7,
           property_id: 700,
