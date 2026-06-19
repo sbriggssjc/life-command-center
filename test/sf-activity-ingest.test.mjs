@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mapSfTypeToCategory, processSfActivityBatch } from '../api/_handlers/sf-activity-ingest.js';
+import { mapSfTypeToCategory, deriveSfCategory, processSfActivityBatch } from '../api/_handlers/sf-activity-ingest.js';
 
 // Fake external_identities (salesforce) → entity map.
 const SF_TO_ENTITY = {
@@ -40,6 +40,31 @@ describe('mapSfTypeToCategory', () => {
     assert.equal(mapSfTypeToCategory('Note'), 'note');
     assert.equal(mapSfTypeToCategory('Whatever'), 'note');
     assert.equal(mapSfTypeToCategory(null), 'note');
+  });
+});
+
+describe('deriveSfCategory (OUTREACH #1 RC1)', () => {
+  it('keeps concrete SF types (Call/Email/Meeting) regardless of subject', () => {
+    assert.equal(deriveSfCategory('Call',  'whatever'), 'call');
+    assert.equal(deriveSfCategory('Email', 'whatever'), 'email');
+    assert.equal(deriveSfCategory('Meeting', 'Sent RE: x'), 'meeting');
+  });
+  it('recovers email from a plain Task whose subject is real outreach', () => {
+    assert.equal(deriveSfCategory('Task', 'Sent RE: 2nd Client - Summit'), 'email');
+    assert.equal(deriveSfCategory('Task', 'Anthony Lewinter sent Re: Assignment'), 'email');
+    assert.equal(deriveSfCategory('Task', 'FW: O’Reilly Auto LOI'), 'email');
+    assert.equal(deriveSfCategory(null,   'Re: your offering'), 'email');
+  });
+  it('recovers call from a plain Task whose subject is a call/voicemail', () => {
+    assert.equal(deriveSfCategory('Task', 'Call'), 'call');
+    assert.equal(deriveSfCategory('Task', 'Left a voicemail for the owner'), 'call');
+    assert.equal(deriveSfCategory('Task', 'Cold call to discuss disposition'), 'call');
+  });
+  it('leaves genuine internal-note Tasks as note (no false outreach)', () => {
+    assert.equal(deriveSfCategory('Task', '2 - Medical Buyer/Portfolio'), 'note');
+    assert.equal(deriveSfCategory('Task', '3 - DaVita Developer'), 'note');
+    assert.equal(deriveSfCategory('Note', 'Internal account notes'), 'note');
+    assert.equal(deriveSfCategory('Task', ''), 'note');
   });
 });
 
@@ -79,6 +104,26 @@ describe('processSfActivityBatch (Unit 2)', () => {
     const { fn, calls } = captureAppend();
     const out = await processSfActivityBatch([
       { sf_id: 'a3', type: 'Note', subject: 'Call notes', what_id: '001bbb' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].category, 'note');
+  });
+
+  it('categorizes a plain Task with an outreach subject as email (RC1, outbound)', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { sf_id: 't1', type: 'Task', subject: 'Sent RE: 2nd Client - Summit', what_id: '001bbb' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].category, 'email', 'real outreach Task is an email, not a dead note');
+    assert.ok(!calls[0].metadata.is_reply, 'outbound "Sent RE:" is not an inbound reply');
+    assert.ok(!('skip_cadence_advance' in calls[0].metadata), 'trigger owns the outbound advance');
+  });
+
+  it('keeps a genuine internal-note Task as note (no false advance)', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { sf_id: 't2', type: 'Task', subject: '2 - Medical Buyer/Portfolio', what_id: '001bbb' },
     ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
     assert.equal(out.inserted, 1);
     assert.equal(calls[0].category, 'note');

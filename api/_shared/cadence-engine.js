@@ -550,6 +550,15 @@ export async function resolveCadenceForEntity(entityId, opts = {}) {
     }
   }
 
+  // 3. OUTREACH #1 (RC3) contact tier — the entity IS the cadence's contact
+  //    person (touchpoint_cadence.contact_id), not its owner entity_id. Mirrors
+  //    the SQL trigger's contact tier so an SF touch / inbound reply logged
+  //    against the human advances the owner's cadence.
+  const asContact = await opsQuery('GET',
+    `touchpoint_cadence?contact_id=eq.${pgFilterVal(entityId)}&phase=in.(${phases})`
+    + `&order=next_touch_due.asc.nullslast&${select}&limit=1`);
+  if (asContact.ok && Array.isArray(asContact.data) && asContact.data[0]) return asContact.data[0];
+
   return null;
 }
 
