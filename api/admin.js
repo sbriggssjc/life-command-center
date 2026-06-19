@@ -827,6 +827,10 @@ const FEDERATED_DECISION_TYPES = new Set([
   // R43: the parked cap-rate review queue (suspect movers, value-ranked by $
   // impact) + the bad-rent leases the recompute surfaced (fix-at-source).
   'caprate_review', 'bad_rent_lease',
+  // R47: sponsor clusters mined from UNRESOLVED current-owner LLC/LP shells.
+  // Confirm the controlling parent (registers it + rolls the shells up) or
+  // mark the owner a genuine independent. Value-ranked by $ rent.
+  'resolve_owner_parent',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -843,6 +847,7 @@ function federatedSubjectRef(type, s) {
     case 'merge_duplicate_entities': return s.winner_id ? 'mergegrp:' + s.winner_id : null;
     case 'caprate_review':     return (s.domain && s.review_id != null) ? 'caprate:' + s.domain + ':' + s.review_id : null;
     case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
+    case 'resolve_owner_parent': return (s.domain && s.cluster_token) ? 'ownerparent:' + s.domain + ':' + s.cluster_token : null;
   }
   return null;
 }
@@ -1162,6 +1167,31 @@ async function fetchFederatedSource(type, cap) {
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? out.items.length : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  // R47: sponsor clusters over UNRESOLVED current-owner shells (gov + dia in
+  // one LCC view, already value-ranked). The lane confirms the controlling
+  // parent or marks the owner independent.
+  if (type === 'resolve_owner_parent') {
+    const r = await opsQuery('GET', 'v_lcc_owner_parent_candidates?select=source_domain,cluster_token,'
+      + 'shells,props,annual_rent,sample_owner_names,is_numeral_family,confidence,suggested_parent_name'
+      + '&order=annual_rent.desc.nullslast,shells.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'ownerparent:' + row.source_domain + ':' + row.cluster_token,
+      subject_domain: row.source_domain, subject_property_id: null, subject_entity_id: null,
+      rank_value: Number(row.annual_rent) || 0,
+      context: {
+        domain: row.source_domain, cluster_token: row.cluster_token,
+        shells: row.shells, props: row.props, annual_rent: row.annual_rent,
+        sample_owner_names: row.sample_owner_names || [],
+        is_numeral_family: row.is_numeral_family, confidence: row.confidence,
+        suggested_parent_name: row.suggested_parent_name,
+      },
+    }));
+    out.total = opsCnt ? await opsCnt('v_lcc_owner_parent_candidates') : out.items.length;
+    if (out.total == null) out.total = out.items.length;
     return out;
   }
 
@@ -2363,6 +2393,58 @@ async function handleDecisionVerdict(req, res) {
           instructions: 'Decision Center: the matcher found multiple candidate properties for this intake ('
             + (c.address || '') + (c.tenant ? ', tenant ' + c.tenant : '')
             + '). Pick the right property or create a new one.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- resolve_owner_parent (R47 — producer: cluster-mine candidate view) --
+    // "These unresolved current-owner shells share a sponsor token — who is the
+    // controlling parent?" confirm_parent / set_parent register the sponsor in
+    // the SHARED registry (lcc_buyer_parents + an owner_parent pattern) so the
+    // member shells roll up to it (effect-first via lcc_register_owner_parent).
+    // mark_independent records the BD fact that the owner is its own ultimate
+    // parent (stop re-asking). research spawns a value-ranked task.
+    if (decision.decision_type === 'resolve_owner_parent') {
+      const dom = c.domain || decision.subject_domain || null;
+      const token = c.cluster_token || null;
+      if (!dom || !token) return res.status(400).json({ error: 'missing domain/cluster_token' });
+      if (verdict === 'confirm_parent' || verdict === 'set_parent') {
+        const name = String(payload.parent_name || (verdict === 'confirm_parent' ? (c.suggested_parent_name || '') : '')).trim();
+        if (verdict === 'set_parent' && !name) return res.status(400).json({ error: 'payload.parent_name required for set_parent' });
+        const rr = await opsQuery('POST', 'rpc/lcc_register_owner_parent', {
+          p_domain: dom, p_cluster_token: token, p_parent_name: name || null,
+          p_disposition: verdict === 'set_parent' ? 'set_manual' : 'confirmed',
+          p_workspace: null, p_actor: user.id || null,
+        });
+        const row = (rr.ok && Array.isArray(rr.data)) ? rr.data[0] : null;
+        if (!rr.ok || !row) { await recordEffectFailure({ register: false, error: rr.data || rr.status }); return res.status(502).json({ error: 'register_failed', detail: rr.data }); }
+        await record(verdict, 'decided',
+          { parent_name: row.out_parent_name, disposition: verdict === 'set_parent' ? 'set_manual' : 'confirmed' },
+          { owner_parent: 'registered', parent_entity_id: row.out_parent_entity_id,
+            matched_shells: row.out_matched_shells, needs_sf_mapping: row.out_needs_sf_mapping });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict,
+          parent_entity_id: row.out_parent_entity_id, parent_name: row.out_parent_name,
+          matched_shells: row.out_matched_shells, needs_sf_mapping: row.out_needs_sf_mapping });
+      }
+      if (verdict === 'mark_independent') {
+        const ir = await opsQuery('POST', 'rpc/lcc_mark_owner_independent',
+          { p_domain: dom, p_cluster_token: token, p_actor: user.id || null });
+        if (!ir.ok) { await recordEffectFailure({ mark_independent: false, error: ir.data || ir.status }); return res.status(502).json({ error: 'mark_independent_failed', detail: ir.data }); }
+        await record('mark_independent', 'decided', payload, { owner_parent: 'independent' });
+        return res.status(200).json({ ok: true, verdict: 'mark_independent' });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'research_owner_parent',
+          title: 'Research controlling sponsor for owner cluster "' + token + '" (' + dom + ')',
+          instructions: 'Decision Center: the unresolved current-owner shells '
+            + ((c.sample_owner_names || []).slice(0, 4).join('; ') || token)
+            + ' may share a controlling sponsor. Identify the parent (SOS / public filings) '
+            + 'and confirm via the lane, or mark the owner independent.' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
