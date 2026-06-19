@@ -3329,3 +3329,48 @@ untouched. Reverse any change from `r40_merge_reconcile_backup`.
 99 pre-existing `entity_relationships` self-loops (`from_entity_id =
 to_entity_id`) — an entity related to itself, from old captures, unrelated to the
 merge graph. A separate dedup/cleanup round.
+
+## R46 — resolve ownership chains to the developer (2026-06-19)
+
+Turns the 3,463 incomplete gov+dia ownership chains ($1.88B gov rent) into
+value-ranked, workable, self-improving work. Grounded live: gov `developer`
+17/12,505; the R6/R8 generator emitted only `trace_ownership_to_developer`
+capped at 100 with its LIMIT before the dedup filter (couldn't walk past the top
+slice); auto-backfill sources for developer are THIN (premise refined — the
+volume lever is Units 2/3, not Unit 1).
+
+- **Unit 1 (gov):** `sql/20260619_gov_r46_developer_backfill_from_sales.sql`
+  (live, fill-blanks `sales_transactions.developer → properties.developer` +
+  excel_import/50 provenance; 17→44) + `ai_scrubber._ingest_om_data` now WRITES
+  the extracted `ownership.developer` (fill-blanks + confirmed_document/60
+  provenance) instead of discarding it — the durable forward fix.
+- **Unit 2 (LCC, live):** `v_ownership_chain_worklist` (every incomplete chain +
+  value + gap→research_type; `DISTINCT ON` collapses the ~72 multi-owner props
+  so the R21 uq index can't collide) + `lcc_generate_chain_research_tasks`
+  rewrite — covers ALL incomplete chains, value-ranked, split by gap
+  (`no_prior_owners_recorded`→`establish_ownership_history`,
+  `developer_unidentified`→`trace_ownership_to_developer`), NOT EXISTS inside
+  cand (walks the backlog), sweep skips complete/gap-changed tasks, cron 100→2000.
+  Seeded 3,422 (establish 2,208 / trace 1,255), idempotent.
+- **Unit 3 (the lane):** Decision Center `ownership_chain` federated lane
+  (`admin.js`/`ops.js`) off the worklist; `lcc_chain_unresolvable` + worklist
+  anti-join = the `mark_unresolvable` stop-asking hook; gov
+  `v_property_earliest_deed_grantee` (parcel_owner_xref) = the `confirm_developer`
+  candidate. Verdicts: research / mark_unresolvable / set_prior_owner /
+  set_developer / confirm_developer.
+- **Unit 4:** grounding refuted the premise (0 deed-linked props lack history; 1
+  noise-only canonical gap vs the audit's 31/137) — deed→ownership_history
+  propagation already complete; NO migration written.
+
+### Activation — `DECISION_DEVELOPER_WRITEBACK` (mirrors `DECISION_GOV_WRITEBACK`)
+The Decision Center's **set_developer / confirm_developer** verdicts correct a gov
+property's `developer` via `gov_apply_manual_developer` (SECURITY DEFINER,
+service_role only, FILL-BLANKS-ONLY — never clobbers a curated developer —
+`field_value_provenance` `manual`/rank 90, idempotent, reversible). **The
+write-back is OFF until `DECISION_DEVELOPER_WRITEBACK` is set in the Railway env**
+(default unset ⇒ record-only `*_pending_writeback`; `payload.dry_run` preview is
+always safe, no flag). **gov only** — dia property subjects fall through to
+record-only (dia developer write-back deferred, mirrors the true_owner Slice-3
+posture). `set_prior_owner` (append an ownership_history segment via
+`gov_apply_manual_prior_owner`, append-only + reversible) is **NOT** gated — it
+ships live on deploy. Activation: set `DECISION_DEVELOPER_WRITEBACK=on` in Railway.
