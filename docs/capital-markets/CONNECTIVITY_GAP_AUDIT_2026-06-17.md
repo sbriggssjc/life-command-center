@@ -126,10 +126,32 @@ SF-linked) are invisible to BD because the bridge never ran.
    *Original framing (superseded): Resolve each unresolved recorded_owner to a canonical
    true_owner (find-or-create, dedup, junk-guard). Many are the same name as an existing
    true_owner → a linking job, not external.*
-3. **Reconcile the two Salesforce stores.** Make `true_owners.salesforce_id` and
-   `external_identities(salesforce, Account)` agree — one canonical SF link per owner;
-   surface mismatches in the Decision Center. (Pairs with the deferred connector-gated
-   SF-link backfill.)
+3. **✅ DONE 2026-06-18 (attach drain; 2 post-deploy conditions pending) — reconcile the two
+   Salesforce stores.** Branch `claude/compassionate-allen-a4n26f` (PR #1244). GROUNDING found
+   three things that shaped the job: domain ids are 15-char vs LCC 18-char (match on
+   `left(id18,15)=id15`); dia `salesforce_id` conflates 326 Account + 360 Contact (only Account
+   reconciles; gov `sf_account_id` 442 all Account); and the stores cover different entity
+   populations (only 158 of ~1,128 domain SF links were mirrored onto bridged owners).
+   - **Built:** `sf-id.js` (15↔18 matcher, one place), `sf-link-reconcile.js`
+     (`?_route=sf-link-reconcile-tick`), `sf_link_conflict` + `sf_link_collision` Decision
+     Center lanes. ≤12 api/*.js.
+   - **Executed live (validated SQL reproduction of the worker logic — endpoint not yet
+     deployed):** 512 SF Account links attached to bridged owners (dia 192 + gov 320), all
+     18-char Account, **0 Contact leak, 0 double-link, 512 distinct entities**, reversible by
+     `metadata.via='sf_link_reconcile'`. Gate-verified correctness: dia 25/25 + gov 320/320
+     left-15 match the domain's recorded SF id (right owner + right checksum). Seeded
+     review-only decisions: 6 conflict + 114 collision (103 + 11 dup-sfid). Collisions are
+     genuine same-owner twins → merge lane, never double-linked.
+   - **Carry-forward (documented, cron `20260719170000` stays `active=false`):** (1) after PR
+     #1244 deploys, run one real `GET` dry-run to confirm JS↔SQL parity (with 512 applied:
+     ~0 attach candidates, classes reconcile 6/103/35); (2) enable the cron only after that.
+   - **Out of scope (documented):** the 360 dia Contact ids (separate Contact-store pass); SF
+     links for owners with NO domain SF id (connector-gated live lookup); working the seeded
+     conflict/collision/dup decisions.
+
+   *Original framing (superseded): Make `true_owners.salesforce_id` and
+   `external_identities(salesforce, Account)` agree — one canonical SF link per owner; surface
+   mismatches in the Decision Center.*
 4. **✅ DONE 2026-06-18 — resolve gov property owners (recorded-owner-backed set).** Branch
    `claude/magical-ramanujan-p4ile5`, migration
    `sql/20260618_gov_connectivity4_recorded_owner_resolution.sql`, applied live + gate-verified.
