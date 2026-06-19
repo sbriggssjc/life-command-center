@@ -213,6 +213,21 @@ the #3 real-endpoint JS↔SQL parity check + enabling cron `20260719170000` (aft
 data), the 345 cms CCN re-homing, working the 120 seeded SF decisions + the `v_owner_residue_review`
 queues.
 
+### #7 ✅ DONE 2026-06-19 — make owner resolution self-healing (recursive-audit follow-on)
+The recursive-connectivity audit found the one non-self-healing link: the #2/#4 backfills were
+one-time, and neither domain re-resolves NEW recorded-owner-backed properties (dia's trigger only
+*propagates* already-resolved owners; gov has no resolution trigger — resolution was pipeline-only).
+So the gap was slowly rebuilding (gov already re-accrued 24 in-use unresolved, all artifacts). Fix:
+gentle cron per domain (`dia-`/`gov-owner-resolution-sweep`, `40 */6`, cap 200, offset before the
+`50 */4` bridge cron) calling the EXISTING #2/#4 resolvers (`dia_connectivity2_resolve_recorded_owners`
+/ `gov_connectivity4_resolve_owners` — reused, not forked; fill-blanks, artifact-guarded, reversible
+via source tags + the gov ledger). Branches `claude/busy-faraday-2h3kw2` (Dialysis PR #7301,
+government-lease PR #281), applied live. Gate: both crons active; gov dry-run `(24,0,0,0,24)`
+re-selects the current set + refuses all 24 artifacts (0 minted); synthetic end-to-end (resolve →
+bridge → provenance rank 35 → ledger) closed, 0 residue. **The pipeline ingestion → resolution →
+bridge → enrichment is now fully cron-backed self-healing** — the owner graph stays connected as new
+data arrives, no future manual backfill needed.
+
 ## Guardrails (carry the project doctrine)
 - Each remediation: ground first (gap vs by-design), capped batch → gate → drain;
   reversible; junk/operator guards on every entity mint (reuse `ensureEntityLink`,
