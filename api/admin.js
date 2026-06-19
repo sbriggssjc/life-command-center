@@ -831,6 +831,12 @@ const FEDERATED_DECISION_TYPES = new Set([
   // Confirm the controlling parent (registers it + rolls the shells up) or
   // mark the owner a genuine independent. Value-ranked by $ rent.
   'resolve_owner_parent',
+  // R48: a CLOSED sale becomes the next BD action. Lists unprocessed
+  // lcc_listing_events (value-ranked by sale $); the operator turns each into a
+  // human-confirmed BD action (nurture the seller / open the new-owner
+  // relationship / pursue the cohort fan-out / flag a sale-leaseback / dismiss).
+  // The verdict marks the event processed so the queue drains. Never auto-blast.
+  'listing_event_action',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -848,6 +854,7 @@ function federatedSubjectRef(type, s) {
     case 'caprate_review':     return (s.domain && s.review_id != null) ? 'caprate:' + s.domain + ':' + s.review_id : null;
     case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
     case 'resolve_owner_parent': return (s.domain && s.cluster_token) ? 'ownerparent:' + s.domain + ':' + s.cluster_token : null;
+    case 'listing_event_action': return s.event_id ? 'listevt:' + s.event_id : null;
   }
   return null;
 }
@@ -894,6 +901,36 @@ async function fetchFederatedSource(type, cap) {
       undefined, { countMode: 'exact' });
     return (r.ok && typeof r.count === 'number') ? r.count : null;
   };
+
+  if (type === 'listing_event_action') {
+    // R48: unprocessed sale events, value-ranked by sale price. The queue view
+    // already excludes processed events; fetchExcludedRefs adds the
+    // decided-subject exclusion (double-safe drain).
+    const r = await opsQuery('GET', 'v_lcc_listing_event_queue?select=event_id,source_domain,'
+      + 'source_property_id,sale_price,rank_value,cap_rate,event_date,buyer_name,seller_name,'
+      + 'buyer_entity_id,seller_entity_id,buyer_entity_name,seller_entity_name,is_sale_leaseback,'
+      + 'property_address,property_city,property_state'
+      + '&processed_at=is.null&order=rank_value.desc.nullslast,event_date.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'listevt:' + row.event_id,
+      subject_domain: row.source_domain,
+      subject_property_id: row.source_property_id != null ? String(row.source_property_id) : null,
+      subject_entity_id: null,
+      rank_value: Number(row.sale_price) || 0,
+      context: {
+        event_id: row.event_id, domain: row.source_domain, property_id: row.source_property_id,
+        sale_price: row.sale_price, cap_rate: row.cap_rate, event_date: row.event_date,
+        buyer_name: row.buyer_name, seller_name: row.seller_name,
+        buyer_entity_id: row.buyer_entity_id, seller_entity_id: row.seller_entity_id,
+        buyer_entity_name: row.buyer_entity_name, seller_entity_name: row.seller_entity_name,
+        is_sale_leaseback: row.is_sale_leaseback,
+        address: row.property_address, city: row.property_city, state: row.property_state,
+      },
+    }));
+    out.total = await opsCnt('v_lcc_listing_event_queue?processed_at=is.null');
+    return out;
+  }
 
   if (type === 'intake_disposition') {
     const r = await opsQuery('GET', 'staged_intake_items?select=intake_id,source_type,status,created_at,raw_payload'
@@ -1717,6 +1754,70 @@ async function handleDecisionVerdict(req, res) {
       { effects, updated_at: new Date().toISOString() });
 
   try {
+    // ---- listing_event_action (R48) -----------------------------------------
+    // A closed sale → the next BD action. Effect-FIRST, then mark the event
+    // processed so the queue drains; a failed effect keeps the decision open and
+    // does NOT mark the event processed. Human-gated — never auto-blasts outreach.
+    if (decision.decision_type === 'listing_event_action') {
+      const lctx = decision.context || {};
+      const eventId = lctx.event_id || null;
+      if (!eventId) return res.status(400).json({ error: 'event_id missing from decision context' });
+      const markProcessed = async (reason) =>
+        opsQuery('POST', 'rpc/lcc_mark_listing_event_processed', { p_event_id: eventId, p_reason: reason });
+      const propLabel = lctx.address || ('property ' + lctx.property_id);
+
+      // Safe verdicts (record-only effect): just mark processed + record.
+      if (verdict === 'dismiss' || verdict === 'flag_sale_leaseback') {
+        const mp = await markProcessed(verdict);
+        if (!mp.ok) { await recordEffectFailure({ marked_processed: false, error: mp.data });
+          return res.status(502).json({ error: 'mark_processed_failed', detail: mp.data }); }
+        const effects = verdict === 'flag_sale_leaseback'
+          ? { flagged: 'sale_leaseback_advisory', marked_processed: true }
+          : { marked_processed: true };
+        await record(verdict, 'decided', payload, effects);
+        return res.status(200).json({ ok: true, verdict, event_id: eventId });
+      }
+
+      // Actionable verdicts → spawn a research_task (the existing decision-work
+      // machinery), then mark processed. The operator works the task (seeds the
+      // cadence / opens the relationship / pursues the cohort) — no auto-send.
+      let taskSpec = null;
+      if (verdict === 'nurture_seller') {
+        taskSpec = { research_type: 'nurture_seller_post_sale',
+          title: 'Nurture seller post-sale: ' + (lctx.seller_entity_name || lctx.seller_name || 'seller')
+            + ' (sold ' + propLabel + ')',
+          instructions: 'A past/known owner just sold. Seed or refresh a relationship / buy-side cadence on '
+            + 'the seller (do NOT auto-send). Seller entity: ' + (lctx.seller_entity_id || 'unresolved')
+            + '. Listing event: ' + eventId };
+      } else if (verdict === 'new_buyer_relationship') {
+        taskSpec = { research_type: 'new_buyer_relationship',
+          title: 'New owner relationship: ' + (lctx.buyer_entity_name || lctx.buyer_name || 'buyer')
+            + ' bought ' + propLabel,
+          instructions: 'The buyer is the new owner (and a future seller). Ensure the owner→asset edge and '
+            + 'open a relationship. If the buyer is a registered/affiliated buyer parent, use the existing '
+            + 'P-BUYER buy-side path instead of duplicating. Buyer entity: ' + (lctx.buyer_entity_id || 'unresolved')
+            + '. Listing event: ' + eventId };
+      } else if (verdict === 'pursue_cohort') {
+        taskSpec = { research_type: 'pursue_listing_cohort',
+          title: 'Pursue cohort from sale of ' + propLabel,
+          instructions: 'Work the listing-event fan-out for ' + lctx.domain + '/' + lctx.property_id
+            + ': same-owner cohort (lcc_listing_same_owner_cohort), recent-buyer cohort '
+            + '(lcc_listing_buyer_cohort), geographic neighbors (lcc_listing_geographic_neighbors). '
+            + 'Pick the highest-value targets to pursue. Listing event: ' + eventId };
+      } else {
+        return res.status(400).json({ error: 'unknown verdict for listing_event_action: ' + verdict });
+      }
+      const rt = await createResearchTask(taskSpec);
+      if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+        return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+      const mp = await markProcessed(verdict);
+      if (!mp.ok) { await recordEffectFailure({ research_task: true, marked_processed: false, error: mp.data });
+        return res.status(502).json({ error: 'mark_processed_failed', detail: mp.data }); }
+      await record(verdict, 'decided', payload, { research_task: true, marked_processed: true });
+      const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
+      return res.status(200).json({ ok: true, verdict, event_id: eventId, research_task_id: taskId || true });
+    }
+
     // ---- confirm_true_owner -------------------------------------------------
     if (decision.decision_type === 'confirm_true_owner') {
       if (verdict === 'correct' || verdict === 'correct_connect') {
@@ -2902,9 +3003,13 @@ async function handleAutoScrapeListings(req, res) {
 
     // 1. Pull overdue active listings, picking the columns we need to make
     //    the sold/available decision.
+    // R48 Unit 3: include gov under_contract listings — an under-contract
+    // listing with a recorded same-property sale should close to 'sold'
+    // (e.g. prop 15516, invisible before). dia uses is_active (post-R48
+    // under_contract rows carry is_active=true, so they're already in scope).
     const isActiveFilter = dom === 'dialysis'
       ? `is_active=eq.true`
-      : `listing_status=eq.active`;
+      : `listing_status=in.(active,under_contract)`;
     const dateCol = dom === 'dialysis' ? 'listing_date' : 'listing_date';
     const select = `listing_id,property_id,${dateCol},verification_due_at,consecutive_check_failures`;
 
@@ -2930,12 +3035,20 @@ async function handleAutoScrapeListings(req, res) {
     // tell that NULLs were always meant to be in scope. The companion view
     // v_listings_due_for_verification already uses
     // (verification_due_at IS NULL OR verification_due_at <= now()).
-    const cutoffEnc = encodeURIComponent(cutoffIso);
+    // R48 Unit 3: drop the `verification_due_at.gte.cutoff` LOWER bound. It was
+    // meant to skip "too stale" rows, but it permanently STRANDED listings that
+    // went overdue more than max_age_days ago — so gov leaks 16306/16369/30949
+    // (active, overdue since 2024-2025, each with a recorded same-property sale)
+    // were never re-scanned and never closed. Now ALL overdue + null-due rows
+    // are eligible, oldest first; the sold-match closes the deal and a no-sale
+    // row gets an 'inferred_active' timer advance — both move it out of the
+    // overdue set, so the backlog drains deterministically instead of stranding.
+    // (cutoffIso/maxAgeDays remain accepted for backward-compat but unused.)
     const nowEnc = encodeURIComponent(new Date().toISOString());
     const path =
       `available_listings?${isActiveFilter}` +
       excludeFilter +
-      `&or=(verification_due_at.is.null,and(verification_due_at.gte.${cutoffEnc},verification_due_at.lte.${nowEnc}))` +
+      `&or=(verification_due_at.is.null,verification_due_at.lte.${nowEnc})` +
       `&select=${select}` +
       `&order=verification_due_at.asc.nullsfirst&limit=${limit}`;
 

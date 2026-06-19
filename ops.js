@@ -1466,6 +1466,7 @@ async function renderReviewConsolePage() {
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
     { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
+    { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
@@ -2016,6 +2017,8 @@ const _DC_FED_META = {
     intro: 'Cap-review rows flagged as bad RENT (implausible gross yield), ranked by $ value, with the plausible rent band + the offending lease. Fix the rent AT SOURCE (never auto-corrected) — the recompute then refreshes the caps. Mark fixed, confirm the rent is genuinely right, or research.' },
   resolve_owner_parent: { title: 'Owner → ultimate parent',
     intro: 'Sponsor clusters mined from UNRESOLVED current-owner LLC/LP shells (gov + dia), ranked by $ rent. “high” = a fund numeral varies across the shells (SPUS6/7/8…). Confirm the controlling parent (registers it + rolls the shells up to it), name the parent yourself, or mark the owner a genuine independent. Never auto-merged — you confirm.' },
+  listing_event_action: { title: 'New sales → act',
+    intro: 'A closed sale is the next BD action, value-ranked by sale price. Nurture the seller (past/known owner — seed a relationship cadence, never auto-send), open the new-owner relationship (the buyer is a future seller; if a registered buyer parent, use the P-BUYER path), pursue the cohort fan-out (same-owner / recent-buyer / geographic neighbors), flag a sale-leaseback advisory angle, or dismiss. Each verdict marks the event processed.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2160,6 +2163,24 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcOwnerParentSet(' + i + ')">Name parent…</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_independent\')">Independent</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'listing_event_action') {
+    const slb = c.is_sale_leaseback;
+    const loc = (c.city ? esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '');
+    const buyer = c.buyer_entity_name || c.buyer_name;
+    const seller = c.seller_entity_name || c.seller_name;
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge pri-high">' + _fedMoney(c.sale_price) + '</span>'
+      + (slb ? '<span class="q-badge type" title="Heuristic: seller &amp; buyer names share a leading core — likely an affiliate sale / sale-leaseback. Confirm.">↪ sale-leaseback?</span>' : '')
+      + '</div></div>'
+      + '<div class="q-item-meta">' + (loc ? loc + ' · ' : '') + 'sold ' + esc(String(c.event_date || '')) + '</div>'
+      + '<div class="q-item-meta">Seller: <b>' + esc(seller || 'unresolved') + '</b>' + (c.seller_entity_id ? '' : ' <span class="q-badge">no entity</span>')
+      + ' → Buyer: <b>' + esc(buyer || 'unresolved') + '</b>' + (c.buyer_entity_id ? '' : ' <span class="q-badge">no entity</span>') + '</div>';
+    actions = (seller ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'nurture_seller\')">Nurture seller →</button>' : '')
+      + (buyer ? '<button class="q-action" onclick="dcFed(' + i + ',\'new_buyer_relationship\')">New owner relationship →</button>' : '')
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_cohort\')">Pursue cohort →</button>'
+      + (slb ? '<button class="q-action" onclick="dcFed(' + i + ',\'flag_sale_leaseback\')">Flag sale-leaseback</button>' : '')
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
