@@ -827,6 +827,9 @@ const FEDERATED_DECISION_TYPES = new Set([
   // R43: the parked cap-rate review queue (suspect movers, value-ranked by $
   // impact) + the bad-rent leases the recompute surfaced (fix-at-source).
   'caprate_review', 'bad_rent_lease',
+  // R46 Unit 3: the ownership-chain lane (incomplete chains → developer),
+  // value-ranked from v_ownership_chain_worklist.
+  'ownership_chain',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -843,6 +846,7 @@ function federatedSubjectRef(type, s) {
     case 'merge_duplicate_entities': return s.winner_id ? 'mergegrp:' + s.winner_id : null;
     case 'caprate_review':     return (s.domain && s.review_id != null) ? 'caprate:' + s.domain + ':' + s.review_id : null;
     case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
+    case 'ownership_chain':    return (s.domain && s.property_id != null) ? 'chain:' + s.domain + ':' + s.property_id : null;
   }
   return null;
 }
@@ -905,6 +909,33 @@ async function fetchFederatedSource(type, cap) {
       };
     }).sort((a, b) => (b.rank_value - a.rank_value));
     out.total = await opsCnt('staged_intake_items?status=in.(review_required,failed)');
+    return out;
+  }
+
+  if (type === 'ownership_chain') {
+    // R46 Unit 3: incomplete ownership chains, value-ranked. The worklist already
+    // excludes chain_complete + lcc_chain_unresolvable; gap → suggested_research_type.
+    const r = await opsQuery('GET', 'v_ownership_chain_worklist?select=source_domain,source_property_id,'
+      + 'current_owner_entity_id,current_owner_name,true_owner_name,owner_links,earliest_known_owner,'
+      + 'address,city,state,rank_value,gap,suggested_research_type'
+      + '&order=rank_value.desc.nullslast,source_domain,source_property_id&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'chain:' + row.source_domain + ':' + row.source_property_id,
+      subject_domain: row.source_domain,
+      subject_property_id: String(row.source_property_id),
+      subject_entity_id: row.current_owner_entity_id || null,
+      rank_value: Number(row.rank_value) || 0,
+      context: {
+        domain: row.source_domain, property_id: row.source_property_id,
+        gap: row.gap, suggested_research_type: row.suggested_research_type,
+        current_owner_name: row.current_owner_name, true_owner_name: row.true_owner_name,
+        earliest_known_owner: row.earliest_known_owner, owner_links: row.owner_links,
+        address: row.address, city: row.city, state: row.state,
+        rank_value: Number(row.rank_value) || 0,
+      },
+    }));
+    out.total = await opsCnt('v_ownership_chain_worklist');
     return out;
   }
 
@@ -1180,7 +1211,35 @@ async function listFederatedLane(type, limit, offset) {
     subject_property_id: it.subject_property_id, subject_ref: it.subject_ref,
     context: it.context, rank_value: it.rank_value,
   }));
+  if (type === 'ownership_chain') await enrichChainCandidates(items);
   return { type, mode: 'federated', total, items };
+}
+
+// R46 Unit 3: lazily attach the earliest-deed-grantee developer CANDIDATE to the
+// visible page of ownership-chain cards (gov only — deed coverage is gov-side via
+// parcel_owner_xref). One batched gov read for the ≤page property_ids; optional —
+// a failure just leaves the candidate absent (the operator still gets establish/
+// trace/research/mark_unresolvable). dia has no deed candidate source here.
+async function enrichChainCandidates(items) {
+  const govIds = (items || [])
+    .filter((i) => i.subject_domain === 'gov' && i.subject_property_id != null)
+    .map((i) => String(i.subject_property_id));
+  if (!govIds.length) return;
+  try {
+    const path = 'v_property_earliest_deed_grantee?select=property_id,earliest_grantee,earliest_recording_date'
+      + '&property_id=in.(' + govIds.map((x) => encodeURIComponent(x)).join(',') + ')';
+    const r = await domainQuery('gov', 'GET', path);
+    if (!r.ok || !Array.isArray(r.data)) return;
+    const byId = new Map(r.data.map((row) => [String(row.property_id), row]));
+    for (const it of items) {
+      const c = byId.get(String(it.subject_property_id));
+      if (c && c.earliest_grantee) {
+        it.context = it.context || {};
+        it.context.developer_candidate = c.earliest_grantee;
+        it.context.developer_candidate_date = c.earliest_recording_date || null;
+      }
+    }
+  } catch (_e) { /* candidate is optional enrichment */ }
 }
 
 async function handleDecisionsList(req, res) {
@@ -2423,6 +2482,104 @@ async function handleDecisionVerdict(req, res) {
         return res.status(200).json({ ok: true, verdict, review_id: c.review_id, resolution });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- ownership_chain (R46 Unit 3) --------------------------------------
+    if (decision.decision_type === 'ownership_chain') {
+      const ctx = (decision.context && typeof decision.context === 'object') ? decision.context : {};
+      const dom = decision.subject_domain || ctx.domain || null;
+      const propId = decision.subject_property_id != null ? decision.subject_property_id
+        : (ctx.property_id != null ? String(ctx.property_id) : null);
+      const isGov = dom === 'gov';
+
+      // research — the directed task already exists (lcc_generate_chain_research_tasks);
+      // recording the verdict drains the row from the lane.
+      if (verdict === 'research') {
+        const rr = await record('research', 'decided', { gap: ctx.gap }, { research: 'existing_task' });
+        if (!rr.ok) return res.status(502).json({ error: 'record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, recorded: 'research' });
+      }
+
+      // mark_unresolvable — developer genuinely unknowable: stop asking
+      // (anti-joined out of v_ownership_chain_worklist → drops from lane AND the
+      // research-task generator). Effect-first; reversible (DELETE the row).
+      if (verdict === 'mark_unresolvable') {
+        if (!dom || propId == null) return res.status(400).json({ error: 'subject missing domain/property' });
+        const ins = await opsQuery('POST', 'lcc_chain_unresolvable',
+          { source_domain: dom, source_property_id: String(propId),
+            reason: String(payload.reason || 'developer_unknowable'), decided_by: user.id || null },
+          { headers: { Prefer: 'resolution=merge-duplicates,return=representation' } });
+        if (!ins.ok) { await recordEffectFailure({ unresolvable: false, detail: ins.data });
+          return res.status(502).json({ error: 'unresolvable_write_failed', detail: ins.data }); }
+        await record('mark_unresolvable', 'decided', { reason: payload.reason || 'developer_unknowable' }, { unresolvable: true });
+        return res.status(200).json({ ok: true, recorded: 'mark_unresolvable' });
+      }
+
+      // set_prior_owner — append an ownership_history segment. gov ships now
+      // (append-only + idempotent + reversible); dia is record-only (deferred,
+      // mirrors the R7 Slice-3 true_owner posture).
+      if (verdict === 'set_prior_owner') {
+        const priorOwner = String(payload.prior_owner || '').trim();
+        if (!priorOwner) return res.status(400).json({ error: 'payload.prior_owner required' });
+        if (!isGov) {
+          await record('prior_owner_pending_writeback', 'decided', { prior_owner: priorOwner }, { writeback: 'deferred_dia' });
+          return res.status(200).json({ ok: true, recorded: 'prior_owner_pending_writeback', note: 'dia write-back deferred' });
+        }
+        const dr = await domainQuery('government', 'POST', 'rpc/gov_apply_manual_prior_owner', {
+          p_property_id: Number(propId), p_prior_owner: priorOwner,
+          p_new_owner: payload.new_owner || null, p_transfer_date: payload.transfer_date || null,
+          p_actor: 'decision_center', p_dry_run: payload.dry_run === true,
+        });
+        const row = (dr.ok && Array.isArray(dr.data)) ? dr.data[0] : (dr.ok ? dr.data : null);
+        if (payload.dry_run === true) return res.status(200).json({ ok: true, dry_run: true, preview: row || dr.data });
+        if (!dr.ok || !row || row.wrote !== true) {
+          await recordEffectFailure({ writeback: false, detail: row || dr.data });
+          return res.status(502).json({ error: 'prior_owner_write_failed', detail: row || dr.data });
+        }
+        await record('prior_owner_added', 'decided', { prior_owner: priorOwner, ownership_id: row.ownership_id }, { writeback: true });
+        return res.status(200).json({ ok: true, recorded: 'prior_owner_added', ownership_id: row.ownership_id });
+      }
+
+      // set_developer / confirm_developer — fill-blanks developer write-back.
+      // GATED behind DECISION_DEVELOPER_WRITEBACK + a gov subject (cross-DB write,
+      // the gov_apply_manual_true_owner / Slice-3 pattern). dry_run preview is
+      // always safe. confirm_developer takes the deed-grantee candidate from ctx.
+      if (verdict === 'set_developer' || verdict === 'confirm_developer') {
+        const developer = String(payload.developer
+          || (verdict === 'confirm_developer' ? (ctx.developer_candidate || '') : '')).trim();
+        if (!developer) return res.status(400).json({ error: 'payload.developer (or a candidate) required' });
+        if (payload.dry_run === true && isGov) {
+          const dr = await domainQuery('government', 'POST', 'rpc/gov_apply_manual_developer', {
+            p_property_id: Number(propId), p_developer_name: developer, p_actor: 'decision_center', p_dry_run: true });
+          const row = (dr.ok && Array.isArray(dr.data)) ? dr.data[0] : (dr.ok ? dr.data : null);
+          return res.status(200).json({ ok: true, dry_run: true, preview: row || dr.data });
+        }
+        const writebackOn = /^(on|1|true|yes|enabled)$/i.test(String(process.env.DECISION_DEVELOPER_WRITEBACK || ''));
+        if (!writebackOn || !isGov) {
+          await record(verdict + '_pending_writeback', 'decided', { developer },
+            { writeback: isGov ? 'deferred_pending_blessing' : 'deferred_dia' });
+          return res.status(200).json({ ok: true, recorded: verdict + '_pending_writeback',
+            note: isGov ? 'Set DECISION_DEVELOPER_WRITEBACK to enable the gov developer write-back.' : 'dia write-back deferred' });
+        }
+        const wr = await domainQuery('government', 'POST', 'rpc/gov_apply_manual_developer', {
+          p_property_id: Number(propId), p_developer_name: developer, p_actor: 'decision_center', p_dry_run: false });
+        const row = (wr.ok && Array.isArray(wr.data)) ? wr.data[0] : (wr.ok ? wr.data : null);
+        if (!wr.ok || !row || (row.wrote !== true && row.note !== 'developer_already_set')) {
+          await recordEffectFailure({ writeback: false, detail: row || wr.data });
+          return res.status(502).json({ error: 'developer_write_failed', detail: row || wr.data });
+        }
+        // Patch the LCC owner-facts mirror so the chain re-resolves immediately +
+        // refresh the queue cache (Slice-1 staleness hook). Best-effort.
+        try {
+          await opsQuery('PATCH', 'lcc_property_owner_facts?source_domain=eq.' + pgFilterVal(dom)
+            + '&source_property_id=eq.' + pgFilterVal(String(propId)), { developer_name: developer });
+          await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {});
+        } catch (_e) { /* best-effort */ }
+        await record(verdict, 'decided', { developer }, { writeback: true });
+        return res.status(200).json({ ok: true, recorded: verdict, developer });
+      }
+
+      return res.status(400).json({ error: 'unsupported_verdict', verdict, decision_type: 'ownership_chain' });
     }
 
     return res.status(400).json({ error: 'unsupported_decision_type', decision_type: decision.decision_type });

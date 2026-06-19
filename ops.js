@@ -1465,6 +1465,7 @@ async function renderReviewConsolePage() {
   const SUBLANES = [
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
+    { dt: 'ownership_chain', label: 'Ownership chain → developer', open: "renderFederatedLane('ownership_chain')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
@@ -1986,6 +1987,8 @@ const _DC_FED_META = {
     intro: 'Parked cap-rate recomputes (low-confidence or out-of-band), ranked by $ impact = price × |old − recomputed cap|. Apply the recompute (bounded, reversible), keep the original, route to the bad-rent lane (the cap is wrong because the rent is), or research.' },
   bad_rent_lease: { title: 'Bad-rent leases — fix at source',
     intro: 'Cap-review rows flagged as bad RENT (implausible gross yield), ranked by $ value, with the plausible rent band + the offending lease. Fix the rent AT SOURCE (never auto-corrected) — the recompute then refreshes the caps. Mark fixed, confirm the rent is genuinely right, or research.' },
+  ownership_chain: { title: 'Ownership chain → developer',
+    intro: 'Incomplete ownership chains (current owner is a buyer/acquisition), value-ranked by $ rent. "Establish history" = pull county deeds; "trace to developer" = the chain needs its developer endpoint. Add a prior owner, confirm the deed-grantee developer candidate, send to research, or mark unresolvable (genuinely unknowable — stops re-asking). Set developer is a gated cross-DB write-back (gov, DECISION_DEVELOPER_WRITEBACK).' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2115,6 +2118,29 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_fixed\')">Mark rent fixed</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'confirm_rent\')">Rent is correct</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'ownership_chain') {
+    const gapLabel = c.gap === 'no_prior_owners_recorded' ? 'Establish ownership history (pull county deeds)'
+      : 'Trace ownership to the original developer';
+    const rent = _fedMoney(c.rank_value);
+    const cand = c.developer_candidate;
+    const openDetail = (c.domain && c.property_id != null && typeof openUnifiedDetail === 'function')
+      ? '<button class="q-action" onclick="openUnifiedDetail(\'' + esc(c.domain) + '\', {property_id: ' + esc(String(c.property_id)) + '}, {}, \'Overview\')">Open property →</button>' : '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + (rent ? '<span class="q-badge pri-high">' + rent + ' rent</span>' : '')
+      + '<span class="q-badge">' + esc(c.gap || '') + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc(gapLabel) + (c.city ? ' · ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '') + '</div>'
+      + '<div class="q-item-meta">Current owner: <b>' + esc(c.current_owner_name || c.true_owner_name || '(unknown)') + '</b>'
+      + ' · ' + esc(String(c.owner_links || 0)) + ' owner link(s)'
+      + (c.earliest_known_owner ? ' · earliest: ' + esc(c.earliest_known_owner) : '') + '</div>'
+      + (cand ? '<div class="q-item-meta">Developer candidate (earliest deed grantee): <b>' + esc(cand) + '</b>'
+        + (c.developer_candidate_date ? ' (' + esc(String(c.developer_candidate_date)) + ')' : '') + '</div>' : '');
+    actions = (cand ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_developer\')">Confirm developer: ' + esc(cand) + '</button>' : '')
+      + '<button class="q-action" onclick="dcChainSetPrior(' + i + ')">Add prior owner…</button>'
+      + '<button class="q-action" onclick="dcChainSetDeveloper(' + i + ')">Set developer…</button>'
+      + openDetail
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_unresolvable\')">Unresolvable</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -2161,6 +2187,38 @@ async function dcImplausibleCorrect(i) {
   dcFed(i, 'correct', { corrected_price: n });
 }
 window.dcImplausibleCorrect = dcImplausibleCorrect;
+
+// R46 Unit 3: ownership-chain prompts. Add a prior owner (append an
+// ownership_history segment — gov ships now, dia record-only) or set the
+// developer (gated cross-DB write-back; dry-run preview only on the click path).
+async function dcChainSetPrior(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
+    + 'current owner ' + (c.current_owner_name || c.true_owner_name || '(unknown)');
+  const v = typeof lccPrompt === 'function'
+    ? await lccPrompt('Add the PRIOR owner (the seller in the deed that conveyed to the current owner).\n\n' + ctx + '\n\nPrior owner name:', '')
+    : (typeof prompt === 'function' ? prompt('Prior owner name:') : '');
+  if (v == null) return;
+  const name = String(v).trim();
+  if (!name) { if (typeof showToast === 'function') showToast('Enter a prior owner name', 'error'); return; }
+  dcFed(i, 'set_prior_owner', { prior_owner: name });
+}
+window.dcChainSetPrior = dcChainSetPrior;
+
+async function dcChainSetDeveloper(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const v = typeof lccPrompt === 'function'
+    ? await lccPrompt('Set the original DEVELOPER for this property (fill-blanks; gated gov write-back).\n\n'
+      + (c.address || ('Property ' + c.property_id)) + '\n\nDeveloper name:', c.developer_candidate || '')
+    : (typeof prompt === 'function' ? prompt('Developer name:', c.developer_candidate || '') : '');
+  if (v == null) return;
+  const name = String(v).trim();
+  if (!name) { if (typeof showToast === 'function') showToast('Enter a developer name', 'error'); return; }
+  dcFed(i, 'set_developer', { developer: name });
+}
+window.dcChainSetDeveloper = dcChainSetDeveloper;
 
 async function dcFed(i, verdict, payload) {
   const it = _dcFedArr[i]; if (!it) return;
