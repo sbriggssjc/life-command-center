@@ -3494,3 +3494,77 @@ Grounding **refuted two audit premises**, so #6 is surface-first, not bulk row-f
 grounding (dia 116/2/79; gov 17/22/5/3,212); the 3 cms entities flagged with the 345 CCN ids
 preserved; SF-linked orphans untouched. ZERO hard-deletes; every change reversible by tag /
 DROP. No `api/*.js` change (pure DB + docs); `ls api/*.js | wc -l`=12.
+
+## OUTREACH #1 — close the SF-activity → cadence-advance loop (Scott's workflow) (2026-06-19)
+
+Scott does outreach in Outlook/Salesforce, NOT in-app. The cadence engine
+(R10/R16/R20/R24) is built + data-ready (521 cadences) but had produced ~0 sends
+and ~4 touches ever, because the one link his workflow depends on — SF-logged
+outreach advancing the matching cadence — was broken. Grounded live 2026-06-19
+(receipts, not the audit premise).
+
+### Unit 1 — root cause (receipts on the real misses)
+- **RC1 (dominant, currently biting):** Scott logs most real outreach in SF as
+  PLAIN Tasks (`sf_type='Task'`, no `TaskSubtype`). `mapSfTypeToCategory`
+  collapsed those to category `note`, and the advance trigger
+  `lcc_activity_event_advance_cadence` explicitly skips `note`. Receipts: 31/44
+  recent SF events are `note`, **29/31 are real outreach** ("Sent RE: …", "…
+  sent Re: …", "Call"), **14 resolve directly onto an active cadence** (+6 onto a
+  cadence's `contact_id`). Those advances were silently lost.
+- **RC3 (latent structural):** the trigger resolved a cadence ONLY by
+  `entity_id` (+ the R10 Unit-2 asset→owner `owns` hop) — **never by
+  `contact_id`**. The SF ingest resolves an event's entity to the SF
+  Contact/Account, which is frequently the cadence's CONTACT person, not its
+  owner `entity_id` (22 active cadences carry `contact_id <> entity_id`).
+- **NOT timing / NOT silent-exception:** the happy-path call/email events DID
+  advance (thomas gorman emails_sent=4; albert muller calls_made=7) — entity_id
+  was set at insert, trigger fired, `lcc_advance_onboarding_cadence` did not
+  throw. (The prompt's "clear case" — albert's `last_touch=2026-05-19` — was the
+  correct latest-call date, not a miss.) Made the swallow observable anyway.
+
+### Unit 2 — fixes (reuse `lcc_advance_onboarding_cadence` + the single-advance owner)
+- **RC3 fix (the gate's core):** migration `20260719180000` adds ONE lookup tier
+  to the trigger — a cadence whose `contact_id = NEW.entity_id` — after the
+  entity/owns tiers (single place, conservative; reproduces the R10 Unit-2 body
+  verbatim). Mirrored in JS `cadence-engine.resolveCadenceForEntity` (the reply
+  path) so the two agree. In-app advance path (`advanceCadence`) untouched.
+- **RC1 fix:** `sf-activity-ingest.js` `deriveSfCategory(type, subject)` —
+  when the SF type collapses to `note` AND it is a generic Task (not an explicit
+  SF `Note` object), infer the real channel from the subject (email markers
+  `sent`/`Re:`/`Fw:` first, then call markers `Call`/voicemail), else stay
+  `note`. Genuine internal notes ("2 - Medical Buyer/Portfolio") stay `note`.
+  The handler now categorizes with this, so a Task that is really an email/call
+  advances the cadence going forward.
+- **Observability:** the trigger's `EXCEPTION WHEN OTHERS` now records the
+  swallowed error in a bounded `lcc_cadence_advance_failures` table (the
+  activity insert still succeeds — advance stays best-effort).
+- **Backfill (reversible):** migration `20260719181000`
+  `lcc_backfill_sf_cadence_advances(dry_run default true)` advances each active
+  cadence (via the SAME advance fn) once per real SF outreach event that
+  resolves to it (entity/contact/owns) and occurred AFTER its `last_touch_at`
+  watermark — so trigger-advanced events never double-count and same-day
+  duplicate Tasks collapse. Snapshots pre-state into `lcc_sf_cadence_backfill_log`
+  + stamps `metadata.cadence_backfilled`. (NOTE: Postgres ARE uses `\y` for word
+  boundary, not `\b` = backspace — the first regex draft missed every match.)
+
+### Verified live 2026-06-19
+- **RC3 (gate):** synthetic SF call logged on the CONTACT person advanced the
+  OWNER's cadence (touch 2→3, calls 0→1, last_touch→today, rescheduled out of
+  overdue). 0 residue.
+- **Backfill:** real apply fixed **albert muller** — 2 distinct Task-outreach
+  days (06-12, 06-17) that never advanced now reflected (`last_touch`
+  05-19→06-17, `next_due`→09-16); reversible via the log. Synthetic note event
+  advanced then reverted from its snapshot (touch→2, last_touch→original);
+  same-day duplicates correctly collapsed (6 events → 2 advances). 0 synthetic
+  residue (2 albert log rows kept as the reversible record).
+- **No stale residue:** 0 active cadences sit overdue behind a real SF outreach
+  event after the fix; `lcc_cadence_advance_failures`=0 (no silent throws).
+- Full suite **1023 pass / 0 fail / 6 skipped**; `node --check` clean; `ls
+  api/*.js | wc -l`=12. DB applied live + committed; JS ships on the Railway
+  redeploy. LCC-Opps only; no dia/gov writes; auth schema untouched.
+
+### Scope / follow-ups
+ADVANCE half only (Scott's blocker). The DRAFT half (in-app sender) is
+deliberately untouched. Reverse any backfill from `lcc_sf_cadence_backfill_log`.
+Follow-up: a small number of SF Account-resolved org events (alliant/primax) have
+no cadence at all (lender/buyer, not prospects) — correct no-op, not a miss.

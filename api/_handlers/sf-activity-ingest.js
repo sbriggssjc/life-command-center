@@ -55,6 +55,39 @@ export function mapSfTypeToCategory(type) {
   return 'note';
 }
 
+// OUTREACH #1 (RC1) — conservative outreach-subject shapes. Scott logs most of
+// his real outreach in Salesforce as PLAIN Tasks (sf_type='Task', no
+// TaskSubtype), which mapSfTypeToCategory collapses to 'note' — and the advance
+// trigger skips 'note', so the touch never advances the cadence. Grounded live
+// 2026-06-19: 29/31 recent 'note' SF events are real outreach. We recover the
+// real category from the SUBJECT for those Tasks only; genuine internal notes
+// ("2 - Medical Buyer/Portfolio") match neither pattern and stay 'note'.
+const SF_EMAIL_SUBJECT_RE = /\bsent\b|^\s*(re|aw|antw|sv|vs|rv|fw|fwd)\s*:|\bre:|\bfw:|\bfwd:/i;
+const SF_CALL_SUBJECT_RE  = /\bcall\b|voicemail|left\s+(a\s+)?(vm|message)/i;
+
+/**
+ * Derive the activity category for a Salesforce record. When the SF type maps
+ * to a concrete channel (Call/Email/Meeting) that wins. When it collapses to
+ * 'note' (a plain Task), infer the real channel from the subject so genuine
+ * outreach logged as a Task advances the cadence — email markers
+ * (sent/Re:/Fw:) first, then call markers (Call/voicemail), else 'note'.
+ *
+ * @param {string} type    SF type / TaskSubtype
+ * @param {string} subject SF subject line
+ * @returns {'call'|'email'|'meeting'|'note'}
+ */
+export function deriveSfCategory(type, subject) {
+  const base = mapSfTypeToCategory(type);
+  if (base !== 'note') return base;
+  // Only infer outreach for generic Tasks / unknown activity types. An explicit
+  // SF 'Note' object is a real note attachment, not a logged touch — leave it.
+  if (String(type || '').toLowerCase() === 'note') return 'note';
+  const s = String(subject || '');
+  if (SF_EMAIL_SUBJECT_RE.test(s)) return 'email';
+  if (SF_CALL_SUBJECT_RE.test(s))  return 'call';
+  return 'note';
+}
+
 /**
  * Decide whether a mirrored email activity is an INBOUND REPLY from the
  * contact (R24 Unit 2). A reply is a high-signal touch that should advance the
@@ -159,7 +192,9 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     }
 
     summary.matched += 1;
-    const category = mapSfTypeToCategory(rawType);
+    // OUTREACH #1 (RC1) — subject-aware so a plain SF Task that is really an
+    // email/call advances the cadence instead of being a dead 'note'.
+    const category = deriveSfCategory(rawType, subject);
     const replyTouch = isInboundReply(category, rec, subject);
 
     const metadata = {
