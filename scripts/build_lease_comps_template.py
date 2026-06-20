@@ -29,7 +29,7 @@ Canonical-merge (2026-06-20):
 Round 76gn.q fix:
   - Abbreviate three header labels (STATE -> ST, RENOVATED -> RENO,
     COMMENCE -> COMM) to match the existing abbreviated style of RBA /
-    EXP / TERM REM / RENT/SF / SF LEASED. The bold Trebuchet MS header
+    EXP / TERM REM / RENT/SF / SF LEASED. The bold header
     font renders wider than the raw character count suggests, so the
     full-word versions wrapped mid-word in narrower columns (especially
     column F STATE at width 7, column I RENOVATED at width 11). The
@@ -79,7 +79,8 @@ Prior fixes (Round 76gn.f / 76gn.h):
   - Freeze pane moved from B30 to B8 so the comps header stays visible while scrolling.
   - Tab color set to NMQ blue. Header band uses white bold text on NMQ blue.
   - Section title bands ("Subject Property", "Lease Comps") get a navy band.
-  - Body uses Open Sans / Trebuchet MS per NMQ_BRAND in detail.js.
+  - Heading/body use Calibri Light / Calibri per the brand source
+    public/reports/cm_brand_tokens.json (was ad-hoc Trebuchet MS / Open Sans).
   - Comps rows alternate warm-white / white fill.
 
 Run from repo root:
@@ -112,8 +113,16 @@ NMQ = {
     "white":     "FFFFFFFF",
 }
 
-HEADING_FONT = "Trebuchet MS"
-BODY_FONT = "Open Sans"
+# Excel deliverable fonts — Calibri Light / Calibri, per the documented brand
+# source public/reports/cm_brand_tokens.json ("Excel exports must use Calibri
+# Light/Calibri to match the existing master workbooks"; Northmarq brand book
+# Futura PT primary, Calibri as the deliverable fallback). The prior
+# Trebuchet MS / Open Sans values were ad-hoc (not Northmarq brand fonts).
+# NOTE: only the Excel export is aligned here; the detail.js HTML/print report
+# (NMQ_BRAND) is a separate surface where the brand source permits a different
+# web heading font.
+HEADING_FONT = "Calibri Light"
+BODY_FONT = "Calibri"
 
 OUT_PATH = Path("assets/cm-templates/dialysis-lease-comps-template.xlsx")
 
@@ -135,7 +144,7 @@ LAST_COL_INDEX = 26  # column Z (1-based)
 # Header labels intentionally use the abbreviated style established by
 # existing columns (RBA, EXP, RENT/SF, TERM REM). Three labels were
 # shortened in Round 76gn.q so they don't wrap mid-word under the bold
-# Trebuchet header font: STATE -> ST, RENOVATED -> RENO, COMMENCE -> COMM.
+# header font: STATE -> ST, RENOVATED -> RENO, COMMENCE -> COMM.
 # If any of these are renamed, also update:
 #   1. avg_formulas[<letter>] below (Excel Table column refs match the
 #      header cell value)
