@@ -37,6 +37,8 @@ import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/cont
 import { buildDeedParseAdapter, isDeedAdapterConfigured } from '../_shared/deed-signatory.js';
 import { buildSosLookupAdapter, isSosAdapterConfigured } from '../_shared/sos-lookup.js';
 import { buildAddressReverseAdapter, isAddressAdapterConfigured } from '../_shared/address-reverse.js';
+import { buildWebSearchAdapter, isWebSearchAdapterConfigured } from '../_shared/web-search-enrich.js';
+import { buildManualResearchProducer, MANUAL_RESEARCH_TYPE } from '../_shared/manual-research-worklist.js';
 
 const WALL_CLOCK_MS = 20000;
 
@@ -50,6 +52,9 @@ const WALL_CLOCK_MS = 20000;
 async function defaultSosLookup() { return { ok: false, reason: 'unconfigured' }; }
 async function defaultAddressLookup() { return { ok: false, reason: 'unconfigured' }; }
 async function defaultDeedParse() { return { ok: false, reason: 'unconfigured' }; }
+// Slice-4 amendment: cross-ref (free sibling reuse) + web search.
+async function defaultCrossRef() { return { ok: false, reason: 'no_sibling' }; }
+async function defaultWebSearch() { return { ok: false, reason: 'unconfigured' }; }
 
 const isConfiguredSos = isSosAdapterConfigured;
 const isConfiguredAddress = isAddressAdapterConfigured;
@@ -137,34 +142,68 @@ export async function processOwnerEnrichmentRow(row, deps) {
     return { entity_id: row.entity_id, outcome: 'guard_rejected', skipped: org && org.skipped };
   }
 
-  // (c) EXTERNAL ENRICHMENT for the contactless.
+  // (c) EXTERNAL ENRICHMENT for the contactless — ordered chain (Scott's
+  // amendment 2026-06-20): cross-ref (free) → public-IR terminal → routed
+  // adapter (deed/SOS/address) → web search → manual-research worklist. Each
+  // step that can't resolve records WHY, so the worklist row carries full
+  // breadcrumbs. First confident resolve wins; the unresolvable tail is
+  // SURFACED (worklist), never dropped or guess-filled.
   const action = row.enrichment_action;
-  if (action === 'sos_manager_lookup' || action === 'find_person_at_manager') {
-    const res = await (deps.sosLookup || defaultSosLookup)(row);
-    if (res && res.ok && res.person_name) {
-      const r = await attachPersonToOwner(row, res.person_name, res.role || 'managing_member', deps, 'sos_manager_lookup');
-      return { entity_id: row.entity_id, source: 'sos', ...r };
-    }
-    return { entity_id: row.entity_id, outcome: res && res.reason === 'unconfigured' ? 'enrichment_unconfigured' : 'enrichment_no_result', action };
+  const tried = [];
+
+  // 1. Cross-reference — reuse a principal already resolved on a sibling owner.
+  //    Free, zero external; run FIRST.
+  const xref = await (deps.crossRef || defaultCrossRef)(row);
+  if (xref && xref.ok && xref.person_name) {
+    const r = await attachPersonToOwner(row, xref.person_name, xref.role || 'principal', deps, 'cross_reference');
+    return { entity_id: row.entity_id, source: 'cross_reference', ...r };
   }
-  if (action === 'address_reverse_lookup') {
-    const res = await (deps.addressLookup || defaultAddressLookup)(row);
-    if (res && res.ok && res.person_name) {
-      const r = await attachPersonToOwner(row, res.person_name, res.role || 'economic_owner_contact', deps, 'address_reverse_lookup');
-      return { entity_id: row.entity_id, source: 'address', ...r };
-    }
-    return { entity_id: row.entity_id, outcome: res && res.reason === 'unconfigured' ? 'enrichment_unconfigured' : 'enrichment_no_result', action };
-  }
-  if (action === 'parse_deed_signatory') {
-    const res = await (deps.deedParse || defaultDeedParse)(row);
-    if (res && res.ok && res.person_name) {
-      const r = await attachPersonToOwner(row, res.person_name, res.role || 'signatory', deps, 'parse_deed_signatory');
-      return { entity_id: row.entity_id, source: 'deed', ...r };
-    }
-    return { entity_id: row.entity_id, outcome: res && res.reason === 'unconfigured' ? 'enrichment_unconfigured' : 'enrichment_no_result', action };
-  }
+  tried.push({ method: 'cross_reference', reason: (xref && xref.reason) || 'no_sibling' });
+
+  // 2. Public-company IR — a known-IR-contact MANUAL path (not a scraper), its
+  //    own terminal (reached only after the free cross-ref).
   if (action === 'public_company_ir') {
     return { entity_id: row.entity_id, outcome: 'public_ir_manual', action };
+  }
+
+  // 3. Backoff: a manual row already OPEN ⇒ the external methods were tried on a
+  //    prior tick — don't re-hammer (cross-ref above is the only worthwhile retry
+  //    as siblings resolve over time).
+  if (deps.manualResearch && typeof deps.manualResearch.check === 'function') {
+    const open = await deps.manualResearch.check(row);
+    if (open && open.open) return { entity_id: row.entity_id, outcome: 'manual_research_pending' };
+  }
+
+  // 4. Routed external adapter by enrichment_action.
+  const routed =
+    (action === 'sos_manager_lookup' || action === 'find_person_at_manager')
+      ? { run: deps.sosLookup || defaultSosLookup, source: 'sos', role: 'managing_member' }
+      : action === 'address_reverse_lookup'
+        ? { run: deps.addressLookup || defaultAddressLookup, source: 'address', role: 'economic_owner_contact' }
+        : action === 'parse_deed_signatory'
+          ? { run: deps.deedParse || defaultDeedParse, source: 'deed', role: 'signatory' }
+          : null;
+  if (routed) {
+    const res = await routed.run(row);
+    if (res && res.ok && res.person_name) {
+      const r = await attachPersonToOwner(row, res.person_name, res.role || routed.role, deps, routed.source + '_lookup');
+      return { entity_id: row.entity_id, source: routed.source, ...r };
+    }
+    tried.push({ method: routed.source, reason: (res && res.reason) || 'no_result' });
+  }
+
+  // 5. Free web search.
+  const web = await (deps.webSearch || defaultWebSearch)(row);
+  if (web && web.ok && web.person_name) {
+    const r = await attachPersonToOwner(row, web.person_name, web.role || 'principal', deps, 'web_search');
+    return { entity_id: row.entity_id, source: 'web', ...r };
+  }
+  tried.push({ method: 'web_search', reason: (web && web.reason) || 'no_result' });
+
+  // 6. Manual-research worklist — surfaced with breadcrumbs, never dropped.
+  if (deps.manualResearch && typeof deps.manualResearch.queue === 'function') {
+    const q = await deps.manualResearch.queue(row, { tried, enrichment_action: action, bench: row.bench_tried || [] });
+    return { entity_id: row.entity_id, outcome: q && q.existed ? 'manual_research_pending' : 'manual_research_queued', queued: !!(q && q.ok), action: action || null };
   }
   return { entity_id: row.entity_id, outcome: 'manual_research', action: action || null };
 }
@@ -179,6 +218,33 @@ function buildDeps() {
     deedParse: buildDeedParseAdapter({ fetchDocText: webhookFetcher('OWNER_ENRICH_DEED_URL') }),
     sosLookup: buildSosLookupAdapter({ fetch: webhookFetcher('OWNER_ENRICH_SOS_URL') }),
     addressLookup: buildAddressReverseAdapter({ fetch: webhookFetcher('OWNER_ENRICH_ADDRESS_URL') }),
+    webSearch: buildWebSearchAdapter({ search: webhookFetcher('OWNER_ENRICH_WEBSEARCH_URL') }),
+    // crossRef: the free sibling-reuse resolver. The production cross-DB sibling
+    // query (shared notice_address / property cluster / true-owner family) needs
+    // its own grounding and is the post-deploy piece; until then the chain's
+    // cross-ref step no-ops (`no_sibling`) and the row flows to the worklist.
+    manualResearch: buildManualResearchProducer(buildManualResearchDeps()),
+  };
+}
+
+// Production deps for the manual-research worklist over the research_tasks table
+// (mirrors api/admin.js createResearchTask: research_tasks.workspace_id + domain
+// are NOT NULL). Idempotent open-check keys on (research_type, entity_id, open).
+function buildManualResearchDeps() {
+  return {
+    findOpenTask: async (entityId) => {
+      const q = 'research_tasks?select=id&research_type=eq.' + MANUAL_RESEARCH_TYPE
+        + '&entity_id=eq.' + pgFilterVal(entityId)
+        + '&status=in.(queued,in_progress)&limit=1';
+      const r = await opsQuery('GET', q);
+      return (r.ok && Array.isArray(r.data)) ? r.data : [];
+    },
+    createTask: async (payload) => opsQuery('POST', 'research_tasks', payload),
+    resolveWorkspace: async (row) => {
+      if (row && row.workspace_id) return row.workspace_id;
+      const wr = await opsQuery('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+      return (wr.ok && Array.isArray(wr.data) && wr.data[0]) ? wr.data[0].id : null;
+    },
   };
 }
 
