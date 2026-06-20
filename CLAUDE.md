@@ -4209,3 +4209,108 @@ The grade-factor (Unit 4, gated); richer CMBS Performance/snapshot captures to
 populate the distress flags (writer + view already ready); a cron that seeds the
 top maturity-watch rows as decisions (kept list-federated / mint-at-verdict for
 now, anti-bloat).
+
+## UW#2 — activate the lease-document extractor (Scott's blessing, 2026-06-20)
+
+From the underwriting data-quality audit: the lease ECONOMICS that aren't in a
+public feed (escalation %, guarantor, renewal terms, expiration, expense
+structure) live in the lease PDFs we already hold in SharePoint. The Stage B
+lease extractor was BUILT and PAUSED ("Widen — still PAUSED"). Scott blessed the
+widen. This round is the **disciplined activation** (capped → gate → drain), NOT
+new build — every artifact was already merged (Stage B Unit 1 + the
+location-agreement / draft-document guards). **The code is complete and wired;
+activation is operational** (an env flag + a capped→broad drain via the live
+Railway endpoint + SharePoint Get flow + the extraction AI), so the durable
+deliverable here is the grounded gate evidence + the runbook, not a code diff.
+
+### What is already wired (verified, no change needed)
+- **Auto-route (steady-state):** `folder-feed.js` routes an in-domain
+  (`subject_hint.vertical` dia/gov) `detected_type='lease'` doc in **enrich mode**
+  through `attachLeaseDoc` (extract → resolve → enrich), gated on
+  **`FOLDER_FEED_LEASE_EXTRACT='true'`** (global) or a per-folder `?lease_extract=1`
+  override (the find_contacts_by_account rollout pattern). Out-of-domain leases
+  (no dia/gov cue) keep the light-attach/CRE path — no AI wasted on the
+  office/retail book.
+- **Corpus drainer:** `?_route=lease-backfill` (sub-route of intake.js — still 12
+  api/*.js). **GET = dry-run** (lists the eligible queue, no byte/AI),
+  **POST = drain** (capped `?limit`, default 15 / hard cap 50). Idempotent by a
+  `subject_hint.lease_backfilled_at` marker; dead-letters transient failures at
+  `LEASE_BACKFILL_MAX_ATTEMPTS=3`.
+- **The `property_financials` #64 leg** is part of the widen and wired
+  (`insertPropertyFinancials` in `buildRealLeaseDeps`): the lease expense schedule
+  → `property_financials` rows stamped `is_actual=false`, `noi=null`,
+  `source='folder_feed_lease'` — so the gov cap-rate provenance ladder
+  (`resolveCapRateProvenance` Tier 2, which requires `is_actual=true AND noi NOT
+  NULL`) **structurally cannot consume them**. Boundary intact.
+- **All four guards hold at the shared `attachLeaseDoc` choke point**:
+  multi-tenant/portfolio deal-folder, draft/unexecuted (`/Drafts/` segment +
+  blackline/redline/draft/vN filename), location-agreement (folder-anchor
+  city/state vs property → `location_mismatch` → match_disambiguation), and
+  operator-family. Plus fill-blanks-only (true-fill against the live column, not
+  the provenance decision), one-active-lease dedupe, provenance
+  `source='folder_feed_lease'` (lease-economics fields `enforce_mode='warn'` →
+  conflicts to the Decision Center, never a clobber).
+
+### Gate receipts (grounded live, read-only, 2026-06-20)
+- **Code health:** `node --check` clean (lease-extractor / lease-backfill /
+  folder-feed); `ls api/*.js | wc -l`=12; `test/lease-extractor.test.mjs` +
+  `test/lease-location-draft-guard.test.mjs` **75 pass / 0 fail**.
+- **Registry readiness (LCC Opps):** 40 `field_source_priority` rows for
+  `source='folder_feed_lease'` (priority 45) — lease-economics fields `warn`,
+  TI/financials/property_documents `record_only`. `v_field_provenance_unranked`
+  coverage complete (no drift).
+- **Prior corpus drain already ran — 298 docs** (`folder_feed_seen.detected_type=
+  'lease'`, `lease_backfilled_at` set), outcomes: **88 enriched** (151 fields
+  filled, **314 conflicts routed to the Decision Center — 0 clobbers**, 7 leases
+  created), **160 `needs_ocr`**, 37 `ambiguous`, 6 `draft_not_executed`, 5
+  `enrich_create_rejected`, 2 `error_dead_letter`. **0 wrong-property / HQ / draft
+  writes.**
+- **Guards validated live:** the 8 location-guard held docs (Stage B location
+  round Unit 3) re-drained exactly as predicted — **6374/7004 → `ambiguous`**
+  (the FL/Gardena memoranda → `location_mismatch` → match_disambiguation, never a
+  write to the CO HQ) and **19517/19522/19524/19526/19530/19541 →
+  `draft_not_executed`** (the Federal Way `…/PSA/Drafts/` redline/blackline files
+  → no phantom lease on 3353605).
+- **Remaining eligible queue (the next capped batch): 62** (dia 58, gov 4) —
+  real DaVita/GSA lease agreements + estoppels + amendments with city/state
+  anchors (Tallahassee, Somerset, Weslaco, Oshkosh, Gladstone, Modesto, Corpus
+  Christi, Florence, …). These are new/late arrivals captured under the light
+  path; idempotent to re-run.
+
+### The honest ceiling (report, don't fake)
+The extractor needs a **text layer**. **160 of 298 (54%) of executed leases are
+scanned image-only PDFs → `needs_ocr` → 0 fields filled.** So the widen — even
+fully drained — lifts dia escalation/guarantor/renewal off the floor only for the
+text-bearing minority; the scanned tail stays blank until an OCR pass lands. The
+floor numbers in the audit (dia escalation 2%, guarantor 5%, renewal 15%) will
+improve, but the structural lift is gated on OCR, not on the extractor. This is a
+known, surfaced limitation — `needs_ocr` is recorded terminal with `text_len`, so
+the OCR follow-up is sized and queued.
+
+### Activation runbook (operational — live Railway endpoint, NOT runnable from the
+### remote sandbox; handed to Scott)
+1. **Capped DRY-RUN** (safe, no writes): `GET /api/lease-backfill?limit=25` —
+   confirms the eligible queue (≈62) and the sample. (The DB-side equivalent was
+   produced above as the gate receipt.)
+2. **Capped REAL drain on a small batch:** `POST /api/lease-backfill?limit=25` —
+   requires `SHAREPOINT_FETCH_URL` configured + the extraction AI. Read the
+   response receipts: `enriched` / `fields_filled_total` / `conflicts_total` /
+   `leases_created` / `guaranteed_by_edges`, and the terminal buckets
+   (`needs_ocr` / `ambiguous` / `draft_not_executed`). Gate = fields filled from
+   real PDFs, leases created where absent **without orphaning a guarantor**, every
+   guard held (0 wrong-property / HQ / draft writes), provenance written,
+   idempotent.
+3. **Broad drain:** repeat `POST …?limit=50` until the queue drains (the cap +
+   dead-letter prevent head-of-line block; re-runs are idempotent).
+4. **Steady-state auto-route:** set **`FOLDER_FEED_LEASE_EXTRACT='true'`** in the
+   Railway env so the enrich crawl (`lcc-folder-feed-crawl`, mode=enrich) enriches
+   NEW in-domain lease docs on arrival. Do this AFTER the capped real drain gate
+   passes (the per-folder `?lease_extract=1` override exists for a single-folder
+   first drain before the global flip).
+
+### Boundaries
+Fill-blanks only; provenance-gated (conflicts → Decision Center, never a
+clobber); reversible; ≤12 api/*.js; no fabrication (a field the doc doesn't state
+stays blank); dia/gov pipelines otherwise untouched. No new migration (registry +
+guards already applied). No env flag flipped in code (the gate is Scott's
+operational switch, by design).
