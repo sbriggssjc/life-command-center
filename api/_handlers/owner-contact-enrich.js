@@ -1,0 +1,212 @@
+// api/_handlers/owner-contact-enrich.js
+// ============================================================================
+// CONTACT-SELECTION Slice 3 — owner-contact enrichment worker
+// ----------------------------------------------------------------------------
+// Drains the contact-selection bench into REAL connected contacts, turning a
+// read-only "who to call" hypothesis (owner_contact_pivot / v_owner_active_contact)
+// into an attached person the operator can actually prospect — so the owner
+// becomes connected/reachable and leaves the NBT `acquire_contact` state.
+//
+//   GET  → dry-run (no writes) — reports what WOULD be processed per outcome.
+//   POST → drain (bounded by `limit` + a wall-clock budget).
+//
+// Three classes, one core (processOwnerEnrichmentRow):
+//   (a) ATTACH a NAMED active contact (authority 1-3, a real person) — the free
+//       drainer: ensureEntityLink the person (guards) → link person→owner
+//       (associated_with) → stamp the contactless cadence → record the contact
+//       entity on the pivot. ~88 named owners.
+//   (b) MANAGER-ENTITY DRILL-THROUGH — when the controlling-role pick is a FIRM
+//       (a management company, not a person), don't mint it as a person: register
+//       the manager org + a `managed_by` edge and re-route the pivot to find a
+//       PERSON at that manager (sos on the manager). The standard's drill-through.
+//   (c) EXTERNAL ENRICHMENT for the contactless (sos_manager_lookup /
+//       address_reverse_lookup / parse_deed_signatory / public_company_ir) —
+//       feature-flagged adapters; no-op cleanly when unconfigured (the
+//       find_contacts_by_account rollout pattern). Free SOS-direct preferred.
+//
+// Reuses (never forks): ensureEntityLink (person/org create + guards), the
+// contact-attach helpers (linkPersonToEntity / stampContactOnActiveCadence).
+// Reversible — every attach is a relationship row + the pivot pointer; delete the
+// relationship and null active_contact_entity_id to undo.
+// ============================================================================
+
+import { authenticate } from '../_shared/auth.js';
+import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
+import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
+import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/contact-attach.js';
+
+const WALL_CLOCK_MS = 20000;
+
+// ---- external enrichment adapters (feature-flagged; free SOS-direct preferred).
+// Unconfigured => clean no-op (`unconfigured`), so the worker drains the
+// attach/drill-through classes today and the external classes light up when an
+// adapter URL is set. The actual per-state SOS scraper / reverse-lookup / deed
+// signature parse are deliberate follow-ups behind these hooks.
+async function defaultSosLookup() { return { ok: false, reason: 'unconfigured' }; }
+async function defaultAddressLookup() { return { ok: false, reason: 'unconfigured' }; }
+async function defaultDeedParse() { return { ok: false, reason: 'unconfigured' }; }
+
+function isConfiguredSos() { return !!process.env.OWNER_ENRICH_SOS_URL; }
+function isConfiguredAddress() { return !!process.env.OWNER_ENRICH_ADDRESS_URL; }
+function isConfiguredDeed() { return !!process.env.OWNER_ENRICH_DEED_URL; }
+
+/**
+ * Attach a resolved person to the owner: ensureEntityLink (guards) →
+ * link person→owner → stamp the contactless cadence → point the pivot at the
+ * new contact entity. Shared by the attach class + a successful external resolve.
+ */
+async function attachPersonToOwner(row, personName, role, deps, via) {
+  const ensure = deps.ensureEntityLink;
+  const link = await ensure({
+    workspaceId: row.workspace_id,
+    sourceType: 'person',
+    domain: 'lcc',
+    seedFields: { name: personName, entity_type: 'person', domain: 'lcc' },
+  });
+  if (!link || !link.ok || !link.entityId) {
+    return { ok: false, outcome: 'guard_rejected', skipped: link && link.skipped };
+  }
+  const contactEntityId = link.entityId;
+  await deps.linkPersonToEntity({
+    workspaceId: row.workspace_id, entityId: row.entity_id, contactEntityId,
+    role: role || 'owner_contact', via: via || 'contact_selection',
+  });
+  // Fill a contactless cadence only — never clobber an existing prospecting contact.
+  await deps.stampContactOnActiveCadence({ entityId: row.entity_id, contactEntityId, onlyContactless: true });
+  await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(row.entity_id),
+    { active_contact_entity_id: contactEntityId, updated_at: new Date().toISOString() });
+  return { ok: true, outcome: 'attached', contact_entity_id: contactEntityId, contact_name: personName };
+}
+
+/**
+ * Process ONE owner pivot row. Pure orchestration over injected deps.
+ * @param row {entity_id, owner_name, workspace_id, active_contact_name,
+ *             active_contact_entity_id, active_authority_level, active_contact_role,
+ *             enrichment_action}
+ */
+export async function processOwnerEnrichmentRow(row, deps) {
+  const looksPerson = deps.looksLikePersonName || looksLikePersonName;
+
+  if (row.active_contact_entity_id) {
+    return { entity_id: row.entity_id, outcome: 'already_linked' };
+  }
+
+  // (a) ATTACH a named active contact (a real person).
+  if (row.active_contact_name && looksPerson(row.active_contact_name)) {
+    const r = await attachPersonToOwner(row, row.active_contact_name, row.active_contact_role, deps, 'contact_selection');
+    return { entity_id: row.entity_id, ...r };
+  }
+
+  // (b) MANAGER-ENTITY DRILL-THROUGH: controlling-role pick is a FIRM.
+  if (row.active_contact_name && Number(row.active_authority_level) <= 2) {
+    const org = await deps.ensureEntityLink({
+      workspaceId: row.workspace_id, sourceType: 'organization', domain: 'lcc',
+      seedFields: { name: row.active_contact_name, entity_type: 'organization', domain: 'lcc' },
+    });
+    if (org && org.ok && org.entityId) {
+      await deps.linkPersonToEntity({
+        workspaceId: row.workspace_id, entityId: row.entity_id, contactEntityId: org.entityId,
+        role: 'manager', via: 'contact_selection_drillthrough',
+      });
+      await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(row.entity_id),
+        { enrichment_action: 'find_person_at_manager', updated_at: new Date().toISOString() });
+      return { entity_id: row.entity_id, outcome: 'manager_drillthrough', manager_entity_id: org.entityId };
+    }
+    return { entity_id: row.entity_id, outcome: 'guard_rejected', skipped: org && org.skipped };
+  }
+
+  // (c) EXTERNAL ENRICHMENT for the contactless.
+  const action = row.enrichment_action;
+  if (action === 'sos_manager_lookup' || action === 'find_person_at_manager') {
+    const res = await (deps.sosLookup || defaultSosLookup)(row);
+    if (res && res.ok && res.person_name) {
+      const r = await attachPersonToOwner(row, res.person_name, res.role || 'managing_member', deps, 'sos_manager_lookup');
+      return { entity_id: row.entity_id, source: 'sos', ...r };
+    }
+    return { entity_id: row.entity_id, outcome: res && res.reason === 'unconfigured' ? 'enrichment_unconfigured' : 'enrichment_no_result', action };
+  }
+  if (action === 'address_reverse_lookup') {
+    const res = await (deps.addressLookup || defaultAddressLookup)(row);
+    if (res && res.ok && res.person_name) {
+      const r = await attachPersonToOwner(row, res.person_name, res.role || 'economic_owner_contact', deps, 'address_reverse_lookup');
+      return { entity_id: row.entity_id, source: 'address', ...r };
+    }
+    return { entity_id: row.entity_id, outcome: res && res.reason === 'unconfigured' ? 'enrichment_unconfigured' : 'enrichment_no_result', action };
+  }
+  if (action === 'parse_deed_signatory') {
+    const res = await (deps.deedParse || defaultDeedParse)(row);
+    if (res && res.ok && res.person_name) {
+      const r = await attachPersonToOwner(row, res.person_name, res.role || 'signatory', deps, 'parse_deed_signatory');
+      return { entity_id: row.entity_id, source: 'deed', ...r };
+    }
+    return { entity_id: row.entity_id, outcome: res && res.reason === 'unconfigured' ? 'enrichment_unconfigured' : 'enrichment_no_result', action };
+  }
+  if (action === 'public_company_ir') {
+    return { entity_id: row.entity_id, outcome: 'public_ir_manual', action };
+  }
+  return { entity_id: row.entity_id, outcome: 'manual_research', action: action || null };
+}
+
+function buildDeps() {
+  return {
+    ensureEntityLink, linkPersonToEntity, stampContactOnActiveCadence, opsQuery, looksLikePersonName,
+    sosLookup: isConfiguredSos() ? undefined : defaultSosLookup,
+    addressLookup: isConfiguredAddress() ? undefined : defaultAddressLookup,
+    deedParse: isConfiguredDeed() ? undefined : defaultDeedParse,
+  };
+}
+
+export async function handleOwnerContactEnrichTick(req, res) {
+  const auth = await authenticate(req);
+  if (!auth.ok) return res.status(auth.status || 401).json({ error: auth.error || 'unauthorized' });
+
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(parseInt(req.query.limit, 10) || 25, 200);
+
+  // Candidates: pivot rows not yet linked (named → attach/drill-through) +
+  // contactless rows carrying an enrichment_action. status locked/superseded are
+  // engaged/retired — skip. Ordered by least-recently-updated for fair drain.
+  const sel = 'owner_contact_pivot?select=entity_id,owner_name,workspace_id,'
+    + 'active_contact_name,active_contact_entity_id,active_authority_level,active_contact_role,enrichment_action,status'
+    + '&active_contact_entity_id=is.null'
+    + '&status=in.(active,exhausted)'
+    + '&or=(active_contact_name.not.is.null,enrichment_action.not.is.null)'
+    + '&order=updated_at.asc&limit=' + limit;
+  const r = await opsQuery('GET', sel);
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'load_failed', detail: r.data });
+  const rows = Array.isArray(r.data) ? r.data : [];
+
+  if (dryRun) {
+    const byAction = {};
+    for (const row of rows) {
+      const k = row.active_contact_name && looksLikePersonName(row.active_contact_name) ? 'attach_person'
+        : (row.active_contact_name && Number(row.active_authority_level) <= 2) ? 'manager_drillthrough'
+        : (row.enrichment_action || 'manual_research');
+      byAction[k] = (byAction[k] || 0) + 1;
+    }
+    return res.status(200).json({ ok: true, dry_run: true, candidates: rows.length, by_action: byAction,
+      adapters: { sos: isConfiguredSos(), address: isConfiguredAddress(), deed: isConfiguredDeed() } });
+  }
+
+  const deps = buildDeps();
+  const started = Date.now();
+  const summary = { processed: 0, attached: 0, drillthrough: 0, unconfigured: 0, skipped: 0, results: [] };
+  let attachedAny = false;
+  for (const row of rows) {
+    if (Date.now() - started > WALL_CLOCK_MS) break;
+    let out;
+    try { out = await processOwnerEnrichmentRow(row, deps); }
+    catch (e) { out = { entity_id: row.entity_id, outcome: 'error', error: String(e && e.message || e) }; }
+    summary.processed += 1;
+    if (out.outcome === 'attached') { summary.attached += 1; attachedAny = true; }
+    else if (out.outcome === 'manager_drillthrough') summary.drillthrough += 1;
+    else if (out.outcome === 'enrichment_unconfigured') summary.unconfigured += 1;
+    else summary.skipped += 1;
+    summary.results.push(out);
+  }
+
+  // Attaching makes owners connected/reachable → refresh the queue cache once.
+  if (attachedAny) { try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ } }
+
+  return res.status(200).json({ ok: true, ...summary });
+}

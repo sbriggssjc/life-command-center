@@ -199,6 +199,15 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfLinkReconcileTick(req, res);
   }
 
+  // CONTACT-SELECTION Slice 3 — owner-contact enrichment worker (via vercel.json
+  // _route=owner-contact-enrich-tick). GET=dry-run / POST=drain. Attaches the
+  // ranked decision-maker (or runs the enrichment action) so owners leave
+  // acquire_contact. Authenticates internally.
+  if (req.query._route === 'owner-contact-enrich-tick') {
+    const { handleOwnerContactEnrichTick } = await import('./_handlers/owner-contact-enrich.js');
+    return handleOwnerContactEnrichTick(req, res);
+  }
+
   // Context broker route (via vercel.json _route=context)
   // When edge_context_broker flag is enabled, proxy to Supabase Edge Function
   if (req.query._route === 'context') {
@@ -1510,7 +1519,34 @@ async function getNextBestTouchpoint(req, res, user, workspaceId) {
   if (action) path += '&next_action=eq.' + pgFilterVal(action);
   const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load next best touchpoint', detail: r.data });
-  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
+  const items = Array.isArray(r.data) ? r.data : [];
+
+  // CONTACT-SELECTION Slice 3 — enrich acquire_contact rows with the resolved
+  // decision-maker / enrichment routing from the contact-selection pivot, so the
+  // card shows WHO to acquire (or which enrichment to run), not just "no contact".
+  const ids = items.map((it) => it.entity_id).filter(Boolean);
+  if (ids.length) {
+    try {
+      const pv = await opsQuery('GET', 'owner_contact_pivot?select=entity_id,active_contact_name,'
+        + 'active_contact_role,active_authority_level,confidence,enrichment_action,active_contact_entity_id'
+        + '&entity_id=in.(' + ids.map(pgFilterVal).join(',') + ')');
+      if (pv.ok && Array.isArray(pv.data)) {
+        const byId = new Map(pv.data.map((p) => [p.entity_id, p]));
+        for (const it of items) {
+          const p = byId.get(it.entity_id);
+          if (p) {
+            it.active_contact_name = p.active_contact_name || null;
+            it.active_contact_role = p.active_contact_role || null;
+            it.active_authority_level = p.active_authority_level ?? null;
+            it.contact_confidence = p.confidence || null;
+            it.enrichment_action = p.enrichment_action || null;
+            it.active_contact_entity_id = p.active_contact_entity_id || null;
+          }
+        }
+      }
+    } catch (_e) { /* soft — NBT still returns without the enrichment overlay */ }
+  }
+  return res.status(200).json({ ok: true, items, total: r.count ?? null });
 }
 
 // ============================================================================
