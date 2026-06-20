@@ -63,12 +63,67 @@ describe('processOwnerEnrichmentRow', () => {
     assert.equal(calls.link.length, 0);
   });
 
-  it('contactless + sos unconfigured → enrichment_unconfigured (no writes)', async () => {
+  it('contactless + everything unconfigured → falls through to manual_research (no writes)', async () => {
+    // Slice-4 amendment: an unresolved owner is no longer a dead-end — it flows
+    // through the chain to the manual-research terminal. With no manualResearch
+    // dep injected, the terminal is the bare 'manual_research' outcome.
     const { deps, calls } = recordingDeps({ sosLookup: async () => ({ ok: false, reason: 'unconfigured' }) });
     const out = await processOwnerEnrichmentRow(
       { ...ownerBase, active_contact_name: null, enrichment_action: 'sos_manager_lookup', active_contact_entity_id: null }, deps);
-    assert.equal(out.outcome, 'enrichment_unconfigured');
+    assert.equal(out.outcome, 'manual_research');
     assert.equal(calls.ensure.length, 0);
+  });
+
+  it('cross-ref runs FIRST and short-circuits the external adapters', async () => {
+    let sosCalled = false;
+    const { deps } = recordingDeps({
+      crossRef: async () => ({ ok: true, person_name: 'Pat Sibling', role: 'principal' }),
+      sosLookup: async () => { sosCalled = true; return { ok: false, reason: 'unconfigured' }; },
+    });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, enrichment_action: 'sos_manager_lookup', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+    assert.equal(out.source, 'cross_reference');
+    assert.equal(out.contact_entity_id, 'person-Pat Sibling');
+    assert.equal(sosCalled, false); // cross-ref wins before any external call
+  });
+
+  it('web search resolves after the routed adapter misses → attach (source web)', async () => {
+    const { deps } = recordingDeps({
+      sosLookup: async () => ({ ok: false, reason: 'no_result' }),
+      webSearch: async () => ({ ok: true, person_name: 'Dana Webfound', role: 'manager', confidence: 'high' }),
+    });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, enrichment_action: 'sos_manager_lookup', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+    assert.equal(out.source, 'web');
+  });
+
+  it('all methods miss → manual_research_queued with breadcrumbs', async () => {
+    let queued = null;
+    const manualResearch = {
+      check: async () => ({ open: false }),
+      queue: async (_row, ctx) => { queued = ctx; return { ok: true, existed: false }; },
+    };
+    const { deps } = recordingDeps({ sosLookup: async () => ({ ok: false, reason: 'unconfigured' }), manualResearch });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, enrichment_action: 'sos_manager_lookup', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'manual_research_queued');
+    assert.equal(out.queued, true);
+    // breadcrumbs carry WHY each method failed
+    assert.ok(queued.tried.some((t) => t.method === 'cross_reference'));
+    assert.ok(queued.tried.some((t) => t.method === 'sos'));
+    assert.ok(queued.tried.some((t) => t.method === 'web_search'));
+  });
+
+  it('manual row already open → manual_research_pending (no re-hammer of externals)', async () => {
+    let sosCalled = false;
+    const manualResearch = { check: async () => ({ open: true }), queue: async () => ({ ok: true }) };
+    const { deps } = recordingDeps({ sosLookup: async () => { sosCalled = true; return { ok: false }; }, manualResearch });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, enrichment_action: 'sos_manager_lookup', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'manual_research_pending');
+    assert.equal(sosCalled, false); // backoff skipped the external attempt
   });
 
   it('contactless + sos resolves a person → attach', async () => {

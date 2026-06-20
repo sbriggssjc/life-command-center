@@ -96,3 +96,58 @@ delete the relationship + null the pivot pointer.
 enabled SOS parser / have only an agent-service address stay **queued** — never
 guess-attach a wrong person. Report per-phase drain as attached / queued /
 unresolved.
+
+## Amendment (Scott, 2026-06-20) — free-only + web search + cross-ref + manual worklist
+
+Decision: **stay free** (no paid OpenCorporates). The worker's external branch is
+now an **ordered chain** — first confident resolve wins; the unresolvable tail is
+SURFACED to a worklist, never dropped or guess-filled:
+
+```
+deed/SOS/address (routed by enrichment_action)  ← Phases A/B/C
+   wrapped in:  cross-ref (free) → public-IR terminal → routed adapter
+                → web search (Phase D) → manual-research worklist
+```
+
+- **Cross-reference (run FIRST, free, zero-network).** Reuse a principal already
+  resolved on a *sibling* owner. Wired as a deps-injected `crossRef` hook ordered
+  first in the chain; resolve → attach `source='cross_reference'`. **The production
+  sibling resolver** (shared `notice_address` / property cluster / true-owner
+  family) needs cross-DB grounding and is the post-deploy piece — until then the
+  step no-ops (`no_sibling`) and the row flows on. (The Slice-2
+  `lcc_detect_contact_recurrence` recurrence-lock already covers the in-portfolio
+  recurrence case.)
+- **Phase D — free web-search enrichment** (`api/_shared/web-search-enrich.js`,
+  framework). `extractPrincipalCandidates(results, owner)` takes a name ONLY when
+  adjacent to a STRONG labeled role cue (manager / managing member / registered
+  agent / authorized person / principal), guarded to a plausible human, scored
+  (≥2 corroborating results = high). `buildWebSearchAdapter({search})`
+  feature-flagged on **`OWNER_ENRICH_WEBSEARCH_URL`** (+ `OWNER_ENRICH_WEBSEARCH_MIN=high`
+  to require corroboration). No labeled candidate ⇒ `no_confident_match` → worklist.
+  The search HTTP is the deferred fetcher; the parser is the tested core.
+- **Manual-research worklist** (`api/_shared/manual-research-worklist.js`). Every
+  owner the chain can't crack → an idempotent `research_tasks` row
+  (`research_type='owner_contact_manual'`, one OPEN per owner) carrying the
+  breadcrumbs: owner name, inferred state, notice address, **the methods tried +
+  why each failed**, the bench rejected, and **2–3 pre-built Google queries**
+  (`buildGoogleQueries`). A hand-found contact attaches via the SAME
+  `ensureEntityLink` + pivot path, so a manual resolution flows into NBT
+  identically. **Backoff:** once a manual row is OPEN, subsequent ticks skip the
+  external attempts (`manual_research_pending`) and only re-try the free cross-ref
+  (as siblings resolve over time) — no re-hammering.
+
+### Env (amendment)
+| Flag | What it points at |
+|---|---|
+| `OWNER_ENRICH_WEBSEARCH_URL` | free search proxy returning `[{title,snippet,url}]` |
+| `OWNER_ENRICH_WEBSEARCH_MIN` | optional; `high` requires ≥2 corroborating results |
+
+### Post-deploy follow-ups (amendment)
+- Build the production **cross-ref sibling resolver** (cross-DB: shared
+  notice_address / property cluster / true-owner family → reuse a resolved
+  sibling's contact). Highest-value free win for the contactless set.
+- Load the dia **owner context** (state / notice_address / city) into each
+  worker row so the SOS/address/web adapters + the worklist Google queries get
+  real inputs (today they no-op/degrade gracefully without it).
+- Wire the free web-search provider + (per-state) SOS parsers, then run the
+  capped per-phase drains.
