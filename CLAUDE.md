@@ -3630,3 +3630,90 @@ admin-bulk-completion flag + below-threshold no-flag; Event → meeting anchored
 StartDateTime, never the "RE:" email miscategorization, WhatId fallback). `node
 --check` clean; `ls api/*.js | wc -l`=12; full suite **1034 pass / 0 fail / 6
 skipped**. JS ships on the Railway redeploy; no DB change.
+
+## CONTACT-SELECTION Slice 1 — the ranked decision-maker bench + active pick (2026-06-20)
+
+Implements `CONTACT_SELECTION_STANDARD`: for each owner, target the
+DECISION-MAKER first (signatory > controlling-role > economic owner > registered
+agent > captured), surface the bench, pick ONE active contact, and route the
+contactless to the right enrichment. **Slice 1 is READ-ONLY and GATED — Slices 2
+(pivot state + feedback re-rank) and 3 (deed/SOS/address enrichment workers) are
+NOT built; they wait on Scott's gate.** DB applied live + committed; no JS / no
+api/*.js change (≤12 holds).
+
+### Grounding refuted two prompt premises (receipts, 2026-06-20)
+- The 656 NBT `acquire_contact` owners carry **0** LCC-native human signals
+  (0 related persons, 0 SF Contacts) — so the candidate signals MUST come from
+  the DOMAIN DBs. Mandatory mirror.
+- **gov `loans.cmbs_sponsor` is NOT a signatory/principal** — the values are CMBS
+  securitization SHELF codes (BBCMS / CGCMT / COMM / CSAIL / DBJPM / GS / CITI),
+  the bond trust, not a person to call (the `isImplausiblePersonName` guard
+  already treats them as junk). **Dropped the gov loan-sponsor tier.** gov
+  authority-1 (signatory) is genuinely absent from structured data → it is
+  `parse_deed_signatory` enrichment (Slice 3) territory. Named-bench reality:
+  gov 30 owners (recorded-owner manager/agent), dia 134 (true_owner economic
+  contacts + manager). 382 gov / 277 dia of the 656 are bridged → signals attach.
+
+### What shipped (all additive / reversible — drop the artifacts → zero trace)
+- **Domain anon views** `v_owner_contact_signals_portfolio` (gov
+  `government/20260620120000`, dia `dialysis/20260620120000`) — owner-grained,
+  one row per `true_owner` with a `candidates` jsonb bench
+  (`[{name,role,authority,source,n_props}]`) + a `has_reg_address` boolean
+  (address-reverse-lookup hint). NAMES ONLY (same PII posture as the existing
+  `v_property_owner_facts_portfolio`); addresses exposed only as a boolean.
+  Owner=postgres so anon bypasses RLS. Candidate sources → authority ladder:
+  recorded_owner manager (2), registered agent (4); dia adds true_owner economic
+  contacts (3). **cmbs_sponsor EXCLUDED** (see above).
+- **Owner-keyed mirror + isolated sync** (LCC `20260620120000`):
+  `lcc_owner_contact_signals` (PK `(source_domain, source_true_owner_id)` = the
+  domain true_owner uuid the `external_identities(<dia|gov>,true_owner)` bridge
+  carries) + `lcc_sync_owner_contact_signals` / `_finalize` (pg_net, 1000/page,
+  vault secrets, graceful-empty) + gentle daily cron
+  `lcc-owner-contact-signals-sync`/`-finalize` (05:00/05:05, after owner-facts,
+  before the mirror reconcile). Modelled on `lcc_sync_property_owner_facts`;
+  ISOLATED so a failure can't touch a working path. Live: **gov 30 + dia 266 =
+  296 owner rows** (164 named, the rest carry an address for routing).
+- **Candidate + active views + SQL guards** (LCC `20260620121000`):
+  - `lcc_looks_like_person` / `lcc_is_rejected_contact_name` /
+    `lcc_is_operator_owner_name` — SQL mirrors of the `entity-link.js` write-time
+    guards (junk / CMBS code / broker `by` / verification-footnote sentence /
+    federal anti-pattern / dialysis OPERATOR). They gate the READ-TIME bench;
+    Slice 3 enrichment still mints through `ensureEntityLink` (the JS choke
+    point).
+  - `v_owner_contact_candidates` — one row per candidate per bridged owner
+    (domain mirror + LCC-native related persons), `authority_level` +
+    `is_named_individual` + cross-property `n_props` recurrence. Live: **200 rows
+    / 91 owners** (56 controlling, 62 economic, 47 agent, 35 captured; 148 named
+    individuals).
+  - `v_owner_active_contact` — ONE active per owner (top by authority → named →
+    recurrence) + the full bench + `confidence` + `partnership` flag +
+    `enrichment_action` for the contactless (`sos_manager_lookup` for an LLC,
+    `address_reverse_lookup` when a registered/notice address exists, else
+    `manual_research`; `parse_deed_signatory` is Slice 3).
+
+### Gate (read-only, 2026-06-20) — PASS, with one fix + one deferral
+- **Distribution:** 172 owners; 88 with an active decision-maker (40 controlling,
+  46 economic, **0 registered-agent ever chosen as active** — agents only sit in
+  the bench, per the standard's low rank), 84 contactless routed (40 SOS / 44
+  address / 0 manual), 10 genuine partnerships, **0 operator leak**.
+- **Fix applied during the gate:** dia operator-as-true_owner entities
+  (Fresenius/DaVita/American Renal — the R8 artifact) surfaced as "owners" with a
+  noisy 15-manager bench + a FALSE `partnership=true`. Added
+  `lcc_is_operator_owner_name` and excluded operator-owner entities from both
+  views (the standard forbids surfacing an operator as an owner contact).
+- **Surfaced (NOT fixed):** (a) ~74 of 164 named domain owners are **unbridged**
+  to an LCC owner entity (gov has only ~53% of true_owners bridged) — a
+  bridging-coverage gap; (b) a few **public institutions** (MassMutual, Agree
+  Realty, public REITs) mis-route to SOS/address enrichment when their real path
+  is known IR contacts — a Slice-3 public-company refinement.
+
+### Slices 2 & 3 (NOT in this slice — gated)
+- **Slice 2:** `owner_contact_pivot` (active pick + bench + `pivot_history`),
+  cross-property recurrence lock, and feedback re-rank from the SF-activity
+  ingest (referral → pivot, no-response → down-bench, bounce → demote, two-way →
+  lock).
+- **Slice 3:** the enrichment workers (`parse_deed_signatory`,
+  `sos_manager_lookup` free-SOS-direct over paid, `address_reverse_lookup`) that
+  resolve a person → `ensureEntityLink` → attach with `contact_role`, draining
+  the ~496 contactless owners; plus wiring `v_owner_active_contact` into the NBT
+  `acquire_contact` next-action.
