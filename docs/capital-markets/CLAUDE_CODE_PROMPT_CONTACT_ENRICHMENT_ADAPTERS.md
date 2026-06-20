@@ -71,6 +71,36 @@ For owners with a residential registered/notice address, the resident is the pri
   the unknown-filing-state owners and the can't-resolve set stay queued for manual research — do
   NOT guess-attach a wrong person. Report per-phase drain (attached / queued / unresolved).
 
+## AMENDMENT (Scott, 2026-06-20) — free-only, + web-search path + manual-research worklist
+Decision: **stay free** — no paid OpenCorporates. Rely on free public sources, cross-referencing,
+Google/web search, and **manual research when automation can't resolve**. Two additions:
+
+### Phase D — free web-search enrichment (post-deploy; network)
+For an owner where SOS/address can't resolve a principal, run a **free web search** of the owner
+name (+ inferred `state`, + `notice_address` city) and parse principal candidates from public
+results — SOS result pages, county/business filings, press, professional-profile snippets. Same
+discipline as B/C: gentle/rate-limited, guarded (`ensureEntityLink` person guards — never attach a
+firm/junk/agent-service), confidence-scored, and **no confident match ⇒ no attach** (route to the
+worklist below). Feature-flagged on a search-provider URL; no-op until configured. Build the
+parser + dispatch now (fixture-tested); the live calls run post-deploy.
+
+### Cross-referencing (already built — lean on it harder)
+The Slice-2 `lcc_detect_contact_recurrence` already promotes a person who signs/manages across ≥2
+of the owner's properties. Make this an explicit enrichment input: before any external call, check
+whether the owner shares a principal with a *resolved* sibling owner (same true-owner family /
+same `notice_address` / same property cluster) and reuse that contact. Free, high-confidence, zero
+network — run it FIRST in the worker's order (deed → cross-ref → SOS → address → web → manual).
+
+### Manual-research worklist (the "when necessary" path — make it efficient)
+Every owner automation can't crack → a **manual-research queue row** (Decision Center lane or
+`research_tasks`) carrying ALL the breadcrumbs so Scott resolves it in seconds, not from scratch:
+owner name, inferred state, `notice_address_1`, the candidate bench tried + why each was rejected,
+links to the owner's properties, and **2–3 pre-built Google query strings** (e.g.
+`"<owner> LLC" <state> manager managing member`, `<notice_address> resident`). A manual entry
+attaches via the same `ensureEntityLink` + pivot path (so a hand-found contact flows into NBT
+identically). This is where the unresolvable tail lands — surfaced and actionable, never silently
+dropped or guess-filled.
+
 ## My gate (per phase / per state)
 - Phase A: real signatories parsed from owned docs, correct role/authority, owner reachable, 0
   junk, reversible.
