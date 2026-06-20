@@ -259,7 +259,9 @@ export default withErrorHandler(async function handler(req, res) {
       case 'next_best_touchpoint': return await getNextBestTouchpoint(req, res, user, workspaceId);
       case 'contact_qualify_worklist': return await getContactQualifyWorklist(req, res, user, workspaceId);
       case 'property_geo': return await getPropertyGeo(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo' });
+      case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
+      case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, bd_worklist, activation_review' });
     }
   }
 
@@ -886,6 +888,290 @@ async function getPropertyGeo(req, res, user, workspaceId) {
     // (e.g. dia same-county competitors) rather than show "broken".
     coverage_note: subjectGeocoded ? null : 'subject_not_geocoded',
   });
+}
+
+// ============================================================================
+// R55 Unit 2 (2026-06-20): one unified, value-ranked BD worklist.
+// GET ?action=bd_worklist[&type=<signal>][&summary=1][&limit=N]
+//
+// MERGES the eight rounds of BD signal into a single list the operator works
+// top-down (highest $ value first), across:
+//   loan_maturity        (R54 v_loan_maturity_watch, gov+dia)  — refi/disposition
+//   suspected_sale       (R53 v_suspected_sale, gov)           — confirm a deal
+//   owner_source_conflict(R51 workable subset = auto_fixable, gov+dia) — reconcile owner
+//   contact_writeback    (R52, via LCC v_lcc_bd_worklist)      — push contact to CRM
+//   ownership_chain      (R46, via LCC v_lcc_bd_worklist)      — resolve to developer
+// (P-BUYER / P-CONTACT / cadence already live in the priority queue — referenced
+//  there, not duplicated here.)
+//
+// UNION, NOT recompute: each source view is read as-is. The two LCC-resident
+// signals come from v_lcc_bd_worklist; the three domain-resident signals fan out
+// to the gov/dia views (a single SQL view can't cross DBs without a mirror =
+// recompute). Ranked value-first with a signal-type tiebreak (distressed loan /
+// suspected_sale, then maturity, then the rest). Deduped one row per
+// property+signal. Read-only.
+// ============================================================================
+const BD_SIGNAL_PRIORITY = {
+  suspected_sale: 0,
+  loan_maturity: 1,
+  owner_source_conflict: 2,
+  ownership_chain: 3,
+  contact_writeback: 4,
+};
+
+// Pure, testable: normalize each source's raw rows + merge + dedup + value-rank.
+// `sources` = { lcc:[], loan_maturity:{gov:[],dia:[]}, suspected_sale:{gov:[]},
+//   owner_conflict:{gov:[],dia:[]} }. Returns the ranked worklist array.
+export function assembleBdWorklist(sources = {}) {
+  const out = [];
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+  // LCC view rows are already normalized (signal_type + rank_value + detail).
+  for (const r of (sources.lcc || [])) {
+    out.push({
+      signal_type: r.signal_type,
+      domain: r.source_domain || null,
+      property_id: r.property_id != null ? String(r.property_id) : null,
+      entity_id: r.entity_id || null,
+      what: r.what,
+      who: r.who || null,
+      rank_value: num(r.rank_value),
+      is_distressed: false,
+      city: r.city || null,
+      state: r.state || null,
+      detail: r.detail || {},
+      deep_link: r.signal_type === 'contact_writeback'
+        ? { surface: 'entity', entity_id: r.entity_id }
+        : { surface: 'property', domain: r.source_domain, property_id: r.property_id != null ? String(r.property_id) : null },
+    });
+  }
+
+  const addLoan = (domain, rows) => {
+    for (const r of (rows || [])) {
+      const distressed = !!r.is_distressed;
+      out.push({
+        signal_type: 'loan_maturity',
+        domain,
+        property_id: r.property_id != null ? String(r.property_id) : null,
+        entity_id: null,
+        what: (distressed ? '⚠ Distressed loan — ' : 'Loan ')
+          + (r.maturity_band === 'matured' ? 'matured' : 'maturing ' + (r.maturity_band || ''))
+          + ' — refi/disposition outreach',
+        who: r.owner_name || null,
+        rank_value: num(r.annual_rent),
+        is_distressed: distressed,
+        city: r.city || null,
+        state: r.state || null,
+        detail: {
+          maturity_date: r.maturity_date, months_to_maturity: r.months_to_maturity,
+          maturity_band: r.maturity_band, loan_balance: r.loan_balance,
+          distress_reason: r.distress_reason || null,
+        },
+        deep_link: { surface: 'decision_center', lane: 'loan_maturity', domain, property_id: r.property_id != null ? String(r.property_id) : null },
+      });
+    }
+  };
+  addLoan('gov', sources.loan_maturity?.gov);
+  addLoan('dia', sources.loan_maturity?.dia);
+
+  for (const r of (sources.suspected_sale?.gov || [])) {
+    out.push({
+      signal_type: 'suspected_sale',
+      domain: 'gov',
+      property_id: r.property_id != null ? String(r.property_id) : null,
+      entity_id: null,
+      what: 'Confirm suspected sale (' + (r.suspected_grantor || '?') + ' → ' + (r.suspected_grantee || '?') + ')',
+      who: r.suspected_grantee || null,
+      rank_value: num(r.annual_rent),
+      is_distressed: false,
+      city: r.city || null,
+      state: r.state || null,
+      detail: { signal_source: r.signal_source, suspected_sale_date: r.suspected_sale_date,
+        suspected_grantor: r.suspected_grantor, suspected_grantee: r.suspected_grantee },
+      deep_link: { surface: 'decision_center', lane: 'suspected_sale', domain: 'gov', property_id: r.property_id != null ? String(r.property_id) : null },
+    });
+  }
+
+  const addConflict = (domain, rows) => {
+    for (const r of (rows || [])) {
+      out.push({
+        signal_type: 'owner_source_conflict',
+        domain,
+        property_id: r.property_id != null ? String(r.property_id) : null,
+        entity_id: null,
+        what: 'Reconcile owner (' + (r.conflict_kind || 'deed') + '): '
+          + (r.recorded_owner_name || '?') + ' → ' + (r.latest_deed_grantee || '?'),
+        who: r.latest_deed_grantee || null,
+        rank_value: num(r.annual_rent),
+        is_distressed: false,
+        city: r.city || null,
+        state: r.state || null,
+        detail: { conflict_kind: r.conflict_kind, recorded_owner_name: r.recorded_owner_name,
+          latest_deed_grantee: r.latest_deed_grantee },
+        deep_link: { surface: 'decision_center', lane: 'owner_source_conflict', domain, property_id: r.property_id != null ? String(r.property_id) : null },
+      });
+    }
+  };
+  addConflict('gov', sources.owner_conflict?.gov);
+  addConflict('dia', sources.owner_conflict?.dia);
+
+  // Dedup one row per (signal_type, domain, property_id|entity_id), keep the
+  // highest-value occurrence.
+  const seen = new Map();
+  for (const r of out) {
+    const key = r.signal_type + ':' + (r.domain || '') + ':' + (r.property_id || r.entity_id || '');
+    const prev = seen.get(key);
+    if (!prev || r.rank_value > prev.rank_value) seen.set(key, r);
+  }
+  const deduped = [...seen.values()];
+
+  // Value-first, signal-type tiebreak. Distressed loans sort with suspected_sale
+  // at the top of their value band (priority 0).
+  deduped.sort((a, b) => {
+    if (b.rank_value !== a.rank_value) return b.rank_value - a.rank_value;
+    const pa = a.is_distressed ? 0 : (BD_SIGNAL_PRIORITY[a.signal_type] ?? 9);
+    const pb = b.is_distressed ? 0 : (BD_SIGNAL_PRIORITY[b.signal_type] ?? 9);
+    return pa - pb;
+  });
+  return deduped;
+}
+
+// GET a domain REST collection with an exact count (reads Content-Range).
+// Soft-fails to { ok:false, count:0 }. Used by the bd_worklist summary.
+async function domainSelectCount(domain, pathWithQuery) {
+  const isGov = domain === 'gov' || domain === 'government';
+  const baseUrl = isGov ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = isGov ? govSupabaseKey() : diaSupabaseKey();
+  if (!baseUrl || !key) return { ok: false, count: 0 };
+  try {
+    const resp = await fetch(baseUrl + '/rest/v1/' + pathWithQuery, {
+      method: 'GET',
+      headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'count=exact', Range: '0-0' },
+      signal: AbortSignal.timeout(8000),
+    });
+    const cr = resp.headers.get('content-range') || '';
+    const total = cr.includes('/') ? parseInt(cr.split('/')[1], 10) : 0;
+    return { ok: resp.ok, count: Number.isFinite(total) ? total : 0 };
+  } catch (_e) {
+    return { ok: false, count: 0 };
+  }
+}
+
+async function getBdWorklist(req, res, user, workspaceId) {
+  const typeFilter = req.query.type ? String(req.query.type).trim() : null;
+  const wantSummary = req.query.summary === '1' || req.query.summary === 'true';
+  const limit = (() => { const n = Number(req.query.limit); return (Number.isFinite(n) && n > 0 && n <= 500) ? Math.floor(n) : 100; })();
+  const want = (t) => !typeFilter || typeFilter === t;
+  // Per-source cap: we only ever surface the top-N by value, so fetch a bounded
+  // slice from each source (ordered value-desc in the DB) and merge. Never pulls
+  // the full 3,445-row chain backlog.
+  const CAP = Math.min(300, Math.max(limit, 150));
+
+  if (wantSummary) {
+    const lccSel = 'v_lcc_bd_worklist?select=signal_type';
+    const [cwC, chC, lmGovC, lmDiaC, ssGovC, ocGovC, ocDiaC] = await Promise.all([
+      want('contact_writeback') ? opsQuery('GET', lccSel + '&signal_type=eq.contact_writeback&limit=1', null, { countMode: 'exact' }) : Promise.resolve({ count: 0 }),
+      want('ownership_chain') ? opsQuery('GET', lccSel + '&signal_type=eq.ownership_chain&limit=1', null, { countMode: 'exact' }) : Promise.resolve({ count: 0 }),
+      want('loan_maturity') ? domainSelectCount('gov', 'v_loan_maturity_watch?select=property_id') : Promise.resolve({ count: 0 }),
+      want('loan_maturity') ? domainSelectCount('dia', 'v_loan_maturity_watch?select=property_id') : Promise.resolve({ count: 0 }),
+      want('suspected_sale') ? domainSelectCount('gov', 'v_suspected_sale?select=property_id') : Promise.resolve({ count: 0 }),
+      want('owner_source_conflict') ? domainSelectCount('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id') : Promise.resolve({ count: 0 }),
+      want('owner_source_conflict') ? domainSelectCount('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id') : Promise.resolve({ count: 0 }),
+    ]);
+    const by_signal_type = {
+      loan_maturity: (lmGovC.count || 0) + (lmDiaC.count || 0),
+      suspected_sale: ssGovC.count || 0,
+      owner_source_conflict: (ocGovC.count || 0) + (ocDiaC.count || 0),
+      contact_writeback: cwC.count || 0,
+      ownership_chain: chC.count || 0,
+    };
+    const total = Object.values(by_signal_type).reduce((a, b) => a + b, 0);
+    return res.status(200).json({ ok: true, summary: true, total, by_signal_type });
+  }
+
+  const lccTypes = ['contact_writeback', 'ownership_chain'].filter(want);
+  const lccFilter = lccTypes.length === 2 ? '' : `&signal_type=eq.${lccTypes[0] || 'none'}`;
+  const [lccRes, lmGov, lmDia, ssGov, ocGov, ocDia] = await Promise.all([
+    lccTypes.length
+      ? opsQuery('GET', `v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,rank_property_count,city,state,detail${lccFilter}&order=rank_value.desc.nullslast&limit=${CAP}`, null, { countMode: 'none' })
+      : Promise.resolve({ ok: true, data: [] }),
+    want('loan_maturity') ? domainSelect('gov', `v_loan_maturity_watch?select=property_id,owner_name,annual_rent,maturity_date,months_to_maturity,maturity_band,is_distressed,distress_reason,loan_balance,city,state&order=is_distressed.desc,annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
+    want('loan_maturity') ? domainSelect('dia', `v_loan_maturity_watch?select=property_id,owner_name,annual_rent,maturity_date,months_to_maturity,maturity_band,is_distressed,distress_reason,loan_balance,city,state&order=is_distressed.desc,annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
+    want('suspected_sale') ? domainSelect('gov', `v_suspected_sale?select=property_id,signal_source,suspected_grantor,suspected_grantee,suspected_sale_date,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
+    want('owner_source_conflict') ? domainSelect('gov', `v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
+    want('owner_source_conflict') ? domainSelect('dia', `v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+
+  const worklist = assembleBdWorklist({
+    lcc: lccRes.ok ? (lccRes.data || []) : [],
+    loan_maturity: { gov: lmGov.ok ? lmGov.data : [], dia: lmDia.ok ? lmDia.data : [] },
+    suspected_sale: { gov: ssGov.ok ? ssGov.data : [] },
+    owner_conflict: { gov: ocGov.ok ? ocGov.data : [], dia: ocDia.ok ? ocDia.data : [] },
+  }).slice(0, limit);
+
+  return res.status(200).json({
+    ok: true,
+    count: worklist.length,
+    type_filter: typeFilter,
+    worklist,
+  });
+}
+
+// ============================================================================
+// R55 Unit 3 (2026-06-20): activation review outputs — the data each gated flag
+// needs so it can be flipped from data, NOT a guess. GET-only, READ-ONLY, dry-
+// run. Enables NOTHING. GET ?action=activation_review[&which=r49|r51|r52]
+//   r49 — SCORING_MODEL_ACTIVE=v3: v2-vs-v3 grade diff (gov_scoring_v3_review;
+//         reports the precondition when the v3 columns aren't applied yet).
+//   r51 — DECISION_OWNER_DEED_WINS: the corrected auto_fixable set (post-R55
+//         Unit 1) with before→after sample, gov + dia.
+//   r52 — SF_CONTACT_WRITEBACK: the top value-ranked candidate batch to push.
+// ============================================================================
+async function getActivationReview(req, res, user, workspaceId) {
+  const which = req.query.which ? String(req.query.which).trim().toLowerCase() : null;
+  const want = (k) => !which || which === k;
+  const sample = (() => { const n = Number(req.query.sample); return (Number.isFinite(n) && n > 0 && n <= 100) ? Math.floor(n) : 25; })();
+  const out = {};
+
+  if (want('r49')) {
+    const r = await domainRpc('gov', 'gov_scoring_v3_review', {});
+    out.r49 = {
+      flag: 'SCORING_MODEL_ACTIVE=v3',
+      review: (r.ok && r.data && r.data[0]) ? r.data[0] : { available: false, note: 'gov RPC unavailable' },
+    };
+  }
+
+  if (want('r51')) {
+    const sel = `v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,latest_deed_date,annual_rent&order=annual_rent.desc.nullslast&limit=${sample}`;
+    const [govC, diaC, govN, diaN] = await Promise.all([
+      domainSelect('gov', sel),
+      domainSelect('dia', `v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,latest_deed_date,annual_rent&limit=${sample}`),
+      domainSelectCount('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
+      domainSelectCount('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
+    ]);
+    const byKind = (rows) => (rows || []).reduce((m, r) => { m[r.conflict_kind] = (m[r.conflict_kind] || 0) + 1; return m; }, {});
+    out.r51 = {
+      flag: 'DECISION_OWNER_DEED_WINS',
+      note: 'Corrected auto_fixable set after R55 Unit 1 (deed-recency + rebrand guard). Each row would set recorded_owner -> latest_deed_grantee.',
+      gov: { auto_fixable_total: govN.count || 0, sample_by_kind: byKind(govC.ok ? govC.data : []), sample: govC.ok ? govC.data : [] },
+      dia: { auto_fixable_total: diaN.count || 0, sample_by_kind: byKind(diaC.ok ? diaC.data : []), sample: diaC.ok ? diaC.data : [] },
+    };
+  }
+
+  if (want('r52')) {
+    const [batch, total] = await Promise.all([
+      opsQuery('GET', `v_lcc_contact_writeback_candidates?select=entity_id,name,email,company,domain,sf_account_id,rank_value,rank_property_count&order=rank_value.desc.nullslast&limit=${sample}`, null, { countMode: 'none' }),
+      opsQuery('GET', 'v_lcc_contact_writeback_candidates?select=entity_id&limit=1', null, { countMode: 'exact' }),
+    ]);
+    out.r52 = {
+      flag: 'SF_CONTACT_WRITEBACK',
+      note: 'Top value-ranked emailable LCC persons with no SF Contact identity — the first batch to push once SF_CONTACT_WRITEBACK + the PA upsert_contact flow are on.',
+      candidates_total: total.count || 0,
+      top_batch: batch.ok ? (batch.data || []) : [],
+    };
+  }
+
+  return res.status(200).json({ ok: true, dry_run: true, ...out });
 }
 
 // R5 (2026-06-05): does an entity reconcile to a repeat-buyer PARENT? Repeat
