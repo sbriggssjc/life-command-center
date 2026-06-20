@@ -3568,3 +3568,65 @@ ADVANCE half only (Scott's blocker). The DRAFT half (in-app sender) is
 deliberately untouched. Reverse any backfill from `lcc_sf_cadence_backfill_log`.
 Follow-up: a small number of SF Account-resolved org events (alliant/primax) have
 no cadence at all (lender/buyer, not prospects) — correct no-op, not a miss.
+
+## NBT Phase 2 — SF activity ingest for Tasks (all statuses) + Events (2026-06-20)
+
+Scott does outreach in Outlook/Salesforce, not in-app, and the "progress with
+accounts" signal is his Salesforce **Tasks AND Events**, deal-linked or not,
+**including completed Tasks** (the completed ones ARE the prospecting history —
+which contacts have been worked). This extends the OUTREACH#1 ingest
+(`api/_handlers/sf-activity-ingest.js`) so that history becomes `activity_events`
+that drive the next-best-touchpoint engine + the cadence advance. **Reuse, not
+fork** — same handler, `deriveSfCategory`, the OUTREACH#1 contact-hop trigger,
+and `lcc_cadence_advance_failures`. No new api/*.js (still 12); no migration —
+the marker the NBT engine reads already exists (`v_next_best_touchpoint`'s
+`last_touch_at` falls back to the latest SF `activity_event` for the entity, so
+writing the row IS the "already-prospected" signal).
+
+### Unit 1 — Tasks of ALL statuses (open + completed, deal-linked or not)
+The handler already ingested regardless of status; this hardens it:
+- A COMPLETED Task is the prospecting RECORD and is never dropped (verified — a
+  completed deal-linked Task AND a standalone deal-unlinked one both ingest,
+  null WhatId tolerated). `Status` / `IsClosed` / `CompletedDateTime` ride in
+  metadata (`sf_status`/`sf_is_closed`/`sf_completed_at`) as a **SOFT** signal.
+- **Completion is never read as "successfully worked"** — an admin bulk
+  auto-completed Scott's open Tasks, so `IsClosed=true` ≠ contacted/responded.
+  `tagBulkCompleted()` flags any group of ≥5 closed Tasks sharing an exact
+  `(LastModifiedById, LastModifiedDate)` signature `metadata.bulk_completed=true`
+  so the engine can discount them; nothing acts on completion to claim a touch.
+- Each Task still writes an `activity_events` row (source `salesforce`); the
+  OUTREACH#1 trigger advances the matching cadence (entity / owns-hop /
+  contact-hop) on email/call/meeting — which, with the activity row, IS the
+  "this contact is already prospected" signal NBT reads.
+
+### Unit 2 — Events (meetings), a different shape than Tasks
+- `sfRecordKind(rec)` classifies Event vs Task (explicit `attributes.type` /
+  object discriminator → bare `Type` of event/task → field shape: Event-only
+  fields present AND no `Status`/`IsClosed`). Defaults to `task`, so every
+  existing canonical Task shape is byte-identical.
+- Events are categorized `meeting` **directly** (never the Task subject-inference
+  — an Event titled "RE: ..." is a meeting, not a miscalled email), and
+  `resolveSfOccurredAt` anchors them on `StartDateTime` (fallback ActivityDate →
+  CreatedDate) instead of stamping now(). The SQL trigger advances the cadence on
+  `meeting` via the same contact-hop — no JS advance needed. **The flow-side
+  Event pull is added to PA only AFTER this ingest ships** (so we never POST
+  Events the ingest can't parse).
+
+### Unit 3 — the archived deep-history limitation (surfaced, NOT faked)
+Salesforce ARCHIVES completed Activities older than ~1 year and EXCLUDES them
+from the standard SOQL/connector query (need `isArchived=true`/`queryAll`), so
+the widened watermark (now−10y) still only reaches ~89 records / ~8 owners.
+Options reported in `docs/SF_ACTIVITY_ARCHIVED_HISTORY.md`: (a) a one-time
+`queryAll`/Bulk-API pull (the standard PA "Get records" step can't do it — needs
+a custom SOQL HTTP action) or (b) go-forward capture (reliable). Recommendation:
+ship (b); pursue (a) only as a deliberate one-shot. **Not pretended to be
+solvable by a wider watermark.**
+
+### Verified (headless 2026-06-20)
+`test/sf-activity-ingest.test.mjs` 23 → 34 (`sfRecordKind` event/task;
+`resolveSfOccurredAt` Event-StartDateTime vs Task-ActivityDate; completed
+deal-linked + standalone Tasks ingest with soft completion captured;
+admin-bulk-completion flag + below-threshold no-flag; Event → meeting anchored on
+StartDateTime, never the "RE:" email miscategorization, WhatId fallback). `node
+--check` clean; `ls api/*.js | wc -l`=12; full suite **1034 pass / 0 fail / 6
+skipped**. JS ships on the Railway redeploy; no DB change.

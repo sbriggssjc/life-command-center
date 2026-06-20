@@ -2,12 +2,12 @@
 // Salesforce activity → activity_events ingest
 // Life Command Center — Phase 2 Slice 3b (Unit 2, LCC-side handler)
 // ----------------------------------------------------------------------------
-// Mirrors Salesforce Task/Activity records into the canonical activity_events
+// Mirrors Salesforce Task AND Event records into the canonical activity_events
 // timeline, linked to the LCC entity via the existing external_identities
 // (source_system='salesforce') → entity mapping. Salesforce is the system of
 // record for client interactions (calls, emails, meetings, notes logged on
 // Contacts/Accounts); this is how that correspondence flows into the timeline
-// the property/contact context packets read.
+// the property/contact context packets + the Next-Best-Touchpoint engine read.
 //
 //   POST /api/intake?_route=sf-activity   (rewritten to /api/sf-activity)
 //   Body: { records: [ { sf_id, type, subject, description, activity_date,
@@ -25,10 +25,39 @@
 //
 // Reports { matched, skipped_no_entity, inserted, deduped, errors, total }.
 //
-// THE SF-SIDE FEED IS THE DEPENDENCY (Scott / Power Automate): the SF connector
-// must QUERY Task/ActivityHistory and POST batches here. This handler is the
-// unblocked half; the PA "SF → LCC Activity Sync" flow is a separate manual
-// step built once this endpoint is live (same pattern as the other PA flows).
+// NBT Phase 2 (2026-06-20): the feed now carries Scott's REAL prospecting
+// history — Tasks of ALL statuses (open AND completed, deal-linked or not) and
+// Events (meetings) — not just the thin recent slice. Two ingest doctrines:
+//
+//   * Tasks of every status land a row. A COMPLETED Task is the prospecting
+//     RECORD ("this contact/account was worked"), so it must never be dropped.
+//     Its Status / IsClosed / completion date ride in metadata as a SOFT signal
+//     — we do NOT infer "successfully contacted / responded" from completion
+//     (a Salesforce admin bulk auto-completed Scott's open Tasks; an identical
+//     LastModifiedDate+modifier across many rows is tagged `bulk_completed` so
+//     the engine can discount it). Writing the activity_events row (source
+//     'salesforce') + the trigger's contact-hop advance IS the "this contact
+//     is already prospected" signal the NBT engine reads (v_next_best_touchpoint
+//     keys last_touch_at on the cadence, else the latest SF activity_event).
+//   * Events carry a DIFFERENT shape than Tasks — StartDateTime (not
+//     ActivityDate), no Status/IsClosed. They are categorized 'meeting'
+//     directly (never run through the Task subject-inference, so an Event titled
+//     "RE: ..." is not miscategorized as an email), with StartDateTime resolved
+//     to occurred_at. The SQL advance trigger advances the matching cadence on
+//     'meeting' via the same entity / contact-hop, no JS advance needed.
+//
+// THE SF-SIDE FEED IS THE DEPENDENCY (Scott / Power Automate): the "SF → LCC:
+// Activity Sync" flow pulls Tasks (watermark widened live to ~now−10y so the
+// full history is reachable); the Event pull is added to the flow only AFTER
+// this Event-aware ingest ships, so we never POST Events the ingest can't parse.
+//
+// Out of reach (documented honestly, NOT faked): Salesforce ARCHIVES completed
+// Activities older than ~1 year and EXCLUDES them from the standard SOQL /
+// connector query — a wider watermark cannot reach them (they need
+// isArchived=true / queryAll, i.e. a custom SOQL action or the Bulk API). So the
+// deep archived prospecting history is not retrievable through the standard PA
+// "Get records" flow; LCC's reliable activity history is go-forward + whatever
+// the standard query still returns. See `docs/SF_ACTIVITY_ARCHIVED_HISTORY.md`.
 // ============================================================================
 
 import { authenticate, requireRole } from '../_shared/auth.js';
@@ -109,6 +138,145 @@ export function isInboundReply(category, rec, subject) {
   return /^\s*(re|aw|antw|sv|vs|rv)\s*:/i.test(String(subject || ''));
 }
 
+// NBT Phase 2 — pick the first non-empty value across a list of possible field
+// names (canonical snake_case + raw Salesforce PascalCase).
+function pickField(rec, ...keys) {
+  for (const k of keys) {
+    const v = rec?.[k];
+    if (v != null && String(v).trim() !== '') return v;
+  }
+  return null;
+}
+
+/**
+ * Classify a Salesforce activity record as an Event (meeting) or a Task.
+ * Salesforce Events and Tasks are distinct sObjects with different shapes; an
+ * Event carries StartDateTime/EndDateTime/DurationInMinutes and NO Status /
+ * IsClosed. The PA "Get records (Event)" flow can also stamp the object type
+ * explicitly (REST `attributes.type`, or a flow-added discriminator).
+ *
+ * Order: explicit object-type stamp → a bare Type of 'Event'/'Task' → field
+ * shape (Event-only fields present AND no Task-only fields). Defaults to 'task'
+ * (the historical behavior; every existing canonical Task shape stays a task).
+ *
+ * NOTE: canonical Task records carry the activity CHANNEL in `type`
+ * (Call/Email/Meeting) — that is NOT the object type, so only an explicit
+ * `Type`/`type` of literally 'event'/'task' is treated as an object-type hint.
+ *
+ * @returns {'event'|'task'}
+ */
+export function sfRecordKind(rec) {
+  const explicit = String(
+    rec?.attributes?.type ?? rec?.sobject ?? rec?.sobject_type ??
+    rec?.sobjectType ?? rec?.object_type ?? rec?.objectType ??
+    rec?.object ?? rec?.sf_object ?? ''
+  ).trim().toLowerCase();
+  if (explicit === 'event') return 'event';
+  if (explicit === 'task')  return 'task';
+
+  const t = String(rec?.type ?? rec?.Type ?? '').trim().toLowerCase();
+  if (t === 'event') return 'event';
+  if (t === 'task')  return 'task';
+
+  const hasEventFields =
+    pickField(rec, 'StartDateTime', 'start_date_time', 'startDateTime',
+                   'EndDateTime', 'end_date_time',
+                   'DurationInMinutes', 'duration_in_minutes',
+                   'EventSubtype', 'event_subtype') != null;
+  const hasTaskFields =
+    rec?.Status != null || rec?.status != null ||
+    rec?.IsClosed != null || rec?.is_closed != null || rec?.isClosed != null ||
+    rec?.TaskSubtype != null || rec?.task_subtype != null;
+  if (hasEventFields && !hasTaskFields) return 'event';
+  return 'task';
+}
+
+/**
+ * Resolve a record's occurred_at. Events anchor on StartDateTime (falling back
+ * to ActivityDate then CreatedDate); Tasks anchor on ActivityDate then
+ * CreatedDate. An explicit canonical `occurred_at` always wins. Returns null
+ * when nothing is present (the append helper then stamps now()).
+ */
+export function resolveSfOccurredAt(rec, kind = sfRecordKind(rec)) {
+  if (kind === 'event') {
+    return pickField(rec, 'occurred_at',
+      'StartDateTime', 'start_date_time', 'startDateTime',
+      'activity_date', 'ActivityDate', 'activityDate',
+      'CreatedDate', 'created_date', 'created_at');
+  }
+  return pickField(rec, 'occurred_at',
+    'activity_date', 'ActivityDate', 'activityDate',
+    'CreatedDate', 'created_date', 'created_at');
+}
+
+// NBT Phase 2 — within a single POSTed batch, ≥ this many closed Tasks sharing
+// an EXACT (LastModifiedById, LastModifiedDate) signature is the fingerprint of
+// an admin bulk auto-completion (one save stamps every row identically). Those
+// are flagged so a completion is never read as "successfully worked".
+const BULK_COMPLETE_MIN = 5;
+
+/**
+ * Normalize a raw record (canonical OR Salesforce-native field names) into the
+ * fields the ingest needs. One extraction point so the batch-level bulk
+ * detection and the per-record loop read the same values.
+ */
+export function normalizeSfRecord(rec) {
+  const kind   = sfRecordKind(rec);
+  const rawType = rec?.type ?? rec?.TaskSubtype ?? rec?.EventSubtype ?? rec?.Type ?? null;
+  const subject = rec?.subject ?? rec?.Subject ?? null;
+  const isClosedRaw = rec?.is_closed ?? rec?.IsClosed ?? rec?.isClosed ?? null;
+  const isClosed = isClosedRaw == null
+    ? null
+    : (isClosedRaw === true || String(isClosedRaw).toLowerCase() === 'true');
+  return {
+    rec,
+    kind,
+    sfId:     rec?.sf_id ?? rec?.Id ?? rec?.id ?? null,
+    rawType,
+    subject,
+    descr:    rec?.description ?? rec?.Description ?? null,
+    actDate:  rec?.activity_date ?? rec?.ActivityDate ?? rec?.activityDate ?? null,
+    whoId:    rec?.who_id ?? rec?.WhoId ?? null,    // Contact
+    whatId:   rec?.what_id ?? rec?.WhatId ?? null,  // Account / other
+    status:   rec?.status ?? rec?.Status ?? null,
+    ownerId:   rec?.owner_id   ?? rec?.OwnerId ?? null,
+    ownerName: rec?.owner_name ?? rec?.OwnerName ?? rec?.Owner?.Name ?? null,
+    isClosed,
+    completedAt: pickField(rec, 'completed_at', 'CompletedDateTime',
+                                'completed_date_time', 'completedDateTime'),
+    lastModifiedAt: pickField(rec, 'last_modified_at', 'LastModifiedDate',
+                                   'lastModifiedDate'),
+    lastModifiedById: pickField(rec, 'last_modified_by', 'last_modified_by_id',
+                                     'LastModifiedById', 'lastModifiedById'),
+    occurredAt: resolveSfOccurredAt(rec, kind),
+    // Events are meetings — categorized directly so an Event titled "RE: ..."
+    // is never run through the Task subject-inference and miscalled an email.
+    category: kind === 'event' ? 'meeting' : deriveSfCategory(rawType, subject),
+    bulkCompleted: false,
+  };
+}
+
+/**
+ * Tag items that look like an admin bulk auto-completion (Unit 1). Mutates
+ * `items` in place, setting `bulkCompleted=true` on each member of any group of
+ * ≥ BULK_COMPLETE_MIN closed Tasks sharing an exact (modifier, LastModifiedDate)
+ * signature. Conservative: needs both a modifier id AND a modified timestamp.
+ */
+export function tagBulkCompleted(items, minGroup = BULK_COMPLETE_MIN) {
+  const groups = new Map();
+  for (const it of items) {
+    if (it.isClosed !== true) continue;
+    if (!it.lastModifiedAt || !it.lastModifiedById) continue;
+    const key = `${it.lastModifiedById}|${it.lastModifiedAt}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it);
+  }
+  for (const arr of groups.values()) {
+    if (arr.length >= minGroup) for (const it of arr) it.bulkCompleted = true;
+  }
+  return items;
+}
+
 /**
  * Process a batch of SF activity records. Pure-ish: all I/O is injected via
  * `deps` so it can be unit-tested without a DB.
@@ -139,24 +307,16 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
 
   if (!Array.isArray(records) || records.length === 0) return summary;
 
-  for (const rec of records) {
-    // Accept EITHER the canonical shape ({sf_id, type, subject, ...}) OR the
-    // raw Salesforce "Get records (Tasks)" field names ({Id, TaskSubtype,
-    // Subject, ...}) so the PA flow can POST the SF output with no in-flow
-    // field mapping. The canonical key wins when both are present.
-    const sfId    = rec?.sf_id        ?? rec?.Id ?? rec?.id ?? null;
-    const rawType = rec?.type         ?? rec?.TaskSubtype ?? rec?.EventSubtype ?? rec?.Type ?? null;
-    const subject = rec?.subject      ?? rec?.Subject ?? null;
-    const descr   = rec?.description  ?? rec?.Description ?? null;
-    const actDate = rec?.activity_date ?? rec?.ActivityDate ?? rec?.activityDate ?? null;
-    const whoId   = rec?.who_id       ?? rec?.WhoId ?? null;   // Contact
-    const whatId  = rec?.what_id      ?? rec?.WhatId ?? null;  // Account / other
-    const status  = rec?.status       ?? rec?.Status ?? null;
-    // WHO logged this Task — the SF Task.OwnerId. Records it so the timeline can
-    // attribute "my team" vs "NorthMarq debt" touches. Owner.Name only rides
-    // along if the flow ever expands it; null otherwise (id is enough to group).
-    const ownerId   = rec?.owner_id   ?? rec?.OwnerId ?? null;
-    const ownerName = rec?.owner_name ?? rec?.OwnerName ?? rec?.Owner?.Name ?? null;
+  // Accept EITHER the canonical shape ({sf_id, type, subject, ...}) OR the raw
+  // Salesforce "Get records" field names ({Id, TaskSubtype, Subject, ...}) so
+  // the PA flow can POST the SF output with no in-flow field mapping. Normalize
+  // every record up front, then tag any admin bulk auto-completion across the
+  // batch (Unit 1) before the per-record write loop.
+  const items = records.map(normalizeSfRecord);
+  tagBulkCompleted(items);
+
+  for (const it of items) {
+    const { rec, sfId, rawType, subject, descr, whoId, whatId, status } = it;
 
     if (!sfId) {
       summary.skipped_no_id += 1;
@@ -193,21 +353,32 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
 
     summary.matched += 1;
     // OUTREACH #1 (RC1) — subject-aware so a plain SF Task that is really an
-    // email/call advances the cadence instead of being a dead 'note'.
-    const category = deriveSfCategory(rawType, subject);
+    // email/call advances the cadence instead of being a dead 'note'. Events
+    // (Unit 2) are categorized 'meeting' directly inside normalizeSfRecord.
+    const category = it.category;
     const replyTouch = isInboundReply(category, rec, subject);
 
     const metadata = {
       sf_id:     String(sfId),
+      sf_kind:   it.kind,
       sf_type:   rawType,
       sf_status: status,
+      // Completion is captured but SOFT (Unit 1): an admin bulk auto-completed
+      // Scott's open Tasks, so IsClosed=true is NOT "successfully worked" and
+      // nothing here infers "contacted/responded" from it.
+      sf_is_closed:    it.isClosed,
+      sf_completed_at: it.completedAt,
       who_id:    whoId,
       what_id:   whatId,
-      activity_date: actDate,
+      activity_date: it.actDate,
       resolved_via: resolvedVia,
-      owner_id:   ownerId,
-      owner_name: ownerName,
+      owner_id:   it.ownerId,
+      owner_name: it.ownerName,
     };
+    if (it.lastModifiedAt)   metadata.sf_last_modified_at = it.lastModifiedAt;
+    if (it.lastModifiedById) metadata.sf_last_modified_by = it.lastModifiedById;
+    // Flag the admin bulk-completion fingerprint so the engine can discount it.
+    if (it.bulkCompleted)    metadata.bulk_completed = true;
     // R24 Unit 2 — for an inbound reply, the JS advanceCadence path owns the
     // advance (sets emails_replied + the converted/pause branch), so tag the
     // event skip_cadence_advance='true' to keep the SQL trigger from also
@@ -228,7 +399,8 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
         entityId,
         sourceType:  'salesforce',
         externalId:  String(sfId),
-        occurredAt:  actDate,
+        // Events anchor on StartDateTime, Tasks on ActivityDate/CreatedDate.
+        occurredAt:  it.occurredAt,
         metadata,
       });
     } catch (err) {
