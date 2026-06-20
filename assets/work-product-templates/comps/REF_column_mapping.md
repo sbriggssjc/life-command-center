@@ -31,23 +31,43 @@ All On Market columns, plus:
 | Seller | Seller | Seller Name |
 | Financing | Financing Type | Financing |
 
-## Lease Comps (Table: "Table1562")
+## Lease Comps (Table: "Comps", B7:Z60)
 
-| Template Column | CoStar Field | Salesforce Field |
+Canonical 26-column layout (A..Z) — the deployed dialysis "Export Lease Comps"
+output. Comp rows are assembled by `detail-lease-comps-fix.js`
+(`_udFetchLeaseCompCandidates`) from the dia/gov property + lease views and
+ranked by haversine distance from the subject. Columns the data layer can't
+fill render blank (no fabrication).
+
+| Col | Template Column | Source (dia/gov view field) |
 |---|---|---|
-| Property Name | Property Name | Property Name |
-| Address | Address | Street Address |
-| City | City | City |
-| State | State | State |
-| Suite / Space | Suite | Suite |
-| SF (Leased) | Lease SF | Leased SF |
-| Annual Rent | Annual Base Rent | Annual Rent |
-| Lease Type | Lease Type | Lease Structure |
-| Lease Commencement | Commencement Date | Lease Start |
-| Lease Expiration | Expiration Date | Lease End |
-| Execution Date | Execution Date | Signed Date |
-| TI Allowance | TI Allowance | TI |
-| Free Rent | Free Rent Months | Free Rent |
-| Rent Bumps | Escalations | Rent Steps |
-| Submarket | Submarket | Submarket |
-| Notes | Comments | Notes |
+| A | # | running `=A+1` counter |
+| B | TENANT | tenant (normalized) |
+| C | OPERATOR | operator (normalized) |
+| D | ADDRESS | properties.address |
+| E | CITY | properties.city |
+| F | ST | properties.state |
+| G | LAND | land_acres / land_area / lot_sf |
+| H | BUILT | properties.year_built |
+| I | RENO | properties.year_renovated |
+| J | RBA | building_sf / building_size / rba |
+| K | SF LEASED | leases.leased_area (fallback RBA) |
+| L | OCCUPANCY | leased_area ÷ RBA |
+| M | RENT/SF | leases.rent_psf |
+| N | CURRENT RENT | leases.annual_rent |
+| O | COMM | leases.lease_start |
+| P | EXP | leases.lease_expiration |
+| Q | INITIAL TERM | leases.initial_term_years (else COMM→EXP) |
+| R | TERM REM | leases.term_remaining_years (else now→EXP) |
+| S | LEASE TYPE | leases.lease_type *(canonical-merge; blank if absent)* |
+| T | EXPENSES | leases.expense_structure |
+| U | BUMPS | lease_escalations (pct/interval) |
+| V | OPTIONS | leases.renewal_options *(canonical-merge; blank if absent)* |
+| W | USER/OWNER | owner_occupied → Yes/No |
+| X | DISTANCE TO SUBJECT | haversine miles from subject |
+| Y | PATIENTS | latest_patient_count / total_patients (dia) |
+| Z | NOTES | leases.notes / comments *(canonical-merge; blank if absent)* |
+
+AVERAGE row (60) carries `SUBTOTAL`/`AVERAGE` over the numeric columns only;
+the text columns LEASE TYPE (S), EXPENSES (T), BUMPS (U), OPTIONS (V),
+USER/OWNER (W), NOTES (Z) have no average.

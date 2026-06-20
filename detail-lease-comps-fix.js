@@ -99,12 +99,16 @@
 (function () {
   'use strict';
 
-  // Register the new PATIENTS column on the existing template column map so
-  // _udPopulateDataRow can write to it. Once detail.js itself is patched to
-  // add `patientCount: 23, distance: 22` (already there) this becomes a
-  // no-op. Until then, the override populates from JS.
-  if (typeof _UD_TPL !== 'undefined' && _UD_TPL && _UD_TPL.cols && !_UD_TPL.cols.patientCount) {
-    _UD_TPL.cols.patientCount = 23;
+  // Canonical 26-column layout (A..Z) after the 2026-06-20 merge that added
+  // LEASE TYPE (S=19), OPTIONS (V=22), NOTES (Z=26) and shifted EXPENSES/
+  // BUMPS/USER-OWNER/DISTANCE/PATIENTS right. detail.js ships the same map;
+  // this re-stamps it defensively in case a stale detail.js is cached (the
+  // override writers + Comps[X] avg refs all key off these indices).
+  if (typeof _UD_TPL !== 'undefined' && _UD_TPL && _UD_TPL.cols && !_UD_TPL.cols.leaseType) {
+    Object.assign(_UD_TPL.cols, {
+      leaseType: 19, expenses: 20, bumps: 21, options: 22,
+      userOwner: 23, distance: 24, patientCount: 25, notes: 26
+    });
   }
 
   // ── Operator name normalization ─────────────────────────────────────
@@ -470,6 +474,11 @@
         annual_rent: _udNumOrNull(l.annual_rent || l.base_annual_rent),
         rent_per_sf: _udNumOrNull(l.rent_psf),
         expense_structure: l.expense_structure || '',
+        // Canonical-merge columns — sourced from the lease view when present,
+        // else blank (honest; never fabricated).
+        lease_type: l.lease_type || '',
+        renewal_options: l.renewal_options || l.options || l.renewal_option || '',
+        notes: l.notes || l.comments || '',
         lease_bump_pct: e.pct != null ? e.pct : null,
         lease_bump_interval_mo: e.intervalMo != null ? e.intervalMo : null,
         bumps_raw: e.raw || '',
@@ -517,6 +526,11 @@
       _udSetCell(sheet, rowIdx, c.termRem, termRem);
     }
 
+    // LEASE TYPE (S) — canonical-merge text column (e.g. NNN / NN / Gross /
+    // Modified Gross). Distinct from EXPENSES (expense_structure). Renders
+    // blank when the data layer can't fill it (no fabrication).
+    if (c.leaseType) _udSetCell(sheet, rowIdx, c.leaseType, rec.lease_type || '');
+
     _udSetCell(sheet, rowIdx, c.expenses, rec.expense_structure || '');
     // Prefer structured pct/interval when available; fall back to raw text.
     const bumpsLabel = (rec.lease_bump_pct != null || rec.lease_bump_interval_mo != null)
@@ -524,14 +538,18 @@
       : (rec.bumps_raw || '');
     _udSetCell(sheet, rowIdx, c.bumps, bumpsLabel);
 
+    // OPTIONS (V) — canonical-merge text column (renewal-option summary).
+    // Blank when unavailable.
+    if (c.options) _udSetCell(sheet, rowIdx, c.options, rec.renewal_options || '');
+
     // USER/OWNER: Yes/No based on owner_occupied. Applied to subject AND
     // comps. Subject's owner_occupied is now computed (was hardcoded false
-    // in the prior round, which is why U4 leaked the recorded_owner string).
+    // in the prior round, which is why the cell leaked the recorded_owner
+    // string).
     _udSetCell(sheet, rowIdx, c.userOwner, rec.owner_occupied ? 'Yes' : 'No');
 
-    // PATIENTS column: only write if the regenerated template extended the
-    // column map to include `patientCount` (W). The pre-Round-76gn.i
-    // template stops at V=DISTANCE.
+    // PATIENTS column (Y): only write if the template extends the column map
+    // to include `patientCount`. A pre-merge template stops earlier.
     if (c.patientCount && rec.patient_count != null) {
       _udSetCell(sheet, rowIdx, c.patientCount, rec.patient_count);
     }
@@ -539,6 +557,9 @@
     if (!isSubject) {
       _udSetCell(sheet, rowIdx, c.distance, rec.distance_miles != null ? rec.distance_miles : null);
     }
+
+    // NOTES (Z) — canonical-merge free-text column. Blank when unavailable.
+    if (c.notes) _udSetCell(sheet, rowIdx, c.notes, rec.notes || '');
 
     // Force left-alignment on TENANT / OPERATOR / ADDRESS — even though the
     // template writes left-aligned, ExcelJS load+save round-trip can flatten
@@ -632,11 +653,16 @@
   // comps_template.py, so the map key for column I is "RENO" (was
   // "RENOVATED"). STATE and COMMENCE also abbreviated (ST, COMM) but
   // they're not in the AVERAGE row so no map entry needed.
+  // Canonical-merge (2026-06-20): LEASE TYPE (S), OPTIONS (V), NOTES (Z) are
+  // text columns with NO AVERAGE, so they're absent here. DISTANCE shifted
+  // V->X and PATIENTS W->Y; their structured-ref letters follow. Columns
+  // G..R are unchanged (the inserts are all at/after S). Keep in sync with
+  // avg_formulas in scripts/build_lease_comps_template.py.
   const _UD_TABLE_COL_MAP = {
     'LAND': 'G', 'BUILT': 'H', 'RENO': 'I', 'RBA': 'J', 'SF LEASED': 'K',
     'OCCUPANCY': 'L', 'RENT/SF': 'M', 'CURRENT RENT': 'N',
     'INITIAL TERM': 'Q', 'TERM REM': 'R',
-    'DISTANCE TO SUBJECT': 'V', 'PATIENTS': 'W'
+    'DISTANCE TO SUBJECT': 'X', 'PATIENTS': 'Y'
   };
   function _udEscRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -710,22 +736,16 @@
     const sheet = wb.worksheets[0];
     if (!sheet) throw new Error('Template has no worksheets');
 
-    // Round 76gn.l: defensive header-cell fix for the Subject Excel table.
-    // The regenerated Round 76gn.i template defines the Subject table over
-    // B3:W4 but leaves V3 (DISTANCE TO SUBJECT) blank because distance
-    // doesn't apply to the subject row itself. Excel tables require every
-    // header cell to contain a value; openpyxl writes the table column for
-    // V with an auto-generated name, and ExcelJS crashes during workbook
-    // serialization with "Cannot read properties of undefined (reading
-    // 'name')" when it tries to materialize the empty column's name.
-    //
-    // Stamping V3 here only affects the Subject section's header row; V4
-    // (the subject data cell) stays blank as intended. Same defense is
-    // applied to W3/V7/W7 in case a future template regen leaves any of
-    // them empty — only cells that are already empty get stamped, so a
-    // correctly-built template is left alone.
-    [['V3', 'DISTANCE TO SUBJECT'], ['W3', 'PATIENTS'],
-     ['V7', 'DISTANCE TO SUBJECT'], ['W7', 'PATIENTS']].forEach(([addr, label]) => {
+    // Round 76gn.l: defensive header-cell fix for the DISTANCE/PATIENTS
+    // header cells. Distance doesn't apply to the subject row, so a regen
+    // could leave those header cells blank; an empty Excel-table header cell
+    // makes ExcelJS crash during serialization ("Cannot read properties of
+    // undefined (reading 'name')"). Post canonical-merge those columns are
+    // X (DISTANCE TO SUBJECT) and Y (PATIENTS) on both the subject header
+    // (row 3) and the comps header (row 7). Only already-empty cells get
+    // stamped, so a correctly-built template is left alone.
+    [['X3', 'DISTANCE TO SUBJECT'], ['Y3', 'PATIENTS'],
+     ['X7', 'DISTANCE TO SUBJECT'], ['Y7', 'PATIENTS']].forEach(([addr, label]) => {
       const cell = sheet.getCell(addr);
       if (cell.value == null || cell.value === '') cell.value = label;
     });
@@ -742,7 +762,7 @@
     // Comp rows. Clone styles for rows beyond the templated range.
     const lastDataRow = _UD_TPL.compsFirstDataRow + comps.length - 1;
     const lastTpl = _UD_TPL.compsLastTemplatedRow;
-    const lastCol = _UD_TPL.cols.patientCount || _UD_TPL.cols.distance;
+    const lastCol = _UD_TPL.cols.notes || _UD_TPL.cols.patientCount || _UD_TPL.cols.distance;
     if (lastDataRow > lastTpl) {
       for (let r = lastTpl + 1; r <= lastDataRow; r++) {
         _udCloneRowStyles(sheet, _UD_TPL.compsFirstDataRow, r, lastCol);
@@ -795,10 +815,13 @@
     // ("Sat Dec 14 2017 00:00:00 GMT-0800 (Pacific Standard Time)"),
     // which made COMMENCE/EXP columns auto-fit to ~60 wide. The cells
     // actually display as "mmm-yy" (6-7 chars), so use a fixed length.
+    // Canonical 26-column widths (A..Z). Mirrors the COLUMNS widths in
+    // scripts/build_lease_comps_template.py: LEASE TYPE (19), OPTIONS (22),
+    // NOTES (26) inserted; EXPENSES/BUMPS/USER-OWNER/DISTANCE/PATIENTS shifted.
     const TEMPLATE_WIDTHS = {
       1: 3.5, 2: 25, 3: 22, 4: 24, 5: 14, 6: 7, 7: 10, 8: 9, 9: 11, 10: 11,
-      11: 12, 12: 11, 13: 11, 14: 14, 15: 11, 16: 11, 17: 13, 18: 13, 19: 13,
-      20: 14, 21: 22, 22: 16, 23: 12
+      11: 12, 12: 11, 13: 11, 14: 14, 15: 11, 16: 11, 17: 13, 18: 13,
+      19: 13, 20: 13, 21: 14, 22: 20, 23: 12, 24: 16, 25: 11, 26: 30
     };
     const DATE_DISPLAY_LEN = 7; // "mmm-yy" plus a margin char
     const MAX_WIDTH = 60;
@@ -942,6 +965,9 @@
         subject.annual_rent = subject.annual_rent || _udNumOrNull(l.annual_rent || l.base_annual_rent);
         subject.rent_per_sf = subject.rent_per_sf || _udNumOrNull(l.rent_psf);
         subject.expense_structure = subject.expense_structure || l.expense_structure || '';
+        subject.lease_type = subject.lease_type || l.lease_type || '';
+        subject.renewal_options = subject.renewal_options || l.renewal_options || l.options || l.renewal_option || '';
+        subject.notes = subject.notes || l.notes || l.comments || '';
         if (!subject.tenant) {
           const t = _udExtractTenantOperator(db, {}, {}, l);
           if (t.tenant) subject.tenant = t.tenant;

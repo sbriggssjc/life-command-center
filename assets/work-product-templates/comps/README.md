@@ -23,8 +23,19 @@ similar.
 
 ## Files
 
-- `Lease Comps Template - Briggs.xlsx` — the Briggs lease-comps template (header
-  bands on rows 3 + 7, `=A+1` numbering). Restyled in place by E2.
+- `Lease Comps Template - Briggs.xlsx` — the canonical Briggs lease-comps
+  template (header bands on rows 3 + 7, `=A+1` numbering, Comps Excel table,
+  AVERAGE row). **This is a generated mirror of the deployed dialysis export
+  template** — it is (re)written by `scripts/build_lease_comps_template.py`,
+  which emits BOTH `assets/cm-templates/dialysis-lease-comps-template.xlsx`
+  (the file the property-page "Export Lease Comps" button populates) AND this
+  file, so the framework template never drifts from the live export. Do not
+  hand-edit — regenerate via the build script.
+  - Canonical-merge (2026-06-20): 26 columns A..Z; the three merged text
+    columns LEASE TYPE (S) / OPTIONS (V) / NOTES (Z) are NOT formula-protected.
+    The two legacy `Lease Comps Template - Briggs.xlsx` variants (the
+    `assets/cm-templates/` copy and an older CVS-Philadelphia variant) were
+    retired in favor of this single canonical generator output.
 - A sales-comps template should be dropped here when available; the restyler's
   sales path + protected-column registry already cover it (unit-tested), and the
   sheet is auto-classified as `sales` by title (`sale|sold|on-market`).

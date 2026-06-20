@@ -19,6 +19,10 @@
 | DOM | Execution Date − List Date (in days) | ✗ |
 | EFFECTIVE RENT/SF | Net effective rent adjusted for TI and free rent | ✗ |
 
+> Canonical-merge text columns **LEASE TYPE (S)**, **OPTIONS (V)**, **NOTES (Z)**
+> are free text with no derived value — they are **not** formula-protected and
+> may be populated/edited freely.
+
 ## Diagnostic: Blank Formula Columns
 
 If a formula column is blank after population, the cause is almost always:

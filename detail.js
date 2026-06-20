@@ -14031,11 +14031,17 @@ const _UD_TPL = {
   compsHeaderRow: 7,      // "TENANT | ... | USER/OWNER | DISTANCE TO SUBJECT"
   compsFirstDataRow: 8,
   compsLastTemplatedRow: 40, // template ships with rows 8..40 pre-styled
+  // Canonical 26-column layout (A..Z). LEASE TYPE (S=19), OPTIONS (V=22),
+  // NOTES (Z=26) were merged in 2026-06-20, shifting EXPENSES/BUMPS/
+  // USER-OWNER/DISTANCE/PATIENTS right. Keep in sync with
+  // scripts/build_lease_comps_template.py COLUMNS and _UD_TABLE_COL_MAP in
+  // detail-lease-comps-fix.js.
   cols: {
     counter: 1, tenant: 2, operator: 3, address: 4, city: 5, state: 6,
     land: 7, built: 8, renovated: 9, rba: 10, sfLeased: 11, occupancy: 12,
     rentPsf: 13, currentRent: 14, commence: 15, exp: 16, initialTerm: 17,
-    termRem: 18, expenses: 19, bumps: 20, userOwner: 21, distance: 22
+    termRem: 18, leaseType: 19, expenses: 20, bumps: 21, options: 22,
+    userOwner: 23, distance: 24, patientCount: 25, notes: 26
   }
 };
 
@@ -14094,11 +14100,19 @@ function _udPopulateDataRow(sheet, db, rowIdx, rec, opts) {
   _udSetCell(sheet, rowIdx, c.exp, endDate);
   _udSetCell(sheet, rowIdx, c.initialTerm, _udYearsBetweenDates(startDate, endDate));
   _udSetCell(sheet, rowIdx, c.termRem, _udYearsBetweenDates(new Date(), endDate));
+  // LEASE TYPE / EXPENSES / BUMPS / OPTIONS / NOTES — text columns. Render
+  // blank when the data layer can't fill them (no fabrication).
+  _udSetCell(sheet, rowIdx, c.leaseType, rec.lease_type || '');
   _udSetCell(sheet, rowIdx, c.expenses, rec.expense_structure || '');
   _udSetCell(sheet, rowIdx, c.bumps, _udFmtBumps(rec.lease_bump_pct, rec.lease_bump_interval_mo));
+  _udSetCell(sheet, rowIdx, c.options, rec.renewal_options || '');
+  _udSetCell(sheet, rowIdx, c.notes, rec.notes || '');
+  if (c.patientCount && rec.patient_count != null) {
+    _udSetCell(sheet, rowIdx, c.patientCount, rec.patient_count);
+  }
 
   // USER/OWNER + DISTANCE only apply to comparables. The template has no
-  // U/V cells in row 4 (subject), so we leave them untouched there.
+  // W/X cells in row 4 (subject), so we leave them untouched there.
   if (!isSubject) {
     const userOwnerLabel = rec.owner_occupied
       ? (rec.owner ? `User (${rec.owner})` : 'User')
@@ -14150,7 +14164,7 @@ async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
   const lastTpl = _UD_TPL.compsLastTemplatedRow;
   if (lastDataRow > lastTpl) {
     for (let r = lastTpl + 1; r <= lastDataRow; r++) {
-      _udCloneRowStyles(sheet, _UD_TPL.compsFirstDataRow, r, _UD_TPL.cols.distance);
+      _udCloneRowStyles(sheet, _UD_TPL.compsFirstDataRow, r, _UD_TPL.cols.notes);
       // Stamp the running counter formula so column A keeps incrementing.
       sheet.getRow(r).getCell(_UD_TPL.cols.counter).value = { formula: `A${r - 1}+1` };
     }
@@ -14163,12 +14177,12 @@ async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
 
   // Clear any unused pre-styled comp rows so a count of 10 doesn't ship
   // with 23 blank-but-counted rows trailing it. We blank the data cells
-  // (B..V) but keep column A's counter formula AND the row formatting,
+  // (B..Z) but keep column A's counter formula AND the row formatting,
   // which lets the user paste additional comps later if they want.
   if (comps.length < (lastTpl - _UD_TPL.compsFirstDataRow + 1)) {
     for (let r = _UD_TPL.compsFirstDataRow + comps.length; r <= lastTpl; r++) {
       const row = sheet.getRow(r);
-      for (let c = _UD_TPL.cols.tenant; c <= _UD_TPL.cols.distance; c++) {
+      for (let c = _UD_TPL.cols.tenant; c <= _UD_TPL.cols.notes; c++) {
         row.getCell(c).value = null;
       }
     }
