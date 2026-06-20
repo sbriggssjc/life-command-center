@@ -67,18 +67,20 @@ delete the relationship + null the pivot pointer.
 
 ## Post-deploy activation + per-phase gate (run on Railway, where egress works)
 
-1. **Phase A routing (DB follow-up, required for Phase A to fire).** No owner is
-   currently routed to `parse_deed_signatory`. Add `has_deed_doc` through the
-   owner-signals chain so deed-owning owners prefer the authority-1 signatory:
-   - dia `v_owner_contact_signals_portfolio` → append `has_deed_doc` (`EXISTS`
-     deed/dd/master `property_documents` on a property the owner's
-     `true_owner_id` owns).
-   - LCC `lcc_owner_contact_signals` + `lcc_sync_owner_contact_signals`/`_finalize`
-     → carry `has_deed_doc`.
-   - LCC `v_owner_active_contact` → in the `enrichment_action` CASE, prefer
-     `'parse_deed_signatory'` when `has_deed_doc` (before sos/address); the
-     seeder re-routes unlinked owners. Additive / cache-or-live-safe / reversible.
-   - **Addressable: ~14 owners / 17 docs** (the deed/dd/master set).
+1. **Phase A routing — BUILT + validated, apply post-deploy (dia view FIRST).**
+   Migrations `supabase/migrations/dialysis/20260620140000_dia_owner_contact_signals_deed_doc.sql`
+   + `supabase/migrations/20260620140000_lcc_contact_enrich_phaseA_deed_routing.sql`
+   thread a `has_deed_doc` signal (owns a recorded deed/dd/master doc) through the
+   dia anon view → `lcc_owner_contact_signals` mirror (sync now `select=*` so the
+   gov leg doesn't 400; gov carries `false`, Phase A gov deferred) → finalize →
+   `v_owner_active_contact` (enrichment_action prefers `parse_deed_signatory`
+   AFTER the public-IR carve-out, BEFORE sos/address) → the seeder re-routes
+   UNLINKED, non-locked pivots (never the active pick). **Not applied live** (the
+   deed adapter no-ops until `OWNER_ENRICH_DEED_URL` anyway). Validated in
+   rolled-back txs (0 residue): dia view parses, `has_deed_doc`=81 owners
+   domain-wide; LCC `CREATE OR REPLACE` column-shape matches; flipping the mirror
+   proves routing precedence (public_ir > parse_deed_signatory > sos > address).
+   **Addressable: ~14 of the 78** contactless dia owners own a deed/dd/master doc.
 2. **Phase A gate.** Set `OWNER_ENRICH_DEED_URL`. `GET …owner-contact-enrich-tick`
    dry-run, then a capped `POST` (`limit=5`). Confirm: real signatories parsed
    from owned docs, correct role/authority 1, owner flips `acquire_contact →
