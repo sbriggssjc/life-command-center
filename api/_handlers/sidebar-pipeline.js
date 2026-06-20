@@ -723,7 +723,7 @@ function parseCoord(val) {
  * Extract structured data from CoStar "Sale Notes" narrative text.
  * Returns an object of parsed values (empty if nothing matched).
  */
-function parseSaleNotes(text) {
+export function parseSaleNotes(text) {
   if (!text) return {};
   const extracted = {};
 
@@ -736,10 +736,12 @@ function parseSaleNotes(text) {
                    text.match(/cap\s*rate.*?(\d+\.?\d*)\s*%/i);
   if (capMatch) extracted.stated_cap_rate = parseFloat(capMatch[1]);
 
-  // Lease term remaining
-  const termMatch = text.match(/(\d+)\s*(?:remaining\s+)?years?\s+remaining/i) ||
-                    text.match(/(\d+)\s+years?\s+remain/i);
-  if (termMatch) extracted.years_remaining = parseInt(termMatch[1]);
+  // Lease term remaining. Capture decimals — CoStar narratives routinely phrase
+  // this as "11.5 years remaining on the lease term"; an integer-only capture
+  // (the prior /(\d+)/) silently dropped the fractional term.
+  const termMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:remaining\s+)?years?\s+remaining/i) ||
+                    text.match(/(\d+(?:\.\d+)?)\s+years?\s+remain/i);
+  if (termMatch) extracted.years_remaining = parseFloat(termMatch[1]);
 
   // Building SF (cross-reference against RBA)
   const sfMatch = text.match(/([\d,]+)\s*[-–]?\s*square[-\s]?foot/i);
@@ -774,6 +776,89 @@ function parseSaleNotes(text) {
   }
 
   return extracted;
+}
+
+// ── Sale-Notes → gov enrichment helpers (pure; unit-tested) ─────────────────
+// Gov has a full cap-rate framework (gov_compute_cap_rate + cap_rate_history)
+// and an at-sale firm-term column; rather than dead-end the captured values in
+// audit columns, the gov path routes the Sale-Notes NOI into properties.noi
+// (the framework's confirmed_sale tier-1 input) and the term into
+// sales_transactions.firm_term_years_at_sale (what the cap-by-term views read
+// first). These pure helpers hold the selection/guard logic so it can be tested
+// without the live DB.
+
+/**
+ * Pick the confirmed-sale NOI for a gov sale from the capture. Prefers the
+ * structured Income & Expenses NOI (metadata.noi), falls back to the value
+ * parsed from the Sale Notes narrative. Returns a positive number or null.
+ */
+export function pickConfirmedSaleNoi(metadata, saleNotesExtracted) {
+  const fromMeta = parseCurrency(metadata?.noi);
+  const fromNotes = saleNotesExtracted?.noi;
+  if (fromMeta != null && fromMeta > 0) return fromMeta;
+  if (typeof fromNotes === 'number' && fromNotes > 0) return fromNotes;
+  return null;
+}
+
+/**
+ * Fill-blank-or-newer guard for writing properties.noi as a confirmed_sale
+ * anchor. Never overwrite an NOI already anchored at/after this sale's date —
+ * a more-recent / curated NOI wins. Returns true when the write should run.
+ */
+export function shouldWriteConfirmedSaleNoi(existingRow, saleDate) {
+  if (!existingRow || existingRow.noi == null) return true;   // blank — fill it
+  const asOf = existingRow.noi_as_of_date || null;
+  if (!asOf) return false;                  // has NOI, unknown anchor — don't clobber
+  return String(saleDate) > String(asOf);   // only a strictly-newer sale wins
+}
+
+/**
+ * Map the Sale-Notes "N years remaining" into the gov at-sale firm-term seed.
+ * Returns {firm_term_years_at_sale, firm_term_source} or {} when absent/insane.
+ */
+export function govSaleNotesTermFields(saleNotesExtracted) {
+  const yrs = saleNotesExtracted?.years_remaining;
+  if (typeof yrs === 'number' && yrs > 0 && yrs <= 25) {
+    return { firm_term_years_at_sale: yrs, firm_term_source: 'costar_sale_notes' };
+  }
+  return {};
+}
+
+/**
+ * Write a Sale-Notes / Income&Expenses NOI onto gov properties.noi as a
+ * confirmed_sale anchor so gov_compute_cap_rate (tier 1, HIGH confidence) can
+ * derive this sale's cap rate from a real NOI instead of leaving it
+ * market-implied. MUST be called BEFORE the sale upsert: trg_gov_auto_cap_rate_
+ * on_sale is a BEFORE trigger that reads properties.noi at insert time, and a
+ * sale's cap is point-in-time — a later NOI change refreshes active listings
+ * only, never prior sales (gov R44). Fill-blank-or-newer + routed through the
+ * priority guard so curated/county NOI is never clobbered. Non-fatal: a failure
+ * logs and proceeds (the sale still writes).
+ */
+async function writeConfirmedSaleNoi(propertyId, noi, saleDate, provCollect) {
+  try {
+    const cur = await domainQuery('government', 'GET',
+      `properties?property_id=eq.${propertyId}&select=noi,noi_as_of_date&limit=1`);
+    const row = (cur.ok && Array.isArray(cur.data) && cur.data[0]) ? cur.data[0] : null;
+    if (!shouldWriteConfirmedSaleNoi(row, saleDate)) {
+      console.log(`[writeConfirmedSaleNoi] skip property=${propertyId} — existing NOI anchored ${row?.noi_as_of_date} >= ${saleDate}`);
+      return;
+    }
+    const fields = { noi, noi_source: 'confirmed_sale', noi_as_of_date: saleDate };
+    const allowed = await filterByFieldPriority({
+      targetDb: 'gov_db', targetTable: 'gov.properties', recordPk: propertyId,
+      source: 'costar_sidebar', confidence: 0.6, fields,
+    }).catch(() => fields);
+    if (!allowed || allowed.noi == null) {
+      console.log(`[writeConfirmedSaleNoi] priority gate blocked NOI write property=${propertyId}`);
+      return;
+    }
+    await domainPatch('government', `properties?property_id=eq.${propertyId}`, allowed, 'writeConfirmedSaleNoi');
+    pushProvenance(provCollect, 'properties', propertyId, { noi }, 0.6, 'costar_sidebar');
+    console.log(`[writeConfirmedSaleNoi] property=${propertyId} NOI=$${noi} as_of=${saleDate} (confirmed_sale)`);
+  } catch (err) {
+    console.warn('[writeConfirmedSaleNoi] failed (non-fatal):', err?.message || err);
+  }
 }
 
 /**
@@ -4876,7 +4961,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const hiStr = hi.toISOString().split('T')[0];
 
     const lookupSelect = domain === 'government'
-      ? 'sale_id,sale_date,sold_price,document_number'
+      ? 'sale_id,sale_date,sold_price,document_number,firm_term_years_at_sale,firm_term_locked'
       : 'sale_id,sale_date,sold_price,document_number,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
 
     // Stage 1: document_number lookup (most authoritative — same deed).
@@ -5063,6 +5148,16 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       }
     }
 
+    // Sale-Notes-derived at-sale firm term (gov, most-recent sale only). The
+    // narrative often carries the term CoStar's structured fields omit
+    // ("11.5 years remaining"); seed firm_term_years_at_sale so the cap-by-term
+    // views (which COALESCE it first) can use it. Fill-blank only — the gov
+    // term-reconcile pass (firm_term_locked) stays authoritative (the PATCH
+    // branch strips this when the existing row is locked or already set).
+    const govSaleNotesFields = (domain === 'government' && isMostRecentSale)
+      ? govSaleNotesTermFields(saleNotesExtracted)
+      : {};
+
     const domainSaleFields = domain === 'government'
       ? {
           sold_cap_rate:    capRateVal,
@@ -5104,6 +5199,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           // DOM, had_price_change, pct_of_initial). Only present on the
           // most-recent sale and only for fields CoStar actually carried.
           ...govListingHistory,
+          // Sale-Notes at-sale firm term seed (fill-blank; PATCH branch guards).
+          ...govSaleNotesFields,
           data_source:      'costar_sidebar',
         }
       : {
@@ -5179,6 +5276,15 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         sale_notes_raw: saleNotesRaw,
         sale_notes_extracted: Object.keys(saleNotesForRow).length > 0
           ? saleNotesForRow : null,
+      } : {}),
+      // Gov audit-retention parity (2026-06-20): retain the raw narrative +
+      // structured extract on the most-recent sale only (the notes describe the
+      // displayed/most-recent deal). Gov has no `notes`/`recorded_date` columns,
+      // so just the two parity columns added by the gov sale-notes migration.
+      ...(domain === 'government' && isMostRecentSale && saleNotesRaw ? {
+        sale_notes_raw: saleNotesRaw,
+        sale_notes_extracted: Object.keys(saleNotesExtracted).length > 0
+          ? saleNotesExtracted : null,
       } : {}),
     });
     if (transaction_type !== null) saleData.transaction_type = transaction_type;
@@ -5314,6 +5420,17 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       continue;
     }
 
+    // Sale-Notes / Income&Expenses NOI → properties.noi (confirmed_sale anchor),
+    // written BEFORE the sale upsert so the BEFORE trigger
+    // trg_gov_auto_cap_rate_on_sale derives this sale's cap rate from a real NOI
+    // (tier 1, HIGH) instead of leaving it market-implied. Most-recent sale only.
+    if (domain === 'government' && isMostRecentSale) {
+      const confirmedNoi = pickConfirmedSaleNoi(metadata, saleNotesExtracted);
+      if (confirmedNoi != null) {
+        await writeConfirmedSaleNoi(propertyId, confirmedNoi, datePart, provCollect);
+      }
+    }
+
     if (writeAction.action === 'patch') {
       const existing = lookup.data[0];
       loopSaleId = existing.sale_id;
@@ -5325,6 +5442,17 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       // redundant given the new lookup and blocked the audit timestamps
       // this audit demands, so it has been removed.
       let patchData = saleData;
+
+      // Fill-blank-only for the Sale-Notes at-sale term: never overwrite an
+      // existing or locked firm_term_years_at_sale (the gov term-reconcile pass
+      // is authoritative). Clone before deleting so saleData stays intact.
+      if (domain === 'government'
+          && (existing.firm_term_locked || existing.firm_term_years_at_sale != null)
+          && (patchData.firm_term_years_at_sale != null || patchData.firm_term_source != null)) {
+        patchData = { ...patchData };
+        delete patchData.firm_term_years_at_sale;
+        delete patchData.firm_term_source;
+      }
 
       // Preserve confirmed cap rate data: if a sale already has a
       // calculated_cap_rate and its confidence is medium/high, the CoStar
@@ -5396,6 +5524,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
         cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
         cap_rate_quality:          saleData.cap_rate_quality || null,
+        // Sale-Notes at-sale term (gov only; null when stripped/absent)
+        firm_term_years_at_sale: patchData.firm_term_years_at_sale ?? null,
         // Round 77: listing price-history (gov only; null/absent on dia)
         initial_price:    saleData.initial_price ?? null,
         last_price:       saleData.last_price ?? null,
@@ -5490,6 +5620,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
             cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
             cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
             cap_rate_quality:          saleData.cap_rate_quality || null,
+            // Sale-Notes at-sale term (gov only; null/absent on dia)
+            firm_term_years_at_sale:   saleData.firm_term_years_at_sale ?? null,
           });
         }
       }
