@@ -380,3 +380,83 @@ export async function createSalesforceOpportunity(task) {
   const nmType = (task && task.nmType !== undefined) ? task.nmType : 'Opportunity';
   return createSalesforceTask(Object.assign({}, task, { nmType }));
 }
+
+/**
+ * Split a full name into {firstName, lastName} for Salesforce (Contact.LastName
+ * is REQUIRED). Last token is LastName; everything before is FirstName. A
+ * single-token name becomes the LastName (SF requires it).
+ */
+function splitContactName(name) {
+  const t = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!t) return { firstName: null, lastName: null };
+  const toks = t.split(' ');
+  if (toks.length === 1) return { firstName: null, lastName: toks[0] };
+  return { firstName: toks.slice(0, -1).join(' '), lastName: toks[toks.length - 1] };
+}
+
+/**
+ * UPSERT a Salesforce Contact by email — the OUT half of the contact loop (R52).
+ * Contacts flow IN (CoStar/SF pull) and opportunities flow OUT today, but a
+ * captured/resolved contact is never pushed to the CRM. This pushes one,
+ * upsert-by-email so Salesforce is never duplicated: the PA flow's SOQL finds an
+ * existing Contact by Email and UPDATEs it, else INSERTs (mirrors the
+ * create_opportunity rollout — Scott wires the PA `upsert_contact` case).
+ *
+ * Tolerant of flows that don't implement it yet — returns ok:false
+ * reason='unsupported'/'unavailable' so the worker leaves the row pending and
+ * reports honestly (same posture as createSalesforceTask). Never throws here;
+ * the worker only writes the identity mirror on ok + a returned Id.
+ *
+ * FLOW CONTRACT (what LCC posts / what PA returns):
+ *   POST <SF_LOOKUP_WEBHOOK_URL>
+ *   { "operation": "upsert_contact",
+ *     "email": "geoff.ficke@colliers.com",  // the upsert key — REQUIRED
+ *     "first_name": "Geoff", "last_name": "Ficke", "name": "Geoff Ficke",
+ *     "phone": "(408) 459-8476",
+ *     "company": "Colliers International",   // → Contact firm context (optional)
+ *     "account_id": "001...",               // link to the owner's SF Account (optional)
+ *     "mailing_street": "...", "mailing_city": "...",
+ *     "mailing_state": "...", "mailing_postal_code": "...",
+ *     "idempotency_key": "<lcc entity id>" }
+ *   Success: { "ok": true, "created": true|false,
+ *              "contact": { "Id": "003...", "Email": "...",
+ *                           "MailingStreet": "...", "MailingCity": "...",
+ *                           "MailingState": "...", "MailingPostalCode": "...",
+ *                           "Phone": "..." } }
+ *   Not implemented: { "ok": false, "reason": "unsupported" } (or HTTP 4xx)
+ *
+ * @param {{name?:string, email:string, phone?:string, company?:string,
+ *          accountId?:string, address?:string, city?:string, state?:string,
+ *          zip?:string, idempotencyKey?:string}} contact
+ * @returns {Promise<{ok:boolean, contact?:object|null, created?:boolean, reason?:string, detail?:any}>}
+ */
+export async function upsertSalesforceContact(contact) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const email = String(contact?.email || '').trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, reason: 'no_email' };
+
+  const { firstName, lastName } = splitContactName(contact?.name);
+  if (!lastName) return { ok: false, reason: 'no_name' };
+
+  const body = { operation: 'upsert_contact', email, last_name: lastName };
+  if (firstName) body.first_name = firstName;
+  if (contact?.name) body.name = String(contact.name).trim();
+  if (contact?.phone) body.phone = String(contact.phone).trim();
+  if (contact?.company) body.company = String(contact.company).trim();
+  const accountId = contact?.accountId ? String(contact.accountId).trim() : '';
+  if (accountId && /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(accountId)) body.account_id = accountId;
+  if (contact?.address) body.mailing_street = String(contact.address).trim();
+  if (contact?.city) body.mailing_city = String(contact.city).trim();
+  if (contact?.state) body.mailing_state = String(contact.state).trim();
+  if (contact?.zip) body.mailing_postal_code = String(contact.zip).trim();
+  if (contact?.idempotencyKey) body.idempotency_key = String(contact.idempotencyKey);
+
+  const result = await callSfLookupFlow(body);
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const c = result.contact || result.record || null;
+  const id = c ? (c.Id || c.id) : null;
+  if (!id) return { ok: false, reason: result.reason || 'no_contact_returned' };
+  return { ok: true, contact: c, created: result.created !== false ? !!result.created : false };
+}

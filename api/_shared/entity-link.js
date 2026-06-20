@@ -718,11 +718,17 @@ function pickSeedFields(entityType, seedFields = {}) {
     delete picked.org_type;
   }
   if (entityType !== 'asset') {
-    delete picked.address;
-    delete picked.city;
-    delete picked.state;
-    delete picked.zip;
-    delete picked.county;
+    // R52 Unit 1: a PERSON keeps its mailing address (address/city/state/zip/
+    // county) so an SF-contact pull / county-record lookup can land it
+    // first-class (the address dimension — 0% today). lat/lng/asset_type stay
+    // asset-only. An organization keeps none of these here (unchanged).
+    if (entityType !== 'person') {
+      delete picked.address;
+      delete picked.city;
+      delete picked.state;
+      delete picked.zip;
+      delete picked.county;
+    }
     delete picked.latitude;
     delete picked.longitude;
     delete picked.asset_type;
