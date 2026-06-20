@@ -845,6 +845,13 @@ const FEDERATED_DECISION_TYPES = new Set([
   // a legit spe_vs_parent; research spawns a task. spe_vs_parent is excluded from
   // the lane (default keep).
   'owner_source_conflict',
+  // R53: an ownership CHANGE (GSA lessor change with no recorded sale, or a R51
+  // deed_newer_stale conflict with no recorded sale) is a SUSPECTED unrecorded
+  // sale. Lists gov v_suspected_sale (value-ranked by rent). confirm_sale writes
+  // a real sales row via gov_confirm_suspected_sale (operator price required —
+  // never fabricated); not_a_sale records + stops asking; research queues a
+  // trace_unrecorded_sale task. A suspected sale is a LEAD, never auto-recorded.
+  'suspected_sale',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -864,6 +871,8 @@ function federatedSubjectRef(type, s) {
     case 'resolve_owner_parent': return (s.domain && s.cluster_token) ? 'ownerparent:' + s.domain + ':' + s.cluster_token : null;
     case 'listing_event_action': return s.event_id ? 'listevt:' + s.event_id : null;
     case 'owner_source_conflict': return (s.domain && s.property_id != null) ? 'osrc:' + s.domain + ':' + s.property_id : null;
+    case 'suspected_sale': return (s.domain && s.property_id != null && s.signal_source)
+                                  ? 'susp:' + s.domain + ':' + s.property_id + ':' + s.signal_source : null;
   }
   return null;
 }
@@ -1016,6 +1025,29 @@ async function fetchFederatedSource(type, cap) {
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  if (type === 'suspected_sale') {
+    // R53: gov v_suspected_sale — an ownership change (GSA lessor / deed) with
+    // NO recorded sale → a suspected unrecorded sale, value-ranked by rent.
+    const sel = 'domain,property_id,signal_source,suspected_grantor,suspected_grantee,'
+      + 'suspected_sale_date,annual_rent,address,city,state,agency';
+    const r = await domainQuery('gov', 'GET', 'v_suspected_sale?select=' + sel
+      + '&order=annual_rent.desc.nullslast,property_id&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'susp:gov:' + row.property_id + ':' + row.signal_source,
+      subject_domain: 'gov', subject_property_id: String(row.property_id), subject_entity_id: null,
+      rank_value: Number(row.annual_rent) || 0,
+      context: {
+        domain: 'gov', property_id: row.property_id, signal_source: row.signal_source,
+        suspected_grantor: row.suspected_grantor, suspected_grantee: row.suspected_grantee,
+        suspected_sale_date: row.suspected_sale_date, annual_rent: row.annual_rent,
+        address: row.address, city: row.city, state: row.state, agency: row.agency,
+      },
+    }));
+    out.total = await domCnt('gov', 'v_suspected_sale');
     return out;
   }
 
@@ -2308,6 +2340,60 @@ async function handleDecisionVerdict(req, res) {
           instructions: 'Decision Center: reconcile ' + (c.domain || '') + ' property ' + (c.property_id || '')
             + ' — recorded owner "' + (c.recorded_owner_name || '') + '" vs deed grantee "'
             + (c.latest_deed_grantee || '') + '" (' + (c.conflict_kind || '') + ').' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- suspected_sale (R53, federated) -----------------------------------
+    // An ownership change (GSA lessor / deed) with no recorded sale = a
+    // suspected unrecorded sale. confirm_sale writes a REAL sales row via
+    // gov_confirm_suspected_sale (operator-supplied price required — we never
+    // fabricate price/date; that is what the research is for). not_a_sale
+    // records + stops asking (refi/correction). research queues a
+    // trace_unrecorded_sale task. Effect-first / outcome-truthful.
+    if (decision.decision_type === 'suspected_sale') {
+      if (verdict === 'not_a_sale') {
+        await record('not_a_sale', 'decided', null,
+          { disposition: 'not_a_sale', signal_source: c.signal_source || null });
+        return res.status(200).json({ ok: true, verdict: 'not_a_sale' });
+      }
+      if (verdict === 'confirm_sale') {
+        if (c.property_id == null) return res.status(400).json({ error: 'confirm_sale requires a property subject' });
+        const price = Number(payload.sold_price);
+        const saleDate = payload.sale_date || c.suspected_sale_date || null;
+        if (!Number.isFinite(price) || price < 50000) {
+          return res.status(400).json({ error: 'confirm_sale requires a sold_price (>= $50k); we never fabricate a price' });
+        }
+        if (!saleDate) return res.status(400).json({ error: 'confirm_sale requires a sale_date' });
+        const rpc = await domainQuery('government', 'POST', 'rpc/gov_confirm_suspected_sale', {
+          p_property_id: c.property_id, p_sale_date: saleDate, p_sold_price: price,
+          p_buyer: payload.buyer || c.suspected_grantee || null,
+          p_seller: payload.seller || c.suspected_grantor || null,
+          p_actor: (user && user.email) || 'decision_center', p_dry_run: false,
+        });
+        const body0 = (rpc.ok && Array.isArray(rpc.data)) ? rpc.data[0] : rpc.data;
+        const result = (body0 && typeof body0 === 'object' && 'gov_confirm_suspected_sale' in body0)
+          ? body0.gov_confirm_suspected_sale : body0;
+        if (!rpc.ok || !result || result.ok !== true) {
+          await recordEffectFailure({ sale_recorded: false, rpc: result || rpc.data });
+          return res.status(502).json({ error: 'confirm_sale_not_applied', detail: result || rpc.data });
+        }
+        await record('confirm_sale', 'decided',
+          { sale_id: result.sale_id || null, sold_price: price, sale_date: saleDate },
+          { sale_recorded: true, sale_id: result.sale_id || null, already_exists: result.already_exists || false });
+        return res.status(200).json({ ok: true, verdict: 'confirm_sale', sale_id: result.sale_id || null,
+          already_exists: result.already_exists || false });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'trace_unrecorded_sale',
+          title: 'Trace suspected unrecorded sale: ' + (c.address || c.property_id || ''),
+          instructions: 'Decision Center (R53): ' + (c.signal_source || 'ownership change') + ' on gov property '
+            + (c.property_id || '') + ' — "' + (c.suspected_grantor || '') + '" → "' + (c.suspected_grantee || '')
+            + '" around ' + (c.suspected_sale_date || '?') + '. Find the sale price/date/buyer (deed, RCA, broker).' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });

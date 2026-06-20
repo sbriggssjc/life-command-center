@@ -1467,6 +1467,7 @@ async function renderReviewConsolePage() {
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
     { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
     { dt: 'owner_source_conflict', label: 'Owner vs deed — who took title', open: "renderFederatedLane('owner_source_conflict')" },
+    { dt: 'suspected_sale', label: 'Suspected unrecorded sales', open: "renderFederatedLane('suspected_sale')" },
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
@@ -2022,6 +2023,8 @@ const _DC_FED_META = {
     intro: 'A closed sale is the next BD action, value-ranked by sale price. Nurture the seller (past/known owner — seed a relationship cadence, never auto-send), open the new-owner relationship (the buyer is a future seller; if a registered buyer parent, use the P-BUYER path), pursue the cohort fan-out (same-owner / recent-buyer / geographic neighbors), flag a sale-leaseback advisory angle, or dismiss. Each verdict marks the event processed.' },
   owner_source_conflict: { title: 'Owner vs deed — who took title',
     intro: 'The recorded deed grantee (legal title) disagrees with the recorded owner (gov + dia), value-ranked by rent. Accept the deed (it wins through the priority gate; true owner re-resolves), clear a broker-as-owner, keep the current owner (a legit parent-vs-SPE), or research. spe_vs_parent is excluded (default keep).' },
+  suspected_sale: { title: 'Suspected unrecorded sales',
+    intro: 'An ownership CHANGE we never recorded as a sale (gov), value-ranked by rent — a NEW GSA lessor with no recorded sale, or a deed grantee that disagrees with the prior owner with no recorded sale. Each is a LEAD, not a fact: confirm the sale (you supply the price — it writes a real sales row, cap rate computes), mark “not a sale” (refinance / name correction — stops asking), or send to research to find the price/date/buyer. We never fabricate a price.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2203,6 +2206,22 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_cohort\')">Pursue cohort →</button>'
       + (slb ? '<button class="q-action" onclick="dcFed(' + i + ',\'flag_sale_leaseback\')">Flag sale-leaseback</button>' : '')
       + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>';
+  } else if (_dcFedType === 'suspected_sale') {
+    const rent = _fedMoney(c.annual_rent);
+    const sig = c.signal_source === 'gsa_lessor_change' ? 'GSA lessor changed'
+      : c.signal_source === 'deed_conflict' ? 'deed ≠ prior owner' : (c.signal_source || '');
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">gov</span>'
+      + '<span class="q-badge type">' + esc(sig) + '</span>'
+      + (rent ? '<span class="q-badge pri-high">' + rent + ' rent</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + ' · property ' + esc(String(c.property_id)) + '</div>'
+      + '<div class="q-item-meta">Was: <b>' + esc(c.suspected_grantor || '?') + '</b></div>'
+      + '<div class="q-item-meta">Now: <b>' + esc(c.suspected_grantee || '?') + '</b>'
+        + (c.suspected_sale_date ? ' · seen ' + esc(String(c.suspected_sale_date)) : '') + '</div>'
+      + '<div class="q-item-meta" style="opacity:.7">Suspected unrecorded sale — confirm only with a real price.</div>';
+    actions = '<button class="q-action primary" onclick="dcConfirmSuspectedSale(' + i + ')">Confirm sale (enter price) →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_a_sale\')">Not a sale</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -2266,6 +2285,33 @@ async function dcOwnerParentSet(i) {
   dcFed(i, 'set_parent', { parent_name: name });
 }
 window.dcOwnerParentSet = dcOwnerParentSet;
+
+// R53: confirm a suspected sale → a REAL sales row. The operator MUST supply a
+// price (we never fabricate); the date defaults to when the change was seen.
+async function dcConfirmSuspectedSale(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
+    + '"' + (c.suspected_grantor || '?') + '" → "' + (c.suspected_grantee || '?') + '"';
+  const pv = typeof lccPrompt === 'function'
+    ? await lccPrompt('Confirm this sale.\n\n' + ctx + '\n\nEnter the SALE PRICE (numbers only — we never guess):', '')
+    : (typeof prompt === 'function' ? prompt('Sale price (number):') : '');
+  if (pv == null) return;
+  const price = Number(String(pv).replace(/[^0-9.]/g, ''));
+  if (!isFinite(price) || price < 50000) { if (typeof showToast === 'function') showToast('Enter a real price (≥ $50k)', 'error'); return; }
+  const defDate = c.suspected_sale_date ? String(c.suspected_sale_date).slice(0, 10) : '';
+  const dv = typeof lccPrompt === 'function'
+    ? await lccPrompt('Sale date (YYYY-MM-DD):', defDate)
+    : (typeof prompt === 'function' ? prompt('Sale date (YYYY-MM-DD):', defDate) : defDate);
+  if (dv == null) return;
+  const saleDate = String(dv).trim() || defDate;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) { if (typeof showToast === 'function') showToast('Enter a valid date (YYYY-MM-DD)', 'error'); return; }
+  dcFed(i, 'confirm_sale', {
+    sold_price: price, sale_date: saleDate,
+    buyer: c.suspected_grantee || null, seller: c.suspected_grantor || null,
+  });
+}
+window.dcConfirmSuspectedSale = dcConfirmSuspectedSale;
 
 async function dcFed(i, verdict, payload) {
   const it = _dcFedArr[i]; if (!it) return;
