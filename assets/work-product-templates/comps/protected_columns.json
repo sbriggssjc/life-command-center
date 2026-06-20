@@ -1,0 +1,5 @@
+{
+  "_doc": "Formula-protected comp columns (Scott, 2026-06-20). The Work-Product Framework E2 chrome restyle (Dialysis src/comps_restyle.py) must NEVER overwrite these columns' values/formulas/number_format — restyle chrome only. Matching is by header-token containment, normalized upper (so 'INITIAL TERM' / 'TERM REM' match 'TERM').",
+  "sales": ["RENT/SF", "CAP RATE", "PRICE/SF", "TERM", "DOM"],
+  "lease": ["RENT/SF", "TERM", "DOM", "EFFECTIVE RENT/SF"]
+}
