@@ -3,6 +3,29 @@
 Generates the Northmarq-branded dialysis lease-comps XLSX template at
 assets/cm-templates/dialysis-lease-comps-template.xlsx.
 
+This is the SINGLE CANONICAL lease-comps template. The property-page
+"Export Lease Comps" button populates this template (detail.js
+_udExportLeaseComps + the detail-lease-comps-fix.js runtime overrides), and
+the Work-Product Framework restyle reads the same canonical output (see
+assets/work-product-templates/comps/README.md). The two legacy
+"Lease Comps Template - Briggs.xlsx" variants were retired in favor of this
+one.
+
+Canonical-merge (2026-06-20):
+  - Merged the three genuinely-useful columns the export lacked
+    (LEASE TYPE, OPTIONS, NOTES) into the deployed dialysis template, keeping
+    every dialysis specific (DISTANCE TO SUBJECT haversine + PATIENTS count)
+    and every ExcelJS-compat fix below. New 26-column layout (A..Z):
+      A # | B TENANT | C OPERATOR | D ADDRESS | E CITY | F ST | G LAND |
+      H BUILT | I RENO | J RBA | K SF LEASED | L OCCUPANCY | M RENT/SF |
+      N CURRENT RENT | O COMM | P EXP | Q INITIAL TERM | R TERM REM |
+      S LEASE TYPE | T EXPENSES | U BUMPS | V OPTIONS | W USER/OWNER |
+      X DISTANCE TO SUBJECT | Y PATIENTS | Z NOTES
+    LEASE TYPE (S), OPTIONS (V), NOTES (Z) are all text "@" and carry NO
+    AVERAGE in the totals row. DISTANCE (was V) and PATIENTS (was W) shifted
+    right to X / Y; their Comps[<name>] AVERAGE refs follow (see avg_formulas
+    + _UD_TABLE_COL_MAP in detail-lease-comps-fix.js, which must stay in sync).
+
 Round 76gn.q fix:
   - Abbreviate three header labels (STATE -> ST, RENOVATED -> RENO,
     COMMENCE -> COMM) to match the existing abbreviated style of RBA /
@@ -65,6 +88,7 @@ Run from repo root:
 from __future__ import annotations
 
 import os
+import shutil
 import zipfile
 from copy import copy
 from pathlib import Path
@@ -93,11 +117,20 @@ BODY_FONT = "Open Sans"
 
 OUT_PATH = Path("assets/cm-templates/dialysis-lease-comps-template.xlsx")
 
+# The Work-Product Framework restyle (Dialysis src/comps_restyle.py) reads the
+# lease-comps template from this path BY FILENAME. Emit the canonical template
+# here too so the framework's lease-comps template IS this single generator
+# output — no separate hand-maintained variant to drift. (Replaces the retired
+# legacy "Lease Comps Template - Briggs.xlsx" variants.)
+FRAMEWORK_OUT_PATH = Path(
+    "assets/work-product-templates/comps/Lease Comps Template - Briggs.xlsx"
+)
+
 COMP_FIRST_DATA_ROW = 8
 COMP_LAST_TEMPLATED_ROW = 40
 COMP_TOTAL_ROW = 60
-LAST_COL_LETTER = "W"
-LAST_COL_INDEX = 23  # column W (1-based)
+LAST_COL_LETTER = "Z"
+LAST_COL_INDEX = 26  # column Z (1-based)
 
 # Header labels intentionally use the abbreviated style established by
 # existing columns (RBA, EXP, RENT/SF, TERM REM). Three labels were
@@ -127,11 +160,17 @@ COLUMNS = [
     ("exp",          "P", "EXP",                   11,    "mmm-yy",                    True),
     ("initTerm",     "Q", "INITIAL TERM",          13,    '0.0" Years"',               True),
     ("termRem",      "R", "TERM REM",              13,    '0.0" Years";"EXPIRED";"-"', True),
-    ("expenses",     "S", "EXPENSES",              13,    "@",                         True),
-    ("bumps",        "T", "BUMPS",                 14,    "@",                         True),
-    ("userOwner",    "U", "USER/OWNER",            12,    "@",                         True),
-    ("distance",     "V", "DISTANCE TO SUBJECT",   16,    '#,##0.0" mi"',              True),
-    ("patientCount", "W", "PATIENTS",              11,    "#,##0",                     True),
+    # Canonical-merge additions: LEASE TYPE (S) / OPTIONS (V) / NOTES (Z) are
+    # text "@" and carry NO AVERAGE. Inserting them shifts EXPENSES/BUMPS/
+    # USER-OWNER/DISTANCE/PATIENTS right (see module docstring).
+    ("leaseType",    "S", "LEASE TYPE",            13,    "@",                         True),
+    ("expenses",     "T", "EXPENSES",              13,    "@",                         True),
+    ("bumps",        "U", "BUMPS",                 14,    "@",                         True),
+    ("options",      "V", "OPTIONS",               20,    "@",                         False),
+    ("userOwner",    "W", "USER/OWNER",            12,    "@",                         True),
+    ("distance",     "X", "DISTANCE TO SUBJECT",   16,    '#,##0.0" mi"',              True),
+    ("patientCount", "Y", "PATIENTS",              11,    "#,##0",                     True),
+    ("notes",        "Z", "NOTES",                 30,    "@",                         False),
 ]
 
 
@@ -238,6 +277,10 @@ def build():
     # If any of these change, update the COLUMNS labels above AND the
     # _UD_TABLE_COL_MAP in detail-lease-comps-fix.js (the runtime hot-patch
     # rewrites Comps[X] to cell ranges before download).
+    # NOTE: LEASE TYPE (S) / OPTIONS (V) / NOTES (Z) are text columns and get
+    # NO AVERAGE. DISTANCE / PATIENTS shifted to X / Y under the canonical
+    # merge — keep these letters in sync with _UD_TABLE_COL_MAP in
+    # detail-lease-comps-fix.js.
     avg_formulas = {
         "G": '=IFERROR(SUBTOTAL(101,Comps[LAND]),"")',
         "H": '=IFERROR(SUBTOTAL(101,Comps[BUILT]),"")',
@@ -249,8 +292,8 @@ def build():
         "N": '=IFERROR(AVERAGE(Comps[CURRENT RENT]),"")',
         "Q": '=IFERROR(SUBTOTAL(101,Comps[INITIAL TERM]),"")',
         "R": '=IFERROR(SUBTOTAL(101,Comps[TERM REM]),"")',
-        "V": '=IFERROR(AVERAGE(Comps[DISTANCE TO SUBJECT]),"")',
-        "W": '=IFERROR(AVERAGE(Comps[PATIENTS]),"")',
+        "X": '=IFERROR(AVERAGE(Comps[DISTANCE TO SUBJECT]),"")',
+        "Y": '=IFERROR(AVERAGE(Comps[PATIENTS]),"")',
     }
     fmt_by_letter = {letter: fmt for _, letter, _l, _w, fmt, _c in COLUMNS}
     for letter, formula in avg_formulas.items():
@@ -302,6 +345,12 @@ def build():
     wb.save(OUT_PATH)
     _patch_rels_paths(OUT_PATH)
     print(f"wrote {OUT_PATH} ({OUT_PATH.stat().st_size} bytes)")
+
+    # Mirror the canonical output to the Work-Product Framework comps folder so
+    # the framework template never drifts from the deployed export template.
+    FRAMEWORK_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(OUT_PATH, FRAMEWORK_OUT_PATH)
+    print(f"wrote {FRAMEWORK_OUT_PATH} ({FRAMEWORK_OUT_PATH.stat().st_size} bytes)")
 
 
 def _patch_rels_paths(xlsx_path: Path) -> None:

@@ -1,5 +1,5 @@
 {
-  "_doc": "Formula-protected comp columns (Scott, 2026-06-20). The Work-Product Framework E2 chrome restyle (Dialysis src/comps_restyle.py) must NEVER overwrite these columns' values/formulas/number_format — restyle chrome only. Matching is by header-token containment, normalized upper (so 'INITIAL TERM' / 'TERM REM' match 'TERM').",
+  "_doc": "Formula-protected comp columns (Scott, 2026-06-20). The Work-Product Framework E2 chrome restyle (Dialysis src/comps_restyle.py) must NEVER overwrite these columns' values/formulas/number_format — restyle chrome only. Matching is by header-token containment, normalized upper (so 'INITIAL TERM' / 'TERM REM' match 'TERM'). The canonical lease-comps template is the deployed dialysis export (scripts/build_lease_comps_template.py output, 26 cols A..Z). The canonical-merge text columns LEASE TYPE / OPTIONS / NOTES are deliberately NOT formula-protected (free text, no derived value).",
   "sales": ["RENT/SF", "CAP RATE", "PRICE/SF", "TERM", "DOM"],
   "lease": ["RENT/SF", "TERM", "DOM", "EFFECTIVE RENT/SF"]
 }
