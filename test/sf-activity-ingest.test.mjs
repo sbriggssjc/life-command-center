@@ -244,7 +244,13 @@ describe('processSfActivityBatch (Unit 2)', () => {
 // the activity skip_cadence_advance (so the SQL trigger doesn't also advance),
 // resolves the cadence, and advances it via the single JS advance owner.
 
-import { isInboundReply } from '../api/_handlers/sf-activity-ingest.js';
+import {
+  isInboundReply,
+  sfRecordKind,
+  resolveSfOccurredAt,
+  normalizeSfRecord,
+  tagBulkCompleted,
+} from '../api/_handlers/sf-activity-ingest.js';
 
 describe('isInboundReply (R24 Unit 2)', () => {
   it('detects reply prefixes and explicit inbound flags on email only', () => {
@@ -320,5 +326,139 @@ describe('processSfActivityBatch reply capture (R24 Unit 2)', () => {
     assert.equal(advanceCalls.length, 0, 'outbound email is not a reply advance');
     assert.ok(!calls[0].metadata.is_reply, 'no reply tag on outbound');
     assert.ok(!('skip_cadence_advance' in calls[0].metadata), 'trigger still owns outbound advance');
+  });
+});
+
+// ===========================================================================
+// NBT Phase 2 — Tasks of all statuses (Unit 1) + Events (Unit 2)
+// ===========================================================================
+
+describe('sfRecordKind (NBT Phase 2 Unit 2)', () => {
+  it('classifies an explicit Event sObject (REST attributes / discriminator)', () => {
+    assert.equal(sfRecordKind({ attributes: { type: 'Event' }, Subject: 'Tour' }), 'event');
+    assert.equal(sfRecordKind({ sobject: 'Event' }), 'event');
+    assert.equal(sfRecordKind({ Type: 'Event' }), 'event');
+  });
+  it('classifies an Event by its field shape (StartDateTime, no Status/IsClosed)', () => {
+    assert.equal(sfRecordKind({ Id: 'e1', StartDateTime: '2026-06-10T15:00:00Z', Subject: 'RE: Mtg' }), 'event');
+    assert.equal(sfRecordKind({ Id: 'e2', DurationInMinutes: 30 }), 'event');
+    assert.equal(sfRecordKind({ Id: 'e3', EventSubtype: 'Email' }), 'event');
+  });
+  it('defaults to task for canonical Task shapes (type is the channel, not the object)', () => {
+    assert.equal(sfRecordKind({ sf_id: 'a1', type: 'Call' }), 'task');
+    assert.equal(sfRecordKind({ Id: 't1', TaskSubtype: 'Call' }), 'task');
+    assert.equal(sfRecordKind({ Id: 't2', Status: 'Completed', IsClosed: true }), 'task');
+    // a Task that also has StartDateTime-shaped noise but a Status stays a task
+    assert.equal(sfRecordKind({ Id: 't3', StartDateTime: 'x', Status: 'Open' }), 'task');
+  });
+});
+
+describe('resolveSfOccurredAt (NBT Phase 2)', () => {
+  it('anchors an Event on StartDateTime (then ActivityDate, then CreatedDate)', () => {
+    assert.equal(resolveSfOccurredAt({ attributes: { type: 'Event' }, StartDateTime: '2026-06-10T15:00:00Z', ActivityDate: '2026-06-10' }), '2026-06-10T15:00:00Z');
+    assert.equal(resolveSfOccurredAt({ attributes: { type: 'Event' }, ActivityDate: '2026-06-11' }), '2026-06-11');
+    assert.equal(resolveSfOccurredAt({ attributes: { type: 'Event' }, CreatedDate: '2026-06-12T09:00:00Z' }), '2026-06-12T09:00:00Z');
+  });
+  it('anchors a Task on ActivityDate then CreatedDate', () => {
+    assert.equal(resolveSfOccurredAt({ Id: 't', TaskSubtype: 'Call', ActivityDate: '2026-06-01' }), '2026-06-01');
+    assert.equal(resolveSfOccurredAt({ Id: 't', Status: 'Completed', CreatedDate: '2026-05-01T00:00:00Z' }), '2026-05-01T00:00:00Z');
+  });
+});
+
+describe('processSfActivityBatch — completed Tasks of all statuses (Unit 1)', () => {
+  const ctx = { workspaceId: 'ws-1', actorId: 'user-1' };
+
+  it('ingests a COMPLETED deal-linked Task (never dropped) and captures soft completion', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { Id: 'c1', TaskSubtype: 'Call', Subject: 'Discussed disposition', WhoId: '003aaa', WhatId: '001bbb',
+        Status: 'Completed', IsClosed: true, ActivityDate: '2026-04-01',
+        CompletedDateTime: '2026-04-01T18:00:00Z' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+
+    assert.equal(out.inserted, 1, 'a completed Task is the prospecting record, never dropped');
+    assert.equal(calls[0].category, 'call');
+    assert.equal(calls[0].entityId, 'ent-contact-1', 'WhoId contact resolved');
+    assert.equal(calls[0].metadata.resolved_via, 'contact');
+    assert.equal(calls[0].metadata.sf_status, 'Completed');
+    assert.equal(calls[0].metadata.sf_is_closed, true, 'completion captured as a soft signal');
+    assert.equal(calls[0].metadata.sf_completed_at, '2026-04-01T18:00:00Z');
+    assert.ok(!calls[0].metadata.is_reply, 'completion is never treated as "responded"');
+    assert.ok(!('skip_cadence_advance' in calls[0].metadata), 'the trigger still owns the advance');
+  });
+
+  it('ingests a STANDALONE (deal-unlinked) completed Task via WhoId, null WhatId tolerated', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { sf_id: 'c2', type: 'Email', subject: 'Sent the OM', who_id: '003aaa',
+        status: 'Completed', is_closed: true },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].metadata.what_id, null, 'standalone Task has no deal link');
+    assert.equal(calls[0].metadata.resolved_via, 'contact');
+    assert.equal(calls[0].metadata.sf_is_closed, true);
+  });
+
+  it('flags an admin bulk auto-completion (same modifier + LastModifiedDate across many)', async () => {
+    const { fn, calls } = captureAppend();
+    const bulk = [];
+    for (let i = 0; i < 6; i++) {
+      bulk.push({ Id: `b${i}`, TaskSubtype: 'Call', Subject: `Old task ${i}`, WhoId: '003aaa',
+        Status: 'Completed', IsClosed: true,
+        LastModifiedById: '005ADMIN', LastModifiedDate: '2026-06-20T03:00:00Z' });
+    }
+    // a control row: closed but a DIFFERENT modify signature → not bulk
+    bulk.push({ Id: 'solo', TaskSubtype: 'Call', Subject: 'Real call', WhoId: '003aaa',
+      Status: 'Completed', IsClosed: true,
+      LastModifiedById: '005SCOTT', LastModifiedDate: '2026-06-19T20:11:00Z' });
+
+    const out = await processSfActivityBatch(bulk, ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+    assert.equal(out.inserted, 7);
+    const bulkFlags = calls.filter(c => c.metadata.bulk_completed === true);
+    assert.equal(bulkFlags.length, 6, 'the 6 identically-stamped rows are flagged');
+    const solo = calls.find(c => c.metadata.sf_id === 'solo');
+    assert.ok(!('bulk_completed' in solo.metadata), 'the distinct real touch is NOT flagged');
+  });
+
+  it('does not flag a small set of completed tasks below the bulk threshold', async () => {
+    const items = [0, 1].map(i => normalizeSfRecord({
+      Id: `s${i}`, TaskSubtype: 'Call', Status: 'Completed', IsClosed: true,
+      LastModifiedById: '005ADMIN', LastModifiedDate: '2026-06-20T03:00:00Z',
+    }));
+    tagBulkCompleted(items);
+    assert.equal(items.every(it => it.bulkCompleted === false), true);
+  });
+});
+
+describe('processSfActivityBatch — Events (Unit 2)', () => {
+  const ctx = { workspaceId: 'ws-1', actorId: 'user-1' };
+
+  it('ingests an Event as a meeting, anchored on StartDateTime, never the Task subject-inference', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { Id: 'ev1', attributes: { type: 'Event' }, Subject: 'RE: site tour', WhoId: '003aaa', WhatId: '001bbb',
+        StartDateTime: '2026-06-10T15:00:00Z', Description: 'walkthrough' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].category, 'meeting', 'an Event is a meeting, even with an "RE:" subject');
+    assert.equal(calls[0].occurredAt, '2026-06-10T15:00:00Z', 'anchored on StartDateTime, not now()');
+    assert.equal(calls[0].entityId, 'ent-contact-1', 'WhoId contact resolved');
+    assert.equal(calls[0].metadata.sf_kind, 'event');
+    assert.ok(!calls[0].metadata.is_reply, 'a meeting is never an inbound email reply');
+  });
+
+  it('resolves an Event via WhatId when WhoId is absent and falls back to ActivityDate', async () => {
+    const { fn, calls } = captureAppend();
+    const out = await processSfActivityBatch([
+      { Id: 'ev2', sobject: 'Event', Subject: 'Lender call', WhatId: '001bbb', ActivityDate: '2026-06-11' },
+    ], ctx, { findEntityBySfId: fakeFindEntity, appendActivityEvent: fn });
+
+    assert.equal(out.inserted, 1);
+    assert.equal(calls[0].category, 'meeting');
+    assert.equal(calls[0].occurredAt, '2026-06-11', 'StartDateTime absent → ActivityDate');
+    assert.equal(calls[0].entityId, 'ent-account-1');
+    assert.equal(calls[0].metadata.resolved_via, 'account');
   });
 });
