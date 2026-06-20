@@ -852,6 +852,13 @@ const FEDERATED_DECISION_TYPES = new Set([
   // never fabricated); not_a_sale records + stops asking; research queues a
   // trace_unrecorded_sale task. A suspected sale is a LEAD, never auto-recorded.
   'suspected_sale',
+  // R54: a loan maturing within 24mo (or already matured) is the classic CRE BD
+  // trigger — the owner must refinance or sell. Lists gov+dia
+  // v_loan_maturity_watch (value-ranked by rent; distressed loans rank first).
+  // pursue_refi / pursue_disposition spawn an owner-outreach research signal;
+  // not_relevant records + stops asking; research spawns a generic task. No
+  // domain write — this is a BD signal, never a fact.
+  'loan_maturity',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -873,6 +880,7 @@ function federatedSubjectRef(type, s) {
     case 'owner_source_conflict': return (s.domain && s.property_id != null) ? 'osrc:' + s.domain + ':' + s.property_id : null;
     case 'suspected_sale': return (s.domain && s.property_id != null && s.signal_source)
                                   ? 'susp:' + s.domain + ':' + s.property_id + ':' + s.signal_source : null;
+    case 'loan_maturity': return (s.domain && s.property_id != null) ? 'loanmat:' + s.domain + ':' + s.property_id : null;
   }
   return null;
 }
@@ -1048,6 +1056,49 @@ async function fetchFederatedSource(type, cap) {
       },
     }));
     out.total = await domCnt('gov', 'v_suspected_sale');
+    return out;
+  }
+
+  if (type === 'loan_maturity') {
+    // R54: gov+dia v_loan_maturity_watch — a property whose CURRENT debt matures
+    // within 24mo (or is matured). Value-ranked by rent; a DISTRESSED loan
+    // (watchlist / special_servicing / delinquent / DSCR<1) ranks at the TOP
+    // (distress is empty today — surfaces when the CMBS Performance data lands).
+    const commonSel = 'domain,property_id,loan_id,maturity_date,months_to_maturity,maturity_band,'
+      + 'loan_balance,loan_amount,annual_rent,is_cmbs,servicer,special_servicer,watchlist,'
+      + 'special_servicing,num_delinquent,dscr,is_distressed,distress_reason,'
+      + 'owner_name,true_owner_name,recorded_owner_name,address,city,state';
+    const fetchDom = async (dom, extraSel) => {
+      const r = await domainQuery(dom, 'GET', 'v_loan_maturity_watch?select=' + commonSel + extraSel
+        + '&order=is_distressed.desc,annual_rent.desc.nullslast,maturity_date.asc&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'loanmat:' + dom + ':' + row.property_id,
+        subject_domain: dom, subject_property_id: String(row.property_id), subject_entity_id: null,
+        // distressed first, then by rent (matches the view ORDER BY).
+        rank_value: (row.is_distressed === true ? 1e12 : 0) + (Number(row.annual_rent) || 0),
+        context: {
+          domain: dom, property_id: row.property_id, loan_id: row.loan_id,
+          maturity_date: row.maturity_date, months_to_maturity: row.months_to_maturity,
+          maturity_band: row.maturity_band, loan_balance: row.loan_balance,
+          loan_amount: row.loan_amount, annual_rent: row.annual_rent,
+          is_cmbs: row.is_cmbs, servicer: row.servicer, special_servicer: row.special_servicer,
+          is_distressed: row.is_distressed === true, distress_reason: row.distress_reason,
+          owner_name: row.owner_name, true_owner_name: row.true_owner_name,
+          recorded_owner_name: row.recorded_owner_name,
+          address: row.address, city: row.city, state: row.state,
+          agency: row.agency || null, tenant: row.tenant || null, operator: row.operator || null,
+        },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov', ',agency'),
+      fetchDom('dia', ',tenant,operator'),
+      domCnt('gov', 'v_loan_maturity_watch'),
+      domCnt('dia', 'v_loan_maturity_watch'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
     return out;
   }
 
@@ -2398,6 +2449,48 @@ async function handleDecisionVerdict(req, res) {
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
         return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- loan_maturity (R54, federated) ------------------------------------
+    // A maturing/matured loan is a BD trigger, not a fact. The two BD plays —
+    // pursue_refi (advisory/refi outreach on the owner) and pursue_disposition
+    // (the owner may sell) — each spawn an owner-outreach research signal routed
+    // to the resolved owner. not_relevant records + stops asking; research
+    // queues a generic task. No domain write. Effect-first / outcome-truthful.
+    if (decision.decision_type === 'loan_maturity') {
+      const who = c.owner_name || c.true_owner_name || c.recorded_owner_name || ('property ' + (c.property_id || ''));
+      const loc = (c.address || '') + (c.city ? ', ' + c.city : '') + (c.state ? ' ' + c.state : '');
+      const matured = typeof c.months_to_maturity === 'number' && c.months_to_maturity < 0;
+      const when = c.maturity_date
+        ? (matured ? 'matured ' + c.maturity_date : 'matures ' + c.maturity_date)
+        : (c.maturity_band || 'maturing');
+      const bal = (c.loan_balance != null) ? ' (loan ~$' + Math.round(Number(c.loan_balance)).toLocaleString() + ')' : '';
+      if (verdict === 'not_relevant') {
+        await record('not_relevant', 'decided', null,
+          { disposition: 'not_relevant', maturity_band: c.maturity_band || null });
+        return res.status(200).json({ ok: true, verdict: 'not_relevant' });
+      }
+      if (verdict === 'pursue_refi' || verdict === 'pursue_disposition' || verdict === 'research') {
+        const rtype = verdict === 'pursue_refi' ? 'loan_maturity_refi'
+          : verdict === 'pursue_disposition' ? 'loan_maturity_disposition'
+          : 'loan_maturity_research';
+        const play = verdict === 'pursue_refi' ? 'Refinance/advisory outreach'
+          : verdict === 'pursue_disposition' ? 'Disposition outreach (owner may sell)'
+          : 'Research the loan maturity';
+        const rt = await createResearchTask({ research_type: rtype,
+          title: play + ': ' + who + ' — ' + (loc || ('property ' + (c.property_id || ''))),
+          instructions: 'Decision Center (R54): ' + (c.domain || '') + ' property ' + (c.property_id || '')
+            + ' — loan ' + when + bal + '. Owner "' + who + '". '
+            + (c.is_distressed ? 'DISTRESSED (' + (c.distress_reason || 'flagged') + '). ' : '')
+            + (verdict === 'pursue_refi' ? 'Reach the owner re refinance/advisory before the maturity wall.'
+               : verdict === 'pursue_disposition' ? 'Reach the owner — a maturity wall often forces a sale.'
+               : 'Confirm the current debt, lender, and the owner’s refi vs sell intent.') });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record(verdict, 'decided', payload, { research_task: true, research_task_id: rid, research_type: rtype });
+        return res.status(200).json({ ok: true, verdict, research_task_id: rid });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }

@@ -194,6 +194,43 @@ describe('assemblePropertyPacket — R50 nearby-sales comps fill', () => {
   });
 });
 
+// R54 — the packet surfaces a loan_maturity BD signal when the property's
+// current debt is maturing within 24mo / matured (v_loan_maturity_watch returns
+// a row); otherwise it is null (no row), never a throw.
+describe('assemblePropertyPacket — R54 loan-maturity signal', () => {
+  const baseOps = () => makeOps({
+    entity: { id: ENTITY_ID, name: 'Gov Office', entity_type: 'asset', workspace_id: 'ws-1' },
+    identities: [{ source_system: 'gov', source_type: 'asset', external_id: '14239' }],
+  });
+
+  it('surfaces loan_maturity when the watch view returns a row', async () => {
+    const domainGet = makeDomainGet({
+      properties: [{ property_id: 14239, recorded_owner_id: 1, true_owner_id: 2 }],
+      recorded_owners: [{ recorded_owner_id: 1, name: 'Affinius Capital' }],
+      true_owners: [{ true_owner_id: 2, name: 'USGBF NSF LLC' }],
+      v_loan_maturity_watch: [{
+        maturity_date: '2027-12-01', months_to_maturity: 17, maturity_band: '<=24mo',
+        loan_balance: 123000000, is_distressed: false, distress_reason: null, servicer: 'KeyBank',
+      }],
+    });
+    const { payload } = await assemblePropertyPacket(ENTITY_ID, 'ws-1', { opsQuery: baseOps(), domainGet });
+    assert.ok(payload.loan_maturity);
+    assert.equal(payload.loan_maturity.maturity_band, '<=24mo');
+    assert.equal(payload.loan_maturity.loan_balance, 123000000);
+    assert.equal(payload.loan_maturity.months_to_maturity, 17);
+  });
+
+  it('loan_maturity is null when the property is not on the watch (no row)', async () => {
+    const domainGet = makeDomainGet({
+      properties: [{ property_id: 14239, recorded_owner_id: 1 }],
+      recorded_owners: [{ recorded_owner_id: 1, name: 'Affinius Capital' }],
+      // v_loan_maturity_watch absent -> 404 -> null, no throw
+    });
+    const { payload } = await assemblePropertyPacket(ENTITY_ID, 'ws-1', { opsQuery: baseOps(), domainGet });
+    assert.equal(payload.loan_maturity, null);
+  });
+});
+
 describe('resolveContextPacket — assemble-on-miss (Unit 2)', () => {
   const entity = { id: ENTITY_ID, workspace_id: 'ws-1' };
 

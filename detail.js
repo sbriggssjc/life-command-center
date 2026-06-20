@@ -6282,15 +6282,32 @@ function _udRenderGeoSection(geo, domain) {
   const owners = Array.isArray(geo.nearby_owners) ? geo.nearby_owners : [];
   const sales = Array.isArray(geo.nearby_sales) ? geo.nearby_sales : [];
 
+  // ── R54: loan-maturity BD signal (independent of geocoding) ──
+  let matHtml = '';
+  const m = geo.loan_maturity;
+  if (m && m.maturity_date) {
+    const matured = (typeof m.months_to_maturity === 'number' && m.months_to_maturity < 0);
+    const lbl = matured ? 'Loan MATURED ' + _dt(m.maturity_date)
+      : 'Loan matures ' + _dt(m.maturity_date)
+        + (typeof m.months_to_maturity === 'number' ? ' (' + m.months_to_maturity + ' mo)' : '');
+    const bal = (m.loan_balance != null) ? ' · ' + _money(m.loan_balance) : '';
+    const distress = m.is_distressed ? ' · ⚠ ' + esc(m.distress_reason || 'distressed') : '';
+    matHtml = '<div class="detail-section">' +
+      '<div class="detail-section-title">Loan Maturity — BD trigger</div>' +
+      '<div style="font-size:12px;font-weight:600;color:' + (matured || m.is_distressed ? 'var(--danger,#c0392b)' : 'var(--text)') + '">' +
+      esc(lbl) + bal + distress + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:2px">A maturity wall forces the owner to refinance or sell — work this via the Decision Center “Loan maturities” lane.</div></div>';
+  }
+
   if (!geo.subject_geocoded) {
-    return '<div class="detail-section">' +
+    return matHtml + '<div class="detail-section">' +
       '<div class="detail-section-title">Nearby (geographic)</div>' +
       '<div style="font-size:11px;color:var(--text3)">Subject property is not geocoded — distance-based nearby owners / sales are unavailable for this record. ' +
       'This is the ~' + (domain === 'dia' ? '13.6%' : '3.4%') + ' ungeocoded tail, not an error.</div></div>';
   }
-  if (owners.length === 0 && sales.length === 0) return '';
+  if (owners.length === 0 && sales.length === 0) return matHtml;
 
-  let html = '';
+  let html = matHtml;
 
   // ── Nearby owner cohort ──
   if (owners.length > 0) {
