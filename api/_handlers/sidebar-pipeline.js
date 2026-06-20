@@ -16,7 +16,8 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, isJunkEntityName } from '../_shared/entity-link.js';
+import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
@@ -29,7 +30,7 @@ import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
 // existing after-the-fact provenance recorder (recordCoStarFieldsProvenance)
 // remains in place so the registry still observes every attempted write,
 // but actual UPDATEs are now narrowed to fields the registry approves.
-import { filterByFieldPriority } from '../_shared/field-priority-guard.js';
+import { filterByFieldPriority, shouldWriteField } from '../_shared/field-priority-guard.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 // C9 Phase 2 (2026-05-27): validate sale rows through the ingest contract.
 // NOTE: ingest-contract.js imports isJunkContactName/isFederalOwnerAntiPattern
@@ -2666,6 +2667,26 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
   }
   if (domain === 'government') {
     results.records.deed_records = await upsertGovernmentDeedRecords(entity, metadata, provCollect);
+  }
+
+  // Step 5b4 (R51): propagate the latest deed grantee → recorded_owner.
+  // The recorded deed grantee is the authoritative legal title-holder; push it
+  // onto properties.recorded_owner through the field-priority gate so a fresh
+  // deed self-corrects a stale / broker-as-owner recorded_owner. Best-effort —
+  // the priority gate protects manual overrides, the guards reject brokerages /
+  // junk, and a failure here never blocks the capture.
+  if (propertyId) {
+    try {
+      const latestDeed = latestDeedGranteeFromMetadata(metadata);
+      if (latestDeed?.grantee) {
+        results.records.deed_owner_propagation = await propagateDeedGranteeToOwner({
+          domain, propertyId, granteeName: latestDeed.grantee,
+          entity, workspaceId, sourceRunId: null, confidence: 0.9,
+        });
+      }
+    } catch (err) {
+      console.warn('[R51:propagateDeedGranteeToOwner] non-fatal:', err?.message || err);
+    }
   }
 
   // Step 5c: Upsert loans
@@ -8013,6 +8034,158 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
     'reconcilePropertyOwnership'
   );
   return { updated: true, patch };
+}
+
+// ── R51: deed grantee → recorded_owner forward propagation ──────────────────
+// The recorded deed grantee is the authoritative "who took title" (legal
+// title). When a NEW grantee that passes the owner guards is captured, push it
+// onto properties.recorded_owner THROUGH the field-priority gate
+// (source='recorded_deed', priority 3) so it OUTRANKS the costar/county
+// aggregators (50/60/10) but can NEVER clobber a manual_resolution / manual_edit
+// (priority 1). true_owner is NEVER written directly here — it is the
+// R47-resolved parent and re-resolves from the new recorded_owner via the
+// owner-facts mirror sync / R47 cron. Used by the deed-writer path (forward,
+// new captures) AND the R51 Unit-3 high-confidence auto-fix worker.
+
+// Reusable guard: a brokerage / junk / federal-antipattern / deal-string
+// grantee must NEVER become the recorded owner. Reuses the same write-time
+// guards the entity graph and contact pipeline use.
+export function granteePassesOwnerGuards(name) {
+  if (!name || typeof name !== 'string') return false;
+  const clean = sanitizeOwnerName(name); // strips " by <Brokerage>" suffix
+  if (!clean || clean.replace(/[^a-z0-9]/gi, '').length < 4) return false;
+  if (isCompetitorBroker(clean)) return false;        // a brokerage is never the owner
+  if (isFederalOwnerAntiPattern(clean)) return false; // personal-property bleed-through
+  if (isJunkEntityName(clean)) return false;          // structural garbage (org-safe:
+                                                      // does NOT reject firm suffixes)
+  return true;
+}
+
+function ownerNameNorm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const R51_PROP_TARGET_DB    = (domain) => (domain === 'government' ? 'gov_db' : 'dia_db');
+const R51_PROP_TARGET_TABLE = (domain) => (domain === 'government' ? 'gov.properties' : 'dia.properties');
+
+function buildDeedPropagationDeps() {
+  return { domainQuery, domainPatch, shouldWriteField };
+}
+
+// Resolve an existing recorded_owner by normalized name, or create a minimal
+// one. Mirrors upsertDomainOwners' ensureRecordedOwner dedup convention.
+async function resolveOrCreateRecordedOwnerForDeed(domain, cleanName, entity, deps) {
+  const q = deps.domainQuery;
+  const nameCol = domain === 'government' ? 'canonical_name' : 'normalized_name';
+  const norm = cleanName.trim().toLowerCase()
+    .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const look = await q(domain, 'GET',
+    `recorded_owners?${nameCol}=eq.${encodeURIComponent(norm)}` +
+    `&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
+  if (look.ok && Array.isArray(look.data) && look.data.length) {
+    return look.data[0].recorded_owner_id;
+  }
+  const ownerData = stripNulls({ name: cleanName, [nameCol]: norm, state: entity?.state || null });
+  const ins = await q(domain, 'POST', 'recorded_owners', ownerData);
+  if (ins.ok && ins.data) {
+    const created = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+    if (created?.recorded_owner_id) return created.recorded_owner_id;
+  }
+  if (ins.status === 409) {
+    const r2 = await q(domain, 'GET',
+      `recorded_owners?${nameCol}=eq.${encodeURIComponent(norm)}&select=recorded_owner_id&limit=1`);
+    if (r2.ok && r2.data?.length) return r2.data[0].recorded_owner_id;
+  }
+  return null;
+}
+
+export async function propagateDeedGranteeToOwner(args, deps) {
+  deps = deps || buildDeedPropagationDeps();
+  const { domain, propertyId, granteeName, entity = {},
+          source = 'recorded_deed', workspaceId = null,
+          sourceRunId = null, confidence = 0.9 } = args || {};
+  const out = { domain, property_id: propertyId, grantee: granteeName || null,
+                applied: false, decision: null, skipped: null, recorded_owner_id: null };
+  try {
+    if (!domain || !propertyId || !granteeName) { out.skipped = 'missing_input'; return out; }
+    const clean = sanitizeOwnerName(granteeName);
+    if (!clean) { out.skipped = 'empty_after_sanitize'; return out; }
+    if (!granteePassesOwnerGuards(granteeName)) { out.skipped = 'grantee_failed_guards'; return out; }
+
+    // Current property owner.
+    const propRes = await deps.domainQuery(domain, 'GET',
+      `properties?property_id=eq.${propertyId}&select=recorded_owner_id&limit=1`);
+    if (!propRes.ok || !propRes.data?.length) { out.skipped = 'property_not_found'; return out; }
+    const curOwnerId = propRes.data[0].recorded_owner_id;
+    let curName = null;
+    if (curOwnerId) {
+      const r = await deps.domainQuery(domain, 'GET',
+        `recorded_owners?recorded_owner_id=eq.${curOwnerId}&select=name&limit=1`);
+      curName = (r.ok && r.data?.[0]) ? r.data[0].name : null;
+    }
+    if (curName && ownerNameNorm(curName) === ownerNameNorm(clean)) {
+      out.skipped = 'already_current'; out.recorded_owner_id = curOwnerId; return out;
+    }
+
+    const newOwnerId = await resolveOrCreateRecordedOwnerForDeed(domain, clean, entity, deps);
+    if (!newOwnerId) { out.skipped = 'owner_resolve_failed'; return out; }
+    if (curOwnerId && String(curOwnerId) === String(newOwnerId)) {
+      out.skipped = 'already_current'; out.recorded_owner_id = curOwnerId; return out;
+    }
+
+    // Priority gate — recorded_deed(3) beats the aggregators, loses to manual(1).
+    const gate = await deps.shouldWriteField({
+      targetDb: R51_PROP_TARGET_DB(domain), targetTable: R51_PROP_TARGET_TABLE(domain),
+      recordPk: propertyId, fieldName: 'recorded_owner_id', value: newOwnerId,
+      source, sourceRunId, confidence,
+    });
+    out.decision = gate.decision;
+    if (!gate.write) {
+      out.skipped = 'blocked_by_priority'; out.blocked_by = gate.currentSource || null; return out;
+    }
+
+    // Apply: set recorded_owner_id (+ recorded_owner_name on dia, where the
+    // denormalized column exists). Do NOT write true_owner_id (R47 re-resolves).
+    const patch = { recorded_owner_id: newOwnerId };
+    if (domain === 'dialysis') patch.recorded_owner_name = clean;
+    const pr = await deps.domainPatch(domain,
+      `properties?property_id=eq.${propertyId}`, patch, 'propagateDeedGranteeToOwner');
+    if (pr && pr.ok === false) { out.skipped = 'patch_failed'; return out; }
+
+    // Record the recorded_owner_name logical-field provenance too (best-effort).
+    try {
+      await deps.shouldWriteField({
+        targetDb: R51_PROP_TARGET_DB(domain), targetTable: R51_PROP_TARGET_TABLE(domain),
+        recordPk: propertyId, fieldName: 'recorded_owner_name', value: clean,
+        source, sourceRunId, confidence,
+      });
+    } catch (_e) { /* best-effort */ }
+
+    out.applied = true; out.recorded_owner_id = newOwnerId;
+    return out;
+  } catch (err) {
+    out.skipped = 'error'; out.error = err?.message || String(err);
+    return out;
+  }
+}
+
+// Pick the latest deed grantee from captured sales/deeds (non-mortgage, newest
+// recording date), preferring the property's denormalized latest_deed_grantee.
+export function latestDeedGranteeFromMetadata(metadata) {
+  const sales = Array.isArray(metadata?.sales_history) ? metadata.sales_history : [];
+  const deeds = sales.filter(s =>
+    s && s.buyer &&
+    !MORTGAGE_DEED_TYPES.test(String(s.deed_type || s.transaction_type || '')));
+  if (deeds.length === 0) return null;
+  deeds.sort((a, b) => {
+    const ad = new Date(a.recordation_date || a.sale_date || 0).getTime() || 0;
+    const bd = new Date(b.recordation_date || b.sale_date || 0).getTime() || 0;
+    return bd - ad;
+  });
+  return { grantee: deeds[0].buyer, deedDate: deeds[0].recordation_date || deeds[0].sale_date || null };
 }
 
 // ── Step 5d1b: Cross-reference owners against Salesforce ──────────────────
