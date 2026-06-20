@@ -208,6 +208,16 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerContactEnrichTick(req, res);
   }
 
+  // R52 — Salesforce contact writeback (via vercel.json
+  // _route=contact-writeback-tick). GET=dry-run (?summary=1 for coverage) /
+  // POST=drain (gated on SF_CONTACT_WRITEBACK). Pushes emailable LCC persons
+  // missing an SF Contact identity to Salesforce upsert-by-email, value-ranked.
+  // Authenticates internally.
+  if (req.query._route === 'contact-writeback-tick') {
+    const { handleContactWritebackTick } = await import('./_handlers/contact-writeback.js');
+    return handleContactWritebackTick(req, res);
+  }
+
   // Context broker route (via vercel.json _route=context)
   // When edge_context_broker flag is enabled, proxy to Supabase Edge Function
   if (req.query._route === 'context') {
