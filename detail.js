@@ -1258,6 +1258,12 @@ async function _udRenderOperationsAsync(bodyEl) {
       ? await Promise.all(promises)
       : [[], [], [], [], [], [], [], [], [], []];
 
+    // R50 — geographic BD bundle (nearby owners / sales / distance competitors).
+    // Heavy haversine scan stays in the dia DB; soft-fails to null.
+    const _geoPropId = _udCache.ids?.property_id || _udCache.property?.property_id;
+    let _geo = null;
+    if (_geoPropId) { try { _geo = await _udLoadPropertyGeo('dia', _geoPropId); } catch (_e) { _geo = null; } }
+
     _opsExtraCache = {
       medicare_id: clinicId,
       patientHistory: patientHistory || [],
@@ -1270,10 +1276,11 @@ async function _udRenderOperationsAsync(bodyEl) {
       lease: (leaseData || [])[0] || null,
       hours: (hoursData || [])[0] || null,
       competitors: (competitorData || []).filter(c => c.medicare_id !== clinicId),
+      geo: _geo,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [] };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], geo: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -4854,6 +4861,41 @@ function _udTabOperations() {
   html += '</div>'; // end side-by-side grid
 
   // ── COMPETITIVE LANDSCAPE ──
+  // -- NEARBY (geographic): owners + sales cohort (R50) --
+  try { html += _udRenderGeoSection(ext.geo, 'dia'); } catch (_e) { /* additive; never break the tab */ }
+
+  // -- COMPETITIVE LANDSCAPE (R50: distance-ranked; same-county fallback) --
+  const geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isArray(ext.geo.nearby_competitors)) ? ext.geo.nearby_competitors : [];
+  if (geoComps.length > 0) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Competitive Landscape — nearest within ' + ((ext.geo.radius && ext.geo.radius.competitors) || 10) + ' mi</div>';
+    const gOpCounts = {};
+    geoComps.forEach(c => { const op = c.operator || c.chain_canonical || 'Independent'; gOpCounts[op] = (gOpCounts[op] || 0) + 1; });
+    const gOpSummary = Object.entries(gOpCounts).sort((a, b) => b[1] - a[1]).map(([op, ct]) => op + ' (' + ct + ')').join(', ');
+    const gSameOp = geoComps.filter(c => c.same_operator).length;
+    html += '<div style="font-size:12px;color:var(--text3);margin-bottom:6px">' + geoComps.length + ' nearest dialysis facilities · ' + gSameOp + ' same operator (replacement-risk)</div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px"><strong class="t-muted2">Operators:</strong> ' + gOpSummary + '</div>';
+    html += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead style="position:sticky;top:0;background:var(--bg)"><tr style="border-bottom:2px solid var(--s3)">';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Address</th>';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">City</th>';
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Dist</th>';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Operator</th>';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Tenant</th>';
+    html += '</tr></thead><tbody>';
+    geoComps.forEach(c => {
+      html += '<tr style="border-bottom:1px solid var(--s3)">';
+      html += '<td style="padding:4px 8px;white-space:nowrap">' + (c.address || '—') + '</td>';
+      html += '<td style="padding:4px 8px">' + (c.city || '') + (c.state ? ', ' + c.state : '') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (c.distance_miles != null ? Number(c.distance_miles).toFixed(2) + ' mi' : '—') + '</td>';
+      html += '<td style="padding:4px 8px">' + (c.operator || c.chain_canonical || 'Independent') + (c.same_operator ? ' ●' : '') + '</td>';
+      html += '<td style="padding:4px 8px">' + (c.tenant || '—') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    html += '<div style="font-size:10px;color:var(--text3);margin-top:6px">Distance-ranked from the geocoded dialysis book; same-county CMS list is the fallback when the subject is ungeocoded.</div>';
+    html += '</div>';
+  } else {
   const competitors = ext.competitors || [];
   if (competitors.length > 0) {
     html += '<div class="detail-section">';
@@ -4892,6 +4934,7 @@ function _udTabOperations() {
     });
     html += '</tbody></table></div>';
     html += '</div>';
+  }
   }
 
   // ── COMPARATIVE RANKINGS ──
@@ -6191,6 +6234,116 @@ async function _udApiPost(path, body) {
   let data = null; try { data = text ? JSON.parse(text) : null; } catch (_e) { data = { error: text }; }
   if (!res.ok && data && data.ok === undefined) data.ok = false;
   return data;
+}
+
+async function _udApiGet(path) {
+  const headers = {};
+  if (window.LCC_USER && window.LCC_USER.workspace_id) headers['x-lcc-workspace'] = window.LCC_USER.workspace_id;
+  const doFetch = (window.LCC_AUTH && window.LCC_AUTH.apiFetch) ? window.LCC_AUTH.apiFetch : fetch;
+  const res = await doFetch(path, { method: 'GET', headers: headers });
+  const text = await res.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch (_e) { data = { error: text }; }
+  if (!res.ok && data && data.ok === undefined) data.ok = false;
+  return data;
+}
+
+// R50 — load the geographic BD bundle (nearby owners / sales / competitors) for
+// a property from the LCC property_geo endpoint (heavy haversine scan stays in
+// the domain DB). Soft-fails to null so the detail page degrades cleanly.
+async function _udLoadPropertyGeo(domain, propertyId) {
+  if (!domain || !propertyId) return null;
+  const d = (domain === 'gov' || domain === 'government') ? 'gov'
+    : (domain === 'dia' || domain === 'dialysis') ? 'dia' : null;
+  if (!d) return null;
+  try {
+    const data = await _udApiGet('/api/operations?action=property_geo&domain=' + d +
+      '&property_id=' + encodeURIComponent(propertyId));
+    if (data && data.ok) return data;
+  } catch (_e) { /* soft */ }
+  return null;
+}
+
+// R50 — render the nearby-owners + nearby-sales geographic section (shared by
+// the dia operations tab + the gov detail body). Competitors are rendered by
+// each domain's own competitor block (dia switches county->distance). Returns
+// '' when there is nothing geocoded to show.
+function _udRenderGeoSection(geo, domain) {
+  if (!geo) return '';
+  const _money = (x) => (x == null || x === '') ? '—' : '$' + Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const _cap = (x, src) => {
+    if (x == null || x === '') return '—';
+    const pct = (Number(x) * 100).toFixed(2) + '%';
+    return src ? (pct + ' <span style="color:var(--text3);font-size:9px">' + String(src).split(':')[0] + '</span>') : pct;
+  };
+  const _d = (x) => (x == null) ? '—' : Number(x).toFixed(2) + ' mi';
+  const _dt = (x) => { if (!x) return '—'; try { return (typeof _fmtDate === 'function') ? _fmtDate(x) : String(x).slice(0, 10); } catch (_e) { return String(x).slice(0, 10); } };
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  const owners = Array.isArray(geo.nearby_owners) ? geo.nearby_owners : [];
+  const sales = Array.isArray(geo.nearby_sales) ? geo.nearby_sales : [];
+
+  if (!geo.subject_geocoded) {
+    return '<div class="detail-section">' +
+      '<div class="detail-section-title">Nearby (geographic)</div>' +
+      '<div style="font-size:11px;color:var(--text3)">Subject property is not geocoded — distance-based nearby owners / sales are unavailable for this record. ' +
+      'This is the ~' + (domain === 'dia' ? '13.6%' : '3.4%') + ' ungeocoded tail, not an error.</div></div>';
+  }
+  if (owners.length === 0 && sales.length === 0) return '';
+
+  let html = '';
+
+  // ── Nearby owner cohort ──
+  if (owners.length > 0) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Nearby Owner Cohort — same owner within ' + (geo.radius && geo.radius.owners || 25) + ' mi</div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">' + owners.length + ' nearby propert' + (owners.length === 1 ? 'y' : 'ies') + ' held by the same owner — outreach cohort.</div>';
+    html += '<div style="overflow-x:auto;max-height:260px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead style="position:sticky;top:0;background:var(--bg)"><tr style="border-bottom:2px solid var(--s3)">';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3)">Address</th><th style="text-align:left;padding:4px 8px;color:var(--text3)">City</th>';
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3)">Dist</th><th style="text-align:left;padding:4px 8px;color:var(--text3)">Owner</th>';
+    html += domain === 'gov'
+      ? '<th style="text-align:right;padding:4px 8px;color:var(--text3)">Rent</th>'
+      : '<th style="text-align:left;padding:4px 8px;color:var(--text3)">Operator</th>';
+    html += '</tr></thead><tbody>';
+    owners.forEach(o => {
+      html += '<tr style="border-bottom:1px solid var(--s3)">';
+      html += '<td style="padding:4px 8px;white-space:nowrap">' + esc(o.address) + '</td>';
+      html += '<td style="padding:4px 8px">' + esc(o.city) + (o.state ? ', ' + esc(o.state) : '') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + _d(o.distance_miles) + '</td>';
+      html += '<td style="padding:4px 8px">' + esc(o.owner_name) + '</td>';
+      html += domain === 'gov'
+        ? '<td style="padding:4px 8px;text-align:right">' + _money(o.annual_rent) + '</td>'
+        : '<td style="padding:4px 8px">' + esc(o.operator || o.tenant) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // ── Nearby sales (comp / price anchor) ──
+  if (sales.length > 0) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Nearby Sales — within ' + (geo.radius && geo.radius.sales || 10) + ' mi / ' + (geo.radius && geo.radius.months || 36) + ' mo</div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">' + sales.length + ' recent comparable sale' + (sales.length === 1 ? '' : 's') + ' — price / cap-rate anchor.</div>';
+    html += '<div style="overflow-x:auto;max-height:280px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead style="position:sticky;top:0;background:var(--bg)"><tr style="border-bottom:2px solid var(--s3)">';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3)">Address</th><th style="text-align:right;padding:4px 8px;color:var(--text3)">Dist</th>';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3)">Date</th><th style="text-align:right;padding:4px 8px;color:var(--text3)">Price</th>';
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3)">Cap</th><th style="text-align:left;padding:4px 8px;color:var(--text3)">Buyer</th>';
+    html += '</tr></thead><tbody>';
+    sales.forEach(s => {
+      html += '<tr style="border-bottom:1px solid var(--s3)">';
+      html += '<td style="padding:4px 8px;white-space:nowrap">' + esc(s.address) + (s.city ? ' <span style="color:var(--text3)">' + esc(s.city) + (s.state ? ', ' + esc(s.state) : '') + '</span>' : '') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + _d(s.distance_miles) + '</td>';
+      html += '<td style="padding:4px 8px">' + _dt(s.sale_date) + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + _money(s.sold_price) + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + _cap(s.cap_rate, s.cap_rate_source) + '</td>';
+      html += '<td style="padding:4px 8px">' + esc(s.buyer) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  return html;
 }
 
 // Resolve/create the canonical owner entity by creating the lead, and stash

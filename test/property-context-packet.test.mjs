@@ -139,6 +139,61 @@ describe('assemblePropertyPacket — enriched sections', () => {
   });
 });
 
+// R50 — the comps section is filled from the domain <dom>_nearby_sales fn
+// (injectable as deps.domainRpc), closing the long-standing context-packet
+// comps gap. When the fn returns no rows / is unavailable, comps stays the
+// honest [] + fields_missing entry (the ungeocoded-tail answer).
+describe('assemblePropertyPacket — R50 nearby-sales comps fill', () => {
+  const baseOps = () => makeOps({
+    entity: { id: ENTITY_ID, name: 'Gov Office', entity_type: 'asset', workspace_id: 'ws-1' },
+    identities: [{ source_system: 'gov', source_type: 'asset', external_id: '14348' }],
+  });
+  const domainGet = makeDomainGet({
+    properties: [{ property_id: 14348, recorded_owner_id: 1, true_owner_id: 2 }],
+    recorded_owners: [{ recorded_owner_id: 1, name: 'Rec LLC' }],
+    true_owners: [{ true_owner_id: 2, name: 'True Holdings' }],
+  });
+
+  it('maps nearby sales into comps and does NOT record comps as missing', async () => {
+    const domainRpc = async (domain, externalId) => {
+      assert.equal(domain, 'gov');
+      assert.equal(externalId, '14348');
+      return { ok: true, data: [
+        { property_id: 3734, sale_id: 'uuid-1', address: '100 Main', city: 'Arlington', state: 'VA',
+          distance_miles: 7.41, sale_date: '2026-03-01', sold_price: 12000000, sold_price_psf: 450,
+          cap_rate: 0.0817, cap_rate_source: 'cap_rate_history:high', buyer: 'NGP', seller: 'Boyd' },
+      ] };
+    };
+    const { payload, fieldsMissing } = await assemblePropertyPacket(ENTITY_ID, 'ws-1', {
+      opsQuery: baseOps(), domainGet, domainRpc,
+    });
+    assert.equal(payload.comps.length, 1);
+    assert.equal(payload.comps[0].cap_rate, 0.0817);
+    assert.equal(payload.comps[0].cap_rate_source, 'cap_rate_history:high');
+    assert.equal(payload.comps[0].price, 12000000);
+    assert.equal(payload.comps[0].distance_miles, 7.41);
+    assert.ok(!fieldsMissing.includes('comps'));
+  });
+
+  it('records comps missing when the nearby-sales fn returns no rows (ungeocoded tail)', async () => {
+    const domainRpc = async () => ({ ok: true, data: [] });
+    const { payload, fieldsMissing } = await assemblePropertyPacket(ENTITY_ID, 'ws-1', {
+      opsQuery: baseOps(), domainGet, domainRpc,
+    });
+    assert.deepEqual(payload.comps, []);
+    assert.ok(fieldsMissing.includes('comps'));
+  });
+
+  it('records comps missing (no throw) when the nearby-sales fn errors', async () => {
+    const domainRpc = async () => ({ ok: false, data: [] });
+    const { payload, fieldsMissing } = await assemblePropertyPacket(ENTITY_ID, 'ws-1', {
+      opsQuery: baseOps(), domainGet, domainRpc,
+    });
+    assert.deepEqual(payload.comps, []);
+    assert.ok(fieldsMissing.includes('comps'));
+  });
+});
+
 describe('resolveContextPacket — assemble-on-miss (Unit 2)', () => {
   const entity = { id: ENTITY_ID, workspace_id: 'ws-1' };
 

@@ -248,7 +248,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'cadence_dashboard': return await getCadenceDashboard(req, res, user, workspaceId);
       case 'next_best_touchpoint': return await getNextBestTouchpoint(req, res, user, workspaceId);
       case 'contact_qualify_worklist': return await getContactQualifyWorklist(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist' });
+      case 'property_geo': return await getPropertyGeo(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo' });
     }
   }
 
@@ -784,6 +785,92 @@ async function domainSelect(domain, pathWithQuery) {
   } catch (err) {
     return { ok: false, status: 500, data: null };
   }
+}
+
+// Read-only RPC companion: POST a domain SQL function (rpc/<fn>) with a JSON
+// arg object. Soft-fails to {ok:false,data:[]} so a geospatial section degrades
+// cleanly. Used by the R50 nearby-geo features + the property-context-packet
+// comps fill.
+async function domainRpc(domain, fnName, args = {}) {
+  const isGov = domain === 'gov' || domain === 'government';
+  const baseUrl = isGov ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = isGov ? govSupabaseKey() : diaSupabaseKey();
+  if (!baseUrl || !key) return { ok: false, status: 503, data: [] };
+  try {
+    const resp = await fetch(baseUrl + '/rest/v1/rpc/' + fnName, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(args),
+      signal: AbortSignal.timeout(10000),
+    });
+    const text = await resp.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (_e) { data = null; }
+    if (!resp.ok) return { ok: false, status: resp.status, data: [] };
+    return { ok: true, data: Array.isArray(data) ? data : (data ? [data] : []) };
+  } catch (err) {
+    return { ok: false, status: 500, data: [] };
+  }
+}
+
+// R50 (2026-06-20): geographic BD features for the property detail page.
+// GET ?action=property_geo&domain=gov|dia&property_id=<id>[&radius=&months=&limit=]
+// Heavy haversine scan stays in the domain DB (the <dom>_nearby_* SQL fns);
+// LCC just fans out the three RPCs and reports the geocode-coverage caveat.
+async function getPropertyGeo(req, res, user, workspaceId) {
+  const domainRaw = String(req.query.domain || '').toLowerCase();
+  const domain = (domainRaw === 'gov' || domainRaw === 'government') ? 'gov'
+    : (domainRaw === 'dia' || domainRaw === 'dialysis') ? 'dia' : null;
+  const propertyId = req.query.property_id != null ? String(req.query.property_id).trim() : '';
+  if (!domain) return res.status(400).json({ error: "domain is required ('gov' or 'dia')" });
+  if (!propertyId || !/^\d+$/.test(propertyId)) {
+    return res.status(400).json({ error: 'property_id is required (numeric)' });
+  }
+  const pid = Number(propertyId);
+  const num = (v, d, lo, hi) => {
+    const n = Number(v);
+    return (Number.isFinite(n) && n >= lo && n <= hi) ? n : d;
+  };
+  const ownerRadius = num(req.query.owner_radius, 25, 1, 250);
+  const salesRadius = num(req.query.sales_radius || req.query.radius, 10, 1, 100);
+  const compRadius = num(req.query.comp_radius || req.query.radius, 10, 1, 100);
+  const months = num(req.query.months, 36, 1, 240);
+  const limit = num(req.query.limit, 25, 1, 100);
+  const compLimit = num(req.query.comp_limit, 10, 1, 50);
+
+  const ownerFn = domain === 'gov' ? 'gov_nearby_same_owner' : 'dia_nearby_same_owner';
+  const salesFn = domain === 'gov' ? 'gov_nearby_sales' : 'dia_nearby_sales';
+  const compFn = domain === 'gov' ? 'gov_nearby_competitors' : 'dia_nearby_competitors';
+
+  // Subject geocode probe (drives the honest coverage caveat) + the three fans.
+  const [geoRes, ownersRes, salesRes, compsRes] = await Promise.all([
+    domainSelect(domain, `properties?property_id=eq.${pid}&select=latitude,longitude&limit=1`),
+    domainRpc(domain, ownerFn, { p_property_id: pid, p_radius_miles: ownerRadius, p_limit: limit }),
+    domainRpc(domain, salesFn, { p_property_id: pid, p_radius_miles: salesRadius, p_months_back: months, p_limit: limit }),
+    domainRpc(domain, compFn, { p_property_id: pid, p_radius_miles: compRadius, p_limit: compLimit }),
+  ]);
+
+  const subjRow = (geoRes.ok && Array.isArray(geoRes.data)) ? geoRes.data[0] : null;
+  const subjectGeocoded = !!(subjRow && subjRow.latitude != null && subjRow.longitude != null);
+
+  return res.status(200).json({
+    ok: true,
+    domain,
+    property_id: pid,
+    subject_geocoded: subjectGeocoded,
+    radius: { owners: ownerRadius, sales: salesRadius, competitors: compRadius, months },
+    nearby_owners: ownersRes.ok ? ownersRes.data : [],
+    nearby_sales: salesRes.ok ? salesRes.data : [],
+    nearby_competitors: compsRes.ok ? compsRes.data : [],
+    // When the subject is ungeocoded, the empty sets are the honest answer
+    // (the ~3.4% gov / ~13.6% dia ungeocoded tail) — callers can fall back
+    // (e.g. dia same-county competitors) rather than show "broken".
+    coverage_note: subjectGeocoded ? null : 'subject_not_geocoded',
+  });
 }
 
 // R5 (2026-06-05): does an entity reconcile to a repeat-buyer PARENT? Repeat
@@ -5951,9 +6038,20 @@ function mapDocument(r) {
   };
 }
 
+// R50: bounded nearby-sales pull for the context packet's comps section.
+// Keeps the heavy haversine scan in the domain DB; on a warmish path so it is
+// radius+limit-capped. Soft-fails to [] so a hiccup never breaks the packet.
+async function ctxNearbySales(domain, externalId) {
+  const fn = domain === 'gov' ? 'gov_nearby_sales' : 'dia_nearby_sales';
+  const pid = Number(externalId);
+  if (!Number.isFinite(pid)) return { ok: false, data: [] };
+  return await domainRpc(domain, fn, { p_property_id: pid, p_radius_miles: 10, p_months_back: 36, p_limit: 8 });
+}
+
 export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
   const _ops = deps.opsQuery || opsQuery;
   const _domainGet = deps.domainGet || ctxDomainGet;
+  const _domainRpc = deps.domainRpc || ctxNearbySales;
 
   const sourcesQueried = ['lcc_db'];
   const fieldsMissing = [];
@@ -6109,10 +6207,36 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
     }
   }
 
-  // comps — deferred placeholder (no cheap nearby-comps source on the hot path);
-  // recorded in fields_missing rather than running a heavy geospatial query here.
-  const comps = [];
-  fieldsMissing.push('comps');
+  // comps — R50: nearby recent sales (price/SF + derived cap-rate anchor) from
+  // the domain <dom>_nearby_sales SQL fn, on the existing geocode coverage. The
+  // heavy haversine scan stays in the DB (radius 10mi / 36mo / top 8). Only
+  // available with a resolved domain linkage AND a geocoded subject; otherwise
+  // recorded in fields_missing (the honest ungeocoded-tail answer).
+  let comps = [];
+  if (domain && externalId) {
+    const compRes = await _domainRpc(domain, externalId);
+    if (compRes && compRes.ok && Array.isArray(compRes.data) && compRes.data.length > 0) {
+      comps = compRes.data.map(r => ({
+        property_id: r.property_id ?? null,
+        sale_id: r.sale_id ?? null,
+        address: r.address ?? null,
+        city: r.city ?? null,
+        state: r.state ?? null,
+        distance_miles: r.distance_miles ?? null,
+        sale_date: r.sale_date ?? null,
+        price: r.sold_price ?? null,
+        price_psf: r.sold_price_psf ?? null,
+        cap_rate: r.cap_rate ?? null,
+        cap_rate_source: r.cap_rate_source ?? null,
+        buyer: r.buyer ?? null,
+        seller: r.seller ?? null,
+      }));
+    } else {
+      fieldsMissing.push('comps');
+    }
+  } else {
+    fieldsMissing.push('comps');
+  }
 
   const payload = {
     entity,

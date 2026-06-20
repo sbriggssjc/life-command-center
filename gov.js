@@ -7944,7 +7944,58 @@ function renderOwnershipOverview(record) {
   html += '<button class="gov-btn" onclick="window.open(\'https://www.google.com/maps/search/' + mapQ + '\',\'_blank\')">View on Map</button>';
   html += '</div>';
 
+  // R50 — geographic BD section (nearby owner cohort / nearby sales / geo
+  // competitors). Filled async after render (the heavy haversine scan stays in
+  // the gov DB). Additive; soft-fails to nothing.
+  const _geoPid = record.property_id != null ? record.property_id
+    : (record.matched_property_id != null ? record.matched_property_id : null);
+  if (_geoPid != null && typeof _udLoadPropertyGeo === 'function') {
+    html += '<div id="govGeoSection" data-pid="' + esc(String(_geoPid)) + '" style="margin-top:8px"></div>';
+    setTimeout(function () { try { _govFillGeoSection(_geoPid); } catch (_e) { /* additive */ } }, 0);
+  }
+
   return html;
+}
+
+// R50 — async filler for the gov detail geographic section. Renders the shared
+// nearby owners + nearby sales tables (detail.js _udRenderGeoSection) plus a
+// gov-specific nearest-competitors table (same_agency = concentration peer).
+async function _govFillGeoSection(pid) {
+  let el = document.getElementById('govGeoSection');
+  if (!el || String(el.getAttribute('data-pid')) !== String(pid)) return;
+  let geo = null;
+  try { geo = await _udLoadPropertyGeo('gov', pid); } catch (_e) { geo = null; }
+  el = document.getElementById('govGeoSection');
+  if (!el || String(el.getAttribute('data-pid')) !== String(pid)) return; // detail changed while loading
+  let html = '';
+  try { if (typeof _udRenderGeoSection === 'function') html += _udRenderGeoSection(geo, 'gov'); } catch (_e) { /* additive */ }
+
+  const comps = (geo && geo.subject_geocoded && Array.isArray(geo.nearby_competitors)) ? geo.nearby_competitors : [];
+  if (comps.length > 0) {
+    const sameAg = comps.filter(c => c.same_agency).length;
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Competitive Landscape — nearest gov-leased within ' + ((geo.radius && geo.radius.competitors) || 10) + ' mi</div>';
+    html += '<div style="font-size:12px;color:var(--text3);margin-bottom:8px">' + comps.length + ' nearest gov-leased assets · ' + sameAg + ' same agency (concentration / replacement-risk)</div>';
+    html += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead style="position:sticky;top:0;background:var(--bg)"><tr style="border-bottom:2px solid var(--s3)">';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Address</th>';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">City</th>';
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Dist</th>';
+    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Agency</th>';
+    html += '</tr></thead><tbody>';
+    comps.forEach(c => {
+      html += '<tr style="border-bottom:1px solid var(--s3)">';
+      html += '<td style="padding:4px 8px;white-space:nowrap">' + esc(c.address || '—') + '</td>';
+      html += '<td style="padding:4px 8px">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (c.distance_miles != null ? Number(c.distance_miles).toFixed(2) + ' mi' : '—') + '</td>';
+      html += '<td style="padding:4px 8px">' + esc(c.agency || '—') + (c.same_agency ? ' <span style="color:var(--orange);font-size:9px">●</span>' : '') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  const el2 = document.getElementById('govGeoSection');
+  if (el2 && String(el2.getAttribute('data-pid')) === String(pid)) el2.innerHTML = html;
 }
 
 function renderOwnershipLease(record) {

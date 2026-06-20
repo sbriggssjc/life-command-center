@@ -360,13 +360,13 @@ that haversine ranking is meaningful, not "no comps near this subject":
 
 - **Lease comps export** (the one this round was built for) — already
   uses lat/lng + haversine in `_udExportLeaseComps`.
-- **Nearby owners** (planned) — find all properties owned by the same
-  recorded_owner within N miles of the subject, for outreach lists.
-- **Competitor analysis** (planned) — for a dialysis subject, what are
-  the next 5 nearest dialysis facilities? Useful for tenant
-  concentration / replacement risk.
-- **Nearby sales** (planned) — recently-closed sales_transactions
-  within N miles for a price/SF anchor.
+- **Nearby owners** (BUILT — R50) — `<dom>_nearby_same_owner` finds
+  properties owned by the same owner within N miles, for outreach lists.
+- **Competitor analysis** (BUILT — R50) — `<dom>_nearby_competitors`;
+  dia = nearest dialysis facilities (same_operator = concentration /
+  replacement risk), gov = nearest gov-leased assets (same_agency).
+- **Nearby sales** (BUILT — R50) — `<dom>_nearby_sales`, recent sales
+  within N miles + time window for a price/SF + cap-rate anchor.
 
 Anything that ranks "near this subject" needs a critical mass of
 geocoded comparables. Below ~70% domain coverage, most subjects
@@ -3837,3 +3837,80 @@ contact in the entity-detail Next-Step banner + the Decision Center buyer lane
 (the full "one truth, three renderings"); the no_response/bounce/referral SF-note
 parsers feeding `lcc_apply_contact_feedback` (the mechanism is built, two_way is
 wired).
+
+## R50 — geographic BD features on the existing geocode coverage (2026-06-20)
+
+The geocode investment (Round 76gn) delivered the COVERAGE (gov ~96.6%, dia
+~86.4% lat/lng) but its payoff features were never built — the only consumer of
+lat/lng was the lease-comps export. R50 turns the dormant spatial layer into live
+BD signal: nearby-owner outreach cohorts, nearby-sales comp anchors (filling the
+MCP context-packet comps gap), and distance-based competitor/concentration
+analysis — all on ONE shared haversine primitive, additive + READ-ONLY, wired
+into the property detail page and the agent context layer.
+
+### Domain SQL (gov + dia, applied live + committed)
+One shared `<dom>_haversine_miles` (matches the JS `_udHaversineMiles`,
+R=3958.7613 mi) + one nearest-neighbor primitive `<dom>_nearby_properties`
+(bounding-box prefilter -> haversine, excludes self/archived, ungeocoded subject
+-> EMPTY) reused by the three features:
+- `<dom>_nearby_same_owner` (Unit 1) — same owner (true/recorded owner id or
+  `<dom>_norm_owner_name` fallback) within radius. gov returns annual_rent +
+  agency; dia returns tenant + operator.
+- `<dom>_nearby_sales` (Unit 2) — recent sales within radius + months window.
+  **gov cap rate prefers the derived `cap_rate_history` value** (income_confidence
+  ladder high>medium>low) then ingested `sold_cap_rate`; **dia coalesces**
+  cap_rate_final -> cap_rate -> calculated -> stated and drops
+  `exclude_from_market_metrics`. `cap_rate_source` records which.
+- `<dom>_nearby_competitors` (Unit 3) — gov: nearest gov-leased assets
+  (`same_agency`); dia: nearest dialysis facilities from the geocoded PROPERTIES
+  book (`same_operator`) — **medicare_clinics has 0 geocoded rows** (the geocode
+  cron pulls from properties), so distance ranking is over properties; detail.js
+  keeps same-county CMS as the ungeocoded fallback.
+
+All `SECURITY DEFINER` + `GRANT EXECUTE TO anon, authenticated, service_role`
+(same posture as the `v_*_portfolio` anon views — RLS-protected base tables stay
+protected). Migrations: `government-lease/sql/20260620_gov_r50_geographic_features.sql`,
+`Dialysis/supabase/migrations/20260620_dia_r50_geographic_features.sql`.
+Reversible (DROP FUNCTION -> zero trace). No writes to curated data.
+
+### LCC wiring (`api/operations.js`, ships on Railway redeploy)
+- `domainRpc(domain, fn, args)` — server-side POST to a domain `rpc/<fn>`.
+- `GET /api/operations?action=property_geo&domain=&property_id=` -> `getPropertyGeo`:
+  `{nearby_owners, nearby_sales, nearby_competitors, subject_geocoded, radius}`.
+  Heavy scan stays in the DB; LCC fans out the three RPCs + reports the
+  geocode-coverage caveat (the ~3.4% gov / ~13.6% dia ungeocoded tail -> empty
+  sets + `coverage_note`, the honest answer, not "broken").
+- **`assemblePropertyPacket` comps gap CLOSED** — the long-deferred
+  `fields_missing.push('comps')` placeholder now fills `comps` from
+  `<dom>_nearby_sales` (radius 10mi / 36mo / top 8) when the subject is geocoded;
+  records comps missing only on empty/error. So the property context packet AND
+  the MCP/agent layer now carry nearby comps. (`deps.domainRpc` injectable for
+  tests.)
+
+### UI (`detail.js` + `gov.js`)
+- `_udLoadPropertyGeo` + `_udRenderGeoSection` (shared nearby owners + sales
+  tables). dia operations tab renders the geo cohort and **switches the
+  competitor view from same-county to lat/lng distance**, same-county CMS list as
+  the ungeocoded fallback. gov ownership detail gets an async geo filler
+  (`_govFillGeoSection`) — nearby owner cohort + nearby sales + a NEW
+  nearest-gov-leased competitor table.
+
+### Verified
+SQL spot-checked live on real geocoded subjects (gov Arlington/Bronx — sales,
+competitors, same-owner cohort, cap-rate provenance `cap_rate_history:high/medium`;
+dia clinic — distance competitors with `same_operator`; ungeocoded subject ->
+empty). `test/property-context-packet.test.mjs` +3 (comps fill via injectable
+domainRpc; honest fields_missing on empty/error). `node --check` clean
+(operations.js, detail.js, gov.js); `ls api/*.js | wc -l`=12; full suite
+**1044 pass / 0 fail / 6 skipped**.
+
+### Coverage caveat (reported, not hidden)
+Subjects in the ungeocoded tail (~3.4% gov / ~13.6% dia) or whose radius has no
+geocoded neighbors return empty sets — `subject_geocoded:false` /
+`coverage_note:'subject_not_geocoded'`. dia competitors fall back to same-county.
+
+### Follow-ups (NOT in R50)
+PostGIS/earthdistance + GiST index (not needed at ~12-19k rows/domain — brute
+haversine + the new `idx_<dom>_properties_lat_lng` bbox index suffices);
+owner-cohort -> BD spine outreach-list generation; geo on the Today/queue
+surfaces.
