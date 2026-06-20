@@ -1,0 +1,18 @@
+{
+  "_doc": "Deal-data merge schema (Work-Product Framework §3a). The fields chat fills from the property/deal record so all four deal documents (Buyer LOI, Seller Response, NDA, Valuation Analysis Memo) draft from one deal context on the shared northmarq_letter base (Dialysis src/northmarq_letter.py). All docs are Northmarq-branded; 0 residual Stan Johnson Company branding.",
+  "fields": [
+    "property_tenant", "address", "city", "state", "zip",
+    "purchaser", "seller_of_record",
+    "purchase_price", "cap_rate", "dd_days", "emd_amount", "closing_days",
+    "broker",
+    "recipient_name", "recipient_title", "recipient_company",
+    "recipient_email", "recipient_phone",
+    "date", "expiration_days"
+  ],
+  "broker_default": {
+    "name": "Scott Briggs",
+    "title": "Managing Director, Investment Sales",
+    "company": "Northmarq",
+    "email": "sbriggs@northmarq.com"
+  }
+}
