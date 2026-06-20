@@ -4109,3 +4109,103 @@ sync producer that pushes the current lessor into `recorded_owner` via
 `lcc_merge_field` (the priority slot is registered); auto-reconcile the 428
 deed_lessor_agree_owner_stale via the R51 owner-deed-autofix (gated on
 `DECISION_OWNER_DEED_WINS`); fold the catch-up diff into the recurring schedule.
+
+## R54 — loan maturity (+ distress) as a value-ranked BD trigger (2026-06-20)
+
+A loan maturity is the classic CRE BD trigger — the owner must refinance or sell
+— and we capture it but ignored it. Grounded live: gov 1,500 loans / 372 with a
+`maturity_date`; using **current-debt semantics** (the property's latest-maturing
+loan, so a refinanced property whose newest loan matures >24mo correctly drops
+out) **154 gov properties** have their current debt maturing within 24mo (48
+matured + 106 within) carrying ~$139M annual rent; **dia 18** (thin — dia carries
+far less debt data). R54 turns the dormant debt layer into a value-ranked BD
+signal wired into the operator's surfaces, exactly as R50 lit up the geocode
+layer. gov-focused; dia built in parallel. Additive / read-only — no writes to
+curated data. DB applied live; JS ships on the Railway redeploy.
+
+### Unit 1 — the maturity-watch view (the BD trigger source)
+`v_loan_maturity_watch` (gov `government-lease/sql/20260620_gov_r54_loan_maturity_watch.sql`,
+dia `Dialysis/supabase/migrations/20260620_dia_r54_loan_maturity_watch.sql`) —
+one row per property whose **current debt** (its latest-maturing loan, picked via
+`DISTINCT ON (property_id) ORDER BY maturity_date DESC`) matures within 24mo OR is
+matured. Carries `maturity_date`, `months_to_maturity` (negative = matured — note
+`age()` already returns a negative interval for a past date, so NO sign flip),
+`maturity_band` (matured / <=6mo / <=12mo / <=24mo), `loan_balance`, `annual_rent`
+(gov `gross_rent`; **dia projects the primary lease to CURRENT_DATE via
+`dia_project_rent_at_date`**, the dia rent doctrine), the resolved owner
+(`COALESCE(true,recorded)` = who to call), and the distress columns +
+`is_distressed` / `distress_reason`. `SECURITY INVOKER` views, `GRANT SELECT` to
+anon/authenticated/service_role (names-only, same PII posture as the sibling
+`v_*_portfolio` views). gov excludes archived; dia has no status. Value-ranked
+`ORDER BY is_distressed DESC, maturity_date ASC, rent DESC NULLS LAST`. Verified
+live: gov 154 (12 <=6mo / 10 <=12mo / 84 <=24mo / 48 matured; 103 w/rent, 137
+w/owner), dia 18 (16 w/rent, 18 w/owner); top gov = property 14239 USGBF NSF LLC /
+Affinius Capital, $24M rent / $123M balance, matures 2027-12.
+
+### Unit 2 — surfaced as a value-ranked BD action (the headline)
+- **Decision Center lane** `decision_type='loan_maturity'` (federated — reuses the
+  R7/R51/R53 machinery; no schema, free-form type). `api/admin.js`:
+  `FEDERATED_DECISION_TYPES` + `federatedSubjectRef` (`loanmat:<dom>:<property_id>`)
+  + `fetchFederatedSource` (GET gov+dia `v_loan_maturity_watch`, value-ranked,
+  **distressed first** via `rank_value = is_distressed?1e12:0 + annual_rent`) +
+  verdict dispatch. Verdicts (effect-first / outcome-truthful): **pursue_refi**
+  (refi/advisory outreach research signal on the owner — `research_type
+  loan_maturity_refi`), **pursue_disposition** (owner may sell — `loan_maturity_
+  disposition`), **research** (`loan_maturity_research`), **not_relevant**
+  (record-only → the `lcc_decisions` anti-join stops asking). All outreach
+  verdicts spawn a `research_tasks` row via the existing `createResearchTask`
+  (a failed write 502s + keeps the decision open). **No domain write — a maturity
+  is a BD signal, never a fact** (unlike R53's `confirm_sale`). `ops.js`: lane
+  registration + `_DC_FED_META` intro + `_fedCardHTML` card (maturity badge,
+  distress badge, owner, balance, the 4 verdict buttons).
+- **Property detail + context packet**: `getPropertyGeo` (`action=property_geo`)
+  now also fans `v_loan_maturity_watch?property_id=eq.<id>` and returns
+  `loan_maturity` (null when not on the watch). `assemblePropertyPacket` adds a
+  `loan_maturity` field (MCP/agent layer). `detail.js _udRenderGeoSection`
+  renders a **"Loan Maturity — BD trigger"** banner (independent of geocoding —
+  shows even on ungeocoded / no-comp subjects); `gov.js _govFillGeoSection`
+  reuses `_udRenderGeoSection`, so gov detail inherits it.
+
+### Unit 3 — populate the distress flags (the honest finding: case b, no writer fix)
+Investigated the Round-76ek CMBS loan pipeline end to end. **The writer is already
+correct.** `extension/content/costar.js parseCmbsLoanDetail` captures the distress
+flags from CoStar's CMBS "Performance" section (`num_delinquent` / `special_
+servicing` / `watchlist` / `modification`) and "Contacts" section (`servicer` /
+`special_servicer`); `sidebar-pipeline.js upsertLoanRecords` maps **every** one of
+them into `loans` (through the `field_source_priority` gate). DSCR is captured onto
+the loan **SNAPSHOT** (`snapshot.noi_dscr` → `loan_snapshots`), NOT `loans.dscr` —
+correctly, since DSCR is a point-in-time snapshot metric. Live state: gov
+`watchlist`=0, `special_servicing`=0, `num_delinquent`=0, `dscr`=0;
+`special_servicer`=110 (but that is **deal metadata** — every CMBS loan carries a
+designated special servicer at securitization, performing or not, so the view
+deliberately does NOT treat a bare special_servicer name as distress);
+`loan_snapshots`=**0 rows** (so DSCR is unavailable anywhere). Conclusion: **the
+source rows we have don't carry the Performance-section distress data** (the
+captures so far are the basic loan layout, not the full CMBS Performance/snapshot
+walk) — case (b), documented, **nothing fabricated and no writer change**. When
+richer CMBS Performance captures land, the flags persist (writer, already wired)
+AND the watch's `is_distressed` ranks them at the TOP of the lane (view, already
+wired). So `is_distressed` is FALSE for every current row today — the honest
+state.
+
+### Unit 4 — maturity/leverage grade-factor: DEFERRED (gated, R49 pattern)
+Not built — per the round scope the BD trigger is the value; a maturity/leverage
+signal in the score is a gated R49-style follow-up.
+
+### Verified (headless + live read-only 2026-06-20)
+Views applied live to gov + dia; counts/owner-resolution/sign all confirmed (gov
+154, dia 18; matured `months_to_maturity` negative; top gov USGBF NSF LLC $24M,
+top dia MARKDEY DV LA MIRADA / DaVita matured). Lane source query (exact federated
+column set + ordering) resolves on both DBs. Verdict round-trip at the DB layer
+(`lcc_open_decision('loan_maturity', subject 'loanmat:gov:14239') →
+lcc_record_decision_verdict('pursue_refi','decided') → delete`) — **0 residue**.
+`test/property-context-packet.test.mjs` +2 (packet surfaces `loan_maturity` when
+the watch returns a row; null when absent — no throw). `node --check` clean
+(admin.js, operations.js, ops.js, detail.js, gov.js); `ls api/*.js | wc -l`=12;
+full suite **1140 pass / 0 fail / 6 skipped**.
+
+### Follow-ups (NOT in R54)
+The grade-factor (Unit 4, gated); richer CMBS Performance/snapshot captures to
+populate the distress flags (writer + view already ready); a cron that seeds the
+top maturity-watch rows as decisions (kept list-federated / mint-at-verdict for
+now, anti-bloat).

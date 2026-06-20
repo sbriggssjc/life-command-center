@@ -856,16 +856,20 @@ async function getPropertyGeo(req, res, user, workspaceId) {
   const salesFn = domain === 'gov' ? 'gov_nearby_sales' : 'dia_nearby_sales';
   const compFn = domain === 'gov' ? 'gov_nearby_competitors' : 'dia_nearby_competitors';
 
-  // Subject geocode probe (drives the honest coverage caveat) + the three fans.
-  const [geoRes, ownersRes, salesRes, compsRes] = await Promise.all([
+  // Subject geocode probe (drives the honest coverage caveat) + the three fans
+  // + R54 loan-maturity watch (one row per property when its current debt is
+  // maturing within 24mo / matured; null otherwise — soft, never breaks geo).
+  const [geoRes, ownersRes, salesRes, compsRes, matRes] = await Promise.all([
     domainSelect(domain, `properties?property_id=eq.${pid}&select=latitude,longitude&limit=1`),
     domainRpc(domain, ownerFn, { p_property_id: pid, p_radius_miles: ownerRadius, p_limit: limit }),
     domainRpc(domain, salesFn, { p_property_id: pid, p_radius_miles: salesRadius, p_months_back: months, p_limit: limit }),
     domainRpc(domain, compFn, { p_property_id: pid, p_radius_miles: compRadius, p_limit: compLimit }),
+    domainSelect(domain, `v_loan_maturity_watch?property_id=eq.${pid}&select=maturity_date,months_to_maturity,maturity_band,loan_balance,is_distressed,distress_reason,servicer,special_servicer&limit=1`),
   ]);
 
   const subjRow = (geoRes.ok && Array.isArray(geoRes.data)) ? geoRes.data[0] : null;
   const subjectGeocoded = !!(subjRow && subjRow.latitude != null && subjRow.longitude != null);
+  const loanMaturity = (matRes.ok && Array.isArray(matRes.data) && matRes.data[0]) ? matRes.data[0] : null;
 
   return res.status(200).json({
     ok: true,
@@ -873,6 +877,7 @@ async function getPropertyGeo(req, res, user, workspaceId) {
     property_id: pid,
     subject_geocoded: subjectGeocoded,
     radius: { owners: ownerRadius, sales: salesRadius, competitors: compRadius, months },
+    loan_maturity: loanMaturity,
     nearby_owners: ownersRes.ok ? ownersRes.data : [],
     nearby_sales: salesRes.ok ? salesRes.data : [],
     nearby_competitors: compsRes.ok ? compsRes.data : [],
@@ -6248,6 +6253,16 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
     fieldsMissing.push('comps');
   }
 
+  // R54: loan-maturity BD signal — present only when the property's current debt
+  // matures within 24mo or is matured (else null). Soft-fails; never blocks.
+  let loanMaturity = null;
+  if (domain && externalId) {
+    const mr = await _domainGet(domain,
+      `v_loan_maturity_watch?property_id=eq.${encodeURIComponent(externalId)}` +
+      `&select=maturity_date,months_to_maturity,maturity_band,loan_balance,is_distressed,distress_reason,servicer&limit=1`);
+    if (mr && mr.ok && Array.isArray(mr.data) && mr.data[0]) loanMaturity = mr.data[0];
+  }
+
   const payload = {
     entity,
     lease_data: leaseData,
@@ -6256,6 +6271,7 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
     transactions,
     listings,
     comps,
+    loan_maturity: loanMaturity,
     investment,
     // investment_score kept for backward compatibility with existing consumers.
     investment_score: investment?.score ?? null,
