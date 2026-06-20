@@ -34,21 +34,43 @@ import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/contact-attach.js';
+import { buildDeedParseAdapter, isDeedAdapterConfigured } from '../_shared/deed-signatory.js';
+import { buildSosLookupAdapter, isSosAdapterConfigured } from '../_shared/sos-lookup.js';
+import { buildAddressReverseAdapter, isAddressAdapterConfigured } from '../_shared/address-reverse.js';
 
 const WALL_CLOCK_MS = 20000;
 
-// ---- external enrichment adapters (feature-flagged; free SOS-direct preferred).
-// Unconfigured => clean no-op (`unconfigured`), so the worker drains the
-// attach/drill-through classes today and the external classes light up when an
-// adapter URL is set. The actual per-state SOS scraper / reverse-lookup / deed
-// signature parse are deliberate follow-ups behind these hooks.
+// ---- external enrichment adapters (Slice 4; feature-flagged; free SOS-direct
+// preferred). Slice 3 left these as TODO no-op stubs; Slice 4 wires the real
+// adapters (see _shared/{deed-signatory,sos-lookup,address-reverse}.js). Each
+// still no-ops cleanly (`unconfigured`) when its OWNER_ENRICH_*_URL is unset (or,
+// for SOS, no state parser is enabled yet) — so the worker drains the
+// attach/drill-through classes today and the external classes light up when the
+// webhook + (SOS) a validated per-state parser land post-deploy.
 async function defaultSosLookup() { return { ok: false, reason: 'unconfigured' }; }
 async function defaultAddressLookup() { return { ok: false, reason: 'unconfigured' }; }
 async function defaultDeedParse() { return { ok: false, reason: 'unconfigured' }; }
 
-function isConfiguredSos() { return !!process.env.OWNER_ENRICH_SOS_URL; }
-function isConfiguredAddress() { return !!process.env.OWNER_ENRICH_ADDRESS_URL; }
-function isConfiguredDeed() { return !!process.env.OWNER_ENRICH_DEED_URL; }
+const isConfiguredSos = isSosAdapterConfigured;
+const isConfiguredAddress = isAddressAdapterConfigured;
+const isConfiguredDeed = isDeedAdapterConfigured;
+
+// Thin production fetchers: POST the owner/doc reference to the configured
+// OWNER_ENRICH_*_URL webhook (a Scott-provided PA flow / proxy that performs the
+// egress the worker can't) and return its JSON. DEFERRED: the webhooks, the SOS
+// per-state response parsers, and the dia per-owner context load (state /
+// notice_address / deed source_url) are the post-deploy activation pieces. The
+// adapters no-op without both the URL and a fetcher, so this is inert until then.
+function webhookFetcher(envKey) {
+  const url = process.env[envKey];
+  if (!url) return undefined;
+  return async function postWebhook(...payloadParts) {
+    const body = JSON.stringify({ args: payloadParts });
+    const resp = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+    if (!resp.ok) throw new Error(`${envKey} ${resp.status}`);
+    return await resp.json();
+  };
+}
 
 /**
  * Attach a resolved person to the owner: ensureEntityLink (guards) →
@@ -148,11 +170,15 @@ export async function processOwnerEnrichmentRow(row, deps) {
 }
 
 function buildDeps() {
+  // Real Slice-4 adapters; each no-ops `unconfigured` without its webhook (and,
+  // for SOS, an enabled per-state parser), so unconfigured behavior is identical
+  // to the Slice-3 no-op. The deed adapter's doc fetch is the deferred byte-fetch
+  // (deed CDN / SharePoint); the SOS/address fetchers are the deferred webhooks.
   return {
     ensureEntityLink, linkPersonToEntity, stampContactOnActiveCadence, opsQuery, looksLikePersonName,
-    sosLookup: isConfiguredSos() ? undefined : defaultSosLookup,
-    addressLookup: isConfiguredAddress() ? undefined : defaultAddressLookup,
-    deedParse: isConfiguredDeed() ? undefined : defaultDeedParse,
+    deedParse: buildDeedParseAdapter({ fetchDocText: webhookFetcher('OWNER_ENRICH_DEED_URL') }),
+    sosLookup: buildSosLookupAdapter({ fetch: webhookFetcher('OWNER_ENRICH_SOS_URL') }),
+    addressLookup: buildAddressReverseAdapter({ fetch: webhookFetcher('OWNER_ENRICH_ADDRESS_URL') }),
   };
 }
 

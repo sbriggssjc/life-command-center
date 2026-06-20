@@ -80,6 +80,15 @@ describe('processOwnerEnrichmentRow', () => {
     assert.equal(out.contact_entity_id, 'person-Pat Principal');
   });
 
+  it('contactless + deed signatory resolves a person → attach (source deed)', async () => {
+    const { deps } = recordingDeps({ deedParse: async () => ({ ok: true, person_name: 'Robert Hughes', role: 'manager', authority: 1 }) });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, enrichment_action: 'parse_deed_signatory', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+    assert.equal(out.source, 'deed');
+    assert.equal(out.contact_entity_id, 'person-Robert Hughes');
+  });
+
   it('public_company_ir routes to manual IR (no scraper)', async () => {
     const { deps } = recordingDeps();
     const out = await processOwnerEnrichmentRow(
