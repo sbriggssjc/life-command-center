@@ -344,13 +344,13 @@ that haversine ranking is meaningful, not "no comps near this subject":
 
 - **Lease comps export** (the one this round was built for) — already
   uses lat/lng + haversine in `_udExportLeaseComps`.
-- **Nearby owners** (planned) — find all properties owned by the same
-  recorded_owner within N miles of the subject, for outreach lists.
-- **Competitor analysis** (planned) — for a dialysis subject, what are
-  the next 5 nearest dialysis facilities? Useful for tenant
-  concentration / replacement risk.
-- **Nearby sales** (planned) — recently-closed sales_transactions
-  within N miles for a price/SF anchor.
+- **Nearby owners** (BUILT — R50) — `<dom>_nearby_same_owner` finds
+  properties owned by the same owner within N miles, for outreach lists.
+- **Competitor analysis** (BUILT — R50) — `<dom>_nearby_competitors`;
+  dia = nearest dialysis facilities (same_operator = concentration /
+  replacement risk), gov = nearest gov-leased assets (same_agency).
+- **Nearby sales** (BUILT — R50) — `<dom>_nearby_sales`, recent sales
+  within N miles + time window for a price/SF + cap-rate anchor.
 
 Anything that ranks "near this subject" needs a critical mass of
 geocoded comparables. Below ~70% domain coverage, most subjects
