@@ -26,7 +26,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout }
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
-import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
+import { reconcilePropertyOwnership, propagateDeedGranteeToOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask } from './_shared/salesforce.js';
@@ -135,6 +135,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'decisions':                  return handleDecisionsList(req, res);
     case 'decision-verdict':           return handleDecisionVerdict(req, res);
     case 'decision-sf-search':         return handleDecisionSfSearch(req, res);
+    case 'owner-deed-autofix':         return handleOwnerDeedAutofix(req, res);
     case 'junk-bucket':                return handleJunkBucket(req, res);
     case 'exact-merge':                return handleExactMerge(req, res);
     default:
@@ -837,6 +838,13 @@ const FEDERATED_DECISION_TYPES = new Set([
   // relationship / pursue the cohort fan-out / flag a sale-leaseback / dismiss).
   // The verdict marks the event processed so the queue drains. Never auto-blast.
   'listing_event_action',
+  // R51: the recorded deed grantee (legal title) disagrees with recorded_owner.
+  // Lists v_owner_source_conflict (gov+dia, value-ranked by rent), classified by
+  // conflict_kind. accept_deed / broker_not_owner ride the Unit-2 propagation
+  // (deed wins through the priority gate + R47 re-resolve); keep_current confirms
+  // a legit spe_vs_parent; research spawns a task. spe_vs_parent is excluded from
+  // the lane (default keep).
+  'owner_source_conflict',
 ]);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
@@ -855,6 +863,7 @@ function federatedSubjectRef(type, s) {
     case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
     case 'resolve_owner_parent': return (s.domain && s.cluster_token) ? 'ownerparent:' + s.domain + ':' + s.cluster_token : null;
     case 'listing_event_action': return s.event_id ? 'listevt:' + s.event_id : null;
+    case 'owner_source_conflict': return (s.domain && s.property_id != null) ? 'osrc:' + s.domain + ':' + s.property_id : null;
   }
   return null;
 }
@@ -968,6 +977,42 @@ async function fetchFederatedSource(type, cap) {
       fetchDom('gov'), fetchDom('dia'),
       domCnt('gov', 'v_property_merge_lane'),
       domCnt('dia', 'v_property_merge_lane'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  if (type === 'owner_source_conflict') {
+    // R51: recorded_owner vs the authoritative latest_deed_grantee. spe_vs_parent
+    // is excluded (legit parent-vs-SPE — default keep); the lane is the
+    // deed-wins / broker-as-owner / stale-seller backlog, value-ranked by rent.
+    const sel = 'property_id,recorded_owner_id,recorded_owner_name,latest_deed_grantee,'
+      + 'latest_deed_date,true_owner_name,annual_rent,address,city,state,conflict_kind,'
+      + 'is_broker_owner,grantee_passes_guards,auto_fixable';
+    const fetchDom = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'v_owner_source_conflict?select=' + sel
+        + '&conflict_kind=neq.spe_vs_parent&order=annual_rent.desc.nullslast,property_id&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'osrc:' + dom + ':' + row.property_id,
+        subject_domain: dom, subject_property_id: String(row.property_id), subject_entity_id: null,
+        rank_value: Number(row.annual_rent) || 0,
+        context: {
+          domain: dom, property_id: row.property_id,
+          recorded_owner_id: row.recorded_owner_id, recorded_owner_name: row.recorded_owner_name,
+          latest_deed_grantee: row.latest_deed_grantee, latest_deed_date: row.latest_deed_date,
+          true_owner_name: row.true_owner_name, annual_rent: row.annual_rent,
+          address: row.address, city: row.city, state: row.state,
+          conflict_kind: row.conflict_kind, is_broker_owner: row.is_broker_owner,
+          grantee_passes_guards: row.grantee_passes_guards, auto_fixable: row.auto_fixable,
+        },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov'), fetchDom('dia'),
+      domCnt('gov', 'v_owner_source_conflict?conflict_kind=neq.spe_vs_parent'),
+      domCnt('dia', 'v_owner_source_conflict?conflict_kind=neq.spe_vs_parent'),
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
@@ -2220,6 +2265,49 @@ async function handleDecisionVerdict(req, res) {
           title: 'Confirm property merge: ' + (c.address || c.property_id || ''),
           instructions: 'Decision Center: confirm whether ' + (c.domain || '') + ' property ' + (c.property_id || '')
             + ' (' + (c.address || '') + ') is a duplicate to be merged, or a distinct property.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- owner_source_conflict (federated) ---------------------------------
+    // R51: the recorded deed grantee (legal title) outranks a stale /
+    // broker-as-owner recorded_owner. accept_deed + broker_not_owner ride the
+    // Unit-2 propagation (deed wins through the priority gate; true_owner
+    // re-resolves via R47). keep_current confirms a legit owner; research queues
+    // a task. Effect-first: a non-applied propagation keeps the decision open.
+    if (decision.decision_type === 'owner_source_conflict') {
+      const dom = c.domain === 'dia' ? 'dialysis' : c.domain === 'gov' ? 'government' : null;
+      if (verdict === 'keep_current') {
+        await record('keep_current', 'decided', null, { owner_source: 'current_confirmed' });
+        return res.status(200).json({ ok: true, verdict: 'keep_current' });
+      }
+      if (verdict === 'accept_deed' || verdict === 'broker_not_owner') {
+        if (!dom || c.property_id == null || !c.latest_deed_grantee) {
+          return res.status(400).json({ error: verdict + ' requires a dia/gov property subject with a deed grantee' });
+        }
+        const prop = await propagateDeedGranteeToOwner({
+          domain: dom, propertyId: c.property_id, granteeName: c.latest_deed_grantee,
+          entity: { state: c.state || null },
+        });
+        if (!prop.applied) {
+          await recordEffectFailure({ owner_source: false, propagation: prop });
+          return res.status(502).json({ error: 'deed_propagation_not_applied', detail: prop });
+        }
+        await record(verdict, 'decided',
+          { recorded_owner_id: prop.recorded_owner_id, grantee: c.latest_deed_grantee },
+          { owner_source: 'applied', recorded_owner_id: prop.recorded_owner_id, decision: prop.decision });
+        return res.status(200).json({ ok: true, verdict, recorded_owner_id: prop.recorded_owner_id });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'owner_source_conflict',
+          title: 'Resolve owner-source conflict: ' + (c.address || c.property_id || ''),
+          instructions: 'Decision Center: reconcile ' + (c.domain || '') + ' property ' + (c.property_id || '')
+            + ' — recorded owner "' + (c.recorded_owner_name || '') + '" vs deed grantee "'
+            + (c.latest_deed_grantee || '') + '" (' + (c.conflict_kind || '') + ').' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
@@ -4139,6 +4227,77 @@ async function handleOwnershipReconcile(req, res) {
   }
 
   return res.status(200).json(results);
+}
+
+// R51 Unit 3 — high-confidence deed-wins auto-fix.
+//   GET  = dry-run: list the auto_fixable rows + before/after (no writes).
+//   POST = apply via the Unit-2 propagation; gated on env DECISION_OWNER_DEED_WINS.
+// Per-row the priority gate still protects manual overrides and the guards still
+// reject brokerages / junk grantees, so a real write can only ever set a clean,
+// authoritative title-holder.
+async function handleOwnerDeedAutofix(req, res) {
+  const dryRun = req.method !== 'POST';
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 500);
+  const domainsParam = (req.query.domain || 'both').toLowerCase();
+  const doms = domainsParam === 'gov' ? ['gov'] : domainsParam === 'dia' ? ['dia'] : ['gov', 'dia'];
+  const sel = 'property_id,recorded_owner_id,recorded_owner_name,latest_deed_grantee,'
+    + 'latest_deed_date,true_owner_name,annual_rent,conflict_kind';
+
+  // Gather the auto_fixable candidates (value-ranked by rent), across domains.
+  const candidates = [];
+  for (const dom of doms) {
+    const r = await domainQuery(dom, 'GET', 'v_owner_source_conflict?select=' + sel
+      + '&auto_fixable=eq.true&order=annual_rent.desc.nullslast,property_id&limit=' + limit);
+    if (r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) candidates.push({ ...row, domain: dom });
+    }
+  }
+  candidates.sort((a, b) => (Number(b.annual_rent) || 0) - (Number(a.annual_rent) || 0));
+  const slice = candidates.slice(0, limit);
+
+  if (dryRun) {
+    return res.status(200).json({
+      mode: 'dry_run', domains: doms, candidate_count: candidates.length,
+      would_change: slice.map((row) => ({
+        domain: row.domain, property_id: row.property_id, conflict_kind: row.conflict_kind,
+        before_recorded_owner: row.recorded_owner_name,
+        after_recorded_owner: row.latest_deed_grantee,
+        true_owner: row.true_owner_name, latest_deed_date: row.latest_deed_date,
+        annual_rent: row.annual_rent,
+      })),
+    });
+  }
+
+  // ── Apply path — env-gated blessing ──
+  if (String(process.env.DECISION_OWNER_DEED_WINS || '').toLowerCase() !== 'on') {
+    return res.status(403).json({
+      error: 'apply_disabled',
+      detail: 'Set DECISION_OWNER_DEED_WINS=on in the Railway env to enable the bulk deed-wins apply. '
+        + 'Run a GET dry-run first.',
+    });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const out = { mode: 'apply', applied: 0, skipped: 0, blocked: 0, errored: 0, rows: [] };
+  for (const row of slice) {
+    const domain = row.domain === 'dia' ? 'dialysis' : 'government';
+    try {
+      const prop = await propagateDeedGranteeToOwner({
+        domain, propertyId: row.property_id, granteeName: row.latest_deed_grantee,
+        entity: {},
+      });
+      if (prop.applied) out.applied++;
+      else if (prop.skipped === 'blocked_by_priority') out.blocked++;
+      else out.skipped++;
+      out.rows.push({ domain: row.domain, property_id: row.property_id,
+        applied: prop.applied, skipped: prop.skipped, decision: prop.decision });
+    } catch (e) {
+      out.errored++;
+      out.rows.push({ domain: row.domain, property_id: row.property_id, error: e?.message || String(e) });
+    }
+  }
+  return res.status(200).json(out);
 }
 
 function parseXmlEntry(entry) {

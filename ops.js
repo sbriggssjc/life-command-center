@@ -1466,6 +1466,7 @@ async function renderReviewConsolePage() {
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
     { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
+    { dt: 'owner_source_conflict', label: 'Owner vs deed — who took title', open: "renderFederatedLane('owner_source_conflict')" },
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
@@ -2019,6 +2020,8 @@ const _DC_FED_META = {
     intro: 'Sponsor clusters mined from UNRESOLVED current-owner LLC/LP shells (gov + dia), ranked by $ rent. “high” = a fund numeral varies across the shells (SPUS6/7/8…). Confirm the controlling parent (registers it + rolls the shells up to it), name the parent yourself, or mark the owner a genuine independent. Never auto-merged — you confirm.' },
   listing_event_action: { title: 'New sales → act',
     intro: 'A closed sale is the next BD action, value-ranked by sale price. Nurture the seller (past/known owner — seed a relationship cadence, never auto-send), open the new-owner relationship (the buyer is a future seller; if a registered buyer parent, use the P-BUYER path), pursue the cohort fan-out (same-owner / recent-buyer / geographic neighbors), flag a sale-leaseback advisory angle, or dismiss. Each verdict marks the event processed.' },
+  owner_source_conflict: { title: 'Owner vs deed — who took title',
+    intro: 'The recorded deed grantee (legal title) disagrees with the recorded owner (gov + dia), value-ranked by rent. Accept the deed (it wins through the priority gate; true owner re-resolves), clear a broker-as-owner, keep the current owner (a legit parent-vs-SPE), or research. spe_vs_parent is excluded (default keep).' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2050,6 +2053,25 @@ function _fedCardHTML(it, i, isNext) {
       ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(pid)) + '}, {}, \'Overview\')">Compare &amp; merge →</button>' : '';
     actions = openDetail
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_duplicate\')">Not a duplicate</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'owner_source_conflict') {
+    const dom = c.domain, pid = c.property_id;
+    const kind = c.conflict_kind || '';
+    const rent = _fedMoney(c.annual_rent);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(dom || '') + '</span>'
+      + '<span class="q-badge' + (kind === 'broker_as_owner' ? ' pri-high' : '') + '">' + esc(kind) + '</span>'
+      + (rent ? '<span class="q-badge">' + rent + '</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + ' · property ' + esc(String(pid)) + '</div>'
+      + '<div class="q-item-meta">Recorded owner: <b>' + esc(c.recorded_owner_name || '?') + '</b></div>'
+      + '<div class="q-item-meta">Deed grantee (title): <b>' + esc(c.latest_deed_grantee || '?') + '</b>'
+        + (c.latest_deed_date ? ' · ' + esc(String(c.latest_deed_date)) : '') + '</div>'
+      + (c.true_owner_name ? '<div class="q-item-meta">True owner: ' + esc(c.true_owner_name) + '</div>' : '');
+    const acceptLabel = (kind === 'broker_as_owner')
+      ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'broker_not_owner\')">Clear broker → set deed owner</button>'
+      : '<button class="q-action primary" onclick="dcFed(' + i + ',\'accept_deed\')">Accept deed owner →</button>';
+    actions = acceptLabel
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_current\')">Keep current</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'provenance_conflict') {
     if (c.kind === 'sales_price_xref') {
