@@ -74,7 +74,24 @@ days_on_market 6% · loan/lender ~0–6%
 - **gov demand-signal intel is underfilled**: federal_employee_count 12%, OPM headcount — public
   (OPM/FRPP) and gov-specific (the bov-government skill already references these).
 
-## CORRECTION (grounded 2026-06-20, after the coverage pass)
+## CORRECTION 2 (grounded 2026-06-20, after the real-write gate — the decisive one)
+**The county valuation channel is hollow in BOTH DBs, and my non-null coverage overstated it.**
+The original table used `COUNT(col)` (non-null); the county-capture path writes **zero-sentinels** on
+failure, so non-null ≫ real. Re-checked with `>0`: dia `assessed_value` is **1.9% real** (not 75%);
+dia `tax_records.assessed_value` 1.0% real of 24,994; gov `parcel_records.total_assessed_value`
+**2.3% real** of 10,821 (8,919 zero, 1,650 null). The raw_payload itself carries 0/null for the
+valuation + physical fields (owner_name + property_class DO come through — that's why the owner side
+works), so there is **no cheap re-parse**. And there's no county concentration to attack (top-12
+counties = 12.5% of linked props; LA, the largest, 1.4%). **Verified NOT contaminated** (real ==
+non-null): building_size 72%, land_area 27%, occupancy 58%, year_built 28%, annual_rent 59%,
+rent_per_sf 52%, leased_area 91%, gov rba/sf/gross_rent/noi — the operational/lease/size layer is
+real. So: only the county assessed/tax fields were inflated; the rest of this audit stands.
+**Implication:** free, at-scale, reliable assessed value across 1,278 county assessors effectively
+does not exist. Assessed value becomes a per-deal CoStar grab when an analyst works a specific
+property — NOT a bulk free backfill. The digest (Part A) was correct to run but its ceiling is the
+~252 real values; the broad county valuation scrape (Part B) is dropped.
+
+## CORRECTION 1 (superseded by Correction 2 above — kept for the record)
 The county channel is **NOT off on gov** — it runs and the raw data is ingested. gov holds
 property_public_records 27,402, parcel_records 10,819 (total_assessed_value populated on **85%**),
 deed_records 5,660, tax_records 2,964; **7,267 properties are linked to a parcel**. Yet
@@ -85,7 +102,22 @@ attrs (land_area_acres / year_built / zoning / building_sf) are **0% even in par
 assessor scraper captures assessed value but drops them: a narrower *capture* gap. dia digests tax/
 assessed fine (75%) but its parcel_records is thin (1,555) — dia's physical-attr gap is genuine ingest.
 
-## Ranked remediations (highest leverage first; all free/public/grabbable)
+## Ranked remediations — REVISED after Correction 2
+0. ~~County assessed/tax bulk lever~~ — **DROPPED.** Hollow source (~2% real both DBs), no cheap
+   re-parse, no concentration, secondary field for income-approach gov underwriting. Keep the digest
+   already run (captured the ~252 real values + owner capture, which works); abandon the broad
+   county valuation scrape. Assessed value = per-deal CoStar grab, not a bulk backfill.
+1. **(was #2) Activate the lease-document extractor (UW#2)** — now the #1 lever. The doc-only fields
+   (dia escalation 2%, guarantor 5%, renewal 15%, expiration 61%; gov escalations 35%, renewal 5%)
+   live in lease PDFs we already hold; the Stage B extractor is built + blessed. Reliable, we own the
+   source. Highest real free lift.
+2. **Cap-rate derivation (UW#3)** — free/internal: backfill cap where price+rent(dia)/price+noi(gov)
+   exist but cap is null (size the lever first; gov noi is only 8% so the gov ceiling is modest).
+3. **Physical attrs via CoStar/RCA sidebar** — year_built (28/30%), land, building_size — from the
+   channel we already operate, captured on the deals analysts actually work. NOT county scraping.
+4. **OPM/FRPP federal-workforce intel for gov** — federal_employee_count 12%, public, gov-specific.
+
+### (original ranking, superseded)
 1. **County DIGEST + capture** — (A, free/immediate) propagate parcel_records.total_assessed_value
    → gov.properties.assessed_value (6,364 backfillable) + tax_records → tax fields, through the
    lcc_merge_field / field_source_priority gate (county_records outranks aggregators), fill-blanks,
