@@ -3914,3 +3914,87 @@ PostGIS/earthdistance + GiST index (not needed at ~12-19k rows/domain — brute
 haversine + the new `idx_<dom>_properties_lat_lng` bbox index suffices);
 owner-cohort -> BD spine outreach-list generation; geo on the Today/queue
 surfaces.
+
+## R51 — make the deed grantee win the owner conflict (2026-06-20)
+
+The recorded deed grantee — the authoritative "who took title" — is captured on
+5,829 gov props (1,711 dia) but could never win and never propagated, so ~630-920
+gov props (164 dia) show a stale / broker-as-owner recorded_owner vs
+`latest_deed_grantee`. Root cause: `field_source_priority` had only
+`costar_sidebar` (60) for `gov.properties.recorded_owner_name` and **no rule at
+all** for `gov.properties.recorded_owner_id` — no `recorded_deed`/`county_records`
+above the aggregator. dia was already wired (county_records=10 beats costar).
+Scope A (Scott): wire + forward-propagate now; surface the backlog to a
+value-ranked lane; identify the high-confidence auto-subset in a dry-run Scott
+blesses before any bulk write. **Deed grantee is authoritative for `recorded_owner`
+(legal title) ONLY — `true_owner` is NEVER written directly (it is the R47-resolved
+parent; it re-resolves from the new recorded_owner via the owner-facts mirror /
+R47 cron).**
+
+### Unit 1 — wire the gov owner priority (mirror dia)
+Migration `20260620140000_lcc_r51_unit1_owner_deed_priority.sql` (LCC Opps,
+idempotent ON CONFLICT DO NOTHING): adds `gov.properties.recorded_owner_name`
+(manual 1 / **recorded_deed 3** / county_records 10, above the existing costar 60)
+and the full `gov.properties.recorded_owner_id` ladder (manual 1 / recorded_deed 3
+/ county 10 / costar 50 / rca 50 / crexi 55 / crexi_desc 60 — mirroring dia), plus
+the explicit `recorded_deed` (3) source on **both** domains' properties owner
+fields so the Unit-2 propagation resolves deterministically and
+`v_field_provenance_unranked` stays 0. Verified live: `lcc_merge_field` on a
+synthetic pk — recorded_deed BEATS costar_sidebar (`write`), and manual_edit HOLDS
+(recorded_deed → `skip`, current_source=manual_edit). 0 residue.
+
+### Unit 2 — propagate deed grantee → recorded_owner (forward, authoritative-only)
+`api/_handlers/sidebar-pipeline.js`:
+- **`granteePassesOwnerGuards(name)`** (exported) — rejects a brokerage
+  (`isCompetitorBroker`, incl. the " by <Broker>" form via `sanitizeOwnerName`),
+  federal anti-pattern (`isFederalOwnerAntiPattern`), and structural junk
+  (`isJunkEntityName` — **org-safe**, does NOT reject firm suffixes, so an LLC/LP
+  owner passes; do NOT use `isImplausiblePersonName` here — it rejects every LLC).
+- **`propagateDeedGranteeToOwner(args, deps)`** (exported, deps-injected for tests)
+  — resolves/creates the recorded_owner for the grantee, then writes
+  `properties.recorded_owner_id` (+ `recorded_owner_name` on dia, which has the
+  denormalized column; gov does not) **THROUGH the `shouldWriteField` priority
+  gate** (`source='recorded_deed'`): recorded_deed(3) outranks the aggregators but
+  can NEVER clobber manual_resolution/manual_edit(1). NEVER writes `true_owner_id`.
+- **`latestDeedGranteeFromMetadata(metadata)`** picks the newest non-mortgage deed
+  buyer. Wired into `propagateToDomainDbDirect` (Step 5b4) AFTER both deed writers,
+  best-effort (a failure never blocks the capture). So a new CoStar/RCA capture
+  self-corrects a stale / broker-as-owner recorded_owner.
+
+### Unit 3 — detection view + Decision Center lane + dry-run-gated auto-subset
+- **`v_owner_source_conflict`** (gov `government-lease/sql/20260620_gov_…`, dia
+  `Dialysis/supabase/migrations/20260620_dia_…`, names only, read-only) — props
+  where recorded_owner ≠ latest_deed_grantee, classified `conflict_kind`:
+  `broker_as_owner` / `stale_seller` (recorded_owner = the SELLER of a recorded
+  sale whose buyer == the grantee) / `spe_vs_parent` (recorded_owner == the
+  resolved true_owner = the parent — legit, default KEEP) / `deed_newer_stale`
+  (default). `auto_fixable` = broker_as_owner | stale_seller | (deed_newer_stale +
+  dated) AND grantee_passes_guards AND not spe_vs_parent. Live: gov 575 stale (189
+  auto) + 315 spe_vs_parent (kept) + 17 broker + 13 seller; dia 126 stale (106
+  auto) + 29 spe + 6 seller + 3 broker.
+- **Decision Center lane** `decision_type='owner_source_conflict'` (`admin.js`
+  federated fetch + verdict dispatch, `ops.js` card). value-ranked by rent;
+  spe_vs_parent excluded. Verdicts: `accept_deed`/`broker_not_owner` →
+  `propagateDeedGranteeToOwner` (effect-first; a non-applied propagation 502s +
+  keeps the decision open), `keep_current` (record-only), `research`.
+- **High-confidence auto-subset** `?_route=owner-deed-autofix` (`admin.js`
+  `handleOwnerDeedAutofix`): **GET = dry-run** (lists `auto_fixable` rows +
+  before/after, NO writes); **POST = apply, gated on env `DECISION_OWNER_DEED_WINS`**
+  (default off → 403) — drives each row through the same Unit-2 propagation (so the
+  per-row priority gate + guards still apply). Do NOT bulk-write without the
+  dry-run blessing.
+
+### Verified (headless + live read-only 2026-06-20)
+`test/owner-deed-propagation.test.mjs` (10): guard accepts LLC/trust, rejects
+broker (bare + " by ")/junk/federal/short; latest-grantee picker skips mortgages;
+propagation applies (gov no name col, dia sets name, true_owner never written),
+broker grantee never writes, manual-held field blocks (skip), already-current
+no-op. `node --check` clean (sidebar-pipeline, admin, ops); `ls api/*.js | wc -l`=12;
+full suite 1106 pass / 0 fail / 6 skipped. DB (priority rows + both views) applied
+live; JS ships on the Railway redeploy. dia/gov pipelines otherwise untouched.
+
+### Activation / follow-ups
+The bulk auto-fix is OFF until `DECISION_OWNER_DEED_WINS=on` in the Railway env
+(run a GET dry-run first). The Decision-Center per-row verdicts work without it.
+The forward propagation (Unit 2) is live on every new deed capture once the JS
+deploys. A county-records sync producer could call the same helper later.
