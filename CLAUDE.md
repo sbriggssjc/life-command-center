@@ -3717,3 +3717,57 @@ api/*.js change (≤12 holds).
   resolve a person → `ensureEntityLink` → attach with `contact_role`, draining
   the ~496 contactless owners; plus wiring `v_owner_active_contact` into the NBT
   `acquire_contact` next-action.
+
+## CONTACT-SELECTION Slice 2 — pivot state + feedback re-rank (2026-06-20)
+
+The active contact is a HYPOTHESIS that pivots as research + outbound feedback
+arrive. Builds on Slice 1; DB applied live + committed; one best-effort JS
+producer hook (ships on Railway redeploy). Reversible — `pivot_history` is the
+audit trail, never a hard-delete. Also folds in two Slice-1 view refinements
+(Scott's gate asks).
+
+### View refinements (`v_owner_active_contact`, migration `20260620122000`)
+- **`&`-detector tightened** — partnership now fires only on genuine
+  multi-principal: `n_managers>=2` OR `jv/joint venture` OR `\m\w+ & \w+\M`
+  between non-firm tokens. Live: **10 → 3** (dropped 7 false positives like
+  "AT&T"/"Smith & Co LLC").
+- **Public-company IR carve-out** — `lcc_is_public_company_name` (REIT / "*
+  Trust" / known net-lease REITs + insurers / Bancorp) routes those to
+  `enrichment_action='public_company_ir'` (known IR/asset-mgmt contact path), NOT
+  SOS/address. Live: **6 carved out** (MassMutual, Agree Realty, Community
+  Healthcare Trust …); sos 40→36, addr 44→42.
+
+### Pivot state (`owner_contact_pivot`, LCC Opps)
+- One row per owner: `active_contact_name`/`_entity_id`, `bench`, `confidence`,
+  `enrichment_action`, `consumed`/`demoted` (names tried/demoted),
+  `recurrence_locked`, `status` (`active|locked|exhausted|superseded`),
+  `pivot_history` jsonb. Drop the table → zero trace.
+- **`lcc_seed_owner_contact_pivots`** (idempotent — INSERTs missing owners,
+  NEVER clobbers an existing active pick) + **`lcc_ensure_owner_pivot`**
+  (seed-on-demand). Seeded 172.
+- **`lcc_apply_contact_feedback(entity, kind, detail, source)`** — the single
+  re-ranker. kinds: `referral` (pivot to the named person, prepend to bench) /
+  `no_response` (advance DOWN the bench, current → `consumed`) /
+  `bounce`|`wrong_person` (demote current → `demoted`, advance) /
+  `two_way`|`positive` (LOCK — engaged, human takes over; blocks further
+  auto-moves) / `recurrence` (set `recurrence_locked`). Every change appends
+  `pivot_history {at,kind,reason,source,from,to}`.
+- **`lcc_detect_contact_recurrence`** — passive research re-rank: locks owners
+  whose active contact recurs across ≥2 of their properties (`n_props>=2`). Live:
+  3 locked. Cron `lcc-owner-contact-pivot-refresh` (05:20 daily — seed +
+  recurrence).
+
+### JS producer (the active-feedback feed)
+`sf-activity-ingest.js` — on a freshly-inserted **inbound reply**, after the
+cadence advance, calls `lcc_apply_contact_feedback(owner, 'two_way')`
+(best-effort, deps-injectable, no-op for a non-owner entity) so a real reply
+LOCKS the owner's active pick. Reuses the existing `isInboundReply` detection +
+the cadence owner-hop (`cad.entity_id`). referral/no_response/bounce remain
+API-driven (operator or a future SF-note parser); the mechanism is built.
+
+### Gate (synthetic, 0 residue) 2026-06-20
+A throwaway 3-candidate pivot exercised the full chain: `Alice →(no_response)→
+Bob →(referral)→ Dave →(bounce)→ Bob →(two_way)→ LOCKED`; `consumed=[Alice]`,
+`demoted=[Dave]`, post-lock `no_response` is a no-op, `pivot_history` carries all
+5 reasons. Recurrence auto-lock fired on 3 real owners. Synthetic row deleted (0
+residue). `node --check` clean; 12 api files.
