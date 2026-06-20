@@ -63,10 +63,22 @@
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { appendActivityEvent as defaultAppendActivityEvent } from '../_shared/activity-events.js';
 import { findEntityBySfId as defaultFindEntityBySfId } from '../_shared/bridge-handlers-salesforce.js';
+import { opsQuery } from '../_shared/ops-db.js';
 import {
   advanceCadence as defaultAdvanceCadence,
   resolveCadenceForEntity as defaultResolveCadenceForEntity,
 } from '../_shared/cadence-engine.js';
+
+// CONTACT-SELECTION Slice 2 — an inbound reply is a two-way (engaged) signal:
+// lock the owner's active contact pick (the human took over). Best-effort,
+// deps-injectable, never blocks the mirror; a no-owner-pivot entity is a no-op.
+async function defaultApplyOwnerContactFeedback(ownerEntityId, kind) {
+  if (!ownerEntityId) return;
+  try {
+    await opsQuery('POST', 'rpc/lcc_apply_contact_feedback',
+      { p_entity_id: ownerEntityId, p_kind: kind, p_detail: {}, p_source: 'sf_ingest' });
+  } catch (_e) { /* non-blocking */ }
+}
 
 const MAX_BATCH = 500;
 
@@ -425,6 +437,10 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
             replyAdvanced = !!(adv && adv.ok);
             if (replyAdvanced) summary.replies_captured += 1;
           }
+          // Slice 2 — feed the contact-selection pivot: a two-way reply locks the
+          // owner's active contact (engaged → human takes over). Best-effort.
+          const applyFeedback = deps.applyOwnerContactFeedback || defaultApplyOwnerContactFeedback;
+          await applyFeedback(cad?.entity_id || entityId, 'two_way');
         } catch (err) {
           // non-blocking — the activity is recorded regardless
           replyAdvanced = false;

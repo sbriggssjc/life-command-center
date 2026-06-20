@@ -226,6 +226,7 @@ app.all('/api/context', (req, res) => { req.query._route = 'context'; operations
 app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
 app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
+app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 
