@@ -3998,3 +3998,114 @@ The bulk auto-fix is OFF until `DECISION_OWNER_DEED_WINS=on` in the Railway env
 (run a GET dry-run first). The Decision-Center per-row verdicts work without it.
 The forward propagation (Unit 2) is live on every new deed capture once the JS
 deploys. A county-records sync producer could call the same helper later.
+
+## R53 — ownership change → suspected-sale + research signal (GSA lessor + deed) (2026-06-20)
+
+An owner/landlord change across our four owner sources (recorded_owner, deed
+grantee, GSA lessor, sale buyer) is the same tell — a likely transfer we never
+recorded. R53 links the orphaned GSA events, elevates the buried lessor change,
+turns deed/lessor/owner conflicts into value-ranked **suspected-sale** research +
+candidates, corroborates ownership across the four sources, and surfaces the
+stale-diff runbook. Builds on R51 (`v_owner_source_conflict`) + reuses the R7
+federated Decision-Center machinery. **gov-focused** (the lessor signal is
+gov-only; dia deed-conflict is a parallel follow-up). Never auto-writes a
+`sales_transactions` row — a suspected sale is a LEAD, confirmed only with an
+operator-supplied price. DB applied live to gov + LCC Opps; JS ships on the
+Railway redeploy.
+
+### Grounding refuted the audit's volume premises (receipts, 2026-06-20)
+- `gsa_lease_events`: 261,254 rows, **100% `property_id` NULL** (orphaned),
+  joinable via `lease_number → gsa_leases.property_id` (7,494/7,495 GSA leases
+  carry a property_id).
+- `changed_fields` is **double-encoded** (a JSON string in the jsonb column, via
+  `json.dumps`) — `? 'lessor_name'` returns 0; must unwrap `(#>>'{}')::jsonb`.
+- The raw lessor "changes" are **mostly case/whitespace/legal-form churn**
+  ("BOLLINGER PROPERTIES, LLC"→"Bollinger Properties, LLC"; "CO, LLC"→"COMPANY,
+  LLC"; "Red Cross"→"Red Cross, The"). Of 18,566 lessor field-changes only ~10k
+  survive alnum-normalization, and only **763** survive the stricter
+  legal-form-core normalizer below AND lack a recorded sale — so the
+  suspected-sale set is precise, not a 10k-row flood.
+
+### Unit 1 — link gsa_lease_events → properties (prerequisite)
+gov `sql/20260620_gov_r53_unit1_link_gsa_events.sql` — one-time backfill
+`property_id` from `gsa_leases` (**0% → 61.3% linked**, 160,258 events; the NULL
+remainder are events whose lease has no property-matched GSA lease — the honest
+join ceiling) + a partial index. Forward path: `src/gsa_monthly_diff.py` now
+builds a `lease_number→property_id` map and stamps `property_id` on every event
+insert (logs `Events with property_id: N/M`). Reversible (`SET property_id=NULL`).
+
+### Unit 2 — elevate the GSA lessor change → suspected sale
+gov `sql/20260620_gov_r53_unit2_suspected_sale.sql`:
+- `gov_norm_owner_core(text)` — dense (strip-all-punct) + trailing legal-form
+  strip (llc/lp/inc/co/company/corp/ltd/na/dst/the/…) so form/article variants
+  reduce to the SAME core (NOT a sale) while genuine owner changes (Morgan Chase
+  Bank→USPS, School Street Associates→Boyd DC II GSA) differ. "trust" deliberately
+  NOT stripped.
+- `v_gsa_lessor_change` — most-recent GENUINE lessor change per property
+  (core-norm old≠new), value-ranked by rent, with a `has_matching_sale` (±12mo)
+  flag. The buried `changed_fields.lessor_name` is now a first-class signal (a
+  view, not a new event_type — lower-risk than touching the diff's enum).
+
+### Unit 3 — suspected-sale candidates + Decision Center lane
+- `v_suspected_sale` (gov) — the unified CANDIDATE feed (mirrors
+  `v_owner_source_conflict`'s shape): lessor-change-with-no-sale (**763**) +
+  R51 `deed_newer_stale`-with-no-sale (**21**) = **784**, value-ranked, names
+  only. Each row is a LEAD (suspected_grantor→grantee + suspected_sale_date).
+- `gov_confirm_suspected_sale(property_id, sale_date, sold_price, buyer, seller,
+  actor, dry_run default true)` — SECURITY DEFINER, **service_role only**. The
+  ONLY path that records a suspected sale, and ONLY with an operator-supplied
+  price (≥$50k floor; never fabricated). Writes through the NORMAL
+  `sales_transactions` insert so the cap-rate trigger fires. `dry_run` DEFAULTS
+  TRUE; idempotent (same price within 31d → `already_exists`).
+- **LCC Decision Center lane** `decision_type='suspected_sale'` (list-federated,
+  reuses R7 machinery — `admin.js` FEDERATED set + `federatedSubjectRef`
+  (`susp:gov:<pid>:<signal>`) + `fetchFederatedSource` (gov `v_suspected_sale`,
+  value-ranked) + verdict dispatch; `ops.js` lane card + `dcConfirmSuspectedSale`
+  price/date prompt). Verdicts: **confirm_sale** (operator price → the gov RPC →
+  real sales row; effect-first, a non-applied RPC 502s + keeps the decision
+  open), **not_a_sale** (record-only → the `lcc_decisions` anti-join stops asking
+  — refi/correction), **research** (`createResearchTask` research_type
+  `trace_unrecorded_sale`). Minted only at verdict time (anti-bloat); the 784
+  backlog is NOT seeded.
+
+### Unit 4 — corroborate the four owner sources + owner ladder
+- gov `sql/20260620_gov_r53_unit4_owner_corroboration.sql` —
+  `v_owner_source_corroboration` aligns recorded_owner / latest_deed_grantee /
+  current GSA lessor / latest sale buyer (normalized) and classifies:
+  **all_agree 6,956 / insufficient 3,828 / all_disagree 1,332 (→ research) /
+  deed_lessor_agree_owner_stale 428** (deed grantee == GSA lessor, both disagree
+  with a stale recorded_owner → the HIGH-CONFIDENCE two-source-corroborated subset
+  of R51's deed-wins auto-reconcile; rides the existing R51 `owner-deed-autofix` /
+  lane).
+- LCC `20260620160000_lcc_r53_gsa_lessor_owner_priority.sql` — registers
+  `gsa_lessor` in `field_source_priority` at **priority 20** (corroborating —
+  below recorded_deed=3/county=10, above aggregators=50) for
+  `gov.properties.recorded_owner_name`/`_id`, so a future gsa-lessor sync producer
+  that pushes the lessor via `lcc_merge_field` ranks correctly (keeps
+  `v_field_provenance_unranked` at 0). No heavy writer this round.
+
+### Unit 5 — stale GSA diff (operational)
+`docs/RUNBOOK_gsa_monthly_diff.md` — snapshots are current (through 2026-06-01)
+but the diff only ran through 2026-03-01 (three un-diffed transitions). Root
+cause: the diff is a side-effect of `run_pipeline.ingest_and_diff`, not a
+standalone job. Runbook: diagnostic (latest_snapshot vs latest_event_diff),
+catch-up via `python -m src.gsa_monthly_diff --diff PREV CURR` per pair, and the
+go-forward guard.
+
+### Verified live 2026-06-20
+Unit 1 link 0%→61.3%. Suspected-sale set 784 (763 lessor + 21 deed), value-ranked
+top is genuine owner changes (Morgan Chase→USPS, CIM→Washington DC III FGF, School
+Street→Boyd DC II GSA) after the core-norm precision pass (1018→784). Corroboration
+distribution as above. `gov_confirm_suspected_sale`: dry-run wrote nothing; real
+write on a synthetic throwaway gov property created exactly ONE sales row
+(`data_source='suspected_sale_confirmed'`, trigger fired clean), idempotent re-run
+`already_exists`, **all synthetic fixtures deleted — 0 residue**. `node --check`
+clean (admin.js, ops.js); `python3 -m py_compile` clean (gsa_monthly_diff.py);
+`ls api/*.js | wc -l`=12; full suite **1106 pass / 0 fail / 6 skipped**.
+
+### Follow-ups (NOT in R53)
+dia parallel (deed-conflict suspected sales — dia has no GSA lessor); a gsa-lessor
+sync producer that pushes the current lessor into `recorded_owner` via
+`lcc_merge_field` (the priority slot is registered); auto-reconcile the 428
+deed_lessor_agree_owner_stale via the R51 owner-deed-autofix (gated on
+`DECISION_OWNER_DEED_WINS`); fold the catch-up diff into the recurring schedule.
