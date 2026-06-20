@@ -2694,6 +2694,7 @@ async function renderPriorityQueuePage(band) {
   var html = '<div class="ops-header"><h2>Priority Queue</h2>'
     + '<button class="q-action" onclick="renderNextBestTouchpoint()">Next best touchpoint →</button>'
     + '<button class="q-action" onclick="renderCadenceDashboard()">Cadence dashboard →</button>'
+    + '<button class="q-action" onclick="renderBdWorklist()">Top BD actions →</button>'
     + '<button class="q-action" onclick="renderContactQualifyWorklist()">Qualify contacts →</button></div>';
   html += '<div class="rc-intro">Start here. Your highest-leverage BD targets, most urgent band first. Each row routes straight to the property so you can resolve the owner, confirm the CRM link, and open a lead.</div>';
   // Band filter chips.
@@ -3240,6 +3241,74 @@ async function renderCadenceDashboard() {
   el.innerHTML = html;
 }
 window.renderCadenceDashboard = renderCadenceDashboard;
+
+// ============================================================================
+// R55 Unit 2 — Top BD actions: the one unified, value-ranked BD worklist.
+// Merges loan_maturity / suspected_sale / owner_source_conflict / contact_writeback
+// / ownership_chain into one list, highest $ value first. Each row routes to the
+// property (or the Decision Center lane) for the actual action.
+// ============================================================================
+var _bdSignalLabel = {
+  loan_maturity: 'Loan maturity',
+  suspected_sale: 'Suspected sale',
+  owner_source_conflict: 'Owner conflict',
+  contact_writeback: 'Push to CRM',
+  ownership_chain: 'Ownership chain',
+};
+async function renderBdWorklist(type) {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var qs = '/api/operations?action=bd_worklist&limit=100' + (type ? '&type=' + encodeURIComponent(type) : '');
+  var res = await opsApi(qs);
+  if (!res.ok || !res.data || !res.data.ok) {
+    el.innerHTML = opsErrorState(res, 'renderBdWorklist()', 'Could not load the BD worklist');
+    return;
+  }
+  var items = Array.isArray(res.data.worklist) ? res.data.worklist : [];
+  var html = '<div class="ops-header"><h2>Top BD Actions</h2>'
+    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div>';
+  html += '<div class="rc-intro">One unified worklist across every BD signal — loan maturities, suspected sales, owner conflicts, contacts to push, and ownership chains — ranked highest $ value first. Work it top-down; each row routes to where you take the action.</div>';
+  // signal-type filter chips
+  var chips = ['', 'loan_maturity', 'suspected_sale', 'owner_source_conflict', 'contact_writeback', 'ownership_chain'];
+  html += '<div class="pq-chips">' + chips.map(function (c) {
+    var active = (type || '') === c ? ' active' : '';
+    return '<button class="pq-chip' + active + '" onclick="renderBdWorklist(' + (c ? jsStringArg(c) : '') + ')">'
+      + (c ? esc(_bdSignalLabel[c] || c) : 'All') + '</button>';
+  }).join('') + '</div>';
+  if (!items.length) { html += '<div class="ops-empty">No BD actions in this view. ✓</div>'; el.innerHTML = html; return; }
+  items.forEach(function (it, ix) {
+    var val = _dcMoney(it.rank_value);
+    var dom = String(it.domain || '');
+    var pid = it.property_id == null ? '' : String(it.property_id);
+    var meta = [];
+    if (val) meta.push(val + ' rent');
+    if (dom) meta.push(dom);
+    if (it.who) meta.push(esc(it.who));
+    if (it.city || it.state) meta.push(esc([it.city, it.state].filter(Boolean).join(', ')));
+    var dl = it.deep_link || {};
+    var action;
+    if (pid && dom && (dl.surface === 'property' || dl.surface === 'decision_center')) {
+      var tab = dl.surface === 'decision_center' ? 'Ownership &amp; CRM' : 'Ownership &amp; CRM';
+      action = '<button class="q-action primary" onclick="openUnifiedDetail(' + jsStringArg(dom)
+        + ', {property_id: ' + jsStringArg(pid) + '}, {}, ' + jsStringArg(tab) + ')">Open property →</button>';
+    } else if (dl.surface === 'decision_center') {
+      action = '<button class="q-action primary" onclick="renderReviewConsolePage()">Open in Decision Center →</button>';
+    } else {
+      action = '<span class="q-badge">' + esc(_bdSignalLabel[it.signal_type] || it.signal_type) + '</span>';
+    }
+    var lane = (dl.surface === 'decision_center')
+      ? '<button class="q-action" onclick="renderReviewConsolePage()">Decision Center →</button>' : '';
+    html += '<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.what || '—') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge type">' + esc(_bdSignalLabel[it.signal_type] || it.signal_type) + '</span>'
+      + (it.is_distressed ? '<span class="q-badge pri-high" title="Distressed loan">⚠ distressed</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc(meta.join(' · ')) + '</div>'
+      + '<div class="q-actions">' + action + lane + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderBdWorklist = renderBdWorklist;
 
 // ============================================================================
 // NBT #1 Slice 1c — Next best touchpoint surface
