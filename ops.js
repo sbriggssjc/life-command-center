@@ -1468,6 +1468,7 @@ async function renderReviewConsolePage() {
     { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
     { dt: 'owner_source_conflict', label: 'Owner vs deed — who took title', open: "renderFederatedLane('owner_source_conflict')" },
     { dt: 'suspected_sale', label: 'Suspected unrecorded sales', open: "renderFederatedLane('suspected_sale')" },
+    { dt: 'loan_maturity', label: 'Loan maturities → refi or sell', open: "renderFederatedLane('loan_maturity')" },
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
@@ -2025,6 +2026,8 @@ const _DC_FED_META = {
     intro: 'The recorded deed grantee (legal title) disagrees with the recorded owner (gov + dia), value-ranked by rent. Accept the deed (it wins through the priority gate; true owner re-resolves), clear a broker-as-owner, keep the current owner (a legit parent-vs-SPE), or research. spe_vs_parent is excluded (default keep).' },
   suspected_sale: { title: 'Suspected unrecorded sales',
     intro: 'An ownership CHANGE we never recorded as a sale (gov), value-ranked by rent — a NEW GSA lessor with no recorded sale, or a deed grantee that disagrees with the prior owner with no recorded sale. Each is a LEAD, not a fact: confirm the sale (you supply the price — it writes a real sales row, cap rate computes), mark “not a sale” (refinance / name correction — stops asking), or send to research to find the price/date/buyer. We never fabricate a price.' },
+  loan_maturity: { title: 'Loan maturities → refi or sell',
+    intro: 'A property whose CURRENT debt matures within 24 months — or is already matured — (gov + dia), value-ranked by rent; a DISTRESSED loan (watchlist / special servicing / delinquent / DSCR<1) ranks first. A maturity wall forces the owner to refinance or sell — that is the BD opening. Pursue refi (advisory/refi outreach on the owner), pursue disposition (the owner may sell), mark not relevant (stops asking), or research. No domain write — this is a BD signal.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2221,6 +2224,28 @@ function _fedCardHTML(it, i, isNext) {
       + '<div class="q-item-meta" style="opacity:.7">Suspected unrecorded sale — confirm only with a real price.</div>';
     actions = '<button class="q-action primary" onclick="dcConfirmSuspectedSale(' + i + ')">Confirm sale (enter price) →</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_a_sale\')">Not a sale</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'loan_maturity') {
+    const rent = _fedMoney(c.annual_rent);
+    const bal = _fedMoney(c.loan_balance);
+    const matured = (typeof c.months_to_maturity === 'number' && c.months_to_maturity < 0);
+    const matLbl = c.maturity_band === 'matured' ? 'MATURED'
+      : (typeof c.months_to_maturity === 'number' ? 'matures in ' + c.months_to_maturity + 'mo' : (c.maturity_band || 'maturing'));
+    const who = c.owner_name || c.true_owner_name || c.recorded_owner_name || '?';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge ' + (matured ? 'pri-high' : 'type') + '">' + esc(matLbl) + '</span>'
+      + (c.is_distressed ? '<span class="q-badge pri-high">⚠ ' + esc(c.distress_reason || 'distressed') + '</span>' : '')
+      + (rent ? '<span class="q-badge pri-high">' + rent + ' rent</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + ' · property ' + esc(String(c.property_id))
+      + (c.agency ? ' · ' + esc(c.agency) : '') + (c.tenant ? ' · ' + esc(c.tenant) : '') + '</div>'
+      + '<div class="q-item-meta">Owner: <b>' + esc(who) + '</b></div>'
+      + '<div class="q-item-meta">Debt ' + (bal ? '<b>' + bal + '</b> · ' : '') + esc(c.maturity_date ? String(c.maturity_date).slice(0, 10) : '')
+        + (c.servicer ? ' · ' + esc(c.servicer) : '') + '</div>'
+      + '<div class="q-item-meta" style="opacity:.7">Loan maturity = refi or sell. Reach the owner.</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'pursue_refi\')">Pursue refi →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_disposition\')">Pursue disposition</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_relevant\')">Not relevant</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
