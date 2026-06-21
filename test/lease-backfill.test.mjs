@@ -74,6 +74,28 @@ describe('lease backfill — per-doc outcome mapping', () => {
     assert.equal(marked.outcome, 'enriched');
   });
 
+  it('UW#4 — supplied free-OCR text is forwarded to attachLeaseDoc + tier/conf recorded on the enriched receipt', async () => {
+    let seen = null, marked = null;
+    const deps = {
+      attachLeaseDoc: async (a) => {
+        seen = { ocrText: a.ocrText, ocrConfidence: a.ocrConfidence };
+        return {
+          ok: true, attached: true, lease: true, domain: 'dialysis', property_id: 30441, boundary_ok: true,
+          ocr_tier: 'free_external', ocr_confidence: 81,
+          applied: { fields_filled: 9, conflicts: 1, ti_rows: 0, lease_created: false },
+        };
+      },
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(row(), { workspaceId: 'w', actorId: 'u', ocrText: 'LEASE TEXT recovered by tesseract', ocrConfidence: 81 }, deps);
+    assert.equal(seen.ocrText, 'LEASE TEXT recovered by tesseract'); // forwarded
+    assert.equal(seen.ocrConfidence, 81);
+    assert.equal(out.outcome, 'enriched');
+    assert.equal(out.ocr_tier, 'free_external');                     // on the receipt
+    assert.equal(out.ocr_confidence, 81);
+    assert.equal(marked.ocr_tier, 'free_external');                  // and the marker
+  });
+
   it('needs_ocr (scanned) → marks + records, never a 500', async () => {
     let marked = null;
     const deps = {
