@@ -91,7 +91,7 @@ export async function fetchEligibleLeaseDocs(limit, deps) {
     '&server_relative_path=not.ilike.*/Multitenant/*' +
     '&server_relative_path=not.ilike.*/Portfolio/*' +
     '&server_relative_path=not.ilike.*/Portfolios/*' +
-    '&select=id,server_relative_path,vertical,status,subject_hint' +
+    '&select=id,server_relative_path,vertical,status,subject_hint,content_hash' +
     '&order=id.asc' +
     `&limit=${limit}`);
   if (!r.ok) return { ok: false, status: r.status, detail: r.data };
@@ -101,8 +101,34 @@ export async function fetchEligibleLeaseDocs(limit, deps) {
     vertical: row.vertical,
     status: row.status,
     subject_hint: row.subject_hint || {},
+    content_hash: row.content_hash || null,
   }));
   return { ok: true, rows };
+}
+
+/**
+ * UW#2b Fix 3 — content-hash dedupe lookup. The SAME executed instrument filed
+ * under two folders (e.g. an estoppel under both /Lease/ and /Estoppel/) shares a
+ * `content_hash`; re-extracting the copy would double-write the SAME conflicts on
+ * the SAME property. Find an ALREADY-ENRICHED backfill row with the identical
+ * content_hash (excluding this row's own id). Distinct documents (a real amendment
+ * vs the base lease) carry DIFFERENT content_hashes → never matched here. Returns
+ * `{ id, property_id }` of the prior enriched copy, or null.
+ */
+export async function findPriorBackfillByContentHash(contentHash, excludeId, deps) {
+  if (!contentHash) return null;
+  const q = deps.opsQuery || opsQuery;
+  const r = await q('GET',
+    'folder_feed_seen' +
+    '?detected_type=eq.lease' +
+    `&content_hash=eq.${encodeURIComponent(contentHash)}` +
+    `&id=neq.${encodeURIComponent(excludeId)}` +
+    '&subject_hint->lease_backfill->>outcome=eq.enriched' +
+    '&select=id,subject_hint' +
+    '&order=id.asc&limit=1').catch(() => ({ ok: false }));
+  if (!r.ok || !Array.isArray(r.data) || !r.data.length) return null;
+  const prior = r.data[0];
+  return { id: prior.id, property_id: prior.subject_hint?.lease_backfill?.property_id ?? null };
 }
 
 /**
@@ -193,6 +219,10 @@ async function bumpAttempt(row, attempts, deps) {
  * Outcome vocabulary (mapped from the attachLeaseDoc result, mirroring the
  * folder-feed worker's status mapping):
  *   enriched              — matched + applied (fill-blanks / conflicts → Decision Center)
+ *   duplicate_content     — same content_hash already enriched a property under
+ *                           another folder (the estoppel filed twice) → TERMINAL,
+ *                           skipped before any extract so it can't double-write
+ *                           the same conflicts (UW#2b Fix 3)
  *   multitenant_deferred  — under a /Multi/ or /Portfolio/ deal folder; the
  *                           attachLeaseDoc gate refused (no extract, no lease) —
  *                           TERMINAL, marked so it drops out of the eligible queue
@@ -226,6 +256,25 @@ async function bumpAttempt(row, attempts, deps) {
  * deps: { attachLeaseDoc, markBackfilled, bumpAttempt? }
  */
 export async function backfillOneLeaseDoc(row, ctx, deps) {
+  // UW#2b Fix 3 — content-hash dedupe (BEFORE any byte fetch / extract). If a row
+  // with an identical content_hash already ENRICHED a property, this is the same
+  // executed instrument filed under a second folder; re-extracting it would
+  // re-write the SAME conflicts on the SAME property. Skip it terminally. Distinct
+  // documents (amendment vs base lease) have different hashes → never deduped.
+  if (row.content_hash && deps.findPriorBackfill) {
+    const prior = await deps.findPriorBackfill(row.content_hash, row.id).catch(() => null);
+    if (prior) {
+      await deps.markBackfilled(row, {
+        outcome: 'duplicate_content', content_hash: row.content_hash,
+        duplicate_of_id: prior.id ?? null, property_id: prior.property_id ?? null,
+      });
+      return {
+        id: row.id, path: row.path, outcome: 'duplicate_content',
+        duplicate_of_id: prior.id ?? null, property_id: prior.property_id ?? null,
+      };
+    }
+  }
+
   const subjectHint = cleanHint(row.subject_hint);
   let res;
   try {
@@ -380,10 +429,20 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
 
   // markBackfilled closes over deps so the test can stub opsQuery; the per-doc
   // worker calls deps.markBackfilled(row, info).
+  // UW#2b Fix 3 — content-hash dedupe across the drain. An in-tick map catches two
+  // copies in the SAME batch (the prior copy's marker may not be visible to a
+  // read-after-write within the tick); the DB lookup catches a copy enriched on an
+  // earlier tick. Together: the same instrument under two folders enriches once.
+  const seenContentHashes = new Map();   // content_hash → { id, property_id } enriched this tick
   const workerDeps = {
     attachLeaseDoc: deps.attachLeaseDoc || PROD_DEPS.attachLeaseDoc,
     markBackfilled: (row, info) => markBackfilled(row, info, deps),
     bumpAttempt: (row, attempts) => bumpAttempt(row, attempts, deps),
+    findPriorBackfill: async (contentHash, excludeId) => {
+      if (!contentHash) return null;
+      if (seenContentHashes.has(contentHash)) return seenContentHashes.get(contentHash);
+      return findPriorBackfillByContentHash(contentHash, excludeId, deps);
+    },
   };
 
   // ── UW#4 GET ?ocr_queue=1 — list the scanned (needs_ocr) lease docs ──────────
@@ -438,6 +497,7 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     limit,
     scanned: 0,
     enriched: 0,
+    duplicate_content: 0,
     multitenant_deferred: 0,
     needs_ocr: 0,
     enrich_unprocessable: 0,
@@ -487,6 +547,9 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
       result.ti_rows_total += r.ti_rows || 0;
       if (r.lease_created) result.leases_created += 1;
       if (r.guaranteed_by_edge === true) result.guaranteed_by_edges += 1;
+      // Record the enriched content_hash so a same-batch duplicate (under a second
+      // folder) is deduped without relying on read-after-write of the marker.
+      if (row.content_hash) seenContentHashes.set(row.content_hash, { id: row.id, property_id: r.property_id ?? null });
     }
     result.items.push(r);
   }

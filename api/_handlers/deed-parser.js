@@ -40,6 +40,17 @@ const CITY_ADDITIONAL_RATES = {
   // Victorville, Hesperia, most Inland Empire cities: no additional tax
 };
 
+// ── Documentary-stamp (deed transfer-tax) rate by STATE, as a FRACTION of the
+// sale price (R58b Unit 2). Used to back out a price from "Doc Stamps $X".
+// FL deed doc stamps = $0.70 per $100 = 0.0070 (verified: $13,333,400 ×
+// 0.0070 = $93,333.80). Only states with a flat, deed-wide rate are modeled;
+// an unmodeled state yields no doc-stamp price estimate (skip, don't guess).
+const DEED_DOC_STAMP_RATE = {
+  FL: 0.0070,
+};
+
+const NOMINAL_CONSIDERATION_FLOOR = 100; // excludes the "$10.00 and other valuable consideration" nominal
+
 // ============================================================================
 // CORE PARSER
 // ============================================================================
@@ -106,33 +117,33 @@ export function parseDeedText(text, opts = {}) {
     data.tax_computation_basis = 'less_liens';
   }
 
-  // ── Grantee (buyer) — between "GRANT(S) to" and property description ─
-  const granteePatterns = [
+  // ── Grantor / Grantee (R58b Unit 1) ──────────────────────────────────
+  // Three formats, in precedence order:
+  //   1. LABELED cover-page (county recorder / Simplifile cover sheets):
+  //      "First Grantor: NAME  First Grantee: NAME", "Grantor(s): NAME".
+  //   2. NARRATIVE parenthetical (the body of most warranty/quitclaim deeds):
+  //      "… NAME[, a <entity qualifier>] (the "Grantor"), and NAME (the "Grantee")".
+  //   3. LEGACY "GRANTS to …" body forms (the original parser).
+  // Cover-page parties are the recorder's authoritative fields, so they win
+  // when both a cover sheet AND a body are present. A deed of trust
+  // (trustor/trustee/beneficiary, none of these markers) correctly yields null.
+  const legacyGranteePatterns = [
     /GRANTS?\s*\(S\)\s+to\s+(.+?)(?:,?\s+(?:the\s+following|all\s+that|that\s+certain))/is,
     /GRANTS?\s+to\s+(.+?)(?:,?\s+(?:the\s+following|all\s+that|that\s+certain))/is,
     /(?:in\s+favor\s+of|conveyed?\s+to)\s+(.+?)(?:,?\s+(?:the\s+following|all\s+that))/is,
   ];
-  for (const pattern of granteePatterns) {
-    const match = text.match(pattern);
-    if (match) {
-      data.grantee = cleanEntityName(match[1]);
-      break;
-    }
-  }
-
-  // ── Grantor (seller) — before "hereby GRANT" ─────────────────────────
-  const grantorPatterns = [
+  const legacyGrantorPatterns = [
     /acknowledged,\s+(.+?)\s+hereby\s+GRANTS?/is,
     /(?:know\s+all\s+men|that)\s+(.+?)(?:\s+(?:has|have|do(?:es)?)\s+(?:hereby\s+)?(?:grant|remise|convey))/is,
     /the\s+undersigned\s+grantor\(s\):?\s*\n?\s*(.+?)(?:\n\s*\n|\s+hereby)/is,
   ];
-  for (const pattern of grantorPatterns) {
-    const match = text.match(pattern);
-    if (match) {
-      data.grantor = cleanEntityName(match[1]);
-      break;
-    }
-  }
+
+  data.grantee = extractLabeledParty(text, 'Grantee')
+              || extractNarrativeParty(text, 'Grantee')
+              || firstPatternMatch(text, legacyGranteePatterns);
+  data.grantor = extractLabeledParty(text, 'Grantor')
+              || extractNarrativeParty(text, 'Grantor')
+              || firstPatternMatch(text, legacyGrantorPatterns);
 
   // ── APN / Parcel ID ──────────────────────────────────────────────────
   const apnPatterns = [
@@ -219,6 +230,52 @@ export function parseDeedText(text, opts = {}) {
   // ── "for good and valuable consideration" (no dollar amount) ─────────
   if (!data.stated_consideration && text.match(/good\s+and\s+valuable\s+consideration/i)) {
     data.consideration_type = 'nominal';
+  }
+
+  // ── Sale price (R58b Unit 2) — precedence:
+  //   (1) explicit transfer amount / total consideration ($real, not the $10 nominal),
+  //   (2) FL-style doc-stamp back-out by state rate,
+  //   (3) the CA transfer-tax estimate already computed above.
+  // Tag price_source so the higher-confidence transfer_amount is distinguishable
+  // from the doc_stamp/transfer-tax estimates. implied_sale_price is the field the
+  // existing R58 cross-ref + the gated DEED_IMPLIED_PRICE_FILL write consume.
+  const amountPatterns = [
+    /Transfer\s+Amt\.?\s*:?\s*\$\s*([\d,]+\.?\d*)/i,
+    /Total\s+Consideration\s*:?\s*\$\s*([\d,]+\.?\d*)/i,
+    /consideration\s+(?:of|in\s+the\s+(?:total\s+)?amount\s+of)\s+\$\s*([\d,]+\.?\d*)/i,
+  ];
+  for (const p of amountPatterns) {
+    const m = text.match(p);
+    if (m) {
+      const v = parseFloat(m[1].replace(/,/g, ''));
+      if (Number.isFinite(v) && v > NOMINAL_CONSIDERATION_FLOOR) { data.transfer_amount = v; break; }
+    }
+  }
+
+  const stampMatch = text.match(/Doc(?:umentary)?\s+Stamps?(?:\s+Tax)?\s*:?\s*\$\s*([\d,]+\.?\d*)/i);
+  if (stampMatch) {
+    const stamps = parseFloat(stampMatch[1].replace(/,/g, ''));
+    const rate = DEED_DOC_STAMP_RATE[(state || '').toUpperCase()];
+    if (Number.isFinite(stamps) && stamps > 0 && rate) {
+      data.doc_stamp_amount = stamps;
+      data.doc_stamp_implied_price = Math.round(stamps / rate);
+    }
+  }
+
+  if (data.transfer_amount) {
+    data.implied_sale_price = data.transfer_amount;
+    data.price_source = 'transfer_amount';
+    // Sanity-check the explicit amount against the doc-stamp estimate when both exist.
+    if (data.doc_stamp_implied_price && data.transfer_amount > 0) {
+      const diff = Math.abs(data.doc_stamp_implied_price - data.transfer_amount) / data.transfer_amount;
+      data.price_cross_check = diff < 0.02 ? 'agree' : 'differ';
+    }
+  } else if (data.doc_stamp_implied_price) {
+    data.implied_sale_price = data.doc_stamp_implied_price;
+    data.price_source = 'doc_stamp_estimate';
+  } else if (data.implied_sale_price) {
+    // CA transfer-tax estimate computed earlier
+    data.price_source = data.price_source || 'transfer_tax_estimate';
   }
 
   return data;
@@ -591,6 +648,78 @@ function granteeIsPlausible(name) {
 // ============================================================================
 // HELPERS
 // ============================================================================
+
+// Quote class covering straight + curly single/double quotes (OCR/PDF vary).
+const Q = '["\\u201C\\u201D\\u2018\\u2019\']?';
+
+/**
+ * R58b Unit 1 — labeled cover-page party.
+ * "First Grantor: NAME", "Grantor: NAME", "Grantor(s): NAME" — value runs up to
+ * the next Grantor/Grantee label, a "Fees:"/"Consideration:" field, or EOL.
+ * `which` is the canonical label ('Grantor' | 'Grantee').
+ */
+function extractLabeledParty(text, which) {
+  if (!text) return null;
+  const re = new RegExp(
+    '(?:^|[\\r\\n]|\\s)(?:First\\s+)?' + which + '(?:\\(s\\))?\\s*:\\s*' +
+    '(.+?)' +
+    '(?=\\s+(?:First\\s+)?Grant(?:or|ee)(?:\\(s\\))?\\s*:|\\s+(?:Fees?|Consideration|Document(?:ary)?|Recording)\\b|[\\r\\n]|$)',
+    'i'
+  );
+  const m = text.match(re);
+  if (!m) return null;
+  const name = cleanEntityName(m[1]);
+  return name && /[A-Za-z]/.test(name) ? name : null;
+}
+
+/**
+ * R58b Unit 1 — narrative parenthetical party.
+ * '… NAME[, a <entity qualifier>] (the "Grantor"), …' — captures the entity name
+ * immediately preceding the `(the "Grantor"|"Grantee")` defined-term parenthetical
+ * and strips trailing qualifiers. `[^()]*?` cannot cross a paren, so the Grantee
+ * match necessarily starts AFTER the Grantor parenthetical closes. No `i` flag on
+ * the leading anchor so it begins at a real (capitalized) entity-name token.
+ */
+function extractNarrativeParty(text, which) {
+  if (!text) return null;
+  // Left-anchor on a connective (between/and/that/comma/…) so the capture is the
+  // single entity phrase preceding the parenthetical — not a whole sentence run.
+  // `[^()\r\n;.]` stops the name at sentence/paren/line boundaries; `[^()]` on
+  // the GRANTEE pass cannot cross the Grantor parenthetical's closing `)`.
+  const re = new RegExp(
+    '(?:between|and|that|to|,|;|:|^)\\s*' +
+    '([A-Z0-9][^()\\r\\n;.]*?)' +
+    '\\s*\\(\\s*[Tt]he\\s+' + Q + which + Q + '\\s*\\)'
+  );
+  const m = text.match(re);
+  if (!m) return null;
+  return stripEntityQualifier(cleanEntityName(m[1]));
+}
+
+/**
+ * Strip a trailing entity-type qualifier and address/aka boilerplate that often
+ * trails the name in the narrative form, e.g.
+ *   "Oldsmar Retail Development LLC, a Florida limited liability company"
+ *      → "Oldsmar Retail Development LLC"
+ *   "Deltona Wellness, LP, a Florida limited partnership"
+ *      → "Deltona Wellness, LP"   (the ", LP" is NOT an "a/an …" qualifier)
+ */
+function stripEntityQualifier(name) {
+  if (!name) return null;
+  let s = name;
+  s = s.replace(/\s+(?:whose\s+address|having\s+an?\s+address|a\/k\/a|f\/k\/a|n\/k\/a|formerly\s+known\s+as)\b.*$/i, '');
+  s = s.replace(/,\s+(?:an?|the)\s+[A-Za-z][\w .,'’&/-]*$/i, '');
+  return cleanEntityName(s);
+}
+
+/** First capture group of the first matching pattern, cleaned. */
+function firstPatternMatch(text, patterns) {
+  for (const pattern of patterns) {
+    const m = text.match(pattern);
+    if (m) return cleanEntityName(m[1]);
+  }
+  return null;
+}
 
 /**
  * Clean up entity name extracted from deed text.

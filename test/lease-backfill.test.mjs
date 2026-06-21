@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  fetchEligibleLeaseDocs, backfillOneLeaseDoc,
+  fetchEligibleLeaseDocs, backfillOneLeaseDoc, findPriorBackfillByContentHash,
 } from '../api/_handlers/lease-backfill.js';
 
 // ── fetchEligibleLeaseDocs ───────────────────────────────────────────────────
@@ -35,11 +35,47 @@ describe('lease backfill — eligibility selection', () => {
     assert.match(calledPath, /limit=15/);
   });
 
+  it('selects content_hash and surfaces it on the mapped rows (UW#2b Fix 3)', async () => {
+    let calledPath = null;
+    const deps = {
+      opsQuery: async (m, path) => {
+        calledPath = path;
+        return { ok: true, data: [{ id: 5, server_relative_path: '/x/c.pdf', vertical: 'dia', status: 'staged', subject_hint: {}, content_hash: 'sha-1' }] };
+      },
+    };
+    const out = await fetchEligibleLeaseDocs(15, deps);
+    assert.match(calledPath, /select=[^&]*content_hash/);
+    assert.equal(out.rows[0].content_hash, 'sha-1');
+  });
+
   it('surfaces a list failure (502 upstream)', async () => {
     const deps = { opsQuery: async () => ({ ok: false, status: 500, data: 'boom' }) };
     const out = await fetchEligibleLeaseDocs(15, deps);
     assert.equal(out.ok, false);
     assert.equal(out.status, 500);
+  });
+});
+
+describe('lease backfill — findPriorBackfillByContentHash (content-hash dedupe lookup)', () => {
+  it('queries an already-enriched row with the same hash, excluding self; returns id + property_id', async () => {
+    let calledPath = null;
+    const deps = {
+      opsQuery: async (m, path) => {
+        calledPath = path;
+        return { ok: true, data: [{ id: 28518, subject_hint: { lease_backfill: { outcome: 'enriched', property_id: 30441 } } }] };
+      },
+    };
+    const prior = await findPriorBackfillByContentHash('sha-estoppel-1', 28522, deps);
+    assert.match(calledPath, /content_hash=eq\.sha-estoppel-1/);
+    assert.match(calledPath, /id=neq\.28522/);
+    assert.match(calledPath, /lease_backfill->>outcome=eq\.enriched/);
+    assert.deepEqual(prior, { id: 28518, property_id: 30441 });
+  });
+
+  it('returns null when there is no prior enriched copy (and on an empty hash)', async () => {
+    const deps = { opsQuery: async () => ({ ok: true, data: [] }) };
+    assert.equal(await findPriorBackfillByContentHash('sha-x', 1, deps), null);
+    assert.equal(await findPriorBackfillByContentHash(null, 1, deps), null);
   });
 });
 
@@ -254,6 +290,40 @@ describe('lease backfill — per-doc outcome mapping', () => {
     assert.equal(out.outcome, 'error');
     assert.match(out.reason, /threw:kaboom/);
     assert.equal(bumped, 1);
+  });
+
+  it('UW#2b Fix 3 — content-hash dedupe: the same instrument under a second folder is skipped before extract', async () => {
+    let attached = false, marked = null;
+    const deps = {
+      // a prior row (id 28518) already enriched property 30441 with this content_hash
+      findPriorBackfill: async (h, excludeId) => {
+        assert.equal(h, 'sha-estoppel-1');
+        assert.equal(excludeId, 28522);
+        return { id: 28518, property_id: 30441 };
+      },
+      attachLeaseDoc: async () => { attached = true; return { ok: true, attached: true, lease: true }; },
+      markBackfilled: async (r, info) => { marked = info; return { ok: true }; },
+    };
+    const out = await backfillOneLeaseDoc(
+      row({ id: 28522, content_hash: 'sha-estoppel-1' }), ctx, deps);
+    assert.equal(out.outcome, 'duplicate_content');
+    assert.equal(out.duplicate_of_id, 28518);
+    assert.equal(out.property_id, 30441);
+    assert.equal(attached, false, 'the duplicate is NEVER extracted (no double-write)');
+    assert.equal(marked.outcome, 'duplicate_content');
+  });
+
+  it('a DISTINCT document (different content_hash) is NOT deduped — it proceeds normally', async () => {
+    let attached = false;
+    const deps = {
+      findPriorBackfill: async () => null,            // no prior enriched copy of THIS hash
+      attachLeaseDoc: async () => { attached = true; return { ok: false, attached: false, no_domain: true }; },
+      markBackfilled: async () => ({ ok: true }),
+    };
+    const out = await backfillOneLeaseDoc(
+      row({ id: 99, content_hash: 'sha-amendment-2' }), ctx, deps);
+    assert.equal(attached, true, 'a distinct instrument still runs through the extractor');
+    assert.equal(out.outcome, 'no_domain');
   });
 
   it('strips backfill marker keys from the hint before re-running (no leak into disambiguation)', async () => {
