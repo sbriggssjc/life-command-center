@@ -136,6 +136,64 @@ export async function ocrPdfToText({ buffer, mediaType, ocrImpl } = {}) {
   return { ok: true, text: trimmed, model: r.data?.model || null };
 }
 
+// ---------------------------------------------------------------------------
+// UW#4 — tiered OCR: a FREE local engine FIRST, the cloud vision model as the
+// escalation. The free tier (Tesseract via ocrmypdf / pytesseract) drains the
+// scanned-lease backlog without per-page cloud spend; the cloud tier (the
+// existing gpt-4o vision) is reached only when free OCR is unavailable or its
+// confidence is below the floor — so the spend is a deliberate, per-doc miss
+// cost, not a default.
+//
+// The free binary is NOT in the always-on Railway image (and a 50-page scan
+// would blow the per-tick budget), so the free engine runs OUT OF PROCESS — the
+// workstation drainer (scripts/lease-ocr-backfill.mjs) shells to the system
+// binary and supplies the recovered text — OR via an injected `freeOcr` adapter
+// once the binary is added to nixpacks. With no `freeOcr` configured this falls
+// straight through to the cloud tier, BYTE-IDENTICAL to R58, so it is
+// deploy-order-safe and adds zero dependency / shell-out to the server.
+//
+// Returns { ok, text, tier:'free'|'free_low_conf'|'cloud', confidence, engine }.
+// `confidence` is 0-100 (mean Tesseract word confidence) for the free tier and
+// null for the cloud tier (the vision model exposes none), so a low-confidence
+// transcription can be FLAGGED for review rather than trusted blind.
+//
+// `OCR_FREE_CONFIDENCE_MIN` — below this mean word confidence a free
+// transcription is treated as a MISS and escalated (a garbled free read is
+// worse than the vision model's); 0 disables the floor.
+// `OCR_CLOUD_ESCALATION` — kill-switch (default on, preserving R58). Set
+// 'false' to force a pure-free drain with ZERO per-page cloud spend.
+// ---------------------------------------------------------------------------
+const OCR_FREE_CONFIDENCE_MIN = Number(process.env.OCR_FREE_CONFIDENCE_MIN || 55);
+
+export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) {
+  const cloudEnabled = String(process.env.OCR_CLOUD_ESCALATION ?? 'true').toLowerCase() !== 'false';
+
+  // Tier 1 — free local engine. Injected; unconfigured by default on the server.
+  if (deps.freeOcr) {
+    let f;
+    try { f = await deps.freeOcr({ buffer, mediaType }); }
+    catch (err) { f = { ok: false, reason: `free_ocr_threw:${err?.message || err}` }; }
+    if (f && f.ok && f.text) {
+      const conf = typeof f.confidence === 'number' ? f.confidence : null;
+      const passesFloor = conf == null || OCR_FREE_CONFIDENCE_MIN <= 0 || conf >= OCR_FREE_CONFIDENCE_MIN;
+      if (passesFloor) {
+        return { ok: true, text: f.text, tier: 'free', confidence: conf, engine: f.engine || 'tesseract' };
+      }
+      // Recovered free text but below the floor: escalate when allowed, else
+      // return it tagged low-confidence (better than nothing on a pure-free run).
+      if (!cloudEnabled) {
+        return { ok: true, text: f.text, tier: 'free_low_conf', confidence: conf, engine: f.engine || 'tesseract' };
+      }
+    }
+  }
+
+  // Tier 2 — cloud vision escalation (the existing, already-blessed gpt-4o OCR).
+  if (!cloudEnabled) return { ok: false, reason: 'free_ocr_unavailable_cloud_disabled' };
+  const c = await (deps.ocrPdfToText || ocrPdfToText)({ buffer, mediaType, ocrImpl: deps.ocrImpl });
+  if (c && c.ok && c.text) return { ok: true, text: c.text, tier: 'cloud', confidence: null, engine: c.model || 'gpt-4o-vision' };
+  return { ok: false, reason: c?.reason || 'ocr_failed' };
+}
+
 /**
  * The Unit-1 core: fetch bytes → extract text (digital first, OCR fallback on a
  * zero-text PDF when allowed). Deps injected for testing.

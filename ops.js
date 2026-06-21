@@ -2268,12 +2268,60 @@ async function renderFederatedLane(type) {
   if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
+  // R59 Unit 3 — bulk-handle the SAFE (record-only / non-destructive) verdict
+  // across all shown items, so an oversized lane is workable, not 999 clicks.
+  // Destructive verdicts (merge/apply/break-link/correct/confirm_sale) are NEVER
+  // bulked — they keep their per-card gate.
+  var bulk = _DC_BULK_SAFE[type];
+  if (bulk) {
+    html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Bulk action (safe only)</span>'
+      + '<div class="triage-actions"><button class="q-action" onclick="dcFedBulkSafe()">' + esc(bulk.label) + '</button></div></div>';
+  }
   _dcFedType = type;
   _dcFedArr = items.slice();
   items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
   el.innerHTML = html;
 }
 window.renderFederatedLane = renderFederatedLane;
+
+// R59 Unit 3 — per-lane SAFE bulk verdict (record-only / non-destructive only).
+var _DC_BULK_SAFE = {
+  intake_disposition: { verdict: 'dismiss', label: 'Dismiss all shown' },
+  property_merge: { verdict: 'not_duplicate', label: 'Mark all "not a duplicate"' },
+  owner_source_conflict: { verdict: 'keep_current', label: 'Keep current owner on all' },
+  provenance_conflict: { verdict: 'keep_current', label: 'Keep current on all' },
+  cms_link_suspect: { verdict: 'link_correct', label: 'Confirm all links correct' },
+  implausible_value: { verdict: 'confirm_as_is', label: 'Confirm all as-is' },
+  merge_duplicate_entities: { verdict: 'keep_separate', label: 'Keep all separate' },
+};
+
+async function dcFedBulkSafe() {
+  var bulk = _DC_BULK_SAFE[_dcFedType];
+  if (!bulk) return;
+  var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
+    .filter(function (p) { var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved'); });
+  if (!pending.length) { showToast('Nothing to bulk-handle', 'info'); return; }
+  var ok = (typeof lccConfirm === 'function')
+    ? await lccConfirm('Apply "' + bulk.label + '" to ' + pending.length + ' shown item' + (pending.length === 1 ? '' : 's') + '?\n\nThis is a safe, record-only verdict (no merges / no domain writes).')
+    : (typeof confirm === 'function' ? confirm(bulk.label + ' — ' + pending.length + ' items?') : true);
+  if (!ok) return;
+  var done = 0, failed = 0;
+  for (var k = 0; k < pending.length; k++) {
+    var p = pending[k];
+    var res = await opsApi('/api/decision-verdict', {
+      method: 'POST', body: JSON.stringify({ type: _dcFedType, subject: p.it, verdict: bulk.verdict, payload: {} }),
+    });
+    var row = document.getElementById('dc-f' + p.ix);
+    if (res.ok && res.data && res.data.ok) {
+      done++;
+      if (row) { row.classList.add('resolved'); row.style.opacity = '0'; }
+    } else { failed++; }
+  }
+  document.querySelectorAll('#reviewConsoleContent .q-item.resolved[id^="dc-f"]').forEach(function (n) { if (n.parentNode) n.remove(); });
+  _dcAdvanceFed();
+  showToast('Bulk: ' + done + ' handled' + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+}
+window.dcFedBulkSafe = dcFedBulkSafe;
 
 async function dcImplausibleCorrect(i) {
   const it = _dcFedArr[i]; if (!it) return;
@@ -3277,6 +3325,7 @@ async function renderBdWorklist(type) {
       + (c ? esc(_bdSignalLabel[c] || c) : 'All') + '</button>';
   }).join('') + '</div>';
   if (!items.length) { html += '<div class="ops-empty">No BD actions in this view. ✓</div>'; el.innerHTML = html; return; }
+  window._bdWorklistItems = items; // R59 Unit 1 — index-based open carries the signal
   items.forEach(function (it, ix) {
     var val = _dcMoney(it.rank_value);
     var dom = String(it.domain || '');
@@ -3289,9 +3338,9 @@ async function renderBdWorklist(type) {
     var dl = it.deep_link || {};
     var action;
     if (pid && dom && (dl.surface === 'property' || dl.surface === 'decision_center')) {
-      var tab = dl.surface === 'decision_center' ? 'Ownership &amp; CRM' : 'Ownership &amp; CRM';
-      action = '<button class="q-action primary" onclick="openUnifiedDetail(' + jsStringArg(dom)
-        + ', {property_id: ' + jsStringArg(pid) + '}, {}, ' + jsStringArg(tab) + ')">Open property →</button>';
+      // Open the property AND carry the signal so the detail's NEXT STEP becomes
+      // the signal's action (R59 Unit 1) — not the generic "Create the lead".
+      action = '<button class="q-action primary" onclick="bdOpenWorklistItem(' + ix + ')">Open property →</button>';
     } else if (dl.surface === 'decision_center') {
       action = '<button class="q-action primary" onclick="renderReviewConsolePage()">Open in Decision Center →</button>';
     } else {
@@ -3309,6 +3358,21 @@ async function renderBdWorklist(type) {
   el.innerHTML = html;
 }
 window.renderBdWorklist = renderBdWorklist;
+
+// R59 Unit 1 — open a worklist row's property, carrying the BD signal forward as
+// a route hint so the detail's NEXT STEP leads with the signal's action. The
+// detail re-fetches the authoritative signal regardless, so this is an instant
+// hint, not the source of truth.
+function bdOpenWorklistItem(ix) {
+  var it = (window._bdWorklistItems || [])[ix];
+  if (!it || typeof openUnifiedDetail !== 'function') return;
+  var dom = String(it.domain || '');
+  var pid = it.property_id == null ? '' : String(it.property_id);
+  if (!dom || !pid) return;
+  var hint = { type: it.signal_type, context: Object.assign({}, it.detail || {}, { owner_name: it.who || null }) };
+  openUnifiedDetail(dom, { property_id: pid }, { _bdSignal: hint }, 'Ownership & CRM');
+}
+window.bdOpenWorklistItem = bdOpenWorklistItem;
 
 // ============================================================================
 // NBT #1 Slice 1c — Next best touchpoint surface
@@ -3397,7 +3461,13 @@ async function renderContactQualifyWorklist() {
   html += '<div class="rc-intro">Real captured contacts waiting to be activated. Highest-value first (by the property they were captured on). '
     + 'Qualifying links the contact to the property owner and feeds it to a cadence that lacked a recipient.</div>';
   if (!items.length) { html += '<div class="ops-empty">No contacts to qualify. ✓</div>'; el.innerHTML = html; return; }
-  html += '<div class="q-item-meta" style="margin:6px 0">' + esc(String(total)) + ' contact' + (total === 1 ? '' : 's') + ' to qualify</div>';
+  // R59 Unit 3 — bulk auto-qualify the high-confidence subset (real email +
+  // plausible person name) in one pass; the ambiguous remainder stays per-item.
+  var hiConf = items.filter(function (x) { return x && x.has_email; }).length;
+  html += '<div class="triage-bar" style="margin:6px 0">'
+    + '<span class="q-item-meta">' + esc(String(total)) + ' contact' + (total === 1 ? '' : 's') + ' to qualify</span>'
+    + '<div class="triage-actions"><button class="q-action primary" id="bulkQualifyBtn" onclick="bulkQualifyContacts(this)" title="Auto-qualify every contact that has a real email + plausible person name">⚡ Auto-qualify high-confidence' + (hiConf ? ' (' + hiConf + '+)' : '') + ' →</button></div>'
+    + '</div>';
   items.forEach(function (it, ix) {
     var iid = it.inbox_item_id == null ? '' : String(it.inbox_item_id);
     var ctx = [];
@@ -3447,6 +3517,22 @@ async function qualifyContact(inboxItemId, btn) {
   showToast(msg, 'success');
 }
 window.qualifyContact = qualifyContact;
+
+// R59 Unit 3 — bulk-drain the high-confidence captured contacts in one pass.
+async function bulkQualifyContacts(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Qualifying…'; }
+  var res = await opsPost('/api/operations?action=qualify_contacts_bulk', { limit: 100 });
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast('Bulk qualify failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Auto-qualify high-confidence →'; }
+    return;
+  }
+  var d = res.data;
+  showToast('Qualified ' + d.qualified + (d.failed ? ' (' + d.failed + ' failed)' : '')
+    + (d.remaining ? ' · ' + d.remaining + ' more remain' : ''), 'success');
+  renderContactQualifyWorklist();
+}
+window.bulkQualifyContacts = bulkQualifyContacts;
 
 // Generate the next-touch email inline (no sending — copy / mailto / mark sent).
 async function cadDraft(cadenceId, entityId, templateId, name, domain, contactEmail, btn) {

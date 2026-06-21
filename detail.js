@@ -426,7 +426,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Best-effort: never throws upward (Item #8 Phase A, 2026-05-17).
     // Phase 8: ranked prospecting feed (PR1). Falls back to the single-row
     // bar on empty feed or render error, so this degrades to prior behavior.
-    Promise.allSettled([_udFetchProspectingFeed(6), _udFetchPriorityBand()]).then(function () {
+    // R59 Unit 1: route-param hint — the BD worklist carries the signal it sent
+    // the operator here to work. Show it instantly; _udLoadBdSignals (authoritative,
+    // POST-ready) confirms/replaces it for any entry point incl. direct nav.
+    if (fallback && fallback._bdSignal && fallback._bdSignal.type) {
+      try { _udCache.bdSignal = fallback._bdSignal; } catch (_e) {}
+    }
+    Promise.allSettled([_udFetchProspectingFeed(6), _udFetchPriorityBand(), _udLoadBdSignals(db, propertyId)]).then(function () {
       try { _udRenderProspectingFeed(); }
       catch (e) { console.warn('prospecting feed render failed', e); try { _udRenderNextActionBar(); } catch (_e) {} }
       try { _udRenderNextStep(); } catch (_e) {}
@@ -6116,9 +6122,19 @@ function _udRenderNextStep() {
   const bandIsCadence = !!(band && ['P0', 'P6', 'P7'].indexOf(band.priority_band) !== -1);
   const onCadence = !!(oo && oo.cadence_next_touch_due) || !!(cad && cad.seeded) || bandIsCadence;
   const cadenceNextTouch = (oo && oo.cadence_next_touch_due) || (cad && cad.next_touch_due) || (band && band.next_touch_due) || null;
+  // R59 Unit 1 — signal continuity: if an open BD signal routed the operator
+  // here (or one is open on direct nav), render its banner above the spine and
+  // make the NEXT STEP the signal's action. suspected_sale + owner_source_conflict
+  // OVERRIDE the spine step; loan_maturity reframes it once the owner is resolved.
+  const _sigUI = (function () {
+    try { return _udBdSignalUI({ recordedOwner: recordedOwner, onCadence: onCadence, needsLead: needsLead }); }
+    catch (_e) { return { banner: '', step: null }; }
+  })();
   // First unmet step in the spine = the single next action.
   let step;
-  if (!recordedOwner) {
+  if (_sigUI.step) {
+    step = _sigUI.step;
+  } else if (!recordedOwner) {
     step = { label: 'Pull the recorded owner', sub: 'No deed owner on file yet.', cta: 'Resolve owner',
       onclick: pid ? '_udBtnGuard(this,function(){_udResolveOwner(' + pid + ')})' : null };
   } else if (linkPending) {
@@ -6154,7 +6170,8 @@ function _udRenderNextStep() {
   const stLink = linked ? 'done' : (linkPending ? 'next' : (lk ? 'todo' : 'na'));
   const stLead = (hasOpenOpp || (own.owner_entity_id && !needsLead)) ? 'done' : 'todo';
   const trail = [['Owner', stOwner], ['Link', stLink], ['Lead', stLead], ['Cadence', onCadence ? 'done' : 'todo']];
-  let h = '<div class="dns-row">';
+  let h = _sigUI.banner || '';
+  h += '<div class="dns-row">';
   h += '<span class="dns-flag">\u25B6 Next step</span>';
   h += '<div class="dns-text"><div class="dns-label">' + esc(step.label) + '</div><div class="dns-sub">' + esc(step.sub) + '</div></div>';
   if (step.onclick) h += '<button type="button" class="dns-cta" onclick="event.stopPropagation();' + step.onclick + '">' + esc(step.cta) + '</button>';
@@ -6262,6 +6279,168 @@ async function _udLoadPropertyGeo(domain, propertyId) {
   } catch (_e) { /* soft */ }
   return null;
 }
+
+// R59 Unit 1 — load the open BD signal(s) for this property and stash the
+// primary on _udCache so the NEXT STEP card can render a signal banner + make
+// the step the signal's action. Works on ANY entry point (worklist route OR
+// direct navigation) — the route param is only an instant hint; this fetch is
+// the authoritative, POST-ready source. Soft-fails (no signal → spine as usual).
+async function _udLoadBdSignals(domain, propertyId) {
+  if (!_udCache || !domain || !propertyId) return;
+  const d = (domain === 'gov' || domain === 'government') ? 'gov'
+    : (domain === 'dia' || domain === 'dialysis') ? 'dia' : null;
+  if (!d) return;
+  try {
+    const data = await _udApiGet('/api/operations?action=property_signals&domain=' + d +
+      '&property_id=' + encodeURIComponent(propertyId));
+    if (data && data.ok && data.signals && data.primary && data.signals[data.primary]) {
+      _udCache.bdSignals = data.signals;
+      _udCache.bdSignal = data.signals[data.primary];
+    } else {
+      // Authoritative "no open signal" — clear any route-param hint.
+      _udCache.bdSignals = {};
+      _udCache.bdSignal = null;
+    }
+  } catch (_e) { /* soft — keep any hint */ }
+}
+
+// Re-fetch signals + re-render the NEXT STEP after a verdict that resolves one.
+async function _udRefreshBdSignals() {
+  const pid = (_udCache && _udCache.ids && _udCache.ids.property_id) || null;
+  const dom = _udCache && _udCache.db;
+  if (dom && pid) await _udLoadBdSignals(dom, pid);
+  try { _udRenderNextStep(); } catch (_e) {}
+}
+
+// R59 Unit 1 — confirm a SUSPECTED sale inline (R53 machinery). The operator
+// MUST supply a price (we never fabricate); the date defaults to when the
+// ownership change was seen. Posts the same federated decision-verdict the
+// Decision Center "Suspected sales" lane uses.
+async function _udConfirmSuspectedSale() {
+  const sig = _udCache && _udCache.bdSignal;
+  if (!sig || sig.type !== 'suspected_sale' || !sig.subject) return;
+  const c = sig.subject.context || {};
+  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
+    + '"' + (c.suspected_grantor || '?') + '" → "' + (c.suspected_grantee || '?') + '"';
+  const promptFn = (typeof window.lccPrompt === 'function') ? window.lccPrompt
+    : (msg, def) => Promise.resolve(typeof prompt === 'function' ? prompt(msg, def) : null);
+  const pv = await promptFn('Confirm this sale.\n\n' + ctx + '\n\nEnter the SALE PRICE (numbers only — we never guess):', '');
+  if (pv == null) return;
+  const price = Number(String(pv).replace(/[^0-9.]/g, ''));
+  if (!isFinite(price) || price < 50000) { showToast('Enter a real price (≥ $50k)', 'error'); return; }
+  const defDate = c.suspected_sale_date ? String(c.suspected_sale_date).slice(0, 10) : '';
+  const dv = await promptFn('Sale date (YYYY-MM-DD):', defDate);
+  if (dv == null) return;
+  const saleDate = String(dv).trim() || defDate;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) { showToast('Enter a valid date (YYYY-MM-DD)', 'error'); return; }
+  const resp = await _udApiPost('/api/decision-verdict', {
+    type: 'suspected_sale', subject: sig.subject, verdict: 'confirm_sale',
+    payload: { sold_price: price, sale_date: saleDate, buyer: c.suspected_grantee || null, seller: c.suspected_grantor || null },
+  });
+  if (resp && resp.ok) { showToast('Sale recorded ✓', 'success'); await _udRefreshBdSignals(); }
+  else { showToast('Could not record: ' + ((resp && (resp.error || resp.message)) || 'unknown'), 'error'); }
+}
+window._udConfirmSuspectedSale = _udConfirmSuspectedSale;
+
+async function _udNotASale() {
+  const sig = _udCache && _udCache.bdSignal;
+  if (!sig || sig.type !== 'suspected_sale' || !sig.subject) return;
+  const resp = await _udApiPost('/api/decision-verdict', { type: 'suspected_sale', subject: sig.subject, verdict: 'not_a_sale' });
+  if (resp && resp.ok) { showToast('Marked not a sale', 'success'); await _udRefreshBdSignals(); }
+  else { showToast('Action failed', 'error'); }
+}
+window._udNotASale = _udNotASale;
+
+// R59 Unit 1 — reconcile an owner-source conflict inline (R51 machinery). Deed
+// grantee (legal title) wins; broker-as-owner clears the broker. keep_current
+// confirms the recorded owner. Posts the federated owner_source_conflict verdict.
+async function _udReconcileOwner(verdict) {
+  const sig = _udCache && _udCache.bdSignal;
+  if (!sig || sig.type !== 'owner_source_conflict' || !sig.subject) return;
+  const resp = await _udApiPost('/api/decision-verdict', { type: 'owner_source_conflict', subject: sig.subject, verdict: verdict });
+  if (resp && resp.ok) {
+    showToast(verdict === 'keep_current' ? 'Kept current owner' : 'Deed owner set ✓', 'success');
+    await _udRefreshBdSignals();
+    // accept_deed changes the recorded owner — refresh the ownership spine too.
+    if (verdict !== 'keep_current') { try { await _udFetchPriorityBand(); } catch (_e) {} try { _udRenderNextStep(); } catch (_e) {} }
+  } else { showToast('Could not reconcile: ' + ((resp && (resp.error || resp.message)) || 'unknown'), 'error'); }
+}
+window._udReconcileOwner = _udReconcileOwner;
+
+// R59 Unit 1 — dismiss a loan-maturity BD trigger as not relevant (R54).
+async function _udLoanMaturityDismiss() {
+  const sig = _udCache && _udCache.bdSignal;
+  if (!sig || sig.type !== 'loan_maturity' || !sig.subject) return;
+  const resp = await _udApiPost('/api/decision-verdict', { type: 'loan_maturity', subject: sig.subject, verdict: 'not_relevant' });
+  if (resp && resp.ok) { showToast('Maturity dismissed', 'success'); await _udRefreshBdSignals(); }
+  else { showToast('Action failed', 'error'); }
+}
+window._udLoanMaturityDismiss = _udLoanMaturityDismiss;
+
+// R59 Unit 1 — build the signal banner HTML + the step override for the NEXT
+// STEP card. Returns { banner, step } where step (when non-null) replaces the
+// spine's computed step. Pure presentation off _udCache.bdSignal.
+function _udBdSignalUI(ctxState) {
+  const sig = _udCache && _udCache.bdSignal;
+  if (!sig || !sig.type) return { banner: '', step: null };
+  const c = (sig.subject && sig.subject.context) || sig.context || {};
+  const fmtDate = (x) => { if (!x) return ''; try { return (typeof _fmtDate === 'function') ? _fmtDate(x) : String(x).slice(0, 10); } catch (_e) { return String(x).slice(0, 10); } };
+  const money = (x) => (x == null || x === '') ? '' : '$' + Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const wrap = (title, body, danger) => '<div class="dns-signal" style="border-left:3px solid '
+    + (danger ? 'var(--danger,#c0392b)' : 'var(--gov-green,#2e7d32)')
+    + ';background:var(--s2,#f4f6f8);padding:8px 12px;border-radius:6px;margin-bottom:8px">'
+    + '<div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:' + (danger ? 'var(--danger,#c0392b)' : 'var(--text2)') + '">' + esc(title) + '</div>'
+    + '<div style="font-size:12px;color:var(--text)">' + body + '</div></div>';
+
+  if (sig.type === 'suspected_sale') {
+    const body = '<b>' + esc(c.suspected_grantor || '?') + '</b> → <b>' + esc(c.suspected_grantee || '?') + '</b>'
+      + (c.suspected_sale_date ? ' (' + esc(fmtDate(c.suspected_sale_date)) + ')' : '')
+      + ' · <a href="#" onclick="event.preventDefault();event.stopPropagation();_udNotASale()" style="color:var(--text3)">not a sale</a>';
+    return {
+      banner: wrap('⚡ Suspected sale', body, true),
+      step: { label: 'Confirm the sale — record price/date', sub: 'An ownership change with no recorded sale. Confirm with the real price (we never guess).',
+        cta: 'Confirm sale', onclick: '_udBtnGuard(this,_udConfirmSuspectedSale)' },
+    };
+  }
+  if (sig.type === 'owner_source_conflict') {
+    const isBroker = c.conflict_kind === 'broker_as_owner' || c.is_broker_owner === true;
+    const body = 'Deed grantee <b>' + esc(c.latest_deed_grantee || '?') + '</b>'
+      + ' ≠ recorded owner <b>' + esc(c.recorded_owner_name || '—') + '</b>'
+      + (c.conflict_kind ? ' <span style="color:var(--text3)">(' + esc(c.conflict_kind) + ')</span>' : '')
+      + ' · <a href="#" onclick="event.preventDefault();event.stopPropagation();_udReconcileOwner(\'keep_current\')" style="color:var(--text3)">keep current</a>';
+    return {
+      banner: wrap('⚠ Owner conflict', body, false),
+      step: { label: 'Reconcile the owner', sub: isBroker ? 'The recorded owner looks like a broker. Clear it and set the deed grantee.' : 'The recorded deed grantee (legal title) should win.',
+        cta: isBroker ? 'Clear broker → set deed owner' : 'Accept deed owner →',
+        onclick: isBroker ? '_udBtnGuard(this,function(){_udReconcileOwner(\'broker_not_owner\')})' : '_udBtnGuard(this,function(){_udReconcileOwner(\'accept_deed\')})' },
+    };
+  }
+  if (sig.type === 'loan_maturity') {
+    const matured = (typeof c.months_to_maturity === 'number' && c.months_to_maturity < 0);
+    const who = c.owner_name || c.true_owner_name || c.recorded_owner_name || '';
+    const lbl = (matured ? 'Loan MATURED ' : 'Loan matures ') + esc(fmtDate(c.maturity_date))
+      + (!matured && typeof c.months_to_maturity === 'number' ? ' (' + c.months_to_maturity + ' mo)' : '');
+    const bal = (c.loan_balance != null) ? ' · ' + money(c.loan_balance) : '';
+    const distress = c.is_distressed ? ' · ⚠ ' + esc(c.distress_reason || 'distressed') : '';
+    const body = lbl + bal + distress
+      + ' · <a href="#" onclick="event.preventDefault();event.stopPropagation();_udLoanMaturityDismiss()" style="color:var(--text3)">not a lead</a>';
+    // Only override the step when the owner is resolved enough to act on (the
+    // outreach IS the opening of the owner opportunity / cadence). Otherwise let
+    // the spine run (resolve owner first) — the banner still shows the trigger.
+    let step = null;
+    if (ctxState && ctxState.recordedOwner) {
+      step = ctxState.onCadence
+        ? { label: 'Refi / disposition outreach', sub: (who ? who + ' — ' : '') + 'maturity wall — work the cadence.',
+            cta: 'Work cadence →', onclick: 'navTo(&quot;pagePriorityQueue&quot;);setTimeout(renderCadenceDashboard,300)' }
+        : { label: 'Refi / disposition outreach', sub: (who ? who + ' — ' : '') + 'maturity wall forces a refinance or sale. Open the owner opportunity.',
+            cta: ctxState.needsLead ? 'Open opportunity' : 'Add to cadence',
+            onclick: ctxState.needsLead ? '_udBtnGuard(this,_udCreateLeadFromProperty)' : '_udBtnGuard(this,_udAddToCadence)' };
+    }
+    return { banner: wrap((matured || c.is_distressed) ? '⚠ Loan maturity — BD trigger' : 'Loan maturity — BD trigger', body, matured || c.is_distressed), step: step };
+  }
+  return { banner: '', step: null };
+}
+window._udBdSignalUI = _udBdSignalUI;
 
 // R50 — render the nearby-owners + nearby-sales geographic section (shared by
 // the dia operations tab + the gov detail body). Competitors are rendered by
