@@ -269,6 +269,10 @@ app.all('/api/lease-backfill', (req, res) => { req.query._route = 'lease-backfil
 // R58 document text / deed-parse worker (cron + manual): GET=dry-run, POST=drain.
 app.all('/api/document-text-tick', (req, res) => { req.query._route = 'document-text-tick'; intakeHandler(req, res); });
 
+// UW#6-REV: sidebar byte-capture notify — records the property-documents Storage
+// pointer (after the signed PUT) so the deep-parser reads durable bytes.
+app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'document-notify'; intakeHandler(req, res); });
+
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });

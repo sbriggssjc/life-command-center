@@ -60,6 +60,42 @@ export function artifactObjectPath({ key, fileName, mimeType, createdAt }) {
  * @param {Function} o.fetchImpl    fetch implementation (fetchWithTimeout or global fetch)
  * @returns {Promise<{ok:boolean, storage_path?:string, status?:number, detail?:string}>}
  */
+/**
+ * Download object bytes from a Supabase Storage bucket. Generic over the
+ * project (opsUrl/opsKey for LCC, or a domain url/service-key for the per-domain
+ * `property-documents` bucket — UW#6-REV). Returns { ok, buffer, contentType }.
+ *
+ * @param {object}  o
+ * @param {string}  o.baseUrl     project Supabase URL
+ * @param {string}  o.key         service-role key for that project
+ * @param {string}  o.bucket      bucket id
+ * @param {string}  o.objectPath  path within the bucket (no leading bucket id)
+ * @param {Function} [o.fetchImpl]
+ * @returns {Promise<{ok:boolean, buffer?:Buffer, contentType?:string, status?:number, detail?:string}>}
+ */
+export async function downloadFromStorage({ baseUrl, key, bucket, objectPath, fetchImpl }) {
+  if (!baseUrl || !key || !bucket || !objectPath) {
+    return { ok: false, status: 0, detail: 'missing_storage_args' };
+  }
+  const encodedPath = String(objectPath).split('/').map(encodeURIComponent).join('/');
+  const url = `${baseUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
+  const doFetch = fetchImpl || ((u, opts) => fetch(u, opts));
+  try {
+    const res = await doFetch(url, {
+      method: 'GET',
+      headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      return { ok: false, status: res.status, detail: detail.slice(0, 200) };
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return { ok: true, buffer, contentType: res.headers?.get?.('content-type') || null };
+  } catch (err) {
+    return { ok: false, status: 0, detail: err?.message?.slice(0, 200) || 'download_error' };
+  }
+}
+
 export async function uploadArtifactToStorage({ opsUrl, opsKey, bucket, objectPath, mimeType, buffer, fetchImpl }) {
   const b = bucket || ARTIFACT_BUCKET;
   const encodedPath = String(objectPath).split('/').map(encodeURIComponent).join('/');
