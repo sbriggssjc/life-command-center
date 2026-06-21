@@ -56,6 +56,82 @@ describe('parseDeedText (R58 Unit 2)', () => {
   });
 });
 
+describe('parseDeedText R58b — real-world formats (Unit 1) + price (Unit 2)', () => {
+  // doc 3964 shape — narrative parenthetical body + explicit transfer amount + FL doc stamps
+  const NARRATIVE = [
+    'Prepared by ... Transfer Amt $13,333,400.00 ... Doc Stamps $93,333.80 ...',
+    'SPECIAL WARRANTY DEED',
+    'THIS SPECIAL WARRANTY DEED made this day by and between Oldsmar Retail Development LLC, ' +
+      'a Florida limited liability company, whose address is 123 Main St (the "Grantor"), and ' +
+      'Deltona Wellness, LP, a Florida limited partnership (the "Grantee").',
+  ].join('\n');
+
+  // doc 3807 shape — Simplifile / county-recorder cover-page labels (OCR)
+  const COVER = 'Recording Cover Page\nFirst Grantor: TRIVIUM GROVE CITY LLC First Grantee: CHF II GROVE CITY MOB LLC\nFees: $18.50';
+
+  it('narrative parenthetical: captures parties + strips entity qualifiers', () => {
+    const p = parseDeedText(NARRATIVE, { state: 'FL' });
+    assert.equal(p.grantor, 'Oldsmar Retail Development LLC');   // qualifier + address stripped
+    assert.equal(p.grantee, 'Deltona Wellness, LP');            // ", LP" kept; ", a Florida …" stripped
+  });
+
+  it('narrative parenthetical: curly quotes + name-qualifier-paren ordering', () => {
+    const t = 'made by and between ABC Holdings, LLC, a Delaware limited liability company (the “Grantor”) and XYZ Trust (the “Grantee”)';
+    const p = parseDeedText(t, { state: 'TX' });
+    assert.equal(p.grantor, 'ABC Holdings, LLC');
+    assert.equal(p.grantee, 'XYZ Trust');
+  });
+
+  it('labeled cover-page: First Grantor/First Grantee on one line', () => {
+    const p = parseDeedText(COVER, { state: 'OH' });
+    assert.equal(p.grantor, 'TRIVIUM GROVE CITY LLC');
+    assert.equal(p.grantee, 'CHF II GROVE CITY MOB LLC');
+  });
+
+  it('labeled cover-page wins when both a cover sheet AND a narrative body are present', () => {
+    const both = COVER + '\nby and between SOME OTHER SELLER LLC (the "Grantor"), and SOME OTHER BUYER LLC (the "Grantee")';
+    const p = parseDeedText(both, { state: 'OH' });
+    assert.equal(p.grantor, 'TRIVIUM GROVE CITY LLC');          // recorder's authoritative field
+    assert.equal(p.grantee, 'CHF II GROVE CITY MOB LLC');
+  });
+
+  it('price: explicit transfer amount wins, tagged transfer_amount, cross-checks doc stamps', () => {
+    const p = parseDeedText(NARRATIVE, { state: 'FL' });
+    assert.equal(p.transfer_amount, 13333400);
+    assert.equal(p.implied_sale_price, 13333400);
+    assert.equal(p.price_source, 'transfer_amount');
+    assert.equal(p.price_cross_check, 'agree');                 // 13,333,400 × 0.0070 = 93,333.80
+  });
+
+  it('price: FL doc-stamp back-out by state rate when no explicit amount', () => {
+    const t = 'WARRANTY DEED ... Doc Stamps: $7,000.00 ... County of Pinellas';
+    const p = parseDeedText(t, { state: 'FL' });
+    assert.equal(p.implied_sale_price, 1000000);               // 7000 / 0.0070
+    assert.equal(p.price_source, 'doc_stamp_estimate');
+  });
+
+  it('price: unmodeled state doc stamps → no estimate (skip, never guess)', () => {
+    const t = 'WARRANTY DEED ... Doc Stamps: $7,000.00 ...';
+    const p = parseDeedText(t, { state: 'GA' });
+    assert.equal(p.implied_sale_price, undefined);
+    assert.equal(p.doc_stamp_implied_price, undefined);
+  });
+
+  it('nominal "$10.00 and other valuable consideration" is NOT read as a price', () => {
+    const t = 'GRANT DEED ... in consideration of $10.00 and other good and valuable consideration ... County of Orange';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.transfer_amount, undefined);
+    assert.equal(p.implied_sale_price, undefined);
+  });
+
+  it('deed of trust (trustor/trustee/beneficiary) yields NULL parties — no false extraction', () => {
+    const t = 'DEED OF TRUST\nThis Deed of Trust is made among the Trustor JOHN SMITH, the Trustee FIRST AMERICAN TITLE, and the Beneficiary BIG BANK NA.';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantor || null, null);
+    assert.equal(p.grantee || null, null);
+  });
+});
+
 describe('processDeedDocument — schema-correct DB integration', () => {
   it('writes property_documents.extracted_data (NOT metadata) keyed by document_id', async () => {
     const { q, calls } = makeFakeQ({

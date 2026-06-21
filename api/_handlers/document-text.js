@@ -50,6 +50,28 @@ export async function fetchEligibleDocs(domain, { limit, doctype }, deps = {}) {
 }
 
 /**
+ * R58b Unit 3 — re-parse queue: deed docs that ALREADY have raw_text (so no
+ * fetch/OCR needed) but whose deed parse never resolved a grantee. Selecting on
+ * the stored text makes a parser improvement cheap to apply retroactively — a
+ * broad OCR drain is never wasted. Idempotent: a doc either gets a grantee
+ * parsed (→ extracted_data.deed_extraction.grantee non-null → drops out) or is
+ * marked ingestion_status='deed_no_parties' (genuine deed-of-trust → excluded).
+ */
+export async function fetchReparseDocs(domain, { limit }, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const path =
+    'property_documents?raw_text=not.is.null' +
+    '&document_type=ilike.*deed*' +
+    '&extracted_data->deed_extraction->>grantee=is.null' +
+    '&or=(ingestion_status.is.null,ingestion_status.neq.deed_no_parties)' +
+    '&select=document_id,property_id,raw_text,document_type,file_name,ingestion_status' +
+    `&order=document_id.desc&limit=${limit}`;
+  const r = await q(domain, 'GET', path);
+  if (!r.ok) return { ok: false, status: r.status, detail: r.data };
+  return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
+}
+
+/**
  * Process ONE document: fetch bytes → text → write raw_text; if it's a deed, run
  * the deed parser too. Deps injected for testability.
  * Outcomes: text_extracted | deed_parsed | needs_ocr | no_source | error
@@ -103,6 +125,47 @@ export async function processOneDoc(domain, row, deps = {}) {
   return { document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len };
 }
 
+/**
+ * R58b Unit 3 — re-parse ONE deed over its STORED raw_text (no fetch, no OCR).
+ * Runs only the deed parser. When no party is parsed (deed of trust, etc.) the
+ * row is marked 'deed_no_parties' so it drops out of the re-parse queue.
+ * Outcomes: deed_parsed | no_parties | no_text
+ */
+export async function processOneReparse(domain, row, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const runDeed = deps.processDeedDocument || processDeedDocument;
+
+  if (!row.raw_text) return { document_id: row.document_id, outcome: 'no_text' };
+
+  let opts = {};
+  if (row.property_id != null) {
+    const pr = await q(domain, 'GET', `properties?property_id=eq.${row.property_id}&select=city,state&limit=1`).catch(() => null);
+    if (pr?.ok && pr.data?.[0]) opts = { city: pr.data[0].city || undefined, state: pr.data[0].state || undefined };
+  }
+  const deedRes = await runDeed(domain, row.property_id, row.document_id, row.raw_text, opts, deps).catch((e) => ({ error: e?.message || String(e) }));
+  const grantor = deedRes?.parsed?.grantor || null;
+  const grantee = deedRes?.parsed?.grantee || null;
+
+  if (!grantor && !grantee) {
+    // Genuinely no parties (e.g. a deed of trust) — mark terminal so the
+    // re-parse queue drains and never re-hammers the same unparseable doc.
+    await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+      { ingestion_status: 'deed_no_parties' }, { Prefer: 'return=minimal' }).catch(() => {});
+    return { document_id: row.document_id, outcome: 'no_parties' };
+  }
+
+  return {
+    document_id: row.document_id, outcome: 'deed_parsed',
+    grantor, grantee,
+    implied_price: deedRes?.parsed?.implied_sale_price || null,
+    price_source: deedRes?.parsed?.price_source || null,
+    deed_record_id: deedRes?.deedRecordId || null,
+    r51_fed: !!deedRes?.r51Fed,
+    sale_verified: (deedRes?.upgradedTransactions || 0) > 0,
+    implied_price_filled: !!deedRes?.impliedPriceFilled,
+  };
+}
+
 const PROD_DEPS = { domainQuery, extractDocumentText, processDeedDocument };
 
 export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
@@ -113,6 +176,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   if (!user) return;
 
   const dryRun = req.method === 'GET';
+  // R58b Unit 3 — re-parse mode runs the deed parser over docs that ALREADY have
+  // raw_text (no fetch/OCR), retroactively applying parser improvements.
+  const reparse = (req.query.mode || '').toLowerCase() === 'reparse' || String(req.query.reparse) === '1';
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '15', 10)));
   const doctype = (req.query.doctype || 'deed').toLowerCase();          // default the headline lane
   const domainParam = (req.query.domain || 'both').toLowerCase();
@@ -120,10 +186,11 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   const tickBudgetMs = Math.max(5000, parseInt(process.env.DOC_TEXT_TICK_BUDGET_MS || '22000', 10));
 
   const result = {
-    mode: dryRun ? 'dry_run' : 'drain',
-    doctype, limit,
+    mode: (reparse ? 'reparse' : 'drain') + (dryRun ? '_dry_run' : ''),
+    doctype, limit, reparse,
     by_domain: {},
     scanned: 0, text_extracted: 0, deed_parsed: 0, needs_ocr: 0, no_source: 0, error: 0,
+    no_parties: 0, no_text: 0,
     deed_records_created: 0, r51_fed: 0, sales_verified: 0, implied_prices_filled: 0,
     items: [],
   };
@@ -131,7 +198,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   const deadline = Date.now() + tickBudgetMs;
   for (const domain of domains) {
     const short = domain === 'dialysis' ? 'dia' : 'gov';
-    const eligible = await fetchEligibleDocs(domain, { limit, doctype }, deps);
+    const eligible = reparse
+      ? await fetchReparseDocs(domain, { limit }, deps)
+      : await fetchEligibleDocs(domain, { limit, doctype }, deps);
     if (!eligible.ok) { result.by_domain[short] = { error: 'list_failed', detail: eligible.detail }; continue; }
     result.by_domain[short] = { eligible: eligible.rows.length };
 
@@ -144,7 +213,7 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
 
     for (const row of eligible.rows) {
       if (Date.now() > deadline) break;
-      const r = await processOneDoc(domain, row, deps);
+      const r = reparse ? await processOneReparse(domain, row, deps) : await processOneDoc(domain, row, deps);
       r.domain = short;
       result.scanned++;
       if (Object.prototype.hasOwnProperty.call(result, r.outcome)) result[r.outcome]++;
