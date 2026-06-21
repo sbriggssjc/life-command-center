@@ -4441,3 +4441,53 @@ confirm-gated price write; additive (no domain migration — raw_text/
 ingestion_status/extracted_data already exist); ≤12 api/*.js; dia/gov pipelines
 otherwise untouched. JS ships on the Railway redeploy; the cron migration applies
 on LCC Opps (no-ops until the endpoint ships).
+
+## UW#3 — cap-rate derivation backfill (2026-06-21)
+
+Audit item #2 (`docs/capital-markets/UNDERWRITING_DATA_QUALITY_AUDIT_2026-06-20.md`):
+backfill cap where the inputs exist but cap is null — "size the lever first."
+Receipts-first; the lever is small and the honest result is asymmetric. Full
+write-up: `docs/capital-markets/UW3_CAP_RATE_DERIVATION.md`. DB applied live to
+dia + gov; migrations committed; pure-DB round (no JS, ≤12 api/*.js).
+
+### Grounding refuted the audit premise
+- dia `rent_at_sale` is a SPENT lever — 0 of 1,341 no-cap sales carry it (wherever
+  it exists the cap is already derived; `calculated_cap_rate` already on 2,887).
+- The AUTHORITATIVE derivation is the compute fn (`dia_compute_cap_rate` /
+  `gov_compute_cap_rate`; "cap is calculated, not stored"), already wired into the
+  snapshot trigger on every INSERT/UPDATE. The only unfilled rows are historical
+  sales or sales whose lease/income arrived AFTER the sale insert.
+- Sized via the compute fn + a QUALITY GATE (high/medium confidence): **dia 8 /
+  gov 0**. gov resolves ~30 but ALL are low-confidence bottom-tier
+  (property_noi_unknown / historical_lease / property_gross_rent), 11/30 out of
+  band (1.75%–29.87%) — those sales lack a cap precisely because they lack
+  underwritable income; writing them would DEGRADE comps. So gov's trustworthy
+  lever is ~0 (the framework was right to leave them null).
+
+### What shipped (reuse the blessed frameworks, never fork)
+- `<dom>_backfill_missing_sale_caps(p_dry_run default true, p_limit, p_run_tag)`
+  on each domain — RE-FIRES the existing snapshot trigger (`trg_auto_cap_rate_on_sale`
+  / `trg_gov_auto_cap_rate_on_sale`) on resolvable rows via a column-scoped
+  touch-update, so the of-record / round / source / suspect pipeline runs exactly
+  as on a real insert. Fill-blanks only (dia `calculated_cap_rate` / gov
+  `sold_cap_rate`); QUALITY GATE = high/medium confidence + in-bound; value-ranked
+  (highest sold_price first). Migrations: `Dialysis/supabase/migrations/
+  20260621_dia_uw3_cap_rate_backfill.sql`, `government-lease/sql/
+  20260621_gov_uw3_cap_rate_backfill.sql`.
+- **The derived cap self-heals** (the snapshot trigger re-derives on any touch —
+  nulling does NOT stick), so `cap_rate_backfill_log` is an AUDIT record, not an
+  undo ledger; suppress a derived cap via the framework's own
+  `exclude_from_market_metrics` opt-out.
+- Gentle weekly self-heal cron per DB (`<dom>-cap-rate-backfill-sweep`, Sun 09:00
+  UTC) — income often lands after the sale insert; the cron fills future
+  high/medium-confidence rows (bounded; gov no-ops until real income arrives).
+
+### Verified live (2026-06-21)
+dia: 692 scanned → 8 filled, all high/medium confidence, all in [0.01,0.25], no
+curated cap clobbered (all were effective-null; the of-record trigger promoted 7
+to `cap_rate_final`). gov: an initial UNGATED run filled 30; inspection found all
+low-confidence (11 out of band) → **reverted to 0 residue** (snapshot trigger
+disabled atomically; sold_cap_rate back to 5,313; log emptied; history rows
+removed); the gated function now resolves 0. The audit's price+noi/price+rent
+premise was refuted by grounding — trustworthy lever = dia 8 / gov 0, surfaced
+honestly rather than padded with speculative caps.

@@ -113,6 +113,10 @@ assessed fine (75%) but its parcel_records is thin (1,555) — dia's physical-at
    source. Highest real free lift.
 2. **Cap-rate derivation (UW#3)** — free/internal: backfill cap where price+rent(dia)/price+noi(gov)
    exist but cap is null (size the lever first; gov noi is only 8% so the gov ceiling is modest).
+   **DONE 2026-06-21** — grounding refuted the premise: the trustworthy (high/medium-confidence)
+   lever is **dia 8 / gov 0** (gov's unfilled sales lack underwritable income; the framework was
+   right to leave them null). Shipped gated `<dom>_backfill_missing_sale_caps()` + weekly self-heal
+   cron. See `UW3_CAP_RATE_DERIVATION.md`.
 3. **Physical attrs via CoStar/RCA sidebar** — year_built (28/30%), land, building_size — from the
    channel we already operate, captured on the deals analysts actually work. NOT county scraping.
 4. **OPM/FRPP federal-workforce intel for gov** — federal_employee_count 12%, public, gov-specific.
