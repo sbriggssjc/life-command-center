@@ -131,6 +131,23 @@
               <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue')">Looking for who to pursue? Open the Priority Queue →</button>
             </div>
 
+            <!-- Top BD Actions — the BD-action cockpit's top slice surfaced on Today
+                 (R59 Unit 2, 2026-06-21). The single highest-value MOVE (suspected
+                 sales / maturities / owner conflicts / contacts / chains), value-ranked.
+                 Distinct from Top Data Gaps above (data-quality) — this is "who/what to
+                 pursue". Links to the full Top BD Actions list. -->
+            <div class="widget" id="todayBdActionsWidget">
+              <div class="widget-title">
+                Top BD Actions
+                <div class="nba-controls">
+                  <button type="button" class="nba-refresh-btn" onclick="renderTodayBdActions(true)" title="Refresh">↻</button>
+                </div>
+              </div>
+              <div class="nba-subhead">Your highest-value moves — suspected sales, loan maturities, owner conflicts, contacts to push. Click to work the deal.</div>
+              <div id="todayBdActionsContent"><div class="loading"><span class="spinner"></span></div></div>
+              <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)">See all BD actions →</button>
+            </div>
+
             <!-- Stats -->
             <div class="widget-grid" id="homeStats">
               <div class="stat-card clickable" onclick="navTo('pageMyWork')" title="Promoted / assigned action items only — does not include raw flagged emails. See the Flagged Emails stat (next card) for the triage queue."><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Action Items</div></div>
