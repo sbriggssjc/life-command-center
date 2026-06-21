@@ -25,6 +25,7 @@ import { createRequire } from 'module';
 import { isReportedField } from '../_shared/extraction-field-policy.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
+import { ocrPdfToText } from '../_shared/document-text.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout, insertEntityRelationship } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
@@ -663,10 +664,21 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
   const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
   if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
-  const text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
-  // Fix #2: a scanned / image-only PDF (executed copies have no text layer) has no
-  // extractable text. Return a graceful needs_ocr outcome instead of throwing (which
-  // 500'd the endpoint) — most executed leases will hit this until OCR lands.
+  let text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
+  // R58 Unit 3: a scanned / image-only PDF (most executed leases) has no text
+  // layer — feed it through the SAME OCR foundation the deed worker uses (gpt-4o
+  // vision verbatim transcription) instead of immediately parking needs_ocr. The
+  // helper is gated on OPENAI_API_KEY + a byte cap; without the key it returns
+  // ok:false and we fall back to the exact prior graceful needs_ocr outcome, so
+  // this is deploy-order-safe and adds nothing when OCR is unavailable. Disable
+  // with LEASE_EXTRACT_OCR='false'.
+  let ocrUsed = false;
+  if (!text && String(process.env.LEASE_EXTRACT_OCR || 'true').toLowerCase() !== 'false') {
+    const ocr = await ocrPdfToText({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));
+    if (ocr.ok && ocr.text) { text = ocr.text.slice(0, 120000); ocrUsed = true; }
+  }
+  // A scanned PDF the OCR path couldn't rescue (no key / over cap / OCR miss) →
+  // graceful needs_ocr (no 500), exactly as before.
   if (!text) return { normalized: null, needs_ocr: true, source: 'needs_ocr' };
   const prompt = `${buildLeaseExtractionPrompt()}\n\n--- LEASE DOCUMENT TEXT ---\n${text}`;
   const result = await invokeExtractionAI({ prompt });
@@ -674,7 +686,7 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   const aiText = result.data?.response || result.data?.content || result.data?.choices?.[0]?.message?.content || (typeof result.data === 'string' ? result.data : '') || '';
   const parsed = parseLeaseJson(aiText);
   if (!parsed) throw new Error('no_json_in_ai_response');
-  return { normalized: normalizeLeaseExtraction(parsed), source: 'ai', text_len: text.length };
+  return { normalized: normalizeLeaseExtraction(parsed), source: ocrUsed ? 'ai_ocr' : 'ai', text_len: text.length, ocr_used: ocrUsed };
 }
 
 const DOMAIN_DB = (d) => (d === 'dialysis' ? 'dia_db' : 'gov_db');

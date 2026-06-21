@@ -148,6 +148,16 @@ export function parseDeedText(text, opts = {}) {
     }
   }
 
+  // ── County (deeds reliably name their recording county; gov.deed_records
+  //    requires it NOT NULL) ──────────────────────────────────────────────
+  const countyMatch =
+    text.match(/County\s+of\s+([A-Za-z][A-Za-z .'\-]+?)(?:\s*[,\n]|\s+State\b)/i) ||
+    text.match(/\b([A-Za-z][A-Za-z .'\-]+?)\s+County\b/);
+  if (countyMatch) {
+    const c = cleanEntityName(countyMatch[1]);
+    if (c && c.length <= 40) data.county = c;
+  }
+
   // ── Escrow number ────────────────────────────────────────────────────
   const escrowMatch = text.match(/Escrow\s+(?:No|Number|#)\s*[.:]?\s*([\w\-]+)/i);
   if (escrowMatch) data.escrow_number = escrowMatch[1].trim();
@@ -222,136 +232,120 @@ export function parseDeedText(text, opts = {}) {
  * Validate parsed deed data against existing DB records.
  * Returns a validation report with matches, mismatches, and confidence score.
  *
+ * R58 (2026-06-20): rewritten to be SCHEMA-CORRECT per domain. The original
+ * orphaned parser queried columns that exist on NEITHER live DB
+ * (`sales_transactions.id`/`.data_confidence`/`.notes`-by-`parcel_id`,
+ * `recorded_owners.owner_name`/`.ownership_start_date`-by-property,
+ * `parcel_records.parcel_number`). Grounded live: both domains key
+ * `sales_transactions` on `property_id` (dia sale_id:int / gov sale_id:uuid) and
+ * carry `properties.recorded_owner_name` denormalized. The owner check now reads
+ * that denormalized name (the property→owner link), and the sale check keys on
+ * `property_id` and selects the real PK.
+ *
  * @param {string} domain - 'government' or 'dialysis'
- * @param {string} propertyId - Property/parcel UUID in domain DB
+ * @param {string|number} propertyId - domain properties.property_id
  * @param {object} parsed - Output from parseDeedText()
- * @returns {object} { matches: [], mismatches: [], confidence, suggestions }
+ * @param {object} [deps] - { domainQuery } injectable for tests
+ * @returns {object} { matches, mismatches, confidence, suggestions, saleCandidate }
+ *   saleCandidate: { sale_id, sold_price, implied_price } — the best sale to
+ *   verify / fill (price-matched first, else the most recent), or null.
  */
-export async function crossReferenceDeed(domain, propertyId, parsed) {
+export async function crossReferenceDeed(domain, propertyId, parsed, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
   const report = {
     matches: [],
     mismatches: [],
     confidence: 0,
     suggestions: [],
+    saleCandidate: null,
   };
 
-  if (!parsed || !propertyId) return report;
-
-  const idCol = domain === 'government' ? 'parcel_id' : 'property_id';
+  if (!parsed || propertyId == null) return report;
+  const isGov = domain === 'government';
+  const salePk = isGov ? 'sale_id' : 'sale_id'; // PK is sale_id on both (gov uuid / dia int)
   let checks = 0;
   let passed = 0;
 
-  // ── 1. Check sales_transactions for implied sale price ───────────────
-  if (parsed.implied_sale_price || parsed.stated_consideration) {
+  const impliedPrice = parsed.implied_sale_price || parsed.stated_consideration || null;
+
+  // ── 1. sales_transactions — keyed on property_id (both domains) ───────
+  const salesRes = await q(domain, 'GET',
+    `sales_transactions?property_id=eq.${propertyId}&select=${salePk},sold_price,sale_date&order=sale_date.desc.nullslast&limit=10`
+  );
+  const sales = (salesRes.ok && Array.isArray(salesRes.data)) ? salesRes.data : [];
+  if (impliedPrice) {
     checks++;
-    const price = parsed.implied_sale_price || parsed.stated_consideration;
-    const salesRes = await domainQuery(domain, 'GET',
-      `sales_transactions?${idCol}=eq.${propertyId}&select=id,sold_price,sale_date,notes&order=sale_date.desc&limit=5`
-    );
-    if (salesRes.ok && salesRes.data?.length) {
-      const matchingSale = salesRes.data.find(s => {
-        if (!s.sold_price) return false;
-        // Allow 2% tolerance for rounding differences in tax calculation
-        const diff = Math.abs(s.sold_price - price) / price;
-        return diff < 0.02;
+    const priceMatch = sales.find(s => {
+      if (!s.sold_price) return false;
+      return Math.abs(Number(s.sold_price) - impliedPrice) / impliedPrice < 0.02; // 2% tax-rounding tolerance
+    });
+    if (priceMatch) {
+      passed++;
+      report.matches.push({
+        field: 'sale_price', deed_value: impliedPrice, db_value: priceMatch.sold_price,
+        db_record: 'sales_transactions', db_id: priceMatch[salePk],
       });
-      if (matchingSale) {
-        passed++;
-        report.matches.push({
-          field: 'sale_price',
-          deed_value: price,
-          db_value: matchingSale.sold_price,
-          db_record: 'sales_transactions',
-          db_id: matchingSale.id,
-        });
-      } else {
-        report.mismatches.push({
-          field: 'sale_price',
-          deed_value: price,
-          db_values: salesRes.data.map(s => s.sold_price).filter(Boolean),
-          db_record: 'sales_transactions',
-        });
-      }
+      report.saleCandidate = { sale_id: priceMatch[salePk], sold_price: priceMatch.sold_price, implied_price: impliedPrice };
+    } else if (sales.length) {
+      report.mismatches.push({
+        field: 'sale_price', deed_value: impliedPrice,
+        db_values: sales.map(s => s.sold_price).filter(v => v != null), db_record: 'sales_transactions',
+      });
     }
   }
+  // Fall back to the most-recent sale as the verify/fill candidate when no price
+  // matched (e.g. the sale has a NULL price — the implied price can fill it).
+  if (!report.saleCandidate && sales.length) {
+    const s = sales[0];
+    report.saleCandidate = { sale_id: s[salePk], sold_price: s.sold_price ?? null, implied_price: impliedPrice };
+  }
 
-  // ── 2. Check recorded_owner matches grantee ──────────────────────────
+  // ── 2. grantee vs the property's recorded owner ──────────────────────
+  // Resolve via properties.recorded_owner_id → recorded_owners.name (works on
+  // BOTH domains — gov properties has NO denormalized recorded_owner_name column,
+  // only the FK; the original parser's `select=recorded_owner_name` 400'd on gov).
   if (parsed.grantee) {
     checks++;
-    const ownerRes = await domainQuery(domain, 'GET',
-      `recorded_owners?${idCol}=eq.${propertyId}&select=id,owner_name,ownership_start_date&order=ownership_start_date.desc.nullsfirst&limit=3`
+    const propRes = await q(domain, 'GET',
+      `properties?property_id=eq.${propertyId}&select=recorded_owner_id&limit=1`
     );
-    if (ownerRes.ok && ownerRes.data?.length) {
-      const normalizedGrantee = normalizeForComparison(parsed.grantee);
-      const matchingOwner = ownerRes.data.find(o =>
-        normalizeForComparison(o.owner_name) === normalizedGrantee
+    const ownerId = (propRes.ok && propRes.data?.[0]?.recorded_owner_id) || null;
+    let ownerName = null;
+    if (ownerId) {
+      const oRes = await q(domain, 'GET',
+        `recorded_owners?recorded_owner_id=eq.${ownerId}&select=name&limit=1`
       );
-      if (matchingOwner) {
+      ownerName = (oRes.ok && oRes.data?.[0]?.name) || null;
+    }
+    if (ownerName) {
+      if (normalizeForComparison(ownerName) === normalizeForComparison(parsed.grantee)) {
         passed++;
         report.matches.push({
-          field: 'grantee_vs_owner',
-          deed_value: parsed.grantee,
-          db_value: matchingOwner.owner_name,
-          db_record: 'recorded_owners',
-          db_id: matchingOwner.id,
+          field: 'grantee_vs_owner', deed_value: parsed.grantee,
+          db_value: ownerName, db_record: 'properties',
         });
       } else {
         report.mismatches.push({
-          field: 'grantee_vs_owner',
-          deed_value: parsed.grantee,
-          db_values: ownerRes.data.map(o => o.owner_name),
-          db_record: 'recorded_owners',
+          field: 'grantee_vs_owner', deed_value: parsed.grantee,
+          db_values: [ownerName], db_record: 'properties',
         });
-        report.suggestions.push(`Grantee "${parsed.grantee}" does not match current recorded owner(s). Consider updating recorded_owners.`);
+        report.suggestions.push(`Grantee "${parsed.grantee}" differs from recorded owner "${ownerName}".`);
       }
     }
   }
 
-  // ── 3. Check APN matches parcel_records (government) ─────────────────
-  if (parsed.apn && domain === 'government') {
-    checks++;
-    const parcelRes = await domainQuery(domain, 'GET',
-      `parcel_records?parcel_id=eq.${propertyId}&select=parcel_id,parcel_number`
-    );
-    if (parcelRes.ok && parcelRes.data?.length) {
-      const normalizedApn = parsed.apn.replace(/[\s\-]/g, '');
-      const matchingParcel = parcelRes.data.find(p =>
-        (p.parcel_number || '').replace(/[\s\-]/g, '') === normalizedApn
-      );
-      if (matchingParcel) {
-        passed++;
-        report.matches.push({
-          field: 'apn',
-          deed_value: parsed.apn,
-          db_value: matchingParcel.parcel_number,
-          db_record: 'parcel_records',
-        });
-      } else {
-        report.mismatches.push({
-          field: 'apn',
-          deed_value: parsed.apn,
-          db_values: parcelRes.data.map(p => p.parcel_number),
-          db_record: 'parcel_records',
-        });
-      }
-    }
-  }
-
-  // ── 4. Check document_number against existing deed_records ───────────
+  // ── 3. document_number against existing deed_records (PK per domain) ──
   if (parsed.document_number) {
     checks++;
-    const deedRes = await domainQuery(domain, 'GET',
-      `deed_records?document_number=eq.${encodeURIComponent(parsed.document_number)}&select=deed_id,grantor,grantee,consideration&limit=1`
+    const deedPk = isGov ? 'deed_id' : 'id';
+    const deedRes = await q(domain, 'GET',
+      `deed_records?document_number=eq.${encodeURIComponent(parsed.document_number)}&select=${deedPk}&limit=1`
     );
     if (deedRes.ok && deedRes.data?.length) {
       passed++;
       report.matches.push({
-        field: 'document_number',
-        deed_value: parsed.document_number,
-        db_value: parsed.document_number,
-        db_record: 'deed_records',
-        db_id: deedRes.data[0].deed_id,
-        note: 'Deed already recorded in system',
+        field: 'document_number', deed_value: parsed.document_number, db_value: parsed.document_number,
+        db_record: 'deed_records', db_id: deedRes.data[0][deedPk], note: 'Deed already recorded in system',
       });
     }
   }
@@ -365,26 +359,37 @@ export async function crossReferenceDeed(domain, propertyId, parsed) {
 // ============================================================================
 
 /**
- * Full deed processing pipeline:
+ * Full deed processing pipeline (R58 — wired off the orphaned shelf, 2026-06-20):
  * 1. Parse raw deed text
- * 2. Store extracted data on the property_documents row (metadata JSONB)
- * 3. Upsert deed_record if document_number present
- * 4. Cross-reference against existing DB records
- * 5. Upgrade matching sales_transaction confidence to "deed_verified"
+ * 2. Store extracted data on property_documents.extracted_data (NOT `metadata` —
+ *    that column exists on NEITHER domain; both carry `extracted_data` jsonb +
+ *    PK `document_id`)
+ * 3. Upsert deed_records (archival; dedup PK per domain — dia `id` / gov `deed_id`)
+ * 4. FEED R51 — write the grantee to properties.latest_deed_grantee/_date so the
+ *    existing v_owner_source_conflict view + owner-deed-autofix lane pick it up
+ *    (R51 reads those property columns, NOT deed_records). Fill-blanks-or-newer,
+ *    never clobber a more-recent recorded grantee.
+ * 5. Cross-reference + supply the deed's implied sale price as a CANDIDATE on a
+ *    matching sale that LACKS one — confirm-gated (env DEED_IMPLIED_PRICE_FILL),
+ *    fill-blanks ONLY, NEVER overwrites a curated price.
  *
  * @param {string} domain - 'government' or 'dialysis'
- * @param {string} propertyId - Property/parcel UUID
- * @param {string} documentId - property_documents row ID (optional)
- * @param {string} rawText - Raw deed text
- * @param {object} [opts] - { city, state } for transfer tax calculation
- * @returns {object} { parsed, crossRef, deedRecordId, upgradedTransactions }
+ * @param {string|number} propertyId - domain properties.property_id
+ * @param {string|number} documentId - property_documents.document_id (optional)
+ * @param {string} rawText - Raw deed text (digital or OCR'd)
+ * @param {object} [opts] - { city, state, county } for transfer-tax calc + DTO
+ * @param {object} [deps] - { domainQuery } injectable for tests
+ * @returns {object} { parsed, crossRef, deedRecordId, upgradedTransactions, r51Fed, impliedPriceFilled }
  */
-export async function processDeedDocument(domain, propertyId, documentId, rawText, opts = {}) {
+export async function processDeedDocument(domain, propertyId, documentId, rawText, opts = {}, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
   const result = {
     parsed: {},
     crossRef: null,
     deedRecordId: null,
     upgradedTransactions: 0,
+    r51Fed: false,
+    impliedPriceFilled: false,
   };
 
   // Step 1: Parse
@@ -396,19 +401,21 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
     return result;
   }
 
-  // Step 2: Store extracted data on property_documents row
-  if (documentId) {
-    await domainQuery(domain, 'PATCH',
-      `property_documents?id=eq.${documentId}`,
+  // Step 2: Store extracted data on property_documents row. The column is
+  // `extracted_data` (jsonb) and the PK is `document_id` on BOTH domains — the
+  // original `metadata`/`id` write was a silent no-op against the real schema.
+  if (documentId != null) {
+    await q(domain, 'PATCH',
+      `property_documents?document_id=eq.${documentId}`,
       {
         ingestion_status: 'deed_parsed',
-        metadata: {
+        extracted_data: {
           deed_extraction: parsed,
           extracted_at: new Date().toISOString(),
         },
       },
       { 'Prefer': 'return=minimal' }
-    );
+    ).catch(() => {});
   }
 
   // Step 3: Upsert deed_record if we have a document number.
@@ -417,19 +424,27 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
   // base64 data_hash via buildDeedDataHash. Validation failures log + skip
   // the write rather than failing loudly mid-pipeline; the DB CHECK
   // constraints would have rejected the same rows.
-  if (parsed.document_number) {
+  // gov.deed_records requires county + state_code NOT NULL. Prefer the caller's
+  // opts, then the county parsed from the deed text. Skip the gov archival insert
+  // when neither is available (it would only 400) — the R51 feed + extracted_data
+  // (the actual BD value) still run. dia.deed_records has no such requirement.
+  const deedCounty = opts.county || parsed.county || null;
+  const deedState = opts.state || null;
+  const canInsertDeed = parsed.document_number &&
+    (domain !== 'government' || (deedCounty && deedState));
+  if (canInsertDeed) {
     const stateCol = domain === 'government' ? 'state_code' : 'state';
     const datePart = parseRecordingDate(parsed.recording_date);
-    const dataHash = buildDeedDataHash(parsed.document_number, opts.state || '', datePart || '');
+    const dataHash = buildDeedDataHash(parsed.document_number, deedState || '', datePart || '');
 
     // Build the DTO + validate before any DB I/O
     const dto = {
       domain: domain === 'government' ? 'government' : 'dialysis',
       property_id: domain === 'government' ? undefined : propertyId,
       document_number: parsed.document_number,
-      [stateCol]: opts.state || null,
-      state: opts.state || null,
-      county: opts.county || null,
+      [stateCol]: deedState || null,
+      state: deedState || null,
+      county: deedCounty,
       recording_date: datePart,
       deed_type: parsed.deed_type || null,
       grantor: parsed.grantor || null,
@@ -469,9 +484,12 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
       // existing constraints. The warnings show up in Vercel logs for triage.
     }
 
-    // Check for existing deed record (dedup by data_hash)
-    const existing = await domainQuery(domain, 'GET',
-      `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=deed_id&limit=1`
+    // Check for existing deed record (dedup by data_hash). The PK differs by
+    // domain — dia `id`, gov `deed_id` — so select the right one (the prior
+    // `select=deed_id` 400'd on dia).
+    const deedPk = domain === 'government' ? 'deed_id' : 'id';
+    const existing = await q(domain, 'GET',
+      `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=${deedPk}&limit=1`
     );
 
     if (!existing.ok || !existing.data?.length) {
@@ -486,7 +504,7 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
       deedRow.recording_date = dto.recording_date;
       deedRow.consideration = dto.consideration;
       deedRow.county = dto.county;
-      deedRow[stateCol] = opts.state || null;
+      deedRow[stateCol] = deedState || null;
       deedRow.data_hash = dataHash;
       deedRow.raw_payload = dto.raw_payload;
 
@@ -495,42 +513,79 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
       }
       deedRow.data_hash = dataHash; // Always keep (NOT NULL)
 
-      const insertRes = await domainQuery(domain, 'POST', 'deed_records', deedRow,
+      const insertRes = await q(domain, 'POST', 'deed_records', deedRow,
         { 'Prefer': 'return=representation' }
       );
       if (insertRes.ok && insertRes.data?.[0]) {
         result.deedRecordId = insertRes.data[0].deed_id || insertRes.data[0].id;
       }
     } else {
-      result.deedRecordId = existing.data[0].deed_id;
+      result.deedRecordId = existing.data[0][deedPk];
     }
   }
 
-  // Step 4: Cross-reference
-  result.crossRef = await crossReferenceDeed(domain, propertyId, parsed);
-
-  // Step 5: Upgrade sales_transaction confidence if price matches
-  if (result.crossRef.matches.some(m => m.field === 'sale_price')) {
-    const priceMatch = result.crossRef.matches.find(m => m.field === 'sale_price');
-    if (priceMatch?.db_id) {
-      const updateRes = await domainQuery(domain, 'PATCH',
-        `sales_transactions?id=eq.${priceMatch.db_id}`,
-        {
-          data_confidence: 'deed_verified',
-          notes: appendNote(
-            priceMatch.notes,
-            `Deed verified: DOC# ${parsed.document_number || 'unknown'}, ` +
-            `transfer tax $${parsed.transfer_tax || 'N/A'}, ` +
-            `recorded ${parsed.recording_date || 'unknown'}`
-          ),
-        },
-        { 'Prefer': 'return=minimal' }
-      );
-      if (updateRes.ok) result.upgradedTransactions++;
+  // Step 4: FEED R51 — write the recorded deed's grantee onto the property's
+  // latest_deed_grantee/_date (the columns v_owner_source_conflict +
+  // owner-deed-autofix read). Conservative: only when the grantee passes the
+  // basic guard (has a letter, length >= 4 after stripping) AND it is BLANK or
+  // the parsed recording date is NEWER than the existing one — never clobber a
+  // more-recent recorded grantee. Property key is property_id on both domains.
+  if (propertyId != null && parsed.grantee && granteeIsPlausible(parsed.grantee)) {
+    const recDate = parseRecordingDate(parsed.recording_date);
+    const propRes = await q(domain, 'GET',
+      `properties?property_id=eq.${propertyId}&select=latest_deed_grantee,latest_deed_date&limit=1`
+    );
+    const cur = (propRes.ok && propRes.data?.[0]) || {};
+    const curDate = cur.latest_deed_date || null;
+    const isBlank = !cur.latest_deed_grantee;
+    const isNewer = recDate && curDate && recDate > curDate;
+    const isBlankDate = recDate && !curDate && !cur.latest_deed_grantee;
+    if (isBlank || isNewer || isBlankDate) {
+      const patch = { latest_deed_grantee: parsed.grantee };
+      if (recDate) patch.latest_deed_date = recDate;
+      const upd = await q(domain, 'PATCH',
+        `properties?property_id=eq.${propertyId}`, patch, { 'Prefer': 'return=minimal' }
+      ).catch(() => ({ ok: false }));
+      result.r51Fed = !!upd.ok;
     }
+  }
+
+  // Step 5: Cross-reference + supply the deed's implied price as a CANDIDATE on a
+  // matching sale that LACKS one. confirm-gated (DEED_IMPLIED_PRICE_FILL) and
+  // fill-blanks ONLY — a curated (non-null) sold_price is NEVER overwritten, and
+  // the verification is recorded regardless. The implied price is a transfer-tax
+  // ESTIMATE, so the real-write is gated exactly like R51's owner-deed-autofix.
+  result.crossRef = await crossReferenceDeed(domain, propertyId, parsed, deps);
+  const cand = result.crossRef.saleCandidate;
+  const implied = parsed.implied_sale_price || parsed.stated_consideration || null;
+  // A confirmed verification = the parsed deed matched an existing sale's price.
+  if (result.crossRef.matches.some(m => m.field === 'sale_price')) {
+    result.upgradedTransactions++;  // "deed_verified" — recorded in extracted_data (no DB confidence column)
+  }
+  const fillEnabled = String(process.env.DEED_IMPLIED_PRICE_FILL || '').toLowerCase() === 'on'
+                   || process.env.DEED_IMPLIED_PRICE_FILL === 'true';
+  if (fillEnabled && cand && cand.sale_id != null && (cand.sold_price == null) && implied && implied > 0) {
+    const upd = await q(domain, 'PATCH',
+      `sales_transactions?sale_id=eq.${cand.sale_id}&sold_price=is.null`,
+      { sold_price: implied }, { 'Prefer': 'return=minimal' }
+    ).catch(() => ({ ok: false }));
+    result.impliedPriceFilled = !!upd.ok;
   }
 
   return result;
+}
+
+/**
+ * Conservative grantee guard for the R51 feed — must contain a letter and be
+ * substantive (>= 4 alphanumerics). Keeps the broker/federal anti-patterns the
+ * R51 view already filters from polluting latest_deed_grantee at the source.
+ */
+function granteeIsPlausible(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (!/[A-Za-z]/.test(name)) return false;
+  if (name.replace(/[^A-Za-z0-9]/g, '').length < 4) return false;
+  if (/^\s*(u\s?\.?\s?s\s?\.?\s?a|united states|gsa|government|federal|n\.?\/?a|unknown|none|tbd)\b/i.test(name)) return false;
+  return true;
 }
 
 // ============================================================================
@@ -595,13 +650,4 @@ function parseRecordingDate(dateStr) {
   // Fall back to generic Date parse
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
-}
-
-/**
- * Append a note string to existing notes (pipe-separated).
- */
-function appendNote(existing, newNote) {
-  if (!existing) return newNote;
-  if (existing.includes(newNote)) return existing; // avoid duplication
-  return `${existing} | ${newNote}`;
 }

@@ -4314,3 +4314,130 @@ clobber); reversible; ≤12 api/*.js; no fabrication (a field the doc doesn't st
 stays blank); dia/gov pipelines otherwise untouched. No new migration (registry +
 guards already applied). No env flag flipped in code (the gate is Scott's
 operational switch, by design).
+
+## R58 — OCR/text foundation + wire the orphaned deed parser (read the docs we hold) (2026-06-20)
+
+The document layer was a filing cabinet: 1,975 `property_documents` filed but only
+OMs deeply extracted. raw_text empty on deed/lease/other (`url_captured` = filed,
+unread). The deed parser (`api/_handlers/deed-parser.js`
+`parseDeedText`/`crossReferenceDeed`/`processDeedDocument`) was BUILT but had ZERO
+callers — and grounding showed it was ALSO schema-stale (written against an
+assumed CA-style schema that matched NEITHER live DB). Root blocker: nothing OCR'd
+the PDFs we already hold (OCR lived only in the OM intake pipeline). R58 adds the
+shared text/OCR foundation, wires the deed parser into R51, and clears the lease
+OCR tail. **Code complete + headless-verified + live schema-gated (0 residue); the
+live OCR/CDN drain is operational (env + endpoint), handed to Scott like UW#2 —
+the remote sandbox has no OpenAI key / CoStar-CDN reach.**
+
+### Grounding (live 2026-06-20) — refuted the audit's schema premise
+- dia + gov `property_documents`: PK `document_id`, cols `raw_text`,
+  `ingestion_status`, `extracted_data` (jsonb) — **no `metadata` column** (the
+  orphaned parser's `metadata` + `id` PATCH was a silent no-op on both).
+- Deeds: dia 158 + gov 159 = ~317, ALL empty raw_text. `source_url` is a **CoStar
+  CDN** download (`ahprd1cdn.csgpimgs.com/…`), NOT a SharePoint ref — so the byte
+  fetch must support direct https, not only the PA Get flow.
+- `sales_transactions`: PK `sale_id` (dia int / gov uuid), keyed on `property_id`;
+  **no `id`, no `data_confidence`** on either; gov has no `notes` (the parser used
+  all four). `recorded_owners` name col is `name` (parser used `owner_name`);
+  gov `properties` has **no `recorded_owner_name`** (joins `recorded_owners`),
+  parser's `select=recorded_owner_name` 400'd on gov. gov `deed_records` keys on
+  `parcel_id` uuid + requires `county`/`state_code` NOT NULL (deed PK gov
+  `deed_id` / dia `id`); dia `deed_records` has a `data_hash` min-len CHECK + a FK
+  to `properties`.
+- R51's `v_owner_source_conflict` reads `properties.latest_deed_grantee` /
+  `latest_deed_date` (present on BOTH) — NOT `deed_records`. So "feed R51" =
+  update those property columns.
+
+### Unit 1 — shared document-text/OCR foundation (`api/_shared/document-text.js`)
+`extractDocumentText({sourceUrl, storageRef, mediaType, allowOcr}, deps)` (pure,
+deps-injected): fetch bytes (URL-shape aware — absolute https → direct fetch for
+CoStar CDN deeds; server-relative ref → `fetchSharepointBytes`) → digital text via
+`pdf-parse` (the `createRequire` ESM dodge) → **OCR fallback on a zero-text PDF via
+`invokeVisionExtractionAI`** (the SAME gpt-4o vision that rescued the Fresenius OM,
+re-prompted to transcribe VERBATIM, not extract JSON), gated on `OPENAI_API_KEY` +
+`INTAKE_OCR_MAX_BYTES` (~12 MB). Returns `{method:'pdf_text'|'ocr'|'text_decode',
+text_len}` or a truthful terminal `needs_ocr` (distinct from a transient
+`ok:false` fetch failure). No writes — callers persist `raw_text`.
+
+### Unit 1 + 2 — the worker (`api/_handlers/document-text.js`, sub-route of intake.js)
+`?_route=document-text-tick` (rewritten `/api/document-text-tick`). GET=dry-run /
+POST=drain, capped (`?limit`, default 15 / hard cap 50) + wall-clock budgeted,
+`?domain=both&doctype=deed` default. Selects `property_documents` with NULL
+raw_text (idempotent — a filled row drops out), writes `raw_text` +
+`ingestion_status` (`text_extracted` / `needs_ocr`); for deed docs runs
+`processDeedDocument`. Value-rank NOTE: ordered `document_id DESC` (recency proxy —
+docs carry no rent and a clean cross-domain rent join is heavier than the OCR it
+would prioritize; the cap+repeat-tick model drains the whole set). Cron
+`lcc-document-text` (`*/30`, migration `20260620170000`) — gentle (artifact-offload
+lesson); endpoint 404s until deploy (GET dry-run to verify, lcc-folder-feed
+posture).
+
+### Unit 2 — wire the deed parser, SCHEMA-CORRECT + R51 feed (`deed-parser.js`)
+Reworked `crossReferenceDeed` + `processDeedDocument` (deps-injectable):
+- **property_documents** → `extracted_data` (not `metadata`) keyed by
+  `document_id` (was a silent no-op).
+- **deed_records** archival insert — per-domain PK/cols (dia `id`/`property_id`/
+  `state`; gov `deed_id`/`state_code`, no property link). gov requires
+  `county`+`state_code` NOT NULL → new **county extraction** in `parseDeedText`
+  (deeds reliably name their county); gov insert is SKIPPED (not 400'd) when
+  county+state are absent — the R51 feed + extracted_data (the BD value) still run.
+- **FEED R51** — `processDeedDocument` writes the grantee to
+  `properties.latest_deed_grantee`/`_date` (fill-blanks or NEWER only, never
+  clobbers a more-recent recorded grantee, `granteeIsPlausible` guard), so the
+  existing `v_owner_source_conflict` + `owner-deed-autofix` lane (R51) pick it up.
+- **sales cross-ref** keyed on `property_id` (both); a price match records the
+  verification (`upgradedTransactions` — there's NO `data_confidence` column, so
+  "deed_verified" lives in `extracted_data` + the count). Implied price (transfer-
+  tax estimate) supplied as a CANDIDATE on a NULL-price matching sale ONLY when
+  `DEED_IMPLIED_PRICE_FILL` is on (env-gated, fill-blanks `sold_price=is.null`
+  guard) — a curated price is NEVER overwritten (R51/R53 gated-write doctrine).
+  owner cross-check resolves `recorded_owner_id`→`recorded_owners.name` (works on
+  both; gov has no denormalized name).
+
+### Unit 3 — clear the lease OCR tail (`lease-extractor.js`)
+`runLeaseExtraction` now, on a zero-text (scanned) lease PDF, runs the SAME
+`ocrPdfToText` foundation before parking `needs_ocr` (UW#2's 160/298 scanned
+tail). Gated on `OPENAI_API_KEY` (helper 503s without it → exact prior graceful
+`needs_ocr`, deploy-order-safe) + `LEASE_EXTRACT_OCR` (default on). `source` →
+`ai_ocr` when OCR fed the prompt. No new route — the existing `lease-backfill`
+drains the tail once OCR is available.
+
+### Unit 4 — rent-roll + dd/bov (DEFERRED, document-only)
+The `raw_text` foundation supports them (a rent-roll extractor: tenant/SF/rent/
+expiration per suite → lease economics + NOI; dd/bov parsing). NOT built this
+round — the foundation is confirmed sufficient.
+
+### Verified
+- `test/document-text.test.mjs` (8: url-shape, pdf_text, OCR fallback, needs_ocr,
+  allowOcr=false, fetch-fail transient, text_decode, fetchDocBytes routing) +
+  `test/deed-parser.test.mjs` (9: parse grantor/grantee/CA-implied-price/county/
+  non-CA-no-price; extracted_data-not-metadata; per-domain dedup PK; R51 fill-
+  blanks feed; R51 never-clobber-newer; sale verify; gated price fill ON/OFF;
+  no-meaningful-parse → no writes). `node --check` clean; full suite **1162 pass /
+  0 fail / 6 skipped**; `ls api/*.js | wc -l`=12; vercel.json valid.
+- **Live schema gate (0 residue):** gov `deed_records` insert (exact write shape)
+  → ok → deleted; the R51 round-trip on a synthetic gov property (set
+  `latest_deed_grantee` → `v_owner_source_conflict` surfaced it,
+  `conflict_kind=deed_newer_stale`, `grantee_passes_guards=true`) → all deleted;
+  dia `deed_records` insert (PK `id`, FK + data_hash CHECK satisfied) → ok →
+  deleted. All three DBs back to 0 residue.
+
+### Activation runbook (operational — handed to Scott, like UW#2)
+1. `GET /api/document-text-tick?doctype=deed&limit=10` — dry-run, lists eligible.
+2. `POST /api/document-text-tick?doctype=deed&limit=10` — capped real drain;
+   needs `OPENAI_API_KEY` (scanned-deed OCR) + outbound reach to the CoStar CDN.
+   Read receipts: `text_extracted`/`deed_parsed`/`needs_ocr`, `deed_records_created`,
+   `r51_fed`, `sales_verified`. Confirm grantees flow into the R51
+   `owner_source_conflict` lane.
+3. Repeat to drain ~317 deeds; the `*/30` cron then maintains coverage.
+4. Lease OCR tail: `OPENAI_API_KEY` set → re-`POST /api/lease-backfill` drains the
+   160 `needs_ocr` leases (now OCR'd before the lease prompt).
+5. Implied-price fill stays a recorded candidate until `DEED_IMPLIED_PRICE_FILL`
+   is set (Scott's gate); never overwrites a curated price.
+
+### Boundaries
+Fill-blanks / newer-only (never clobber a curated price or a newer grantee);
+confirm-gated price write; additive (no domain migration — raw_text/
+ingestion_status/extracted_data already exist); ≤12 api/*.js; dia/gov pipelines
+otherwise untouched. JS ships on the Railway redeploy; the cron migration applies
+on LCC Opps (no-ops until the endpoint ships).
