@@ -208,6 +208,15 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerContactEnrichTick(req, res);
   }
 
+  // UW#7 — developer resolution from the ownership chain (via vercel.json
+  // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
+  // POST=drain. Resolves the original developer for queued
+  // trace_ownership_to_developer tasks (gov). Authenticates internally.
+  if (req.query._route === 'developer-chain-resolve-tick') {
+    const { handleDeveloperChainResolveTick } = await import('./_handlers/developer-chain-resolve.js');
+    return handleDeveloperChainResolveTick(req, res);
+  }
+
   // R52 — Salesforce contact writeback (via vercel.json
   // _route=contact-writeback-tick). GET=dry-run (?summary=1 for coverage) /
   // POST=drain (gated on SF_CONTACT_WRITEBACK). Pushes emailable LCC persons
