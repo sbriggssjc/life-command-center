@@ -98,6 +98,141 @@ export function leaseValuesEqual(a, b) {
   return false;
 }
 
+// ── rent-figure reconciliation (UW#2b Fix 1) ─────────────────────────────────
+// The extractor sometimes writes the MONTHLY $/SF into the annual rent_psf field
+// (the live receipt: rent_psf=1.81 against annual_rent=141180 over 6500 SF —
+// 1.81 × 12 × 6500 ≈ 141180), or states a MONTHLY total rent. Reconcile so every
+// emitted figure is ANNUAL and internally consistent (rent_psf × area ≈
+// annual_rent) BEFORE it reaches the fill-blanks / conflict comparison. No
+// fabrication: with all three present we anchor on annual_rent (the more reliable
+// figure) and only adjust a clearly-monthly value; an unreconcilable rent_psf is
+// replaced by the derived annual_rent/area (low-confidence) so it can't fire a
+// spurious conflict. With < 3 figures we leave the values untouched.
+const RENT_RECONCILE_TOL = 0.05;   // ±5% — OM/lease rounding slack
+function approxEq(a, b, tol = RENT_RECONCILE_TOL) {
+  if (!(a > 0) || !(b > 0)) return false;
+  return Math.abs(a - b) <= tol * Math.max(a, b);
+}
+function round2(n) { return Math.round(n * 100) / 100; }
+/**
+ * Reconcile {annual_rent, rent_psf, leased_sf} to annual + internally consistent.
+ * Pure. Returns {annual_rent, rent_psf, reconciled, flag}; flag is null unless a
+ * value was adjusted ('psf_monthly_to_annual' | 'rent_monthly_to_annual' |
+ * 'psf_derived_low_confidence').
+ */
+export function reconcileRentFigures({ annual_rent = null, rent_psf = null, leased_sf = null } = {}) {
+  let arent = num(annual_rent);
+  let psf = num(rent_psf);
+  const areaN = num(leased_sf);
+  const area = (areaN != null && areaN > 0) ? areaN : null;
+  let flag = null;
+  if (arent != null && arent > 0 && area != null && psf != null && psf > 0) {
+    const target = psf * area;                       // annual rent implied by psf (if psf is annual)
+    if (approxEq(arent, target)) {
+      /* already consistent — both annual */
+    } else if (approxEq(arent, target * 12)) {
+      psf = round2(psf * 12); flag = 'psf_monthly_to_annual';      // psf was MONTHLY $/SF (the 1.81 case)
+    } else if (approxEq(arent * 12, target)) {
+      arent = round2(arent * 12); flag = 'rent_monthly_to_annual'; // annual_rent was a MONTHLY total
+    } else {
+      psf = round2(arent / area); flag = 'psf_derived_low_confidence'; // unreconcilable → trust annual_rent, derive psf
+    }
+  }
+  return { annual_rent: arent, rent_psf: psf, reconciled: flag != null, flag };
+}
+
+// ── field-aware equivalence for the fill-blanks vs conflict decision (UW#2b Fix 2)
+// `leaseValuesEqual` is the exact/numeric-exact base. `leaseFieldsEquivalent` adds
+// value-TYPE-aware tolerance so only MATERIAL disagreements reach the Decision
+// Center: numeric fields within ~1% (term-years rounding noise like 15.01 ≡ 15),
+// punctuation/case on strings ("DaVita, Inc" ≡ "DaVita, Inc."), a tight EXPLICIT
+// expense-structure synonym map (NNN ≡ triple net, NN ≡ double net — but NN ≠ NNN
+// STILL conflicts), and renewal-option count/term equivalence ("Three 5-year
+// options" ≡ "Three additional periods of five years each"). Material conflicts
+// (leased_area 17100 vs 6500, NN vs NNN, rent 723k vs 791k, lease_start 2019 vs
+// 1999) STILL surface.
+const LEASE_NUMERIC_COLS = new Set([
+  'annual_rent', 'rent_psf', 'rent_per_sf', 'leased_area', 'leased_sf',
+  'firm_term_years', 'total_term_years',
+]);
+const LEASE_STRUCTURE_COLS = new Set(['expense_structure', 'lease_structure']);
+const LEASE_RENEWAL_COLS = new Set(['renewal_options']);
+const LEASE_NUMERIC_REL_TOL = 0.01;    // 1% relative tolerance
+const LEASE_NUMERIC_ABS_FLOOR = 0.05;  // also catches sub-1%-scale noise (15.01 vs 15)
+function leaseNumericEquivalent(a, b) {
+  const na = num(a), nb = num(b);
+  if (na === null || nb === null) return false;
+  const diff = Math.abs(na - nb);
+  if (diff <= LEASE_NUMERIC_ABS_FLOOR) return true;
+  const scale = Math.max(Math.abs(na), Math.abs(nb));
+  return scale > 0 && diff <= LEASE_NUMERIC_REL_TOL * scale;
+}
+// Lowercase, strip '.'/',' (NOT '-', so dates/ranges stay distinct), collapse ws.
+function normalizeLeaseString(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// Tight, explicit expense/lease-structure synonyms. NN and NNN are DISTINCT
+// canonical keys, so double-net can NEVER collapse into triple-net.
+const EXPENSE_STRUCTURE_SYNONYMS = [
+  { key: 'nnn', re: /^(?:nnn|triple\s*net|net\s*net\s*net)$/ },
+  { key: 'nn', re: /^(?:nn|double\s*net|net\s*net)$/ },
+  { key: 'n', re: /^(?:n|single\s*net)$/ },
+  { key: 'modified_gross', re: /^(?:modified\s*gross|mod\s*gross|modified_gross|mg)$/ },
+  { key: 'full_service', re: /^(?:full\s*service(?:\s*gross)?|fsg|fs)$/ },
+  { key: 'gross', re: /^gross$/ },
+];
+function canonicalExpenseStructure(s) {
+  const n = normalizeLeaseString(s);
+  if (!n) return null;
+  for (const { key, re } of EXPENSE_STRUCTURE_SYNONYMS) if (re.test(n)) return key;
+  return n;   // unknown structure → compare normalized verbatim
+}
+const RENEWAL_WORD_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+function renewalWordToNum(w) {
+  const s = String(w || '').toLowerCase();
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  return Object.prototype.hasOwnProperty.call(RENEWAL_WORD_NUM, s) ? RENEWAL_WORD_NUM[s] : null;
+}
+const RENEWAL_NUM_TOK = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
+/**
+ * Parse a renewal-options string → {count, years}. Pure. The count is the first
+ * number-ish token; years is the number qualifying "year(s)". Returns null when it
+ * can't extract both. "Three 5-year options" and "Three additional periods of five
+ * years each" both → {count:3, years:5}.
+ */
+export function parseRenewalOptions(s) {
+  const t = String(s == null ? '' : s).toLowerCase();
+  if (!t.trim()) return null;
+  const countM = t.match(new RegExp('\\b' + RENEWAL_NUM_TOK + '\\b'));
+  const yearsM = t.match(new RegExp('\\b' + RENEWAL_NUM_TOK + '[-\\s]*year'));
+  const count = countM ? renewalWordToNum(countM[1]) : null;
+  const years = yearsM ? renewalWordToNum(yearsM[1]) : null;
+  if (count == null || years == null) return null;
+  return { count, years };
+}
+/**
+ * Field-aware "are these the SAME value" for the fill-blanks vs conflict decision.
+ * Returns true when the doc value matches the curated value closely enough that
+ * surfacing a conflict would be NOISE; false only on a MATERIAL disagreement.
+ */
+export function leaseFieldsEquivalent(col, a, b) {
+  if (leaseValuesEqual(a, b)) return true;     // exact / null / pure-number-exact
+  if (a == null || b == null) return false;    // one blank, one not → genuine difference
+  const c = String(col || '');
+  if (LEASE_NUMERIC_COLS.has(c)) return leaseNumericEquivalent(a, b);
+  if (LEASE_STRUCTURE_COLS.has(c)) {
+    const ca = canonicalExpenseStructure(a), cb = canonicalExpenseStructure(b);
+    return ca != null && cb != null && ca === cb;
+  }
+  if (LEASE_RENEWAL_COLS.has(c)) {
+    const ra = parseRenewalOptions(a), rb = parseRenewalOptions(b);
+    if (ra && rb) return ra.count === rb.count && ra.years === rb.years;
+    return normalizeLeaseString(a) === normalizeLeaseString(b);   // fall back to text-normalize
+  }
+  // generic string (tenant, guarantor, dates): case + punctuation + whitespace
+  return normalizeLeaseString(a) === normalizeLeaseString(b);
+}
+
 /**
  * The lease-specific AI extraction prompt. Asks for a STRICT JSON object — the
  * property identity (so the attach resolves), the factual lease fields, the TI
@@ -158,6 +293,17 @@ export function normalizeLeaseExtraction(raw) {
     if (v !== null) factual[k] = v;
   }
 
+  // UW#2b Fix 1 — normalize the rent figures to ANNUAL + internally consistent
+  // (the monthly $/SF written into rent_psf, or a monthly total rent) BEFORE the
+  // values reach the fill-blanks / conflict comparison or the write plan.
+  const rec = reconcileRentFigures({
+    annual_rent: factual.annual_rent ?? null,
+    rent_psf: factual.rent_psf ?? null,
+    leased_sf: factual.leased_sf ?? null,
+  });
+  if (rec.annual_rent != null) factual.annual_rent = rec.annual_rent;
+  if (rec.rent_psf != null) factual.rent_psf = rec.rent_psf;
+
   const ti_schedule = tiIn.map(row => ({
     schedule_year: row?.schedule_year != null ? parseInt(row.schedule_year, 10) || null : null,
     period_start: iso(row?.period_start),
@@ -173,7 +319,7 @@ export function normalizeLeaseExtraction(raw) {
     amount: num(row?.amount),
   })).filter(row => row.amount !== null);
 
-  return { property_identity, factual, ti_schedule, expense_schedule };
+  return { property_identity, factual, ti_schedule, expense_schedule, rent_reconcile_flag: rec.flag };
 }
 
 /**
@@ -573,8 +719,10 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
         if (deps.mergeField) {
           await deps.mergeField({ domain, table: plan.table, recordPk: resolvedLeaseId, field: col, value }).catch(() => {});
         }
-      } else if (!leaseValuesEqual(cur, value)) {
-        // Populated + disagreement → route to the Decision Center, never overwrite.
+      } else if (!leaseFieldsEquivalent(col, cur, value)) {
+        // Populated + MATERIAL disagreement → route to the Decision Center, never
+        // overwrite. Cosmetic differences (rounding, punctuation, NNN≡triple net,
+        // renewal-option phrasing) are equivalent (UW#2b Fix 2) → no conflict.
         out.conflicts += 1;
         if (deps.recordConflict) {
           await deps.recordConflict({ domain, table: plan.table, recordPk: resolvedLeaseId, field: col, currentValue: cur, attemptedValue: value }).catch(() => {});

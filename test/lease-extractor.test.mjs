@@ -17,6 +17,7 @@ import {
   buildLeaseExtractionPrompt, normalizeLeaseExtraction, planLeaseWrites,
   resolveAttachFromExtraction, applyLeaseEnrichment, LEASE_FIELD_MAP,
   extractLeaseDoc, planExpenseFinancials, attachLeaseDoc, leaseValuesEqual, runLeaseExtraction,
+  reconcileRentFigures, leaseFieldsEquivalent, parseRenewalOptions,
   guarantorContradictsTenant,
   leaseEnrichFailureReason, isDeterministicEnrichFailure,
   describeLeaseCreateError, isCreateRejectionFailure,
@@ -587,6 +588,74 @@ describe('lease extractor — leaseValuesEqual (the no-clobber comparator)', () 
     assert.equal(leaseValuesEqual('DaVita', 'Renal Treatment Centers'), false);
     assert.equal(leaseValuesEqual(null, 'x'), false);
     assert.equal(leaseValuesEqual(null, null), true);
+  });
+});
+
+describe('lease extractor — UW#2b Fix 1: rent-figure reconciliation', () => {
+  it('monthly $/SF in rent_psf is annualized against annual_rent (the 1.81/mo → 21.72/yr receipt)', () => {
+    const r = reconcileRentFigures({ annual_rent: 141180, rent_psf: 1.81, leased_sf: 6500 });
+    assert.equal(r.rent_psf, 21.72);
+    assert.equal(r.annual_rent, 141180);     // annual_rent already annual → untouched
+    assert.equal(r.flag, 'psf_monthly_to_annual');
+  });
+  it('a coherent annual triple is left untouched (no spurious adjustment)', () => {
+    const r = reconcileRentFigures({ annual_rent: 316980, rent_psf: 18.54, leased_sf: 17100 });
+    assert.equal(r.reconciled, false);
+    assert.equal(r.rent_psf, 18.54);
+    assert.equal(r.annual_rent, 316980);
+  });
+  it('a monthly TOTAL rent is annualized (psf already annual)', () => {
+    const r = reconcileRentFigures({ annual_rent: 11765, rent_psf: 21.72, leased_sf: 6500 });
+    assert.equal(r.annual_rent, 141180);
+    assert.equal(r.flag, 'rent_monthly_to_annual');
+  });
+  it('an unreconcilable psf is replaced by the derived annual_rent/area (low-confidence, no spurious conflict)', () => {
+    const r = reconcileRentFigures({ annual_rent: 141180, rent_psf: 7.5, leased_sf: 6500 });
+    assert.equal(r.rent_psf, 21.72);          // derived = 141180/6500
+    assert.equal(r.flag, 'psf_derived_low_confidence');
+  });
+  it('fewer than three figures → untouched (never fabricates)', () => {
+    const r = reconcileRentFigures({ annual_rent: 141180, leased_sf: 6500 });
+    assert.equal(r.reconciled, false);
+    assert.equal(r.rent_psf, null);
+  });
+  it('normalizeLeaseExtraction applies the reconciliation end-to-end', () => {
+    const n = normalizeLeaseExtraction({ factual: { annual_rent: '141180', rent_psf: '1.81', leased_sf: '6500' } });
+    assert.equal(n.factual.rent_psf, 21.72);
+    assert.equal(n.rent_reconcile_flag, 'psf_monthly_to_annual');
+  });
+});
+
+describe('lease extractor — UW#2b Fix 2: field-aware conflict tolerance', () => {
+  it('numeric rounding noise is NOT a conflict (15.01 ≡ 15, 10.01 ≡ 10)', () => {
+    assert.equal(leaseFieldsEquivalent('total_term_years', 15.01, 15), true);
+    assert.equal(leaseFieldsEquivalent('firm_term_years', 10.01, 10), true);
+    assert.equal(leaseFieldsEquivalent('annual_rent', 193330.00, 193329.48), true);
+  });
+  it('MATERIAL numeric disagreements STILL conflict (area 17100 vs 6500, rent 723k vs 791k)', () => {
+    assert.equal(leaseFieldsEquivalent('leased_area', 17100, 6500), false);
+    assert.equal(leaseFieldsEquivalent('annual_rent', 723000, 791000), false);
+  });
+  it('punctuation/case noise on strings is NOT a conflict (DaVita, Inc ≡ DaVita, Inc.)', () => {
+    assert.equal(leaseFieldsEquivalent('guarantor', 'DaVita, Inc', 'DaVita, Inc.'), true);
+    assert.equal(leaseFieldsEquivalent('tenant', 'Total Renal Care, Inc.', 'total renal care inc'), true);
+  });
+  it('dates still conflict on a real difference (lease_start 2019 vs 1999)', () => {
+    assert.equal(leaseFieldsEquivalent('lease_start', '2019-06-01', '1999-06-01'), false);
+    assert.equal(leaseFieldsEquivalent('lease_start', '2019-06-01', '2019-06-01'), true);
+  });
+  it('expense-structure synonyms collapse (NNN ≡ triple net) but NN ≠ NNN STILL conflicts (material)', () => {
+    assert.equal(leaseFieldsEquivalent('expense_structure', 'NNN', 'Triple Net'), true);
+    assert.equal(leaseFieldsEquivalent('expense_structure', 'NN', 'Double Net'), true);
+    assert.equal(leaseFieldsEquivalent('expense_structure', 'NN', 'NNN'), false);
+    assert.equal(leaseFieldsEquivalent('expense_structure', 'Double Net', 'Triple Net'), false);
+  });
+  it('renewal-option phrasing collapses on count + term ("Three 5-year options" ≡ "Three additional periods of five years each")', () => {
+    assert.equal(leaseFieldsEquivalent('renewal_options', 'Three 5-year options', 'Three additional periods of five years each'), true);
+    assert.equal(leaseFieldsEquivalent('renewal_options', 'Two 5-year options', 'Three 5-year options'), false);   // different count → conflict
+    assert.deepEqual(parseRenewalOptions('Three 5-year options'), { count: 3, years: 5 });
+    assert.deepEqual(parseRenewalOptions('Three additional periods of five years each'), { count: 3, years: 5 });
+    assert.equal(parseRenewalOptions('to be negotiated'), null);
   });
 });
 
