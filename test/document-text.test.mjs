@@ -99,71 +99,165 @@ describe('document-text foundation (R58 Unit 1)', () => {
   });
 });
 
-describe('tiered OCR — free-first, cloud escalation (UW#4)', () => {
+describe('tiered OCR — free-first, cheap-cloud escalation (UW#4 / UW#4b)', () => {
   const buf = Buffer.from('%PDF scan');
+  // Keep each test hermetic w.r.t. the cloud-policy env vars.
+  function clearCloudEnv() {
+    delete process.env.OCR_CLOUD_ESCALATION;
+    delete process.env.OCR_FREE_CONFIDENCE_MIN;
+    delete process.env.OCR_CLOUD_PROVIDER;
+    delete process.env.OCR_CLOUD_OCR_URL;
+    delete process.env.OCR_CLOUD_GPT4O_LASTRESORT;
+  }
 
-  it('free tier above the floor → used, cloud never called', async () => {
-    let cloud = false;
+  it('free tier above the floor → used, no paid tier called', async () => {
+    clearCloudEnv();
+    let cheap = false, gpt = false;
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
-      freeOcr: async () => ({ ok: true, text: 'free ocr text', confidence: 88, engine: 'tesseract' }),
-      ocrPdfToText: async () => { cloud = true; return { ok: true, text: 'cloud' }; },
+      freeOcr: async () => ({ ok: true, text: 'free ocr text', confidence: 88, engine: 'surya' }),
+      cloudCheapOcr: async () => { cheap = true; return { ok: true, text: 'cheap' }; },
+      ocrPdfToText: async () => { gpt = true; return { ok: true, text: 'gpt' }; },
     });
     assert.equal(r.ok, true);
     assert.equal(r.tier, 'free');
     assert.equal(r.confidence, 88);
-    assert.equal(cloud, false);
+    assert.equal(r.engine, 'surya');
+    assert.equal(cheap, false);
+    assert.equal(gpt, false);
   });
 
-  it('free tier below the floor → escalates to cloud', async () => {
+  it('UW#4b — free below the floor → escalates to CHEAP CLOUD, not gpt-4o', async () => {
+    clearCloudEnv();
     process.env.OCR_FREE_CONFIDENCE_MIN = '55';
-    let cloud = false;
+    let cheap = false, gpt = false;
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
       freeOcr: async () => ({ ok: true, text: 'garbled', confidence: 20, engine: 'tesseract' }),
-      ocrPdfToText: async () => { cloud = true; return { ok: true, text: 'cloud transcription', model: 'gpt-4o' }; },
+      cloudCheapOcr: async () => { cheap = true; return { ok: true, text: 'docai transcription', confidence: 97, engine: 'google_docai' }; },
+      ocrPdfToText: async () => { gpt = true; return { ok: true, text: 'gpt', model: 'gpt-4o' }; },
     });
-    assert.equal(cloud, true);
-    assert.equal(r.tier, 'cloud');
-    assert.equal(r.text, 'cloud transcription');
-    delete process.env.OCR_FREE_CONFIDENCE_MIN;
+    assert.equal(cheap, true);
+    assert.equal(gpt, false);                 // gpt-4o is NOT the lease default
+    assert.equal(r.tier, 'cloud_cheap');
+    assert.equal(r.text, 'docai transcription');
+    assert.equal(r.engine, 'google_docai');
+    assert.equal(r.confidence, 97);
+    clearCloudEnv();
   });
 
-  it('no free adapter configured → straight to cloud (byte-identical to R58)', async () => {
+  it('UW#4b — no free adapter + cheap cloud configured → cheap cloud (preferred paid)', async () => {
+    clearCloudEnv();
+    let gpt = false;
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
-      ocrPdfToText: async () => ({ ok: true, text: 'cloud only', model: 'gpt-4o' }),
+      cloudCheapOcr: async () => ({ ok: true, text: 'cheap only', engine: 'azure_di' }),
+      ocrPdfToText: async () => { gpt = true; return { ok: true, text: 'gpt', model: 'gpt-4o' }; },
+    });
+    assert.equal(r.tier, 'cloud_cheap');
+    assert.equal(r.engine, 'azure_di');
+    assert.equal(gpt, false);
+  });
+
+  it('UW#4b — gpt-4o reached ONLY behind the explicit last-resort flag', async () => {
+    clearCloudEnv();
+    process.env.OCR_CLOUD_GPT4O_LASTRESORT = 'true';
+    let gpt = false;
+    const r = await ocrPdfToTextTiered({ buffer: buf }, {
+      // cheap cloud misses (unconfigured), so it falls to the gated last resort
+      cloudCheapOcr: async () => ({ ok: false, reason: 'cloud_ocr_unconfigured' }),
+      ocrPdfToText: async () => { gpt = true; return { ok: true, text: 'gpt rescue', model: 'gpt-4o' }; },
+    });
+    assert.equal(gpt, true);
+    assert.equal(r.tier, 'cloud');
+    assert.equal(r.engine, 'gpt-4o');
+    clearCloudEnv();
+  });
+
+  it('UW#4b — OCR_CLOUD_PROVIDER=gpt4o selects gpt-4o as the paid tier', async () => {
+    clearCloudEnv();
+    process.env.OCR_CLOUD_PROVIDER = 'gpt4o';
+    const r = await ocrPdfToTextTiered({ buffer: buf }, {
+      ocrPdfToText: async () => ({ ok: true, text: 'gpt only', model: 'gpt-4o' }),
     });
     assert.equal(r.tier, 'cloud');
     assert.equal(r.engine, 'gpt-4o');
+    clearCloudEnv();
+  });
+
+  it('UW#4b — default (no provider, no flag) → ZERO spend, gpt-4o never called', async () => {
+    clearCloudEnv();
+    let gpt = false;
+    const r = await ocrPdfToTextTiered({ buffer: buf }, {
+      ocrPdfToText: async () => { gpt = true; return { ok: true, text: 'gpt' }; },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'cloud_ocr_unconfigured');
+    assert.equal(gpt, false);
   });
 
   it('low-conf free + cloud disabled → returns free_low_conf (pure-free drain)', async () => {
+    clearCloudEnv();
     process.env.OCR_CLOUD_ESCALATION = 'false';
     process.env.OCR_FREE_CONFIDENCE_MIN = '55';
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
       freeOcr: async () => ({ ok: true, text: 'weak text', confidence: 30, engine: 'tesseract' }),
-      ocrPdfToText: async () => ({ ok: true, text: 'should not run' }),
+      cloudCheapOcr: async () => ({ ok: true, text: 'should not run' }),
     });
     assert.equal(r.tier, 'free_low_conf');
     assert.equal(r.text, 'weak text');
-    delete process.env.OCR_CLOUD_ESCALATION;
-    delete process.env.OCR_FREE_CONFIDENCE_MIN;
+    clearCloudEnv();
   });
 
   it('free fails + cloud disabled → ok:false (no spend, honest miss)', async () => {
+    clearCloudEnv();
     process.env.OCR_CLOUD_ESCALATION = 'false';
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
       freeOcr: async () => ({ ok: false, reason: 'tesseract_empty' }),
     });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'free_ocr_unavailable_cloud_disabled');
-    delete process.env.OCR_CLOUD_ESCALATION;
+    clearCloudEnv();
   });
 
-  it('free adapter throws → escalates to cloud (never a 500)', async () => {
+  it('free adapter throws → escalates to cheap cloud (never a 500)', async () => {
+    clearCloudEnv();
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
       freeOcr: async () => { throw new Error('binary missing'); },
-      ocrPdfToText: async () => ({ ok: true, text: 'cloud rescued', model: 'gpt-4o' }),
+      cloudCheapOcr: async () => ({ ok: true, text: 'cheap rescued', engine: 'webhook' }),
     });
-    assert.equal(r.tier, 'cloud');
-    assert.equal(r.text, 'cloud rescued');
+    assert.equal(r.tier, 'cloud_cheap');
+    assert.equal(r.text, 'cheap rescued');
+  });
+});
+
+describe('ocrCloudCheap — cheap-cloud HTTP seam (UW#4b)', () => {
+  const buf = Buffer.from('%PDF scan');
+
+  it('unconfigured (no OCR_CLOUD_OCR_URL) → no-op, zero spend', async () => {
+    delete process.env.OCR_CLOUD_OCR_URL;
+    const { ocrCloudCheap } = await import('../api/_shared/document-text.js');
+    const r = await ocrCloudCheap({ buffer: buf });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'cloud_ocr_unconfigured');
+  });
+
+  it('configured → POSTs base64 and reads back { text, confidence }', async () => {
+    process.env.OCR_CLOUD_OCR_URL = 'https://ocr.example/flow';
+    process.env.OCR_CLOUD_PROVIDER = 'google_docai';
+    const { ocrCloudCheap } = await import('../api/_shared/document-text.js');
+    let sentBody = null;
+    const r = await ocrCloudCheap({
+      buffer: buf,
+      fetchImpl: async (_url, opts) => {
+        sentBody = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ text: 'doc ai text', confidence: 96, engine: 'google_docai' }) };
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.text, 'doc ai text');
+    assert.equal(r.confidence, 96);
+    assert.equal(r.engine, 'google_docai');
+    assert.equal(sentBody.provider, 'google_docai');
+    assert.ok(typeof sentBody.content_base64 === 'string' && sentBody.content_base64.length > 0);
+    delete process.env.OCR_CLOUD_OCR_URL;
+    delete process.env.OCR_CLOUD_PROVIDER;
   });
 });
