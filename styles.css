@@ -1238,6 +1238,8 @@ body.compact .greeting { font-size: 18px; }
 .q-action.primary { background: var(--accent2); border-color: var(--accent); color: #fff; }
 .q-action.danger { color: var(--red); }
 .q-action.danger:hover { border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, var(--s2)); }
+/* R60 Unit 2 — render-side pagination "Show more" control + row wrapper. */
+.ops-show-more { display: flex; justify-content: center; width: 100%; padding: 10px; margin: 4px 0 14px; font-size: 13px; }
 
 /* Freshness indicator — shows how stale data is */
 .freshness { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text3); }
