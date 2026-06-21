@@ -70,6 +70,28 @@ it with the Chrome tools to capture the exact `.xlsx` href + update `GSA_FILE_UR
 re-run the monthly ingest for Apr/May/Jun so the diff produces real lease events. The content-hash
 guard (Unit 2) then confirms fresh data landed (writes a new snapshot, clears `source_static_alert`).
 
+## CONFIRMED LIVE (browser walk of gsa.gov/real-estate/leasing, 2026-06-20) — the exact fix
+The leasing page lists monthly inventory files newest-first; GSA IS publishing. Captured hrefs:
+- `https://www.gsa.gov/system/files/May-2026-External.xlsx`  ← latest
+- `https://www.gsa.gov/system/files/April-2026-External.xlsx`
+- `https://www.gsa.gov/system/files/March-2026-External.xlsx` (and back through Oct-2025)
+Pattern: `https://www.gsa.gov/system/files/{Month}-{Year}-External.xlsx`.
+
+**Root cause (precise):** the pattern ALREADY matches `gsa_auto_sync.py`'s first template
+(`{month_name}-{year}-External.xlsx`) — so the template isn't wrong. The bug is the run only tries
+the **current** month: a June run requests `June-2026-External.xlsx`, which doesn't exist yet
+(GSA's latest is May), 404s, and falls back to the stale catalog.data.gov resource (frozen at the
+March data we've been re-ingesting). April + May files existed unfetched the whole time.
+
+**The fix (small, decisive):** resolve the **latest AVAILABLE** month, not just the current one —
+either (a) walk back from the current month (try current, then −1, −2 … up to ~3) until a
+`{Month}-{Year}-External.xlsx` URL returns 200, or (b) scrape the leasing-page links (they render
+newest-first; take the top "External File Inventory" href). Then ingest that file with the
+**file's own month as the snapshot_date** (so May data is labeled 2026-05, not the run date), and
+let the R57 content-hash guard write it (it WILL differ from the frozen March fingerprint →
+`source_static_alert` clears, the diff produces real Mar→May lease events, R53 suspected sales wake
+up). Backfill April + May now so the gap fills.
+
 ## Bottom line
 The GSA diff catch-up correctly produced 0 events — the snapshots are identical because the GSA
 inventory source has served the same file since March. R57 determines whether that's a fixable
