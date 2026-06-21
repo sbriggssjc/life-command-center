@@ -7,7 +7,7 @@ process.env.OPS_SUPABASE_URL = 'https://ops.test.local';
 process.env.OPS_SUPABASE_KEY = 'k';
 
 const { fetchDocBytes, extractDocumentText } = await import('../api/_shared/document-text.js');
-const { performDocumentNotify, normalizeNotifyDoctype } = await import('../api/_handlers/intake-document-notify.js');
+const { performDocumentNotify, normalizeNotifyDoctype, isNonDocumentTypeName } = await import('../api/_handlers/intake-document-notify.js');
 const { handleIntakePrepareUpload } = await import('../api/_handlers/intake-prepare-upload.js');
 
 const pdfBuf = Buffer.from('%PDF-1.7 fake');
@@ -42,7 +42,7 @@ describe('UW#6-REV — storage-first byte fetch', () => {
       { storagePath: 'dia/lease/26955/h.pdf' },
       {
         storageGet: async () => ({ ok: true, buffer: pdfBuf, contentType: 'application/pdf' }),
-        pdfTextFromBuffer: async () => 'LEASE AGREEMENT ... base rent ...',
+        pdfTextFromBuffer: async () => ('LEASE AGREEMENT between landlord and tenant for the demised premises, with base rent, escalations, and renewal options as set forth herein. '.repeat(3)),
       }
     );
     assert.equal(r.ok, true);
@@ -58,6 +58,22 @@ describe('UW#6-REV — doctype re-validation', () => {
     assert.equal(normalizeNotifyDoctype('?'), 'other');
     assert.equal(normalizeNotifyDoctype('8-K/A'), 'other');
     assert.equal(normalizeNotifyDoctype(null), 'other');
+  });
+
+  // UW#6 — reject SEC/IR/press artifacts even when the sidebar sent a KNOWN type.
+  it('isNonDocumentTypeName catches press release / 8-K / investor presentation', () => {
+    assert.equal(isNonDocumentTypeName('Press Release - Broker.pdf'), true);
+    assert.equal(isNonDocumentTypeName('Q3 2024 8-K.pdf'), true);
+    assert.equal(isNonDocumentTypeName('Investor Presentation Feb 2024.pdf'), true);
+    assert.equal(isNonDocumentTypeName('Prospectus.pdf'), true);
+    assert.equal(isNonDocumentTypeName('Grant Deed - 816 Featherstone.pdf'), false);
+    assert.equal(isNonDocumentTypeName('Lease Agreement DaVita.pdf'), false);
+  });
+
+  it('filename downgrades a mis-typed non-doc to other (press release sent as lease)', () => {
+    // The substring "reLEASE" used to type this as `lease`; the filename guard forces `other`.
+    assert.equal(normalizeNotifyDoctype('lease', 'Press Release - Broker.pdf'), 'other');
+    assert.equal(normalizeNotifyDoctype('deed', 'Grant Deed - 816 Featherstone.pdf'), 'deed');
   });
 });
 
@@ -96,12 +112,27 @@ describe('UW#6-REV — document-notify writer', () => {
 
   it('same content_hash already stored → idempotent no-op', async () => {
     const q = async (domain, method, path) => {
-      if (method === 'GET' && path.includes('content_hash=eq')) return { ok: true, data: [{ document_id: 7, storage_path: 'gov/deed/16500/abc.pdf' }] };
+      if (method === 'GET' && path.includes('content_hash=eq')) return { ok: true, data: [{ document_id: 7, storage_path: 'gov/deed/16500/abc.pdf', ingestion_status: 'text_extracted' }] };
       return { ok: true, data: [] };
     };
     const r = await performDocumentNotify(base, { domainQuery: q });
     assert.equal(r.outcome, 'idempotent');
     assert.equal(r.document_id, 7);
+    assert.equal(r.status_repaired, false, 'a downstream status (text_extracted) must NOT be clobbered');
+  });
+
+  // UW#6 — the 6-of-7 mislabel: storage_path set but status stuck url_captured.
+  it('idempotent row stuck at url_captured → REPAIRS status to bytes_captured', async () => {
+    let patched = null;
+    const q = async (domain, method, path, body) => {
+      if (method === 'GET' && path.includes('content_hash=eq')) return { ok: true, data: [{ document_id: 8, storage_path: 'gov/deed/16500/abc.pdf', ingestion_status: 'url_captured' }] };
+      if (method === 'PATCH') { patched = body; return { ok: true }; }
+      return { ok: true, data: [] };
+    };
+    const r = await performDocumentNotify(base, { domainQuery: q });
+    assert.equal(r.outcome, 'idempotent');
+    assert.equal(r.status_repaired, true);
+    assert.equal(patched.ingestion_status, 'bytes_captured');
   });
 
   it('rejects bad domain / missing property_id / missing storage_path / missing hash', async () => {

@@ -62,6 +62,43 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     }
   }
 
+  // ── UW#6 — fetch a document's bytes IN THE PAGE/TAB CONTEXT ─────────────────
+  // The CoStar CDN (ahprd1cdn.csgpimgs.com) signed URLs are tied to the LIVE
+  // browsing session, which lives in THIS tab — not the background service
+  // worker. A SW-initiated cross-site fetch drops the SameSite session cookies,
+  // so the SW fetch 401/403'd and byte-capture silently produced nothing. The
+  // background worker now asks this content script to fetch first; we return the
+  // bytes as base64 (chrome.runtime binary transfer is flaky, base64 is safe).
+  chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    if (!msg || msg.type !== 'FETCH_DOC_BYTES') return undefined;
+    (async () => {
+      try {
+        const url = msg.url;
+        if (!url) { respond({ ok: false, error: 'missing_url' }); return; }
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) { respond({ ok: false, error: 'doc_fetch_failed', status: res.status }); return; }
+        const buf = await res.arrayBuffer();
+        if (!buf || !buf.byteLength) { respond({ ok: false, error: 'empty_doc' }); return; }
+        // ArrayBuffer → base64 (chunked to avoid call-stack limits on big PDFs).
+        const u8 = new Uint8Array(buf);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < u8.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+        }
+        respond({
+          ok: true,
+          base64: btoa(binary),
+          mimeType: res.headers.get('content-type') || 'application/pdf',
+          sizeBytes: u8.byteLength,
+        });
+      } catch (e) {
+        respond({ ok: false, error: 'doc_fetch_threw', detail: String(e && e.message || e) });
+      }
+    })();
+    return true; // async response
+  });
+
   const observer = new MutationObserver(() => {
     clearTimeout(extractionTimer);
     extractionTimer = setTimeout(extract, 500);

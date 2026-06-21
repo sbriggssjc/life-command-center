@@ -36,6 +36,20 @@ const OCR_MAX_BYTES = Number(process.env.INTAKE_OCR_MAX_BYTES || 12_000_000);
 
 const FETCH_TIMEOUT_MS = Number(process.env.DOC_TEXT_FETCH_TIMEOUT_MS || 30000);
 
+// UW#6 — a scanned deed/lease often has a thin text layer (a recording stamp,
+// a page number, a few OCR-bleed glyphs) that pdf-parse returns as a tiny
+// non-empty string. Treating that as "text_extracted" marks the doc done with
+// NOTHING and never routes it to OCR (the 32/113-char bug). A PDF whose
+// MEANINGFUL (whitespace-stripped) text is below this floor is treated as a
+// scanned page → OCR fallback / needs_ocr. Only applies to PDFs; text/* docs
+// are taken at face value. 0 disables the floor.
+const DOC_TEXT_MIN_CHARS = Number(process.env.DOC_TEXT_MIN_CHARS || 200);
+
+/** Whitespace-stripped length — the "meaningful char" count the OCR floor uses. */
+export function meaningfulTextLen(s) {
+  return String(s || '').replace(/\s+/g, '').length;
+}
+
 /** True for an absolute http(s) URL (a vendor CDN download), false for a SharePoint ref. */
 export function isAbsoluteUrl(u) {
   return /^https?:\/\//i.test(String(u || ''));
@@ -310,7 +324,10 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
  * `needs_ocr` is a TRUTHFUL terminal-this-pass state, distinct from a transient
  * fetch failure (ok:false), so the worker can record it vs. leave it for retry.
  */
-export async function extractDocumentText({ sourceUrl, storageRef, storagePath, mediaType, allowOcr = true } = {}, deps = {}) {
+export async function extractDocumentText(
+  { sourceUrl, storageRef, storagePath, mediaType, allowOcr = true, ocrTiered = false, minChars = DOC_TEXT_MIN_CHARS } = {},
+  deps = {},
+) {
   const fetched = await (deps.fetchDocBytes || fetchDocBytes)({
     sourceUrl, storageRef, storagePath, storageGet: deps.storageGet, fetchImpl: deps.fetchImpl,
   });
@@ -337,20 +354,47 @@ export async function extractDocumentText({ sourceUrl, storageRef, storagePath, 
     method = text ? 'binary_decode' : null;
   }
 
+  // UW#6 — a PDF whose MEANINGFUL text is below the floor is a scanned page with
+  // a thin junk text layer (recording stamp / page number / OCR bleed). Discard
+  // it so the row routes to OCR instead of being marked done with ~nothing. The
+  // floor is PDF-only (text/* + binary salvage are taken at face value); a 0
+  // floor disables it.
+  const floor = Number.isFinite(minChars) ? minChars : DOC_TEXT_MIN_CHARS;
+  const thinTextLayer = isPdf && text && floor > 0 && meaningfulTextLen(text) < floor;
+  if (thinTextLayer) { text = ''; method = null; }
+
   if (text && text.length > 0) {
     return { ok: true, text, method, text_len: text.length, ocr_attempted: false, via: fetchedVia };
   }
 
-  // Zero-text PDF → OCR fallback (the scanned-deed / scanned-lease case).
+  // Zero-text (or sub-floor) PDF → OCR fallback (the scanned-deed / scanned-lease
+  // case). UW#6: `ocrTiered` routes deeds through the UW#4/#4b free-first tiered
+  // OCR (Surya/Paddle → cheap cloud → gpt-4o LAST RESORT) instead of gpt-4o
+  // direct — the same expensive-engine avoidance the lease path uses.
   if (isPdf && allowOcr) {
-    const ocr = await (deps.ocrPdfToText || ocrPdfToText)({
-      buffer, mediaType: ct || 'application/pdf', ocrImpl: deps.ocrImpl,
-    });
-    if (ocr.ok && ocr.text) {
-      return { ok: true, text: ocr.text, method: 'ocr', text_len: ocr.text.length, ocr_attempted: true, ocr_ok: true };
+    let ocr;
+    if (ocrTiered) {
+      ocr = await (deps.ocrPdfToTextTiered || ocrPdfToTextTiered)({ buffer, mediaType: ct || 'application/pdf' }, deps);
+    } else {
+      ocr = await (deps.ocrPdfToText || ocrPdfToText)({ buffer, mediaType: ct || 'application/pdf', ocrImpl: deps.ocrImpl });
     }
-    return { ok: true, text: '', method: null, text_len: 0, ocr_attempted: true, ocr_ok: false, needs_ocr: true, reason: ocr.reason || 'ocr_failed' };
+    if (ocr.ok && ocr.text) {
+      return {
+        ok: true, text: ocr.text, method: 'ocr', text_len: ocr.text.length,
+        ocr_attempted: true, ocr_ok: true, via: fetchedVia,
+        ocr_tier: ocr.tier || null, ocr_engine: ocr.engine || ocr.model || null,
+        thin_text_layer: thinTextLayer || undefined,
+      };
+    }
+    return {
+      ok: true, text: '', method: null, text_len: 0, ocr_attempted: true, ocr_ok: false,
+      needs_ocr: true, reason: ocr.reason || 'ocr_failed', thin_text_layer: thinTextLayer || undefined,
+    };
   }
 
-  return { ok: true, text: '', method: null, text_len: 0, ocr_attempted: false, needs_ocr: true, reason: 'no_text_layer' };
+  return {
+    ok: true, text: '', method: null, text_len: 0, ocr_attempted: false,
+    needs_ocr: true, reason: thinTextLayer ? 'thin_text_layer_no_ocr' : 'no_text_layer',
+    thin_text_layer: thinTextLayer || undefined,
+  };
 }
