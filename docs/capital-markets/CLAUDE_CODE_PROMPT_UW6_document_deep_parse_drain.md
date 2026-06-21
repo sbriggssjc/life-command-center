@@ -1,3 +1,45 @@
+# ⛔ UW#6 BLOCKED (live test 2026-06-21) — revised to the real fix below
+
+> **Gate outcome:** the capped real drain via the live endpoint returned **20/20 `fetch_failed`
+> (`fetch_non_ok`), 0 parsed.** Root cause confirmed: `property_documents.source_url` is a
+> CoStar-CDN signed/token path (`ahprd1cdn.csgpimgs.com/d2/<token>/…`) that is **session-gated and
+> short-lived** — a document captured the SAME DAY already 403s server-side. `property_documents`
+> stores only the URL, never the bytes. So R58's deferred server-side re-fetch **cannot work as
+> architected**, which is why it was never drainable. The operational drain is abandoned; the real
+> fix is upstream byte-capture (UW#6-REV below). The existing ~325 deeds + ~1,600 docs hold dead
+> URLs (bytes gone) → recoverable only by re-capture in CoStar.
+
+## UW#6-REV — capture document bytes at sidebar time (mirror the OM-intake pattern)
+1. **Sidebar byte-capture (the fix):** when the CoStar sidebar captures a deed/lease/OM/etc. PDF,
+   **download the bytes within the live CoStar session** (the browser HAS the session the server
+   lacks) and upload to Storage (the `lcc-om-uploads` bucket / a docs bucket), writing
+   `property_documents.storage_path` (+ keep `source_url` for reference). Identical posture to the
+   OM intake pipeline, which already stores bytes — `property_documents` is the channel that
+   regressed to URL-only.
+2. **Deep-parse reads stored bytes:** point the R58 `document-text-tick` fetch at `storage_path`
+   first (Storage, always fetchable), falling back to `source_url` only for freshly-captured docs
+   within the token window. Then the deed/lease/OM deep-parse (grantor/price/legal-desc → R51 +
+   sales cross-ref; lease economics; OM content) runs off durable bytes.
+2b. **Auto-capture, not manual + route by doctype (confirmed via the sidebar code + a live
+   screenshot 2026-06-21):** today the sidebar only auto-captures the URL ("URL Captured"); bytes
+   are captured ONLY if the user manually clicks **"Stage to LCC"** in-session — and that button
+   routes through the **OM** pipeline (`/api/intake/stage-om`), so a DEED staged that way stores its
+   bytes but may not reach the deed parser (`deed_records` → R51). The fix must (a) **auto-Stage the
+   bytes at capture time** (no manual click) and (b) **route by doctype** — deeds → the deed
+   pipeline (deed_records/R51), leases → the lease extractor, OMs → stage-om. So the byte the
+   browser captures in-session lands in the RIGHT downstream parser.
+3. **Backfill the dead-URL docs:** the existing ~325 deeds + ~1,600 docs can't be server-fetched
+   (dead tokens). Options to surface for Scott: (a) re-capture on next CoStar encounter (the sidebar
+   byte-capture catches them going forward), (b) a one-time re-visit sweep of high-value deeds in
+   CoStar. Do NOT pretend a server drain can recover them.
+
+## My gate (UW#6-REV)
+- A NEW sidebar capture stores `storage_path` + real bytes; `document-text-tick` then parses that
+  doc from Storage end-to-end (deed → grantor/price → R51 fed), 0 `fetch_failed`. Then the drain is
+  viable for newly-captured docs. Honest: the legacy URL-only backlog needs re-capture.
+
+---
+# (ORIGINAL UW#6 — superseded by the BLOCKED finding above; kept for the record)
 # Claude Code prompt — UW#6: drain the document deep-parse (R58) on gov + dia
 
 > From the deed/loan ingestion audit (task #37). R58 built a document-text deep-parser
