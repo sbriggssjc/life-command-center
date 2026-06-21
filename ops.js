@@ -2726,6 +2726,53 @@ async function pqTriggerDrill(entityId, band, domain, btn) {
   box.dataset.loaded = '1';
   box.style.display = '';
 }
+// ============================================================================
+// R60 Unit 2 — render-side row pagination. The big list surfaces (Priority
+// Queue, Top BD Actions) build one rich card per row; injecting 100-150 at
+// once is what made them feel heavy and time out mid-render. We cap how many
+// rows hit the DOM at once and reveal the rest via "Show more". This is a
+// RENDER cap only — band/signal filters still run against the full in-memory
+// set, and selecting a filter re-renders the row array from scratch, so the
+// cap re-pages within the filtered subset.
+// ============================================================================
+var OPS_ROW_PAGE = 50;
+var _opsRowStore = {};
+
+// Build the initial (capped) row HTML for a list + a "Show more" control.
+// `rows` is an array of per-row HTML strings (order preserved).
+function opsPagedRows(key, rows, pageSize) {
+  pageSize = pageSize || OPS_ROW_PAGE;
+  var shown = Math.min(pageSize, rows.length);
+  _opsRowStore[key] = { rows: rows, shown: shown, size: pageSize };
+  var html = '<div class="ops-row-list" id="ops-rows-' + key + '">' + rows.slice(0, shown).join('') + '</div>';
+  return html + _opsShowMoreBtn(key);
+}
+
+function _opsShowMoreBtn(key) {
+  var st = _opsRowStore[key];
+  if (!st || st.shown >= st.rows.length) return '';
+  var remaining = st.rows.length - st.shown;
+  var next = Math.min(st.size, remaining);
+  return '<button class="q-action ops-show-more" id="ops-more-' + key + '" onclick="opsShowMore(' + jsStringArg(key) + ')">Show ' + next + ' more (' + remaining + ' remaining)</button>';
+}
+
+// Reveal the next chunk, appending to the existing list (no full re-render).
+function opsShowMore(key) {
+  var st = _opsRowStore[key];
+  if (!st) return;
+  var wrap = document.getElementById('ops-rows-' + key);
+  if (!wrap) return;
+  var to = Math.min(st.shown + st.size, st.rows.length);
+  wrap.insertAdjacentHTML('beforeend', st.rows.slice(st.shown, to).join(''));
+  st.shown = to;
+  var btn = document.getElementById('ops-more-' + key);
+  if (!btn) return;
+  if (st.shown >= st.rows.length) { btn.remove(); return; }
+  var remaining = st.rows.length - st.shown;
+  btn.textContent = 'Show ' + Math.min(st.size, remaining) + ' more (' + remaining + ' remaining)';
+}
+window.opsShowMore = opsShowMore;
+
 async function renderPriorityQueuePage(band) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
@@ -2757,7 +2804,7 @@ async function renderPriorityQueuePage(band) {
   // Collect entities still needing an opportunity opened, for the bulk
   // "Open top N" action (R4-C \u00A72). Reset per render.
   var _openOppCandidates = [];
-  var _rowsHtml = '';
+  var _rowChunks = [];
   items.forEach(function (it, _ix) {
     var domShort = it.source_domain === 'government' ? 'gov' : it.source_domain === 'dialysis' ? 'dia' : (it.source_domain || '');
     var hasProp = it.source_property_id != null && domShort;
@@ -2868,7 +2915,7 @@ async function renderPriorityQueuePage(band) {
       _openOppCandidates.push({ id: _qid, vertical: it.vertical || '' });
       _ownerAction = '<button class="q-action primary" onclick="pqOpenOpportunity(' + jsStringArg(_qid) + ', ' + jsStringArg(it.vertical || '') + ', this)">Open opportunity \u2192</button>';
     }
-    _rowsHtml += '<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
+    _rowChunks.push('<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
       + '<div class="q-item-header">'
       + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
       + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
@@ -2886,7 +2933,7 @@ async function renderPriorityQueuePage(band) {
           : '')
       + '</div>'
       + (isTriggerLane && Number(it.trigger_property_count) > 1 ? '<div class="pq-trigger-detail" style="display:none"></div>' : '')
-      + '</div>';
+      + '</div>');
   });
   // Bulk "Open top N" action (R4-C §2): when a band (esp. P0.5) holds many rows
   // that all just need an opportunity opened, let the operator clear the top
@@ -2899,7 +2946,7 @@ async function renderPriorityQueuePage(band) {
       + '<button class="q-action primary" onclick="pqOpenTopN(' + _bulkN + ')">⚡ Open top ' + _bulkN + ' opportunities</button>'
       + '</div>';
   }
-  html += _rowsHtml;
+  html += opsPagedRows('pq', _rowChunks);
   el.innerHTML = html;
   perf.end();
 }
@@ -3326,6 +3373,7 @@ async function renderBdWorklist(type) {
   }).join('') + '</div>';
   if (!items.length) { html += '<div class="ops-empty">No BD actions in this view. ✓</div>'; el.innerHTML = html; return; }
   window._bdWorklistItems = items; // R59 Unit 1 — index-based open carries the signal
+  var _bdRows = [];
   items.forEach(function (it, ix) {
     var val = _dcMoney(it.rank_value);
     var dom = String(it.domain || '');
@@ -3348,13 +3396,14 @@ async function renderBdWorklist(type) {
     }
     var lane = (dl.surface === 'decision_center')
       ? '<button class="q-action" onclick="renderReviewConsolePage()">Decision Center →</button>' : '';
-    html += '<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '">'
+    _bdRows.push('<div class="q-item' + (ix === 0 ? ' pq-hero' : '') + '">'
       + '<div class="q-item-header"><span class="q-item-title">' + esc(it.what || '—') + '</span>'
       + '<div class="q-item-badges"><span class="q-badge type">' + esc(_bdSignalLabel[it.signal_type] || it.signal_type) + '</span>'
       + (it.is_distressed ? '<span class="q-badge pri-high" title="Distressed loan">⚠ distressed</span>' : '') + '</div></div>'
       + '<div class="q-item-meta">' + esc(meta.join(' · ')) + '</div>'
-      + '<div class="q-actions">' + action + lane + '</div></div>';
+      + '<div class="q-actions">' + action + lane + '</div></div>');
   });
+  html += opsPagedRows('bd', _bdRows);
   el.innerHTML = html;
 }
 window.renderBdWorklist = renderBdWorklist;

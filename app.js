@@ -7157,44 +7157,72 @@ window.openNbaItem = openNbaItem;
 // full Priority-Queue "Top BD Actions" list, shows the top 5, and routes each row
 // to the property carrying its signal (NEXT STEP becomes the signal's action).
 let _todayBdLoaded = false;
+let _todayBdInFlight = false;
+// R60 Unit 1 — the card used to early-return forever when ops.js's opsApi wasn't
+// ready yet AND was never invoked on the initial Home render (bootApp loads the
+// NBA panel but not this card; renderTodayBdActions only fired via
+// handlePageLoad('pageHome'), which doesn't run on the default-page boot). The
+// result was a card stuck on its static spinner. This version (a) retries if
+// opsApi isn't loaded yet instead of dying on the spinner, (b) wraps the render
+// in try/catch with a watchdog timeout so it can NEVER leave an indefinite
+// spinner, and (c) only marks "loaded" on a clean result so a later nav retries.
+function _todayBdFallback(msg) {
+  const el = document.getElementById('todayBdActionsContent');
+  if (!el) return;
+  el.innerHTML = '<div class="nba-empty">' + esc(msg || 'BD actions unavailable.')
+    + ' <button class="retry-btn" onclick="renderTodayBdActions(true)">Retry</button>'
+    + ' <button class="retry-btn" onclick="navTo(&quot;pagePriorityQueue&quot;);setTimeout(function(){if(typeof renderBdWorklist===&quot;function&quot;)renderBdWorklist();},300)">View all →</button></div>';
+}
 async function renderTodayBdActions(force) {
   const el = document.getElementById('todayBdActionsContent');
   if (!el) return;
   if (_todayBdLoaded && !force) return;
-  if (typeof opsApi !== 'function') return;
+  if (_todayBdInFlight) return;
+  // ops.js provides opsApi; on a very early call (e.g. boot) it may not have
+  // executed yet. Retry shortly instead of leaving the static spinner forever.
+  if (typeof opsApi !== 'function') { setTimeout(() => renderTodayBdActions(force), 300); return; }
+  _todayBdInFlight = true;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-  const res = await opsApi('/api/operations?action=bd_worklist&limit=5');
-  _todayBdLoaded = true;
-  if (!res.ok || !res.data || !res.data.ok) {
-    el.innerHTML = '<div class="nba-empty">BD actions unavailable. <button class="retry-btn" onclick="renderTodayBdActions(true)">Retry</button></div>';
-    return;
+  try {
+    // Watchdog: opsApi already aborts at 30s, but the Today card should fall back
+    // faster — never hang the home screen on a spinner.
+    const res = await Promise.race([
+      opsApi('/api/operations?action=bd_worklist&limit=5'),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 12000)),
+    ]);
+    if (!res.ok || !res.data || !res.data.ok) { _todayBdFallback('BD actions unavailable.'); return; }
+    const items = Array.isArray(res.data.worklist) ? res.data.worklist : [];
+    _todayBdLoaded = true; // clean result — don't auto-refetch on re-nav
+    if (!items.length) { el.innerHTML = '<div class="nba-empty">No BD actions right now. ✓</div>'; return; }
+    window._bdWorklistItems = items; // reuse the ops.js index-based open handler
+    const labels = { loan_maturity: 'Loan maturity', suspected_sale: 'Suspected sale',
+      owner_source_conflict: 'Owner conflict', contact_writeback: 'Push to CRM', ownership_chain: 'Ownership chain' };
+    const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
+    let html = '';
+    items.slice(0, 5).forEach(function (it, ix) {
+      const dom = String(it.domain || '');
+      const pid = it.property_id == null ? '' : String(it.property_id);
+      const val = money(it.rank_value);
+      const meta = [];
+      if (val) meta.push(val + ' rent');
+      if (it.who) meta.push(esc(it.who));
+      if (it.city || it.state) meta.push(esc([it.city, it.state].filter(Boolean).join(', ')));
+      const clickable = !!(dom && pid);
+      html += '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
+        + (clickable ? ' onclick="bdOpenWorklistItem(' + ix + ')"' : '')
+        + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
+        + '<div class="nba-item-head"><span class="nba-item-title">' + esc(it.what || '—') + '</span>'
+        + '<span class="q-badge type">' + esc(labels[it.signal_type] || it.signal_type) + '</span>'
+        + (it.is_distressed ? '<span class="q-badge pri-high" title="Distressed loan">⚠</span>' : '') + '</div>'
+        + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
+        + '</div>';
+    });
+    el.innerHTML = html;
+  } catch (e) {
+    _todayBdFallback('BD actions unavailable.');
+  } finally {
+    _todayBdInFlight = false;
   }
-  const items = Array.isArray(res.data.worklist) ? res.data.worklist : [];
-  if (!items.length) { el.innerHTML = '<div class="nba-empty">No BD actions right now. ✓</div>'; return; }
-  window._bdWorklistItems = items; // reuse the ops.js index-based open handler
-  const labels = { loan_maturity: 'Loan maturity', suspected_sale: 'Suspected sale',
-    owner_source_conflict: 'Owner conflict', contact_writeback: 'Push to CRM', ownership_chain: 'Ownership chain' };
-  const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
-  let html = '';
-  items.forEach(function (it, ix) {
-    const dom = String(it.domain || '');
-    const pid = it.property_id == null ? '' : String(it.property_id);
-    const val = money(it.rank_value);
-    const meta = [];
-    if (val) meta.push(val + ' rent');
-    if (it.who) meta.push(esc(it.who));
-    if (it.city || it.state) meta.push(esc([it.city, it.state].filter(Boolean).join(', ')));
-    const clickable = !!(dom && pid);
-    html += '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
-      + (clickable ? ' onclick="bdOpenWorklistItem(' + ix + ')"' : '')
-      + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
-      + '<div class="nba-item-head"><span class="nba-item-title">' + esc(it.what || '—') + '</span>'
-      + '<span class="q-badge type">' + esc(labels[it.signal_type] || it.signal_type) + '</span>'
-      + (it.is_distressed ? '<span class="q-badge pri-high" title="Distressed loan">⚠</span>' : '') + '</div>'
-      + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
-      + '</div>';
-  });
-  el.innerHTML = html;
 }
 window.renderTodayBdActions = renderTodayBdActions;
 
@@ -8517,8 +8545,8 @@ function bootApp() {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
         Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
-          .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
-          .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+          .then(() => { updateGreeting(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+          .catch(() => { updateGreeting(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
       });
     });
   });
