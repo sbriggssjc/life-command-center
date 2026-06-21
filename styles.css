@@ -237,6 +237,12 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
 .nba-portal-link:hover { text-decoration: underline; }
 .nba-value { font-size: 13px; font-weight: 700; color: var(--text1); text-align: right; white-space: nowrap; }
 .nba-empty { font-size: 12px; color: var(--text3); padding: 12px 4px; text-align: center; }
+/* R59 Unit 2 — Today "Top BD Actions" rows */
+.nba-item { padding: 8px 10px; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; transition: border-color 0.15s, background 0.15s; }
+.nba-item.clickable:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent2) 8%, var(--s2)); }
+.nba-item-head { display: flex; align-items: center; gap: 8px; }
+.nba-item-title { font-size: 12px; font-weight: 600; color: var(--text1); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nba-item-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
 @media (max-width: 720px) {
   .nba-row { grid-template-columns: 28px 48px 1fr auto; gap: 8px; padding: 7px 8px; }
   .nba-action { font-size: 10px; }

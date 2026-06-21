@@ -259,9 +259,10 @@ export default withErrorHandler(async function handler(req, res) {
       case 'next_best_touchpoint': return await getNextBestTouchpoint(req, res, user, workspaceId);
       case 'contact_qualify_worklist': return await getContactQualifyWorklist(req, res, user, workspaceId);
       case 'property_geo': return await getPropertyGeo(req, res, user, workspaceId);
+      case 'property_signals': return await getPropertySignals(req, res, user, workspaceId);
       case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
       case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, bd_worklist, activation_review' });
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review' });
     }
   }
 
@@ -284,6 +285,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'select_buyer_contact': return await bridgeSelectBuyerContact(req, res, user, workspaceId);
       case 'select_prospecting_contact': return await bridgeSelectProspectingContact(req, res, user, workspaceId);
       case 'qualify_contact':    return await bridgeQualifyContact(req, res, user, workspaceId);
+      case 'qualify_contacts_bulk': return await bridgeQualifyContactsBulk(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
@@ -888,6 +890,127 @@ async function getPropertyGeo(req, res, user, workspaceId) {
     // (e.g. dia same-county competitors) rather than show "broken".
     coverage_note: subjectGeocoded ? null : 'subject_not_geocoded',
   });
+}
+
+// ============================================================================
+// R59 Unit 1 (2026-06-21): the open BD signals for ONE property.
+// GET ?action=property_signals&domain=&property_id=
+//
+// The signal-aware detail page needs to know — regardless of entry point — what
+// BD signal(s) are open on a property so it can render a banner and make the
+// NEXT STEP the signal's action. Three cheap property-id-filtered view reads
+// (no haversine): R53 suspected_sale (gov), R51 owner_source_conflict (gov+dia),
+// R54 loan_maturity (gov+dia). Each signal is returned as a POST-ready `subject`
+// (the exact {subject_domain, subject_property_id, rank_value, context} shape the
+// federated /api/decision-verdict endpoint mints from), so the detail page can
+// confirm/reconcile inline by reusing the existing verdict machinery — no fork.
+// Read-only; soft-fails each read independently. `primary` is the highest-value
+// signal to lead with (suspected_sale > owner_source_conflict > loan_maturity).
+// ============================================================================
+const _BD_SIGNAL_RANK = { suspected_sale: 0, owner_source_conflict: 1, loan_maturity: 2 };
+
+// Pure, testable: pick the highest-value signal to LEAD with on the detail page.
+// A suspected sale (time-sensitive, $-confirming) outranks an owner conflict,
+// which outranks a loan maturity (a slower-burn outreach trigger).
+export function pickPrimarySignal(signalsObj) {
+  const present = Object.keys(signalsObj || {}).filter((k) => signalsObj[k]);
+  if (!present.length) return null;
+  return present.sort((a, b) => (_BD_SIGNAL_RANK[a] ?? 9) - (_BD_SIGNAL_RANK[b] ?? 9))[0];
+}
+
+async function getPropertySignals(req, res, user, workspaceId) {
+  const domainRaw = String(req.query.domain || '').toLowerCase();
+  const domain = (domainRaw === 'gov' || domainRaw === 'government') ? 'gov'
+    : (domainRaw === 'dia' || domainRaw === 'dialysis') ? 'dia' : null;
+  const propertyId = req.query.property_id != null ? String(req.query.property_id).trim() : '';
+  if (!domain) return res.status(400).json({ error: "domain is required ('gov' or 'dia')" });
+  if (!propertyId || !/^\d+$/.test(propertyId)) {
+    return res.status(400).json({ error: 'property_id is required (numeric)' });
+  }
+  const pid = Number(propertyId);
+
+  // Column lists mirror admin.js fetchFederatedSource exactly (proven selects).
+  const matSel = 'property_id,loan_id,maturity_date,months_to_maturity,maturity_band,'
+    + 'loan_balance,annual_rent,is_distressed,distress_reason,servicer,special_servicer,'
+    + 'owner_name,true_owner_name,recorded_owner_name,address,city,state';
+  const oscSel = 'property_id,recorded_owner_id,recorded_owner_name,latest_deed_grantee,'
+    + 'latest_deed_date,true_owner_name,annual_rent,address,city,state,conflict_kind,'
+    + 'is_broker_owner,grantee_passes_guards,auto_fixable';
+  const suspSel = 'domain,property_id,signal_source,suspected_grantor,suspected_grantee,'
+    + 'suspected_sale_date,annual_rent,address,city,state,agency';
+
+  const [matRes, oscRes, suspRes] = await Promise.all([
+    domainSelect(domain, 'v_loan_maturity_watch?property_id=eq.' + pid + '&select=' + matSel + '&limit=1'),
+    // spe_vs_parent is a legit parent-vs-SPE (default keep) — exclude it from the
+    // actionable conflict, same as the lane.
+    domainSelect(domain, 'v_owner_source_conflict?property_id=eq.' + pid
+      + '&conflict_kind=neq.spe_vs_parent&select=' + oscSel + '&limit=1'),
+    domain === 'gov'
+      ? domainSelect('gov', 'v_suspected_sale?property_id=eq.' + pid + '&select=' + suspSel + '&limit=1')
+      : Promise.resolve({ ok: true, data: [] }),
+  ]);
+
+  const signals = {};
+
+  const matRow = (matRes.ok && Array.isArray(matRes.data)) ? matRes.data[0] : null;
+  if (matRow && matRow.maturity_date) {
+    signals.loan_maturity = {
+      type: 'loan_maturity',
+      subject: {
+        subject_domain: domain, subject_property_id: String(pid),
+        rank_value: (matRow.is_distressed === true ? 1e12 : 0) + (Number(matRow.annual_rent) || 0),
+        context: {
+          domain, property_id: pid, loan_id: matRow.loan_id,
+          maturity_date: matRow.maturity_date, months_to_maturity: matRow.months_to_maturity,
+          maturity_band: matRow.maturity_band, loan_balance: matRow.loan_balance,
+          annual_rent: matRow.annual_rent, is_distressed: matRow.is_distressed === true,
+          distress_reason: matRow.distress_reason, owner_name: matRow.owner_name,
+          true_owner_name: matRow.true_owner_name, recorded_owner_name: matRow.recorded_owner_name,
+          address: matRow.address, city: matRow.city, state: matRow.state,
+        },
+      },
+    };
+  }
+
+  const oscRow = (oscRes.ok && Array.isArray(oscRes.data)) ? oscRes.data[0] : null;
+  if (oscRow && oscRow.latest_deed_grantee) {
+    signals.owner_source_conflict = {
+      type: 'owner_source_conflict',
+      subject: {
+        subject_domain: domain, subject_property_id: String(pid),
+        rank_value: Number(oscRow.annual_rent) || 0,
+        context: {
+          domain, property_id: pid,
+          recorded_owner_id: oscRow.recorded_owner_id, recorded_owner_name: oscRow.recorded_owner_name,
+          latest_deed_grantee: oscRow.latest_deed_grantee, latest_deed_date: oscRow.latest_deed_date,
+          true_owner_name: oscRow.true_owner_name, annual_rent: oscRow.annual_rent,
+          address: oscRow.address, city: oscRow.city, state: oscRow.state,
+          conflict_kind: oscRow.conflict_kind, is_broker_owner: oscRow.is_broker_owner,
+          grantee_passes_guards: oscRow.grantee_passes_guards, auto_fixable: oscRow.auto_fixable,
+        },
+      },
+    };
+  }
+
+  const suspRow = (suspRes.ok && Array.isArray(suspRes.data)) ? suspRes.data[0] : null;
+  if (suspRow && suspRow.signal_source) {
+    signals.suspected_sale = {
+      type: 'suspected_sale',
+      subject: {
+        subject_domain: 'gov', subject_property_id: String(pid),
+        rank_value: Number(suspRow.annual_rent) || 0,
+        context: {
+          domain: 'gov', property_id: pid, signal_source: suspRow.signal_source,
+          suspected_grantor: suspRow.suspected_grantor, suspected_grantee: suspRow.suspected_grantee,
+          suspected_sale_date: suspRow.suspected_sale_date, annual_rent: suspRow.annual_rent,
+          address: suspRow.address, city: suspRow.city, state: suspRow.state, agency: suspRow.agency,
+        },
+      },
+    };
+  }
+
+  const primary = pickPrimarySignal(signals);
+  return res.status(200).json({ ok: true, domain, property_id: pid, signals, primary });
 }
 
 // ============================================================================
@@ -2177,9 +2300,11 @@ export async function performContactQualify({ inboxItemId, workspaceId }, deps) 
   };
 }
 
-async function bridgeQualifyContact(req, res, user, workspaceId) {
-  const inboxItemId = String((req.body || {}).inbox_item_id || '').trim();
-  const deps = {
+// Shared production deps for performContactQualify (used by the single-item
+// bridge AND the R59 bulk drain — one source of truth for the resolve/link/
+// stamp/disposition wiring).
+function _contactQualifyDeps(workspaceId) {
+  return {
     getRow: async (id, ws) => {
       const get = await opsQuery('GET', 'inbox_items?id=eq.' + pgFilterVal(id)
         + '&workspace_id=eq.' + pgFilterVal(ws)
@@ -2197,8 +2322,53 @@ async function bridgeQualifyContact(req, res, user, workspaceId) {
     dispositionInbox: (id, patch) => opsQuery('PATCH', 'inbox_items?id=eq.' + pgFilterVal(id) + '&status=eq.new', patch),
     refreshQueue: () => opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}),
   };
-  const out = await performContactQualify({ inboxItemId, workspaceId }, deps);
+}
+
+async function bridgeQualifyContact(req, res, user, workspaceId) {
+  const inboxItemId = String((req.body || {}).inbox_item_id || '').trim();
+  const out = await performContactQualify({ inboxItemId, workspaceId }, _contactQualifyDeps(workspaceId));
   return res.status(out.status).json(out.body);
+}
+
+// ============================================================================
+// R59 Unit 3 — bulk auto-qualify the HIGH-CONFIDENCE captured contacts.
+// POST ?action=qualify_contacts_bulk { limit }
+//
+// The 938 new_contact_qualify rows are too many to click one-by-one. The
+// high-confidence subset — a real email + a plausible person name (the R52 SF
+// writeback candidates) — can be drained in one pass: each rides the SAME
+// performContactQualify path as the per-item button (resolve owner → link →
+// stamp a contactless cadence → disposition terminal). The ambiguous remainder
+// (no email / firm-as-person) is LEFT for the per-item worklist. Capped per call
+// + wall-clock budgeted; idempotent (a row already promoted is a no-op).
+// ============================================================================
+async function bridgeQualifyContactsBulk(req, res, user, workspaceId) {
+  const cap = Math.min(parseInt((req.body || {}).limit, 10) || 50, 100);
+  // Pull the value-ranked workable page, then keep only the high-confidence
+  // subset: a real email AND a plausible person name (reuse filterQualifiableContacts).
+  const path = 'v_lcc_contact_qualify_worklist?workspace_id=eq.' + pgFilterVal(workspaceId)
+    + '&has_email=eq.true&order=rank_value.desc.nullslast,received_at.asc&limit=1000';
+  const r = await opsQuery('GET', path, undefined, { countMode: 'none' });
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load contact-qualify worklist', detail: r.data });
+  const candidates = filterQualifiableContacts(Array.isArray(r.data) ? r.data : [])
+    .filter((row) => row && row.has_email && row.contact_email && row.inbox_item_id);
+  const batch = candidates.slice(0, cap);
+
+  const deps = _contactQualifyDeps(workspaceId);
+  const deadline = Date.now() + 22000; // wall-clock budget (Vercel function limit)
+  let qualified = 0, failed = 0, processed = 0;
+  for (const row of batch) {
+    if (Date.now() > deadline) break;
+    processed++;
+    try {
+      const out = await performContactQualify({ inboxItemId: row.inbox_item_id, workspaceId }, deps);
+      if (out && out.body && out.body.ok) qualified++; else failed++;
+    } catch (_e) { failed++; }
+  }
+  return res.status(200).json({
+    ok: true, qualified, failed, processed,
+    eligible: candidates.length, remaining: Math.max(0, candidates.length - qualified),
+  });
 }
 
 // ============================================================================
