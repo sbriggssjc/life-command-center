@@ -742,6 +742,24 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
     assert.equal(out.match_status, 'needs_ocr');
   });
 
+  // ── UW#4 — supplied free-OCR text path ───────────────────────────────────────
+  it('runLeaseExtraction with supplied ocrText bypasses fetch + drives extraction', async () => {
+    // No storageRef / fetchImpl: if the ocrText path were NOT taken it would throw
+    // "storage_ref required". Reaching the AI (which has no key in the test env)
+    // proves the supplied text was used directly. Either AI failure is acceptable.
+    await assert.rejects(
+      runLeaseExtraction({ ocrText: 'COMMENCEMENT DATE 2024-01-01 ANNUAL RENT $250,000 GUARANTOR DaVita Inc', ocrConfidence: 72 }),
+      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+    );
+  });
+
+  it('whitespace ocrText is ignored → falls through to the scanned needs_ocr path', async () => {
+    const blankFetch = async () => ({ ok: true, status: 200,
+      text: async () => JSON.stringify({ ok: true, content_base64: 'AAAA', content_type: 'application/octet-stream' }) });
+    const ext = await runLeaseExtraction({ storageRef: '/x/scan.pdf', ocrText: '   ', fetchImpl: blankFetch });
+    assert.equal(ext.needs_ocr, true);   // blank ocrText not taken; scanned no-text → needs_ocr
+  });
+
   // ── Scott's matched-but-enrich-failed bucket split (2026-06-15) ──────────────
   it('matched but NO usable lease terms → enrich_unprocessable (terminal, real reason)', async () => {
     // ensureLeaseRow fails with the deterministic reason; applyLeaseEnrichment

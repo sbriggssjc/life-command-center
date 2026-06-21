@@ -25,7 +25,7 @@ import { createRequire } from 'module';
 import { isReportedField } from '../_shared/extraction-field-policy.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
-import { ocrPdfToText } from '../_shared/document-text.js';
+import { ocrPdfToTextTiered } from '../_shared/document-text.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout, insertEntityRelationship } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
@@ -654,39 +654,70 @@ async function leaseTextFromBytes(buffer, mediaType) {
   catch { return ''; }
 }
 
-/**
- * One file read → normalized lease extraction. `raw` may be supplied to bypass
- * the AI (tests / a pre-extracted preview); otherwise bytes are fetched from the
- * SharePoint ref and run through the lease prompt.
- */
-export async function runLeaseExtraction({ storageRef, mediaType = 'application/pdf', raw = null, fetchImpl } = {}) {
-  if (raw) return { normalized: normalizeLeaseExtraction(raw), source: 'raw' };
-  if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
-  const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
-  if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
-  let text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
-  // R58 Unit 3: a scanned / image-only PDF (most executed leases) has no text
-  // layer — feed it through the SAME OCR foundation the deed worker uses (gpt-4o
-  // vision verbatim transcription) instead of immediately parking needs_ocr. The
-  // helper is gated on OPENAI_API_KEY + a byte cap; without the key it returns
-  // ok:false and we fall back to the exact prior graceful needs_ocr outcome, so
-  // this is deploy-order-safe and adds nothing when OCR is unavailable. Disable
-  // with LEASE_EXTRACT_OCR='false'.
-  let ocrUsed = false;
-  if (!text && String(process.env.LEASE_EXTRACT_OCR || 'true').toLowerCase() !== 'false') {
-    const ocr = await ocrPdfToText({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));
-    if (ocr.ok && ocr.text) { text = ocr.text.slice(0, 120000); ocrUsed = true; }
-  }
-  // A scanned PDF the OCR path couldn't rescue (no key / over cap / OCR miss) →
-  // graceful needs_ocr (no 500), exactly as before.
-  if (!text) return { normalized: null, needs_ocr: true, source: 'needs_ocr' };
+// Run the lease prompt over a recovered text layer → normalized extraction.
+// Shared by the byte path and the UW#4 supplied-OCR-text path so the prompt /
+// parse / normalize is the SAME machinery regardless of where the text came from.
+async function extractLeaseFromText(text) {
   const prompt = `${buildLeaseExtractionPrompt()}\n\n--- LEASE DOCUMENT TEXT ---\n${text}`;
   const result = await invokeExtractionAI({ prompt });
   if (!result.ok) throw new Error(`AI provider error ${result.status}`);
   const aiText = result.data?.response || result.data?.content || result.data?.choices?.[0]?.message?.content || (typeof result.data === 'string' ? result.data : '') || '';
   const parsed = parseLeaseJson(aiText);
   if (!parsed) throw new Error('no_json_in_ai_response');
-  return { normalized: normalizeLeaseExtraction(parsed), source: ocrUsed ? 'ai_ocr' : 'ai', text_len: text.length, ocr_used: ocrUsed };
+  return normalizeLeaseExtraction(parsed);
+}
+
+/**
+ * One file read → normalized lease extraction. `raw` may be supplied to bypass
+ * the AI (tests / a pre-extracted preview); otherwise bytes are fetched from the
+ * SharePoint ref and run through the lease prompt.
+ *
+ * UW#4: `ocrText` may be supplied by a caller that already produced a text layer
+ * with a FREE off-box OCR (the workstation drainer). When present, the fetch +
+ * pdf-parse + in-server OCR are skipped and that text feeds the SAME lease
+ * prompt + (downstream) the SAME guards + enrichment — OCR only adds a text
+ * layer, it never changes the extractor. `ocrConfidence` (0-100) is recorded so
+ * a low-confidence transcription can be flagged for review.
+ */
+export async function runLeaseExtraction({ storageRef, mediaType = 'application/pdf', raw = null, fetchImpl, ocrText = null, ocrConfidence = null } = {}) {
+  if (raw) return { normalized: normalizeLeaseExtraction(raw), source: 'raw' };
+
+  // Supplied free-OCR text path — the text layer was recovered off-box.
+  if (typeof ocrText === 'string' && ocrText.trim()) {
+    const t = ocrText.trim().slice(0, 120000);
+    const conf = typeof ocrConfidence === 'number' ? ocrConfidence : null;
+    return {
+      normalized: await extractLeaseFromText(t),
+      source: 'ai_ocr_free', text_len: t.length,
+      ocr_used: true, ocr_tier: 'free_external', ocr_confidence: conf,
+    };
+  }
+
+  if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
+  const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
+  if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
+  let text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
+  // R58 Unit 3 + UW#4: a scanned / image-only PDF (most executed leases) has no
+  // text layer — feed it through the TIERED OCR foundation (free local engine
+  // first when injected, else the gpt-4o vision escalation). On the server no
+  // free adapter is configured, so this resolves to the cloud tier — identical
+  // to R58 — and the free tier is delivered via the supplied-`ocrText` path
+  // above (the workstation drainer). The helper is gated on OPENAI_API_KEY + a
+  // byte cap; without it we fall back to the exact prior graceful needs_ocr
+  // outcome, so this is deploy-order-safe. Disable with LEASE_EXTRACT_OCR='false'.
+  let ocrUsed = false, ocrTier = null, ocrConf = null;
+  if (!text && String(process.env.LEASE_EXTRACT_OCR || 'true').toLowerCase() !== 'false') {
+    const ocr = await ocrPdfToTextTiered({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));
+    if (ocr.ok && ocr.text) { text = ocr.text.slice(0, 120000); ocrUsed = true; ocrTier = ocr.tier || 'cloud'; ocrConf = ocr.confidence ?? null; }
+  }
+  // A scanned PDF the OCR path couldn't rescue (no key / over cap / OCR miss) →
+  // graceful needs_ocr (no 500), exactly as before.
+  if (!text) return { normalized: null, needs_ocr: true, source: 'needs_ocr' };
+  return {
+    normalized: await extractLeaseFromText(text),
+    source: ocrUsed ? `ai_ocr_${ocrTier || 'cloud'}` : 'ai', text_len: text.length,
+    ocr_used: ocrUsed, ocr_tier: ocrTier, ocr_confidence: ocrConf,
+  };
 }
 
 const DOMAIN_DB = (d) => (d === 'dialysis' ? 'dia_db' : 'gov_db');
@@ -1185,7 +1216,7 @@ export const LEASE_THIN_TEXT_CHARS = Math.max(0, parseInt(process.env.LEASE_THIN
  * @param {object} [injected] { deps?, matchByPathAnchor?, emitMatchDisambiguation? } — tests inject; prod wires live
  */
 export async function attachLeaseDoc(a, injected = {}) {
-  const { storageRef, fileName, subjectHint, mediaType, workspaceId, actorId, dryRun = false } = a;
+  const { storageRef, fileName, subjectHint, mediaType, workspaceId, actorId, dryRun = false, ocrText = null, ocrConfidence = null } = a;
   const pathRef = a.pathRef || storageRef || fileName || null;
 
   // ── Multi-tenant / portfolio deal-folder gate — THE SHARED CHOKE POINT ──────
@@ -1220,9 +1251,9 @@ export async function attachLeaseDoc(a, injected = {}) {
   const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
   const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
 
-  let normalized, extTextLen = null;
+  let normalized, extTextLen = null, ocrTier = null, ocrConf = null;
   try {
-    const ext = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl });
+    const ext = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl, ocrText, ocrConfidence });
     // Fix #2: scanned / image-only PDF → graceful needs_ocr (folder-feed records
     // it skipped/needs_ocr, never an error/500).
     if (ext.needs_ocr) {
@@ -1230,6 +1261,8 @@ export async function attachLeaseDoc(a, injected = {}) {
     }
     ({ normalized } = ext);
     extTextLen = ext.text_len ?? null;   // drives the scanned-thin-text re-route below
+    ocrTier = ext.ocr_tier ?? null;      // UW#4 — recorded on the enriched receipt for review
+    ocrConf = ext.ocr_confidence ?? null;
   } catch (e) {
     return { ok: false, attached: false, reason: `extract_failed:${e?.message || 'err'}`, match_status: null };
   }
@@ -1377,6 +1410,7 @@ export async function attachLeaseDoc(a, injected = {}) {
         ok: true, attached: true, lease: true,
         domain: resolved.domain, property_id: resolved.property_id, applied,
         boundary_ok: reported_targets.length === 0, match_status: 'matched',
+        ocr_tier: ocrTier, ocr_confidence: ocrConf,
       };
     }
     // Matched, but the lease could not be created/linked. Split the failure

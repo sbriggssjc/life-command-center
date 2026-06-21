@@ -106,6 +106,53 @@ export async function fetchEligibleLeaseDocs(limit, deps) {
 }
 
 /**
+ * UW#4 OCR queue — lease docs already marked terminal `needs_ocr` (scanned /
+ * no-text-layer). These are EXCLUDED from `fetchEligibleLeaseDocs` (they carry
+ * `lease_backfilled_at`), so the free-OCR workstation drainer pulls them here,
+ * recovers the text layer off-box, and re-submits via the single-doc id path.
+ * A successful OCR re-process re-stamps `outcome='enriched'`, dropping the row
+ * out of THIS queue — so the lane self-drains and is idempotent.
+ */
+export async function fetchOcrQueue(limit, deps) {
+  const q = deps.opsQuery || opsQuery;
+  const r = await q('GET',
+    'folder_feed_seen' +
+    '?detected_type=eq.lease' +
+    '&vertical=in.(dia,gov)' +
+    '&subject_hint->lease_backfill->>outcome=eq.needs_ocr' +
+    '&select=id,server_relative_path,vertical,status,subject_hint' +
+    '&order=id.asc' +
+    `&limit=${limit}`);
+  if (!r.ok) return { ok: false, status: r.status, detail: r.data };
+  const rows = (Array.isArray(r.data) ? r.data : []).map((row) => ({
+    id: row.id,
+    path: row.server_relative_path,
+    vertical: row.vertical,
+    status: row.status,
+    subject_hint: row.subject_hint || {},
+  }));
+  return { ok: true, rows };
+}
+
+/**
+ * Fetch ONE folder_feed_seen lease row by id, bypassing the eligibility filter —
+ * the single-doc free-OCR re-process targets a row already marked terminal
+ * `needs_ocr`, which the queue selects exclude.
+ */
+export async function fetchLeaseDocById(id, deps) {
+  const q = deps.opsQuery || opsQuery;
+  const r = await q('GET',
+    `folder_feed_seen?id=eq.${encodeURIComponent(id)}` +
+    '&detected_type=eq.lease' +
+    '&select=id,server_relative_path,vertical,status,subject_hint' +
+    '&limit=1');
+  if (!r.ok) return { ok: false, status: r.status, detail: r.data };
+  const row = Array.isArray(r.data) ? r.data[0] : null;
+  if (!row) return { ok: true, row: null };
+  return { ok: true, row: { id: row.id, path: row.server_relative_path, vertical: row.vertical, status: row.status, subject_hint: row.subject_hint || {} } };
+}
+
+/**
  * Stamp the backfill marker on a folder_feed_seen row (merging the existing
  * subject_hint so the path anchor is preserved). Called ONLY for terminal
  * outcomes so transient failures retry. Effect-truthful: returns {ok}.
@@ -189,6 +236,10 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
       pathRef:    row.path,
       workspaceId: ctx.workspaceId,
       actorId:     ctx.actorId,
+      // UW#4 — a workstation drainer may supply free-OCR'd text for a scanned
+      // doc; when present the extractor uses it instead of in-server OCR.
+      ocrText:       ctx.ocrText ?? null,
+      ocrConfidence: ctx.ocrConfidence ?? null,
     });
   } catch (err) {
     // A thrown extractor is transient → fall through to the capped transient
@@ -233,11 +284,14 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
       guarantor_entity_id: a.guarantor_entity_id || null,
       guaranteed_by_edge: a.guaranteed_by_edge ?? null,
       boundary_ok: res.boundary_ok ?? null,
+      ocr_tier: res.ocr_tier ?? null,            // UW#4 — provenance of the text layer
+      ocr_confidence: res.ocr_confidence ?? null,
     };
     await deps.markBackfilled(row, {
       outcome: 'enriched', domain: res.domain, property_id: res.property_id,
       fields_filled: out.fields_filled, conflicts: out.conflicts,
       ti_rows: out.ti_rows, lease_created: out.lease_created,
+      ocr_tier: out.ocr_tier, ocr_confidence: out.ocr_confidence,
     });
     return out;
   }
@@ -331,6 +385,47 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     markBackfilled: (row, info) => markBackfilled(row, info, deps),
     bumpAttempt: (row, attempts) => bumpAttempt(row, attempts, deps),
   };
+
+  // ── UW#4 GET ?ocr_queue=1 — list the scanned (needs_ocr) lease docs ──────────
+  // The free-OCR workstation drainer pulls its worklist here (read-only, no
+  // byte fetch / AI), recovers each text layer off-box, and re-submits via the
+  // single-doc POST below.
+  if (req.method === 'GET' && (req.query.ocr_queue === '1' || req.query.ocr_queue === 'true')) {
+    const oq = await fetchOcrQueue(limit, deps);
+    if (!oq.ok) return res.status(502).json({ error: 'ocr_queue_list_failed', detail: oq.detail });
+    return res.status(200).json({
+      mode: 'ocr_queue', limit, count: oq.rows.length,
+      items: oq.rows.map((row) => {
+        const h = cleanHint(row.subject_hint);
+        return {
+          id: row.id, path: row.path, vertical: row.vertical,
+          tenant_brand: h.tenant_brand || null, city: h.city || null, state: h.state || null,
+          text_len: row.subject_hint?.lease_backfill?.text_len ?? null,
+        };
+      }),
+    });
+  }
+
+  // ── UW#4 POST ?id=<id> — single-doc re-process with supplied free-OCR text ───
+  // Re-runs ONE already-marked needs_ocr lease doc through the SAME attachLeaseDoc
+  // machinery using the text layer the workstation drainer recovered off-box
+  // (body.ocr_text). With no ocr_text the row escalates to in-server cloud OCR.
+  // All guards / fill-blanks / provenance / dedupe are UNCHANGED — OCR only adds
+  // a text layer. Bypasses the eligible-queue filter (needs_ocr rows are marked
+  // terminal); a successful re-process re-stamps `enriched`, draining the queue.
+  if (req.method === 'POST' && req.query.id) {
+    if (!process.env.SHAREPOINT_FETCH_URL) {
+      return res.status(200).json({ mode: 'ocr_resubmit', note: 'sharepoint_fetch_not_configured' });
+    }
+    const body = req.body || {};
+    const ocrText = typeof body.ocr_text === 'string' && body.ocr_text.trim() ? body.ocr_text : null;
+    const ocrConfidence = typeof body.ocr_confidence === 'number' ? body.ocr_confidence : null;
+    const found = await fetchLeaseDocById(req.query.id, deps);
+    if (!found.ok) return res.status(502).json({ error: 'lookup_failed', detail: found.detail });
+    if (!found.row) return res.status(404).json({ error: 'lease_doc_not_found', id: req.query.id });
+    const r = await backfillOneLeaseDoc(found.row, { workspaceId, actorId, ocrText, ocrConfidence }, workerDeps);
+    return res.status(200).json({ mode: 'ocr_resubmit', id: found.row.id, ocr_text_supplied: !!ocrText, ocr_confidence: ocrConfidence, result: r });
+  }
 
   const eligible = await fetchEligibleLeaseDocs(limit, deps);
   if (!eligible.ok) {
