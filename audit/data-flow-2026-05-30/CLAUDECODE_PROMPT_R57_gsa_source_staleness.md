@@ -45,6 +45,31 @@ Report: the (a)/(b) determination with evidence; if (a), the corrected source UR
 the re-run produces; if (b), the documented external gap. Confirm the content-hash guard skips a
 duplicate snapshot on a synthetic identical pull. `py_compile` clean; gov repo conventions.
 
+## Addendum (web check, 2026-06-20) — leans toward (a) fixable, + a better source
+A WebSearch confirms GSA's lease inventory is an **active, documented monthly product** ("posted
+after the 1st of each month") — so the static-since-March is more likely our scraper targeting a
+moved/renamed "External" xlsx (case a) than GSA halting publication. Also surfaced a **better,
+actively-maintained source we're not using: IOLP (Inventory of Owned and Leased Properties)** —
+`iolp.gsa.gov`, the catalog.data.gov `inventory-of-owned-and-leased-properties-iolp` dataset, and
+the `d2d.gsa.gov` IOLP report. Recommendation for the networked run: (1) confirm the current
+"External" file URL on `gsa.gov/real-estate/leasing` and fix `GSA_FILE_URL_TEMPLATES` if it moved;
+(2) evaluate **repointing/adding IOLP as the primary source** (more stable, API/catalog-backed)
+so the inventory feed stops depending on the month-named xlsx scrape. Either path resumes the
+lease-event intelligence.
+
+## RESOLVED a/b (data.gov fetch, 2026-06-20) — case (a), the page moved
+The data.gov "Current Lease Inventory" dataset (`lease-inventory-excel-spreadsheet`) shows
+**Dataset Last Updated: 2026-05-20** (`modified: 2026-05-20T15:39:23Z`, contact Matt Crothers /
+matthew.crothers@gsa.gov) — **GSA is actively maintaining it; this is NOT an external freeze.**
+The catalog's distribution `accessURL` is now **`https://www.gsa.gov/real-estate/real-estate-services/leasing-overview`**, but `gsa_auto_sync.py` targets the OLD page
+`GSA_LEASING_PAGE = "https://www.gsa.gov/real-estate/leasing"`. So our scraper is hitting a
+moved/stale page and falling back to the same old file → identical snapshots since March.
+**Concrete fix:** repoint `GSA_LEASING_PAGE` to `…/real-estate-services/leasing-overview`, re-find
+the current "External" inventory file link there (the file URL is on that JS-rendered page — load
+it with the Chrome tools to capture the exact `.xlsx` href + update `GSA_FILE_URL_TEMPLATES`), then
+re-run the monthly ingest for Apr/May/Jun so the diff produces real lease events. The content-hash
+guard (Unit 2) then confirms fresh data landed (writes a new snapshot, clears `source_static_alert`).
+
 ## Bottom line
 The GSA diff catch-up correctly produced 0 events — the snapshots are identical because the GSA
 inventory source has served the same file since March. R57 determines whether that's a fixable
