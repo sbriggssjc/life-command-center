@@ -227,6 +227,7 @@ app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.
 app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
+app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 'developer-chain-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
@@ -268,6 +269,10 @@ app.all('/api/lease-backfill', (req, res) => { req.query._route = 'lease-backfil
 
 // R58 document text / deed-parse worker (cron + manual): GET=dry-run, POST=drain.
 app.all('/api/document-text-tick', (req, res) => { req.query._route = 'document-text-tick'; intakeHandler(req, res); });
+
+// UW#6-REV: sidebar byte-capture notify — records the property-documents Storage
+// pointer (after the signed PUT) so the deep-parser reads durable bytes.
+app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'document-notify'; intakeHandler(req, res); });
 
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
