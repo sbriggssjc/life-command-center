@@ -18,10 +18,23 @@
 // Bucket used: "lcc-om-uploads" — create via Supabase Studio first.
 
 import { fetchWithTimeout } from '../_shared/ops-db.js';
+import { getDomainCredentials } from '../_shared/domain-db.js';
 import { randomUUID } from 'crypto';
 
 const BUCKET = 'lcc-om-uploads';
+const PROPERTY_DOC_BUCKET = 'property-documents';   // UW#6-REV — per-domain, retained
 const SIGNED_URL_TTL_SECONDS = 3600;   // signed upload URLs are valid 1 hour
+
+// Doctypes the deep-parser knows; everything else is filed as 'other' (triage).
+const KNOWN_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov', 'brochure', 'comp', 'survey', 'other']);
+function normalizeDoctype(d) {
+  const v = String(d || '').toLowerCase().trim();
+  return KNOWN_DOCTYPES.has(v) ? v : 'other';
+}
+function sanitizeSegment(s, fallback) {
+  const v = String(s || '').replace(/[^\w.\-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return v || fallback;
+}
 
 /**
  * @param {object} args
@@ -46,6 +59,46 @@ export async function handleIntakePrepareUpload({ inputs, authContext }) {
     return {
       status: 401,
       body: { error: 'missing_caller_identity' },
+    };
+  }
+
+  // ── UW#6-REV: per-domain property-documents upload ──────────────────────────
+  // The sidebar captured a deed/lease/OM PDF's bytes in-session and needs a
+  // signed URL to PUT them into the DOMAIN's retained `property-documents` bucket
+  // (co-located with the property_documents row). The domain service key never
+  // leaves the server. Unset target ⇒ the original OM path below (LCC bucket).
+  if (inputs.target === 'property_document' || String(inputs.bucket || '') === PROPERTY_DOC_BUCKET) {
+    const creds = getDomainCredentials(String(inputs.domain || '').toLowerCase());
+    if (!creds) {
+      return { status: 400, body: { error: 'bad_domain', detail: `domain must be dia/gov (got "${inputs.domain}")` } };
+    }
+    const dom = /^(dia|dialysis)$/i.test(inputs.domain) ? 'dia' : 'gov';
+    const doctype = normalizeDoctype(inputs.doctype);
+    const pid = sanitizeSegment(inputs.property_id, 'unknown');
+    const objKey = sanitizeSegment(inputs.content_hash, '') || randomUUID();
+    const ext = (/\.([a-z0-9]{2,6})$/i.exec(inputs.file_name || '')?.[1] || 'pdf').toLowerCase();
+    const objectPath = `${dom}/${doctype}/${pid}/${objKey}.${ext}`;  // deterministic, idempotent on re-capture
+    const minted = await mintSignedUpload({ supabaseUrl: creds.url, serviceKey: creds.key, bucket: PROPERTY_DOC_BUCKET, objectPath });
+    if (!minted.ok) return { status: minted.status, body: minted.body };
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        storage_path: objectPath,               // WITHIN the bucket; notify carries storage_bucket separately
+        storage_bucket: PROPERTY_DOC_BUCKET,
+        domain: dom,
+        doctype,
+        upload_url: minted.uploadUrl,
+        upload_method: 'PUT',
+        upload_token: minted.token,
+        upload_headers: { 'x-upsert': 'true' },
+        expires_at: minted.expiresAt,
+        max_bytes: 100 * 1024 * 1024,
+        instructions: [
+          '1. PUT the file bytes to upload_url with the listed upload_headers.',
+          '2. POST /api/intake/document-notify { domain, property_id, doctype, file_name, source_url, content_hash, storage_path, storage_bucket }.',
+        ],
+      },
     };
   }
 
@@ -90,54 +143,12 @@ export async function handleIntakePrepareUpload({ inputs, authContext }) {
   const objectPath = `${today}/${objectId}-${safeName}`;          // within the bucket
   const fullPath   = `${BUCKET}/${objectPath}`;                   // bucket + path (what stageOmIntake stores)
 
-  // ---- 2. Mint the signed upload URL via Supabase Storage REST
-  const signEndpoint = `${supabaseUrl}/storage/v1/object/upload/sign/${BUCKET}/${objectPath}`;
-  const signRes = await fetchWithTimeout(signEndpoint, {
-    method: 'POST',
-    headers: {
-      'apikey':        serviceKey,
-      'Authorization': `Bearer ${serviceKey}`,
-      'Content-Type':  'application/json',
-    },
-    body: JSON.stringify({ expiresIn: SIGNED_URL_TTL_SECONDS }),
-  }, 8000);
-
-  const signText = await signRes.text();
-  let signJson = null;
-  try { signJson = signText ? JSON.parse(signText) : null; } catch { /* keep text for error */ }
-
-  if (!signRes.ok || !signJson?.url) {
-    return {
-      status: signRes.status === 404 ? 500 : signRes.status || 500,
-      body: {
-        error: 'signed_url_mint_failed',
-        detail: signJson?.message || signJson?.error || signText?.slice(0, 300) || 'Supabase Storage signed-URL endpoint returned no data',
-        hint: signRes.status === 404
-          ? `Bucket "${BUCKET}" may not exist yet. Create it in Supabase Studio → Storage.`
-          : 'Check that OPS_SUPABASE_KEY has storage:write permissions (service role).',
-      },
-    };
-  }
-
-  // ---- 3. Build the PUT URL the caller uses
-  //     Supabase returns a relative `/object/upload/sign/...?token=JWT`.
-  //     The client PUTs to https://<project>.supabase.co/storage/v1{url}
-  //     with Authorization: Bearer <token>. Some SDKs use the URL as-is
-  //     (token is embedded as query param) — both patterns work.
-  const relativeSignedPath = signJson.url;                        // "/object/upload/sign/..."
-  const uploadUrl = `${supabaseUrl}/storage/v1${relativeSignedPath}`;
-  const uploadToken = signJson.token || null;                     // some Supabase versions include
-
-  // ---- 4. Extract embedded token from URL if not returned separately
-  let derivedToken = uploadToken;
-  if (!derivedToken) {
-    try {
-      const parsed = new URL(uploadUrl);
-      derivedToken = parsed.searchParams.get('token');
-    } catch { /* fall through */ }
-  }
-
-  const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString();
+  // ---- 2-4. Mint the signed upload URL (shared with the property-doc path)
+  const minted = await mintSignedUpload({ supabaseUrl, serviceKey, bucket: BUCKET, objectPath });
+  if (!minted.ok) return { status: minted.status, body: minted.body };
+  const uploadUrl = minted.uploadUrl;
+  const derivedToken = minted.token;
+  const expiresAt = minted.expiresAt;
 
   return {
     status: 200,
@@ -170,4 +181,52 @@ export async function handleIntakePrepareUpload({ inputs, authContext }) {
       ],
     },
   };
+}
+
+/**
+ * Mint a Supabase Storage signed-upload URL for any project/bucket/path.
+ * Shared by the OM (LCC) path and the per-domain property-documents path.
+ * Returns { ok:true, uploadUrl, token, expiresAt } or
+ * { ok:false, status, body } (a ready-to-return error envelope).
+ */
+async function mintSignedUpload({ supabaseUrl, serviceKey, bucket, objectPath }) {
+  const signEndpoint = `${supabaseUrl}/storage/v1/object/upload/sign/${bucket}/${objectPath}`;
+  const signRes = await fetchWithTimeout(signEndpoint, {
+    method: 'POST',
+    headers: {
+      'apikey':        serviceKey,
+      'Authorization': `Bearer ${serviceKey}`,
+      'Content-Type':  'application/json',
+    },
+    body: JSON.stringify({ expiresIn: SIGNED_URL_TTL_SECONDS }),
+  }, 8000);
+
+  const signText = await signRes.text();
+  let signJson = null;
+  try { signJson = signText ? JSON.parse(signText) : null; } catch { /* keep text for error */ }
+
+  if (!signRes.ok || !signJson?.url) {
+    return {
+      ok: false,
+      status: signRes.status === 404 ? 500 : signRes.status || 500,
+      body: {
+        error: 'signed_url_mint_failed',
+        detail: signJson?.message || signJson?.error || signText?.slice(0, 300) || 'Supabase Storage signed-URL endpoint returned no data',
+        hint: signRes.status === 404
+          ? `Bucket "${bucket}" may not exist yet. Create it in Supabase Studio → Storage.`
+          : 'Check that the service key has storage:write permissions (service role).',
+      },
+    };
+  }
+
+  // Supabase returns a relative `/object/upload/sign/...?token=JWT`. The client
+  // PUTs to https://<project>.supabase.co/storage/v1{url}. The token is embedded
+  // in the URL query string; we also surface it for callers that need it.
+  const uploadUrl = `${supabaseUrl}/storage/v1${signJson.url}`;
+  let token = signJson.token || null;
+  if (!token) {
+    try { token = new URL(uploadUrl).searchParams.get('token'); } catch { /* fall through */ }
+  }
+  const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString();
+  return { ok: true, uploadUrl, token, expiresAt };
 }

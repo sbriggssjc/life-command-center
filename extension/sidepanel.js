@@ -1312,6 +1312,49 @@ async function loadPropertyTab(opts) {
     const pipelineSummary = lccEntity?.metadata?._pipeline_summary || null;
     const verifyDomain = pipelineSummary?.domain || null;
     const verifyPropertyId = pipelineSummary?.domain_property_id || null;
+
+    // UW#6-REV — capture document BYTES while the CoStar session is live. The
+    // server can't re-fetch ahprd1cdn signed URLs (token dies server-side), so
+    // we download each deep-parse doc here and store it durably in the domain's
+    // property-documents bucket (background → prepare-upload → PUT → notify).
+    // Fire-and-forget, deduped by content_hash server-side, one at a time so we
+    // don't hammer the CDN. Only runs once we have a resolved domain property_id.
+    if (verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
+      const DEEP_PARSE_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov']);
+      const inferDocType = (label) => {
+        const l = String(label || '').toLowerCase();
+        if (l.includes('deed')) return 'deed';
+        if (l.includes('lease') || l.includes('estoppel')) return 'lease';
+        if (l.includes('om') || l.includes('offering') || l.includes('memorandum')) return 'om';
+        if (l.includes('due diligence') || /\bdd\b/.test(l)) return 'dd';
+        if (l.includes('master')) return 'master';
+        if (l.includes('bov') || l.includes('broker opinion')) return 'bov';
+        return 'other';
+      };
+      const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
+      const seenUrls = new Set();
+      (async () => {
+        for (const d of docLinks) {
+          const url = d?.url;
+          if (!url || seenUrls.has(url)) continue;
+          seenUrls.add(url);
+          const doctype = d?.type && DEEP_PARSE_DOCTYPES.has(d.type) ? d.type : inferDocType(d?.label);
+          if (!DEEP_PARSE_DOCTYPES.has(doctype)) continue;  // skip brochure/comp/survey/other
+          try {
+            await chrome.runtime.sendMessage({
+              type: 'STAGE_DOC_BYTES_TO_LCC',
+              domain: verifyDomain,
+              propertyId: verifyPropertyId,
+              doctype,
+              fileName: d?.label || null,
+              sourceUrl: url,
+            });
+          } catch (e) {
+            console.warn('[UW6] doc byte-capture failed for', url, e?.message || e);
+          }
+        }
+      })();
+    }
     if (verifyDomain && verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
       const verifyBtn = document.createElement('button');
       verifyBtn.className = 'btn btn-sm btn-secondary';

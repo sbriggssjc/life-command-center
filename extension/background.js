@@ -1026,6 +1026,98 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     return true; // async response
   }
 
+  if (msg.type === 'STAGE_DOC_BYTES_TO_LCC') {
+    // UW#6-REV — capture a property document's bytes IN-SESSION and store them
+    // durably. The live CoStar session is the ONLY thing that makes the
+    // ahprd1cdn signed URL fetchable; the server can't re-fetch it (token dies
+    // server-side — why R58's URL-only re-fetch was never drainable). Flow
+    // mirrors the OM Path C: fetch bytes → prepare-upload (domain
+    // property-documents bucket) → PUT to Storage → notify (record the pointer).
+    (async () => {
+      try {
+        const { domain, propertyId, doctype, fileName, sourceUrl } = msg;
+        if (!domain || propertyId == null || !sourceUrl) { respond({ ok: false, error: 'missing_args' }); return; }
+
+        // 1. Fetch the PDF bytes in-session (cookies sent; CDN host permitted).
+        const docRes = await fetch(sourceUrl, { credentials: 'include' });
+        if (!docRes.ok) { respond({ ok: false, error: 'doc_fetch_failed', status: docRes.status }); return; }
+        const buf = await docRes.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        if (!bytes.byteLength) { respond({ ok: false, error: 'empty_doc' }); return; }
+        const mimeType = docRes.headers.get('content-type') || 'application/pdf';
+
+        // 2. content_hash (sha-256 hex) — the idempotency key.
+        const digest = await crypto.subtle.digest('SHA-256', buf);
+        const contentHash = 'sha256:' + Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+
+        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const host = String(syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app').replace(/\/+$/, '');
+        const apiHeaders = {
+          'X-LCC-Key': syncConfig.LCC_API_KEY || '',
+          ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
+        };
+        const safeName = (fileName && fileName.trim()) || sourceUrl.split('/').pop() || `doc-${Date.now()}.pdf`;
+
+        // 3. prepare-upload — signed URL for the DOMAIN property-documents bucket.
+        const prepRes = await fetch(`${host}/api/intake/prepare-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            target: 'property_document',
+            domain,
+            doctype: doctype || 'other',
+            property_id: propertyId,
+            file_name: safeName,
+            mime_type: mimeType,
+            content_hash: contentHash,
+          }),
+        });
+        const prepBody = await prepRes.json().catch(() => null);
+        if (!prepRes.ok || !prepBody?.ok || !prepBody.upload_url || !prepBody.storage_path) {
+          respond({ ok: false, error: 'prepare_upload_refused', status: prepRes.status, detail: prepBody?.error || prepBody?.detail });
+          return;
+        }
+
+        // 4. PUT the bytes to Storage (Blob — MV3 Content-Length quirk).
+        const putRes = await fetch(prepBody.upload_url, {
+          method: prepBody.upload_method || 'PUT',
+          headers: { 'Content-Type': mimeType, ...(prepBody.upload_headers || {}) },
+          body: new Blob([bytes], { type: mimeType }),
+        });
+        if (!putRes.ok) { respond({ ok: false, error: 'storage_put_failed', status: putRes.status }); return; }
+
+        // 5. notify — record the pointer on property_documents (idempotent;
+        //    server re-validates the doctype and routes unknowns to triage).
+        const notifyRes = await fetch(`${host}/api/intake/document-notify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            domain,
+            property_id: propertyId,
+            doctype: prepBody.doctype || doctype || 'other',
+            file_name: safeName,
+            source_url: sourceUrl,
+            content_hash: contentHash,
+            storage_path: prepBody.storage_path,
+            storage_bucket: prepBody.storage_bucket,
+          }),
+        });
+        const notifyBody = await notifyRes.json().catch(() => null);
+        respond({
+          ok: notifyRes.ok && notifyBody?.ok === true,
+          status: notifyRes.status,
+          outcome: notifyBody?.outcome,
+          document_id: notifyBody?.document_id,
+          content_hash: contentHash,
+          sizeBytes: bytes.byteLength,
+        });
+      } catch (e) {
+        respond({ ok: false, error: 'doc_capture_threw', detail: String(e?.message || e) });
+      }
+    })();
+    return true;
+  }
+
   if (msg.type === 'STAGE_PDF_BYTES_TO_LCC') {
     // Manual OM PDF upload — sidebar reads file → base64 → here.
     // Round 76ej.g (2026-05-04): switched to Path C first (storage upload

@@ -52,12 +52,27 @@ async function fetchWithTimeout(url, opts, ms) {
 }
 
 /**
- * Fetch the document bytes. Absolute URLs are fetched directly (CoStar CDN deed
- * PDFs are public/signed download links); a SharePoint server-relative ref goes
- * through the Phase-1 "Get file content" PA flow. Returns
- * { ok, buffer, contentType } or { ok:false, status, detail }.
+ * Fetch the document bytes. Resolution order (UW#6-REV):
+ *   1. `storagePath` — bytes in a Supabase Storage bucket (the durable
+ *      source-of-record written at sidebar capture time). Tried FIRST because the
+ *      CoStar CDN `source_url` carries a short-lived session token that dies
+ *      server-side — the whole reason R58's URL-only re-fetch was never drainable.
+ *   2. absolute `sourceUrl` — direct vendor download (only works inside the live
+ *      token window, e.g. a doc captured moments ago that hasn't been offloaded).
+ *   3. SharePoint server-relative ref → the Phase-1 "Get file content" PA flow.
+ * Returns { ok, buffer, contentType, via } or { ok:false, status, detail }.
  */
-export async function fetchDocBytes({ sourceUrl, storageRef, fetchImpl } = {}) {
+export async function fetchDocBytes({ sourceUrl, storageRef, storagePath, storageGet, fetchImpl } = {}) {
+  // 1. Storage-first: durable bytes, always fetchable with the project key.
+  if (storagePath && typeof storageGet === 'function') {
+    const sg = await storageGet(storagePath);
+    if (sg && sg.ok && sg.buffer) {
+      return { ok: true, buffer: sg.buffer, contentType: sg.contentType || null, via: 'storage' };
+    }
+    // Storage miss is recorded but we still try the URL (token may still be live
+    // right after capture). A storage row that 404s is a real problem, surfaced
+    // via the via/detail on the eventual failure.
+  }
   // An absolute vendor URL takes priority — it's the direct download. A bare
   // server-relative ref falls to the SharePoint Get flow.
   if (sourceUrl && isAbsoluteUrl(sourceUrl)) {
@@ -70,7 +85,7 @@ export async function fetchDocBytes({ sourceUrl, storageRef, fetchImpl } = {}) {
     }
     if (!r || !r.ok) return { ok: false, status: r?.status || 0, detail: 'fetch_non_ok' };
     const buffer = Buffer.from(await r.arrayBuffer());
-    return { ok: true, buffer, contentType: r.headers?.get?.('content-type') || null };
+    return { ok: true, buffer, contentType: r.headers?.get?.('content-type') || null, via: 'url' };
   }
   const ref = storageRef || sourceUrl;
   if (ref) {
@@ -79,7 +94,7 @@ export async function fetchDocBytes({ sourceUrl, storageRef, fetchImpl } = {}) {
       fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, FETCH_TIMEOUT_MS)),
     });
     if (!sp.ok) return { ok: false, status: sp.status || 0, detail: sp.detail || 'sharepoint_fetch_failed' };
-    return { ok: true, buffer: sp.buffer, contentType: sp.contentType || null };
+    return { ok: true, buffer: sp.buffer, contentType: sp.contentType || null, via: 'sharepoint' };
   }
   return { ok: false, status: 0, detail: 'no_source_url_or_ref' };
 }
@@ -295,13 +310,14 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
  * `needs_ocr` is a TRUTHFUL terminal-this-pass state, distinct from a transient
  * fetch failure (ok:false), so the worker can record it vs. leave it for retry.
  */
-export async function extractDocumentText({ sourceUrl, storageRef, mediaType, allowOcr = true } = {}, deps = {}) {
+export async function extractDocumentText({ sourceUrl, storageRef, storagePath, mediaType, allowOcr = true } = {}, deps = {}) {
   const fetched = await (deps.fetchDocBytes || fetchDocBytes)({
-    sourceUrl, storageRef, fetchImpl: deps.fetchImpl,
+    sourceUrl, storageRef, storagePath, storageGet: deps.storageGet, fetchImpl: deps.fetchImpl,
   });
   if (!fetched.ok) {
     return { ok: false, reason: 'fetch_failed', status: fetched.status || 0, detail: fetched.detail || null };
   }
+  const fetchedVia = fetched.via || null;
   const buffer = fetched.buffer;
   const ct = (fetched.contentType || mediaType || '').toLowerCase();
   const isPdf = /pdf/i.test(ct) || (buffer && buffer[0] === 0x25 && buffer[1] === 0x50); // %P
@@ -322,7 +338,7 @@ export async function extractDocumentText({ sourceUrl, storageRef, mediaType, al
   }
 
   if (text && text.length > 0) {
-    return { ok: true, text, method, text_len: text.length, ocr_attempted: false };
+    return { ok: true, text, method, text_len: text.length, ocr_attempted: false, via: fetchedVia };
   }
 
   // Zero-text PDF → OCR fallback (the scanned-deed / scanned-lease case).

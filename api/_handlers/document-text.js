@@ -30,18 +30,34 @@
 // ============================================================================
 
 import { authenticate } from '../_shared/auth.js';
-import { domainQuery } from '../_shared/domain-db.js';
+import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { extractDocumentText } from '../_shared/document-text.js';
+import { downloadFromStorage } from '../_shared/artifact-storage.js';
 import { processDeedDocument } from './deed-parser.js';
+
+/**
+ * UW#6-REV — build a domain-bound Storage getter for a property_documents row.
+ * Reads the durable bytes from the domain's `property-documents` bucket with the
+ * domain service key (the bytes are co-located with the row). Returns null when
+ * the row has no storage_path or the domain isn't configured (URL fallback only).
+ */
+function buildStorageGet(domain, bucket) {
+  const creds = getDomainCredentials(domain);
+  if (!creds) return null;
+  const b = bucket || 'property-documents';
+  return (objectPath) => downloadFromStorage({ baseUrl: creds.url, key: creds.key, bucket: b, objectPath });
+}
 
 const DOMAINS = { dia: 'dialysis', dialysis: 'dialysis', gov: 'government', government: 'government' };
 
 /** Eligible queue: property_documents with a source and NO raw_text yet. */
 export async function fetchEligibleDocs(domain, { limit, doctype }, deps = {}) {
   const q = deps.domainQuery || domainQuery;
+  // Eligible = no text yet AND a byte source exists — either the durable
+  // storage_path (UW#6-REV, the win) OR a (possibly-stale-token) source_url.
   let path =
-    'property_documents?raw_text=is.null&source_url=not.is.null' +
-    '&select=document_id,property_id,source_url,document_type,file_name,ingestion_status' +
+    'property_documents?raw_text=is.null&or=(storage_path.not.is.null,source_url.not.is.null)' +
+    '&select=document_id,property_id,source_url,storage_path,storage_bucket,document_type,file_name,ingestion_status' +
     `&order=document_id.desc&limit=${limit}`;
   if (doctype && doctype !== 'all') path += `&document_type=eq.${encodeURIComponent(doctype)}`;
   const r = await q(domain, 'GET', path);
@@ -81,11 +97,23 @@ export async function processOneDoc(domain, row, deps = {}) {
   const extract = deps.extractDocumentText || extractDocumentText;
   const runDeed = deps.processDeedDocument || processDeedDocument;
 
-  if (!row.source_url) return { document_id: row.document_id, outcome: 'no_source' };
+  if (!row.source_url && !row.storage_path) return { document_id: row.document_id, outcome: 'no_source' };
+
+  // Storage-first: the durable bytes (UW#6-REV) are read from the domain bucket
+  // with the domain key; source_url is the live-token fallback. deps.storageGet
+  // override wins (tests); else bind one to this row's domain + bucket.
+  const storageGet = row.storage_path
+    ? (deps.storageGet || buildStorageGet(domain, row.storage_bucket))
+    : null;
 
   const ext = await extract(
-    { sourceUrl: row.source_url, mediaType: null, allowOcr: deps.allowOcr !== false },
-    deps
+    {
+      sourceUrl: row.source_url || null,
+      storagePath: row.storage_path || null,
+      mediaType: null,
+      allowOcr: deps.allowOcr !== false,
+    },
+    { ...deps, storageGet }
   );
   if (!ext.ok) {
     // Transient byte-fetch failure → leave the row untouched so a later tick retries.

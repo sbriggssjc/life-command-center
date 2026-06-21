@@ -125,6 +125,7 @@
     { "source": "/api/lease-extract", "destination": "/api/intake?_route=lease-extract" },
     { "source": "/api/lease-backfill", "destination": "/api/intake?_route=lease-backfill" },
     { "source": "/api/document-text-tick", "destination": "/api/intake?_route=document-text-tick" },
+    { "source": "/api/intake/document-notify", "destination": "/api/intake?_route=document-notify" },
     { "source": "/api/sf-activity", "destination": "/api/intake?_route=sf-activity" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },
     { "source": "/api/intake/accuracy", "destination": "/api/intake?_route=accuracy" },
