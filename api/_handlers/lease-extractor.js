@@ -697,14 +697,14 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
   if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
   let text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
-  // R58 Unit 3 + UW#4: a scanned / image-only PDF (most executed leases) has no
-  // text layer — feed it through the TIERED OCR foundation (free local engine
-  // first when injected, else the gpt-4o vision escalation). On the server no
-  // free adapter is configured, so this resolves to the cloud tier — identical
-  // to R58 — and the free tier is delivered via the supplied-`ocrText` path
-  // above (the workstation drainer). The helper is gated on OPENAI_API_KEY + a
-  // byte cap; without it we fall back to the exact prior graceful needs_ocr
-  // outcome, so this is deploy-order-safe. Disable with LEASE_EXTRACT_OCR='false'.
+  // R58 Unit 3 + UW#4/UW#4b: a scanned / image-only PDF (most executed leases)
+  // has no text layer — feed it through the TIERED OCR foundation (free local
+  // engine first when injected, then CHEAP CLOUD — Doc AI / Azure DI Read —, then
+  // gpt-4o vision only as a gated last resort). On the server no free adapter is
+  // configured and, by default, no cheap provider either, so this resolves to a
+  // ZERO-SPEND needs_ocr — the free tier is delivered via the supplied-`ocrText`
+  // path above (the workstation drainer) and paid spend is opt-in (OCR_CLOUD_*).
+  // Deploy-order-safe; disable any OCR here with LEASE_EXTRACT_OCR='false'.
   let ocrUsed = false, ocrTier = null, ocrConf = null;
   if (!text && String(process.env.LEASE_EXTRACT_OCR || 'true').toLowerCase() !== 'false') {
     const ocr = await ocrPdfToTextTiered({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));

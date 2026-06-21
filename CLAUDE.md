@@ -4441,3 +4441,62 @@ confirm-gated price write; additive (no domain migration — raw_text/
 ingestion_status/extracted_data already exist); ≤12 api/*.js; dia/gov pipelines
 otherwise untouched. JS ships on the Railway redeploy; the cron migration applies
 on LCC Opps (no-ops until the endpoint ships).
+
+## UW#4b — OCR engine cost optimization (lease path only) (2026-06-21)
+
+Follow-up to UW#4 (free-first lease OCR). A cost exploration (grounded 2026-06-20)
+found gpt-4o vision is the most EXPENSIVE OCR path by 6–14× and purpose-built OCR
+is near-free at our volume. UW#4b re-points the **engine economics** of the
+lease-OCR tier — same extractor, same four guards, same fill-blanks, same
+`source='folder_feed_lease'` provenance, same confidence tagging; **only the OCR
+engine choices change.** Licenses we already pay for don't help (M365 Copilot has
+no batch-OCR API — Microsoft's OCR product is Azure DI, separately metered;
+Claude/ChatGPT chat seats can't batch through the API). Corpus ≈ 860 scanned
+leases / 15k–35k pages, one-time.
+
+### Scope guard (the critical boundary)
+`ocrPdfToTextTiered` is called ONLY by `lease-extractor.js`. **R58's other OCR
+paths (deeds) call `ocrPdfToText` directly and are UNTOUCHED** — UW#4b does not
+regress R58. ≤12 api/*.js; no migration (confidence/tier ride existing jsonb); no
+new always-on server dependency (OSS engine in the workstation drainer; cheap
+cloud is a config'd HTTP seam).
+
+### Unit 1 — free tier = the workhorse, upgraded (`scripts/lease-ocr-backfill.mjs`)
+Default engine is now **`auto`**, which prefers a purpose-built OCR engine
+(**Surya → PaddleOCR** — markedly better on the rent-schedule / exhibit TABLES in
+NNN leases, still $0) and FALLS BACK to **ocrmypdf → Tesseract** when the better
+engine isn't installed (`resolveEngine` cascade by `binaryAvailable`). New engine
+runners `suryaOcr` / `paddleOcr` + the version-tolerant pure parsers
+`textAndConfFromSuryaJson` / `textAndConfFromPaddleJson` (per-line text + 0-1→0-100
+confidence; defensive against CLI shape drift). `--engine`/`--ocr-cmd` pin a
+version-specific invocation. Existing Tesseract/ocrmypdf paths extracted into
+`tesseractOcr`/`ocrmypdfOcr` helpers (byte-identical).
+
+### Unit 2 — cheap cloud as the escalation, NOT gpt-4o (`document-text.js`)
+The paid escalation order in `ocrPdfToTextTiered` is now: free →
+**`cloud_cheap`** (Google Document AI / Azure DI Read, ~$1.50/1k pp, the PREFERRED
+paid tier) → **gpt-4o vision LAST RESORT, explicit opt-in only**. New
+`ocrCloudCheap({buffer,mediaType,fetchImpl})` POSTs base64 to `OCR_CLOUD_OCR_URL`
+(a thin Doc AI / Azure DI flow — the SHAREPOINT_FETCH_URL webhook-adapter pattern,
+zero new SDK) and reads back `{text, confidence?}`. **Default = ZERO SPEND,
+free-only:** with no cheap provider configured AND no gpt-4o last-resort flag the
+paid tiers are inert (a server free miss → `needs_ocr`; the corpus drains via the
+workstation free OCR). Env: `OCR_CLOUD_ESCALATION` (master kill-switch, default
+on), `OCR_CLOUD_PROVIDER` (`google_docai`/`azure_di`/`webhook` via the URL, or
+`gpt4o`), `OCR_CLOUD_OCR_URL`(+`OCR_CLOUD_OCR_KEY`), `OCR_CLOUD_GPT4O_LASTRESORT`.
+Google's $300 new-account credit covers the whole backfill at ~$0.
+
+### Unit 3 — measure to size the spend
+The drainer summary now prints the **free-tier hit RATE** (free OK / OCR-attempted)
+so a capped gate batch reveals the paid escalation volume before any broad drain —
+if the OSS engine clears most leases, the paid tail is trivial; if not, Doc AI at
+~$30 (or $0 under the credit) covers the rest.
+
+### Verified (headless 2026-06-21)
+`test/document-text.test.mjs` UW#4 tiered block rewritten for UW#4b (cheap-cloud
+preferred; gpt-4o reached ONLY behind the explicit flag; default zero-spend;
+`ocrCloudCheap` webhook seam) + `test/lease-ocr-backfill.test.mjs` (+Surya/Paddle
+parser cases). `node --check` clean (document-text, lease-extractor,
+lease-ocr-backfill); `ls api/*.js | wc -l`=12; full suite 1193 pass / 0 fail / 6
+skipped. JS ships on the Railway redeploy. Doc: `docs/UW4_LEASE_OCR.md` (cost
+table, engine install notes, cheap-cloud config + Google $300-credit path).

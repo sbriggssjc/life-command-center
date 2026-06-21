@@ -1,15 +1,22 @@
 #!/usr/bin/env node
 // ============================================================================
-// UW#4 — FREE-first lease OCR drainer (workstation one-shot)
+// UW#4 / UW#4b — FREE-first lease OCR drainer (workstation one-shot)
 // Life Command Center
 //
 // The lease extractor (UW#2 / R58) lifts escalation %, guarantor, renewal,
 // expiration, and expense structure off the floor — but ~54% of executed lease
 // PDFs are SCANNED image-only and park `needs_ocr` (0 fields filled) because the
 // extractor needs a text layer. This drainer adds that text layer with a FREE
-// local OCR engine (Tesseract via ocrmypdf), so the bulk drain costs ZERO
-// per-page cloud spend; only the free-tier MISSES escalate to the in-server
-// cloud OCR (gpt-4o vision), and only when --escalate is set.
+// local OCR engine, so the bulk drain costs ZERO per-page cloud spend; only the
+// free-tier MISSES escalate to the in-server cloud OCR (cheap cloud — Doc AI /
+// Azure DI Read — preferred; gpt-4o only as a gated last resort), and only when
+// --escalate is set.
+//
+// UW#4b — free engine choice: the DEFAULT is `auto`, which prefers a purpose-
+// built OCR engine (Surya, then PaddleOCR — markedly better on the rent-
+// schedule / exhibit TABLES in NNN leases) and FALLS BACK to ocrmypdf-Tesseract
+// when the better engine isn't installed. All are $0 at our volume. Pin a
+// version-specific invocation with --engine / --ocr-cmd if a CLI differs.
 //
 // Why a workstation script (not an in-tick cron): the OCR binary isn't in the
 // Railway image, and a 50-page scan blows the per-tick budget. This runs where
@@ -55,14 +62,17 @@
 //   --limit <n>                    docs per run (default 25)
 //   --concurrency <n>              parallel OCR (default 2, max 4 — gentle)
 //   --conf-min <0-100>             escalate/skip below this mean word conf (default 55)
-//   --engine ocrmypdf|tesseract    free OCR engine (default ocrmypdf)
+//   --engine auto|surya|paddleocr|ocrmypdf|tesseract
+//                                  free OCR engine (default auto — prefers
+//                                  surya > paddleocr > ocrmypdf > tesseract by
+//                                  what's installed)
 //   --ocr-cmd "<tmpl>"             full override; {in} {sidecar} placeholders
 //   --escalate                     allow cloud-OCR fallback on a free-tier miss
 //   --manifest <path>              resume manifest (default .lease-ocr-backfill.json)
 //   --dry-run                      list + locate only; no OCR, no POST
 // ============================================================================
 
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -91,7 +101,7 @@ const STRIP_PREFIX = args['strip-prefix'] || '/sites/TeamBriggs20/Shared Documen
 const LIMIT        = Math.max(1, parseInt(args.limit || '25', 10));
 const CONCURRENCY  = Math.max(1, Math.min(4, parseInt(args.concurrency || '2', 10)));
 const CONF_MIN     = Math.max(0, Math.min(100, parseFloat(args['conf-min'] ?? '55')));
-const ENGINE       = args.engine === 'tesseract' ? 'tesseract' : 'ocrmypdf';
+const ENGINE_ARG   = String(args.engine || 'auto').toLowerCase();
 const OCR_CMD      = args['ocr-cmd'] || '';
 const ESCALATE     = !!args.escalate;
 const MANIFEST     = args.manifest || '.lease-ocr-backfill.json';
@@ -152,10 +162,141 @@ export function meanConfidenceFromTsv(tsv) {
   return n ? Math.round((sum / n) * 10) / 10 : null;
 }
 
+/**
+ * UW#4b — extract { text, confidence } from a Surya `results.json`. Surya emits
+ * per-line `{ text, confidence }` (confidence 0-1) nested under page objects;
+ * the walk is defensive against the CLI's cross-version shape changes — it
+ * collects every string `text` + numeric `confidence` it finds. Scales a 0-1
+ * mean to 0-100 (matching the Tesseract scale). Returns {text:'',confidence:null}
+ * when nothing parses.
+ */
+export function textAndConfFromSuryaJson(json) {
+  let obj = json;
+  if (typeof json === 'string') { try { obj = JSON.parse(json); } catch { return { text: '', confidence: null }; } }
+  const texts = []; const confs = [];
+  const walk = (n) => {
+    if (!n) return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (typeof n === 'object') {
+      if (typeof n.text === 'string' && n.text.trim()) {
+        texts.push(n.text);
+        if (typeof n.confidence === 'number') confs.push(n.confidence);
+      }
+      for (const k of Object.keys(n)) { if (k === 'text' || k === 'confidence') continue; walk(n[k]); }
+    }
+  };
+  walk(obj);
+  const text = texts.join('\n').trim();
+  let confidence = null;
+  if (confs.length) { const m = confs.reduce((a, b) => a + b, 0) / confs.length; confidence = Math.round((m <= 1 ? m * 100 : m) * 10) / 10; }
+  return { text, confidence };
+}
+
+/**
+ * UW#4b — extract { text, confidence } from a PaddleOCR result. Handles the 3.x
+ * `{ rec_texts:[…], rec_scores:[…] }` shape (per page, possibly nested) AND the
+ * legacy `[ [bbox], [text, score] ]` line tuples. Scores are 0-1 → 0-100.
+ */
+export function textAndConfFromPaddleJson(json) {
+  let obj = json;
+  if (typeof json === 'string') { try { obj = JSON.parse(json); } catch { return { text: '', confidence: null }; } }
+  const texts = []; const confs = [];
+  const walk = (n) => {
+    if (!n) return;
+    if (Array.isArray(n)) {
+      // legacy line tuple: [ [bbox...], [text, score] ]
+      if (n.length === 2 && Array.isArray(n[1]) && typeof n[1][0] === 'string' && typeof n[1][1] === 'number') {
+        if (n[1][0].trim()) { texts.push(n[1][0]); confs.push(n[1][1]); }
+        return;
+      }
+      n.forEach(walk); return;
+    }
+    if (typeof n === 'object') {
+      if (Array.isArray(n.rec_texts)) {
+        n.rec_texts.forEach((t, i) => {
+          if (typeof t === 'string' && t.trim()) {
+            texts.push(t);
+            const s = Array.isArray(n.rec_scores) ? n.rec_scores[i] : null;
+            if (typeof s === 'number') confs.push(s);
+          }
+        });
+      }
+      for (const k of Object.keys(n)) { if (k === 'rec_texts' || k === 'rec_scores') continue; walk(n[k]); }
+    }
+  };
+  walk(obj);
+  const text = texts.join('\n').trim();
+  let confidence = null;
+  if (confs.length) { const m = confs.reduce((a, b) => a + b, 0) / confs.length; confidence = Math.round((m <= 1 ? m * 100 : m) * 10) / 10; }
+  return { text, confidence };
+}
+
 // ---- free OCR engines (system binaries; workstation only) ------------------
 
 function run(cmd, argv, opts = {}) {
   return spawnSync(cmd, argv, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts });
+}
+
+// True unless the binary is absent (spawn ENOENT). A present binary that exits
+// nonzero on a probe arg still counts as available.
+function binaryAvailable(cmd) {
+  const r = spawnSync(cmd, ['--version'], { encoding: 'utf8' });
+  return !(r.error && r.error.code === 'ENOENT');
+}
+
+// Recursively find the first file under `dir` matching predicate(name) → path|null.
+function findFile(dir, predicate) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) { const f = findFile(full, predicate); if (f) return f; }
+    else if (predicate(e.name)) return full;
+  }
+  return null;
+}
+
+// Resolve the free engine: --ocr-cmd wins; an explicit --engine is honored;
+// `auto` (default) prefers a purpose-built engine that's actually installed,
+// falling back to ocrmypdf/Tesseract. Computed once.
+let RESOLVED_ENGINE = null;
+export function resolveEngine() {
+  if (RESOLVED_ENGINE) return RESOLVED_ENGINE;
+  if (OCR_CMD) { RESOLVED_ENGINE = 'custom'; return RESOLVED_ENGINE; }
+  if (ENGINE_ARG !== 'auto') { RESOLVED_ENGINE = ENGINE_ARG; return RESOLVED_ENGINE; }
+  const probe = { surya: 'surya_ocr', paddleocr: 'paddleocr', ocrmypdf: 'ocrmypdf', tesseract: 'tesseract' };
+  for (const e of ['surya', 'paddleocr', 'ocrmypdf', 'tesseract']) {
+    if (binaryAvailable(probe[e])) { RESOLVED_ENGINE = e; return RESOLVED_ENGINE; }
+  }
+  RESOLVED_ENGINE = 'ocrmypdf';
+  return RESOLVED_ENGINE;
+}
+
+// Surya — native PDF → results.json with per-line confidence; strong on tables.
+function suryaOcr(pdfPath, scratch) {
+  const out = join(scratch, 'surya');
+  const r = run('surya_ocr', [pdfPath, '--output_dir', out]);
+  if (r.error && r.error.code === 'ENOENT') return { ok: false, reason: 'surya_not_installed' };
+  const js = findFile(out, (n) => n === 'results.json') || findFile(out, (n) => n.endsWith('.json'));
+  if (!js) return { ok: false, reason: `surya_no_output:${(r.stderr || '').slice(0, 160)}` };
+  const { text, confidence } = textAndConfFromSuryaJson(readFileSync(js, 'utf8'));
+  if (!text) return { ok: false, reason: 'surya_empty' };
+  return { ok: true, text, confidence, engine: 'surya' };
+}
+
+// PaddleOCR — 3.x `paddleocr ocr` CLI; JSON may land in stdout or a saved file.
+// Pin a version-specific invocation with --ocr-cmd if your CLI differs.
+function paddleOcr(pdfPath, scratch) {
+  const out = join(scratch, 'paddle');
+  const r = run('paddleocr', ['ocr', '-i', pdfPath, '--save_path', out]);
+  if (r.error && r.error.code === 'ENOENT') return { ok: false, reason: 'paddleocr_not_installed' };
+  let parsed = textAndConfFromPaddleJson(r.stdout || '');
+  if (!parsed.text) {
+    const js = findFile(out, (n) => n.endsWith('.json'));
+    if (js) parsed = textAndConfFromPaddleJson(readFileSync(js, 'utf8'));
+  }
+  if (!parsed.text) return { ok: false, reason: `paddleocr_no_text:${(r.stderr || '').slice(0, 160)}` };
+  return { ok: true, text: parsed.text, confidence: parsed.confidence, engine: 'paddleocr' };
 }
 
 // Best-effort mean word confidence: rasterize the first few pages (pdftoppm) and
@@ -182,55 +323,67 @@ function freeOcrConfidence(pdfPath, scratch) {
   } catch { return null; }
 }
 
+// --ocr-cmd full override ({in} {sidecar} placeholders).
+function customOcr(pdfPath, scratch) {
+  const sidecar = join(scratch, 'sidecar.txt');
+  const filled = OCR_CMD.replace(/\{in\}/g, pdfPath).replace(/\{sidecar\}/g, sidecar);
+  const r = run('/bin/sh', ['-c', filled]);
+  if (r.status !== 0) return { ok: false, reason: `ocr_cmd_exit_${r.status}:${(r.stderr || '').slice(0, 200)}` };
+  const text = existsSync(sidecar) ? readFileSync(sidecar, 'utf8') : (r.stdout || '');
+  if (!text.trim()) return { ok: false, reason: 'ocr_cmd_empty' };
+  return { ok: true, text: text.trim(), confidence: freeOcrConfidence(pdfPath, scratch), engine: 'custom' };
+}
+
+// pdftoppm + tesseract end-to-end (the TSV pass also yields confidence).
+function tesseractOcr(pdfPath, scratch) {
+  const prefix = join(scratch, 'pg');
+  const ppm = run('pdftoppm', ['-png', '-r', '200', pdfPath, prefix]);
+  if (ppm.status !== 0) return { ok: false, reason: `pdftoppm_exit_${ppm.status}` };
+  const parts = []; const confs = [];
+  for (let pg = 1; pg <= 500; pg++) {
+    const a = `${prefix}-${pg}.png`, b = `${prefix}-${String(pg).padStart(2, '0')}.png`;
+    const img = existsSync(a) ? a : (existsSync(b) ? b : null);
+    if (!img) break;
+    const txt = run('tesseract', [img, 'stdout']);
+    if (txt.status === 0 && txt.stdout) parts.push(txt.stdout);
+    const tsv = run('tesseract', [img, 'stdout', 'tsv']);
+    if (tsv.status === 0) { const c = meanConfidenceFromTsv(tsv.stdout); if (c != null) confs.push(c); }
+  }
+  const text = parts.join('\n').trim();
+  if (!text) return { ok: false, reason: 'tesseract_empty' };
+  const confidence = confs.length ? Math.round((confs.reduce((a, b) => a + b, 0) / confs.length) * 10) / 10 : null;
+  return { ok: true, text, confidence, engine: 'tesseract' };
+}
+
+// ocrmypdf (rasterization + Tesseract + a text layer via --sidecar).
+function ocrmypdfOcr(pdfPath, scratch) {
+  const sidecar = join(scratch, 'sidecar.txt');
+  const out = join(scratch, 'out.pdf');
+  const r = run('ocrmypdf', ['--force-ocr', '--sidecar', sidecar, '--output-type', 'pdf', pdfPath, out]);
+  if (r.error && r.error.code === 'ENOENT') return { ok: false, reason: 'ocrmypdf_not_installed' };
+  if (r.status !== 0 && !existsSync(sidecar)) {
+    return { ok: false, reason: `ocrmypdf_exit_${r.status}:${(r.stderr || '').slice(0, 200)}` };
+  }
+  const text = existsSync(sidecar) ? readFileSync(sidecar, 'utf8').trim() : '';
+  if (!text) return { ok: false, reason: 'ocrmypdf_empty' };
+  return { ok: true, text, confidence: freeOcrConfidence(pdfPath, scratch), engine: 'ocrmypdf' };
+}
+
 /**
  * Free OCR one local PDF → { ok, text, confidence, engine } or { ok:false, reason }.
- * Never throws. Default engine ocrmypdf (text via --sidecar) with a best-effort
- * tesseract-TSV confidence pass; --engine tesseract uses pdftoppm + tesseract
- * end-to-end; --ocr-cmd is a full override ({in} {sidecar} placeholders).
+ * Never throws. Dispatches by the resolved engine (UW#4b: prefers Surya /
+ * PaddleOCR — better on lease rent-tables — and falls back to ocrmypdf /
+ * Tesseract when the better engine isn't installed). --ocr-cmd overrides all.
  */
 export function freeOcr(pdfPath) {
   const scratch = mkdtempSync(join(tmpdir(), 'lease-ocr-'));
   try {
-    const sidecar = join(scratch, 'sidecar.txt');
-
-    if (OCR_CMD) {
-      const filled = OCR_CMD.replace(/\{in\}/g, pdfPath).replace(/\{sidecar\}/g, sidecar);
-      const r = run('/bin/sh', ['-c', filled]);
-      if (r.status !== 0) return { ok: false, reason: `ocr_cmd_exit_${r.status}:${(r.stderr || '').slice(0, 200)}` };
-      const text = existsSync(sidecar) ? readFileSync(sidecar, 'utf8') : (r.stdout || '');
-      if (!text.trim()) return { ok: false, reason: 'ocr_cmd_empty' };
-      return { ok: true, text: text.trim(), confidence: freeOcrConfidence(pdfPath, scratch), engine: 'custom' };
-    }
-
-    if (ENGINE === 'tesseract') {
-      const prefix = join(scratch, 'pg');
-      const ppm = run('pdftoppm', ['-png', '-r', '200', pdfPath, prefix]);
-      if (ppm.status !== 0) return { ok: false, reason: `pdftoppm_exit_${ppm.status}` };
-      const parts = []; const confs = [];
-      for (let pg = 1; pg <= 500; pg++) {
-        const a = `${prefix}-${pg}.png`, b = `${prefix}-${String(pg).padStart(2, '0')}.png`;
-        const img = existsSync(a) ? a : (existsSync(b) ? b : null);
-        if (!img) break;
-        const txt = run('tesseract', [img, 'stdout']);
-        if (txt.status === 0 && txt.stdout) parts.push(txt.stdout);
-        const tsv = run('tesseract', [img, 'stdout', 'tsv']);
-        if (tsv.status === 0) { const c = meanConfidenceFromTsv(tsv.stdout); if (c != null) confs.push(c); }
-      }
-      const text = parts.join('\n').trim();
-      if (!text) return { ok: false, reason: 'tesseract_empty' };
-      const confidence = confs.length ? Math.round((confs.reduce((a, b) => a + b, 0) / confs.length) * 10) / 10 : null;
-      return { ok: true, text, confidence, engine: 'tesseract' };
-    }
-
-    // Default: ocrmypdf (handles rasterization + Tesseract + a text layer).
-    const out = join(scratch, 'out.pdf');
-    const r = run('ocrmypdf', ['--force-ocr', '--sidecar', sidecar, '--output-type', 'pdf', pdfPath, out]);
-    if (r.status !== 0 && !existsSync(sidecar)) {
-      return { ok: false, reason: `ocrmypdf_exit_${r.status}:${(r.stderr || '').slice(0, 200)}` };
-    }
-    const text = existsSync(sidecar) ? readFileSync(sidecar, 'utf8').trim() : '';
-    if (!text) return { ok: false, reason: 'ocrmypdf_empty' };
-    return { ok: true, text, confidence: freeOcrConfidence(pdfPath, scratch), engine: 'ocrmypdf' };
+    const eng = resolveEngine();
+    if (eng === 'custom') return customOcr(pdfPath, scratch);
+    if (eng === 'surya') return suryaOcr(pdfPath, scratch);
+    if (eng === 'paddleocr') return paddleOcr(pdfPath, scratch);
+    if (eng === 'tesseract') return tesseractOcr(pdfPath, scratch);
+    return ocrmypdfOcr(pdfPath, scratch);
   } catch (err) {
     return { ok: false, reason: `free_ocr_threw:${err?.message || err}` };
   } finally {
@@ -334,7 +487,7 @@ async function main() {
     console.error('ERROR: --library-root/LEASE_OCR_LIBRARY_ROOT is required (the locally-synced SharePoint library).');
     process.exit(2);
   }
-  console.log(`[lease-ocr-backfill] base=${BASE} engine=${ENGINE} conf-min=${CONF_MIN} escalate=${ESCALATE} concurrency=${CONCURRENCY} dry-run=${DRY_RUN}`);
+  console.log(`[lease-ocr-backfill] base=${BASE} engine=${ENGINE_ARG}→${resolveEngine()} conf-min=${CONF_MIN} escalate=${ESCALATE} concurrency=${CONCURRENCY} dry-run=${DRY_RUN}`);
 
   let queue;
   try { queue = await fetchOcrQueue(); }
@@ -356,12 +509,22 @@ async function main() {
   const confs = results.map((r) => r.confidence).filter((c) => typeof c === 'number');
   const meanConf = confs.length ? Math.round((confs.reduce((a, b) => a + b, 0) / confs.length) * 10) / 10 : null;
 
+  // Free-tier hit rate (UW#4b) — over the docs we actually TRIED to OCR
+  // (excludes already-done / no-local-path), so a capped gate batch tells you
+  // how big the paid escalation tail will be before any broad drain.
+  const ATTEMPTED_STATUSES = ['submitted', 'escalated_low_conf', 'escalated_free_fail', 'free_ocr_failed', 'skipped_low_conf'];
+  const attempted = results.filter((r) => ATTEMPTED_STATUSES.includes(r.status));
+  const freeHits = attempted.filter((r) => r.via === 'free').length;
+  const escalations = results.filter((r) => /escalat/.test(r.status)).length;
+  const hitRate = attempted.length ? Math.round((freeHits / attempted.length) * 1000) / 10 : null;
+
   console.log('\n=== lease-ocr-backfill summary ===');
+  console.log(`free engine: ${resolveEngine()}`);
   console.log('status:', JSON.stringify(tally, null, 0));
   console.log(`enriched: ${enriched.length}  fields_filled: ${fieldsFilled}  conflicts→DecisionCenter: ${conflicts}  leases_created: ${leasesCreated}`);
   console.log(`free-tier mean confidence: ${meanConf == null ? 'n/a' : meanConf}`);
-  const escalations = results.filter((r) => /escalat/.test(r.status)).length;
-  console.log(`free-tier hit: ${results.filter((r) => r.via === 'free').length}  escalated to cloud: ${escalations}`);
+  console.log(`free-tier hit RATE: ${hitRate == null ? 'n/a' : `${hitRate}%`} (${freeHits}/${attempted.length} OCR-attempted)  escalated to cloud: ${escalations}`);
+  console.log('  → sizes the paid (cheap-cloud) escalation tail before a broad drain');
   if (DRY_RUN) console.log('(dry-run — no OCR, no writes)');
 }
 
