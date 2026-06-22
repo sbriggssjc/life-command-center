@@ -11,7 +11,7 @@ process.env.DIA_SUPABASE_KEY = 'k';
 process.env.GOV_SUPABASE_URL = 'https://gov.test.local';
 process.env.GOV_SUPABASE_KEY = 'k';
 
-const { parseDeedText, processDeedDocument } = await import('../api/_handlers/deed-parser.js');
+const { parseDeedText, processDeedDocument, propagateStoredDeedExtraction } = await import('../api/_handlers/deed-parser.js');
 
 const DEED_TEXT = [
   'GRANT DEED',
@@ -147,6 +147,78 @@ describe('parseDeedText R58b — real-world formats (Unit 1) + price (Unit 2)', 
   });
 
   it('deed of trust (trustor/trustee/beneficiary) yields NULL parties — no false extraction', () => {
+    const t = 'DEED OF TRUST\nThis Deed of Trust is made among the Trustor JOHN SMITH, the Trustee FIRST AMERICAN TITLE, and the Beneficiary BIG BANK NA.';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantor || null, null);
+    assert.equal(p.grantee || null, null);
+  });
+});
+
+describe('parseDeedText R59b — clean party extraction from OCR\'d scanned deeds (Unit 1)', () => {
+  const HEAD = ['GRANT DEED', 'County of Los Angeles', 'DOC # 2021-1 recorded on 05/10/2021'].join('\n');
+
+  it('doc-1896 shape: a county-form instruction LABEL is rejected (→ null, not junk)', () => {
+    // The scanned form puts the parenthetical instruction after the label; the
+    // labeled path used to capture it verbatim.
+    const t = HEAD + '\nGrantee (name, mailing address, and, if appropriate, character of entity, e.g. a California corporation):\n';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantee || null, null, 'form-instruction label is not emitted as a grantee');
+  });
+
+  it('doc-1935 shape: a legal-description blob is rejected (→ null, not junk)', () => {
+    const legal = 'BEGINNING at the POINT OF BEGINNING thence North 45 degrees East along the metes and bounds more particularly described in Deed Book 12 Page 345 of said records, '.repeat(3);
+    const t = HEAD + '\nacknowledged, SELLER TRUST hereby GRANTS to ' + legal + ' all that certain real property:';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantee || null, null, 'legal-description span is not emitted as a grantee');
+  });
+
+  it('doc-1948 shape: a real name + trailing OCR junk is TRIMMED to the clean name (recovery)', () => {
+    // The legacy "GRANTS to …" path latched onto "<name>, A CALIFORNIA LIMITED
+    // LIABILITY COMPANY Area". R59b strips the qualifier + the stray "Area" tail.
+    const t = HEAD + '\nacknowledged, SUNSET PLAZA HOLDINGS LLC hereby GRANTS to LA MIRADA INVESTMENT LLC, A CALIFORNIA LIMITED LIABILITY COMPANY Area, the following described property:';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantee, 'LA MIRADA INVESTMENT LLC', 'trailing qualifier + OCR-bleed token stripped');
+  });
+
+  it('no-comma OCR variant: "FOO LLC A CALIFORNIA LIMITED LIABILITY COMPANY Area" trims to "FOO LLC"', () => {
+    const t = HEAD + '\nacknowledged, SELLER TRUST hereby GRANTS to OAKWOOD PARTNERS LLC A CALIFORNIA LIMITED LIABILITY COMPANY Area, the following described property:';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantee, 'OAKWOOD PARTNERS LLC');
+  });
+
+  it('clean scanned GRANTOR:/GRANTEE: labeled block extracts both parties correctly', () => {
+    const t = ['GRANT DEED', 'County of Los Angeles',
+      'GRANTOR: SUNSET PLAZA HOLDINGS LLC',
+      'GRANTEE: LA MIRADA INVESTMENT LLC',
+      'DOC # 2021-123 recorded on 05/10/2021'].join('\n');
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantor, 'SUNSET PLAZA HOLDINGS LLC');
+    assert.equal(p.grantee, 'LA MIRADA INVESTMENT LLC');
+  });
+
+  it('scanned "from <X> to <Y>" recital form (no parenthetical marker) extracts both parties', () => {
+    const t = 'THIS WARRANTY DEED is made from Riverside Capital LP to Oakwood Partners LLC, dated May 10, 2021. County of Orange.';
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantor, 'Riverside Capital LP');
+    assert.equal(p.grantee, 'Oakwood Partners LLC');
+  });
+
+  it('NO regression: doc-3964 narrative parenthetical still extracts Oldsmar / Deltona', () => {
+    const REAL = [
+      'Prepared by First American Title. Transfer Amt $13,333,400.00  Doc Stamps $93,333.80',
+      'SPECIAL WARRANTY DEED',
+      'THIS SPECIAL WARRANTY DEED is made this day by and between Oldsmar Retail Development LLC,',
+      'a Florida limited liability company, a/k/a Oldsmar Retail Development, LLC, whose address is',
+      '3662 Avalon Park East Boulevard, Suite 201, Orlando, Florida 32828 (the "Grantor"), and',
+      'Deltona Wellness, LP, a Florida limited partnership, whose address is 17 Copperbeech Lane,',
+      'Lawrence, New York 11559 (the "Grantee"), the following described property in Pinellas County.',
+    ].join('\n');
+    const p = parseDeedText(REAL, { state: 'FL' });
+    assert.equal(p.grantor, 'Oldsmar Retail Development LLC');
+    assert.equal(p.grantee, 'Deltona Wellness, LP');
+  });
+
+  it('NO regression: deed of trust still yields NULL parties (no false from/to or label match)', () => {
     const t = 'DEED OF TRUST\nThis Deed of Trust is made among the Trustor JOHN SMITH, the Trustee FIRST AMERICAN TITLE, and the Beneficiary BIG BANK NA.';
     const p = parseDeedText(t, { state: 'CA' });
     assert.equal(p.grantor || null, null);
@@ -415,5 +487,66 @@ describe('processDeedDocument — R59 BD-spine propagation', () => {
     assert.equal(r.ownershipEventAppended, false);
     assert.equal(r.granteeEntityId, null);
     assert.equal(events.entities.length, 0);
+  });
+});
+
+// ── R59b Unit 2 — retroactive propagation over STORED extraction ────────────
+describe('propagateStoredDeedExtraction (R59b Unit 2)', () => {
+  function bdDeps(over = {}) {
+    const events = { research: [], entities: [], edges: [], ownerResolved: [] };
+    const deps = {
+      granteePassesOwnerGuards: (n) => !!n && !/broker|gsa|u\.?s\.?a\b/i.test(n) && n.replace(/[^a-z0-9]/gi, '').length >= 4,
+      resolveRecordedOwner: async (_d, name) => { events.ownerResolved.push(name); return 'ro-1'; },
+      ensureEntityLink: async (a) => {
+        if (a.resolveOnly) return a.sourceType === 'asset' ? { ok: true, entityId: 'asset-ent-1' } : { ok: false };
+        events.entities.push(a); return { ok: true, entityId: 'owner-ent-1' };
+      },
+      insertEntityRelationship: async (row) => { events.edges.push(row); return { ok: true }; },
+      opsQuery: async () => ({ ok: true, data: [] }),
+      openResearchTask: async (a) => { events.research.push(a); return { ok: true, created: true }; },
+      resolveBuyerParent: async () => ({ ok: true, data: [] }),
+      ...over,
+    };
+    return { deps, events };
+  }
+
+  // The stored extraction (extracted_data.deed_extraction) for the real 3964 deal.
+  const STORED = {
+    grantee: 'Deltona Wellness, LP', grantor: 'Oldsmar Retail Development LLC',
+    recording_date: '01/21/2020', implied_sale_price: 13333400, deed_type: 'Special Warranty Deed',
+  };
+
+  it('reuses Step 6 over stored extraction (no re-parse): fills a price-matched sale\'s parties', async () => {
+    const { deps } = bdDeps();
+    const f = makeFakeQ({
+      'sales_transactions?property_id=eq.24703': { value: { ok: true, data: [{ sale_id: 14751, sold_price: 13333400, sale_date: '2020-01-21' }] } },
+      'ownership_history?property_id=eq.24703&recorded_owner_id=eq.ro-1': { method: 'GET', value: { ok: true, data: [] } },
+    });
+    const r = await propagateStoredDeedExtraction(
+      { domain: 'dialysis', propertyId: 24703, documentId: 3964, parsed: STORED },
+      { domainQuery: f.q, ...deps }
+    );
+    // Never re-parses (no extracted_data PATCH, no deed_records write).
+    assert.equal(f.calls.some(c => c.path.startsWith('property_documents')), false, 'no extracted_data re-write');
+    assert.equal(f.calls.some(c => c.path.startsWith('deed_records')), false, 'no deed_records write');
+    // Runs the R59 propagation: buyer/seller fill on the matched sale.
+    const buyerFill = f.calls.find(c => c.method === 'PATCH' && c.path.includes('sales_transactions?sale_id=eq.14751') && c.path.includes('buyer_name=is.null'));
+    assert.ok(buyerFill, 'fills buyer_name on the matched sale');
+    assert.equal(buyerFill.body.buyer_name, 'Deltona Wellness, LP');
+    assert.equal(r.saleBuyerFilled, true);
+    assert.equal(r.saleSellerFilled, true);
+    assert.equal(r.ownershipEventAppended, true);
+  });
+
+  it('no grantee in the stored extraction → pure no-op', async () => {
+    const { deps } = bdDeps();
+    const f = makeFakeQ({});
+    const r = await propagateStoredDeedExtraction(
+      { domain: 'dialysis', propertyId: 24703, documentId: 3964, parsed: { grantor: 'X', recording_date: '01/21/2020' } },
+      { domainQuery: f.q, ...deps }
+    );
+    assert.equal(f.calls.length, 0);
+    assert.equal(r.saleBuyerFilled, false);
+    assert.equal(r.ownershipEventAppended, false);
   });
 });

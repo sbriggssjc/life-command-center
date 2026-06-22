@@ -33,7 +33,7 @@ import { authenticate } from '../_shared/auth.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { extractDocumentText } from '../_shared/document-text.js';
 import { downloadFromStorage } from '../_shared/artifact-storage.js';
-import { processDeedDocument } from './deed-parser.js';
+import { processDeedDocument, propagateStoredDeedExtraction } from './deed-parser.js';
 // R59 — BD-spine propagation deps for the deed parser (Units 1-4). Importing them
 // here (not inside deed-parser.js) keeps the parser dependency-light + unit-
 // testable; the worker injects the production wiring.
@@ -231,8 +231,70 @@ export async function processOneReparse(domain, row, deps = {}) {
   };
 }
 
+// R59b Unit 2 — the marker stamped on extracted_data once a deed's stored
+// extraction has been run through the R59 BD-spine propagation, so the backfill
+// drains (the row drops out) instead of re-processing every tick.
+export const R59_BACKFILL_MARKER = 'r59_backfilled_at';
+
+/**
+ * R59b Unit 2 — retroactive-propagation queue: deeds ALREADY parsed (raw_text +
+ * extracted_data present, a grantee resolved) whose R59 BD-spine propagation
+ * never ran (parsed before R59 shipped). Selects on the stored grantee so no
+ * fetch/OCR/re-parse is needed — the propagation reads the stored extraction.
+ * Excludes rows already stamped with the backfill marker (idempotent / drains).
+ * Eligibility note: the task's "matching sale NULL-party OR no deed-sourced OH"
+ * condition is enforced by the propagation itself (fill-blanks + OH dedup), so a
+ * doc whose effects already exist is a clean no-op that just gets marked + drops.
+ */
+export async function fetchPropagateBackfillDocs(domain, { limit }, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const path =
+    'property_documents?ingestion_status=eq.deed_parsed' +
+    '&document_type=ilike.*deed*' +
+    '&extracted_data->deed_extraction->>grantee=not.is.null' +
+    `&extracted_data->>${R59_BACKFILL_MARKER}=is.null` +
+    '&select=document_id,property_id,extracted_data,document_type,file_name' +
+    `&order=document_id.desc&limit=${limit}`;
+  const r = await q(domain, 'GET', path);
+  if (!r.ok) return { ok: false, status: r.status, detail: r.data };
+  return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
+}
+
+/**
+ * R59b Unit 2 — propagate ONE already-parsed deed's stored extraction into the BD
+ * spine (no re-parse / no OCR), then stamp the idempotency marker so it drops out
+ * of the backfill queue. Reuses the EXACT R59 Step 6 via propagateStoredDeedExtraction.
+ * Outcomes: propagated | skipped
+ */
+export async function processOnePropagateBackfill(domain, row, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const propagate = deps.propagateStoredDeedExtraction || propagateStoredDeedExtraction;
+  const parsed = row.extracted_data?.deed_extraction || null;
+  if (!parsed || !parsed.grantee || row.property_id == null) {
+    return { document_id: row.document_id, outcome: 'skipped', reason: 'no_parsed_grantee' };
+  }
+  const r = await propagate({ domain, propertyId: row.property_id, documentId: row.document_id, parsed }, deps)
+    .catch((e) => ({ bdError: e?.message || String(e) }));
+  // Stamp the idempotency marker (merge into the existing extracted_data) so the
+  // row drops out of the backfill queue. Effect-first ordering doesn't matter here:
+  // the propagation is itself idempotent, so a re-tick before the marker lands is a no-op.
+  const merged = { ...(row.extracted_data || {}), [R59_BACKFILL_MARKER]: new Date().toISOString() };
+  await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+    { extracted_data: merged }, { Prefer: 'return=minimal' }).catch(() => {});
+  return {
+    document_id: row.document_id, outcome: 'propagated',
+    grantee: parsed.grantee || null, grantor: parsed.grantor || null,
+    sale_parties_filled: !!(r.saleBuyerFilled || r.saleSellerFilled),
+    ownership_event: !!r.ownershipEventAppended,
+    suspected_sale: !!r.suspectedSaleSurfaced,
+    grantee_entity_id: r.granteeEntityId || null,
+    owns_edge: !!r.ownsEdgeCreated,
+    trace_task: !!r.traceGranteeTaskSurfaced,
+  };
+}
+
 const PROD_DEPS = {
-  domainQuery, extractDocumentText, processDeedDocument,
+  domainQuery, extractDocumentText, processDeedDocument, propagateStoredDeedExtraction,
   // R59 deed → BD-spine propagation (Units 1-4). Each is consumed by
   // processDeedDocument's Step 6 only when present, so unit tests that inject
   // just { domainQuery } keep the exact pre-R59 deed behavior.
@@ -253,9 +315,14 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   if (!user) return;
 
   const dryRun = req.method === 'GET';
+  const mode = (req.query.mode || '').toLowerCase();
   // R58b Unit 3 — re-parse mode runs the deed parser over docs that ALREADY have
   // raw_text (no fetch/OCR), retroactively applying parser improvements.
-  const reparse = (req.query.mode || '').toLowerCase() === 'reparse' || String(req.query.reparse) === '1';
+  const reparse = mode === 'reparse' || String(req.query.reparse) === '1';
+  // R59b Unit 2 — propagate-backfill runs ONLY the R59 BD-spine propagation over
+  // deeds already parsed with a clean grantee (no re-parse / no OCR), for the
+  // deeds parsed before R59 shipped whose Step 6 never ran.
+  const propagateBackfill = mode === 'propagate-backfill';
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '15', 10)));
   const doctype = (req.query.doctype || 'deed').toLowerCase();          // default the headline lane
   const domainParam = (req.query.domain || 'both').toLowerCase();
@@ -263,11 +330,11 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   const tickBudgetMs = Math.max(5000, parseInt(process.env.DOC_TEXT_TICK_BUDGET_MS || '22000', 10));
 
   const result = {
-    mode: (reparse ? 'reparse' : 'drain') + (dryRun ? '_dry_run' : ''),
-    doctype, limit, reparse,
+    mode: (propagateBackfill ? 'propagate-backfill' : reparse ? 'reparse' : 'drain') + (dryRun ? '_dry_run' : ''),
+    doctype, limit, reparse, propagate_backfill: propagateBackfill,
     by_domain: {},
     scanned: 0, text_extracted: 0, deed_parsed: 0, needs_ocr: 0, no_source: 0, error: 0,
-    no_parties: 0, no_text: 0,
+    no_parties: 0, no_text: 0, propagated: 0, skipped: 0,
     deed_records_created: 0, r51_fed: 0, sales_verified: 0, implied_prices_filled: 0,
     // R59 — BD-spine propagation effects (deed Units 1-4).
     sale_parties_filled: 0, ownership_events: 0, suspected_sales: 0, grantee_entities: 0,
@@ -280,7 +347,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   const deadline = Date.now() + tickBudgetMs;
   for (const domain of domains) {
     const short = domain === 'dialysis' ? 'dia' : 'gov';
-    const eligible = reparse
+    const eligible = propagateBackfill
+      ? await fetchPropagateBackfillDocs(domain, { limit }, deps)
+      : reparse
       ? await fetchReparseDocs(domain, { limit }, deps)
       : await fetchEligibleDocs(domain, { limit, doctype }, deps);
     if (!eligible.ok) { result.by_domain[short] = { error: 'list_failed', detail: eligible.detail }; continue; }
@@ -295,7 +364,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
 
     for (const row of eligible.rows) {
       if (Date.now() > deadline) break;
-      const r = reparse ? await processOneReparse(domain, row, deps) : await processOneDoc(domain, row, deps);
+      const r = propagateBackfill
+        ? await processOnePropagateBackfill(domain, row, deps)
+        : reparse ? await processOneReparse(domain, row, deps) : await processOneDoc(domain, row, deps);
       r.domain = short;
       result.scanned++;
       if (Object.prototype.hasOwnProperty.call(result, r.outcome)) result[r.outcome]++;
