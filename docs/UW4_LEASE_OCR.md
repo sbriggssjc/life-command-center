@@ -180,6 +180,70 @@ and returns `{text, confidence}`, then point `OCR_CLOUD_OCR_URL` at it. Once the
 corpus is drained the steady-state marginal cost is near zero (only new scanned
 leases trigger a call).
 
+### UW#4c — the Document AI wrapper Edge Function (the cheap-cloud seam, wired)
+
+UW#4b left the cheap-cloud seam unwired (no creds). UW#4c ships the wrapper:
+**`supabase/functions/docai-ocr`** — a thin Supabase Edge Function (the
+SHAREPOINT_FETCH_URL webhook pattern, **not** a new `api/*.js`) that:
+
+- accepts `POST { content_base64, mime_type? | media_type? }` (tolerant of both
+  field names — the seam sends `media_type`, the documented contract is `mime_type`),
+- mints a short-lived GCP OAuth2 access token from a server-side service-account
+  key (RS256 JWT via Web Crypto, cached in-process until ~1 min before expiry),
+- calls the Document AI **Enterprise Document OCR** processor (`documents:process`),
+- returns `{ ok, text, confidence, pages, engine:"google_docai" }` — the exact
+  shape `ocrCloudCheap` already reads back.
+- `GET` is a health probe (`{ ready, configured, missing }`) — no GCP call, no spend.
+
+**Point the seam at it (Railway env on the LCC app):**
+
+| Env | Value |
+|-----|-------|
+| `OCR_CLOUD_OCR_URL` | `https://<ops-ref>.supabase.co/functions/v1/docai-ocr` |
+| `OCR_CLOUD_PROVIDER` | `google_docai` (telemetry label; routing is via the URL) |
+| `OCR_CLOUD_OCR_KEY` | shared secret == the wrapper's `DOCAI_SHARED_SECRET` |
+
+**Wrapper env (Supabase Edge Function secrets — Scott provisions the GCP side):**
+
+| Env | Purpose |
+|-----|---------|
+| `GOOGLE_DOCAI_SA_KEY` | the service-account JSON (full string) — the GCP credential |
+| `GOOGLE_DOCAI_PROCESSOR` | full processor resource name `projects/…/locations/…/processors/…` (or set the three parts below) |
+| `GOOGLE_DOCAI_PROJECT_ID` / `GOOGLE_DOCAI_LOCATION` / `GOOGLE_DOCAI_PROCESSOR_ID` | parts (location default `us`) when the full name isn't given |
+| `DOCAI_SHARED_SECRET` | Bearer shared secret == `OCR_CLOUD_OCR_KEY` on the app (mirrors `_shared/auth.ts`; transitional-open + warn when unset) |
+| `DOCAI_MAX_PAGES` / `DOCAI_MAX_BYTES` | per-request cost guards (default 15 pages / 20 MB — the sync OCR processor caps ~15 pages) |
+
+**Scott's GCP setup (one-time):** create a GCP project → enable Document AI →
+create an **Enterprise Document OCR** processor → create a service-account key
+with the Document AI API User role. The $300 new-account credit covers the full
+deed + lease backfill at ~$0.
+
+**Tiering unchanged.** With the seam pointed at the wrapper, the order is still
+free OSS (workstation) → **Document AI** (cheap cloud) → gpt-4o **only** on a
+Document AI miss (a wrapper `{ok:false}`, e.g. `over_page_cap`, falls through —
+gpt-4o stays the gated last resort for the handwriting / poor-scan tail).
+`OCR_CLOUD_ESCALATION='false'` still kills all paid OCR.
+
+**This also lights up the deed worker.** The R58 `document-text-tick` worker runs
+`extractDocumentText(..., ocrTiered:true)` (UW#6), so scanned deeds route through
+the SAME tiered seam — once the wrapper is configured, deeds OCR via Document AI
+too. R58's `ocrPdfToText`-direct path remains gpt-4o (untouched); only the tiered
+seam's cheap-cloud provider was filled in.
+
+### Per-page cost observability (UW#4c)
+
+Document AI bills per **page**. The wrapper returns `pages`; it threads
+`ocrCloudCheap.pages` → `ocrPdfToTextTiered.pages` → the worker receipts, and
+both drain workers aggregate it per tick:
+
+- `lease-backfill` + `document-text-tick` responses carry `ocr_pages_total` and
+  `ocr_by_engine` (`{ "google_docai": N, … }`).
+- Each tick that ran any cloud OCR logs a cost line to the Railway logs:
+  `[lease-backfill] OCR cost: <N> pages {"google_docai":N}`.
+
+A capped gate batch therefore shows the Document AI page count (≈$1.50/1k pages;
+$0 under the credit) BEFORE any broad drain.
+
 ---
 
 ## Confidence + provenance
