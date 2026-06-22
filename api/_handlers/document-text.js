@@ -65,13 +65,23 @@ export async function fetchEligibleDocs(domain, { limit, doctype }, deps = {}) {
   return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
 }
 
+// R58c — the terminal "no parties" marker. Bumped from the bare 'deed_no_parties'
+// so the connective-anchored narrative fix gets ONE retroactive pass over the
+// backlog R58b stamped 'deed_no_parties' (e.g. doc 3964): those rows are now
+// eligible again, and after R58c they either resolve a grantee (drop out via the
+// grantee-not-null filter) or are re-marked at THIS version (excluded going
+// forward) — so genuine deed-of-trust docs are never re-hammered.
+export const DEED_NO_PARTIES_TERMINAL = 'deed_no_parties_r58c';
+
 /**
  * R58b Unit 3 — re-parse queue: deed docs that ALREADY have raw_text (so no
  * fetch/OCR needed) but whose deed parse never resolved a grantee. Selecting on
  * the stored text makes a parser improvement cheap to apply retroactively — a
  * broad OCR drain is never wasted. Idempotent: a doc either gets a grantee
  * parsed (→ extracted_data.deed_extraction.grantee non-null → drops out) or is
- * marked ingestion_status='deed_no_parties' (genuine deed-of-trust → excluded).
+ * marked terminal at the current parser version (genuine deed-of-trust →
+ * excluded). The legacy R58b 'deed_no_parties' rows are intentionally INCLUDED
+ * (re-tried once under R58c); only the current terminal marker is excluded.
  */
 export async function fetchReparseDocs(domain, { limit }, deps = {}) {
   const q = deps.domainQuery || domainQuery;
@@ -79,7 +89,7 @@ export async function fetchReparseDocs(domain, { limit }, deps = {}) {
     'property_documents?raw_text=not.is.null' +
     '&document_type=ilike.*deed*' +
     '&extracted_data->deed_extraction->>grantee=is.null' +
-    '&or=(ingestion_status.is.null,ingestion_status.neq.deed_no_parties)' +
+    `&or=(ingestion_status.is.null,ingestion_status.neq.${DEED_NO_PARTIES_TERMINAL})` +
     '&select=document_id,property_id,raw_text,document_type,file_name,ingestion_status' +
     `&order=document_id.desc&limit=${limit}`;
   const r = await q(domain, 'GET', path);
@@ -161,7 +171,8 @@ export async function processOneDoc(domain, row, deps = {}) {
 /**
  * R58b Unit 3 — re-parse ONE deed over its STORED raw_text (no fetch, no OCR).
  * Runs only the deed parser. When no party is parsed (deed of trust, etc.) the
- * row is marked 'deed_no_parties' so it drops out of the re-parse queue.
+ * row is marked terminal (DEED_NO_PARTIES_TERMINAL) so it drops out of the
+ * re-parse queue and is not re-hammered.
  * Outcomes: deed_parsed | no_parties | no_text
  */
 export async function processOneReparse(domain, row, deps = {}) {
@@ -183,7 +194,7 @@ export async function processOneReparse(domain, row, deps = {}) {
     // Genuinely no parties (e.g. a deed of trust) — mark terminal so the
     // re-parse queue drains and never re-hammers the same unparseable doc.
     await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
-      { ingestion_status: 'deed_no_parties' }, { Prefer: 'return=minimal' }).catch(() => {});
+      { ingestion_status: DEED_NO_PARTIES_TERMINAL }, { Prefer: 'return=minimal' }).catch(() => {});
     return { document_id: row.document_id, outcome: 'no_parties' };
   }
 
