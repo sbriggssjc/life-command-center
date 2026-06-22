@@ -29,11 +29,15 @@
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { ensureEntityLink, normalizeEmail, isGenericInboxEmail, isJunkEntityName, looksLikePersonName } from '../_shared/entity-link.js';
-import { upsertSalesforceContact, isSalesforceConfigured } from '../_shared/salesforce.js';
+import { upsertSalesforceContact, upsertSalesforceAccount, isSalesforceConfigured } from '../_shared/salesforce.js';
 import { toSf18 } from '../_shared/sf-id.js';
 import { planContactFieldPromotion } from '../_shared/contact-fields.js';
 
 const WRITEBACK_BATCH_TAG = 'r52_contact_writeback';
+// R52c: the SF Account-identity mirror tag (the compounding owner→account
+// coverage win — distinct from the Contact-identity tag so each is reversible
+// on its own).
+const ACCOUNT_BATCH_TAG = 'r52c_account_establish';
 
 /** Is the deliberate writeback gate on? (env SF_CONTACT_WRITEBACK = on|1|true) */
 export function isWritebackEnabled() {
@@ -65,9 +69,54 @@ export function planContactWriteback(row) {
       email,
       phone: row.phone ? String(row.phone).trim() : null,
       company: row.company ? String(row.company).trim() : null,
-      accountId: row.sf_account_id || null,
+      // accountId is NO LONGER carried here — R52c resolves the Company/Account
+      // in a dedicated step (planCompanyResolution) since the org REQUIRES one.
     },
   };
+}
+
+/**
+ * R52c — PURE: resolve the COMPANY (Salesforce Account) to file this contact
+ * under, and the entity to mirror the resulting Account id onto. The org won't
+ * accept a Contact without a Company, so every candidate gets one. Priority:
+ *   (a) the contact's linked TRUE OWNER (the BD owner entity the person is
+ *       associated_with) — prefer an organization; mirror the account onto that
+ *       owner (the compounding owner→SF-account coverage win);
+ *   (b) else the contact's existing `company` field (their employer/firm) — no
+ *       owner entity to mirror onto, just file the contact under it;
+ *   (c) else an individual investor → Company = the person's own name; mirror
+ *       the account onto the PERSON.
+ * When the chosen owner already carries an SF Account id, REUSE it (no upsert,
+ * no re-mirror). `owner` is the resolved best linked owner (or null), shaped
+ * `{ entity_id, name, entity_type, sf_account_id }`.
+ *
+ * @returns {{ok:true, companyName, accountId, mirrorEntityId, mirrorIsPerson, source}
+ *          | {ok:false, skip:string}}
+ */
+export function planCompanyResolution(row, owner) {
+  // (a) linked true-owner organization (or any owner) with a usable name
+  if (owner && owner.name && !isJunkEntityName(String(owner.name))) {
+    const acct = owner.sf_account_id ? String(owner.sf_account_id).trim() : null;
+    return {
+      ok: true,
+      companyName: String(owner.name).trim(),
+      accountId: acct || null,
+      mirrorEntityId: owner.entity_id || null,
+      mirrorIsPerson: owner.entity_type === 'person',
+      source: 'owner',
+    };
+  }
+  // (b) the contact's own company field (employer/firm) — no owner entity to mirror
+  const company = row && row.company ? String(row.company).trim() : '';
+  if (company && !isJunkEntityName(company)) {
+    return { ok: true, companyName: company, accountId: null, mirrorEntityId: null, mirrorIsPerson: false, source: 'company' };
+  }
+  // (c) individual investor — Company = the person's own name, mirror onto the person
+  const self = row && row.name ? String(row.name).trim() : '';
+  if (self) {
+    return { ok: true, companyName: self, accountId: null, mirrorEntityId: row.entity_id || null, mirrorIsPerson: true, source: 'self' };
+  }
+  return { ok: false, skip: 'no_company_resolvable' };
 }
 
 /** Map an SF contact record's mailing fields → promotable first-class incoming. */
@@ -87,31 +136,87 @@ function promotableFromSfContact(c) {
   return out;
 }
 
+/** Map an SF/flow reason code → the tick-response outcome bucket. */
+function reasonToOutcome(reason) {
+  if (reason === 'sf_not_configured') return 'not_configured';
+  if (reason === 'unsupported' || reason === 'unavailable') return 'unsupported';
+  return 'unavailable';
+}
+
 /**
- * Process ONE candidate: plan → upsert → mirror identity → promote address.
+ * Process ONE candidate (R52c): plan person → ESTABLISH the Company (Account) →
+ * mirror the Account id onto the owner/person (compounding coverage) → upsert
+ * the Contact UNDER that Account → mirror the Contact identity → promote address.
  * Pure orchestration over injected deps so it unit-tests without fetch:
- *   upsertContact(push)            -> { ok, contact:{Id,...}, created, reason }
- *   mirrorIdentity(row, sfId)      -> { ok }
+ *   resolveCompany(row)               -> { ok, companyName, accountId, mirrorEntityId, mirrorIsPerson, source } | { ok:false, skip }
+ *   upsertAccount({name,idempotencyKey}) -> { ok, accountId, created, reason, detail }
+ *   mirrorAccount(entityId, accountId, isPerson) -> { ok }
+ *   upsertContact(push)               -> { ok, contact:{Id,...}, created, reason }
+ *   mirrorIdentity(row, sfId)         -> { ok }
  *   promoteFields(entityId, incoming) -> { ok, fields:[...] }
+ *
+ * Effect-first / outcome-truthful: the org REQUIRES a Company on every Contact,
+ * so if the Account can't be established the Contact is NEVER attempted and the
+ * real reason is reported. The Account-identity mirror is the compounding win
+ * but is best-effort (the Account exists in SF regardless) — recorded honestly
+ * in `account_mirrored`, it never blocks the contact write.
  */
 export async function processContactWriteback(row, deps) {
   const plan = planContactWriteback(row);
   if (!plan.ok) return { outcome: 'skipped', reason: plan.skip, entity_id: row.entity_id };
 
+  // ── Establish the Company (Account) the org requires on every Contact ──────
+  let comp;
+  try {
+    comp = await deps.resolveCompany(row);
+  } catch (e) {
+    return { outcome: 'unavailable', reason: String(e && e.message || e), entity_id: row.entity_id, stage: 'company' };
+  }
+  if (!comp || comp.ok !== true) {
+    return { outcome: 'skipped', reason: (comp && comp.skip) || 'no_company_resolvable', entity_id: row.entity_id };
+  }
+
+  let accountId = comp.accountId || null;     // reuse an owner's existing SF Account
+  let accountCreated = false;
+  let accountMirrored = null;                 // null = not attempted (reuse), true/false = mirror result
+  if (!accountId) {
+    let ar;
+    try {
+      ar = await deps.upsertAccount({ name: comp.companyName, idempotencyKey: comp.mirrorEntityId || row.entity_id });
+    } catch (e) {
+      return { outcome: 'unavailable', reason: String(e && e.message || e), entity_id: row.entity_id, stage: 'account' };
+    }
+    if (!ar || ar.ok !== true || !ar.accountId) {
+      const reason = (ar && ar.reason) || 'account_upsert_failed';
+      // The org won't take a Contact without a Company → do NOT attempt the
+      // contact create. Report the real Salesforce/flow detail (R52b).
+      return { outcome: reasonToOutcome(reason), reason, detail: (ar && ar.detail) || null, entity_id: row.entity_id, stage: 'account', company_resolved: comp.companyName };
+    }
+    accountId = ar.accountId;
+    accountCreated = !!ar.created;
+    // The compounding win: mirror the SF Account id onto the OWNER (or the
+    // person, for an individual investor) so owner→SF-account coverage grows
+    // every time the writeback runs. Best-effort — never blocks the contact.
+    if (comp.mirrorEntityId) {
+      try {
+        const m = await deps.mirrorAccount(comp.mirrorEntityId, accountId, !!comp.mirrorIsPerson);
+        accountMirrored = !!(m && m.ok);
+      } catch (_e) { accountMirrored = false; }
+    }
+  }
+
+  // ── Upsert the Contact UNDER the resolved Account (the required Company) ────
   let res;
   try {
-    res = await deps.upsertContact(plan.push);
+    res = await deps.upsertContact({ ...plan.push, accountId });
   } catch (e) {
-    return { outcome: 'unavailable', reason: String(e && e.message || e), entity_id: row.entity_id };
+    return { outcome: 'unavailable', reason: String(e && e.message || e), entity_id: row.entity_id, account_id: accountId };
   }
   if (!res || res.ok !== true) {
     const reason = (res && res.reason) || 'lookup_failed';
-    const outcome = reason === 'sf_not_configured' ? 'not_configured'
-      : (reason === 'unsupported' || reason === 'unavailable') ? 'unsupported'
-      : 'unavailable';
     // Surface the richer SF/PA flow message (R52b) so the real Salesforce
     // error reaches the tick response instead of a bare reason code.
-    return { outcome, reason, detail: (res && res.detail) || null, entity_id: row.entity_id };
+    return { outcome: reasonToOutcome(reason), reason, detail: (res && res.detail) || null, entity_id: row.entity_id, account_id: accountId, account_created: accountCreated, account_mirrored: accountMirrored };
   }
 
   const sfId = res.contact && (res.contact.Id || res.contact.id);
@@ -122,7 +227,7 @@ export async function processContactWriteback(row, deps) {
   // than claiming a clean write.
   const mir = await deps.mirrorIdentity(row, sfId);
   if (!mir || !mir.ok) {
-    return { outcome: 'mirror_failed', reason: (mir && mir.detail) || 'mirror_failed', entity_id: row.entity_id, sf_contact_id: sfId, created: !!res.created };
+    return { outcome: 'mirror_failed', reason: (mir && mir.detail) || 'mirror_failed', entity_id: row.entity_id, sf_contact_id: sfId, created: !!res.created, account_id: accountId, account_created: accountCreated, account_mirrored: accountMirrored };
   }
 
   // Promote the SF contact's mailing address / phone to first-class (Unit 1).
@@ -132,7 +237,18 @@ export async function processContactWriteback(row, deps) {
     if (pr && pr.ok && pr.changed) promoted = pr.fields || [];
   } catch (_e) { /* promotion is best-effort, never fails the writeback */ }
 
-  return { outcome: 'written', created: !!res.created, sf_contact_id: sfId, entity_id: row.entity_id, promoted_fields: promoted };
+  return {
+    outcome: 'written',
+    created: !!res.created,
+    sf_contact_id: sfId,
+    entity_id: row.entity_id,
+    promoted_fields: promoted,
+    company_resolved: comp.companyName,
+    company_source: comp.source,
+    account_id: accountId,
+    account_created: accountCreated,
+    account_mirrored: accountMirrored,
+  };
 }
 
 // ── coverage summary (Unit 3 reporting: SF-Contact coverage before/after) ────
@@ -146,6 +262,44 @@ async function fetchCoverageSummary() {
   const sfContactIdentities = await exact('external_identities?source_system=eq.salesforce&source_type=eq.Contact&select=entity_id');
   const candidatesRemaining = await exact('v_lcc_contact_writeback_candidates?select=entity_id');
   return { sf_contact_identities: sfContactIdentities, candidates_remaining: candidatesRemaining };
+}
+
+// ── owner resolution (production resolveCompany dep) ─────────────────────────
+// Find the best linked TRUE OWNER entity for a contact: the person is the `to`
+// side of an `associated_with` edge, the owner is the `from` side (R52 view +
+// R7-2.4 convention). Prefer an organization, then an SF-mapped owner, then the
+// longest name. Reads the owner's existing SF Account id so we REUSE it instead
+// of minting a duplicate. Returns the resolution plan (planCompanyResolution).
+function rankOwnerRow(e, acctMap) {
+  let s = 0;
+  if (e.entity_type === 'organization') s += 4;
+  if (acctMap.get(e.id)) s += 2;
+  if (e.name && !isJunkEntityName(String(e.name))) s += 1;
+  return s;
+}
+
+async function resolveCompanyForContact(row) {
+  let owner = null;
+  try {
+    const rel = await opsQuery('GET',
+      'entity_relationships?relationship_type=eq.associated_with&to_entity_id=eq.'
+      + pgFilterVal(row.entity_id) + '&select=from_entity_id&limit=25');
+    const ownerIds = (rel.ok && Array.isArray(rel.data))
+      ? [...new Set(rel.data.map((r) => r.from_entity_id).filter(Boolean))] : [];
+    if (ownerIds.length) {
+      const inList = '(' + ownerIds.map(pgFilterVal).join(',') + ')';
+      const [ents, acct] = await Promise.all([
+        opsQuery('GET', 'entities?id=in.' + inList + '&merged_into_entity_id=is.null&select=id,name,entity_type&limit=25'),
+        opsQuery('GET', 'external_identities?entity_id=in.' + inList + '&source_system=eq.salesforce&source_type=eq.Account&select=entity_id,external_id'),
+      ]);
+      const entRows = (ents.ok && Array.isArray(ents.data)) ? ents.data : [];
+      const acctMap = new Map(((acct.ok && Array.isArray(acct.data)) ? acct.data : []).map((a) => [a.entity_id, a.external_id]));
+      entRows.sort((a, b) => rankOwnerRow(b, acctMap) - rankOwnerRow(a, acctMap));
+      const best = entRows.find((e) => e.name && !isJunkEntityName(String(e.name))) || entRows[0] || null;
+      if (best) owner = { entity_id: best.id, name: best.name, entity_type: best.entity_type, sf_account_id: acctMap.get(best.id) || null };
+    }
+  } catch (_e) { /* fall through to company/self in planCompanyResolution */ }
+  return planCompanyResolution(row, owner);
 }
 
 // ── HTTP entrypoint ─────────────────────────────────────────────────────────
@@ -177,6 +331,8 @@ export async function handleContactWritebackTick(req, res) {
     skipped: 0,
     unavailable: 0,
     promoted_fields: 0,
+    accounts_created: 0,     // R52c: NEW SF Accounts established this drain
+    accounts_mirrored: 0,    // R52c: owner→SF-account links written (coverage win)
     items: [],
   };
 
@@ -217,6 +373,17 @@ export async function handleContactWritebackTick(req, res) {
   for (const row of rows) {
     if (Date.now() > deadline) { result.budget_stopped = true; break; }
     const deps = {
+      resolveCompany: (r) => resolveCompanyForContact(r),
+      upsertAccount: (a) => upsertSalesforceAccount(a),
+      mirrorAccount: async (entityId, accountId) => {
+        const el = await ensureEntityLink({
+          workspaceId: row.workspace_id, userId: user.id,
+          entityId,
+          sourceSystem: 'salesforce', sourceType: 'Account', externalId: toSf18(accountId) || String(accountId),
+          metadata: { via: ACCOUNT_BATCH_TAG, batch_tag: ACCOUNT_BATCH_TAG },
+        });
+        return { ok: !!(el && el.ok), detail: el && (el.error || el.skipped) };
+      },
       upsertContact: (push) => upsertSalesforceContact({ ...push, idempotencyKey: row.entity_id }),
       mirrorIdentity: async (r, sfId) => {
         const el = await ensureEntityLink({
@@ -248,6 +415,10 @@ export async function handleContactWritebackTick(req, res) {
       result.promoted_fields += (out.promoted_fields || []).length;
     } else if (out.outcome === 'skipped') result.skipped++;
     else result.unavailable++;
+    // R52c: account-establishment accounting (counts on every outcome that got
+    // far enough to establish/mirror an account, incl. mirror_failed).
+    if (out.account_created) result.accounts_created++;
+    if (out.account_mirrored === true) result.accounts_mirrored++;
     result.items.push(out);
   }
 
