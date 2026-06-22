@@ -144,7 +144,7 @@ export async function processOneDoc(domain, row, deps = {}) {
     const deedRes = await runDeed(domain, row.property_id, row.document_id, ext.text, opts, deps).catch((e) => ({ error: e?.message || String(e) }));
     return {
       document_id: row.document_id, outcome: 'deed_parsed', method: ext.method, text_len: ext.text_len,
-      ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null,
+      ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null, ocr_pages: ext.ocr_pages ?? null,
       grantor: deedRes?.parsed?.grantor || null,
       grantee: deedRes?.parsed?.grantee || null,
       implied_price: deedRes?.parsed?.implied_sale_price || null,
@@ -155,7 +155,7 @@ export async function processOneDoc(domain, row, deps = {}) {
     };
   }
 
-  return { document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len, ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null };
+  return { document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len, ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null, ocr_pages: ext.ocr_pages ?? null };
 }
 
 /**
@@ -225,6 +225,8 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
     scanned: 0, text_extracted: 0, deed_parsed: 0, needs_ocr: 0, no_source: 0, error: 0,
     no_parties: 0, no_text: 0,
     deed_records_created: 0, r51_fed: 0, sales_verified: 0, implied_prices_filled: 0,
+    // UW#4c — per-page OCR cost telemetry (Document AI bills per page).
+    ocr_pages_total: 0, ocr_by_engine: {},
     items: [],
   };
 
@@ -254,8 +256,19 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
       if (r.r51_fed) result.r51_fed++;
       if (r.sale_verified) result.sales_verified++;
       if (r.implied_price_filled) result.implied_prices_filled++;
+      // UW#4c — accumulate per-page OCR cost (a cloud OCR that ran still cost pages).
+      if (Number.isFinite(r.ocr_pages) && r.ocr_pages > 0) {
+        result.ocr_pages_total += r.ocr_pages;
+        const eng = r.ocr_engine || r.ocr_tier || 'unknown';
+        result.ocr_by_engine[eng] = (result.ocr_by_engine[eng] || 0) + r.ocr_pages;
+      }
       result.items.push(r);
     }
+  }
+
+  // Cost line (Document AI bills per page) — observable in the Railway logs.
+  if (result.ocr_pages_total > 0) {
+    console.log(`[document-text] OCR cost: ${result.ocr_pages_total} pages ${JSON.stringify(result.ocr_by_engine)}`);
   }
 
   return res.status(200).json(result);

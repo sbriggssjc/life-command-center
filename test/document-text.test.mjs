@@ -176,7 +176,7 @@ describe('tiered OCR — free-first, cheap-cloud escalation (UW#4 / UW#4b)', () 
     let cheap = false, gpt = false;
     const r = await ocrPdfToTextTiered({ buffer: buf }, {
       freeOcr: async () => ({ ok: true, text: 'garbled', confidence: 20, engine: 'tesseract' }),
-      cloudCheapOcr: async () => { cheap = true; return { ok: true, text: 'docai transcription', confidence: 97, engine: 'google_docai' }; },
+      cloudCheapOcr: async () => { cheap = true; return { ok: true, text: 'docai transcription', confidence: 97, pages: 4, engine: 'google_docai' }; },
       ocrPdfToText: async () => { gpt = true; return { ok: true, text: 'gpt', model: 'gpt-4o' }; },
     });
     assert.equal(cheap, true);
@@ -185,6 +185,7 @@ describe('tiered OCR — free-first, cheap-cloud escalation (UW#4 / UW#4b)', () 
     assert.equal(r.text, 'docai transcription');
     assert.equal(r.engine, 'google_docai');
     assert.equal(r.confidence, 97);
+    assert.equal(r.pages, 4);                 // UW#4c — page count surfaced for cost telemetry
     clearCloudEnv();
   });
 
@@ -303,5 +304,38 @@ describe('ocrCloudCheap — cheap-cloud HTTP seam (UW#4b)', () => {
     assert.ok(typeof sentBody.content_base64 === 'string' && sentBody.content_base64.length > 0);
     delete process.env.OCR_CLOUD_OCR_URL;
     delete process.env.OCR_CLOUD_PROVIDER;
+  });
+
+  it('UW#4c — reads back { pages } and sends mime_type (Document AI cost telemetry)', async () => {
+    process.env.OCR_CLOUD_OCR_URL = 'https://ocr.example/docai';
+    process.env.OCR_CLOUD_PROVIDER = 'google_docai';
+    const { ocrCloudCheap } = await import('../api/_shared/document-text.js');
+    let sentBody = null;
+    const r = await ocrCloudCheap({
+      buffer: buf,
+      mediaType: 'application/pdf',
+      fetchImpl: async (_url, opts) => {
+        sentBody = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ ok: true, text: 'scanned deed text', confidence: 94, pages: 7, engine: 'google_docai' }) };
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.pages, 7);
+    assert.equal(sentBody.mime_type, 'application/pdf');   // documented wrapper field
+    assert.equal(sentBody.media_type, 'application/pdf');  // original seam field (tolerant)
+    delete process.env.OCR_CLOUD_OCR_URL;
+    delete process.env.OCR_CLOUD_PROVIDER;
+  });
+
+  it('UW#4c — wrapper { ok:false, reason } falls through (so tiered seam can reach gpt-4o)', async () => {
+    process.env.OCR_CLOUD_OCR_URL = 'https://ocr.example/docai';
+    const { ocrCloudCheap } = await import('../api/_shared/document-text.js');
+    const r = await ocrCloudCheap({
+      buffer: buf,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ ok: false, reason: 'over_page_cap', status: 400 }) }),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'over_page_cap');
+    delete process.env.OCR_CLOUD_OCR_URL;
   });
 });

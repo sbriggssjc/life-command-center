@@ -4500,3 +4500,64 @@ parser cases). `node --check` clean (document-text, lease-extractor,
 lease-ocr-backfill); `ls api/*.js | wc -l`=12; full suite 1193 pass / 0 fail / 6
 skipped. JS ships on the Railway redeploy. Doc: `docs/UW4_LEASE_OCR.md` (cost
 table, engine install notes, cheap-cloud config + Google $300-credit path).
+
+## UW#4c — wire Google Document AI as the cheap-cloud OCR (2026-06-21)
+
+Realizes the cheap-cloud seam UW#4b left unwired (built the tier, no creds).
+Decision (Scott): Document AI is at-least-equal quality to gpt-4o for typed/
+printed scanned deeds + leases and ~20–60× cheaper (~$1.50/1k pages; $0 under
+Google's $300 new-account credit), so it's the cheap-cloud PRIMARY; gpt-4o stays
+the gated last resort for the hard tail (handwriting / poor scans). **Reuse the
+existing tiered seam — no routing-logic change.** ≤12 api/*.js (the wrapper is a
+Supabase Edge Function, NOT a new api/*.js). JS ships on the Railway redeploy;
+the wrapper deploys to the LCC Opps Supabase project.
+
+### The wrapper — `supabase/functions/docai-ocr/index.ts`
+Thin Document AI HTTP wrapper (the SHAREPOINT_FETCH_URL webhook pattern):
+`POST { content_base64, mime_type? | media_type? }` → mint a short-lived GCP
+OAuth2 access token from a server-side service-account key (RS256 JWT via Web
+Crypto, cached in-process until ~1 min before expiry) → call the **Enterprise
+Document OCR** processor (`documents:process`) → return `{ ok, text, confidence,
+pages, engine:'google_docai' }` — the exact shape `ocrCloudCheap` already reads.
+Tolerant of both `mime_type` (documented) and `media_type` (what the seam sends).
+`GET` = health probe (`{ready, configured, missing}`, no GCP call / no spend).
+Auth mirrors `_shared/auth.ts` (Bearer `DOCAI_SHARED_SECRET`/`OCR_CLOUD_OCR_KEY`/
+`LCC_API_KEY`, or X-LCC-Key; transitional-open + warn when unset). Confidence =
+mean Document AI token (→block→line) layout confidence × 100, else null. Per-
+request cost guards: `DOCAI_MAX_PAGES` (15 — the sync processor cap) /
+`DOCAI_MAX_BYTES` (20 MB); `PAGE_LIMIT_EXCEEDED` → `over_page_cap` so the seam
+falls through to gpt-4o.
+
+### Point the seam at it (Railway env, no code change to routing)
+`OCR_CLOUD_OCR_URL=https://<ops-ref>.supabase.co/functions/v1/docai-ocr`,
+`OCR_CLOUD_PROVIDER=google_docai`, `OCR_CLOUD_OCR_KEY`==the wrapper's
+`DOCAI_SHARED_SECRET`. Wrapper secrets: `GOOGLE_DOCAI_SA_KEY` (SA JSON),
+`GOOGLE_DOCAI_PROCESSOR` (full resource name) or
+`GOOGLE_DOCAI_PROJECT_ID`/`_LOCATION`/`_PROCESSOR_ID`. Tiering UNCHANGED: free
+OSS (workstation) → Document AI (cheap cloud) → gpt-4o ONLY on a Document AI miss
+(`OCR_CLOUD_GPT4O_LASTRESORT`); `OCR_CLOUD_ESCALATION='false'` kills all paid OCR.
+**Lights up deeds too:** the R58 `document-text-tick` worker already runs
+`extractDocumentText(..., ocrTiered:true)` (UW#6), so scanned deeds route through
+the SAME seam → Document AI once configured. R58's `ocrPdfToText`-direct path
+(other deed callers) stays gpt-4o — **only the tiered seam's cheap-cloud provider
+was filled in** (UW#4b scope guard holds).
+
+### Per-page cost observability (Document AI bills per page)
+The wrapper returns `pages`; threaded `ocrCloudCheap.pages` →
+`ocrPdfToTextTiered.pages` → `extractDocumentText.ocr_pages` / lease-extractor
+`ocr_pages`/`ocr_engine` → both drain workers. `lease-backfill` +
+`document-text-tick` responses carry `ocr_pages_total` + `ocr_by_engine`
+(`{google_docai:N}`); each tick that ran cloud OCR logs `[…] OCR cost: <N> pages
+{…}`. A capped gate batch shows the Document AI page count BEFORE any broad drain.
+`ocrCloudCheap` now also honors a wrapper `{ok:false,reason}` (e.g.
+`over_page_cap`) so the structured failure falls through to the last resort.
+
+### Verified (headless 2026-06-21)
+`test/document-text.test.mjs` (+UW#4c: `ocrPdfToTextTiered` surfaces `pages` on
+cloud_cheap; `ocrCloudCheap` reads back `pages` + sends `mime_type`; a wrapper
+`{ok:false}` falls through). `node --check` clean (document-text + the two drain
+handlers + lease-extractor); `ls api/*.js | wc -l`=12; full suite 1264 pass / 0
+fail / 6 skipped. The live deed/lease drain (routes to Document AI, gpt-4o only
+on misses, cost log shows pages) is operational — gated on Scott's GCP creds +
+the env, handed off like UW#2/R58. Doc: `docs/UW4_LEASE_OCR.md` (UW#4c wrapper +
+GCP setup + cost telemetry).

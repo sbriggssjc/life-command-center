@@ -236,6 +236,9 @@ export async function ocrCloudCheap({ buffer, mediaType, fetchImpl } = {}) {
       headers,
       body: JSON.stringify({
         content_base64: Buffer.from(buffer).toString('base64'),
+        // `mime_type` is the documented wrapper field (UW#4c docai-ocr); `media_type`
+        // is the original seam field — send both so the wrapper is tolerant.
+        mime_type: mediaType || 'application/pdf',
         media_type: mediaType || 'application/pdf',
         provider,
       }),
@@ -246,10 +249,15 @@ export async function ocrCloudCheap({ buffer, mediaType, fetchImpl } = {}) {
   if (!r || !r.ok) return { ok: false, reason: 'cloud_ocr_non_ok', status: r?.status || 0 };
   let data = null;
   try { data = await r.json(); } catch { return { ok: false, reason: 'cloud_ocr_bad_json' }; }
+  // The wrapper may report ok:false with a structured reason (e.g. over_page_cap)
+  // so the tiered seam can fall through to the gpt-4o last resort.
+  if (data && data.ok === false) return { ok: false, reason: data.reason || 'cloud_ocr_failed', status: data.status || 0 };
   const text = String(data?.text || data?.content || data?.transcription || '').trim();
   if (!text) return { ok: false, reason: 'cloud_ocr_empty' };
   const confidence = typeof data?.confidence === 'number' ? data.confidence : null;
-  return { ok: true, text, confidence, engine: data?.engine || provider };
+  // pages drives the per-page cost log (Document AI bills per page, UW#4c).
+  const pages = Number.isFinite(data?.pages) ? data.pages : null;
+  return { ok: true, text, confidence, pages, engine: data?.engine || provider };
 }
 
 /** Which paid tier the cheap-vs-gpt4o policy selects (telemetry-only, no I/O). */
@@ -295,7 +303,7 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
   if (mode === 'cheap' || deps.cloudCheapOcr) {
     const cc = await (deps.cloudCheapOcr || ocrCloudCheap)({ buffer, mediaType, fetchImpl: deps.fetchImpl });
     if (cc && cc.ok && cc.text) {
-      return { ok: true, text: cc.text, tier: 'cloud_cheap', confidence: cc.confidence ?? null, engine: cc.engine || 'cloud_ocr' };
+      return { ok: true, text: cc.text, tier: 'cloud_cheap', confidence: cc.confidence ?? null, pages: cc.pages ?? null, engine: cc.engine || 'cloud_ocr' };
     }
     cheapReason = cc?.reason || 'cloud_ocr_failed';
   }
@@ -383,6 +391,7 @@ export async function extractDocumentText(
         ok: true, text: ocr.text, method: 'ocr', text_len: ocr.text.length,
         ocr_attempted: true, ocr_ok: true, via: fetchedVia,
         ocr_tier: ocr.tier || null, ocr_engine: ocr.engine || ocr.model || null,
+        ocr_pages: ocr.pages ?? null,   // UW#4c — per-page cost telemetry
         thin_text_layer: thinTextLayer || undefined,
       };
     }
