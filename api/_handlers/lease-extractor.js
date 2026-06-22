@@ -31,6 +31,7 @@ import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
 import { attachEnrichDocument } from './intake-promoter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
+import { openResearchTask } from '../_shared/research-task.js';
 import { isMultiTenantDealFolderPath, isDraftDocumentPath } from '../_shared/folder-feed-classify.js';
 import { authenticate } from '../_shared/auth.js';
 
@@ -770,7 +771,56 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
     out.document_id = r?.document_id || null;
   }
 
+  // 6) R59 Unit 4 — surface the ambiguous lease facts as research tasks (the
+  //    operator decides). Gated on the optional openResearchTask dep so legacy
+  //    callers / tests are byte-identical. Idempotent on (research_type, property).
+  if (deps.openResearchTask) {
+    const short = domain === 'government' ? 'gov' : 'dia';
+    const extractedTenant = normalized.factual?.tenant || normalized.property_identity?.tenant || null;
+    // 6a) extracted tenant disagrees with the property's recorded tenant.
+    if (extractedTenant && deps.getPropertyTenant) {
+      const recordedTenant = await deps.getPropertyTenant({ domain, propertyId }).catch(() => null);
+      if (recordedTenant && !leaseTenantNamesAgree(recordedTenant, extractedTenant)) {
+        const rt = await deps.openResearchTask({
+          researchType: 'confirm_tenant_mismatch', domain: short, propertyId, sourceTable: 'lease_extraction',
+          title: `Lease tenant ≠ recorded tenant: "${extractedTenant}" vs "${recordedTenant}"`,
+          instructions: `An executed lease names tenant "${extractedTenant}" but the property record carries ` +
+            `"${recordedTenant}". Confirm which is correct (a sublease / assignment / mis-match). Lease ${resolvedLeaseId || '(new)'}.`,
+          metadata: { lease_id: resolvedLeaseId || null, extracted_tenant: extractedTenant, recorded_tenant: recordedTenant },
+        }).catch(() => null);
+        if (rt && rt.ok) { out.tenant_mismatch_task = true; }
+      }
+    }
+    // 6b) a guarantor was extracted but did NOT resolve to an entity (and was not a
+    //     contamination withheld to the Decision Center) → resolve it manually.
+    const extractedGuarantor = normalized.factual?.guarantor || null;
+    if (extractedGuarantor && !out.guarantor_entity_id && !out.guarantor_withheld) {
+      const rt = await deps.openResearchTask({
+        researchType: 'resolve_lease_guarantor', domain: short, propertyId, sourceTable: 'lease_extraction',
+        title: `Resolve lease guarantor: "${extractedGuarantor}"`,
+        instructions: `An executed lease names guarantor "${extractedGuarantor}" that did not resolve to a known ` +
+          `entity (failed the name guards or no match). Identify the credit parent / entity. Lease ${resolvedLeaseId || '(new)'}.`,
+        metadata: { lease_id: resolvedLeaseId || null, guarantor: extractedGuarantor },
+      }).catch(() => null);
+      if (rt && rt.ok) { out.guarantor_research_task = true; }
+    }
+  }
+
   return out;
+}
+
+// R59 — loose tenant-name agreement for the mismatch check. Two names "agree"
+// when one normalized form contains the other's core (handles "DaVita" vs
+// "DaVita Inc." / "Total Renal Care, Inc."). Conservative: only a CLEAR
+// disagreement opens a research task (never a guess-write).
+export function leaseTenantNamesAgree(a, b) {
+  const norm = (s) => String(s || '').toLowerCase()
+    .replace(/\b(inc|llc|l\.?l\.?c|lp|l\.?p|llp|corp|co|company|the|of|a)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return true;            // unknown on either side → don't flag
+  if (na === nb) return true;
+  return na.includes(nb) || nb.includes(na);
 }
 
 // ============================================================================
@@ -934,6 +984,16 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
     // and tenant resolving to different operator families is the contamination
     // signal. Returns the canonical parent entity id, or null.
     resolveOperatorParent,
+    // R59 Unit 4 — idempotent research-task producer + the property's recorded
+    // tenant (dia only; gov "tenant" is the agency, a different concept — return
+    // null there so the mismatch check is skipped, never a wrong-column read).
+    openResearchTask,
+    getPropertyTenant: async ({ domain, propertyId }) => {
+      if (domain !== 'dialysis') return null;
+      const r = await domainQuery(domain, 'GET',
+        `properties?property_id=eq.${propertyId}&select=tenant&limit=1`).catch(() => ({ ok: false }));
+      return (r.ok && r.data?.[0]?.tenant) || null;
+    },
     // Read-only: the active lease_id for a property, or null. Used by the gated
     // dry-run to report whether the real write would CREATE a lease.
     findActiveLeaseId: async ({ domain, propertyId }) => {

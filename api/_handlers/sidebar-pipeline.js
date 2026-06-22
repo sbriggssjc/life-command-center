@@ -8228,6 +8228,19 @@ async function resolveOrCreateRecordedOwnerForDeed(domain, cleanName, entity, de
   return null;
 }
 
+// R59 — exported thin wrapper so the deed-extraction worker can resolve/create a
+// recorded_owner for an ownership_history append. Sanitizes the raw deed grantee
+// (strips " by <Brokerage>" etc.) then reuses the same dedup-or-create resolver.
+// Returns recorded_owner_id or null (best-effort; never throws).
+export async function resolveDeedRecordedOwner(domain, name, deps) {
+  try {
+    const d = deps || buildDeedPropagationDeps();
+    const clean = sanitizeOwnerName(name) || (name || '').trim();
+    if (!clean || clean.replace(/[^a-z0-9]/gi, '').length < 4) return null;
+    return await resolveOrCreateRecordedOwnerForDeed(domain, clean, {}, d);
+  } catch (_e) { return null; }
+}
+
 export async function propagateDeedGranteeToOwner(args, deps) {
   deps = deps || buildDeedPropagationDeps();
   const { domain, propertyId, granteeName, entity = {},

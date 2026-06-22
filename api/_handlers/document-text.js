@@ -34,6 +34,13 @@ import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { extractDocumentText } from '../_shared/document-text.js';
 import { downloadFromStorage } from '../_shared/artifact-storage.js';
 import { processDeedDocument } from './deed-parser.js';
+// R59 — BD-spine propagation deps for the deed parser (Units 1-4). Importing them
+// here (not inside deed-parser.js) keeps the parser dependency-light + unit-
+// testable; the worker injects the production wiring.
+import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
+import { ensureEntityLink } from '../_shared/entity-link.js';
+import { granteePassesOwnerGuards, resolveDeedRecordedOwner } from './sidebar-pipeline.js';
+import { openResearchTask } from '../_shared/research-task.js';
 
 /**
  * UW#6-REV — build a domain-bound Storage getter for a property_documents row.
@@ -162,6 +169,13 @@ export async function processOneDoc(domain, row, deps = {}) {
       r51_fed: !!deedRes?.r51Fed,
       sale_verified: (deedRes?.upgradedTransactions || 0) > 0,
       implied_price_filled: !!deedRes?.impliedPriceFilled,
+      // R59 propagation effects
+      sale_parties_filled: !!(deedRes?.saleBuyerFilled || deedRes?.saleSellerFilled),
+      ownership_event: !!deedRes?.ownershipEventAppended,
+      suspected_sale: !!deedRes?.suspectedSaleSurfaced,
+      grantee_entity_id: deedRes?.granteeEntityId || null,
+      owns_edge: !!deedRes?.ownsEdgeCreated,
+      trace_task: !!deedRes?.traceGranteeTaskSurfaced,
     };
   }
 
@@ -207,10 +221,29 @@ export async function processOneReparse(domain, row, deps = {}) {
     r51_fed: !!deedRes?.r51Fed,
     sale_verified: (deedRes?.upgradedTransactions || 0) > 0,
     implied_price_filled: !!deedRes?.impliedPriceFilled,
+    // R59 propagation effects (also run on retroactive re-parse)
+    sale_parties_filled: !!(deedRes?.saleBuyerFilled || deedRes?.saleSellerFilled),
+    ownership_event: !!deedRes?.ownershipEventAppended,
+    suspected_sale: !!deedRes?.suspectedSaleSurfaced,
+    grantee_entity_id: deedRes?.granteeEntityId || null,
+    owns_edge: !!deedRes?.ownsEdgeCreated,
+    trace_task: !!deedRes?.traceGranteeTaskSurfaced,
   };
 }
 
-const PROD_DEPS = { domainQuery, extractDocumentText, processDeedDocument };
+const PROD_DEPS = {
+  domainQuery, extractDocumentText, processDeedDocument,
+  // R59 deed → BD-spine propagation (Units 1-4). Each is consumed by
+  // processDeedDocument's Step 6 only when present, so unit tests that inject
+  // just { domainQuery } keep the exact pre-R59 deed behavior.
+  granteePassesOwnerGuards,
+  resolveRecordedOwner: (domain, name) => resolveDeedRecordedOwner(domain, name, { domainQuery }),
+  ensureEntityLink,
+  insertEntityRelationship,
+  opsQuery,
+  openResearchTask,
+  resolveBuyerParent: (entityId) => opsQuery('POST', 'rpc/lcc_resolve_buyer_parent', { p_entity_id: entityId }),
+};
 
 export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -236,6 +269,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
     scanned: 0, text_extracted: 0, deed_parsed: 0, needs_ocr: 0, no_source: 0, error: 0,
     no_parties: 0, no_text: 0,
     deed_records_created: 0, r51_fed: 0, sales_verified: 0, implied_prices_filled: 0,
+    // R59 — BD-spine propagation effects (deed Units 1-4).
+    sale_parties_filled: 0, ownership_events: 0, suspected_sales: 0, grantee_entities: 0,
+    owns_edges: 0, trace_tasks: 0,
     // UW#4c — per-page OCR cost telemetry (Document AI bills per page).
     ocr_pages_total: 0, ocr_by_engine: {},
     items: [],
@@ -267,6 +303,13 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
       if (r.r51_fed) result.r51_fed++;
       if (r.sale_verified) result.sales_verified++;
       if (r.implied_price_filled) result.implied_prices_filled++;
+      // R59 propagation effects
+      if (r.sale_parties_filled) result.sale_parties_filled++;
+      if (r.ownership_event) result.ownership_events++;
+      if (r.suspected_sale) result.suspected_sales++;
+      if (r.grantee_entity_id) result.grantee_entities++;
+      if (r.owns_edge) result.owns_edges++;
+      if (r.trace_task) result.trace_tasks++;
       // UW#4c — accumulate per-page OCR cost (a cloud OCR that ran still cost pages).
       if (Number.isFinite(r.ocr_pages) && r.ocr_pages > 0) {
         result.ocr_pages_total += r.ocr_pages;

@@ -4620,3 +4620,105 @@ A capped `POST /api/lease-backfill?mode=reparse&limit=25` over the re-included
 with `ocr_engine: google_docai` (fills lease fields / routes conflicts to the
 Decision Center), exactly like the El Paso memorandum. Needs `SHAREPOINT_FETCH_URL`
 + the configured Document AI seam (`OCR_CLOUD_*`).
+
+## R59 — propagate document-extraction into the BD spine (deed/lease) (2026-06-22)
+
+The OCR unlock (UW#4c/UW#5 + R58c) yields rich structured deed/lease data at
+scale, but the extraction LANDED without UPDATING the rest of the system.
+Grounded live on the real $13.3M transfer (deed doc 3964 → dia property 24703,
+grantor Oldsmar Retail Development LLC → grantee Deltona Wellness, LP, 2020-01-21):
+sale 14751 had buyer_name/seller_name NULL, property 24703 had 0 ownership_history
+rows, no prospect for the new owner, no research prompt. R59 closes those gaps —
+additive / fill-blanks / append-only / reversible / gated, reusing R5/R6/R51/R53
+machinery. All four units hang off the SAME confident deed→sale/property match
+already resolved inside `processDeedDocument` (`deed-parser.js` Step 6). ≤12
+api/*.js; JS ships on the Railway redeploy; no migration.
+
+### Grounding that shaped the design (live 2026-06-22)
+- **Party columns DIFFER by domain:** dia `sales_transactions.buyer_name`/
+  `seller_name`; gov `buyer`/`seller`. **ownership_history schemas DIFFER:** dia
+  `ownership_start`/`sold_price`/`acquisition_method`, bigint sale_id, PK `id`; gov
+  `transfer_date`/`change_type`/`data_source`, uuid sale_id, PK `ownership_id`
+  (auto uuid). gov `change_type='deed'` already exists, no CHECK on the table.
+- **dia `ownership_history.ownership_id`** is integer NOT NULL with **no default
+  and no trigger** in information_schema, BUT a bare insert auto-fills it (verified
+  live) — so the writer NEVER supplies it (mirrors the sidebar writer).
+- **The 2% price-match is too tight.** Deed consideration $13.33M vs recorded sale
+  $13.70M = 2.7% (closing-cost/doc-stamp rounding), but the dates are 5 days
+  apart. So Unit 1's "confident sale" = price-matched **OR** date-proximate
+  (`saleCandidate.sale_date` within 18mo of the deed date). `crossReferenceDeed`'s
+  `saleCandidate` now carries `sale_date` + `price_matched`.
+- **A seeded `suspected_sale` decision is INVISIBLE** — that lane lists ONLY from
+  gov `v_suspected_sale`. So gov owner-conflicting deeds surface via the EXISTING
+  Step-4 R51 `latest_deed_grantee` feed → `v_suspected_sale` (no new code); the
+  universally-visible Unit-2 producer is a **research task** (both domains).
+
+### What shipped (all gated on optional deps → R58 behavior byte-identical)
+`processDeedDocument` Step 6 `propagateDeedToBd(...)` (deed-parser.js); the worker
+`document-text.js` injects the production deps in `PROD_DEPS` (so the deed Units
+light up live; absent-dep unit tests keep the exact pre-R59 deed flow). New shared
+producer **`api/_shared/research-task.js openResearchTask()`** — idempotent on the
+live partial unique index `uq_research_tasks_open_source(source_table,
+source_record_id, research_type, domain)` (pre-check + 409-tolerant), workspace
+resolved (oldest). New exported `resolveDeedRecordedOwner()` on sidebar-pipeline.js
+(thin wrapper over the R51 `resolveOrCreateRecordedOwnerForDeed`).
+
+- **Unit 1(a)** — on a confident sale match, fill the sale's parties from
+  grantee→buyer / grantor→seller, **fill-blanks** (per-column `=is.null` guard,
+  per-domain columns), each run through `granteePassesOwnerGuards` (rejects
+  brokerage/federal/junk; works for grantor too — NOT `isImplausiblePersonName`
+  which rejects every LLC).
+- **Unit 1(b)** — append ONE `ownership_history` event (recorded deed = canonical
+  transfer). Resolve/create the grantee's recorded_owner (R51 resolver), per-domain
+  row shape, `change_type/acquisition_method='deed'`, `data_source/ownership_source=
+  'deed_extraction'`, `ownership_state='active'`, sale_id linked only when the
+  matched sale's PK type fits the domain column (uuid gov / int dia). Idempotent —
+  dedup on (property_id, recorded_owner_id, date). **NEVER** writes
+  `properties.recorded_owner_id`/`true_owner_id` (that stays R51/R47-gated).
+- **Unit 2** — a deed with consideration ($price) + date but NO confident sale →
+  `confirm_deed_transfer_sale` research task (idempotent on property). Never writes
+  a sales row (a suspected sale is a LEAD; gov also flows the owner-conflict subset
+  into `v_suspected_sale` via the R51 feed).
+- **Unit 3** — grantee → BD entity via `ensureEntityLink` (domain dia/gov,
+  sourceType `true_owner`, name-dedup; the junk/implausible/federal guards apply) +
+  an `owns` edge owner→asset (asset resolved `resolveOnly` — never invents an
+  asset; dupe-guarded). **NEVER opens an opportunity** (the R5 BEFORE-INSERT
+  trigger + gate own that; a buyer-SPE grantee gets no prospect opp).
+- **Unit 4** — research producers on the ambiguous cases: deed grantee that is a
+  private LLC NOT resolving to a known parent (`resolveBuyerParent` → null) →
+  `trace_grantee_to_parent`; (lease, `lease-extractor.js applyLeaseEnrichment`,
+  gated on `openResearchTask`/`getPropertyTenant` deps) extracted tenant ≠ the
+  property's recorded tenant → `confirm_tenant_mismatch` (dia only — gov "tenant"
+  is the agency); an extracted guarantor that didn't resolve to an entity (and
+  wasn't a withheld contamination) → `resolve_lease_guarantor`. Each idempotent on
+  (research_type, property_id); none fires when the fact resolves cleanly.
+
+### Verified (headless + live schema-gate, 0 residue) 2026-06-22
+`test/deed-parser.test.mjs` 19 → **29** (Unit 1a per-domain party fill on a
+date-proximate sale; 1b OH append + dedup + no-`ownership_id`; Unit 2 research
+task + no sale write; Unit 3 mint+owns-edge + no-opp + asset-not-resolved → no
+edge; Unit 4 trace task on/off; broker grantee writes nothing), `test/lease-
+extractor.test.mjs` 80 → **84** (tenant-mismatch on/off, guarantor-unresolved,
+byte-identical when the dep is absent), new `test/research-task.test.mjs` (4:
+create / idempotent-open / 409-race / missing-input). **Live schema gate** — the
+exact dia (24703/sale 14751) + gov Unit-1 writes exercised in self-rolling-back
+DO blocks on the real DBs: dia buyer/seller guards matched (`buyer_patched=1`), OH
+appended (ownership_id auto-filled 22316); gov shapes valid, `buyer_patched=0` (the
+fill-blanks guard correctly did NOT overwrite an existing buyer). **0 residue on
+both DBs** (sale 14751 buyer still NULL). `node --check` clean (research-task,
+deed-parser, document-text, sidebar-pipeline, lease-extractor); `ls api/*.js | wc
+-l`=12.
+
+### Reversibility / boundaries
+Every write is fill-blanks / append-only / identity-link. Revert: null the filled
+`buyer_name`/`seller_name`/`buyer`/`seller`; delete `ownership_history` rows
+`WHERE data_source='deed_extraction'` (gov) / `ownership_source='deed_extraction'`
+(dia); the Unit-3 entity+edge and the research_tasks are deletable. No domain
+migration (all columns pre-exist); dia/gov pipelines otherwise untouched; auth
+schema untouched.
+
+### Follow-ups (NOT in R59)
+Connecting each historical chain owner (entity-link) is the existing R6 phase-3(c)
+machinery; a dia suspected-sale lane (R53 is gov-only — dia uses the research
+task); premises-address-preference at extraction time (R58c folder-anchor guard is
+the current safety net).

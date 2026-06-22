@@ -251,3 +251,169 @@ describe('processDeedDocument — schema-correct DB integration', () => {
     assert.equal(r.deedRecordId, null);
   });
 });
+
+// ── R59 — propagation into the BD spine (Units 1-4) ─────────────────────────
+describe('processDeedDocument — R59 BD-spine propagation', () => {
+  // Reusable BD deps. granteePassesOwnerGuards rejects brokers/federal; the rest
+  // are recording stubs. With NONE of these injected the R58 tests above prove
+  // the deed flow is byte-identical (gated on dep presence).
+  function bdDeps(over = {}) {
+    const events = { research: [], entities: [], edges: [], ownerResolved: [] };
+    const deps = {
+      granteePassesOwnerGuards: (n) => !!n && !/broker|gsa|u\.?s\.?a\b/i.test(n) && n.replace(/[^a-z0-9]/gi, '').length >= 4,
+      resolveRecordedOwner: async (_d, name) => { events.ownerResolved.push(name); return 'ro-1'; },
+      ensureEntityLink: async (a) => {
+        if (a.resolveOnly) return a.sourceType === 'asset' ? { ok: true, entityId: 'asset-ent-1' } : { ok: false };
+        events.entities.push(a); return { ok: true, entityId: 'owner-ent-1' };
+      },
+      insertEntityRelationship: async (row) => { events.edges.push(row); return { ok: true }; },
+      opsQuery: async (_m, _p) => ({ ok: true, data: [] }),  // edge dupe-guard: none exists
+      openResearchTask: async (a) => { events.research.push(a); return { ok: true, created: true }; },
+      resolveBuyerParent: async () => ({ ok: true, data: [] }),  // no registered parent
+      ...over,
+    };
+    return { deps, events };
+  }
+
+  it('Unit 1(a): fills a date-proximate sale\'s parties (dia buyer_name/seller_name), guarded on is.null', async () => {
+    const { deps } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'deed_records': { method: 'POST', value: { ok: true, data: [{ id: 'd1' }] } },
+      'properties?property_id=eq.55&select=latest_deed_grantee': { value: { ok: true, data: [{ latest_deed_grantee: null, latest_deed_date: null }] } },
+      // price (2,000,000) does NOT 2%-match the deed's 1,000,000, but the sale is 5
+      // days from the deed date → date-proximate fallback ⇒ confident.
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [{ sale_id: 7, sold_price: 2000000, sale_date: '2024-03-10' }] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    const buyerFill = f.calls.find(c => c.method === 'PATCH' && c.path.includes('sales_transactions?sale_id=eq.7') && c.path.includes('buyer_name=is.null'));
+    const sellerFill = f.calls.find(c => c.method === 'PATCH' && c.path.includes('sales_transactions?sale_id=eq.7') && c.path.includes('seller_name=is.null'));
+    assert.ok(buyerFill, 'buyer_name fill-blanks PATCH on the matched sale');
+    assert.equal(buyerFill.body.buyer_name, 'BUYER HOLDINGS LLC');
+    assert.ok(sellerFill, 'seller_name fill-blanks PATCH');
+    assert.equal(sellerFill.body.seller_name, 'SELLER TRUST');
+    assert.equal(r.saleBuyerFilled, true);
+    assert.equal(r.saleSellerFilled, true);
+  });
+
+  it('Unit 1(a): gov uses buyer/seller columns (not buyer_name)', async () => {
+    const { deps } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [{ sale_id: 'u-1', sold_price: 1000000, sale_date: '2024-03-15' }] } },
+    });
+    await processDeedDocument('government', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.ok(f.calls.some(c => c.method === 'PATCH' && c.path.includes('&buyer=is.null') && c.body.buyer === 'BUYER HOLDINGS LLC'), 'gov fills buyer');
+    assert.equal(f.calls.some(c => c.path.includes('buyer_name=is.null')), false, 'gov never uses buyer_name');
+  });
+
+  it('Unit 1(b): appends an ownership_history event for the grantee (dia schema), idempotent', async () => {
+    const { deps } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [{ sale_id: 7, sold_price: 1000000, sale_date: '2024-03-15' }] } },
+      // dedup probe: no existing OH row for this owner+date
+      'ownership_history?property_id=eq.55&recorded_owner_id=eq.ro-1': { method: 'GET', value: { ok: true, data: [] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    const ohPost = f.calls.find(c => c.method === 'POST' && c.path === 'ownership_history');
+    assert.ok(ohPost, 'POST ownership_history');
+    assert.equal(ohPost.body.recorded_owner_id, 'ro-1');
+    assert.equal(ohPost.body.ownership_start, '2024-03-15');
+    assert.equal(ohPost.body.acquisition_method, 'deed');
+    assert.equal(ohPost.body.ownership_state, 'active');
+    assert.equal(ohPost.body.sale_id, 7, 'links the integer sale_id (dia)');
+    assert.equal('ownership_id' in ohPost.body, false, 'never supplies ownership_id (DB auto-fills it)');
+    assert.equal(r.ownershipEventAppended, true);
+  });
+
+  it('Unit 1(b): a pre-existing OH row for the same owner+date → no duplicate append', async () => {
+    const { deps } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [{ sale_id: 7, sold_price: 1000000, sale_date: '2024-03-15' }] } },
+      'ownership_history?property_id=eq.55&recorded_owner_id=eq.ro-1': { method: 'GET', value: { ok: true, data: [{ id: 999 }] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(f.calls.some(c => c.method === 'POST' && c.path === 'ownership_history'), false, 'no duplicate OH insert');
+    assert.equal(r.ownershipEventAppended, false);
+  });
+
+  it('Unit 2: deed with consideration but NO sale → research task, never writes a sale', async () => {
+    const { deps, events } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } },   // no sales at all
+    });
+    const r = await processDeedDocument('government', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.suspectedSaleSurfaced, true);
+    const task = events.research.find(t => t.researchType === 'confirm_deed_transfer_sale');
+    assert.ok(task, 'opens confirm_deed_transfer_sale');
+    assert.equal(task.propertyId, 55);
+    assert.equal(task.metadata.suspected_grantee, 'BUYER HOLDINGS LLC');
+    assert.equal(f.calls.some(c => c.method === 'POST' && c.path.startsWith('sales_transactions')), false, 'never writes a sales row');
+  });
+
+  it('Unit 3: grantee → entity + owns edge (asset resolved); never opens an opportunity', async () => {
+    const { deps, events } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.granteeEntityId, 'owner-ent-1');
+    const mint = events.entities.find(e => e.sourceType === 'true_owner');
+    assert.ok(mint, 'mints the grantee owner entity via ensureEntityLink');
+    assert.equal(mint.domain, 'dia');
+    assert.equal(r.ownsEdgeCreated, true);
+    const edge = events.edges[0];
+    assert.equal(edge.from_entity_id, 'owner-ent-1');  // owner = from
+    assert.equal(edge.to_entity_id, 'asset-ent-1');    // asset = to
+    assert.equal(edge.relationship_type, 'owns');
+    // No opportunity is ever opened by the deed path (R5 gate owns that).
+    assert.equal(f.calls.some(c => /rpc\/lcc_open_prospect_opportunity|bd_opportunities/.test(c.path)), false);
+  });
+
+  it('Unit 3: asset entity does not resolve → no owns edge (never invents an asset)', async () => {
+    const { deps, events } = bdDeps({ ensureEntityLink: async (a) => a.resolveOnly ? { ok: false } : { ok: true, entityId: 'owner-ent-1' } });
+    const f = makeFakeQ({ 'deed_records?data_hash': { value: { ok: true, data: [] } }, 'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } } });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.granteeEntityId, 'owner-ent-1');
+    assert.equal(r.ownsEdgeCreated, false);
+    assert.equal(events.edges.length, 0);
+  });
+
+  it('Unit 4: an LLC grantee that does not resolve to a parent → trace_grantee_to_parent', async () => {
+    const { deps, events } = bdDeps();  // resolveBuyerParent returns no parent
+    const f = makeFakeQ({ 'deed_records?data_hash': { value: { ok: true, data: [] } }, 'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } } });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.traceGranteeTaskSurfaced, true);
+    assert.ok(events.research.some(t => t.researchType === 'trace_grantee_to_parent'), 'opens trace task');
+  });
+
+  it('Unit 4: a grantee that DOES resolve to a known parent → no trace task', async () => {
+    const { deps, events } = bdDeps({ resolveBuyerParent: async () => ({ ok: true, data: [{ parent_entity_id: 'parent-1' }] }) });
+    const f = makeFakeQ({ 'deed_records?data_hash': { value: { ok: true, data: [] } }, 'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } } });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.traceGranteeTaskSurfaced, false);
+    assert.equal(events.research.some(t => t.researchType === 'trace_grantee_to_parent'), false);
+  });
+
+  it('GUARD: a broker grantee writes nothing (no party fill, no OH, no entity)', async () => {
+    const BROKER_DEED = [
+      'GRANT DEED', 'County of Orange',
+      'DOC # 2024-1 recorded on 06/01/2024',
+      'acknowledged, SELLER TRUST hereby GRANTS to CBRE Group Inc broker, the following described property:',
+    ].join('\n');
+    const { deps, events } = bdDeps();
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [{ sale_id: 7, sold_price: 1, sale_date: '2024-06-01' }] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, BROKER_DEED, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.saleBuyerFilled, false, 'broker never fills the buyer');
+    assert.equal(r.ownershipEventAppended, false);
+    assert.equal(r.granteeEntityId, null);
+    assert.equal(events.entities.length, 0);
+  });
+});
