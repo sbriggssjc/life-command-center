@@ -28,9 +28,42 @@ import { domainQuery } from '../_shared/domain-db.js';
 const DOMAIN_NORM = { dia: 'dialysis', dialysis: 'dialysis', gov: 'government', government: 'government' };
 const KNOWN_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov', 'brochure', 'comp', 'survey', 'other']);
 
-/** Re-validate the sidebar doctype; an unknown/"?" is filed as `other` (triage), never mis-routed. */
-export function normalizeNotifyDoctype(d) {
+// Pre-capture statuses safe to PROMOTE to 'bytes_captured' once bytes land. A
+// downstream status (text_extracted / needs_ocr / deed_parsed / deed_no_parties)
+// is NEVER clobbered — the bytes are already past capture there.
+const PRE_CAPTURE_STATUSES = new Set(['', 'url_captured', 'pending', 'seen']);
+
+// Filenames that are NOT a property document type — SEC/IR/press material the
+// capture sometimes lists alongside deeds/leases. The substring `release`
+// previously matched `lease` and mis-typed these. Anchored word-ish patterns;
+// any hit forces doctype `other` (triage), never a deep-parse route.
+const NON_DOCTYPE_NAME_RES = [
+  /\bpress\s*release\b/i,
+  /\b8[\s-]?k\b/i,
+  /\b10[\s-]?[kq]\b/i,
+  /\binvestor\s+(presentation|deck|day)\b/i,
+  /\bearnings\b/i,
+  /\bprospectus\b/i,
+  /\bproxy\s+statement\b/i,
+  /\bannual\s+report\b/i,
+];
+
+/** True when a filename is clearly a non-property-document (SEC/IR/press) artifact. */
+export function isNonDocumentTypeName(name) {
+  const s = String(name || '');
+  return NON_DOCTYPE_NAME_RES.some((re) => re.test(s));
+}
+
+/**
+ * Re-validate the sidebar doctype; an unknown/"?" is filed as `other` (triage),
+ * never mis-routed. UW#6: the optional `fileName` lets the server REJECT obvious
+ * non-types (a "Press Release" the sidebar mis-typed as `lease` because
+ * "reLEASE" substring-matched) down to `other`, even when the sidebar sent a
+ * KNOWN doctype.
+ */
+export function normalizeNotifyDoctype(d, fileName) {
   const v = String(d || '').toLowerCase().trim();
+  if (fileName != null && isNonDocumentTypeName(fileName)) return 'other';
   return KNOWN_DOCTYPES.has(v) ? v : 'other';
 }
 
@@ -50,8 +83,8 @@ export async function performDocumentNotify(args, deps = {}) {
   if (!storage_path) return { ok: false, status: 400, error: 'missing_storage_path' };
   if (!content_hash) return { ok: false, status: 400, error: 'missing_content_hash' };
 
-  const dt = normalizeNotifyDoctype(doctype);
   const fileName = file_name || String(storage_path).split('/').pop() || 'document';
+  const dt = normalizeNotifyDoctype(doctype, fileName);   // filename can downgrade a mis-typed non-doc to `other`
   const bucket = storage_bucket || 'property-documents';
 
   const ptr = {
@@ -62,13 +95,26 @@ export async function performDocumentNotify(args, deps = {}) {
     ingestion_status: 'bytes_captured',
   };
 
-  // 1. Already recorded this exact content for this property? → idempotent no-op.
+  // 1. Already recorded this exact content for this property? → idempotent.
+  //    UW#6: but REPAIR a stale ingestion_status — earlier builds wrote
+  //    storage_path while leaving the row at the sidebar's 'url_captured'
+  //    default (the 6-of-7 mislabel). Promote those to 'bytes_captured' here
+  //    WITHOUT clobbering a downstream status the deep-parser already set
+  //    (text_extracted / needs_ocr / deed_parsed / etc.).
   const existingByHash = await q(domain, 'GET',
     `property_documents?property_id=eq.${encodeURIComponent(property_id)}` +
     `&content_hash=eq.${encodeURIComponent(content_hash)}` +
-    `&select=document_id,storage_path&limit=1`);
+    `&select=document_id,storage_path,ingestion_status&limit=1`);
   if (existingByHash.ok && existingByHash.data?.[0]?.storage_path) {
-    return { ok: true, status: 200, outcome: 'idempotent', document_id: existingByHash.data[0].document_id, domain, doctype: dt };
+    const ex = existingByHash.data[0];
+    let repaired = false;
+    if (PRE_CAPTURE_STATUSES.has(String(ex.ingestion_status || '').toLowerCase())) {
+      const fix = await q(domain, 'PATCH',
+        `property_documents?document_id=eq.${ex.document_id}`,
+        { ingestion_status: 'bytes_captured' }, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+      repaired = !!fix?.ok;
+    }
+    return { ok: true, status: 200, outcome: 'idempotent', document_id: ex.document_id, domain, doctype: dt, status_repaired: repaired };
   }
 
   // 2. Sidebar already wrote a url_captured row for this file? → ATTACH the bytes.

@@ -21,12 +21,56 @@ describe('document-text foundation (R58 Unit 1)', () => {
   it('digital PDF → pdf_text (no OCR attempted)', async () => {
     const r = await extractDocumentText(
       { sourceUrl: 'https://cdn/deed.pdf' },
-      { fetchDocBytes: okFetch, pdfTextFromBuffer: async () => 'GRANT DEED ... grantor ... grantee ...' }
+      { fetchDocBytes: okFetch, pdfTextFromBuffer: async () => ('GRANT DEED conveying the real property described herein from grantor to grantee, recorded with the county recorder. '.repeat(4)) }
     );
     assert.equal(r.ok, true);
     assert.equal(r.method, 'pdf_text');
     assert.equal(r.ocr_attempted, false);
     assert.ok(r.text_len > 0);
+  });
+
+  // UW#6 — a PDF with a sub-floor (thin) text layer routes to OCR, not done-with-nothing.
+  it('thin text layer (<200 meaningful chars) → routes to OCR (the 32/113-char bug)', async () => {
+    const r = await extractDocumentText(
+      { sourceUrl: 'https://cdn/scan.pdf' },
+      {
+        fetchDocBytes: okFetch,
+        pdfTextFromBuffer: async () => 'DEED 12345',                 // thin junk text layer
+        ocrPdfToText: async () => ({ ok: true, text: 'OCR transcribed full deed text from the scan' }),
+      }
+    );
+    assert.equal(r.method, 'ocr');
+    assert.equal(r.thin_text_layer, true);
+    assert.ok(r.text.includes('OCR'));
+  });
+
+  it('thin text layer + OCR unavailable → needs_ocr (not text_extracted)', async () => {
+    const r = await extractDocumentText(
+      { sourceUrl: 'https://cdn/scan.pdf' },
+      { fetchDocBytes: okFetch, pdfTextFromBuffer: async () => 'recorded 2021', ocrPdfToText: async () => ({ ok: false, reason: 'ocr_non_ok' }) }
+    );
+    assert.equal(r.needs_ocr, true);
+    assert.equal(r.thin_text_layer, true);
+    assert.equal(r.text_len, 0);
+  });
+
+  // UW#6 — deeds use the free-first tiered OCR (not gpt-4o direct).
+  it('ocrTiered → routes the zero-text PDF through the tiered OCR flow', async () => {
+    let tieredCalled = false, directCalled = false;
+    const r = await extractDocumentText(
+      { sourceUrl: 'https://cdn/scan.pdf', ocrTiered: true },
+      {
+        fetchDocBytes: okFetch,
+        pdfTextFromBuffer: async () => '',
+        ocrPdfToTextTiered: async () => { tieredCalled = true; return { ok: true, text: 'tiered OCR text', tier: 'cloud_cheap', engine: 'google_docai' }; },
+        ocrPdfToText: async () => { directCalled = true; return { ok: true, text: 'gpt4o' }; },
+      }
+    );
+    assert.equal(tieredCalled, true);
+    assert.equal(directCalled, false, 'gpt-4o-direct must NOT be called when ocrTiered is set');
+    assert.equal(r.method, 'ocr');
+    assert.equal(r.ocr_tier, 'cloud_cheap');
+    assert.equal(r.ocr_engine, 'google_docai');
   });
 
   it('scanned PDF (zero digital text) → OCR fallback yields text', async () => {

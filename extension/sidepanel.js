@@ -1321,27 +1321,42 @@ async function loadPropertyTab(opts) {
     // don't hammer the CDN. Only runs once we have a resolved domain property_id.
     if (verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
       const DEEP_PARSE_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov']);
+      // SEC/IR/press artifacts the doc list sometimes carries — NOT property
+      // document types. Checked FIRST so "Press Release" never falls through to
+      // the lease branch (where the `release` substring used to match `lease`).
+      const NON_DOCTYPE_RE = /\bpress\s*release\b|\b8[\s-]?k\b|\b10[\s-]?[kq]\b|\binvestor\s+(presentation|deck|day)\b|\bearnings\b|\bprospectus\b|\bproxy\s+statement\b|\bannual\s+report\b/i;
       const inferDocType = (label) => {
-        const l = String(label || '').toLowerCase();
-        if (l.includes('deed')) return 'deed';
-        if (l.includes('lease') || l.includes('estoppel')) return 'lease';
-        if (l.includes('om') || l.includes('offering') || l.includes('memorandum')) return 'om';
+        const raw = String(label || '');
+        if (NON_DOCTYPE_RE.test(raw)) return 'other';   // reject press release / 8-K / etc.
+        const l = raw.toLowerCase();
+        if (/\bdeed\b/.test(l)) return 'deed';
+        // word-boundary `lease` (so "release" no longer matches) + estoppel.
+        if (/\blease\b/.test(l) || /\bestoppel\b/.test(l)) return 'lease';
+        if (/\bom\b/.test(l) || l.includes('offering') || l.includes('memorandum')) return 'om';
         if (l.includes('due diligence') || /\bdd\b/.test(l)) return 'dd';
-        if (l.includes('master')) return 'master';
-        if (l.includes('bov') || l.includes('broker opinion')) return 'bov';
+        if (/\bmaster\b/.test(l)) return 'master';
+        if (/\bbov\b/.test(l) || l.includes('broker opinion')) return 'bov';
         return 'other';
       };
       const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
       const seenUrls = new Set();
       (async () => {
+        // UW#6 — observable: collect a per-doc outcome so a live capture shows
+        // "N ok / M failed / K skipped" in the console instead of silently
+        // skipping. A fetch failure is RECORDED (not swallowed) so a dead
+        // CoStar token / SW-context miss is visible.
+        const results = { ok: 0, failed: 0, skipped: 0, failures: [] };
         for (const d of docLinks) {
           const url = d?.url;
           if (!url || seenUrls.has(url)) continue;
           seenUrls.add(url);
-          const doctype = d?.type && DEEP_PARSE_DOCTYPES.has(d.type) ? d.type : inferDocType(d?.label);
-          if (!DEEP_PARSE_DOCTYPES.has(doctype)) continue;  // skip brochure/comp/survey/other
+          // The upstream d.type can be wrong (a "Press Release" mis-typed
+          // lease); re-derive from the label and let a non-doctype label veto.
+          const labelType = inferDocType(d?.label);
+          const doctype = (d?.type && DEEP_PARSE_DOCTYPES.has(d.type) && labelType !== 'other') ? d.type : labelType;
+          if (!DEEP_PARSE_DOCTYPES.has(doctype)) { results.skipped++; continue; }  // brochure/comp/survey/other/press-release
           try {
-            await chrome.runtime.sendMessage({
+            const resp = await chrome.runtime.sendMessage({
               type: 'STAGE_DOC_BYTES_TO_LCC',
               domain: verifyDomain,
               propertyId: verifyPropertyId,
@@ -1349,9 +1364,21 @@ async function loadPropertyTab(opts) {
               fileName: d?.label || null,
               sourceUrl: url,
             });
+            if (resp && resp.ok) {
+              results.ok++;
+            } else {
+              results.failed++;
+              results.failures.push({ url, error: resp?.error || 'no_response', status: resp?.status, via: resp?.via });
+              console.warn('[UW6] doc byte-capture failed', { url, error: resp?.error, status: resp?.status, via: resp?.via });
+            }
           } catch (e) {
-            console.warn('[UW6] doc byte-capture failed for', url, e?.message || e);
+            results.failed++;
+            results.failures.push({ url, error: e?.message || String(e) });
+            console.warn('[UW6] doc byte-capture threw for', url, e?.message || e);
           }
+        }
+        if (results.ok || results.failed || results.skipped) {
+          console.log(`[UW6] byte-capture: ${results.ok} ok / ${results.failed} failed / ${results.skipped} skipped`, results.failures.length ? results.failures : '');
         }
       })();
     }
