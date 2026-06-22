@@ -64,6 +64,23 @@ function normalizeActivityDate(v) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
 
+/**
+ * Coerce a flow-error value of ANY shape to a human-readable string. A Power
+ * Automate / Salesforce-connector non-2xx body commonly arrives as
+ * `{error:{message}}`, `{message}`, or an array of `{message}` — calling
+ * `.slice` on those objects throws `TypeError: ... .slice is not a function`,
+ * which then masks the real Salesforce error (R52b, 2026-06-21). Always coerce
+ * to a string before slicing.
+ */
+function pickFlowMessage(v) {
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return v.length ? pickFlowMessage(v[0]) : '';
+  if (v && typeof v === 'object') {
+    return v.message || v.error_description || v.errorMessage || JSON.stringify(v);
+  }
+  return '';
+}
+
 async function callSfLookupFlow(body) {
   const url = process.env.SF_LOOKUP_WEBHOOK_URL;
   if (!url) return { ok: false, reason: 'sf_not_configured' };
@@ -79,22 +96,29 @@ async function callSfLookupFlow(body) {
   try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
 
   if (!res.ok) {
+    const detailRaw = pickFlowMessage(json?.error)
+      || pickFlowMessage(json?.detail)
+      || (typeof text === 'string' ? text : '')
+      || '';
     return {
       ok: false,
       reason: 'flow_http_error',
       status: res.status,
-      detail: (json?.error || json?.detail || text || '').slice(0, 300),
+      detail: String(detailRaw).slice(0, 500),
     };
   }
   if (!json || json.ok !== true) {
+    const detailRaw = pickFlowMessage(json?.detail) || pickFlowMessage(json?.error) || '';
     return {
       ok: false,
       reason: json?.reason || 'flow_reported_failure',
-      detail: json?.detail || null,
+      detail: detailRaw ? String(detailRaw).slice(0, 500) : null,
     };
   }
   return json;
 }
+
+export { pickFlowMessage };
 
 /**
  * Normalize a business name for fuzzy comparison: lowercase, strip

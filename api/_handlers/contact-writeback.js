@@ -109,7 +109,9 @@ export async function processContactWriteback(row, deps) {
     const outcome = reason === 'sf_not_configured' ? 'not_configured'
       : (reason === 'unsupported' || reason === 'unavailable') ? 'unsupported'
       : 'unavailable';
-    return { outcome, reason, entity_id: row.entity_id };
+    // Surface the richer SF/PA flow message (R52b) so the real Salesforce
+    // error reaches the tick response instead of a bare reason code.
+    return { outcome, reason, detail: (res && res.detail) || null, entity_id: row.entity_id };
   }
 
   const sfId = res.contact && (res.contact.Id || res.contact.id);
