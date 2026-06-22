@@ -29,3 +29,30 @@ LeaseComps, BuyerShowings, …}. Supporting docs (DD findings, etc.) may sit in 
 
 This convention should also be reflected in the §4 naming/delivery section of
 `WORK_PRODUCT_FRAMEWORK.md` and applied by the future master-sheet generator.
+
+## Standard property-folder structure (the filing system)
+```
+PROPERTIES/
+  <Bucket>/                         # A–Z by tenant/brand initial, or "Multi" for multi-tenant
+    <Tenant or Brand>/              # CVS pharmacy · DaVita · Valley MOB …
+      <City, ST>/                   # Philadelphia, PA
+        <Property>_<Addr>_MasterSheet_<YYYY-MM>.xlsx   # ONE current master sheet (base)
+        <Property>_..._DD_Findings_<YYYY-MM>.md         # current working notes (optional)
+        Rec'd/        # received DD: leases, tax, deeds, seller emails (sub-folders OK)
+        Marketing/    # OM, flyers, photos, marketing collateral
+        Old/          # superseded versions / prior transactions (date-named)
+```
+- Fold legacy variant folders into this: `Raw/Diligence` → `Rec'd/`; ad-hoc `Pricing Update` →
+  dated files (or a dated sub-folder); `Past Deals` → `Old/` (or a clearly-labeled prior-transaction
+  sub-folder).
+- A reference doc from outside our file system (e.g. a competitor's prior OM kept for expense/detail
+  reference) lives in `Rec'd/` (or `Rec'd/Reference/`), clearly not a Northmarq work product.
+
+## ⚠ Sync-root hazard (flagged 2026-06-22)
+The Team Briggs library is currently synced to **two local roots** on this machine —
+`C:\Users\scott\NorthMarq Capital, LLC\Team Briggs - Documents\` (the connected/working root) and
+`C:\Users\scott\OneDrive - NorthMarq Capital, LLC\Team Briggs - Documents\` (a second sync). Two
+roots of one SharePoint library cause exactly the "I edited one, you opened the other" confusion +
+risk of sync conflicts. **Recommendation: keep ONE sync of the library** (stop syncing the
+duplicate), and treat **SharePoint online as the source of truth**. Edits land in SharePoint and
+propagate to whichever local root remains.
