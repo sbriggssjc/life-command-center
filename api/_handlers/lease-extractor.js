@@ -25,7 +25,7 @@ import { createRequire } from 'module';
 import { isReportedField } from '../_shared/extraction-field-policy.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
-import { ocrPdfToTextTiered } from '../_shared/document-text.js';
+import { ocrPdfToTextTiered, meaningfulTextLen, DOC_TEXT_MIN_CHARS } from '../_shared/document-text.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout, insertEntityRelationship } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
@@ -827,8 +827,12 @@ async function extractLeaseFromText(text) {
  * layer, it never changes the extractor. `ocrConfidence` (0-100) is recorded so
  * a low-confidence transcription can be flagged for review.
  */
-export async function runLeaseExtraction({ storageRef, mediaType = 'application/pdf', raw = null, fetchImpl, ocrText = null, ocrConfidence = null } = {}) {
+export async function runLeaseExtraction({ storageRef, mediaType = 'application/pdf', raw = null, fetchImpl, ocrText = null, ocrConfidence = null, textFromBytesImpl = null, ocrTieredImpl = null } = {}) {
   if (raw) return { normalized: normalizeLeaseExtraction(raw), source: 'raw' };
+  // Injectable for unit tests (default to the module functions) — same deps-first
+  // testability pattern as the rest of the extractor (matcher / AI / byte read-back).
+  const textFromBytes = textFromBytesImpl || leaseTextFromBytes;
+  const ocrTiered = ocrTieredImpl || ocrPdfToTextTiered;
 
   // Supplied free-OCR text path — the text layer was recovered off-box.
   if (typeof ocrText === 'string' && ocrText.trim()) {
@@ -844,7 +848,19 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
   const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
   if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
-  let text = await leaseTextFromBytes(sp.buffer, sp.contentType || mediaType);
+  let text = await textFromBytes(sp.buffer, sp.contentType || mediaType);
+  // UW#5: most scanned executed leases are NOT zero-text — they carry a thin junk
+  // text layer (a recording stamp, a page number, OCR bleed) that is well under the
+  // floor but non-empty, so `!text` is false and OCR never fires. Discard a
+  // sub-floor PDF text layer (the SAME minChars floor the deed path uses in
+  // document-text.js::extractDocumentText) so the OCR branch below runs and the
+  // junk layer NEVER reaches the lease prompt. PDF-only — docx/xlsx/text salvage
+  // paths are taken at face value (a short legitimate text doc must not be OCR'd).
+  const isPdf = /pdf/i.test(sp.contentType || mediaType || '');
+  const floor = Number(process.env.LEASE_TEXT_MIN_CHARS || DOC_TEXT_MIN_CHARS);
+  if (isPdf && text && floor > 0 && meaningfulTextLen(text) < floor) {
+    text = '';   // thin junk layer → route to OCR (never concatenated)
+  }
   // R58 Unit 3 + UW#4/UW#4b: a scanned / image-only PDF (most executed leases)
   // has no text layer — feed it through the TIERED OCR foundation (free local
   // engine first when injected, then CHEAP CLOUD — Doc AI / Azure DI Read —, then
@@ -855,7 +871,7 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   // Deploy-order-safe; disable any OCR here with LEASE_EXTRACT_OCR='false'.
   let ocrUsed = false, ocrTier = null, ocrConf = null, ocrPages = null, ocrEngine = null;
   if (!text && String(process.env.LEASE_EXTRACT_OCR || 'true').toLowerCase() !== 'false') {
-    const ocr = await ocrPdfToTextTiered({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));
+    const ocr = await ocrTiered({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));
     if (ocr.ok && ocr.text) {
       text = ocr.text.slice(0, 120000); ocrUsed = true; ocrTier = ocr.tier || 'cloud';
       ocrConf = ocr.confidence ?? null; ocrPages = ocr.pages ?? null; ocrEngine = ocr.engine || null;

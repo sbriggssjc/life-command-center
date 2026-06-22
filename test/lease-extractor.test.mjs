@@ -829,6 +829,80 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
     assert.equal(ext.needs_ocr, true);   // blank ocrText not taken; scanned no-text → needs_ocr
   });
 
+  // ── UW#5 — thin-text-layer OCR routing ──────────────────────────────────────
+  // Most scanned executed leases are NOT zero-text: they carry a sub-floor junk
+  // text layer (recording stamp / page no.) that made `!text` false so OCR never
+  // fired. runLeaseExtraction now discards a sub-floor PDF text layer (the same
+  // minChars floor the deed path uses) so the OCR branch runs and the junk never
+  // reaches the lease prompt — PDF-only.
+  const spFetch = (contentType) => async () => ({ ok: true, status: 200,
+    text: async () => JSON.stringify({ ok: true, content_base64: 'AAAA', content_type: contentType }) });
+
+  it('UW#5: thin PDF junk layer (sub-floor) is discarded → routed to OCR, junk never hits the prompt', async () => {
+    let ocrCalled = false;
+    const ext = await runLeaseExtraction({
+      storageRef: '/x/scan.pdf', fetchImpl: spFetch('application/pdf'),
+      textFromBytesImpl: async () => 'RECORDED 05/2024 PAGE 1 OF 2',   // ~22 meaningful chars < 200
+      ocrTieredImpl: async () => { ocrCalled = true; return { ok: false }; },  // OCR unavailable here
+    });
+    assert.equal(ocrCalled, true);       // the discard routed to OCR
+    assert.equal(ext.needs_ocr, true);   // OCR unavailable → graceful needs_ocr (junk NOT sent to the AI)
+  });
+
+  it('UW#5: when OCR succeeds, its text feeds the prompt (not the junk layer)', async () => {
+    let ocrCalled = false;
+    // OCR returns text → extractLeaseFromText runs → the AI (no key in test) throws.
+    // The throw at the AI (not a needs_ocr return) proves OCR text WAS used; the
+    // companion test above proves the junk layer was discarded, not sent.
+    await assert.rejects(
+      runLeaseExtraction({
+        storageRef: '/x/scan.pdf', fetchImpl: spFetch('application/pdf'),
+        textFromBytesImpl: async () => 'STAMP 12345',   // sub-floor junk
+        ocrTieredImpl: async () => { ocrCalled = true; return { ok: true, text: 'COMMENCEMENT DATE 2024-01-01 ANNUAL RENT $250,000', tier: 'cloud_cheap', engine: 'google_docai', pages: 2, confidence: 95 }; },
+      }),
+      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+    );
+    assert.equal(ocrCalled, true);
+  });
+
+  it('UW#5: a PDF text layer ABOVE the floor is used directly — OCR never called', async () => {
+    let ocrCalled = false;
+    await assert.rejects(
+      runLeaseExtraction({
+        storageRef: '/x/lease.pdf', fetchImpl: spFetch('application/pdf'),
+        textFromBytesImpl: async () => 'COMMENCEMENT DATE 2024-01-01 ANNUAL RENT $250,000 GUARANTOR DaVita Inc '.repeat(8),  // > 200 chars
+        ocrTieredImpl: async () => { ocrCalled = true; return { ok: false }; },
+      }),
+      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+    );
+    assert.equal(ocrCalled, false);   // real text → straight to the prompt, no OCR
+  });
+
+  it('UW#5: a SHORT non-PDF doc (docx/text) is NOT force-OCR\'d — taken at face value', async () => {
+    let ocrCalled = false;
+    const docxMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    await assert.rejects(
+      runLeaseExtraction({
+        storageRef: '/x/abstract.docx', mediaType: docxMime, fetchImpl: spFetch(docxMime),
+        textFromBytesImpl: async () => 'Short lease note.',   // < 200 chars but NOT a PDF
+        ocrTieredImpl: async () => { ocrCalled = true; return { ok: false }; },
+      }),
+      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+    );
+    assert.equal(ocrCalled, false);   // non-PDF short text used directly, never discarded
+  });
+
+  it('UW#5: a true zero-text PDF still routes to OCR (no regression)', async () => {
+    let ocrCalled = false;
+    const ext = await runLeaseExtraction({
+      storageRef: '/x/blank.pdf', fetchImpl: spFetch('application/pdf'),
+      textFromBytesImpl: async () => '',   // genuine no text layer
+      ocrTieredImpl: async () => { ocrCalled = true; return { ok: false }; },
+    });
+    assert.equal(ocrCalled, true);
+    assert.equal(ext.needs_ocr, true);
+  });
+
   // ── Scott's matched-but-enrich-failed bucket split (2026-06-15) ──────────────
   it('matched but NO usable lease terms → enrich_unprocessable (terminal, real reason)', async () => {
     // ensureLeaseRow fails with the deterministic reason; applyLeaseEnrichment

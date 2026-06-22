@@ -43,7 +43,7 @@ const FETCH_TIMEOUT_MS = Number(process.env.DOC_TEXT_FETCH_TIMEOUT_MS || 30000);
 // MEANINGFUL (whitespace-stripped) text is below this floor is treated as a
 // scanned page → OCR fallback / needs_ocr. Only applies to PDFs; text/* docs
 // are taken at face value. 0 disables the floor.
-const DOC_TEXT_MIN_CHARS = Number(process.env.DOC_TEXT_MIN_CHARS || 200);
+export const DOC_TEXT_MIN_CHARS = Number(process.env.DOC_TEXT_MIN_CHARS || 200);
 
 /** Whitespace-stripped length — the "meaningful char" count the OCR floor uses. */
 export function meaningfulTextLen(s) {
