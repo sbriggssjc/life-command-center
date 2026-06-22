@@ -11,7 +11,7 @@ process.env.DIA_SUPABASE_KEY = 'k';
 process.env.GOV_SUPABASE_URL = 'https://gov.test.local';
 process.env.GOV_SUPABASE_KEY = 'k';
 
-const { fetchReparseDocs, processOneReparse } = await import('../api/_handlers/document-text.js');
+const { fetchReparseDocs, processOneReparse, fetchPropagateBackfillDocs, processOnePropagateBackfill, R59_BACKFILL_MARKER } = await import('../api/_handlers/document-text.js');
 
 function makeFakeQ(canned = {}) {
   const calls = [];
@@ -77,6 +77,56 @@ describe('processOneReparse (R58b Unit 3)', () => {
     const { q, calls } = makeFakeQ({});
     const r = await processOneReparse('dialysis', { document_id: 1, property_id: null, raw_text: null }, { domainQuery: q });
     assert.equal(r.outcome, 'no_text');
+    assert.equal(calls.length, 0);
+  });
+});
+
+// ── R59b Unit 2 — retroactive propagation backfill (worker) ─────────────────
+describe('fetchPropagateBackfillDocs (R59b Unit 2)', () => {
+  it('selects deed_parsed deeds with a stored grantee, not yet backfill-marked', async () => {
+    const { q, calls } = makeFakeQ({ 'property_documents?ingestion_status=eq.deed_parsed': { value: { ok: true, data: [{ document_id: 1 }] } } });
+    const r = await fetchPropagateBackfillDocs('dialysis', { limit: 25 }, { domainQuery: q });
+    assert.equal(r.ok, true);
+    const path = calls[0].path;
+    assert.ok(path.includes('ingestion_status=eq.deed_parsed'), 'already-parsed deeds');
+    assert.ok(path.includes('document_type=ilike.*deed*'), 'deed docs only');
+    assert.ok(path.includes('extracted_data->deed_extraction->>grantee=not.is.null'), 'has a stored grantee');
+    assert.ok(path.includes(`extracted_data->>${R59_BACKFILL_MARKER}=is.null`), 'not yet backfill-marked (idempotent / drains)');
+    assert.ok(path.includes('extracted_data') && path.includes('select='), 'selects extracted_data for the stored parse');
+  });
+});
+
+describe('processOnePropagateBackfill (R59b Unit 2)', () => {
+  const STORED = {
+    extracted_data: { deed_extraction: { grantee: 'Deltona Wellness, LP', grantor: 'Oldsmar Retail Development LLC', recording_date: '01/21/2020', implied_sale_price: 13333400 } },
+  };
+
+  it('runs R59 propagation over the STORED extraction (no re-parse) + stamps the idempotency marker', async () => {
+    const events = [];
+    const propagateStoredDeedExtraction = async (args) => { events.push(args); return { saleBuyerFilled: true, saleSellerFilled: true, ownershipEventAppended: true }; };
+    const { q, calls } = makeFakeQ({});
+    const row = { document_id: 3964, property_id: 24703, ...STORED };
+    const r = await processOnePropagateBackfill('dialysis', row, { domainQuery: q, propagateStoredDeedExtraction });
+    assert.equal(r.outcome, 'propagated');
+    assert.equal(r.sale_parties_filled, true);
+    assert.equal(r.ownership_event, true);
+    // Read the stored parse, never re-parsed.
+    assert.equal(events[0].parsed.grantee, 'Deltona Wellness, LP');
+    assert.equal(events[0].propertyId, 24703);
+    // Stamps the idempotency marker (merged into existing extracted_data) so the row drops out.
+    const mark = calls.find(c => c.method === 'PATCH' && c.path.startsWith('property_documents?document_id=eq.3964'));
+    assert.ok(mark, 'PATCHes the backfill marker');
+    assert.ok(mark.body.extracted_data[R59_BACKFILL_MARKER], 'sets the marker');
+    assert.equal(mark.body.extracted_data.deed_extraction.grantee, 'Deltona Wellness, LP', 'preserves existing extracted_data');
+  });
+
+  it('a row without a stored grantee → skipped, no propagation, no marker', async () => {
+    const events = [];
+    const propagateStoredDeedExtraction = async (args) => { events.push(args); return {}; };
+    const { q, calls } = makeFakeQ({});
+    const r = await processOnePropagateBackfill('dialysis', { document_id: 5, property_id: 9, extracted_data: { deed_extraction: { grantor: 'X' } } }, { domainQuery: q, propagateStoredDeedExtraction });
+    assert.equal(r.outcome, 'skipped');
+    assert.equal(events.length, 0);
     assert.equal(calls.length, 0);
   });
 });

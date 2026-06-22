@@ -138,12 +138,21 @@ export function parseDeedText(text, opts = {}) {
     /the\s+undersigned\s+grantor\(s\):?\s*\n?\s*(.+?)(?:\n\s*\n|\s+hereby)/is,
   ];
 
+  // R59b — every path now returns a CLEANED + VALIDATED name (or null) so the
+  // `||` chain falls through to the next path instead of latching onto garbage
+  // (a form-field label / legal-description blob / OCR-bleed tail). The labeled
+  // cover-page path (R58b) wins; then the narrative parenthetical; then the
+  // scanned "from <X> to <Y>" form (R59b); then the legacy "GRANTS to …" body —
+  // the legacy candidate is run through the same clean+validate gate so it can
+  // no longer emit a qualifier/junk tail (the doc-1948 bug).
   data.grantee = extractLabeledParty(text, 'Grantee')
               || extractNarrativeParty(text, 'Grantee')
-              || firstPatternMatch(text, legacyGranteePatterns);
+              || extractFromToParty(text, 'Grantee')
+              || cleanAndValidateParty(firstPatternMatch(text, legacyGranteePatterns));
   data.grantor = extractLabeledParty(text, 'Grantor')
               || extractNarrativeParty(text, 'Grantor')
-              || firstPatternMatch(text, legacyGrantorPatterns);
+              || extractFromToParty(text, 'Grantor')
+              || cleanAndValidateParty(firstPatternMatch(text, legacyGrantorPatterns));
 
   // ── APN / Parcel ID ──────────────────────────────────────────────────
   const apnPatterns = [
@@ -648,6 +657,39 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
   return result;
 }
 
+/**
+ * R59b Unit 2 — run ONLY the R59 BD-spine propagation (Step 5 cross-reference +
+ * Step 6 `propagateDeedToBd`) over an ALREADY-PARSED deed's stored extraction.
+ *
+ * This is the one-time retroactive backfill entrypoint: deeds parsed BEFORE R59
+ * shipped have their `latest_deed_grantee` set + the R58c terminal marker, so the
+ * re-parse queue skips them and Step 6 never ran — their matching sale stays
+ * NULL-party and ownership_history stays empty. This reuses the EXACT R59 Step 6
+ * entrypoint (same fill-blanks / append-only / guards / idempotency), reading the
+ * stored `parsed` object — it does NOT re-parse (no regex/OCR) and does NOT
+ * re-write extracted_data / deed_records. Gated on the same optional deps, so
+ * with none injected it is a pure no-op.
+ *
+ * @param {object} args - { domain, propertyId, documentId, parsed }
+ *   parsed = the stored property_documents.extracted_data.deed_extraction object.
+ * @param {object} [deps] - same dep set as processDeedDocument's Step 5/6.
+ * @returns {object} the R59 effect flags + the crossRef.
+ */
+export async function propagateStoredDeedExtraction({ domain, propertyId, documentId, parsed }, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const result = {
+    crossRef: null,
+    saleBuyerFilled: false, saleSellerFilled: false, ownershipEventAppended: false,
+    suspectedSaleSurfaced: false, granteeEntityId: null, ownsEdgeCreated: false,
+    traceGranteeTaskSurfaced: false,
+  };
+  if (!parsed || propertyId == null || !parsed.grantee) return result;
+  result.crossRef = await crossReferenceDeed(domain, propertyId, parsed, deps);
+  await propagateDeedToBd({ domain, propertyId, documentId, parsed, crossRef: result.crossRef }, q, deps, result)
+    .catch((e) => { result.bdError = e?.message || String(e); });
+  return result;
+}
+
 // ── R59 per-domain wiring ────────────────────────────────────────────────────
 // sales_transactions party columns DIFFER by domain (dia buyer_name/seller_name;
 // gov buyer/seller). ownership_history schemas DIFFER too (dia ownership_start /
@@ -848,13 +890,95 @@ async function propagateDeedToBd({ domain, propertyId, documentId, parsed, cross
  * Conservative grantee guard for the R51 feed — must contain a letter and be
  * substantive (>= 4 alphanumerics). Keeps the broker/federal anti-patterns the
  * R51 view already filters from polluting latest_deed_grantee at the source.
+ *
+ * R59b — also rejects the OCR garbage shapes a scanned grant deed produces: a
+ * form-field instruction label, a legal-description blob, an over-long sentence/
+ * clause. A name that survives this is still re-checked downstream by
+ * granteePassesOwnerGuards (broker/federal/junk) before any BD write.
  */
 function granteeIsPlausible(name) {
   if (!name || typeof name !== 'string') return false;
   if (!/[A-Za-z]/.test(name)) return false;
   if (name.replace(/[^A-Za-z0-9]/g, '').length < 4) return false;
   if (/^\s*(u\s?\.?\s?s\s?\.?\s?a|united states|gsa|government|federal|n\.?\/?a|unknown|none|tbd)\b/i.test(name)) return false;
+  if (isFormBoilerplateOrLegalDescription(name)) return false;
   return true;
+}
+
+/**
+ * R59b — reject a candidate party that is actually a county-form instruction
+ * label or a legal-description span (OCR latches onto these on scanned deeds),
+ * or is simply too long / sentence-shaped to be an entity name.
+ *   doc 1896: "name, mailing address, and, if appropriate, character of entity, e.g."
+ *   doc 1935: "…POINT OF BEGINNING… metes and bounds…" (~600 chars)
+ * A real grantee/grantor name is short and has few internal commas, so this is
+ * conservative — "Deltona Wellness, LP" / "ABC Holdings, LLC" all pass.
+ */
+function isFormBoilerplateOrLegalDescription(name) {
+  if (!name) return false;
+  const n = String(name);
+  // Too long to be an entity name — OCR grabbed a clause / legal-description blob.
+  if (n.length > 80) return true;
+  // County-form instruction boilerplate (the parenthetical that follows a label).
+  if (/\b(mailing\s+address|character\s+of\s+entity|e\.\s?g\.|i\.\s?e\.|if\s+appropriate|space\s+above\s+(?:this|reserved|for)|for\s+recorder|documentary\s+transfer\s+tax|return\s+to)\b/i.test(n)) return true;
+  // Legal-description markers.
+  if (/\b(point\s+of\s+beginning|metes\s+and\s+bounds|more\s+particularly\s+described|deed\s+book|page\s+\d|\bthence\b|book\s+\d+\s+page|section\s+\d+,?\s+township|together\s+with\s+all)\b/i.test(n)) return true;
+  // Compass bearings in a legal description: "North 45°", "S 12 deg".
+  if (/\b[NS]\s*\d{1,2}\s*(?:°|deg\b|degrees\b)/i.test(n)) return true;
+  // Sentence/clause shape — a real party name rarely carries 4+ commas/semicolons.
+  if ((n.match(/[,;]/g) || []).length >= 4) return true;
+  return false;
+}
+
+/**
+ * R59b — single clean+validate gate every extraction path runs its raw candidate
+ * through. Reuses the R58c qualifier-stripping (`leadingEntityName`), then trims
+ * an OCR-bleed tail, then validates. Returns a clean name or null (so the caller's
+ * `||` fallback chain continues instead of latching onto junk).
+ */
+function cleanAndValidateParty(raw) {
+  if (!raw) return null;
+  let n = leadingEntityName(raw);          // R58c qualifier / a-k-a / address strip
+  n = trimTrailingOcrNoise(n);             // R59b OCR-bleed tail
+  if (!n) return null;
+  return granteeIsPlausible(n) ? n : null; // form / legal-desc / length / federal guard
+}
+
+/**
+ * R59b — trim an OCR-bleed tail off an otherwise-good name. Two shapes:
+ *  (a) a no-comma entity-type clause the comma-anchored `leadingEntityName` missed
+ *      — "LA MIRADA INVESTMENT LLC A CALIFORNIA LIMITED LIABILITY COMPANY Area"
+ *  (b) a single dangling capitalized stray token after a firm suffix
+ *      — "… LIMITED LIABILITY COMPANY Area" / "FOO LLC Area" → drop "Area".
+ */
+function trimTrailingOcrNoise(name) {
+  if (!name) return name;
+  let n = String(name);
+  // (a) no-comma "[,]? a <state/words> limited liability company/corporation/…" clause.
+  n = n.replace(
+    /\s*,?\s+an?\s+(?:[A-Za-z]+\s+){0,3}(?:limited\s+liability\s+company|limited\s+(?:liability\s+)?partnership|general\s+partnership|professional\s+(?:corporation|association)|corporation|company)\b.*$/i,
+    ''
+  );
+  // (b) a lone trailing capitalized stray token right after a firm suffix.
+  n = n.replace(
+    /\b(LLC|L\.L\.C\.?|LP|L\.P\.?|LLP|INC|CORP|CORPORATION|CO|TRUST|HOLDINGS|PARTNERS|COMPANY)\.?\s+[A-Z][a-z]+\s*$/,
+    '$1'
+  );
+  return cleanEntityName(n);
+}
+
+/**
+ * R59b — scanned-deed fallback: the "THIS [SPECIAL WARRANTY] DEED … from <Grantor>
+ * to <Grantee>" recital form (parties named without the `(the "Grantor")` marker
+ * that OCR frequently drops). Validated like every other path.
+ */
+function extractFromToParty(text, which) {
+  if (!text) return null;
+  const m = text.match(
+    /\bdeed\b[^.]{0,160}?\bfrom\s+(.+?)\s+\bto\s+(.+?)(?:[,.]|\s+(?:dated|whose|the\s+following|all\s+that|that\s+certain|for\s+(?:and|valuable|the)|its\s+successors|in\s+consideration)|[\r\n]|$)/is
+  );
+  if (!m) return null;
+  return cleanAndValidateParty(which === 'Grantor' ? m[1] : m[2]);
 }
 
 // ============================================================================
@@ -880,8 +1004,11 @@ function extractLabeledParty(text, which) {
   );
   const m = text.match(re);
   if (!m) return null;
-  const name = cleanEntityName(m[1]);
-  return name && /[A-Za-z]/.test(name) ? name : null;
+  // R59b — validate the labeled value (a scanned grant-deed form puts a
+  // parenthetical instruction after the label, e.g. "Grantee (name, mailing
+  // address, …, e.g. …)"). An invalid value returns null so the caller falls
+  // through to the narrative / from-to / legacy paths.
+  return cleanAndValidateParty(m[1]);
 }
 
 /**
@@ -931,9 +1058,9 @@ function extractNarrativeParty(text, which) {
   if (span == null) return null;
 
   // 3. Leading entity name = everything before the first qualifier delimiter,
-  //    then validate with the same plausibility guard the R51 feed uses.
-  const name = leadingEntityName(span);
-  return name && /[A-Za-z]/.test(name) && granteeIsPlausible(name) ? name : null;
+  //    then validate via the shared R59b clean+validate gate (qualifier strip +
+  //    OCR-tail trim + the plausibility / form-label / legal-desc guard).
+  return cleanAndValidateParty(span);
 }
 
 /** Text after the LAST match of a global `re` in `s`, or null when none match. */
