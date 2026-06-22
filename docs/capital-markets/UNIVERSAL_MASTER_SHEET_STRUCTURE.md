@@ -7,7 +7,12 @@
 > new sheets and the generator follow it.
 
 ## The canonical workbook (the "Terms" template)
-**Core sheets (every deal):** `Terms` → `Rent` → `Pro Forma` → `Amort`.
+**Core sheets (every deal):** `Terms` → `Rent` → `Pro Forma` → `Amort` (multi-tenant inserts a
+`Rent Roll` sheet between `Rent` and `Pro Forma` → **`Terms` → `Rent` → `Rent Roll` → `Pro Forma` →
+`Amort`**). **Verified reference implementation (2026-06-22):** `DaVita Anchored - Danville, IL
+(Master Sheet).xlsx` (live comp) and `docs/capital-markets/master_sheet_reference_build.py` (the Valley rebuild). The Terms
+Exec Summary section is identical to the OM's Executive Summary (same fields + hero Offering Price /
+Cap / NOI), so one block feeds both BOV and OM.
 Everything is **formula-driven** (live calcs + cross-sheet references), NOT hardcoded — this is the
 single biggest difference from the early Valley sheet.
 
@@ -61,6 +66,53 @@ Guaranty Type** · **Credit rating (S&P/Moody's)** · Lease Structure · **NNN r
 (Taxes/Ins/CAM/R&M)** · Commencement · Expiration · Initial Term · Term Remaining · Escalations
 (standardized: monthly step → annual % ) · Renewal Options · ROFR/ROFO · Annual Rent · $/RSF · Pricing
 (Ask/Trade × cap).
+
+## Role-based cell-style system (the design standard — from the Northridge reference, 2026-06-22)
+Quality comes from styling every cell by its ROLE, applied uniformly — not ad-hoc color/bold. The
+locked standard (Scott, "navy + Northridge restraint"):
+
+| Role | Style |
+|---|---|
+| **Title bar** (rows 1–2) | NM Navy `#003DA5` fill, white Calibri Light 15 / Calibri 10 |
+| **Section header** (REAL ESTATE, LEASE ABSTRACT, EXECUTIVE SUMMARY, REVENUE:, EXPENSES:, NET OPERATING INCOME:) | **Bold navy text, NO fill**, ALL-CAPS, navy bottom-border across the content width |
+| **Sub-section** (Cash Investment Outcomes, Leveraged Investment Outcomes, Acquisition/Financing/Disposition Assumptions, Cash Flow After Debt Service) | Bold navy text, Title Case, no fill |
+| **Column header** (table head rows: Rent Roll, Rent, Pro Forma year row, Amort, the Lease-Abstract tenant row) | **Navy `#003DA5` fill, white bold, centered**, thin border |
+| **Total / subtotal row** (Scheduled Base Rent, Gross Revenue, Total Operating Expenses, NET OPERATING INCOME, TOTAL, Total Debt Service) | **Pale-blue `#E0E8F4` fill, bold navy text** |
+| **Field label** | Calibri 9–10, muted `#666666`, left |
+| **Value** | Calibri 9–10, `#191919`; right (numbers) / left (text) |
+| **Input / assumption cell** (editable: cap rates, growth %, LTV, interest, exit cap, ask price) | **Peach `#FFF2CC` fill** — signals "editable input" |
+| **Renewal-period rent** | Gold `#FCEFC8` fill |
+| **Note / footnote** | Calibri 8, italic, muted |
+
+Consistency rules: ALL-CAPS for major sections + bottom-line totals; Title Case for sub-sections;
+bold ONLY on section headers, totals, and key metrics (NOI, IRR, equity multiple, pricing). Anchor
+every section to the same left column (labels in B, values in C+) so titles align with their columns.
+Reference implementation: `docs/capital-markets/master_sheet_reference_build.py`; live comp: Northridge - Grand Prairie, TX.
+
+## Pro Forma section order (canonical, from Northridge — top to bottom)
+**REVENUE:** (per-tenant rows → Scheduled Base Rent → Vacancy & Credit Loss → Gross Revenue) →
+**EXPENSES:** (line items → Total Operating Expenses → Capital Reserves) → **NET OPERATING INCOME:**
+→ RENTAL INCREASES: → **Cash Investment Outcomes** (Equity, Disposition, Net Cash Flows, Cap Rate,
+Cumulative Return, Average Cap Rate, Equity Realization Multiple, IRR — unleveraged) → **Cash Flow
+After Debt Service** (Principal, Interest, Total Debt Service, CFADS, Cumulative Equity Build-Up,
+Leverage) → **Leveraged Investment Outcomes** (Equity, Disposition, Net Cash Flow, Cash-on-Cash,
+Cumulative Return, Avg CoC, Equity Multiple, IRR) → **Acquisition / Financing / Disposition
+Assumptions** (at the bottom, peach inputs) → Amort schedule feeds debt service via SUMIFS.
+
+## Branding spec — exact tokens (apply on every sheet; the generator must enforce)
+The early-AI Valley sheet was off-brand (Arial; a generic dark blue `1F3864`; a **purple** flags
+header `7B2D8B`; **red-on-yellow** alarm cells). The Northmarq standard, from
+`public/reports/cm_brand_tokens.json`:
+- **Font:** Calibri everywhere (Calibri Light/600 acceptable for titles). **Never Arial** in a
+  client-facing sheet.
+- **Section/title headers:** fill **NM Navy `#003DA5`**, white **bold** Calibri. (Replace any
+  `1F3864`/`001159`/`7B2D8B`/other dark or accent header fill with `003DA5`.)
+- **Body:** `#191919` Calibri on white; optional zebra = NM Pale `#E0E8F4`. Light accents
+  (sky `#62B5E5`) for contracted-rent emphasis only.
+- **No alarm styling.** Internal QA/verification cells use clean Calibri on white — never
+  red-on-yellow or purple. (Status is conveyed by the ✓/OPEN text, not by garish fills.)
+- **Re-brand path:** to migrate an early-AI sheet, remap fonts→Calibri and the fill/color palette to
+  the tokens above (a pure restyle that preserves all data + formulas). Applied to Valley 2026-06-22.
 
 ## Conventions (apply on every sheet)
 - **Formula-driven** (land SF, parking ratio, term remaining, pricing, cross-sheet rent) — not

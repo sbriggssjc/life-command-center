@@ -39,6 +39,55 @@ library IS the generator's configuration — improving the docs improves the out
 ---
 # PATTERN_LOG (append-only; newest first)
 
+### 2026-06-22 — Valley MOB — production-quality pass (Northridge style system integrated)
+- **Design standard (promoted):** adopted a **role-based cell-style system** from the Northridge -
+  Grand Prairie reference — every cell styled by ROLE (section header / sub-section / column header /
+  total / label / value / input / note), applied uniformly. Locked palette = "navy + Northridge
+  restraint" (Scott): bold-navy section headers (no fill), navy `#003DA5` column-headers + title,
+  pale-blue `#E0E8F4` totals, **peach `#FFF2CC` input cells** for editable assumptions, gold renewal
+  rents. → new "Role-based cell-style system" section in UNIVERSAL_MASTER_SHEET_STRUCTURE.
+- **Pro Forma order (promoted, was incomplete):** the canonical ladder is REVENUE → EXPENSES → NOI →
+  **Cash Investment Outcomes** (unlevered returns) → **Cash Flow After Debt Service** → **Leveraged
+  Investment Outcomes** → Acquisition/Financing/Disposition **assumptions at the bottom** (peach),
+  Amort feeding debt service via SUMIFS. The prior Valley rebuild stopped at NOI+valuation and was
+  missing the two returns ladders. → structure spec.
+- **Consistency rules (promoted):** ALL-CAPS major sections + bottom-line totals; Title Case
+  sub-sections; bold only on headers/totals/key metrics; anchor every section to column B so titles
+  align with their columns (fixes the "columns don't align with section titles" defect).
+- **Verified:** unlevered IRR 9.48% / 2.03x equity multiple, levered IRR 13.67% / 2.86x (ties the
+  prior Valley analysis); 0 formula errors; peach inputs + navy headers consistent; reference
+  generator persisted at `docs/capital-markets/master_sheet_reference_build.py`.
+
+### 2026-06-22 — Valley MOB — full canonical rebuild (verified against a live comp)
+- **Reference implementation (promoted):** grounded the canonical structure against a live comp —
+  `DaVita Anchored - Danville, IL (Master Sheet).xlsx` (multi-tenant MOB, Valley's twin) + its OM
+  (`DaVitaMT_Danville_IL_OM_SB.pdf`). Confirmed the **5-sheet order: Terms → Rent → Rent Roll →
+  Pro Forma → Amort** (Rent Roll is its own sheet for multi-tenant). Rebuilt Valley to this exactly,
+  formula-driven, Northmarq-branded; verified in LibreOffice (0 formula errors; NOI $103,841 ties
+  Pro Forma↔Rent Roll; Ask 7.75% → $1.34M; WALT 2.88 yr; amort pays down correctly).
+- **Confirmed: the Terms Exec Summary == the OM Executive Summary** (identical field set + hero
+  Offering Price / Cap / NOI). So one Terms block feeds both the BOV and the OM. → structure spec.
+- **Pricing matrix (promoted):** Terms carries the proposal — **Ask** (one cap) + **Trade range**
+  (2 wider caps), every cell `= in-place NOI ÷ cap`, $/SF `= price ÷ RBA`. Mirrors the OM hero band.
+- **Pro Forma section ladder (promoted, the canonical order):** Revenue (per tenant) → Vacancy →
+  EGI → Expenses (Taxes/Ins/CAM/Lawn/HVAC/R&M) → NOI → Valuation Matrix → Cash Investment Outcomes
+  (unlevered: equity, cap rate, equity-multiple, IRR) → Cash Flow After Debt Service → Leveraged
+  Outcomes (cash-on-cash, total return, IRR) → Acquisition/Financing/Disposition Assumptions →
+  Amort schedule (PMT-driven). → structure spec.
+- **Lease Abstract = per-tenant COLUMNS** (one column per tenant on Terms), occupancy/$ figures
+  formula-driven off SF + Rent Roll. → structure spec.
+- **Build artifact:** `docs/capital-markets/master_sheet_reference_build.py` is the reference generator for this structure —
+  hand it to the PR #7313 generator as the worked example.
+
+### 2026-06-22 — Valley MOB — branding refinement (client-flagged)
+- **Branding/layout refinement (promoted):** the early-AI Valley sheet was off-brand — **Arial**
+  font, generic dark-blue header `1F3864`, **purple** flags header `7B2D8B`, **red-on-yellow** alarm
+  cells. Re-branded to the Northmarq tokens: Calibri throughout, NM Navy `#003DA5` headers (white
+  bold), clean white/`191919` body, no alarm styling. → added an explicit **Branding spec** section
+  to UNIVERSAL_MASTER_SHEET_STRUCTURE; the generator (PR #7313) must emit this palette and offer a
+  re-brand path for early-AI sheets. Rule: **never Arial / no `1F3864` / no purple / no red-yellow**
+  in a client-facing sheet.
+
 ### 2026-06-22 — Valley MOB (Multi/Valley MOB - Roanoke, AL) — first structured pass
 - **Field (promoted):** `Ownership Interest` is mandatory + field #1 — confirmed standard across
   every sampled sheet; marketing flagged its absence. → in dictionary.
