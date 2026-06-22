@@ -342,7 +342,7 @@ export async function crossReferenceDeed(domain, propertyId, parsed, deps = {}) 
         field: 'sale_price', deed_value: impliedPrice, db_value: priceMatch.sold_price,
         db_record: 'sales_transactions', db_id: priceMatch[salePk],
       });
-      report.saleCandidate = { sale_id: priceMatch[salePk], sold_price: priceMatch.sold_price, implied_price: impliedPrice };
+      report.saleCandidate = { sale_id: priceMatch[salePk], sold_price: priceMatch.sold_price, sale_date: priceMatch.sale_date || null, implied_price: impliedPrice, price_matched: true };
     } else if (sales.length) {
       report.mismatches.push({
         field: 'sale_price', deed_value: impliedPrice,
@@ -354,7 +354,7 @@ export async function crossReferenceDeed(domain, propertyId, parsed, deps = {}) 
   // matched (e.g. the sale has a NULL price — the implied price can fill it).
   if (!report.saleCandidate && sales.length) {
     const s = sales[0];
-    report.saleCandidate = { sale_id: s[salePk], sold_price: s.sold_price ?? null, implied_price: impliedPrice };
+    report.saleCandidate = { sale_id: s[salePk], sold_price: s.sold_price ?? null, sale_date: s.sale_date || null, implied_price: impliedPrice, price_matched: false };
   }
 
   // ── 2. grantee vs the property's recorded owner ──────────────────────
@@ -447,6 +447,15 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
     upgradedTransactions: 0,
     r51Fed: false,
     impliedPriceFilled: false,
+    // R59 — propagation into the BD spine (all gated on the optional deps below;
+    // absent deps ⇒ exact pre-R59 behavior, so the R58 tests stay byte-identical).
+    saleBuyerFilled: false,
+    saleSellerFilled: false,
+    ownershipEventAppended: false,
+    suspectedSaleSurfaced: false,
+    granteeEntityId: null,
+    ownsEdgeCreated: false,
+    traceGranteeTaskSurfaced: false,
   };
 
   // Step 1: Parse
@@ -629,7 +638,210 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
     result.impliedPriceFilled = !!upd.ok;
   }
 
+  // Step 6 (R59): propagate the extracted deed into the BD spine — fill the sale's
+  // parties, append the ownership_history event, surface an unrecorded transfer,
+  // enter the grantee into the entity graph, and prompt the ambiguous cases. All
+  // additive / fill-blanks / append-only / gated on the optional deps.
+  await propagateDeedToBd({ domain, propertyId, documentId, parsed, crossRef: result.crossRef }, q, deps, result)
+    .catch((e) => { result.bdError = e?.message || String(e); });
+
   return result;
+}
+
+// ── R59 per-domain wiring ────────────────────────────────────────────────────
+// sales_transactions party columns DIFFER by domain (dia buyer_name/seller_name;
+// gov buyer/seller). ownership_history schemas DIFFER too (dia ownership_start /
+// sold_price / acquisition_method; gov transfer_date / change_type / data_source,
+// uuid sale ids). Both grounded live 2026-06-22.
+const DEED_BD_SALE_COLS = {
+  government: { buyer: 'buyer', seller: 'seller' },
+  dialysis:  { buyer: 'buyer_name', seller: 'seller_name' },
+};
+// A deed recording date within this window of a sale's date is the SAME
+// transaction even when the deed's consideration differs from the recorded price
+// by more than the 2% price-match tolerance (closing-cost / doc-stamp rounding —
+// the 24703 example: deed $13.33M vs sale $13.70M = 2.7%, but 5 days apart).
+const DEED_SALE_PROXIMITY_DAYS = 548; // ~18 months
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function stripNullsLocal(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) if (v !== null && v !== undefined) out[k] = v;
+  return out;
+}
+
+/**
+ * R59 Units 1-4 — propagate a parsed+matched deed into the BD spine.
+ * Every effect is gated on its dep being present (so a caller that injects only
+ * `domainQuery`, like the R58 tests, gets exact pre-R59 behavior). Best-effort:
+ * a failure on any sub-step is recorded but never blocks the others.
+ *
+ * Optional deps:
+ *   granteePassesOwnerGuards(name)            — R51 owner guard (broker/federal/junk)
+ *   resolveRecordedOwner(domain, name)        — resolve/create recorded_owner → id
+ *   ensureEntityLink(args)                    — mint/resolve an LCC entity (guards)
+ *   insertEntityRelationship(row)             — entity_relationships POST (owns edge)
+ *   opsQuery(method, path, body)              — LCC Opps query (edge dupe-guard)
+ *   openResearchTask(args)                    — idempotent research_tasks producer
+ *   resolveBuyerParent(entityId)              — lcc_resolve_buyer_parent (R5/R6)
+ *   workspaceId / userId                      — optional context for the mint
+ */
+async function propagateDeedToBd({ domain, propertyId, documentId, parsed, crossRef }, q, deps, result) {
+  if (!parsed || propertyId == null) return;
+  const short = domain === 'government' ? 'gov' : 'dia';
+  const passes = deps.granteePassesOwnerGuards || null;
+  const recDate = parseRecordingDate(parsed.recording_date);
+  const grantee = parsed.grantee || null;
+  const grantor = parsed.grantor || null;
+  const price = parsed.implied_sale_price || parsed.stated_consideration || null;
+
+  // Resolve "the deed's sale" — the price-matched sale, or a date-proximate
+  // fallback (same transaction, looser price). Null = no sale corresponds.
+  const cand = crossRef?.saleCandidate || null;
+  let confidentSale = null;
+  if (cand && cand.sale_id != null) {
+    if (cand.price_matched) {
+      confidentSale = cand;
+    } else if (recDate && cand.sale_date) {
+      const days = Math.abs((new Date(recDate) - new Date(cand.sale_date)) / 86400000);
+      if (Number.isFinite(days) && days <= DEED_SALE_PROXIMITY_DAYS) confidentSale = cand;
+    }
+  }
+
+  // ── Unit 1(a): fill the confident sale's parties (fill-blanks, per-domain) ──
+  if (confidentSale && passes) {
+    const cols = DEED_BD_SALE_COLS[domain] || DEED_BD_SALE_COLS.dialysis;
+    const sid = encodeURIComponent(String(confidentSale.sale_id));
+    if (grantee && passes(grantee)) {
+      const up = await q(domain, 'PATCH',
+        `sales_transactions?sale_id=eq.${sid}&${cols.buyer}=is.null`,
+        { [cols.buyer]: grantee }, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+      if (up && up.ok) result.saleBuyerFilled = true;
+    }
+    if (grantor && passes(grantor)) {
+      const up = await q(domain, 'PATCH',
+        `sales_transactions?sale_id=eq.${sid}&${cols.seller}=is.null`,
+        { [cols.seller]: grantor }, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+      if (up && up.ok) result.saleSellerFilled = true;
+    }
+  }
+
+  // ── Unit 1(b): append the ownership_history event (recorded deed = transfer) ──
+  let granteeOwnerId = null;
+  if (grantee && passes && passes(grantee) && deps.resolveRecordedOwner && recDate) {
+    granteeOwnerId = await deps.resolveRecordedOwner(domain, grantee).catch(() => null);
+    if (granteeOwnerId) {
+      const dateCol = domain === 'government' ? 'transfer_date' : 'ownership_start';
+      const pkCol = domain === 'government' ? 'ownership_id' : 'id';
+      const dq = await q(domain, 'GET',
+        `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${encodeURIComponent(granteeOwnerId)}` +
+        `&${dateCol}=eq.${recDate}&select=${pkCol}&limit=1`).catch(() => ({ ok: false }));
+      const exists = dq && dq.ok && Array.isArray(dq.data) && dq.data.length > 0;
+      if (!exists) {
+        // sale_id is uuid on gov / int on dia — only link when the matched sale's
+        // PK fits the domain's column type (never coerce a mismatched type).
+        const saleIdGov = confidentSale && UUID_RE.test(String(confidentSale.sale_id)) ? confidentSale.sale_id : null;
+        const saleIdDia = confidentSale && /^\d+$/.test(String(confidentSale.sale_id)) ? Number(confidentSale.sale_id) : null;
+        const row = domain === 'government'
+          ? stripNullsLocal({
+              property_id: propertyId, recorded_owner_id: granteeOwnerId,
+              recorded_owner_name: grantee, new_owner: grantee, prior_owner: grantor,
+              transfer_date: recDate, transfer_price: price, sale_price: price,
+              sale_id: saleIdGov, matched_sale_id: saleIdGov,
+              change_type: 'deed', data_source: 'deed_extraction', ownership_state: 'active',
+            })
+          : stripNullsLocal({
+              property_id: propertyId, recorded_owner_id: granteeOwnerId,
+              ownership_start: recDate, sold_price: price, sale_id: saleIdDia,
+              acquisition_method: 'deed', ownership_source: 'deed_extraction',
+              ownership_state: 'active', notes: `Recorded deed grantee (doc ${documentId})`,
+            });
+        const ins = await q(domain, 'POST', 'ownership_history', row, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+        if (ins && ins.ok) result.ownershipEventAppended = true;
+      }
+    }
+  }
+
+  // ── Unit 2: a transfer with consideration but NO matching sale → research task.
+  // NOTE: gov owner-conflicting deeds ALSO surface in the R53 v_suspected_sale
+  // lane via the Step-4 R51 latest_deed_grantee feed (that lane reads the view,
+  // not seeded decisions). This research task is the universally-VISIBLE producer
+  // for both domains (a deed with consideration but no sale row), idempotent on
+  // (research_type, property_id). We never write a sales row — a suspected sale is
+  // a LEAD, confirmed only with an operator-supplied price.
+  if (!confidentSale && recDate && Number(price) > 0 && grantee && passes && passes(grantee) && deps.openResearchTask) {
+    const rt = await deps.openResearchTask({
+      researchType: 'confirm_deed_transfer_sale', domain: short, propertyId,
+      sourceTable: 'deed_extraction',
+      title: `Confirm unrecorded sale: ${grantor || '?'} → ${grantee} (${recDate})`,
+      instructions: `A recorded deed shows a transfer with consideration ($${price}) recorded ${recDate} ` +
+        `but no matching sales_transactions row was found. Confirm the sale (operator price) or mark not-a-sale. Deed doc ${documentId}.`,
+      metadata: { document_id: documentId, suspected_grantor: grantor, suspected_grantee: grantee,
+        suspected_sale_date: recDate, suspected_price: price, price_source: parsed.price_source || null },
+    }).catch(() => null);
+    if (rt && rt.ok) result.suspectedSaleSurfaced = true;
+  }
+
+  // ── Unit 3: grantee → BD entity + owns edge (best-effort; NEVER an opportunity —
+  // the R5 gate forbids a prospect opp for a buyer SPE and we open none). ────────
+  if (grantee && passes && passes(grantee) && deps.ensureEntityLink) {
+    const ent = await deps.ensureEntityLink({
+      workspaceId: deps.workspaceId || null, userId: deps.userId || null,
+      domain: short, sourceType: 'true_owner',
+      seedFields: { name: grantee, metadata: { source: 'deed_extraction', property_id: String(propertyId), document_id: documentId } },
+    }).catch(() => null);
+    const ownerEntityId = ent && ent.ok ? (ent.entityId || ent.entity_id || null) : null;
+    if (ownerEntityId) {
+      result.granteeEntityId = ownerEntityId;
+      // owns edge owner→asset: resolve the asset entity by its external identity
+      // (resolveOnly — never invents an asset). owner=from, asset=to (R10/R17).
+      if (deps.insertEntityRelationship) {
+        const asset = await deps.ensureEntityLink({
+          sourceSystem: short, sourceType: 'asset', externalId: String(propertyId),
+          domain: short, resolveOnly: true,
+        }).catch(() => null);
+        const assetEntityId = asset && asset.ok ? (asset.entityId || asset.entity_id || null) : null;
+        if (assetEntityId && String(assetEntityId) !== String(ownerEntityId)) {
+          let edgeExists = false;
+          if (deps.opsQuery) {
+            const ex = await deps.opsQuery('GET',
+              `entity_relationships?from_entity_id=eq.${encodeURIComponent(ownerEntityId)}` +
+              `&to_entity_id=eq.${encodeURIComponent(assetEntityId)}` +
+              `&relationship_type=eq.owns&select=id&limit=1`).catch(() => ({ ok: false }));
+            edgeExists = ex && ex.ok && Array.isArray(ex.data) && ex.data.length > 0;
+          }
+          if (!edgeExists) {
+            const er = await deps.insertEntityRelationship({
+              from_entity_id: ownerEntityId, to_entity_id: assetEntityId,
+              relationship_type: 'owns',
+              metadata: { source: 'deed_extraction', document_id: documentId },
+            }).catch(() => ({ ok: false }));
+            if (er && er.ok) result.ownsEdgeCreated = true;
+          }
+        }
+      }
+
+      // ── Unit 4 (deed): a private-LLC grantee that does NOT resolve to a known
+      // parent → a trace-to-developer research task (idempotent on property). ──
+      if (deps.resolveBuyerParent && deps.openResearchTask && /\b(llc|l\.?l\.?c|lp|l\.?p|llp)\b/i.test(grantee)) {
+        const pr = await deps.resolveBuyerParent(ownerEntityId).catch(() => null);
+        const parentId = pr && pr.ok && Array.isArray(pr.data) && pr.data[0]
+          ? pr.data[0].parent_entity_id
+          : (pr && pr.parent_entity_id) || null;
+        if (!parentId) {
+          const rt = await deps.openResearchTask({
+            researchType: 'trace_grantee_to_parent', domain: short, propertyId,
+            entityId: ownerEntityId, sourceTable: 'deed_extraction',
+            title: `Trace grantee to parent: ${grantee}`,
+            instructions: `The recorded deed grantee "${grantee}" is a private entity that does not resolve ` +
+              `to a known buyer parent. Trace its ownership/control to a parent (SOS / chain research). Deed doc ${documentId}.`,
+            metadata: { document_id: documentId, grantee },
+          }).catch(() => null);
+          if (rt && rt.ok) result.traceGranteeTaskSurfaced = true;
+        }
+      }
+    }
+  }
 }
 
 /**

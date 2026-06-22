@@ -1087,3 +1087,59 @@ describe('lease extractor — isCreateRejectionFailure (4xx is deterministic, 5x
     assert.equal(isCreateRejectionFailure('no_factual_fields'), false);
   });
 });
+
+// ── R59 Unit 4 — lease facts → research tasks (gated on openResearchTask) ────
+describe('lease extractor — R59 Unit 4 research producers', () => {
+  it('extracted tenant disagrees with the recorded tenant → confirm_tenant_mismatch', async () => {
+    const tasks = [];
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }),
+      patchLease: async () => ({ ok: true }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1', edge_ok: true }),  // guarantor resolves → 6b silent
+      getPropertyTenant: async () => 'Fresenius Medical Care',                  // ≠ extracted 'DaVita Inc'
+      openResearchTask: async (a) => { tasks.push(a); return { ok: true, created: true }; },
+    };
+    const n = normalizeLeaseExtraction(RAW);
+    const out = await applyLeaseEnrichment({ domain: 'dialysis', propertyId: 30441, leaseId: 7001, normalized: n }, deps);
+    assert.equal(out.tenant_mismatch_task, true);
+    const t = tasks.find(x => x.researchType === 'confirm_tenant_mismatch');
+    assert.ok(t, 'opens confirm_tenant_mismatch');
+    assert.equal(t.metadata.extracted_tenant, 'DaVita Inc');
+    assert.equal(t.metadata.recorded_tenant, 'Fresenius Medical Care');
+    assert.equal(out.guarantor_research_task, undefined, 'guarantor resolved → no guarantor task');
+  });
+
+  it('extracted tenant AGREES (DaVita vs DaVita Inc) → no mismatch task', async () => {
+    const tasks = [];
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }), patchLease: async () => ({ ok: true }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'g1' }),
+      getPropertyTenant: async () => 'DaVita',
+      openResearchTask: async (a) => { tasks.push(a); return { ok: true }; },
+    };
+    const out = await applyLeaseEnrichment({ domain: 'dialysis', propertyId: 30441, leaseId: 7001, normalized: normalizeLeaseExtraction(RAW) }, deps);
+    assert.equal(out.tenant_mismatch_task, undefined);
+    assert.equal(tasks.some(x => x.researchType === 'confirm_tenant_mismatch'), false);
+  });
+
+  it('a guarantor that does not resolve to an entity → resolve_lease_guarantor', async () => {
+    const tasks = [];
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }), patchLease: async () => ({ ok: true }),
+      // NO ensureGuarantorEntity → out.guarantor_entity_id stays null
+      openResearchTask: async (a) => { tasks.push(a); return { ok: true }; },
+    };
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: normalizeLeaseExtraction(RAW) }, deps);
+    assert.equal(out.guarantor_research_task, true);
+    const t = tasks.find(x => x.researchType === 'resolve_lease_guarantor');
+    assert.ok(t, 'opens resolve_lease_guarantor');
+    assert.equal(t.metadata.guarantor, 'Total Renal Care, Inc.');
+  });
+
+  it('byte-identical when openResearchTask is NOT injected (legacy callers)', async () => {
+    const deps = { mergeField: async () => ({ decision: 'write' }), patchLease: async () => ({ ok: true }) };
+    const out = await applyLeaseEnrichment({ domain: 'government', propertyId: 555, leaseId: 1, normalized: normalizeLeaseExtraction(RAW) }, deps);
+    assert.equal(out.tenant_mismatch_task, undefined);
+    assert.equal(out.guarantor_research_task, undefined);
+  });
+});
