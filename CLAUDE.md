@@ -4561,3 +4561,62 @@ fail / 6 skipped. The live deed/lease drain (routes to Document AI, gpt-4o only
 on misses, cost log shows pages) is operational — gated on Scott's GCP creds +
 the env, handed off like UW#2/R58. Doc: `docs/UW4_LEASE_OCR.md` (UW#4c wrapper +
 GCP setup + cost telemetry).
+
+## UW#5 — lease extractor OCRs thin-text scanned PDFs, not just zero-text (2026-06-22)
+
+Document AI is wired + confirmed end-to-end (`ocr_engine: google_docai`, ~95%
+conf — El Paso 5566 / Kerrville 6152 OCR'd + enriched real records). But the
+lease corpus wouldn't fully reach OCR: `runLeaseExtraction`'s OCR branch only
+fired on a COMPLETELY EMPTY text layer (`!text`). Most scanned executed leases
+are NOT zero-text — they carry a thin junk layer (recording stamp / page no. /
+OCR bleed), so `!text` is false and OCR never ran (live: Walterboro estoppel
+2835 → `text_len:143` / `reason:thin_text_layer`, marked `needs_ocr` without ever
+calling OCR). The deed path already discards a sub-floor PDF text layer before
+its OCR decision (`document-text.js::extractDocumentText`, `meaningfulTextLen <
+DOC_TEXT_MIN_CHARS`); the lease path now uses the SAME floor.
+
+### Unit 1 — the surgical fix (`api/_handlers/lease-extractor.js`)
+After `leaseTextFromBytes` and BEFORE the existing OCR gate, `runLeaseExtraction`
+discards a sub-floor PDF text layer so the OCR branch runs and the junk NEVER
+reaches the lease prompt: `isPdf && text && floor>0 && meaningfulTextLen(text) <
+floor → text=''` (PDF-only — docx/xlsx/text salvage are taken at face value, so a
+short legitimate text doc is never force-OCR'd). Reuses the shared
+`meaningfulTextLen` + `DOC_TEXT_MIN_CHARS` (now EXPORTED from `document-text.js` —
+no duplicated threshold; env knob `LEASE_TEXT_MIN_CHARS`, default 200). The junk
+is DISCARDED (set to `''`), never concatenated, so the OCR'd text (or `needs_ocr`)
+is what flows on. Everything downstream is unchanged: the tiered OCR call
+(Surya/Paddle → Doc AI cheap-cloud → gpt-4o last resort), the four guards
+(location / draft / multi-tenant / operator), fill-blanks-only,
+`source='folder_feed_lease'` provenance, one-active-lease dedupe, the graceful
+`needs_ocr` fallback, and the `ocr_tier`/`ocr_engine`/`ocr_pages` telemetry.
+`runLeaseExtraction` gains injectable `textFromBytesImpl`/`ocrTieredImpl` deps
+(default to the module fns — the codebase's deps-first testability pattern); the
+two production callers are unchanged.
+
+### Unit 2 — re-process the parked backlog (versioned reparse, R58c pattern)
+The previously-parked `thin_text_layer` leases carry the terminal
+`lease_backfilled_at` marker, so the eligible queue excludes them. New
+`?_route=lease-backfill&mode=reparse` (GET dry-run / POST drain) selects via
+`fetchThinTextReparseDocs` — rows with `lease_backfill.reason='thin_text_layer'`
+NOT yet at the current `reparse_version` (`THIN_TEXT_REPARSE_VERSION='uw5'`) — and
+re-runs the SAME `attachLeaseDoc` machinery (now with the discard + server OCR). A
+re-run either ENRICHES (reason changes → drops out) or, for a genuinely near-blank
+scan that OCRs back to still-thin text, is re-marked at version `uw5` and excluded
+going forward — the R58c never-re-hammer guard (`markBackfilled` stamps
+`reparse_version` on every terminal mark in reparse mode). No migration (marker
+rides existing `subject_hint` jsonb); no new api/*.js (sub-route of intake.js).
+
+### Verified (headless 2026-06-22)
+`test/lease-extractor.test.mjs` 75 → 80 (UW#5: thin PDF junk discarded → routed to
+OCR, junk never sent to the AI; OCR-success text feeds the prompt; >floor PDF text
+used directly, OCR never called; short non-PDF docx/text NOT force-OCR'd; true
+zero-text PDF still OCRs — no regression). `node --check` clean (lease-extractor,
+lease-backfill, document-text); `ls api/*.js | wc -l`=12; full suite **1287 pass /
+0 fail / 6 skipped**. JS ships on the Railway redeploy; no migration.
+
+### After deploy (operational, handed to Scott)
+A capped `POST /api/lease-backfill?mode=reparse&limit=25` over the re-included
+`thin_text_layer` set should flip those leases from `thin_text_layer` → `enriched`
+with `ocr_engine: google_docai` (fills lease fields / routes conflicts to the
+Decision Center), exactly like the El Paso memorandum. Needs `SHAREPOINT_FETCH_URL`
++ the configured Document AI seam (`OCR_CLOUD_*`).
