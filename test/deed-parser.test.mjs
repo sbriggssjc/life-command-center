@@ -75,6 +75,28 @@ describe('parseDeedText R58b — real-world formats (Unit 1) + price (Unit 2)', 
     assert.equal(p.grantee, 'Deltona Wellness, LP');            // ", LP" kept; ", a Florida …" stripped
   });
 
+  it('R58c — real doc-3964 shape: name separated from the marker by a long qualifier + a/k/a + multi-line notice address', () => {
+    // The token immediately before "(the "Grantor")" is the ADDRESS, not the
+    // name; the qualifier/address wraps across OCR lines (newlines + commas).
+    const REAL = [
+      'Prepared by First American Title. Transfer Amt $13,333,400.00  Doc Stamps $93,333.80',
+      'SPECIAL WARRANTY DEED',
+      'THIS SPECIAL WARRANTY DEED is made this day by and between Oldsmar Retail Development LLC,',
+      'a Florida limited liability company, a/k/a Oldsmar Retail Development, LLC, whose address is',
+      '3662 Avalon Park East Boulevard, Suite 201, Orlando, Florida 32828 (the "Grantor"), and',
+      'Deltona Wellness, LP, a Florida limited partnership, whose address is 17 Copperbeech Lane,',
+      'Lawrence, New York 11559 (the "Grantee"), the following described property in Pinellas County.',
+    ].join('\n');
+    const p = parseDeedText(REAL, { state: 'FL' });
+    assert.equal(p.grantor, 'Oldsmar Retail Development LLC');   // qualifier + a/k/a + address stripped
+    assert.equal(p.grantee, 'Deltona Wellness, LP');            // ", LP" kept; ", a Florida …, whose address" stripped
+    // Explicit transfer amount captured + doc-stamp cross-check agrees.
+    assert.equal(p.transfer_amount, 13333400);
+    assert.equal(p.implied_sale_price, 13333400);
+    assert.equal(p.price_source, 'transfer_amount');
+    assert.equal(p.price_cross_check, 'agree');                 // 13,333,400 × 0.0070 = 93,333.80
+  });
+
   it('narrative parenthetical: curly quotes + name-qualifier-paren ordering', () => {
     const t = 'made by and between ABC Holdings, LLC, a Delaware limited liability company (the “Grantor”) and XYZ Trust (the “Grantee”)';
     const p = parseDeedText(t, { state: 'TX' });

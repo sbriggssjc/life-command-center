@@ -28,8 +28,8 @@ function makeFakeQ(canned = {}) {
 const COVER = 'Recording Cover Page\nFirst Grantor: TRIVIUM GROVE CITY LLC First Grantee: CHF II GROVE CITY MOB LLC\nFees: $18.50';
 const DEED_OF_TRUST = 'DEED OF TRUST\nmade among the Trustor JOHN SMITH, the Trustee FIRST AMERICAN TITLE, and the Beneficiary BIG BANK NA.';
 
-describe('fetchReparseDocs (R58b Unit 3)', () => {
-  it('selects deed docs WITH raw_text and a NULL parsed grantee, excluding deed_no_parties', async () => {
+describe('fetchReparseDocs (R58b Unit 3 / R58c terminal bump)', () => {
+  it('selects deed docs WITH raw_text and a NULL parsed grantee; re-includes the legacy deed_no_parties backlog, excludes only the R58c terminal', async () => {
     const { q, calls } = makeFakeQ({ 'property_documents?raw_text=not.is.null': { value: { ok: true, data: [{ document_id: 1 }] } } });
     const r = await fetchReparseDocs('dialysis', { limit: 25 }, { domainQuery: q });
     assert.equal(r.ok, true);
@@ -37,7 +37,10 @@ describe('fetchReparseDocs (R58b Unit 3)', () => {
     assert.ok(path.includes('raw_text=not.is.null'), 'requires raw_text present');
     assert.ok(path.includes('document_type=ilike.*deed*'), 'deed docs only');
     assert.ok(path.includes('extracted_data->deed_extraction->>grantee=is.null'), 'no parsed grantee yet');
-    assert.ok(path.includes('ingestion_status.neq.deed_no_parties'), 'excludes terminal no-parties');
+    // R58c — only the CURRENT terminal marker is excluded; the legacy bare
+    // 'deed_no_parties' backlog (e.g. doc 3964) is re-included for one pass.
+    assert.ok(path.includes('ingestion_status.neq.deed_no_parties_r58c'), 'excludes the R58c terminal no-parties');
+    assert.ok(!path.includes('ingestion_status.neq.deed_no_parties)'), 'does NOT exclude the legacy bare deed_no_parties');
     assert.ok(path.includes('raw_text') && path.includes('select='), 'selects raw_text for in-place parse');
   });
 });
@@ -67,7 +70,7 @@ describe('processOneReparse (R58b Unit 3)', () => {
     assert.equal(r.outcome, 'no_parties');
     const mark = calls.find(c => c.method === 'PATCH' && c.path.startsWith('property_documents?document_id=eq.3'));
     assert.ok(mark, 'marks the doc terminal');
-    assert.equal(mark.body.ingestion_status, 'deed_no_parties');
+    assert.equal(mark.body.ingestion_status, 'deed_no_parties_r58c');
   });
 
   it('no raw_text → no_text, no writes', async () => {

@@ -673,43 +673,97 @@ function extractLabeledParty(text, which) {
 }
 
 /**
- * R58b Unit 1 — narrative parenthetical party.
- * '… NAME[, a <entity qualifier>] (the "Grantor"), …' — captures the entity name
- * immediately preceding the `(the "Grantor"|"Grantee")` defined-term parenthetical
- * and strips trailing qualifiers. `[^()]*?` cannot cross a paren, so the Grantee
- * match necessarily starts AFTER the Grantor parenthetical closes. No `i` flag on
- * the leading anchor so it begins at a real (capitalized) entity-name token.
+ * R58c Unit 1 — narrative parenthetical party, anchored on the CONNECTIVE.
+ *
+ * Real warranty/quitclaim deeds put a long entity-type qualifier AND a notice
+ * address BETWEEN the entity name and the `(the "Grantor")` defined-term marker,
+ * e.g.
+ *   "… by and between Oldsmar Retail Development LLC, a Florida limited liability
+ *    company, a/k/a Oldsmar Retail Development, LLC, whose address is 3662 Avalon
+ *    Park East Blvd, Suite 201, Orlando, Florida 32828 (the "Grantor"), and
+ *    Deltona Wellness, LP, a Florida limited partnership, whose address is …
+ *    (the "Grantee") …"
+ * so the token immediately BEFORE the marker is the ADDRESS, not the name.
+ *
+ * R58b captured backward from the marker (`[^()\r\n;.]*?`), and the intervening
+ * newlines/periods/parens in that address broke the capture → `no_parties`. R58c
+ * instead anchors on the connective that INTRODUCES the party (grantor: the
+ * recital "between"; grantee: the "and" that joins the two parties) and takes the
+ * LEADING entity name up to the first qualifier delimiter — robust to whatever
+ * address/aka junk trails it. A deed of trust (no Grantor/Grantee marker) → null.
+ * Precedence is unchanged: the labeled cover-page path wins; this is the
+ * fallback; an implausible cleaned name falls through (no bad party emitted).
  */
 function extractNarrativeParty(text, which) {
   if (!text) return null;
-  // Left-anchor on a connective (between/and/that/comma/…) so the capture is the
-  // single entity phrase preceding the parenthetical — not a whole sentence run.
-  // `[^()\r\n;.]` stops the name at sentence/paren/line boundaries; `[^()]` on
-  // the GRANTEE pass cannot cross the Grantor parenthetical's closing `)`.
-  const re = new RegExp(
-    '(?:between|and|that|to|,|;|:|^)\\s*' +
-    '([A-Z0-9][^()\\r\\n;.]*?)' +
-    '\\s*\\(\\s*[Tt]he\\s+' + Q + which + Q + '\\s*\\)'
+
+  // 1. Locate the defined-term marker — parenthesized `(the "Grantor")` or the
+  //    bare quoted form `the "Grantor"` (quotes required when no parens).
+  const Qc = '["\\u201C\\u201D\\u2018\\u2019\']';
+  const markerRe = new RegExp(
+    '\\(\\s*[Tt]he\\s+' + Q + which + Q + '\\s*\\)' +
+    '|[Tt]he\\s+' + Qc + '\\s*' + which + '\\s*' + Qc,
+    'i'
   );
-  const m = text.match(re);
-  if (!m) return null;
-  return stripEntityQualifier(cleanEntityName(m[1]));
+  const marker = text.match(markerRe);
+  if (!marker) return null;
+  const before = text.slice(0, marker.index);
+
+  // 2. The connective that introduces this party. Use the LAST one before the
+  //    marker so the recital's "by and between" is skipped. Grantor → "between".
+  //    Grantee → ", and" (the join between the two parties), falling back to a
+  //    bare " and " for the comma-less "(the "Grantor") and X (the "Grantee")".
+  const span = which === 'Grantee'
+    ? (sliceAfterLast(before, /,\s*and\s+/gi) ?? sliceAfterLast(before, /\band\s+/gi))
+    : sliceAfterLast(before, /\bbetween\s+/gi);
+  if (span == null) return null;
+
+  // 3. Leading entity name = everything before the first qualifier delimiter,
+  //    then validate with the same plausibility guard the R51 feed uses.
+  const name = leadingEntityName(span);
+  return name && /[A-Za-z]/.test(name) && granteeIsPlausible(name) ? name : null;
+}
+
+/** Text after the LAST match of a global `re` in `s`, or null when none match. */
+function sliceAfterLast(s, re) {
+  let idx = -1, len = 0, m;
+  re.lastIndex = 0;
+  while ((m = re.exec(s)) !== null) {
+    idx = m.index; len = m[0].length;
+    if (m.index === re.lastIndex) re.lastIndex++; // zero-width-match guard
+  }
+  return idx < 0 ? null : s.slice(idx + len);
 }
 
 /**
- * Strip a trailing entity-type qualifier and address/aka boilerplate that often
- * trails the name in the narrative form, e.g.
- *   "Oldsmar Retail Development LLC, a Florida limited liability company"
+ * From a connective-anchored span, the entity name is everything up to the FIRST
+ * qualifier delimiter — the entity-type clause / a-k-a / notice address / role
+ * that always follows the name in the narrative form, e.g.
+ *   "Oldsmar Retail Development LLC, a Florida limited liability company, a/k/a …"
  *      → "Oldsmar Retail Development LLC"
- *   "Deltona Wellness, LP, a Florida limited partnership"
- *      → "Deltona Wellness, LP"   (the ", LP" is NOT an "a/an …" qualifier)
+ *   "Deltona Wellness, LP, a Florida limited partnership, whose address is …"
+ *      → "Deltona Wellness, LP"   (the ", LP" is NOT a ", a/an …" qualifier)
+ * `\s+` spans newlines, so a name immediately followed by ",\na Florida …" (the
+ * address wrapped to the next OCR line) is still cut correctly.
  */
-function stripEntityQualifier(name) {
-  if (!name) return null;
-  let s = name;
-  s = s.replace(/\s+(?:whose\s+address|having\s+an?\s+address|a\/k\/a|f\/k\/a|n\/k\/a|formerly\s+known\s+as)\b.*$/i, '');
-  s = s.replace(/,\s+(?:an?|the)\s+[A-Za-z][\w .,'’&/-]*$/i, '');
-  return cleanEntityName(s);
+function leadingEntityName(span) {
+  if (!span) return null;
+  const qualifierRe = new RegExp(
+    [
+      ',\\s+an?\\s',                    // ", a "/", an " — entity-type / individual / married clause
+      '\\ba\\/k\\/a\\b',                // a/k/a
+      '\\bf\\/k\\/a\\b',                // f/k/a
+      '\\bn\\/k\\/a\\b',                // n/k/a
+      ',?\\s*whose\\s+address',         // whose address / , whose address
+      ',?\\s*having\\s+an?\\s+address', // having an address
+      ',\\s+as\\s+trustee\\b',          // , as trustee
+      ',\\s+trustee\\b',                // , trustee
+    ].join('|'),
+    'i'
+  );
+  const m = span.match(qualifierRe);
+  const head = m ? span.slice(0, m.index) : span;
+  return cleanEntityName(head);
 }
 
 /** First capture group of the first matching pattern, cleaned. */
