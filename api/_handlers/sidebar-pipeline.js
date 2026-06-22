@@ -559,8 +559,8 @@ export async function propertyHasLivePricedSale(domain, propertyId) {
 // write. Pure — all I/O is resolved by the caller and passed in as booleans so
 // this is unit-testable and the policy lives in one place.
 //
-//   lookupMatched     — an existing sale row matched (document_number, the
-//                       price±5%/date±14d window, or the R37 dedup-key window).
+//   lookupMatched     — an existing sale row matched (the price±5%/date±14d
+//                       window, or the R37 dedup-key window).
 //   incomingHasPrice  — the CAPTURE carried a positive sold_price. This is the
 //                       raw page price, NOT the written price: a portfolio
 //                       aggregate is nulled on write but is still a real,
@@ -4925,14 +4925,13 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     }
 
     const soldPrice = parseCurrency(sale.sale_price);
-    const docNum = sale.document_number
-      ? String(sale.document_number).trim()
-      : null;
 
     // Match predicate for existing sales:
-    //   1. By document_number first — same deed is always the same sale.
-    //   2. Else by price ±5% AND sale_date ±14 days — economic identity.
-    //   3. Else fall through to INSERT (distinct transaction).
+    //   1. By price ±5% AND sale_date ±14 days — economic identity.
+    //   2. Else fall through to INSERT (distinct transaction).
+    // (sales_transactions carries no document_number column — the recorder
+    //  document number lives on deed_records — so the prior "same deed"
+    //  stage was a no-op that errored every run; price/date is the dedup key.)
     // The previous implementation pulled back any row within ±45 days
     // (limit=1) and PATCHed it, which collapsed a $10K seed transfer and
     // a $45.75M acquisition that happened on the same property a few
@@ -4961,20 +4960,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const hiStr = hi.toISOString().split('T')[0];
 
     const lookupSelect = domain === 'government'
-      ? 'sale_id,sale_date,sold_price,document_number,firm_term_years_at_sale,firm_term_locked'
-      : 'sale_id,sale_date,sold_price,document_number,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
+      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked'
+      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
 
-    // Stage 1: document_number lookup (most authoritative — same deed).
     let lookup = { ok: false, data: [] };
-    if (docNum) {
-      lookup = await domainQuery(domain, 'GET',
-        `sales_transactions?property_id=eq.${propertyId}` +
-        `&document_number=eq.${encodeURIComponent(docNum)}` +
-        `&select=${lookupSelect}&limit=1`
-      );
-    }
 
-    // Stage 2: price ±5% AND date ±14d window. Fetch candidates in the
+    // Match by price ±5% AND date ±14d window. Fetch candidates in the
     // 14-day window and JS-filter by price — PostgREST can't express
     // "within ±5% of incoming" in a single URL.
     if (!lookup.ok || !lookup.data?.length) {
@@ -5891,10 +5882,13 @@ async function stageGovCompForSalesforce(propertyId, entity, metadata) {
   const saleDate = parseDate(mostRecentSale.sale_date)?.split('T')[0];
   if (!saleDate) return;
 
-  // Check for existing staging row
+  // Check for existing staging row. Column names must match the real
+  // sf_comps_staging schema (street/sold_date/staging_id) — the same columns
+  // the INSERT below uses. The old address/sale_date/id form errored every
+  // run ("column sf_comps_staging.id does not exist") and never deduped.
   const existing = await domainQuery('government', 'GET',
-    `sf_comps_staging?address=eq.${encodeURIComponent(entity.address || '')}` +
-    `&sale_date=eq.${saleDate}&select=id&limit=1`
+    `sf_comps_staging?street=eq.${encodeURIComponent(entity.address || '')}` +
+    `&sold_date=eq.${saleDate}&select=staging_id&limit=1`
   );
   if (existing.ok && existing.data?.length) return; // already staged
 
