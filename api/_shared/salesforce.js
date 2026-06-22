@@ -484,3 +484,47 @@ export async function upsertSalesforceContact(contact) {
   if (!id) return { ok: false, reason: result.reason || 'no_contact_returned' };
   return { ok: true, contact: c, created: result.created !== false ? !!result.created : false };
 }
+
+/**
+ * UPSERT a Salesforce Account by name (R52c, 2026-06-21). Scott's org requires
+ * every Contact to be tied to a Company (the Account object is relabeled
+ * "Company"; Contact.AccountId is required), so the writeback can't INSERT a
+ * Contact without first establishing its Account. This finds an Account by an
+ * EXACT Name match (Top 1) and returns it, else CREATEs one with just the Name
+ * (verified in SF: Name is the only required Account field). Same flow-op
+ * rollout pattern as upsert_contact — Scott wires the PA `upsert_account` case.
+ *
+ * Tolerant of flows that don't implement it yet — returns ok:false
+ * reason='unsupported'/'unavailable' so the worker leaves the row pending and
+ * reports honestly (never throws; the worker only attaches the contact + mirrors
+ * the account identity on ok + a returned Id).
+ *
+ * FLOW CONTRACT (what LCC posts / what PA returns):
+ *   POST <SF_LOOKUP_WEBHOOK_URL>
+ *   { "operation": "upsert_account",
+ *     "name": "Next Generation Capital LLC",   // the find-or-create key — REQUIRED
+ *     "idempotency_key": "<lcc owner/person entity id>" }
+ *   Success existing: { "ok": true, "created": false, "account": { "Id": "001...", "Name": "..." } }
+ *   Success created:  { "ok": true, "created": true,  "account": { "Id": "001...", "Name": "..." } }
+ *   Not implemented:  { "ok": false, "reason": "unsupported" } (or HTTP 4xx)
+ *
+ * @param {{name:string, idempotencyKey?:string}} account
+ * @returns {Promise<{ok:boolean, accountId?:string, created?:boolean, account?:object|null, reason?:string, detail?:any}>}
+ */
+export async function upsertSalesforceAccount(account) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const name = String(account?.name || '').trim();
+  if (!name) return { ok: false, reason: 'no_name' };
+
+  const body = { operation: 'upsert_account', name };
+  if (account?.idempotencyKey) body.idempotency_key = String(account.idempotencyKey);
+
+  const result = await callSfLookupFlow(body);
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const a = result.account || result.record || null;
+  const id = a ? (a.Id || a.id) : null;
+  if (!id) return { ok: false, reason: result.reason || 'no_account_returned' };
+  return { ok: true, accountId: id, account: a, created: result.created === true };
+}
