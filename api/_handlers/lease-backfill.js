@@ -106,6 +106,46 @@ export async function fetchEligibleLeaseDocs(limit, deps) {
   return { ok: true, rows };
 }
 
+// UW#5 — versioned thin-text reparse marker (mirrors R58c's DEED_NO_PARTIES_TERMINAL
+// pattern). Before UW#5 a thin junk text layer (recording stamp / page no.) was
+// marked terminal `needs_ocr`/`thin_text_layer` WITHOUT ever calling OCR. With the
+// thin-layer discard now wired into runLeaseExtraction, those rows can be OCR'd
+// (server-side Document AI) on a re-run. This version stamp gives that backlog ONE
+// retroactive pass: a re-run either ENRICHES (reason changes → drops out) or — for a
+// genuinely near-blank scan that OCRs back to still-thin text — is re-marked at THIS
+// version and excluded going forward, so a non-OCR-able row is never re-hammered.
+export const THIN_TEXT_REPARSE_VERSION = 'uw5';
+
+/**
+ * UW#5 — thin-text reparse queue: lease docs PARKED terminal with
+ * `lease_backfill.reason='thin_text_layer'` (a sub-floor junk text layer that was
+ * never OCR'd). Re-include them ONCE per version so the runLeaseExtraction thin-layer
+ * discard + server OCR can rescue them. A row already re-marked at the current
+ * `reparse_version` is excluded (the R58c never-re-hammer guard).
+ */
+export async function fetchThinTextReparseDocs(limit, deps) {
+  const q = deps.opsQuery || opsQuery;
+  const r = await q('GET',
+    'folder_feed_seen' +
+    '?detected_type=eq.lease' +
+    '&vertical=in.(dia,gov)' +
+    '&subject_hint->lease_backfill->>reason=eq.thin_text_layer' +
+    `&or=(subject_hint->lease_backfill->>reparse_version.is.null,subject_hint->lease_backfill->>reparse_version.neq.${THIN_TEXT_REPARSE_VERSION})` +
+    '&select=id,server_relative_path,vertical,status,subject_hint,content_hash' +
+    '&order=id.asc' +
+    `&limit=${limit}`);
+  if (!r.ok) return { ok: false, status: r.status, detail: r.data };
+  const rows = (Array.isArray(r.data) ? r.data : []).map((row) => ({
+    id: row.id,
+    path: row.server_relative_path,
+    vertical: row.vertical,
+    status: row.status,
+    subject_hint: row.subject_hint || {},
+    content_hash: row.content_hash || null,
+  }));
+  return { ok: true, rows };
+}
+
 /**
  * UW#2b Fix 3 — content-hash dedupe lookup. The SAME executed instrument filed
  * under two folders (e.g. an estoppel under both /Lease/ and /Estoppel/) shares a
@@ -418,6 +458,12 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
   if (!user) return;
 
   const dryRun = req.method === 'GET';
+  // UW#5 — thin-text reparse mode: re-run the PARKED thin_text_layer backlog through
+  // the SAME machinery (now with the runLeaseExtraction thin-layer discard + server
+  // OCR). Selection swaps to fetchThinTextReparseDocs; terminal marks carry the
+  // version stamp so a still-thin re-park isn't re-hammered.
+  const reparseMode = (req.query.mode || '').toLowerCase() === 'reparse'
+    || req.query.thin_text_reparse === '1' || req.query.thin_text_reparse === 'true';
   // Gated: capped batch. Default 15, hard cap 50 — the full corpus is drained by
   // repeated capped ticks, not one giant call (the artifact-offload lesson).
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '15', 10)));
@@ -438,7 +484,12 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
   const seenContentHashes = new Map();   // content_hash → { id, property_id } enriched this tick
   const workerDeps = {
     attachLeaseDoc: deps.attachLeaseDoc || PROD_DEPS.attachLeaseDoc,
-    markBackfilled: (row, info) => markBackfilled(row, info, deps),
+    // UW#5 — in reparse mode stamp the version on every terminal mark so a row that
+    // OCRs back to still-thin text (re-parked thin_text_layer) is excluded from the
+    // next reparse pass (the R58c never-re-hammer guard). An enriched re-run drops
+    // out anyway (reason no longer thin_text_layer).
+    markBackfilled: (row, info) =>
+      markBackfilled(row, reparseMode ? { ...info, reparse_version: THIN_TEXT_REPARSE_VERSION } : info, deps),
     bumpAttempt: (row, attempts) => bumpAttempt(row, attempts, deps),
     findPriorBackfill: async (contentHash, excludeId) => {
       if (!contentHash) return null;
@@ -488,13 +539,15 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     return res.status(200).json({ mode: 'ocr_resubmit', id: found.row.id, ocr_text_supplied: !!ocrText, ocr_confidence: ocrConfidence, result: r });
   }
 
-  const eligible = await fetchEligibleLeaseDocs(limit, deps);
+  const eligible = reparseMode
+    ? await fetchThinTextReparseDocs(limit, deps)
+    : await fetchEligibleLeaseDocs(limit, deps);
   if (!eligible.ok) {
     return res.status(502).json({ error: 'list_failed', detail: eligible.detail });
   }
 
   const result = {
-    mode: dryRun ? 'dry_run' : 'drain',
+    mode: (reparseMode ? 'thin_text_reparse_' : '') + (dryRun ? 'dry_run' : 'drain'),
     eligible: eligible.rows.length,
     limit,
     scanned: 0,
