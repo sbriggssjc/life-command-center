@@ -69,6 +69,13 @@ const MAX_LIMIT = 100;
 // no sooner than this (UW#6 may have extended its chain in the meantime).
 const REATTEMPT_DAYS = 7;
 const VIEW_CHUNK = 150;
+// The GET dry-run must stay cheap (it only classifies — it must never heavy-join
+// the whole book and hold a gov connection to the statement timeout, which
+// saturated the pooler). Bound how many candidates the dry-run reads from the
+// gov view; report total_queued separately so the sizing stays honest. Override
+// with ?sample=N (capped). The drain (POST) is already bounded by `limit`.
+const DRYRUN_SAMPLE = 250;
+const MAX_DRYRUN_SAMPLE = 750;
 
 const VIEW_COLS =
   'property_id,is_build_to_suit,current_developer,cur_true_owner_name,owner_links,earliest_owner,earliest_start';
@@ -367,17 +374,31 @@ export async function handleDeveloperChainResolveTick(req, res) {
   const allTasks = Array.isArray(q.data) ? q.data : [];
 
   if (dryRun) {
-    // Reproduce the honest sizing over the WHOLE queued set (read the view for all).
-    const ids = allTasks.map((t) => String(t.source_record_id));
+    // Bounded sizing: classify a capped, highest-priority sample rather than
+    // heavy-joining the whole queued set (the gov-view read over ~764 ids ran
+    // long and held the connection to the statement timeout). `total_queued`
+    // keeps the sizing honest; the buckets/resolvable are over the sample.
+    const sampleSize = Math.min(
+      Math.max(parseInt(req.query.sample, 10) || DRYRUN_SAMPLE, 1),
+      MAX_DRYRUN_SAMPLE,
+    );
+    const sampledTasks = allTasks
+      .slice() // don't mutate
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+      .slice(0, sampleSize);
+    const ids = sampledTasks.map((t) => String(t.source_record_id));
     const byId = await readCandidates(ids);
-    const { buckets, resolvable, sample } = tally(allTasks, byId);
+    const { buckets, resolvable, sample } = tally(sampledTasks, byId);
     return res.status(200).json({
       ok: true, dry_run: true, domain: 'gov',
       total_queued: allTasks.length,
+      sampled: sampledTasks.length,
       resolvable,
       by_bucket: buckets,
       sample,
-      note: 'resolvable = bts_origin + developer_keyword; everything else stays queued (honest).',
+      note: 'buckets are over the top-' + sampledTasks.length + ' by priority (of '
+        + allTasks.length + ' queued); resolvable = bts_origin + developer_keyword. '
+        + 'Pass ?sample=N to widen (max ' + MAX_DRYRUN_SAMPLE + ').',
     });
   }
 
