@@ -348,6 +348,39 @@ function propertyIdentityKey(url) {
   }
 }
 
+/**
+ * UW#6 — fetch a document's bytes via the active CoStar TAB's content script
+ * (page context holds the live CoStar session + CDN cookies). Returns
+ * { ok, base64, mimeType, sizeBytes } or { ok:false, error }. Used so document
+ * byte-capture doesn't rely on the SW fetch, which drops the SameSite session.
+ */
+async function fetchDocBytesViaTab(url) {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://*.costar.com/*' });
+    // Prefer the active tab; otherwise any open CoStar tab can fetch the CDN.
+    const ordered = tabs.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+    for (const tab of ordered) {
+      if (tab.id == null) continue;
+      const resp = await new Promise((resolve) => {
+        try {
+          chrome.tabs.sendMessage(tab.id, { type: 'FETCH_DOC_BYTES', url }, (r) => {
+            if (chrome.runtime && chrome.runtime.lastError) { resolve({ ok: false, error: 'no_content_script' }); return; }
+            resolve(r || { ok: false, error: 'no_response' });
+          });
+        } catch (e) {
+          resolve({ ok: false, error: String(e && e.message || e) });
+        }
+      });
+      if (resp && resp.ok && resp.base64) return resp;
+      // A reachable tab that itself failed the fetch (401/403/empty) — report it.
+      if (resp && resp.error && resp.error !== 'no_content_script' && resp.error !== 'no_response') return resp;
+    }
+    return { ok: false, error: tabs.length ? 'tab_fetch_unreachable' : 'no_costar_tab' };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg.type === 'CONTEXT_DETECTED') {
     // Merge detected page context with any existing context for the same
@@ -1038,13 +1071,38 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const { domain, propertyId, doctype, fileName, sourceUrl } = msg;
         if (!domain || propertyId == null || !sourceUrl) { respond({ ok: false, error: 'missing_args' }); return; }
 
-        // 1. Fetch the PDF bytes in-session (cookies sent; CDN host permitted).
-        const docRes = await fetch(sourceUrl, { credentials: 'include' });
-        if (!docRes.ok) { respond({ ok: false, error: 'doc_fetch_failed', status: docRes.status }); return; }
-        const buf = await docRes.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        if (!bytes.byteLength) { respond({ ok: false, error: 'empty_doc' }); return; }
-        const mimeType = docRes.headers.get('content-type') || 'application/pdf';
+        // 1. Fetch the PDF bytes. The CoStar CDN signed URL is bound to the LIVE
+        //    session that lives in the TAB, not this service worker — a SW fetch
+        //    drops the SameSite session cookies and 401/403s (the silent
+        //    byte-capture failure). So ask the active CoStar tab's content
+        //    script to fetch in page context FIRST; fall back to a direct SW
+        //    fetch only if no tab/content-script is reachable.
+        let bytes = null;
+        let buf = null;
+        let mimeType = 'application/pdf';
+        let fetchVia = null;
+
+        const tabFetch = await fetchDocBytesViaTab(sourceUrl);
+        if (tabFetch.ok) {
+          const binary = atob(tabFetch.base64);
+          bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+          buf = bytes.buffer;
+          mimeType = tabFetch.mimeType || 'application/pdf';
+          fetchVia = 'tab';
+        } else {
+          // SW fallback (works only inside the live-token window / same-site).
+          const docRes = await fetch(sourceUrl, { credentials: 'include' }).catch((e) => ({ ok: false, _err: e?.message }));
+          if (!docRes || !docRes.ok) {
+            respond({ ok: false, error: 'doc_fetch_failed', status: docRes?.status, via: 'sw', tab_error: tabFetch.error });
+            return;
+          }
+          buf = await docRes.arrayBuffer();
+          bytes = new Uint8Array(buf);
+          mimeType = docRes.headers.get('content-type') || 'application/pdf';
+          fetchVia = 'sw';
+        }
+        if (!bytes.byteLength) { respond({ ok: false, error: 'empty_doc', via: fetchVia }); return; }
 
         // 2. content_hash (sha-256 hex) — the idempotency key.
         const digest = await crypto.subtle.digest('SHA-256', buf);
@@ -1110,6 +1168,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           document_id: notifyBody?.document_id,
           content_hash: contentHash,
           sizeBytes: bytes.byteLength,
+          via: fetchVia,
         });
       } catch (e) {
         respond({ ok: false, error: 'doc_capture_threw', detail: String(e?.message || e) });

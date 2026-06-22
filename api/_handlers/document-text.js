@@ -112,6 +112,10 @@ export async function processOneDoc(domain, row, deps = {}) {
       storagePath: row.storage_path || null,
       mediaType: null,
       allowOcr: deps.allowOcr !== false,
+      // UW#6 — route the deed/document OCR through the UW#4/#4b free-first tiered
+      // flow (Surya/Paddle → cheap cloud → gpt-4o LAST RESORT) so scanned deeds
+      // don't burn the most-expensive engine. Opt-out via deps.ocrTiered=false.
+      ocrTiered: deps.ocrTiered !== false,
     },
     { ...deps, storageGet }
   );
@@ -140,6 +144,7 @@ export async function processOneDoc(domain, row, deps = {}) {
     const deedRes = await runDeed(domain, row.property_id, row.document_id, ext.text, opts, deps).catch((e) => ({ error: e?.message || String(e) }));
     return {
       document_id: row.document_id, outcome: 'deed_parsed', method: ext.method, text_len: ext.text_len,
+      ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null,
       grantor: deedRes?.parsed?.grantor || null,
       grantee: deedRes?.parsed?.grantee || null,
       implied_price: deedRes?.parsed?.implied_sale_price || null,
@@ -150,7 +155,7 @@ export async function processOneDoc(domain, row, deps = {}) {
     };
   }
 
-  return { document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len };
+  return { document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len, ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null };
 }
 
 /**
