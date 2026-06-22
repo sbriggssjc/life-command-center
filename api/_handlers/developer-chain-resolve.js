@@ -30,8 +30,13 @@
 // re-attempted on a cadence via the metadata guard, never re-hammered):
 //   no_chain               owner_links<=1 -> nothing to trace (UW#6 extends the chain first)
 //   origin_equals_current  earliest == current true owner -> no real trace
-//   origin_not_developer   bank/lender/REIT/insurer/agency at origin -> an acquisition/
-//                          foreclosure, genuinely NOT a developer
+//   origin_not_developer   bank/lender/REIT/net-lease-financier/insurer/agency at
+//                          origin -> an acquisition/foreclosure/sale-leaseback,
+//                          genuinely NOT a developer
+//   origin_is_person       an individual human name at the chain origin -> the prior
+//                          LANDOWNER who sold to the developer, NOT the developer (a
+//                          developer is an organization). Exception: a known developer
+//                          BRAND that reads as a person ("Trammell Crow") still resolves.
 //   ambiguous_generic_org  a generic "Associates/Partners/Holdings/LLC" origin we can't
 //                          honestly call a developer without UW#6 / a human
 //
@@ -52,6 +57,8 @@ import { domainQuery } from '../_shared/domain-db.js';
 import {
   ensureEntityLink,
   isJunkEntityName,
+  looksLikePersonName,
+  hasFirmSuffix,
 } from '../_shared/entity-link.js';
 import { shouldWriteField } from '../_shared/field-priority-guard.js';
 
@@ -72,6 +79,15 @@ const BANK_LENDER_RE =
   /\b(bank|banc|national association|wells fargo|fannie mae|freddie mac|fnma|fhlmc|mortgage|savings|credit union|jpmorgan|citibank|u\.?s\.? bank|trust company|lender|insurance)\b/i;
 const REIT_TRUST_RE =
   /\b(properties trust|realty trust|income trust|realty income|reit|real estate investment trust)\b/i;
+// Net-lease financiers / sale-leaseback REITs at a chain origin are the FINANCING
+// counterparty (or a 1031 / sale-leaseback buyer), NOT the developer. Caught here
+// because they often LACK the "trust"/"realty income" tokens REIT_TRUST_RE keys on
+// — e.g. "Capital Lease Funding AKA VEREIT" (a net-lease REIT) reads as neither a
+// bank nor a "trust". Brands + the net-lease finance phrases ("capital lease
+// funding", "lease funding", "net lease", "sale-leaseback"). Deliberately NOT bare
+// "Capital" — that is ubiquitous in legitimate developer / PE names.
+const FINANCIER_RE =
+  /\b(vereit|spirit realty|store capital|w\.?\s?p\.?\s?carey|wp carey|lexington realty|national retail|american finance trust|gramercy property|capital lease funding|lease funding|net lease|sale[\s-]?leaseback)\b/i;
 const FEDERAL_AGENCY_RE =
   /\b(united states|u\.?\s?s\.?\s?a\.?|general services|federal government|department of)\b/i;
 // Capture-junk shapes a real owner name never carries ($ amounts, CMBS codes,
@@ -127,8 +143,27 @@ export function classifyDeveloperOrigin(candidate) {
   }
 
   if (BANK_LENDER_RE.test(origin) || REIT_TRUST_RE.test(origin) ||
-      FEDERAL_AGENCY_RE.test(origin) || JUNK_SHAPE_RE.test(origin)) {
+      FINANCIER_RE.test(origin) || FEDERAL_AGENCY_RE.test(origin) || JUNK_SHAPE_RE.test(origin)) {
     return { resolve: false, reason: 'origin_not_developer' };
+  }
+
+  // An explicit developer signal (a development cue or a known developer brand).
+  // Computed first so the person-name guard below can defer to it: some real
+  // developer brands ("Trammell Crow", "Hines") read as a person name but ARE
+  // developers, and a development company named after a person ("John Smith
+  // Development") is a legitimate org.
+  const hasDevSignal = DEV_KEYWORD_RE.test(origin) || DEV_BRAND_RE.test(origin);
+
+  // A developer is an ORGANIZATION, never an individual. A bare human name at the
+  // chain origin (e.g. "Gary Brown", "SEVDE MARGUERITE") is the prior LANDOWNER who
+  // SOLD to the developer — writing it as the developer is wrong (the live-gate
+  // find). Require an org-shaped name: reject a person-shaped origin that carries
+  // NEITHER a firm/org suffix ("… Property/Properties/LLC/…") NOR an explicit
+  // developer signal. ("Chandler Property" is org-shaped → resolves; "Trammell
+  // Crow" carries a dev brand → resolves.) These route to 'stays queued / needs
+  // research', never a developer write.
+  if (!hasDevSignal && !hasFirmSuffix(origin) && looksLikePersonName(origin)) {
+    return { resolve: false, reason: 'origin_is_person' };
   }
 
   // Tier A — build-to-suit: the original owner IS the developer by construction.
@@ -137,7 +172,7 @@ export function classifyDeveloperOrigin(candidate) {
   }
 
   // Tier B — explicit development entity at a genuine chain origin.
-  if (DEV_KEYWORD_RE.test(origin) || DEV_BRAND_RE.test(origin)) {
+  if (hasDevSignal) {
     return { resolve: true, tier: 'developer_keyword', confidence: 0.7, developer_name: origin, reason: 'developer_keyword' };
   }
 
@@ -282,6 +317,7 @@ function tally(tasks, byId) {
     resolved_developer_keyword: 0,
     ambiguous_generic_org: 0,
     origin_not_developer: 0,
+    origin_is_person: 0,
     origin_equals_current: 0,
     no_chain: 0,
     guard_rejected: 0,
@@ -305,8 +341,14 @@ function tally(tasks, byId) {
 // Handler.
 // ---------------------------------------------------------------------------
 export async function handleDeveloperChainResolveTick(req, res) {
-  const auth = await authenticate(req);
-  if (!auth.ok) return res.status(auth.status || 401).json({ error: auth.error || 'unauthorized' });
+  // Same auth contract as the sibling worker sub-routes (document-text-tick,
+  // lease-backfill, contact-acquisition, …): authenticate(req, res) returns the
+  // user object or null AFTER sending its own 401. It does NOT return an
+  // {ok,status} shape — the prior `auth.ok` check read a property the user object
+  // never carries, so a valid page-session X-LCC-Key still 401'd. Aligning here
+  // lets the gated dry-run → verify → drain run from the app session, not just cron.
+  const user = await authenticate(req, res);
+  if (!user) return; // authenticate already sent the 401
 
   const domain = String(req.query.domain || 'gov').toLowerCase();
   if (domain !== 'gov') {

@@ -45,6 +45,33 @@ describe('classifyDeveloperOrigin', () => {
     assert.equal(c.reason, 'origin_not_developer');
   });
 
+  it('rejects a net-lease financier (VEREIT / Capital Lease Funding) even on the BTS path (UW#7b)', () => {
+    for (const name of ['Capital Lease Funding AKA VEREIT', 'VEREIT', 'Spirit Realty Capital', 'Lexington Realty Trust']) {
+      const c = classifyDeveloperOrigin({ earliest_owner: name, owner_links: 3, is_build_to_suit: true });
+      assert.equal(c.resolve, false, name);
+      assert.equal(c.reason, 'origin_not_developer', name);
+    }
+  });
+
+  it('rejects an individual human name at origin (the landowner, not the developer) — UW#7b', () => {
+    // bare person names — even on the BTS path — are the prior landowner, never the developer
+    for (const name of ['SEVDE MARGUERITE', 'Gary Brown', 'Robert J. Smith']) {
+      const c = classifyDeveloperOrigin({ earliest_owner: name, owner_links: 3, is_build_to_suit: true });
+      assert.equal(c.resolve, false, name);
+      assert.equal(c.reason, 'origin_is_person', name);
+    }
+    // a developer BRAND that reads as a person ("Trammell Crow") still resolves (dev signal wins)
+    const tc = classifyDeveloperOrigin({ earliest_owner: 'Trammell Crow', owner_links: 3, is_build_to_suit: true });
+    assert.equal(tc.resolve, true);
+    assert.equal(tc.tier, 'bts_origin');
+    // a development company named after a person is a legitimate org
+    const jsd = classifyDeveloperOrigin({ earliest_owner: 'John Smith Development', owner_links: 3, is_build_to_suit: false, cur_true_owner_name: 'Other' });
+    assert.equal(jsd.resolve, true);
+    assert.equal(jsd.tier, 'developer_keyword');
+    // an org with a firm suffix is never mistaken for a person
+    assert.equal(classifyDeveloperOrigin({ earliest_owner: 'Acme Holdings LLC', owner_links: 3, is_build_to_suit: true }).resolve, true);
+  });
+
   it('a generic org (no dev signal, no reject) defers as ambiguous — not auto-resolved', () => {
     for (const name of ['DRA CRT CHAMBLEE CENTER LLC', 'ELMAN KC LLC', 'BLDG 11, LLC', 'MIDDLE STREET OFFICE TOWER A ASSOCIATES LIMITED PARTNERSHIP']) {
       const c = classifyDeveloperOrigin({ earliest_owner: name, owner_links: 3, is_build_to_suit: false, cur_true_owner_name: 'Other' });
@@ -179,5 +206,14 @@ describe('processChainResolveRow', () => {
     assert.equal(out.reason, 'origin_not_developer');
     assert.equal(calls.ensure.length, 0);
     assert.equal(calls.patch.length, 0);
+  });
+
+  it('a person-name origin (UW#7b) is not resolved and writes nothing — no orphan entity', async () => {
+    const { deps, calls } = recordingDeps();
+    const out = await processChainResolveRow(task, { earliest_owner: 'Gary Brown', owner_links: 3, is_build_to_suit: true }, deps);
+    assert.equal(out.outcome, 'not_resolved');
+    assert.equal(out.reason, 'origin_is_person');
+    assert.equal(calls.ensure.length, 0, 'never minted the person as a developer entity');
+    assert.equal(calls.patch.length, 0, 'never wrote');
   });
 });
