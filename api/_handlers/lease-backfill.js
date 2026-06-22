@@ -335,6 +335,8 @@ export async function backfillOneLeaseDoc(row, ctx, deps) {
       boundary_ok: res.boundary_ok ?? null,
       ocr_tier: res.ocr_tier ?? null,            // UW#4 — provenance of the text layer
       ocr_confidence: res.ocr_confidence ?? null,
+      ocr_pages: res.ocr_pages ?? null,          // UW#4c — per-page cost telemetry
+      ocr_engine: res.ocr_engine ?? null,
     };
     await deps.markBackfilled(row, {
       outcome: 'enriched', domain: res.domain, property_id: res.property_id,
@@ -512,6 +514,9 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
     ti_rows_total: 0,
     leases_created: 0,
     guaranteed_by_edges: 0,
+    // UW#4c — per-page OCR cost telemetry (Document AI bills per page).
+    ocr_pages_total: 0,
+    ocr_by_engine: {},
     items: [],
   };
 
@@ -551,7 +556,19 @@ export async function handleLeaseBackfill(req, res, deps = PROD_DEPS) {
       // folder) is deduped without relying on read-after-write of the marker.
       if (row.content_hash) seenContentHashes.set(row.content_hash, { id: row.id, property_id: r.property_id ?? null });
     }
+    // UW#4c — accumulate per-page OCR cost regardless of outcome (a cloud OCR
+    // that ran but didn't enrich still cost pages).
+    if (Number.isFinite(r.ocr_pages) && r.ocr_pages > 0) {
+      result.ocr_pages_total += r.ocr_pages;
+      const eng = r.ocr_engine || r.ocr_tier || 'unknown';
+      result.ocr_by_engine[eng] = (result.ocr_by_engine[eng] || 0) + r.ocr_pages;
+    }
     result.items.push(r);
+  }
+
+  // Cost line (Document AI bills per page) — observable in the Railway logs.
+  if (result.ocr_pages_total > 0) {
+    console.log(`[lease-backfill] OCR cost: ${result.ocr_pages_total} pages ${JSON.stringify(result.ocr_by_engine)}`);
   }
 
   return res.status(200).json(result);

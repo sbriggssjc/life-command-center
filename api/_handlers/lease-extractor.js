@@ -853,10 +853,13 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   // ZERO-SPEND needs_ocr — the free tier is delivered via the supplied-`ocrText`
   // path above (the workstation drainer) and paid spend is opt-in (OCR_CLOUD_*).
   // Deploy-order-safe; disable any OCR here with LEASE_EXTRACT_OCR='false'.
-  let ocrUsed = false, ocrTier = null, ocrConf = null;
+  let ocrUsed = false, ocrTier = null, ocrConf = null, ocrPages = null, ocrEngine = null;
   if (!text && String(process.env.LEASE_EXTRACT_OCR || 'true').toLowerCase() !== 'false') {
     const ocr = await ocrPdfToTextTiered({ buffer: sp.buffer, mediaType: sp.contentType || mediaType }).catch(() => ({ ok: false }));
-    if (ocr.ok && ocr.text) { text = ocr.text.slice(0, 120000); ocrUsed = true; ocrTier = ocr.tier || 'cloud'; ocrConf = ocr.confidence ?? null; }
+    if (ocr.ok && ocr.text) {
+      text = ocr.text.slice(0, 120000); ocrUsed = true; ocrTier = ocr.tier || 'cloud';
+      ocrConf = ocr.confidence ?? null; ocrPages = ocr.pages ?? null; ocrEngine = ocr.engine || null;
+    }
   }
   // A scanned PDF the OCR path couldn't rescue (no key / over cap / OCR miss) →
   // graceful needs_ocr (no 500), exactly as before.
@@ -865,6 +868,7 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
     normalized: await extractLeaseFromText(text),
     source: ocrUsed ? `ai_ocr_${ocrTier || 'cloud'}` : 'ai', text_len: text.length,
     ocr_used: ocrUsed, ocr_tier: ocrTier, ocr_confidence: ocrConf,
+    ocr_pages: ocrPages, ocr_engine: ocrEngine,   // UW#4c — per-page cost telemetry
   };
 }
 
@@ -1399,7 +1403,7 @@ export async function attachLeaseDoc(a, injected = {}) {
   const matchPath = injected.matchByPathAnchor || matchByPathAnchor;
   const emitDisambig = injected.emitMatchDisambiguation || emitMatchDisambiguation;
 
-  let normalized, extTextLen = null, ocrTier = null, ocrConf = null;
+  let normalized, extTextLen = null, ocrTier = null, ocrConf = null, ocrPages = null, ocrEngine = null;
   try {
     const ext = await runLeaseExtraction({ storageRef, mediaType, raw: a.raw || null, fetchImpl: deps.fetchImpl, ocrText, ocrConfidence });
     // Fix #2: scanned / image-only PDF → graceful needs_ocr (folder-feed records
@@ -1411,6 +1415,8 @@ export async function attachLeaseDoc(a, injected = {}) {
     extTextLen = ext.text_len ?? null;   // drives the scanned-thin-text re-route below
     ocrTier = ext.ocr_tier ?? null;      // UW#4 — recorded on the enriched receipt for review
     ocrConf = ext.ocr_confidence ?? null;
+    ocrPages = ext.ocr_pages ?? null;    // UW#4c — per-page cost telemetry
+    ocrEngine = ext.ocr_engine ?? null;
   } catch (e) {
     return { ok: false, attached: false, reason: `extract_failed:${e?.message || 'err'}`, match_status: null };
   }
@@ -1558,7 +1564,7 @@ export async function attachLeaseDoc(a, injected = {}) {
         ok: true, attached: true, lease: true,
         domain: resolved.domain, property_id: resolved.property_id, applied,
         boundary_ok: reported_targets.length === 0, match_status: 'matched',
-        ocr_tier: ocrTier, ocr_confidence: ocrConf,
+        ocr_tier: ocrTier, ocr_confidence: ocrConf, ocr_pages: ocrPages, ocr_engine: ocrEngine,
       };
     }
     // Matched, but the lease could not be created/linked. Split the failure
