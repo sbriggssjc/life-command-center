@@ -4569,7 +4569,11 @@ function renderGovOverview() {
   // correctly returned NULL for. These were polluting the distinct-agency
   // count and the Agency Breakdown chart.
   const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency_canonical || (p.agency && !_govIsPrivateFederalNamedEntity(p.agency) ? p.agency : null)).filter(Boolean)).size;
-  const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
+  // UI Phase 2 Unit 3 — honest denominator: the headline is the ACTIVE portfolio
+  // (mv.total_properties excludes archived). Prefer the MV's active count whenever
+  // the MV is loaded — not only on the fast path — so the headline doesn't flip to
+  // the all-status count (~19,960) once the full portfolio finishes loading.
+  const totalPropCount = mv ? (mv.total_properties || mv.property_count || 0) : propCount;
   const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
   const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
 
@@ -4802,7 +4806,7 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Portfolio at a Glance', '🏛️', 'search');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Total Properties', value: fmtN(totalPropCount), sub: 'government-leased nationwide', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Total Properties', value: fmtN(totalPropCount), sub: 'active government-leased (archived excluded)', color: 'blue', tab: 'search' });
   html += govCard({ title: 'Total SF Leased', value: fmtN(Math.round(totalSF / 1e6)) + 'M', sub: fmtN(totalSFCount) + ' properties with data', color: 'green', tab: 'search' });
   html += govCard({ title: 'Total Gross Rent', value: '$' + fmtN(Math.round(totalGrossRent / 1e9)) + 'B', sub: 'annual government rent', color: 'cyan', tab: 'search' });
   html += govCard({ title: 'Avg Rent / SF', value: '$' + avgRentPSF, sub: fmtN(totalRentPSFCount) + ' properties', color: 'purple', tab: 'search' });
@@ -5050,22 +5054,6 @@ function renderGovOverview() {
   html += govCard({ title: 'Avg DOM', value: avgDomVal, sub: 'days on market', color: 'yellow', tab: 'listings' });
   html += '</div>';
 
-  // ── Listings Needing Confirmation (manual follow-up) ──
-  html += govSectionHeader('Listings Needing Confirmation', '🔎', 'listings');
-  html += '<div id="govListingConfirm"><div class="gov-grid gov-grid-3">';
-  html += govCard({ title: 'Need Confirmation', value: '...', sub: 'loading', color: 'orange', id: 'govLcNeed', subId: 'govLcNeedSub' });
-  html += govCard({ title: 'Sale Match Ready', value: '...', sub: 'one-click confirm sold', color: 'green', id: 'govLcMatch', subId: 'govLcMatchSub' });
-  html += govCard({ title: 'Aged > 90d', value: '...', sub: 'needs research', color: 'red', id: 'govLcAged', subId: 'govLcAgedSub' });
-  html += '</div><div id="govLcConfirmList" style="margin-top:10px"></div></div>';
-
-  // ── LLC Research Queue (owner enrichment, manual resolve) ──
-  html += govSectionHeader('LLC Research Queue', '🏛️', 'research');
-  html += '<div id="govLlcQueue"><div class="gov-grid gov-grid-3">';
-  html += govCard({ title: 'Queued Owners', value: '...', sub: 'pending enrichment', color: 'purple', id: 'govLlcTotal', subId: 'govLlcTotalSub' });
-  html += govCard({ title: 'Shown', value: '...', sub: 'top by value', color: 'blue', id: 'govLlcShown', subId: 'govLlcShownSub' });
-  html += govCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
-  html += '</div><div id="govLlcQueueList" style="margin-top:10px"></div></div>';
-
   // ═══════════════════════════════════════════════
   // SECTION 11: GSA LEASE INTEL
   // ═══════════════════════════════════════════════
@@ -5111,8 +5099,30 @@ function renderGovOverview() {
   }
 
   // ═══════════════════════════════════════════════
-  // SECTION 12: OWNERSHIP COVERAGE
+  // SECTION 12: DATA HEALTH & COVERAGE (ops — at the bottom; mirrors dia)
+  // Groups the data-quality / coverage blocks (Listings confirmation, LLC
+  // research queue, Ownership coverage) under one labelled footer so the dia
+  // and gov Overviews end the same way (UI Phase 2 Unit 2).
   // ═══════════════════════════════════════════════
+  html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin:30px 0 0;padding:0 2px 6px;border-bottom:2px solid var(--border)">Data Health &amp; Coverage</div>';
+
+  // ── Listings Needing Confirmation (manual follow-up) ──
+  html += govSectionHeader('Listings Needing Confirmation', '🔎', 'listings');
+  html += '<div id="govListingConfirm"><div class="gov-grid gov-grid-3">';
+  html += govCard({ title: 'Need Confirmation', value: '...', sub: 'loading', color: 'orange', id: 'govLcNeed', subId: 'govLcNeedSub' });
+  html += govCard({ title: 'Sale Match Ready', value: '...', sub: 'one-click confirm sold', color: 'green', id: 'govLcMatch', subId: 'govLcMatchSub' });
+  html += govCard({ title: 'Aged > 90d', value: '...', sub: 'needs research', color: 'red', id: 'govLcAged', subId: 'govLcAgedSub' });
+  html += '</div><div id="govLcConfirmList" style="margin-top:10px"></div></div>';
+
+  // ── LLC Research Queue (owner enrichment, manual resolve) ──
+  html += govSectionHeader('LLC Research Queue', '🏛️', 'research');
+  html += '<div id="govLlcQueue"><div class="gov-grid gov-grid-3">';
+  html += govCard({ title: 'Queued Owners', value: '...', sub: 'pending enrichment', color: 'purple', id: 'govLlcTotal', subId: 'govLlcTotalSub' });
+  html += govCard({ title: 'Shown', value: '...', sub: 'top by value', color: 'blue', id: 'govLlcShown', subId: 'govLlcShownSub' });
+  html += govCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
+  html += '</div><div id="govLlcQueueList" style="margin-top:10px"></div></div>';
+
+  // ── Ownership Coverage ──
   html += govSectionHeader('Ownership Coverage', '🏛️', 'ownership');
   html += '<div id="govOwnershipCoverage">';
   html += '<div class="gov-grid gov-grid-3">';

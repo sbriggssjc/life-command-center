@@ -44,6 +44,8 @@ let diaNpiLookupCache = null;           // Map<clinic_id, latest npi_registry_lo
 let diaNpiRegistryCache = null;         // Map<npi, npi_registry row> for dup-cluster NPIs
 let diaNpiCleanupLoading = false;
 let diaSalesView = 'comps'; // 'comps' | 'available'
+let diaOverviewStats = null;   // lazy-loaded single-row mv_dia_overview_stats (UI Phase 2)
+let _diaOverviewStatsLoading = false;
 let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
@@ -1185,10 +1187,158 @@ function sectionHeader(title, icon, tab) {
   </div>`;
 }
 
+// Helper: horizontal labelled bar list (mirror of gov.js inlineBar so the
+// dia/gov Overview breakdown blocks share one card grammar — UI Phase 2).
+function diaInlineBar(items, maxVal) {
+  let out = '';
+  items.forEach(item => {
+    const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
+    out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div title="${esc(item.label)}" style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
+      <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
+      <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
+    </div>`;
+  });
+  return out;
+}
+
+// Parse a jsonb column that PostgREST may return as an array OR a string.
+function _diaParseJ(raw) {
+  if (!raw) return [];
+  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return []; }
+}
+
+// ── UI Phase 2: value-first Overview blocks (driven by mv_dia_overview_stats) ──
+// Portfolio at a Glance — mirrors gov's section 1. Honest denominators: headline
+// is ACTIVE properties (dia has no archived class), NOT the CMS-clinic count
+// (shown as a secondary metric); rent is projected to CURRENT_DATE; dia is NNN
+// so net rent ≈ NOI (labelled honestly).
+function renderDiaPortfolioGlanceInner() {
+  const mv = diaOverviewStats;
+  if (!mv || mv._error || mv._empty) {
+    if (_diaOverviewStatsLoading || !mv) {
+      return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading portfolio…</div></div></div>';
+    }
+    return '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Portfolio summary unavailable</div>';
+  }
+  const n = v => Number(v) || 0;
+  let h = '<div class="dia-grid dia-grid-5">';
+  h += infoCard({ title: 'Total Properties', value: fmtN(n(mv.total_properties)), sub: 'dialysis facilities tracked', color: 'blue', tab: 'search' });
+  h += infoCard({ title: 'Total SF', value: fmtN(Math.round(n(mv.total_sf) / 1e6)) + 'M', sub: fmtN(n(mv.properties_with_sf)) + ' with size data', color: 'green', tab: 'search' });
+  h += infoCard({ title: 'Projected Annual Rent', value: '$' + fmtN(Math.round(n(mv.total_rent) / 1e6)) + 'M', sub: fmtN(n(mv.properties_with_rent)) + ' with lease rent', color: 'cyan', tab: 'sales' });
+  h += infoCard({ title: 'Avg Rent / SF', value: mv.avg_rent_psf ? '$' + Number(mv.avg_rent_psf).toFixed(2) : '—', sub: fmtN(n(mv.properties_with_rent)) + ' properties', color: 'purple', tab: 'sales' });
+  h += infoCard({ title: 'Operators Tracked', value: fmtN(n(mv.operators_tracked)), sub: 'distinct operators', color: 'yellow', tab: 'search' });
+  h += '</div>';
+  h += '<div class="dia-grid dia-grid-3" style="margin-top:10px">';
+  h += infoCard({ title: 'Net Rent ≈ NOI', value: '$' + fmtN(Math.round(n(mv.total_noi) / 1e6)) + 'M', sub: 'NNN net lease — rent ≈ NOI', color: 'green', tab: 'sales' });
+  h += infoCard({ title: 'CMS Clinics', value: fmtN(n(mv.cms_clinics)), sub: 'Medicare-certified facilities', color: 'blue', tab: 'search' });
+  h += infoCard({ title: 'Contacts', value: fmtN(n(mv.total_contacts)), sub: 'owners & principals', color: 'purple', tab: 'research' });
+  h += '</div>';
+  return h;
+}
+
+// Lease Expiration Risk — mirrors gov's section 2 (bucketed off lease_expiration).
+function renderDiaLeaseExpRiskInner() {
+  const mv = diaOverviewStats;
+  if (!mv || mv._error || mv._empty) {
+    if (_diaOverviewStatsLoading || !mv) {
+      return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading lease risk…</div></div></div>';
+    }
+    return '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Lease expiration data unavailable</div>';
+  }
+  const n = v => Number(v) || 0;
+  const dated = n(mv.properties_with_lease_exp);
+  const pct = v => dated > 0 ? (v / dated * 100).toFixed(1) + '% of dated leases' : '';
+  let h = '<div class="dia-grid dia-grid-5">';
+  h += infoCard({ title: 'Expiring < 6 Months', value: fmtN(n(mv.exp_lease_lt_6mo)), sub: pct(n(mv.exp_lease_lt_6mo)), color: 'red', tab: 'sales' });
+  h += infoCard({ title: 'Expiring < 1 Year', value: fmtN(n(mv.exp_lease_lt_1yr)), sub: pct(n(mv.exp_lease_lt_1yr)), color: 'orange', tab: 'sales' });
+  h += infoCard({ title: 'Expired / Holdover', value: fmtN(n(mv.lease_expired_count)), sub: fmtN(n(mv.lease_expired_stale)) + ' expired >1yr (stale)', color: 'red', tab: 'sales' });
+  h += infoCard({ title: '2–5 Year Term', value: fmtN(n(mv.exp_lease_2_5yr)), sub: 'mid-range leases', color: 'yellow', tab: 'sales' });
+  h += infoCard({ title: '5+ Year Term', value: fmtN(n(mv.exp_lease_5plus)), sub: 'long-term secured', color: 'green', tab: 'sales' });
+  h += '</div>';
+  h += '<div style="font-size:11px;color:var(--text3);margin-top:6px">Bucketed by actual <b>lease_expiration</b> over ' + fmtN(dated) + ' dated leases. Avg term remaining ' + (mv.avg_term_remaining != null ? Number(mv.avg_term_remaining).toFixed(1) : '—') + ' yrs.</div>';
+  const dist = _diaParseJ(mv.lease_distribution_by_expiry).map(b => ({ label: b.label, count: Number(b.count) || 0, color: b.color }));
+  if (dist.length) {
+    h += '<div class="dia-info-card" style="padding:14px 16px;margin-top:10px">';
+    h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lease Expiration Distribution</div>';
+    const maxB = Math.max(1, ...dist.map(b => b.count));
+    h += diaInlineBar(dist.map(b => ({ label: b.label, value: b.count, display: fmtN(b.count), barColor: b.color, labelWidth: 110, valueWidth: 40 })), maxB);
+    h += '</div>';
+  }
+  return h;
+}
+
+// Operator + Geographic breakdown — the dia mirror of gov's Agency Breakdown +
+// Geographic Distribution sections.
+function renderDiaBreakdownInner() {
+  const mv = diaOverviewStats;
+  if (!mv || mv._error || mv._empty) {
+    if (_diaOverviewStatsLoading || !mv) {
+      return '<div class="dia-info-card" style="text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading breakdown…</div></div>';
+    }
+    return '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Breakdown data unavailable</div>';
+  }
+  const stateName = st => (typeof STATE_FULL !== 'undefined' && STATE_FULL[st]) ? STATE_FULL[st] : st;
+  const opCount = _diaParseJ(mv.top_operators_by_count);
+  const opRent = _diaParseJ(mv.top_operators_by_rent);
+  let h = '';
+  if (opCount.length) {
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h += '<div class="dia-info-card" onclick="goToDiaTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
+    h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Operators by Property Count</div>';
+    const maxC = opCount[0] ? Number(opCount[0].count) || 1 : 1;
+    h += diaInlineBar(opCount.map(d => ({ label: d.name, value: Number(d.count) || 0, display: fmtN(Number(d.count) || 0), barColor: '#60a5fa', labelWidth: 140, valueWidth: 40 })), maxC);
+    h += '</div>';
+    h += '<div class="dia-info-card" onclick="goToDiaTab(\'sales\')" style="cursor:pointer;padding:14px 16px">';
+    h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Operators by Projected Rent</div>';
+    const maxR = opRent[0] ? Number(opRent[0].rent) || 1 : 1;
+    h += diaInlineBar(opRent.map(d => ({ label: d.name, value: Number(d.rent) || 0, display: '$' + fmtN(Math.round((Number(d.rent) || 0) / 1e6)) + 'M', barColor: '#34d399', labelWidth: 140, valueWidth: 56 })), maxR);
+    h += '</div>';
+    h += '</div>';
+  }
+  const stCount = _diaParseJ(mv.top_states_by_count);
+  const stRent = _diaParseJ(mv.top_states_by_rent);
+  if (stCount.length) {
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
+    h += '<div class="dia-info-card" style="padding:14px 16px">';
+    h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Property Count</div>';
+    const maxSc = stCount[0] ? Number(stCount[0].count) || 1 : 1;
+    h += diaInlineBar(stCount.map(d => ({ label: stateName(d.name), value: Number(d.count) || 0, display: fmtN(Number(d.count) || 0), barColor: '#a78bfa', labelWidth: 110, valueWidth: 40 })), maxSc);
+    h += '</div>';
+    h += '<div class="dia-info-card" style="padding:14px 16px">';
+    h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Projected Rent</div>';
+    const maxSr = stRent[0] ? Number(stRent[0].rent) || 1 : 1;
+    h += diaInlineBar(stRent.map(d => ({ label: stateName(d.name), value: Number(d.rent) || 0, display: '$' + fmtN(Math.round((Number(d.rent) || 0) / 1e6)) + 'M', barColor: '#22d3ee', labelWidth: 110, valueWidth: 56 })), maxSr);
+    h += '</div>';
+    h += '</div>';
+  }
+  return h || '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">No breakdown data yet</div>';
+}
+
 /**
  * Render overview — infographic-style command center homepage
  */
 function renderDiaOverview() {
+  // UI Phase 2: load the single-row overview-stats MV (Portfolio at a Glance,
+  // Lease Expiration Risk, Operator/Geographic Breakdown). Fast (~100ms); fills
+  // the value-first placeholder divs when it resolves. Mirrors gov's
+  // mv_gov_overview_stats fast-path.
+  if (!diaOverviewStats && !_diaOverviewStatsLoading) {
+    _diaOverviewStatsLoading = true;
+    (async () => {
+      try {
+        const rows = await diaQuery('mv_dia_overview_stats', '*', { limit: 1 });
+        diaOverviewStats = (rows && rows[0]) ? rows[0] : { _empty: true };
+      } catch (e) {
+        console.warn('dia overview stats load failed:', e.message);
+        diaOverviewStats = { _error: e.message || 'load failed' };
+      }
+      _diaOverviewStatsLoading = false;
+      const g = document.getElementById('diaPortfolioGlance'); if (g) g.innerHTML = renderDiaPortfolioGlanceInner();
+      const r = document.getElementById('diaLeaseExpRisk'); if (r) r.innerHTML = renderDiaLeaseExpRiskInner();
+      const b = document.getElementById('diaBreakdown'); if (b) b.innerHTML = renderDiaBreakdownInner();
+    })();
+  }
   // Kick off lazy-loading sales comps and listings in background if not cached
   if (!diaSalesComps && !diaSalesLoading) {
     diaSalesLoading = true;
@@ -1718,8 +1868,73 @@ function renderDiaOverview() {
   }
 
   // ═══════════════════════════════════════════════
-  // SECTION 1: DATABASE HEALTH
+  // UI Phase 2 — unified value-first Overview order (mirrors gov.js):
+  // Portfolio → Lease Expiration Risk → Market Activity → Pipeline →
+  // Breakdown → Data Health & Coverage (ops at the bottom).
   // ═══════════════════════════════════════════════
+  const _diaGroup = (label) => '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin:30px 0 0;padding:0 2px 6px;border-bottom:2px solid var(--border)">' + label + '</div>';
+
+  // ── SECTION 1: PORTFOLIO AT A GLANCE (value-first headline) ──
+  html += sectionHeader('Portfolio at a Glance', '🏥', 'search');
+  html += '<div id="diaPortfolioGlance">' + renderDiaPortfolioGlanceInner() + '</div>';
+
+  // ── SECTION 2: LEASE EXPIRATION RISK ──
+  html += sectionHeader('Lease Expiration Risk', '⏰', 'sales');
+  html += '<div id="diaLeaseExpRisk">' + renderDiaLeaseExpRiskInner() + '</div>';
+
+  // ── SECTION 3: MARKET ACTIVITY (TTM Sales · Northmarq · On Market · SJC) ──
+  html += _diaGroup('Market Activity');
+  html += sectionHeader('TTM Sales Activity', '💰', 'sales');
+  html += '<div id="diaOverviewSales">' + renderSalesMetricsInner() + '</div>';
+
+  html += sectionHeader('Northmarq Performance', '🏆', 'sales');
+  html += '<div id="diaOverviewNM">' + renderNorthmarqInner() + '</div>';
+
+  html += sectionHeader('On Market', '🏪', 'sales');
+  html += '<div id="diaOverviewMarket">' + renderOnMarketInner() + '</div>';
+
+  // SJC Deal Book (Salesforce, all teams) — loaded async below.
+  html += sectionHeader('SJC Deal Book (Salesforce)', '📒', 'sales');
+  html += '<div id="diaSjcDealBook"><div class="dia-grid dia-grid-4">';
+  html += infoCard({ title: 'Closed Sales', value: '...', sub: 'loading Salesforce deal book', color: 'green', id: 'sjcClosedVal', subId: 'sjcClosedSub' });
+  html += infoCard({ title: 'Closed Volume', value: '...', sub: 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
+  html += infoCard({ title: 'Active Listings', value: '...', sub: 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
+  html += infoCard({ title: 'Under Contract', value: '...', sub: 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
+  html += '</div><div id="sjcDealBookByYear" style="margin-top:10px"></div><div id="sjcDealBookTeams" style="margin-top:10px"></div><div id="sjcRecentDeals" style="margin-top:10px"></div></div>';
+
+  // ── SECTION 4: PIPELINE SNAPSHOT (team BD activity) ──
+  html += _diaGroup('Pipeline Snapshot');
+  html += sectionHeader('Team Outreach & Touchpoints', '📞', 'activity');
+  html += '<div class="dia-grid dia-grid-5">';
+  html += infoCard({ title: 'Team Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue', tab: 'activity' });
+  html += infoCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'team contacts', color: 'green', tab: 'activity' });
+  html += infoCard({ title: 'Last 30 Days', value: fmtN(touchpoints1mo), sub: 'recent contacts', color: 'cyan', tab: 'activity' });
+  html += infoCard({ title: 'Unique Accounts', value: fmtN(uniqueAccounts), sub: 'companies touched', color: 'purple', tab: 'activity' });
+  html += infoCard({ title: 'Avg / Account', value: avgTouchPerAcct, sub: 'touchpoints per account YTD', color: 'yellow', tab: 'activity' });
+  html += '</div>';
+
+  // Per-team-member breakdown
+  html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
+  const memberColors = { 'kelly largent': 'green', 'sarah martin': 'purple', 'scott briggs': 'blue', 'nathanael berwaldt': 'cyan' };
+  NM_TEAM.forEach(name => {
+    const lastName = name.split(' ').pop();
+    const memberActs = diaActivities.filter(a => (a.assigned_to || '').toLowerCase().includes(lastName));
+    const ytd = memberActs.filter(a => a.activity_date && new Date(a.activity_date) >= yearStart).length;
+    const displayName = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    html += infoCard({ title: displayName, value: fmtN(ytd), sub: 'YTD touchpoints', color: memberColors[name] || 'blue', tab: 'activity' });
+  });
+  html += '</div>';
+
+  // ── SECTION 5: OPERATOR & GEOGRAPHIC BREAKDOWN ──
+  html += sectionHeader('Operator & Geographic Breakdown', '🏢', 'search');
+  html += '<div id="diaBreakdown">' + renderDiaBreakdownInner() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 6: DATA HEALTH & COVERAGE (ops — at the bottom)
+  // ═══════════════════════════════════════════════
+  html += _diaGroup('Data Health &amp; Coverage');
+
+  // Database Health
   html += sectionHeader('Database Health', '🏥', 'search');
   if (f._fallback) {
     html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;padding:6px 10px;background:var(--s2);border-radius:6px;border-left:3px solid #fbbf24">⚠ View not available — using estimates from inventory data (' + fmtN(totalClinics) + ' clinics loaded)</div>';
@@ -1731,9 +1946,7 @@ function renderDiaOverview() {
   html += infoCard({ title: 'Lease Coverage', value: leaseBackfillPct + '%', sub: fmtN(leaseBackfillLen) + ' need backfill', color: 'purple', tab: 'research' });
   html += '</div>';
 
-  // ═══════════════════════════════════════════════
-  // SECTION 2: CLINICAL METRICS
-  // ═══════════════════════════════════════════════
+  // Clinical Metrics
   html += sectionHeader('Clinical Metrics', '📊', 'changes');
   html += '<div id="diaOverviewPatientMetrics">' + renderPatientMetricsInner() + '</div>';
   html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
@@ -1779,70 +1992,13 @@ function renderDiaOverview() {
   html += sectionHeader('Clinic Financial Estimates', '💵', 'search');
   html += '<div id="diaOverviewFinancials">' + renderFinancialMetricsInner() + '</div>';
 
-  // ═══════════════════════════════════════════════
-  // SECTION 4: OUTREACH & TOUCHPOINTS
-  // ═══════════════════════════════════════════════
-  html += sectionHeader('Team Outreach & Touchpoints', '📞', 'activity');
-  html += '<div class="dia-grid dia-grid-5">';
-  html += infoCard({ title: 'Team Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue', tab: 'activity' });
-  html += infoCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'team contacts', color: 'green', tab: 'activity' });
-  html += infoCard({ title: 'Last 30 Days', value: fmtN(touchpoints1mo), sub: 'recent contacts', color: 'cyan', tab: 'activity' });
-  html += infoCard({ title: 'Unique Accounts', value: fmtN(uniqueAccounts), sub: 'companies touched', color: 'purple', tab: 'activity' });
-  html += infoCard({ title: 'Avg / Account', value: avgTouchPerAcct, sub: 'touchpoints per account YTD', color: 'yellow', tab: 'activity' });
-  html += '</div>';
-
-  // Per-team-member breakdown
-  html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
-  const memberColors = { 'kelly largent': 'green', 'sarah martin': 'purple', 'scott briggs': 'blue', 'nathanael berwaldt': 'cyan' };
-  NM_TEAM.forEach(name => {
-    const lastName = name.split(' ').pop();
-    const memberActs = diaActivities.filter(a => (a.assigned_to || '').toLowerCase().includes(lastName));
-    const ytd = memberActs.filter(a => a.activity_date && new Date(a.activity_date) >= yearStart).length;
-    const displayName = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    html += infoCard({ title: displayName, value: fmtN(ytd), sub: 'YTD touchpoints', color: memberColors[name] || 'blue', tab: 'activity' });
-  });
-  html += '</div>';
-
-  // ═══════════════════════════════════════════════
-  // SECTION 4b: OWNERSHIP COVERAGE REPORTING
-  // ═══════════════════════════════════════════════
+  // Ownership Coverage (loaded async)
   html += sectionHeader('Ownership Coverage', '🏛️', 'sales');
   html += '<div id="diaOwnershipCoverage"><div class="dia-grid dia-grid-3">';
   html += infoCard({ title: 'Ownership Depth', value: '...', sub: 'loading ownership data', color: 'blue', id: 'diaOwnDevVal', subId: 'diaOwnDevSub' });
   html += infoCard({ title: 'SF Prospecting', value: '...', sub: 'loading activity data', color: 'green', id: 'diaOwnProspVal', subId: 'diaOwnProspSub' });
   html += infoCard({ title: 'Missing SF Link', value: '...', sub: 'loading salesforce data', color: 'red', id: 'diaOwnMissVal', subId: 'diaOwnMissSub' });
   html += '</div></div>';
-
-  // ═══════════════════════════════════════════════
-  // SECTION 5: TTM SALES MARKET
-  // ═══════════════════════════════════════════════
-  html += sectionHeader('TTM Sales Activity', '💰', 'sales');
-  html += '<div id="diaOverviewSales">' + renderSalesMetricsInner() + '</div>';
-
-  // ═══════════════════════════════════════════════
-  // SECTION 6: NORTHMARQ PERFORMANCE
-  // ═══════════════════════════════════════════════
-  html += sectionHeader('Northmarq Performance', '🏆', 'sales');
-  html += '<div id="diaOverviewNM">' + renderNorthmarqInner() + '</div>';
-
-  // ═══════════════════════════════════════════════
-  // SECTION 6b: SJC DEAL BOOK (Salesforce, all teams)
-  // Full attributed deal book straight from Salesforce (v_sjc_deal_book*).
-  // Auto-refreshes as the SF connector syncs. Loaded async below.
-  // ═══════════════════════════════════════════════
-  html += sectionHeader('SJC Deal Book (Salesforce)', '📒', 'sales');
-  html += '<div id="diaSjcDealBook"><div class="dia-grid dia-grid-4">';
-  html += infoCard({ title: 'Closed Sales', value: '...', sub: 'loading Salesforce deal book', color: 'green', id: 'sjcClosedVal', subId: 'sjcClosedSub' });
-  html += infoCard({ title: 'Closed Volume', value: '...', sub: 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
-  html += infoCard({ title: 'Active Listings', value: '...', sub: 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
-  html += infoCard({ title: 'Under Contract', value: '...', sub: 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
-  html += '</div><div id="sjcDealBookByYear" style="margin-top:10px"></div><div id="sjcDealBookTeams" style="margin-top:10px"></div><div id="sjcRecentDeals" style="margin-top:10px"></div></div>';
-
-  // ═══════════════════════════════════════════════
-  // SECTION 7: ON MARKET
-  // ═══════════════════════════════════════════════
-  html += sectionHeader('On Market', '🏪', 'sales');
-  html += '<div id="diaOverviewMarket">' + renderOnMarketInner() + '</div>';
 
   // ═══════════════════════════════════════════════
   // SECTION 7b: LISTINGS NEEDING CONFIRMATION (manual follow-up)
