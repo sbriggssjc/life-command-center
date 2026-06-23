@@ -51,6 +51,11 @@ rows back to 2001-01-31** with non-null values. Dia sales exist from **1996** (t
 smoothing makes the thin early data invisible — **not** missing data. **Fix:** extend the x-axis to the
 first real data point (1996–2001); where Scott wants "back to 1997," show it (flag thin early years).
 Covers dia 1 and gov 1, 11, 13.
+**REFINED 2026-06-22 (CC pushback verified):** the dia volume/cap/txn charts already start at **2001**
+(not 2013), and the cap line is honestly NULL pre-2005 (1–4 dia sales/yr; a TTM cap off <15 sales is
+noise — forcing it earlier fabricates precision). No view-layer "trim" to reverse (round-47 trim
+superseded; footers already flag thin years). The residual: Scott's "appears to start 2013" perception
+is **y-axis scaling** hiding thin early movement — that's the Task-5 axis-min/max fix (RC8), not a data fix.
 
 ### RC4 — 2023–2024 dialysis sales dip is REAL in the data  ·  VERIFY COLLECTION
 Dia sales by year: 2021=462, 2022=451, **2023=270, 2024=200**, 2025=287, 2026=95 (partial). The sharp
@@ -58,12 +63,16 @@ Dia sales by year: 2021=462, 2022=451, **2023=270, 2024=200**, 2025=287, 2026=95
 **capture lag** for those years (2025 recovering to 287 hints at lag). **Action:** reconcile 2023–24
 dia sales completeness against CoStar before concluding it's market-driven. Covers dia 4.
 
-### RC5 — Gov State/Municipal data is near-absent  ·  COLLECTION  ·  data gap
-Non-superseded gov leases by `government_type`: **Federal 11,272 · State 27 · Municipal 6 · Other 57**.
-The State/Municipal cap lines are blank because we have **~0 state/municipal deals** — the GSA/federal
-capture doesn't include state & local. **Fix:** either source state/municipal lease+sale data, or
-relabel the chart "Federal" and drop the empty series so it doesn't read as a propagation failure.
-Covers gov 2.
+### RC5 — Gov State/Municipal cap series are SPARSE, not empty  ·  CORRECTED 2026-06-22 (CC pushback verified)
+**Original verdict was WRONG and is retracted.** I conflated the *lease* government_type mix
+(Federal 11,272 / State 27 / Municipal 6 — genuinely ~99.7% Federal) with the `cap_by_credit` chart,
+which is built from **SALES-derived cap cohorts**, not the lease inventory. Verified against the export
+Scott reviewed: **State Cap = 76 non-null quarters (2004-12 → 2025-09), Municipal Cap = 29 (2014-12 →
+2023-03)**. These are real history — do NOT relabel "Federal" or drop them (CC correctly refused).
+The residual real issues, narrower than the original claim: (a) **Municipal has no data after
+2023-03** — a recency gap worth checking (is municipal deal flow really zero since 2023, or a
+tagging/capture gap?); (b) the series are **sparse** (gaps between quarters), so a connected line can
+misread as "missing movement" — render as markers / gap-aware. Covers gov 2.
 
 ### RC6 — Gov "active lease inventory" definition is broken (302 / 4,734 / ~8,000)  ·  FORMULA  ·  fixable
 Total gov leases **16,616**; not-superseded **11,379**; but only **302** have `expiration_date >=
