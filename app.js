@@ -8498,7 +8498,15 @@ function handleLocalCopilotQuery(msg) {
 // ============================================================
 // ENHANCED GREETING — updates with daily context after data loads
 // ============================================================
+function setGreetingDate() {
+  const dateEl = document.getElementById('greetingDate');
+  if (dateEl) dateEl.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+}
+
 function updateGreeting() {
+  // Re-stamp the date on every refresh so a tab left open across midnight
+  // doesn't keep showing yesterday's date (the init-time value goes stale).
+  setGreetingDate();
   const el = document.getElementById('greeting');
   if (!el) return;
   const base = getGreeting();
@@ -8532,9 +8540,32 @@ function updateGreeting() {
 // INIT
 // ============================================================
 const _greetEl = document.getElementById('greeting');
-const _greetDateEl = document.getElementById('greetingDate');
 if (_greetEl) _greetEl.textContent = getGreeting();
-if (_greetDateEl) _greetDateEl.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+setGreetingDate();
+
+// Day-rollover refresh: a tab left open across midnight must not keep showing
+// yesterday's date. Re-stamp the greeting + its date when the tab is re-focused,
+// and on a timer scheduled to fire just after the next local (Chicago) midnight.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { if (_greetEl) _greetEl.textContent = getGreeting(); setGreetingDate(); }
+  });
+}
+function scheduleMidnightGreetingRefresh() {
+  // ms until ~10s past the next local midnight (Chicago), via the tz-aware date string.
+  const now = new Date();
+  const chicagoNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const next = new Date(chicagoNow);
+  next.setHours(24, 0, 10, 0);
+  const delay = Math.max(1000, next - chicagoNow);
+  setTimeout(() => {
+    if (_greetEl) _greetEl.textContent = getGreeting();
+    setGreetingDate();
+    if (typeof updateGreeting === 'function') updateGreeting();
+    scheduleMidnightGreetingRefresh();
+  }, delay);
+}
+if (typeof setTimeout === 'function') scheduleMidnightGreetingRefresh();
 
 // Initialize auth module, then load user context, flags, and data
 // IMPORTANT: Auth init must complete BEFORE data loading begins.

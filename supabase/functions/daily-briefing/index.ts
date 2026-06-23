@@ -1021,11 +1021,21 @@ function buildDomainSignals(myWork: any[], inboxSummary: any, unassignedWork: an
   }
 
   for (const c of (hotContacts || [])) {
-    if (govHighlights.length >= 5) break;
     const name = deriveItemTitle(c);
     if (!name) continue;
     const score = c.engagement_score ? ` (score: ${c.engagement_score})` : "";
-    govHighlights.push(`${name}${score}`);
+    // Route the hot contact to its own domain's highlights, each respecting its
+    // own >=5 cap. A dia-classified hot contact MUST be allowed into dia (was
+    // unconditionally pushed to gov, so dia could never surface one). Unknown
+    // domain keeps the prior gov-default behavior.
+    const domain = inferDomain(c);
+    if (domain === "dialysis") {
+      if (diaHighlights.length >= 5) continue;
+      diaHighlights.push(`${name}${score}`);
+    } else {
+      if (govHighlights.length >= 5) continue;
+      govHighlights.push(`${name}${score}`);
+    }
   }
 
   const diaPipe = diaPipeline || { deals: [], leads: [] };
