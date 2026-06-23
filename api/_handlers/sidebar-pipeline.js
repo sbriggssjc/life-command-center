@@ -21,7 +21,7 @@ import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
-import { getCadenceState } from '../_shared/cadence-engine.js';
+import { getCadenceState, entityHasBdSignal } from '../_shared/cadence-engine.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
@@ -1564,20 +1564,32 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
     // via a backfill if needed.
     if (link.createdEntity && entityType === 'person' && workspaceId && link.entityId) {
       try {
-        // 1. Initialize touchpoint_cadence at touch 0 (idempotent — if a
-        //    row already exists for this entity_id it's returned unchanged).
-        const cadenceRes = await getCadenceState(
-          { entity_id: link.entityId },
-          { domain }
-        );
-        if (!cadenceRes?.ok) {
-          console.warn('[contact-cadence-seed] getCadenceState non-ok for',
-            link.entityId, '-', cadenceRes?.error || 'unknown');
+        // 1. R63 Unit 1 — only a real BD target gets an auto-cadence. A bare
+        //    captured contact (the typical CoStar broker/owner contact) carries
+        //    no Salesforce identity, value, open opp, or SF activity, so it is
+        //    NOT auto-seeded into a prospecting cadence — that is exactly the
+        //    capture noise that drowned the cadence dashboard (300 overdue
+        //    captures vs Scott's real ~16 relationships). It still lands in the
+        //    inbox triage below; Scott promotes it to a real target (open an
+        //    opp / SF-link / portfolio value), and a cadence then grows from the
+        //    real outreach he logs (the sf-activity grow path).
+        let cadenceRes = null;
+        if (await entityHasBdSignal(link.entityId)) {
+          // Initialize touchpoint_cadence at touch 0 (idempotent — an existing
+          // row for this entity_id is returned unchanged).
+          cadenceRes = await getCadenceState(
+            { entity_id: link.entityId },
+            { domain }
+          );
+          if (!cadenceRes?.ok) {
+            console.warn('[contact-cadence-seed] getCadenceState non-ok for',
+              link.entityId, '-', cadenceRes?.error || 'unknown');
+          }
         }
-        // 2. POST inbox_items so the new contact lands in Scott's triage
-        //    queue. Skip if cadence row was pre-existing (is_new === false)
-        //    — that means this contact was already triaged before.
-        if (cadenceRes?.ok && cadenceRes.is_new) {
+        // 2. POST inbox_items so the new contact lands in Scott's triage queue
+        //    regardless of cadence — the contact stays in the inbox until it is
+        //    promoted to a real target (when it earns its cadence above).
+        {
           const role = contact.role || 'unknown';
           const title = `New contact: ${contact.name}${role && role !== 'unknown' ? ' (' + role + ')' : ''}`;
           const bodyLines = [
@@ -1610,7 +1622,7 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
               contact_phone:    contact.phones?.[0] || contact.phone || null,
               contact_company:  contact.company || null,
               contact_title:    contact.title || null,
-              cadence_id:       cadenceRes.cadence?.id || null,
+              cadence_id:       cadenceRes?.cadence?.id || null,
               extracted_at:     extractedAt,
               property_entity_id: propertyEntityId || null,
             },
@@ -1619,7 +1631,7 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
             console.warn('[contact-cadence-seed] inbox_items POST failed for',
               link.entityId, '-', inboxRes?.status, inboxRes?.data);
           } else {
-            console.log(`[contact-cadence-seed] seeded cadence + inbox for new contact ${contact.name} (entity ${link.entityId}, domain ${domain})`);
+            console.log(`[contact-cadence-seed] ${cadenceRes ? 'seeded cadence + ' : 'no-signal (no cadence), '}inbox triage for new contact ${contact.name} (entity ${link.entityId}, domain ${domain})`);
           }
         }
       } catch (err) {
