@@ -71,10 +71,14 @@ capped row-fetch `.length` or a fragile post-render `setTxt`.
 ### 6. ON MARKET — "742 active listings" (scope check)
 - **Data:** `v_available_listings` = **746** rows (the tile's 742 after excluding 2 stale).
   This is a real count, not a bug.
-- **Open question:** is 746 the right *dialysis* scope, or does `v_available_listings` include
-  non-dialysis / aggregator-bleed listings? For a dialysis-only book 746 active listings is high.
-  → **Scope verification needed** (sample the view; confirm asset_type/domain filter). Likely
-  accurate but worth a spot check.
+- **RESOLVED (spot-check 2026-06-23): the count is REAL and dialysis-scoped — not
+  mis-categorized.** 745 rows, all with a `property_id`; **712 (96%) carry a dialysis-named
+  operator** (DaVita/Fresenius/US Renal/dialysis/nephro), only 6 have no operator; 701 priced;
+  status = 744 active + 1 under_contract. So 742 active dialysis listings is accurate.
+  - **One refinement (freshness, not a bug):** only **601 of 745 were listed within 180 days** →
+    ~144 (19%) are 6+ months old but still `status='active'`, yet the tile excludes only "2
+    stale." The availability-checker / verification (the 28-overdue tile) should age more of
+    these out so the "active market" headline isn't padded by a stale tail. Ties to #5/#7.
 
 ### 7. Ingestion staleness (the real ops issue — drives #4 and freshness)
 - **Data:** `ingestion_tracker` latest `facility_patient_counts` run = **2026-03-27,
@@ -92,9 +96,17 @@ capped row-fetch `.length` or a fragile post-render `setTxt`.
 - The SJC Deal Book by-year/teams = the team's **Salesforce CRM brokered deals**
   (`v_sjc_deal_book`, bounded ~60), NOT the **3,035 market sale comps** (`sales_transactions`).
   They're different universes — the by-year chart correctly shows only Briggs/SJC closed deals.
-- **Open question:** if Scott expects more SF deals, the **Salesforce → dia deal-book sync** may
-  be incomplete (e.g., only certain record types / teams synced). → separate SF-sync
-  completeness check; not a dashboard bug.
+- **RESOLVED (spot-check 2026-06-23): NOT a sync gap.** The deal book spans **2017-2026 across
+  ~12 teams** (Briggs, Scrivner, Feller, Powell, Brett, Hughes, Butler, Hedrick, Byerly, Duff,
+  Fritz, Harf, Adatto, Stan Johnson Co…) — a reasonably complete multi-team SF sync. Closed
+  deals by side: **62 Sale-Deal-Commercial + 11 IS-Buy-Side + 9 IS-Off-Market = 82 total
+  closed** (plus 29 terminated Sale, 29 terminated Off-Market, 13 active, 5 in-escrow/LOI).
+  - **The "missing many sales" impression has two real parts:** (a) the deal book is the team's
+    SF *brokered* deals (~82 closed), a different universe from the **3,035 market sale comps**
+    (`sales_transactions`) — not missing, just different; and (b) the headline **"Closed Sales"
+    tile counts ONLY `deal_side='Sale Deal - Commercial'` (62)**, excluding the ~20 closed
+    buy-side / off-market deals. → **Scott's call:** relabel the tile "Closed Sale-Side Deals"
+    for honesty, OR include all closed `deal_side`s (82). Minor JS tweak, not a sync fix.
 
 ### 9. Feature request — clickable Recent Closed Sales + team closings
 - `Recent closed sales` (`dialysis.js:1666-1677`) and the team table render as static rows.

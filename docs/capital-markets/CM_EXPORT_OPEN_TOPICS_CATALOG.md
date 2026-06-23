@@ -42,13 +42,31 @@ axis on "Days on Market & % of Ask" (still 0-450 DOM scale; % line crushed), ren
 %s, and other non-cap percent trendlines. **Action:** extend the fitted-axis logic to non-cap percent
 series (% of ask ~85-105%, renewal rates, returns) and secondary axes — same data-driven floor/ceiling.
 
-### T3 — Cap-rate-by-lease-term bucket: formula + storage correctness  ·  P1  ·  recurring deep concern
-**Notes:** dia 7, 13, 14 · gov 19, 31. Scott repeatedly asks: "Are the formulas correct for each bucket
-(TTM avg cap rate moving monthly per lease-term-remaining bucket)? Are we storing each sale correctly?"
-**Grounded:** not yet independently verified. **Action:** audit the bucket pipeline end to end — confirm
-each sale is assigned to the right lease-term-remaining-at-close bucket, the monthly-rolling TTM average
-is computed correctly per bucket, and the stored series matches a from-scratch recompute. Report whether
-the "too smooth / little movement" is real (TTM smoothing) or a binning/averaging bug.
+### T3 — Cap-by-term: VIEW FORMULA correct (verified) ✅  ·  but T3b export-mapping inconsistency found ⚠
+**Notes:** dia 7, 13, 14 · gov 19, 31.
+**T3 VERDICT (CC full-series recompute, both DBs): the view math is correct** — 303×4 (dia) / 255×5
+(gov) cells diffed cell-by-cell vs a from-scratch recompute = **max abs diff 0.0, 0 NULL mismatches**.
+Term basis (`firm_term_years_at_sale`) + bucketing + TTM avg all reconcile. (My own spot-check matched
+too — but on `cm_dialysis_cap_by_term_m`; the EXPORT reads `cm_dialysis_sold_cap_by_term_dot`, the
+smoothed one — see T3b.) Benign: dia 14% / gov 22% of cap-eligible sales have NULL term → unbucketed
+(missing lease data, not mis-bucketing). Methodologies differ by design: dia = mean/1yr-TTM/n≥3/9-mo MA;
+gov = median/2yr-TTM/n≥5/7-mo MA.
+
+### T3b — Export MAPPING ≠ the manual MASTER workbook (the real "doesn't move" cause)  ·  P1  ·  ❓ DECISION
+Triggered by Scott's manual `Dialysis Comp Work MASTER.xlsx` (his trusted historical source). Its
+lease-term chart = **4 buckets (12+/8-12/6-8/≤5), raw SOLD CAP, TTM, NO smoothing**, term=(EXP−DATE)/365
+(= same basis as the DB). **The export is inconsistent with it in TWO ways (verified in code):**
+1. **Rendered line chart** (`capital-markets.js:455`) draws the **gov 3-bucket scheme (10+/6-10/<5)** for
+   dialysis — no vertical branch — instead of the 4-bucket dia scheme. Plain bug.
+2. The path that DOES use 4 buckets (the Excel tab, via `cm_dialysis_sold_cap_by_term_dot`) layers a
+   **9-month centered MA + n≥3 density floor** the manual never had → halves month-over-month movement
+   (12+ bucket: raw 5.1 bps/mo → export 2.1; ≤5: 7.1 → 3.0). That's the visible "flatness."
+**Decision (Scott):** Option 1 (recommended) — lock dia to 4 buckets on BOTH surfaces (fix line 455
+vertical-aware) + drop the 9-mo MA & density floor for dia so it tracks raw TTM like the manual. Option 2
+— keep some smoothing but make rendered+Excel consistent and document it as intentionally smoothed.
+**Note:** this is the WITHIN-RANGE movement/bucket fix; the T1b display-start floors (2019/2017) are
+separate and stay. Level-only diffs (cap_rate_final clamped [4-12%] vs manual raw SOLD CAP; ~13mo vs
+12mo window) don't affect movement — keep cap_rate_final (cleaner) but match window/buckets/no-MA.
 
 ### T4 — Available / active deal-count history & consistency  ·  P1
 **Notes:** dia 5, 8, 11, 12 · gov 27, 29, 30. Scott still sees counts "significantly lower prior to 2025"
