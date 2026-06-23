@@ -385,3 +385,11 @@ honest classification (surface `no_domain`/`State`, never guess).
   `ingest_tfc()` module on a workstation (the gated row 32505 coexists via ON CONFLICT/NOT EXISTS).
   Topic 2 = schema + classifier live, ingest built/validated/gated-live; full bulk + run-logging is
   the workstation step.
+- **2026-06-23** — **TFC full-drain fix** (gov PR #306): the live full run hit `23505` on
+  `uq_recorded_owners_canonical` — `recorded_owners` is unique on **`canonical_name`** (a
+  normalized form), not `name`, so the name-based NOT-EXISTS guard missed owners colliding under a
+  different spelling (`RKJ ENTERPRISES, LLC`). Mirrored the gov `compute_canonical_name` in Python
+  (verified byte-identical to the DB on real TFC names) and now dedupe + link owners by
+  `canonical_name`, preferring active (non-merged) rows. The aborted run wrote no owners/properties
+  (atomic batch failed first); only the gated building 01021 exists — the re-run is idempotent. Scott
+  re-runs `python -m src.ingest_texas_tfc "<file>"`.
