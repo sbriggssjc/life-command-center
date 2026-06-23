@@ -158,6 +158,55 @@ const CAP_RATE_TIGHT_RANGE    = { min: 0.05,  max: 0.08  };
 const CAP_RATE_BID_ASK_RANGE  = { min: 0.055, max: 0.100 };
 const CAP_RATE_DOT_RANGE      = { min: 0.04,  max: 0.12  };
 const CAP_RATE_COHORT_RANGE   = { min: 0.04,  max: 0.11  };
+
+// CM audit 2026-06-22 Task 5 — data-driven Y-axis auto-fit for the cap-rate /
+// spread trend family. Every cap-rate chart sits in a narrow band (~5-10.6%), so
+// the old hand-tuned literal ranges drifted out of date on refresh and a 0-based
+// axis crushed the movement into the top of the panel. This fits the axis to the
+// PLOTTED SERIES so it stays correct as data refreshes (Scott, 2026-06-22):
+//   floor = round DOWN to 0.5% of the series min   (clamped >= 0)
+//   ceil  = round UP   to 0.5% of the series max
+// Net Lease Spread approaches zero (~1.1%) and is handled by the same rule (its
+// floor rounds toward 0) — no special-casing. Returns null when there is no
+// real spread to fit, so callers fall back to their prior literal (no regression).
+const CAP_AXIS_FIT_TEMPLATES = new Set([
+  'cap_rate_ttm_by_quarter',
+  'cap_rate_top_bottom_quartile',
+  'nm_vs_market_cap',
+  'cap_rate_by_lease_term',
+  'sold_cap_by_term_dot_plot',
+  'asking_cap_by_term_dot_plot',
+  'asking_cap_quartiles_active',
+  'cap_rate_by_credit',
+  'net_lease_spread',
+]);
+function fitCapAxisRange(rows, cols) {
+  if (!Array.isArray(rows) || !rows.length || !Array.isArray(cols)) return null;
+  // Cap/spread series are the percent-formatted value columns; non-cap columns
+  // (counts, prices, dates) and any bps-unit columns fall outside the decimal
+  // cap band and are excluded, so the fit can never mix units.
+  const pctCols = cols.filter((c) => /percent|basis_points/i.test(c.format || ''));
+  const vals = [];
+  for (const r of rows) {
+    for (const c of pctCols) {
+      let v = r[c.key];
+      if (v == null && Array.isArray(c.fieldKeys)) {
+        for (const fk of c.fieldKeys) { if (r[fk] != null) { v = r[fk]; break; } }
+      }
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0.002 && n <= 0.30) vals.push(n);
+    }
+  }
+  if (vals.length < 2) return null;
+  const STEP = 0.005;
+  const mn = Math.min(...vals);
+  const mx = Math.max(...vals);
+  let min = Math.max(0, Math.floor(mn / STEP) * STEP);
+  let max = Math.ceil(mx / STEP) * STEP;
+  if (max <= min) max = min + STEP;
+  // round to kill floating-point noise (0.045000000001)
+  return { min: Math.round(min * 1e6) / 1e6, max: Math.round(max * 1e6) / 1e6 };
+}
 const PCT_OF_ASK_RANGE        = { min: 0.85,  max: 1.05  };
 
 // Emit <c:scaling> block with optional min/max. If both are undefined
@@ -2154,6 +2203,7 @@ export {
   buildDoughnutChartXml,
   buildDrawingXml,
   heatRampColors,
+  fitCapAxisRange,
 };
 
 // ----------------------------------------------------------------------------
@@ -2780,6 +2830,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     : dataStart - 1;
   const standardAnchor = { col0: 0, row0: 0, col1: 13, row1: 21 };
 
+  // CM audit Task 5 — fitted cap-rate/spread Y-axis (refresh-proof). null for
+  // non-cap charts and when there's no real spread; each cap case uses
+  // `capFit || <prior literal>` so an empty fit is a no-op.
+  const capFit = CAP_AXIS_FIT_TEMPLATES.has(chart_template_id)
+    ? fitCapAxisRange(rows, cols)
+    : null;
+
   // Helper: find the column letter for a CHART_COLUMNS key (or first
   // match from a list of candidate keys).
   const findCol = (...keys) => {
@@ -2847,7 +2904,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // 5.75-8.5% clipped the 8.57% peak and left ~0.7% empty below); gov stays
       // on shared CAP_RATE_RANGE (5-10%).
       return singleSeries('line', 'ttm_weighted_cap_rate', navy, {
-        yAxisRange: (vertical === 'dialysis' ? { min: 0.0625, max: 0.0875 } : CAP_RATE_RANGE),
+        yAxisRange: capFit || (vertical === 'dialysis' ? { min: 0.0625, max: 0.0875 } : CAP_RATE_RANGE),
         valAxNumFmt: VAL_FMT_PERCENT_2DP,
       });
     case 'transaction_count_ttm':
@@ -3216,7 +3273,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           // R37 P2 — 4-line cohort caps: 4-11% pin (renderer line ~874)
-          yAxisRange: cohortRange,
+          // CM audit Task 5 — data-fit overrides the hand-tuned cohortRange.
+          yAxisRange: capFit || cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: series.map(s => ({
@@ -3266,9 +3324,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 6.40-7.27% over 2020+), so the dia range clipped the gov peaks; gov
           // gets its own 6.0-7.75% frame. (The 4.75-7.75% original left ~1.3% of
           // dead space below the lines on both.)
-          yAxisRange: (vertical === 'dialysis')
+          yAxisRange: capFit || (vertical === 'dialysis'
             ? { min: 0.0575, max: 0.0725 }
-            : { min: 0.06, max: 0.0775 },
+            : { min: 0.06, max: 0.0775 }),
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           // R66o — thin gray vertical connectors between the two lines (deck style).
           hiLowLines: '#C9CED6',
@@ -3854,7 +3912,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // R60 → R63 — IQR-visibility. R63 set 5-9% (batch 6 2026-05-23).
           // NOTE: Data_Cap_Quartile was NOT in the 2026-05-31 export feedback,
           // so R66 leaves it at the R63 5-9% band (no scope creep).
-          yAxisRange: { min: 0.05, max: 0.09 },
+          yAxisRange: capFit || { min: 0.05, max: 0.09 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
@@ -3895,7 +3953,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
           // R37 P2 — cap by credit uses CAP_RATE_RANGE 5-10% (renderer ~1538)
-          yAxisRange: CAP_RATE_RANGE,
+          yAxisRange: capFit || CAP_RATE_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
@@ -4015,7 +4073,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // gated out at the view (n_core>=5) and all four series are smoothed, so
           // the data sits in the deck's tight 4.94-7.3% band. Tighten the axis to
           // the deck's 4.5-7.75% (was 4.75-9.0% to accommodate the now-removed spikes).
-          yAxisRange: { min: 0.045, max: 0.0775 },
+          yAxisRange: capFit || { min: 0.045, max: 0.0775 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol, color: C_MAUVE }, // total upper
@@ -4952,6 +5010,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           dataStart, dataEnd,
           // R37 P2 — cap rate percent
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
+          // CM audit Task 5 — data-fit the % axis (was auto-scaled 0-based, which
+          // crushed the 1-10% lines). Spread legitimately nears zero, so the
+          // fit floors toward 0 here. null => prior auto-scale (no regression).
+          yAxisRange: capFit || undefined,
           series: [
             { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
             { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },

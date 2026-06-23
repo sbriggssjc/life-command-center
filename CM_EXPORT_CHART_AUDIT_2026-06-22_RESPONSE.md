@@ -179,14 +179,29 @@ asking-dots. So all three are intentional. **Recommendation:** keep the closed
 LINE + the asking DOTS; the closed DOTS is the only candidate to drop if the deck
 wants one fewer term-cap panel — an editorial call for Scott, not a blind delete.
 
-**Y-axis min/max — mechanism confirmed; specific charts need naming.** The
-line/bar builders already accept `spec.yAxisRange:{min,max}` (`valAxScalingFrag`)
-— pinning is per-chart config, just not set on the flagged "dia chart 2 / gov 11".
-Those chart numbers aren't resolvable from the export code without the June-22
-review doc's numbering, and pinning a wrong range hurts more than it helps, so I
-held rather than guess. Tell me which two charts (or "all the cap-rate trend
-charts") and I'll add a fitted range — the classic win is a non-zero floor on the
-cap-rate line charts so 6–8% movement isn't flattened against a 0-based axis.
+**Y-axis auto-fit — DONE (the whole cap-rate/spread family).** Per Scott's
+decisive call (2026-06-22): every cap-rate trend chart lives in a narrow band
+(~5–10.6%), so a 0-based / stale hardcoded axis crushes the real movement into the
+top of the panel — that's why the lines look flat. Added `fitCapAxisRange(rows,
+cols)` (`cm-native-chart-injector.js`) — a **data-driven** fit computed from the
+plotted series (not literals, so it stays correct on refresh):
+- floor = round **down** to 0.5% of the series min (clamped ≥ 0); ceil = round
+  **up** to 0.5% of the series max. Net Lease Spread (legitimately ~1.1%) floors
+  toward zero by the same rule — no special-casing.
+- Fits only the percent-formatted value columns within a decimal cap band
+  `[0.002, 0.30]`, so it never mixes units (a bps column or a price falls out and
+  the chart keeps its prior literal — `capFit || <literal>`, a no-op on empty fit).
+
+Applied to all 9 named templates (verified all native, so it reaches the Excel
+output): `cap_rate_ttm_by_quarter`, `cap_rate_top_bottom_quartile`,
+`nm_vs_market_cap`, `cap_rate_by_lease_term`, `sold_cap_by_term_dot_plot`,
+`asking_cap_by_term_dot_plot`, `asking_cap_quartiles_active`, `cap_rate_by_credit`,
+`net_lease_spread`. This replaces the per-round hand-tuned literals
+(`{6.25,8.75}`, `CAP_RATE_RANGE`, cohort variants, …) with the auto-fit.
+**Verified against Scott's grounded numbers** (`test/cm-heat-ramp.test.mjs`):
+most-cap 5.0→9.5%, gov NM 6.0→8.0%, dia active 5.5→8.0%, gov credit 7.0→9.5%,
+spread 1.0→11.0%. Full injector suite green (192 pass). Ships on the Railway
+redeploy; no view/data change.
 
 ---
 
