@@ -149,6 +149,14 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // Store requested initial tab for use after data loads
   window._udInitialTab = activeTab;
 
+  // Client routing (UI Phase 1): mirror the open property+tab into the hash so a
+  // reload / pasted deep-link re-opens this exact detail. Loop-guarded (no-op
+  // when the router is the one driving this open). Needs a stable property_id;
+  // clinic-only opens (no property_id) are not deep-linked this phase.
+  if (typeof _routeSetDetailHash === 'function' && ids && ids.property_id) {
+    _routeSetDetailHash({ kind: 'prop', db, id: ids.property_id, tab: activeTab });
+  }
+
   // Show spinner in body
   if (bodyEl) bodyEl.innerHTML =
     '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading details...</p></div>';
@@ -796,6 +804,9 @@ window._udSubmitDismiss = _udSubmitDismiss;
 function switchUnifiedTab(tabName) {
   if (!_udCache) return;
   tabName = _udMapLegacyTab(tabName);
+  // Client routing (UI Phase 1): keep the tab segment in the hash current
+  // (replace, so reload keeps the tab and no history entry / loop is created).
+  if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
   document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
@@ -11856,6 +11867,13 @@ async function openEntityDetail(entityId) {
 
   panel.style.display = 'block';
   overlay.classList.add('open');
+
+  // Client routing (UI Phase 1): mirror the open entity into the hash so a
+  // reload / deep-link re-opens it. Loop-guarded (no-op when the router drove
+  // this open).
+  if (typeof _routeSetDetailHash === 'function') {
+    _routeSetDetailHash({ kind: 'entity', id: entityId });
+  }
 
   const headerEl = document.getElementById('detailHeader');
   const tabsEl = document.getElementById('detailTabs');
