@@ -18,6 +18,8 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
+import { heatRampColors } from './cm-native-chart-injector.js';
+
 const QUICKCHART_URL =
   process.env.CM_QUICKCHART_URL || 'https://quickchart.io/chart';
 
@@ -1972,6 +1974,9 @@ function buildChartConfig(chart, brand) {
         .filter(r => r.avg_rpsf != null)
         .sort((a, b) => Number(b.avg_rpsf) - Number(a.avg_rpsf))
         .slice(0, 15);
+      // CM audit Task 5 (gov #8) — value-grade the bars (pale->navy by avg_rpsf)
+      // so the PNG reads as a heat map, matching the native chart.
+      const heatBg = heatRampColors(top.map(r => r.avg_rpsf)).map(h => '#' + h);
       return {
         type: 'bar',
         data: {
@@ -1979,7 +1984,7 @@ function buildChartConfig(chart, brand) {
           datasets: [{
             label: 'Avg Rent PSF',
             data: top.map(r => r.avg_rpsf),
-            backgroundColor: palette[0], borderRadius: 2,
+            backgroundColor: heatBg, borderRadius: 2,
           }],
         },
         options: { ...commonOpts({ yAxisFormat: AXIS_FORMAT_CURRENCY, xMaxTicks: 16 }),
