@@ -453,13 +453,32 @@
           options: commonChartOptions('currency_millions') });
       }
       case 'cap_rate_by_lease_term': {
-        datasets = [
+        // Vertical-aware cohort scheme — mirrors cm-chart-image-renderer.js +
+        // cm-excel-export.js so the in-app preview, the export image, and the
+        // Excel tab all show the SAME buckets for a given vertical. Dialysis
+        // PDF p.22 = 12+/8-12/6-8/≤5; gov PDF p.13 = 10+/6-10/<5/Outside Firm.
+        // Detect the dialysis cohorts by sniffing cap_12plus on the row shape.
+        const hasDiaCohorts = (chart.rows || []).some(r =>
+          r.cap_12plus != null || r.cap_8to12 != null ||
+          r.cap_6to8 != null  || r.cap_5orless != null);
+        datasets = hasDiaCohorts ? [
+          { label: '12+ Year', data: chart.rows.map(r => r.cap_12plus),
+            borderColor: palette[0], tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: '8-12 Year', data: chart.rows.map(r => r.cap_8to12),
+            borderColor: palette[1], tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: '6-8 Year', data: chart.rows.map(r => r.cap_6to8),
+            borderColor: palette[2], tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: '≤5 Year', data: chart.rows.map(r => r.cap_5orless),
+            borderColor: palette[4], tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        ] : [
           { label: '10+ Year', data: chart.rows.map(r => r.cap_10plus),
             borderColor: palette[0], tension: 0.3, pointRadius: 0, borderWidth: 2 },
           { label: '6–10 Year', data: chart.rows.map(r => r.cap_6to10),
             borderColor: palette[1], tension: 0.3, pointRadius: 0, borderWidth: 2 },
           { label: '<5 Year', data: chart.rows.map(r => r.cap_less5),
             borderColor: palette[2], tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: 'Outside Firm', data: chart.rows.map(r => r.cap_outside_firm),
+            borderColor: palette[4], tension: 0.3, pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
         ];
         return new Chart(canvas, { type: 'line', data: { labels, datasets },
           options: commonChartOptions('percent_basis_points') });
