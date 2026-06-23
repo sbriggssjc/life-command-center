@@ -38,8 +38,15 @@ Research-workbench findings into one sequenced plan.
   Renal Care…). **Remaining:** a hands-off cold-load render check defeated the automation tab
   (synthetic nav + 60s CDN cache + synthetic `.click()` not firing the real render path) —
   needs Scott's 10-sec in-browser eyeball: open Dialysis → Overview, confirm the value blocks
-  render value-first (and gov reads still fine). Mark Phase 2 DONE after that eyeball; then
-  Phase 3.
+  render value-first (and gov reads still fine).
+- **Phase 2 — ✅ DONE / VERIFIED LIVE 2026-06-23 (Scott eyeball).** dia Overview renders
+  value-first: Action Items → Portfolio at a Glance ($936M / 12,280 / 220M SF / $27.36 PSF /
+  45 operators) → Lease Expiration Risk (buckets + distribution) → Market Activity (TTM /
+  Northmarq / On Market) → Pipeline Snapshot (Team Outreach) → Operator & Geographic Breakdown
+  (DaVita 4,292/$622M, Fresenius 3,519/$203M, top states) → Data Health & Coverage at the
+  bottom. Brand-consistent, mirrors gov. **Follow-on:** Scott's eyeball surfaced a set of
+  broken/mis-categorized dia Overview tiles → spun out as the "dia Overview tile audit"
+  (DIA_OVERVIEW_TILE_AUDIT_2026-06-23.md), tracked separately from the Phase 3 IA work.
 
 ## Two themes explain almost everything we found
 1. **The Consumption Layer is missing.** Across Today (research), Priority Queue (cadence
