@@ -190,11 +190,20 @@ column map.
       (6 cases) **pass**. **Validated on the REAL file:** 1,179 rows → **725 buildings / 997
       agency-tenants / 549 distinct landlords / 553 lessor contacts (all w/ email)**; multi-agency
       building 01271 grouped its 3 agencies with the right primary.
-- [ ] **LIVE DRAIN (gate):** run `ingest_tfc(<TFC file>)` against the gov DB (needs gov creds + the
-      TFC file in-repo / a workstation) — confirm 725 `State` properties land, the trigger leaves the
-      explicit `State` intact, lessor contacts populate `contacts`, and a re-run is idempotent.
-      Wire `start_ingestion_run`/`log_ingestion_error` into the live-drain (writer currently returns a
-      summary dict).
+- [~] **LIVE DRAIN (gate) — gated building DONE + verified live; full bulk via the module run.**
+      Drove a gated 1-building drain (Prop ID 01021) into the gov DB via Supabase MCP and verified:
+      `properties.property_id=32505`, `government_type='State'` (the classify trigger left the
+      explicit value), `recorded_owner_id`→SVEA Industrial VI LLC, + 1 `property_agencies` row,
+      1 `leases` row, and the landlord `contact` (Harry Kuper, email/phone, `contact_type='landlord'`,
+      linked owner). The mechanism works against the real schema. The gated test **surfaced + fixed
+      two writer bugs** (committed): `recorded_owners` has **no `data_source`** column and
+      `contact_info` is **JSONB** (the writer now inserts owners as name/type/state via `NOT EXISTS`,
+      not `upsert on name`). **The full 725-building bulk is NOT done via MCP** — ~3,800 rows ≈ 900KB
+      of SQL (the owners batch alone is ~31K tokens) is impractical to push through the chat context;
+      it must run from `ingest_tfc(<TFC file>)` on a workstation with gov creds + the file (streams via
+      the DB client, no LLM in the loop). The writer + SQL are idempotent, so the gated row 32505
+      coexists with the later full run. Still to wire: `start_ingestion_run`/`log_ingestion_error`
+      into the live-drain step (writer currently returns a summary dict).
 - [ ] After the drain: confirm investment scoring assigns **State=4** on the new rows (the dead enum
       goes live), and re-run the classifier backfill for any agency that landed `government_type` NULL.
 - [ ] De-dupe new state buildings against existing rows by `normalized_address` (most won't exist —
@@ -312,3 +321,12 @@ honest classification (surface `no_domain`/`State`, never guess).
   the real TFC file → 725 buildings / 997 agency-tenants / 549 landlords / 553 lessor contacts. The
   **live drain** (write 725 State properties to the gov DB) is the remaining Topic-2 gate — needs gov
   creds + the TFC file in-repo / a workstation run.
+- **2026-06-23** — **TFC gated live drain DONE + verified** (gov DB via MCP): building 01021 →
+  property 32505, `government_type='State'` (trigger preserved), owner SVEA linked, +1 agency, +1
+  lease, +1 landlord contact (Harry Kuper). Gated test surfaced + **fixed two module writer bugs**
+  (`recorded_owners` has no `data_source`; `contact_info` is JSONB → owners now inserted via
+  `NOT EXISTS` on name); tests still 6/6. Decision: the **full 725-building bulk is NOT pushed
+  through chat-MCP** (~900KB SQL, owners batch alone ~31K tokens) — it runs from the idempotent
+  `ingest_tfc()` module on a workstation (the gated row 32505 coexists via ON CONFLICT/NOT EXISTS).
+  Topic 2 = schema + classifier live, ingest built/validated/gated-live; full bulk + run-logging is
+  the workstation step.
