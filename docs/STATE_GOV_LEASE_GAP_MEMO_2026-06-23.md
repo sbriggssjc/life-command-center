@@ -168,9 +168,10 @@ responsibility. It is exactly the recurring inventory the federal side has and t
       (additive, idempotent, evidence-tagged). Adds a Municipal `school district` rule (priority 31)
       + a State program-name rule (priority 41); scoped tighter than LCC so it can't steal a federal
       record (`comptroller`→`comptroller of public accounts|state comptroller`; wildlife drops
-      `service`). Validated (regex emulation): all 22 TX agencies → `State`; federal/municipal
-      controls tier correctly; private → NULL. **Still to do: apply live to the gov DB + confirm via
-      the `VERIFY` block in the migration / `sql/verify_gov_type_classifier.sql`.**
+      `service`). **Applied live to the gov DB (`scknotsqkcheojiaewwh`) 2026-06-23 + VERIFY pass:
+      32/32** — all 22 TX agencies (NULL → `State`), federal → `Federal`, municipal incl. Dallas ISD
+      → `Municipal`, private (Macy's/Nordstrom/Workforce Housing) → `NULL`. Baseline before apply:
+      all 16 spot-checked TX agencies were NULL.
 - [ ] Build `ingest_texas_tfc.py` (parse the TFC Agency Report shape) → properties/leases/owners/
       contacts; idempotent (MD5 dedupe), logs to `run_log`/`ingestion_tracker` per project rules.
 - [ ] Run the 4-tier matcher over the new state leases; confirm `government_type='State'` lands and
@@ -272,3 +273,10 @@ honest classification (surface `no_domain`/`State`, never guess).
   Municipal `school district` + State program rule) so LCC routing and gov `government_type` agree;
   validated all 22 TX agencies → `State` (regex emulation), live apply still pending. Surfaced two
   pre-existing federal-classifier quirks (bare `national`; spelled-out IRS) — out of scope, logged.
+- **2026-06-23** — **Topic 1 gov-classifier APPLIED LIVE** to the gov DB (`scknotsqkcheojiaewwh`,
+  PRs LCC #1301 / gov #306 merged + redeployed). VERIFY 32/32 (TX→State, federal→Federal,
+  municipal→Municipal, private→NULL). Topic 1 closed except the post-deploy Hempstead re-capture
+  (Scott's live UI test). **Follow-up for Topic 2:** existing gov-DB rows whose `agency` now
+  classifies `State` but carry `government_type=NULL` should be re-run through the classifier
+  backfill once a state inventory feed lands (no state rows in the DB today to backfill).
+  Proceeding to Topic 2.
