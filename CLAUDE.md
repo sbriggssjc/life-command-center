@@ -4997,3 +4997,75 @@ standard `merged_into_entity_id` tombstone path; reverse a map via
 `sf_account_id=null, needs_sf_mapping=true` (prior value in `effects`). `node
 --check` clean; `ls api/*.js | wc -l`=12; full suite 1351 pass / 0 fail / 6 skipped.
 LCC-Opps only; no dia/gov writes; auth schema untouched.
+
+## UI Phase 2 — Overview parity (dia ↔ gov, value-first) (2026-06-23)
+
+The two domain Overview pages now read the SAME way, top-to-bottom, with one
+section grammar. The **unified Overview block order (BOTH domains)** —
+`renderDiaOverview` (`dialysis.js`) + `renderGovOverview` (`gov.js`):
+
+1. **Action Items** (BD + data-quality, value-ranked, capped)
+2. **Portfolio at a Glance** — active property count, SF, gross/projected rent,
+   NOI, avg rent/SF, operators-or-agencies tracked, contacts
+3. **Lease Expiration Risk** — <6mo / <1yr / expired-holdover / 2–5yr / 5+yr +
+   a distribution bar over dated leases
+4. **Market Activity** — TTM Sales · Northmarq Performance · On Market (dia folds
+   its SJC Deal Book in here)
+5. **Pipeline Snapshot** — gov: leads by temperature/grade + pipeline value;
+   dia: Team Outreach & Touchpoints (its BD-activity surface)
+6. **Operator (dia) / Agency (gov) + Geographic Breakdown**
+7. **Data Health & Coverage** (ops — at the BOTTOM, under a labelled group
+   divider). dia: Database Health, Clinical Metrics, Clinic Financials,
+   Ownership Coverage, Listings-confirm, LLC queue, Research pipeline. gov:
+   Listings-confirm, LLC queue, Ownership Coverage (GSA Lease Intel sits above
+   the footer as market intel).
+
+**Keep future Overview edits value-first + mirrored** — new blocks go in the
+order above on BOTH pages; ops/data-quality stays in the bottom "Data Health &
+Coverage" group.
+
+### Honest, comparable denominators
+- Both Overviews headline **ACTIVE properties**. gov's "Total Properties" now
+  prefers `mv_gov_overview_stats.total_properties` (archived excluded, ~12.6k)
+  whenever the MV is loaded — not only on the fast path — so the headline never
+  flips to the all-status ~19.9k once the full portfolio loads. dia headlines
+  its ~12.3k active properties (dia has no archived class); CMS-clinic count
+  (~8.5k) is a SECONDARY metric, not the headline.
+- dia rent is **projected to CURRENT_DATE** (the dia doctrine), sourced from
+  `v_property_attributes_portfolio` (`dia_project_rent_at_date` over the primary
+  lease), never raw Y1 `leases.annual_rent`. dia is NNN, so net rent ≈ NOI —
+  labelled honestly ("Net Rent ≈ NOI").
+
+### dia data source — `mv_dia_overview_stats` (NEW, mirrors gov's MV)
+`renderDiaOverview` loads a single-row materialized view
+`public.mv_dia_overview_stats` (dia DB) via `diaQuery('mv_dia_overview_stats',
+…)` into the `diaOverviewStats` global (mirrors gov's `mv_gov_overview_stats` /
+`govOverviewStats` fast-path), and fills the value-first placeholder divs
+(`#diaPortfolioGlance`, `#diaLeaseExpRisk`, `#diaBreakdown`) when it resolves.
+The MV exposes: portfolio totals (active property count, cms_clinics secondary,
+SF, projected total_rent, total_noi=total_rent, operators_tracked, avg_rent_psf,
+contacts), lease-expiration buckets + `lease_distribution_by_expiry` jsonb, and
+`top_operators_by_count`/`_by_rent` + `top_states_by_count`/`_by_rent` jsonb.
+- Migration: `Dialysis/supabase/migrations/20260630_dia_mv_overview_stats.sql`
+  (applied live to dia `zqzrriwuavgrquhisnoa`). Unique singleton index for
+  CONCURRENTLY refresh; **pg_cron `dia-refresh-overview-stats` daily 01:00**
+  (parity with gov's `refresh-gov-overview-stats`).
+- Empty/unavailable MV ⇒ the value blocks show a graceful skeleton/“unavailable”,
+  never a crash (cache-or-live safe). Every other dia Overview section is
+  unchanged — just reordered.
+
+### Shared card grammar
+dia's `infoCard`/`sectionHeader`/`.dia-info-card` and gov's
+`govCard`/`govSectionHeader`/`.gov-info-card` render identically (same grid
+classes, same card/bar CSS). The new dia breakdown blocks use `diaInlineBar`
+(a verbatim mirror of gov's `inlineBar`) so the mirrored Operator/Agency +
+Geographic blocks look the same across domains. Both pages emit the same
+"Market Activity" / "Pipeline Snapshot" / "Data Health & Coverage" group
+dividers. Bar colours match gov's palette so dia↔gov reconcile visually.
+
+### Boundaries / verified
+Client render only (`dialysis.js`, `gov.js`) + one additive dia MV migration; no
+new api/*.js (`ls api/*.js | wc -l`=12); reversible (drop the MV → dia value
+blocks degrade to skeleton, every other section unchanged). `node --check` clean
+(dialysis.js, gov.js); full suite **1356 pass / 0 fail / 6 skipped**. JS ships on
+the Railway redeploy; the dia MV + cron are live on the dia DB.

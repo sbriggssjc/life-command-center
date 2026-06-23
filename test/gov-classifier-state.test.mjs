@@ -34,6 +34,9 @@ const STATE_AGENCIES_THAT_MUST_CLASSIFY_GOV = [
   'TEXAS WORKFORCE COMMISSION',              // 1
   'TX DEPT OF HOUSING & COMM AFFAIRS',       // 1
   'TEXAS ALCOHOLIC BEVERAGE COMMISSION',     // 1
+  "Children's Protective Services",          // CPS — live capture 2026-06-23 (Sherman TX)
+  'Child Protective Services',               // CPS
+  'Adult Protective Services',               // APS
 ];
 
 // Agencies that already classified (federal vocabulary) — must STILL classify.
@@ -59,6 +62,7 @@ const PRIVATE_TENANTS_THAT_MUST_NOT_BE_GOV = [
   'Planet Fitness',
   'Texas Roadhouse',                       // "Texas" + restaurant, not a state agency
   'Conservation Realty Group',             // "conservation" without board/district/commission
+  'Allied Protective Services',            // private security firm — "protective services" w/o child/adult/family anchor
 ];
 
 function classifyByTenant(tenant) {

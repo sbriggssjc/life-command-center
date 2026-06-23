@@ -480,6 +480,7 @@ export const GOV_TENANT_PATTERNS = [
   // ("department store" is retail), NO bare "workforce" ("workforce housing" is
   // multifamily), NO bare "lottery"/"commission"/"board".
   /\bhuman services\b/,                           // (TX) Health & Human Services Commission — trigger case
+  /\b(?:child|children'?s|adult|family)\s+protective\s+services\b/,  // CPS/APS — Child/Adult/Children's Protective Services (live capture 2026-06-23, Sherman TX 2607 N Loy Lake Rd)
   /\bdept\.?\s+of\b/,                             // "Dept of"/"Dept. of" abbrev (Texas Dept of Criminal Justice)
   /\bcomm(?:ission|\.)?\s+on\b/,                  // "Commission on"/"Comm. on" (Comm. on Environmental Quality)
   /\bcriminal justice\b/,                         // Dept of Criminal Justice
