@@ -683,6 +683,36 @@ WHERE jobname LIKE 'lcc-%-sync%'
 ORDER BY start_time DESC LIMIT 10;
 ```
 
+## Producer/Consumer (Consumption Layer) doctrine
+
+LCC produces work (research tasks, cadences, decisions, queue rows, inbox items) at ingestion
+scale and historically under-consumed it, so operator surfaces filled with un-worked noise
+that buried the actionable few (the worst failure mode: a 5,447 / 999+ badge that is mostly
+noise trains the operator to ignore the surface). Every code path that emits operator-facing
+work MUST satisfy all five invariants:
+
+1. **Value-gate the producer.** Emit a work item only above an actionability/value floor —
+   never one item per captured row. The floor is a single tunable knob (e.g. R60
+   `$500k` chain-task floor; R63 `CADENCE_SIGNAL_MIN_VALUE`).
+2. **Auto-retire + auto-resolve.** A scheduled sweep closes items whose premise has cleared
+   (data self-resolved) and auto-resolves the high-confidence subset, leaving only genuine
+   judgment calls for a human. Model: `lcc_refresh_decisions` auto-supersede. Reversible —
+   pause/skip with a reason, never hard-delete.
+3. **Surface actionable-only, value-ranked, capped.** The operator surface defaults to the
+   workable set (signal-bearing, value-ranked, top-N) with a "show all" toggle. A surfaced
+   count must reflect ACTIONABLE work, not raw producer output.
+4. **Close the loop from real activity.** Where an operator activity stream exists (Salesforce
+   / Outlook), drive the consumer from it (e.g. OUTREACH#1 SF-activity → cadence advance)
+   rather than a separate manual queue.
+5. **Honest counts.** Every badge/number is actionable work, not raw output.
+
+**No new producer ships without:** (a) a named consumer (human verdict, worker, or auto-sweep
+— if none, don't build the producer); (b) a value-gate; (c) an auto-retire predicate (+ which
+subset auto-resolves); (d) a ranked, capped surface whose count is actionable-only; (e) where
+possible, reality-driven advance. Instances: R60 (research), R62 (queue cadence), R63
+(cadence), R64 (Decision Center verdict lanes). A healthy worklist (inbox triage,
+match_disambiguation) is one whose consumer keeps pace; a graveyard is one without.
+
 ## sf_sync_log retention + disk-pressure alert (2026-05-29 outage fix)
 
 Sign-in to LCC broke with HTTP 500 "Database error granting user". Root
