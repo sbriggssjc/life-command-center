@@ -148,39 +148,73 @@ Lessor Phone, Janitorial, Utilities**. This is the **state equivalent of the GSA
 FRPP**: tenant (agency), premises, SF, lease term, **landlord/owner + direct contact**, expense
 responsibility. It is exactly the recurring inventory the federal side has and the state side lacks.
 
-### Proposed insertion point (to be confirmed when we start)
+### Schema decision — RESOLVED (refinement of Option A)
 
-- **Option A (preferred): consolidate into `gsa_leases`** — add `government_level`
-  (`Federal|State|Municipal`), `source_system` (`GSA|TFC|CA_SPI|…`), `state_lease_id`; reuse the
-  existing 4-tier `gsa_property_matcher`. One lease table, one matching pipeline.
-- **Option B: parallel `state_lease_inventory` table** — isolated, per-state ingest, same matcher.
-- New module(s) following `ingest_gsa_historical.py` shape: `ingest_state_leases.py` /
-  `ingest_texas_tfc.py` (Excel/ManagePath export), then CA SPI (open data) as the second state.
-- Field mapping (TFC → gov): Agency→`agency` (+ `government_type` via classifier), Lessor→
-  recorded/true owner + `contacts` (we already capture lessor email/phone — high BD value),
-  Start/End→lease term, Agency SF→`sf_leased`, County/Zip→location.
+Grounding the live gov schema (2026-06-23) showed the existing tables already hold the TFC shape
+with **no new tables and only one additive column** — so we write state inventory straight into the
+Excel-"Ownership"-sheet path rather than routing through `gsa_leases` (which has no `agency` column
+and is GSA-snapshot-shaped). The mapping:
+
+| TFC Agency Report | gov table.column |
+|---|---|
+| Prop ID (building) | `properties` (one row/building) — `state_lease_id` + synthetic `lease_number='TFC-TX-<propid>'` |
+| Agency (tenant) | `properties.agency` (primary = max SF) + `property_agencies` (one/agency — multi-tenant) + `leases.tenant_agency` |
+| Address/City/State/Zip/County | `properties.*` |
+| Agency SF | `properties.sf_leased` (building = Σ) + `property_agencies.sf_occupied` |
+| Start / End | `leases.commencement_date`/`expiration_date`, `properties.lease_commencement`/`_expiration` |
+| Lessor | `recorded_owners.name` → `properties.recorded_owner_id` |
+| Contact name/email/phone/address | `contacts` (`contact_type='landlord'`, linked `recorded_owner_id`) — **high BD value** |
+| — | `government_type='State'` (explicit; the classify trigger only fills NULLs so it isn't clobbered) |
+| — | `data_source='tfc_state_inventory'` on every row |
+
+`properties.lease_number` is UNIQUE → idempotent upsert; child tables are delete-then-insert scoped
+to `(property_id, data_source)`. CA SPI / other states reuse the same transform with a per-state
+column map.
 
 ### Work checklist — Topic 2
 
-- [ ] Decide Option A vs B (recommend A) and write the schema migration (discriminator columns).
-- [x] Strengthen the gov-side State classifier (`agency_enrichment_rules`) to match the Topic-1
-      vocabulary — `government-lease/sql/20260623_gov_state_agency_classifier_expansion.sql`
-      (additive, idempotent, evidence-tagged). Adds a Municipal `school district` rule (priority 31)
-      + a State program-name rule (priority 41); scoped tighter than LCC so it can't steal a federal
-      record (`comptroller`→`comptroller of public accounts|state comptroller`; wildlife drops
-      `service`). Validated (regex emulation): all 22 TX agencies → `State`; federal/municipal
-      controls tier correctly; private → NULL. **Still to do: apply live to the gov DB + confirm via
-      the `VERIFY` block in the migration / `sql/verify_gov_type_classifier.sql`.**
-- [ ] Build `ingest_texas_tfc.py` (parse the TFC Agency Report shape) → properties/leases/owners/
-      contacts; idempotent (MD5 dedupe), logs to `run_log`/`ingestion_tracker` per project rules.
-- [ ] Run the 4-tier matcher over the new state leases; confirm `government_type='State'` lands and
-      investment scoring assigns State=4 (the tier becomes live, not dead).
-- [ ] Confirm the lessor contact (name/email/phone) flows to `contacts` for BD/outreach.
-- [ ] Decide cadence/recurrence for state feeds (TFC has no open API → manual export drop vs
-      scheduled; CA SPI is open data → scheduled).
-- [ ] (Stretch) second state — California SPI — to prove the module generalizes.
+- [x] **Schema decision + migration** — resolved to the property-direct path (above). Only additive
+      change: `properties.state_lease_id` + partial index
+      (`government-lease/sql/20260623_gov_state_lease_inventory.sql`). **Applied live to the gov DB
+      (`scknotsqkcheojiaewwh`) 2026-06-23.** Reversible (`DROP COLUMN`); no `gsa_leases` discriminator
+      needed.
+- [x] Strengthen the gov-side State classifier (`agency_enrichment_rules`) —
+      `government-lease/sql/20260623_gov_state_agency_classifier_expansion.sql`; **applied live +
+      VERIFY 32/32** (Topic-1 note). Municipal `school district` (p31) + State program rule (p41),
+      scoped tighter than LCC (`comptroller`→`comptroller of public accounts|state comptroller`;
+      wildlife drops `service`). Baseline before apply: all 16 spot-checked TX agencies NULL.
+- [x] **Build `ingest_texas_tfc.py`** — `government-lease/src/ingest_texas_tfc.py`. PURE
+      `transform_tfc(rows)` (groups by building, primary-by-SF, multi-agency, lessor→owner+contact,
+      synthetic key, `government_type='State'`) + a thin idempotent writer (`ingest_tfc`, upsert on
+      `lease_number`, child tables scope-replaced by `data_source`). `tests/unit/test_ingest_texas_tfc.py`
+      (6 cases) **pass**. **Validated on the REAL file:** 1,179 rows → **725 buildings / 997
+      agency-tenants / 549 distinct landlords / 553 lessor contacts (all w/ email)**; multi-agency
+      building 01271 grouped its 3 agencies with the right primary.
+- [~] **LIVE DRAIN (gate) — gated building DONE + verified live; full bulk via the module run.**
+      Drove a gated 1-building drain (Prop ID 01021) into the gov DB via Supabase MCP and verified:
+      `properties.property_id=32505`, `government_type='State'` (the classify trigger left the
+      explicit value), `recorded_owner_id`→SVEA Industrial VI LLC, + 1 `property_agencies` row,
+      1 `leases` row, and the landlord `contact` (Harry Kuper, email/phone, `contact_type='landlord'`,
+      linked owner). The mechanism works against the real schema. The gated test **surfaced + fixed
+      two writer bugs** (committed): `recorded_owners` has **no `data_source`** column and
+      `contact_info` is **JSONB** (the writer now inserts owners as name/type/state via `NOT EXISTS`,
+      not `upsert on name`). **The full 725-building bulk is NOT done via MCP** — ~3,800 rows ≈ 900KB
+      of SQL (the owners batch alone is ~31K tokens) is impractical to push through the chat context;
+      it must run from `ingest_tfc(<TFC file>)` on a workstation with gov creds + the file (streams via
+      the DB client, no LLM in the loop). The writer + SQL are idempotent, so the gated row 32505
+      coexists with the later full run. Still to wire: `start_ingestion_run`/`log_ingestion_error`
+      into the live-drain step (writer currently returns a summary dict).
+- [ ] After the drain: confirm investment scoring assigns **State=4** on the new rows (the dead enum
+      goes live), and re-run the classifier backfill for any agency that landed `government_type` NULL.
+- [ ] De-dupe new state buildings against existing rows by `normalized_address` (most won't exist —
+      state is a new universe — but a few CoStar-captured state sales may already be present).
+- [ ] Cadence/recurrence: TFC has no open API → manual export drop; CA SPI is open data → scheduled.
+      Wire a state-inventory step into `run_pipeline.py`.
+- [ ] (Stretch) second state — California SPI — to prove the transform generalizes.
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS · schema + classifier live; ingest built + validated + gated-live. Full
+725-building bulk: SCOTT runs the one-command module drain on his workstation (decided 2026-06-23) —
+`python -m src.ingest_texas_tfc "<ActiveLeaseSummaryReport.xls>"` (`--dry-run` first).**
 
 ---
 
@@ -215,16 +249,70 @@ SF is intentionally the BD/outreach layer. Two valid resolutions — **decide, d
 - **(b) Close the loop:** add a promotion path (or reconcile) `sf_deal_staging` Closed-Won →
   `sales_transactions` so deals we brokered are captured as comps regardless of CoStar coverage.
 
+### Decision — RESOLVED (Scott, 2026-06-23): **(b) close the loop**
+
+> "We can ingest information from Salesforce, especially closed transactions. Those can absolutely
+> populate in our databases and the LCC. We want it to be a source of information that populates our
+> LCC universe, especially if it's new or confirmed information from elsewhere."
+
+So SF becomes a **populating source**, not just a BD/outreach mirror: a staged closed (Closed-Won)
+SF Opportunity → a `sales_transactions` comp in the right domain **+** the LCC BD spine
+(entity/owner). Doctrine guardrails (mirror R51/R53/R59): fill-blanks / never clobber a curated or
+CoStar comp; idempotent on `sf_deal_id`; gated through `lcc_merge_field`; a price is a fact only when
+SF carries it (no fabrication).
+
+### Grounding — RESOLVED (2026-06-23): the promotion worker EXISTS but stops short
+
+Correcting the initial investigation: `supabase/functions/sf-promotion-worker/index.ts` **does
+exist** and promotes property/comp/listing/**deal**. But for a **deal** it only `promoteEntity` →
+resolves a `property_id` and merges deal FIELDS into a `deal_provenance` record via `lcc_merge_field`
+— **it never inserts a `sales_transactions` row.** (Comp promotion writes to `comparable_sales` on
+dia, also not `sales_transactions`.) So the precise missing piece for (b) is the **sales-row insert
+from a Closed-Won deal**.
+
+The staging row already carries everything needed (`intake-salesforce/sf-config.ts` `deal.parsed`,
+confirmed against a real NorthMarq Opportunity 2026-05-15):
+`deal_price` (sold price) · `expected_close_date` (`CloseDate` = the sale date for Closed-Won) ·
+`buyer_company_name` / `seller_company_name` · `deal_cap_rate` / `noi` / `annual_rent` ·
+`stage` (`StageName` → gate on Closed-Won) · property resolution via `sf_property_id` /
+`linked_property_id` / `property_address`. Staging tables live in the **domain** DBs (gov/dia), not
+LCC Opps. Vertical routing (`routeVertical`) keys on federal-flavored gov signals → a TX **state**
+deal with no federal cue defaults to `dia` + review (the state-routing gap).
+
+### Build plan (b) — concrete
+
+1. **Sales-row promotion** (the headline): in `sf-promotion-worker` deal branch, when
+   `stage` ∈ Closed-Won **and** a `property_id` resolved **and** `deal_price` + a close date are
+   present → upsert a `sales_transactions` row (`sold_price`, `sale_date`=`expected_close_date`,
+   `buyer`/`seller`, `data_source='salesforce_deal'`), **idempotent on a deterministic key tied to
+   `sf_deal_id`**, **fill-blanks / never clobber** a CoStar/curated comp, gated through
+   `lcc_merge_field`. The existing cap-rate trigger then derives the cap rate (gov §12 doctrine —
+   don't trust the ingested `deal_cap_rate`). Env-flag gated for first-drain discipline.
+2. **State-aware routing**: extend `routeVertical` so a state-agency cue (reuse the Topic-1 vocab)
+   routes a deal to `gov` instead of defaulting `dia`.
+3. **Surface into the LCC universe**: the resolved property + buyer/seller already flow to the BD
+   spine via the existing entity/owner sync — confirm the new comp's buyer becomes/links an owner
+   entity (it should, via the sales→listing-events + owner sync), so the deal "populates the LCC
+   universe" per Scott's ask.
+
 ### Work checklist — Topic 3
 
-- [ ] Scott decides (a) vs (b). Record the decision here.
-- [ ] If (b): design `sf_deal_staging` → `sales_transactions` promotion (gated by `lcc_merge_field`,
-      fill-blanks, never clobber a curated/CoStar comp; idempotent on `sf_deal_id`).
-- [ ] If (b): add state-aware vertical routing in `sf-config.ts` so state deals route to `gov`.
-- [ ] If (a): document the decision + ensure Topics 1/2 carry the full burden (no silent reliance
-      on SF).
+- [x] Scott decides (a) vs (b) → **(b)** — SF as a populating source.
+- [x] Ground the live `sf_deal_staging` shape + the promotion worker (worker exists; stops at
+      `deal_provenance` field-merge; the sales-row insert is the gap; staging on gov/dia;
+      state deals mis-route to `dia`). **See grounding above.**
+- [ ] Build the Closed-Won `sf_deal_staging` → `sales_transactions` insert in `sf-promotion-worker`
+      (gated by `lcc_merge_field`, fill-blanks, never clobber a curated/CoStar comp; idempotent on
+      `sf_deal_id`; env-flag for first drain). Cap-rate derived by the trigger, not ingested.
+- [ ] Add state-aware vertical routing in `sf-config.ts routeVertical` (reuse Topic-1 vocab) so state
+      deals route to `gov`.
+- [ ] Confirm the new comp's buyer/seller populates the LCC universe (entity/owner) — "new or
+      confirmed" per Scott.
+- [ ] Test (headless) + a gated live promotion of ONE real Closed-Won deal (fill-blanks, no-clobber,
+      idempotent), same first-drain discipline as Topics 1/2.
 
-**Status: NOT STARTED · awaiting decision**
+**Status: IN PROGRESS · decision (b) made + grounded (worker exists, sales-row insert is the gap);
+build is the next focused step.**
 
 ---
 
@@ -272,3 +360,28 @@ honest classification (surface `no_domain`/`State`, never guess).
   Municipal `school district` + State program rule) so LCC routing and gov `government_type` agree;
   validated all 22 TX agencies → `State` (regex emulation), live apply still pending. Surfaced two
   pre-existing federal-classifier quirks (bare `national`; spelled-out IRS) — out of scope, logged.
+- **2026-06-23** — **Topic 1 gov-classifier APPLIED LIVE** to the gov DB (`scknotsqkcheojiaewwh`,
+  PRs LCC #1301 / gov #306 merged + redeployed). VERIFY 32/32 (TX→State, federal→Federal,
+  municipal→Municipal, private→NULL). Topic 1 closed except the post-deploy Hempstead re-capture
+  (Scott's live UI test). **Follow-up for Topic 2:** existing gov-DB rows whose `agency` now
+  classifies `State` but carry `government_type=NULL` should be re-run through the classifier
+  backfill once a state inventory feed lands (no state rows in the DB today to backfill).
+  Proceeding to Topic 2.
+- **2026-06-23** — **Topic 2 schema + classifier live; ingest built + validated.** Resolved the
+  schema decision to the property-direct path (existing Ownership-sheet tables, no new tables);
+  added `properties.state_lease_id` (`government-lease/sql/20260623_gov_state_lease_inventory.sql`,
+  applied live to gov DB). Mirrored the State classifier vocabulary into `agency_enrichment_rules`
+  (applied live, VERIFY 32/32). Built `src/ingest_texas_tfc.py` (pure `transform_tfc` + thin
+  idempotent writer) with `tests/unit/test_ingest_texas_tfc.py` (6 pass); validated the transform on
+  the real TFC file → 725 buildings / 997 agency-tenants / 549 landlords / 553 lessor contacts. The
+  **live drain** (write 725 State properties to the gov DB) is the remaining Topic-2 gate — needs gov
+  creds + the TFC file in-repo / a workstation run.
+- **2026-06-23** — **TFC gated live drain DONE + verified** (gov DB via MCP): building 01021 →
+  property 32505, `government_type='State'` (trigger preserved), owner SVEA linked, +1 agency, +1
+  lease, +1 landlord contact (Harry Kuper). Gated test surfaced + **fixed two module writer bugs**
+  (`recorded_owners` has no `data_source`; `contact_info` is JSONB → owners now inserted via
+  `NOT EXISTS` on name); tests still 6/6. Decision: the **full 725-building bulk is NOT pushed
+  through chat-MCP** (~900KB SQL, owners batch alone ~31K tokens) — it runs from the idempotent
+  `ingest_tfc()` module on a workstation (the gated row 32505 coexists via ON CONFLICT/NOT EXISTS).
+  Topic 2 = schema + classifier live, ingest built/validated/gated-live; full bulk + run-logging is
+  the workstation step.
