@@ -18,6 +18,14 @@ Ten root causes explain all 24 comments. The two that matter most:
 
 ---
 
+## Standing doctrine — Salesforce consumption (Scott, 2026-06-23)
+**Adapt the LCC pipeline to whatever Salesforce already produces; never require new Salesforce data
+entry or process change.** Northmarq does not control the org's SF requirements — SF is a required
+tool used only to the extent it yields value, no more. Practical rule for all NM-attribution and
+SF-sourced work: consume every place SF already puts the data (Internal Sold Comps, **`Closed IS`
+deals in `sf_deal_staging`**, the manual export — all deduped), rather than asking the team to log
+deals a particular way. A fix that depends on a Salesforce data-entry change is the wrong fix.
+
 ## Root causes (with evidence)
 
 ### RC1 — "Active / available" counted inconsistently across charts  ·  FORMULA/DEFINITION  ·  fixable
