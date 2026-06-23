@@ -60,6 +60,11 @@ let _diaPatientCountsLoading = false;
 let _diaAvailListingsLoading = false;
 let _diaOwnershipCoverageLoading = false;
 let _diaSjcDealBookLoading = false;
+// Cached SJC deal-book summary (tiles + by-year/teams/recent HTML). Lets a
+// re-render of renderDiaOverview paint the 4 value tiles + tables from cache
+// instead of leaving them stuck on the '...' placeholder once the one-shot
+// async fetch has run (DIA_OVERVIEW_TILE_AUDIT Unit 1).
+let diaSjcDealBook = null;
 let _diaListingConfirmLoading = false;
 let _diaLlcQueueLoading = false;
 let diaSalesLoading = false;
@@ -906,6 +911,7 @@ async function loadDiaData() {
       moversDown: [],
       propertyReviewQueue: [],
       leaseBackfillRows: [],
+      leaseBackfillCount: null, // exact (un-capped) candidate count; null = not loaded
       researchOutcomes: [],
       sfActivities: [],
       reconciliation: {}
@@ -915,7 +921,7 @@ async function loadDiaData() {
     // Previously split into sequential Batch 1 → movers enrichment → Batch 2
     // Now merged into single Promise.all — cuts load time roughly in half
     var [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw,
-         npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon,
+         npiSignalSummary, npiSignals, propQueue, leaseQueue, leaseCountRes, outcomes, recon,
          sfActivities
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
@@ -927,6 +933,9 @@ async function loadDiaData() {
       diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(function() { return []; }),
       diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(function() { return []; }),
       diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 1000 }).catch(function() { return []; }),
+      // Exact (un-capped) candidate count for the honest Lease Coverage sub —
+      // the 1000-row page above can't report the true backlog (Unit 3).
+      diaQuery('v_clinic_lease_backfill_candidates', 'ccn', { limit: 1, includeCount: true }).catch(function() { return { data: [], count: null }; }),
       diaQuery('research_queue_outcomes', 'outcome_id,clinic_id,queue_type,status,assigned_to,assigned_at,created_at,source_name,selected_property_id,notes', { limit: 2000 }).catch(function() { return []; }),
       diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(function() { return []; }),
       // Team touchpoints — query DIA Supabase directly so all team members are included
@@ -963,6 +972,10 @@ async function loadDiaData() {
     diaData.npiSignals = npiSignals || [];
     diaData.propertyReviewQueue = propQueue || [];
     diaData.leaseBackfillRows = leaseQueue || [];
+    // Honest backlog size from the count=exact probe (null when it failed —
+    // never silently 0). Falls back to the capped page length only as a floor.
+    diaData.leaseBackfillCount = (leaseCountRes && typeof leaseCountRes.count === 'number')
+      ? leaseCountRes.count : null;
     diaData.researchOutcomes = outcomes || [];
     diaData.sfActivities = sfActivities || [];
     if (recon && recon.length > 0) {
@@ -1315,6 +1328,28 @@ function renderDiaBreakdownInner() {
   return h || '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">No breakdown data yet</div>';
 }
 
+// DIA_OVERVIEW_TILE_AUDIT Unit 3: Lease Coverage derived from server-side
+// aggregates, never a capped page length. Headline = rent coverage from the MV
+// (properties_with_rent / total_properties — aligns with Portfolio "with lease
+// rent"); sub = the un-capped backfill backlog from the count=exact probe. A
+// missing/failed MV → '—' (never a false 100%); a missing count → the capped
+// floor, labelled honestly.
+function _diaLeaseCoverage() {
+  const mv = (typeof diaOverviewStats !== 'undefined') ? diaOverviewStats : null;
+  const ok = mv && !mv._error && !mv._empty && Number(mv.total_properties) > 0;
+  const pct = ok
+    ? (Number(mv.properties_with_rent) / Number(mv.total_properties) * 100).toFixed(1) + '%'
+    : '—';
+  const cnt = (typeof diaData !== 'undefined' && diaData.leaseBackfillCount != null)
+    ? diaData.leaseBackfillCount : null;
+  const capped = (typeof diaData !== 'undefined' && diaData.leaseBackfillRows)
+    ? diaData.leaseBackfillRows.length : 0;
+  const sub = (cnt != null)
+    ? fmtN(cnt) + ' clinics need lease backfill'
+    : (capped >= 1000 ? '1,000+ need backfill' : fmtN(capped) + ' need backfill');
+  return { pct, sub };
+}
+
 /**
  * Render overview — infographic-style command center homepage
  */
@@ -1327,8 +1362,9 @@ function renderDiaOverview() {
     _diaOverviewStatsLoading = true;
     (async () => {
       try {
-        const rows = await diaQuery('mv_dia_overview_stats', '*', { limit: 1 });
-        diaOverviewStats = (rows && rows[0]) ? rows[0] : { _empty: true };
+        const res = await diaQuery('mv_dia_overview_stats', '*', { limit: 1 });
+        const row = (Array.isArray(res) ? res : (res && res.data) || [])[0];
+        diaOverviewStats = row ? row : { _empty: true };
       } catch (e) {
         console.warn('dia overview stats load failed:', e.message);
         diaOverviewStats = { _error: e.message || 'load failed' };
@@ -1337,6 +1373,11 @@ function renderDiaOverview() {
       const g = document.getElementById('diaPortfolioGlance'); if (g) g.innerHTML = renderDiaPortfolioGlanceInner();
       const r = document.getElementById('diaLeaseExpRisk'); if (r) r.innerHTML = renderDiaLeaseExpRiskInner();
       const b = document.getElementById('diaBreakdown'); if (b) b.innerHTML = renderDiaBreakdownInner();
+      // Lease Coverage (Data Health) keys on the same MV — refresh it once the
+      // MV lands so it isn't stuck on the '—' first-paint placeholder (Unit 3).
+      const lc = _diaLeaseCoverage();
+      const lcv = document.getElementById('diaLeaseCoverageVal'); if (lcv) lcv.textContent = lc.pct;
+      const lcs = document.getElementById('diaLeaseCoverageSub'); if (lcs) lcs.textContent = lc.sub;
     })();
   }
   // Kick off lazy-loading sales comps and listings in background if not cached
@@ -1399,8 +1440,11 @@ function renderDiaOverview() {
         // routinely never finished inside a session ("Loading full patient
         // data..." forever). The view pre-aggregates best-per-clinic exactly
         // like the renderer did.
-        const rows = await diaQuery('v_clinic_financial_overview', '*', { limit: 1, count: 'false' });
-        diaFinancialEstimates = (rows && rows[0]) ? rows[0] : { _empty: true };
+        const res = await diaQuery('v_clinic_financial_overview', '*', { limit: 1, count: 'false' });
+        // Tolerate both diaQuery return shapes (bare array OR {data:[]}) — same
+        // defensiveness as the SJC loader (DIA_OVERVIEW_TILE_AUDIT Unit 2).
+        const row = (Array.isArray(res) ? res : (res && res.data) || [])[0];
+        diaFinancialEstimates = row ? row : { _empty: true };
       } catch(e) {
         console.warn('Financial estimates summary load failed:', e.message);
         // Fail visibly, not an eternal spinner.
@@ -1584,7 +1628,7 @@ function renderDiaOverview() {
 
   // Lazy-load SJC Salesforce deal book (Section 6b). Reads the aggregated
   // v_sjc_deal_book_summary (small) so it's cheap; gated to load once/session.
-  if (!_diaSjcDealBookLoading && !window._diaSjcDealBookRendered) {
+  if (!_diaSjcDealBookLoading && !diaSjcDealBook) {
     _diaSjcDealBookLoading = true;
     (async () => {
       try {
@@ -1603,13 +1647,14 @@ function renderDiaOverview() {
         setTxt('sjcActiveVal', fmtN(activeDeals)); setTxt('sjcActiveSub', 'signed & marketing');
         setTxt('sjcUCVal', fmtN(ucDeals)); setTxt('sjcUCSub', 'LOI executed / in escrow');
 
-        // Closed-sales track record by year.
+        // Closed-sales track record by year. Built into a string so it can be
+        // both injected now AND cached for the next render (Unit 1).
+        let byYearHtml = '';
         try {
           const yrs = await diaQueryAll('v_sjc_deal_book_by_year', '*');
           const yrRows = (Array.isArray(yrs) ? yrs : (yrs && yrs.data) || [])
             .filter(r => r.close_year).sort((a, b) => b.close_year - a.close_year).slice(0, 10);
-          const ywrap = document.getElementById('sjcDealBookByYear');
-          if (ywrap && yrRows.length) {
+          if (yrRows.length) {
             const maxVol = Math.max.apply(null, yrRows.map(r => Number(r.closed_volume) || 0)) || 1;
             let t = '<div style="font-size:11px;color:var(--text3);margin:6px 0 4px">Closed sales by year (Sale Deal - Commercial)</div>'
               + '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
@@ -1624,7 +1669,9 @@ function renderDiaOverview() {
                 + '<td style="padding:4px 8px;text-align:right;width:64px;color:var(--text3)">' + (r.avg_cap_rate ? (Number(r.avg_cap_rate) * 100).toFixed(2) + '%' : '') + '</td></tr>';
             });
             t += '</tbody></table>';
-            ywrap.innerHTML = t;
+            byYearHtml = t;
+            const ywrap = document.getElementById('sjcDealBookByYear');
+            if (ywrap) ywrap.innerHTML = t;
           }
         } catch (ye) { console.warn('sjc by-year load failed:', ye.message); }
 
@@ -1638,8 +1685,8 @@ function renderDiaOverview() {
           if (r.deal_stage === 'in_escrow' || r.deal_stage === 'under_loi') byTeam[t].uc += Number(r.deals) || 0;
         });
         const teams = Object.values(byTeam).sort((a, b) => b.closed - a.closed).slice(0, 12);
-        const wrap = document.getElementById('sjcDealBookTeams');
-        if (wrap && teams.length) {
+        let teamsHtml = '';
+        if (teams.length) {
           let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
             + '<th style="padding:4px 8px">Team</th><th style="padding:4px 8px;text-align:right">Closed</th>'
             + '<th style="padding:4px 8px;text-align:right">Closed Vol</th><th style="padding:4px 8px;text-align:right">Active</th>'
@@ -1653,21 +1700,34 @@ function renderDiaOverview() {
               + '<td style="padding:4px 8px;text-align:right">' + fmtN(r.uc) + '</td></tr>';
           });
           t += '</tbody></table>';
-          wrap.innerHTML = t;
+          teamsHtml = t;
+          const wrap = document.getElementById('sjcDealBookTeams');
+          if (wrap) wrap.innerHTML = t;
         }
 
-        // Recent closed sale deals (drill list).
+        // Recent closed sale deals (drill list). Unit 5: each row links through
+        // to the LCC property detail (linked_property_id) when matched, else to
+        // the Salesforce Opportunity (sf_deal_id) — graceful non-clickable when
+        // neither id is present.
         const recent = await diaQuery('v_sjc_deal_book',
-          'deal_name,sjc_team,state,closed_price,est_close_date,deal_side',
+          'deal_name,sjc_team,state,closed_price,est_close_date,deal_side,linked_property_id,sf_deal_id',
           { filter: 'deal_stage=eq.closed', order: 'est_close_date.desc.nullslast', limit: 25 });
         const recentRows = (Array.isArray(recent) ? recent : (recent && recent.data) || [])
           .filter(r => r.deal_side === 'Sale Deal - Commercial').slice(0, 10);
-        const rwrap = document.getElementById('sjcRecentDeals');
-        if (rwrap && recentRows.length) {
+        let recentHtml = '';
+        if (recentRows.length) {
           let t = '<div style="font-size:11px;color:var(--text3);margin:6px 0 4px">Recent closed sales</div>'
             + '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
           recentRows.forEach(r => {
-            t += '<tr style="border-top:1px solid var(--border)">'
+            const pid = Number(r.linked_property_id) || 0;
+            const sfId = r.sf_deal_id ? String(r.sf_deal_id) : '';
+            let rowAttr = '';
+            if (pid) {
+              rowAttr = ' onclick="openUnifiedDetail(\'dialysis\',{property_id:' + pid + '},null,\'sales\')" style="cursor:pointer" title="Open property detail"';
+            } else if (sfId) {
+              rowAttr = ' onclick="window.open(\'https://northmarqcapital.lightning.force.com/lightning/r/Opportunity/' + encodeURIComponent(sfId) + '/view\',\'_blank\',\'noopener\')" style="cursor:pointer" title="Open deal in Salesforce"';
+            }
+            t += '<tr style="border-top:1px solid var(--border)"' + rowAttr + '>'
               + '<td style="padding:4px 8px">' + esc((r.deal_name || '—').substring(0, 48)) + '</td>'
               + '<td style="padding:4px 8px;color:var(--text3)">' + esc(r.sjc_team || '') + '</td>'
               + '<td style="padding:4px 8px;color:var(--text3)">' + esc(r.state || '') + '</td>'
@@ -1675,15 +1735,19 @@ function renderDiaOverview() {
               + '<td style="padding:4px 8px;text-align:right;color:var(--text3)">' + esc(r.est_close_date || '') + '</td></tr>';
           });
           t += '</tbody></table>';
-          rwrap.innerHTML = t;
+          recentHtml = t;
+          const rwrap = document.getElementById('sjcRecentDeals');
+          if (rwrap) rwrap.innerHTML = t;
         }
+
+        // Cache so a re-render paints tiles + tables from memory (no '...').
+        diaSjcDealBook = { closedDeals, closedVol, activeDeals, ucDeals, byYearHtml, teamsHtml, recentHtml };
       } catch (err) {
         console.warn('SJC deal book load failed:', err.message);
         const wrap = document.getElementById('diaSjcDealBook');
         if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">SJC deal book unavailable</div>';
       }
       _diaSjcDealBookLoading = false;
-      window._diaSjcDealBookRendered = true;
     })();
   }
 
@@ -1791,7 +1855,10 @@ function renderDiaOverview() {
 
   // Property linkage stats
   const linkedPct = totalClinics > 0 ? ((totalClinics - propQueueLen) / totalClinics * 100).toFixed(1) : '—';
-  const leaseBackfillPct = totalClinics > 0 ? ((totalClinics - leaseBackfillLen) / totalClinics * 100).toFixed(1) : '—';
+  // Lease Coverage is derived from the server-side MV (see _diaLeaseCoverage),
+  // NOT from `1 - cappedPageLength/totalClinics` (which falsely read 100%/0 on
+  // an empty/timed-out fetch and measured the wrong denominator). Unit 3.
+  const leaseCov = _diaLeaseCoverage();
 
   // ═══════════════════════════════════════════════
   // SECTION 0: ACTIONABLE HIGHLIGHTS (Round 54)
@@ -1893,14 +1960,18 @@ function renderDiaOverview() {
   html += sectionHeader('On Market', '🏪', 'sales');
   html += '<div id="diaOverviewMarket">' + renderOnMarketInner() + '</div>';
 
-  // SJC Deal Book (Salesforce, all teams) — loaded async below.
+  // SJC Deal Book (Salesforce, all teams) — value tiles render from the cached
+  // summary (diaSjcDealBook) when present so a re-render keeps the real numbers
+  // instead of collapsing back to '...'; the one-shot async fetch below fills
+  // the cache on first load (DIA_OVERVIEW_TILE_AUDIT Unit 1).
   html += sectionHeader('SJC Deal Book (Salesforce)', '📒', 'sales');
+  const _sjc = diaSjcDealBook;
   html += '<div id="diaSjcDealBook"><div class="dia-grid dia-grid-4">';
-  html += infoCard({ title: 'Closed Sales', value: '...', sub: 'loading Salesforce deal book', color: 'green', id: 'sjcClosedVal', subId: 'sjcClosedSub' });
-  html += infoCard({ title: 'Closed Volume', value: '...', sub: 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
-  html += infoCard({ title: 'Active Listings', value: '...', sub: 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
-  html += infoCard({ title: 'Under Contract', value: '...', sub: 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
-  html += '</div><div id="sjcDealBookByYear" style="margin-top:10px"></div><div id="sjcDealBookTeams" style="margin-top:10px"></div><div id="sjcRecentDeals" style="margin-top:10px"></div></div>';
+  html += infoCard({ title: 'Closed Sales', value: _sjc ? fmtN(_sjc.closedDeals) : '...', sub: _sjc ? 'closed sale deals (all teams)' : 'loading Salesforce deal book', color: 'green', id: 'sjcClosedVal', subId: 'sjcClosedSub' });
+  html += infoCard({ title: 'Closed Volume', value: _sjc ? '$' + fmtN(Math.round(_sjc.closedVol / 1e6)) + 'M' : '...', sub: _sjc ? 'lifetime closed volume' : 'all teams', color: 'blue', id: 'sjcVolVal', subId: 'sjcVolSub' });
+  html += infoCard({ title: 'Active Listings', value: _sjc ? fmtN(_sjc.activeDeals) : '...', sub: _sjc ? 'signed & marketing' : 'listing signed', color: 'cyan', id: 'sjcActiveVal', subId: 'sjcActiveSub' });
+  html += infoCard({ title: 'Under Contract', value: _sjc ? fmtN(_sjc.ucDeals) : '...', sub: _sjc ? 'LOI executed / in escrow' : 'LOI / escrow', color: 'orange', id: 'sjcUCVal', subId: 'sjcUCSub' });
+  html += '</div><div id="sjcDealBookByYear" style="margin-top:10px">' + ((_sjc && _sjc.byYearHtml) || '') + '</div><div id="sjcDealBookTeams" style="margin-top:10px">' + ((_sjc && _sjc.teamsHtml) || '') + '</div><div id="sjcRecentDeals" style="margin-top:10px">' + ((_sjc && _sjc.recentHtml) || '') + '</div></div>';
 
   // ── SECTION 4: PIPELINE SNAPSHOT (team BD activity) ──
   html += _diaGroup('Pipeline Snapshot');
@@ -1943,7 +2014,7 @@ function renderDiaOverview() {
   html += infoCard({ title: 'Total Clinics', value: fmtN(totalClinics), sub: f._fallback ? 'from inventory data' : 'tracked nationwide', color: 'blue', tab: 'search' });
   html += infoCard({ title: 'Data Coverage', value: coveragePct.toFixed(1) + '%', sub: fmtN(clinicsWithCounts) + ' clinics with patient data', color: coveragePct > 50 ? 'green' : 'yellow', tab: 'search' });
   html += infoCard({ title: 'Property Linked', value: linkedPct + '%', sub: fmtN(totalClinics - propQueueLen) + ' of ' + fmtN(totalClinics) + ' matched', color: 'cyan', tab: 'research' });
-  html += infoCard({ title: 'Lease Coverage', value: leaseBackfillPct + '%', sub: fmtN(leaseBackfillLen) + ' need backfill', color: 'purple', tab: 'research' });
+  html += infoCard({ title: 'Lease Coverage', value: leaseCov.pct, sub: leaseCov.sub, color: 'purple', tab: 'research', id: 'diaLeaseCoverageVal', subId: 'diaLeaseCoverageSub' });
   html += '</div>';
 
   // Clinical Metrics
@@ -4914,9 +4985,13 @@ function renderListingVerificationCard() {
   if (overdue90 > 0 || broken > 0) color = 'red';
   else if (due > 0 || overdue30 > 0) color = 'yellow';
 
+  // DIA_OVERVIEW_TILE_AUDIT Unit 4: headline the actionable OVERDUE count, not
+  // the "due now" number (which is genuinely 0 and read as broken). "due now"
+  // moves into the sub-detail.
   const title = 'Verification Status';
-  const value = fmtN(due);
-  const sub = `${overdue30} 30d-overdue · ${overdue90} 90d · ${broken} broken-url · ${checks7dPart} · ${changes7d} status-changes/7d`;
+  const value = fmtN(overdue30);
+  const headlineLabel = 'overdue (30d+)';
+  const sub = `${due} due now · ${overdue90} 90d-overdue · ${broken} broken-url · ${checks7dPart} · ${changes7d} status-changes/7d`;
 
   // Round 76et-B (2026-04-29): Phase 3 + 3b + 4b all shipped. The card was
   // pointing users at a "lands later" toast for a feature that already exists.
@@ -4929,7 +5004,7 @@ function renderListingVerificationCard() {
   return `<div class="dia-info-card dia-info-${color}" onclick="showToast('${escapeHtmlSafe(tooltipText)}','info')" style="cursor:pointer;padding:14px 16px" title="${escapeHtmlSafe(tooltipText)}">
     <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
     <div style="font-size:24px;font-weight:700;color:var(--text1);margin-bottom:4px">${value}</div>
-    <div style="font-size:11px;color:var(--text2)">due now · ${escapeHtmlSafe(sub)}</div>
+    <div style="font-size:11px;color:var(--text2)">${escapeHtmlSafe(headlineLabel)} · ${escapeHtmlSafe(sub)}</div>
   </div>`;
 }
 
