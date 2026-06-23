@@ -521,9 +521,42 @@ ${dLblsFrag}
  * single numeric y-series. Used for transaction count, avg deal size,
  * YoY change (with optional signed coloring), quarterly volume, etc.
  */
+// Heat-map ramp: map each numeric value to a hex on a pale-sky -> NM-Blue
+// sequential ramp by its position in [min,max] (higher value = darker/hotter).
+// Pure; returns hex WITHOUT '#'. Non-finite/empty -> the low (pale) color.
+// Gives the rent-by-state "heat map" real value-graded shading instead of flat
+// navy bars (CM audit 2026-06-22 Task 5, gov #8).
+const HEAT_LO_RGB = [201, 220, 240]; // #C9DCF0 pale sky (low rent)
+const HEAT_HI_RGB = [0, 61, 165];    // #003DA5 NM Blue (high rent)
+function heatRampColors(values) {
+  const nums = (values || []).map((v) => Number(v));
+  const valid = nums.filter((v) => Number.isFinite(v));
+  const lo = valid.length ? Math.min(...valid) : 0;
+  const hi = valid.length ? Math.max(...valid) : 0;
+  const span = hi - lo;
+  return nums.map((v) => {
+    const t = (!Number.isFinite(v) || span <= 0) ? 0 : (v - lo) / span;
+    return HEAT_LO_RGB
+      .map((loC, i) => Math.round(loC + (HEAT_HI_RGB[i] - loC) * t))
+      .map((x) => x.toString(16).padStart(2, '0').toUpperCase())
+      .join('');
+  });
+}
+
 function buildSingleBarChartXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const color = (spec.color || '003DA5').replace('#', '');
+  // CM audit Task 5 (gov #8) — optional per-bar fills for a value-graded heat
+  // map. Absent => single-color series (byte-identical to prior output).
+  const dPtBarFrag = Array.isArray(spec.colors) && spec.colors.length
+    ? '\n' + spec.colors.map((c, i) =>
+        `          <c:dPt>
+            <c:idx val="${i}"/>
+            <c:invertIfNegative val="0"/>
+            <c:bubble3D val="0"/>
+            <c:spPr><a:solidFill><a:srgbClr val="${String(c || '003DA5').replace('#', '')}"/></a:solidFill></c:spPr>
+          </c:dPt>`).join('\n')
+    : '';
   // R36 P1 — `horizontal: true` produces a horizontal bar chart (top-N
   // state ranking visual). In OOXML this means:
   //   • <c:barDir val="bar"/> instead of "col"
@@ -579,7 +612,7 @@ function buildSingleBarChartXml(spec) {
           <c:spPr>
             <a:solidFill><a:srgbClr val="${color}"/></a:solidFill>
           </c:spPr>
-          <c:invertIfNegative val="0"/>
+          <c:invertIfNegative val="0"/>${dPtBarFrag}
 ${dLblsFrag}
           <c:cat>
             <c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef>
@@ -2120,6 +2153,7 @@ export {
   buildScatterChartXml,
   buildDoughnutChartXml,
   buildDrawingXml,
+  heatRampColors,
 };
 
 // ----------------------------------------------------------------------------
@@ -4937,6 +4971,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const stateCol = findCol('state');
       const rpsfCol  = findCol('avg_rpsf');
       if (!stateCol || !rpsfCol) return null;
+      // CM audit Task 5 (gov #8) — value-grade the bars (pale->navy by avg_rpsf,
+      // in data-tab/row order) so it reads as a heat map, not flat navy bars.
+      const heatColors = heatRampColors((rows || []).map((r) => r.avg_rpsf));
       return {
         tabName,
         spec: {
@@ -4946,6 +4983,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: stateCol, valCol: rpsfCol,
           dataStart, dataEnd,
           color: navy,
+          colors: heatColors,
           horizontal: true,
           // R37 P2 — rent PSF currency
           valAxNumFmt: VAL_FMT_CURRENCY,
