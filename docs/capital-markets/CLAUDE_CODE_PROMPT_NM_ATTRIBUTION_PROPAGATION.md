@@ -1,5 +1,16 @@
 # Claude Code prompt — fix Northmarq-brokered attribution on gov sales (SF staging → sales propagation)
 
+> ⚠️ **CORRECTION (2026-06-23, post-resolution) — this prompt's premise was WRONG; do not reuse as-is.**
+> It pointed at `sf_comps_staging` as "staged NM comps." Live `source_system` shows that table is
+> **1,447 `costar_sidebar` (CoStar market captures) + 187 `salesforce_ascendix`** — NOT Northmarq
+> comps. Matching `is_northmarq` off it would have **mass-attributed the whole market to Northmarq**.
+> The real NM source is **`sf_internal_comp_export` (127 rows, NM-only object)** with buy/sell side in
+> `sf_comp_staging.Direct_Co_Broke__c`. CC correctly caught this and built the fix off the right table
+> (see `gov_promote_nm_comps` + cron `gov-nm-comp-promote`, PR #304). **Root-cause lesson: verify a
+> table's `source_system`/provenance before asserting what it contains** — the schema alone isn't
+> enough. The diagnosis below (NM tags collapse, propagation-not-collection) was correct; only the
+> source-table identification was wrong.
+
 > From the June-22 capital-markets chart review (gov comment 7/9, audit
 > `CM_EXPORT_CHART_AUDIT_2026-06-22.md` RC10). Scott's own government brokered deals have all but
 > vanished from the report since 2023. Grounded live on gov `scknotsqkcheojiaewwh` — this is a
