@@ -230,6 +230,10 @@ export const DIA_READ_TABLES = new Set([
   'medicare_ingest_quarantine',
   'npi_registry',
   'npi_registry_lookups',
+  // UIP2b (2026-06-23): dia Overview value dashboard MV, mirrors gov's
+  // mv_gov_overview_stats. Without it the Portfolio-at-a-Glance / Lease
+  // Expiration Risk / Operator Breakdown blocks render the empty skeleton.
+  'mv_dia_overview_stats',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)
