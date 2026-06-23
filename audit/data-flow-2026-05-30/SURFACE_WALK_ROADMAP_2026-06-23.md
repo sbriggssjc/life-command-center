@@ -15,7 +15,19 @@ Research-workbench findings into one sequenced plan.
   NOT cold-deep-linkable yet (no stable id in the token) — they open normally in-app; revisit if
   needed (give clinics a stable token) during Phase 4 zoom wiring. Substrate is ready for the
   Phase-4 lateral back-stack + breadcrumb.
-- **Phase 2 (overview parity):** next.
+- **Phase 2 (overview parity):** ⏳ **SHIPPED, ONE BLOCKER 2026-06-23.** Code + data verified
+  live: served + running `renderDiaOverview` contains the new value blocks (Portfolio at a
+  Glance, Lease Expiration Risk, Operator Breakdown); the dia MV `mv_dia_overview_stats` is live
+  on the dia DB and reconciles (12,280 active props, $935.7M projected rent, DaVita $622M /
+  Fresenius $203M, lease-exp buckets). **BUT** the blocks render the empty skeleton because
+  `mv_dia_overview_stats` is not in the `data-query` Edge Function `DIA_READ_TABLES` allowlist
+  (gov's `mv_gov_overview_stats` is) → `diaQuery` returns `[]` → `{_empty}` sentinel → fallback.
+  Fix = one allowlist line in `supabase/functions/data-query/index.ts` + its
+  `api/_shared/allowlist.js` mirror + redeploy the dia Edge Function
+  (`CLAUDECODE_PROMPT_UIP2b_allowlist_mv_dia_overview.md`). *Learning:* any new dia/gov
+  frontend-read table/view/MV must be added to the `data-query` allowlist (both places) — a
+  recurring gap (cf. the QA-02 / R4-D allowlist-residue fixes already in that file). Mark Phase 2
+  DONE after the edge redeploy + a live render check.
 
 ## Two themes explain almost everything we found
 1. **The Consumption Layer is missing.** Across Today (research), Priority Queue (cadence
