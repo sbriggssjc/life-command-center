@@ -34,6 +34,84 @@ function openTrackingActive(options = {}) {
 }
 
 // ============================================================================
+// R63 — BD-SIGNAL GATE (a cadence tracks a REAL relationship, not capture noise)
+// ============================================================================
+//
+// A prospecting cadence should exist only where there is a real BD target to
+// work. The signal predicate below is the single source of truth shared by
+// (1) the PRODUCER gate — the CoStar contact-capture path no longer auto-seeds
+// a cadence for a bare captured contact — and (2) the inversion in
+// sf-activity-ingest, which GROWS a cadence from Scott's real SF/Outlook
+// outreach on a real target. The Unit-2 reversible pause sweep mirrors the same
+// predicate in SQL, so the gate, the grow path, and the sweep all agree on what
+// "real" means. Same value-floor knob shape as R60.
+
+export const CADENCE_SIGNAL_MIN_VALUE_DEFAULT = 500000;
+
+export function cadenceSignalFloor() {
+  const v = parseFloat(process.env.CADENCE_SIGNAL_MIN_VALUE);
+  return Number.isFinite(v) && v >= 0 ? v : CADENCE_SIGNAL_MIN_VALUE_DEFAULT;
+}
+
+/**
+ * Pure classifier — does this entity carry a real BD signal?
+ * Real = any of: a Salesforce CRM identity, connected/portfolio value at or
+ * above the floor, an open BD opportunity, real SF activity, or a buy-side
+ * cadence (a P-BUYER relationship is real by construction). Pure + synchronous
+ * so the decision logic is unit-testable without the DB.
+ *
+ * @param {object} facts - { hasSalesforceIdentity, hasOpenOpportunity,
+ *   hasSalesforceActivity, connectedValue, portfolioValue, phase, floor }
+ * @returns {boolean}
+ */
+export function bdSignalFromFacts(facts = {}) {
+  const floor = Number.isFinite(facts.floor) ? facts.floor : CADENCE_SIGNAL_MIN_VALUE_DEFAULT;
+  if (facts.phase === 'buy_side') return true;
+  if (facts.hasSalesforceIdentity) return true;
+  if (facts.hasOpenOpportunity) return true;
+  if (facts.hasSalesforceActivity) return true;
+  if (Number(facts.connectedValue) >= floor) return true;
+  if (Number(facts.portfolioValue) >= floor) return true;
+  return false;
+}
+
+/**
+ * Gather the BD-signal facts for an entity and classify. deps.query injectable
+ * for tests (defaults to opsQuery). Fails CLOSED (no signal) on a gather error:
+ * a bare captured contact must not be auto-seeded just because the check
+ * hiccuped — a genuine target re-earns its cadence from real outreach (the
+ * sf-activity grow path) or an explicit operator action (initiate_cadence).
+ *
+ * @param {string} entityId
+ * @param {object} [opts] - { query, floor, phase }
+ * @returns {Promise<boolean>}
+ */
+export async function entityHasBdSignal(entityId, opts = {}) {
+  if (!entityId) return false;
+  const query = opts.query || opsQuery;
+  const floor = Number.isFinite(opts.floor) ? opts.floor : cadenceSignalFloor();
+  const v = pgFilterVal(entityId);
+  const facts = { floor, phase: opts.phase || null };
+  try {
+    const [sf, opp, act, cv, pf] = await Promise.all([
+      query('GET', `external_identities?entity_id=eq.${v}&source_system=eq.salesforce&select=entity_id&limit=1`),
+      query('GET', `bd_opportunities?entity_id=eq.${v}&is_open=is.true&select=id&limit=1`),
+      query('GET', `activity_events?entity_id=eq.${v}&source_type=eq.salesforce&select=id&limit=1`),
+      query('GET', `lcc_entity_connected_value?entity_id=eq.${v}&select=connected_property_value&limit=1`),
+      query('GET', `v_entity_portfolio_all?entity_id=eq.${v}&select=current_annual_rent_total&limit=1`),
+    ]);
+    facts.hasSalesforceIdentity = !!(sf.ok && Array.isArray(sf.data) && sf.data.length);
+    facts.hasOpenOpportunity    = !!(opp.ok && Array.isArray(opp.data) && opp.data.length);
+    facts.hasSalesforceActivity = !!(act.ok && Array.isArray(act.data) && act.data.length);
+    facts.connectedValue = (cv.ok && cv.data?.[0]) ? (Number(cv.data[0].connected_property_value) || 0) : 0;
+    facts.portfolioValue = (pf.ok && pf.data?.[0]) ? (Number(pf.data[0].current_annual_rent_total) || 0) : 0;
+  } catch (_e) {
+    return false; // fail closed — do not seed on a signal-check error
+  }
+  return bdSignalFromFacts(facts);
+}
+
+// ============================================================================
 // CADENCE SEQUENCE DEFINITION
 // ============================================================================
 
