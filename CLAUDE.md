@@ -4722,3 +4722,87 @@ Connecting each historical chain owner (entity-link) is the existing R6 phase-3(
 machinery; a dia suspected-sale lane (R53 is gov-only — dia uses the research
 task); premises-address-preference at extraction time (R58c folder-anchor guard is
 the current safety net).
+
+## R60 — stop the research-task backlog runaway (value-gate the chain producers) (2026-06-22)
+
+Grounded live 2026-06-22 (Today-page audit): **5,447 queued `research_tasks`**,
+growing ~16× faster than worked (+4,061/7d vs 254 closed). Two producers fired
+into a void — **63% of the queue**:
+`establish_ownership_history` (2,192; gov 2,145 / dia 47 — **no consumer**) +
+`trace_ownership_to_developer` (1,252; gov 764 / dia 488 — consumer clears ~5%).
+Both come from the R46/R6 `lcc_generate_chain_research_tasks`, which seeds ONE
+task per incomplete chain (gov 2,987) regardless of value or resolvability.
+**Grounding refined the audit premise:** ALL 3,444 flood tasks are genuinely
+still-incomplete chains, so the existing chain-complete sweep closes **0** of
+them (none have resolved); the `trace` consumer's UW#7 cron already existed
+(gov daily) — the "0 completed" is the endpoint not being deployed, not a missing
+cron. Doctrine: a research task is only worklist if it is ACTIONABLE high-value.
+
+### Unit 3 + Unit 2 (the headline) — value-gate the producer + bulk-close (DB, applied live)
+Migration `20260622120000_lcc_r60_research_task_flood_control.sql` rewrites
+`lcc_generate_chain_research_tasks(p_limit int, p_min_value numeric DEFAULT 500000)`
+— `p_min_value` ($500k/yr rent) is the single tuning knob:
+- **Sweep A [Unit 2A]** (existing, retained) — close open chain tasks no longer in
+  `v_ownership_chain_worklist` (chain completed / gap changed). This is the
+  "property now has ownership_history → portfolio mirror grows owner_links → gap
+  clears → close" path (R59 deed propagation feeds the mirror; the LCC sweep can't
+  read domain ownership_history cross-DB, so it closes via the chain-completeness
+  view).
+- **Sweep B [Unit 3 value-gate / Unit 2 bulk-close]** (NEW) — close open chain
+  tasks whose live worklist `rank_value` < floor → `skipped`, reason
+  `below_value_floor`. Reversible; never re-seeded (the seed also gates on the floor).
+- **Seed** (existing, gated) — only above-floor incomplete chains, value-ranked;
+  EXCLUDES properties carrying an OPEN task (idempotent) OR a consumer-judged
+  TERMINAL skip (`outcome.terminal='true'`) so a structurally-unresolvable chain is
+  never re-seeded (no churn).
+- Producer cron re-registered with the explicit floor; consumer cron
+  `lcc-uw7-developer-chain` bumped to every 6h / limit 50 (gentle — artifact-offload
+  connection-budget lesson) so resolvable trace tasks complete + unresolvable ones
+  close going forward.
+
+**Verified live (applied + run, reversible):** total queued **5,447 → 2,917**
+(−2,530); flood **3,444 → 914** — kept exactly the ≥$500k set (gov establish 645,
+gov trace 250, dia trace 19; matches `v_ownership_chain_worklist` ge_500k=914),
+all below-floor closed `below_value_floor`. **Idempotent** — re-run seeded 0, no
+further change. The healthy types (`property_missing_recorded_owner` 841 closed/7d,
+`true_owner_needs_salesforce` 334/7d) were untouched.
+
+### Unit 2B (JS, ships on Railway redeploy) — consumer closes the unresolvable
+`api/_handlers/developer-chain-resolve.js`: a not-resolved task is now either
+**terminal** (close as `skipped` + `outcome.terminal=true` → the producer never
+re-seeds it) or **retry** (transient/contingent → keep queued + markAttempted).
+New pure `chainResolveDisposition(reason,{externalResearch})`: terminal for
+`origin_is_person / origin_not_developer / origin_equals_current / no_chain /
+guard_rejected / entity_guard_rejected / already_resolved`; `ambiguous_generic_org`
+is terminal ONLY when no external developer-research source is configured (env
+`DEVELOPER_CHAIN_EXTERNAL_RESEARCH`); `blocked_by_provenance / write_failed` stay
+retryable. So the gov `trace` backlog drains (resolve or close) as the 6h cron
+runs post-deploy. Tick summary gains `terminal_closed`.
+
+### Unit 1 — drain the resolvable
+The UW#7 consumer cron already existed; R60 re-registers it gentler (every 6h /
+limit 50, gov). The live drain (resolvable → completed, unresolvable → terminal
+close) is operational on the Railway redeploy (endpoint 404s until then — same
+posture as UW#7/R58). The dry-run earlier showed only ~12/250 trace tasks are
+internally resolvable; the rest need external research and now terminal-close
+instead of queuing forever.
+
+### Grounded scope decision — dia developer-resolution consumer DEFERRED
+The audit asked to "add the dia leg" (488 dia trace). But value-gating drops dia
+establish 47→0 and dia trace 488→**19**, and dia has no gov-style
+`v_developer_chain_candidate` view (thin developer signal — operators dominate dia
+true_owners, R8). A full dia resolution-consumer is not warranted for 19 tasks; the
+19 ride the same value-ranked worklist and auto-close via Sweep A as their chains
+complete. Documented follow-up, consistent with the existing gov-only consumer.
+
+### Verified (headless 2026-06-22)
+`test/developer-chain-resolve.test.mjs` 19 → 24 (R60 `chainResolveDisposition`:
+terminal vs retry buckets; ambiguous gated on external-research; every classifier
+not-resolve reason maps; a resolvable origin is never a terminal close). `node
+--check` clean; `ls api/*.js | wc -l`=12; full suite **1,323 pass / 0 fail / 6
+skipped**. DB applied live + committed; JS ships on the Railway redeploy.
+
+### Reversibility / boundaries
+All closes are status-only (`skipped`, reason in `outcome`) — lower the floor and
+the producer re-seeds the still-incomplete above-floor chains. LCC-Opps only; no
+domain writes; no auth-schema touch.
