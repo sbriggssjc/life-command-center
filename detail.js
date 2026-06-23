@@ -1270,10 +1270,18 @@ async function _udRenderOperationsAsync(bodyEl) {
       } else {
         promises.push(Promise.resolve([]));
       }
+      // Demographics: ZIP-level census (ACS) for catchment / demand context (client export)
+      const demoZip = (_udCache.property && (_udCache.property.zip_code || _udCache.property.zip))
+        || (_udCache.rankings && _udCache.rankings.zip_code) || null;
+      if (demoZip) {
+        promises.push(diaQuery('census_zcta_demographics', 'zip_code,total_population,median_household_income,population_65_plus,population_65_plus_pct,uninsured_rate,poverty_rate,data_year', { filter: `zip_code=eq.${encodeURIComponent(String(demoZip).slice(0, 5))}`, limit: 1 }).catch(() => []));
+      } else {
+        promises.push(Promise.resolve([]));
+      }
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], [], [], []];
 
     // R50 — geographic BD bundle (nearby owners / sales / distance competitors).
     // Heavy haversine scan stays in the dia DB; soft-fails to null.
@@ -1293,11 +1301,12 @@ async function _udRenderOperationsAsync(bodyEl) {
       lease: (leaseData || [])[0] || null,
       hours: (hoursData || [])[0] || null,
       competitors: (competitorData || []).filter(c => c.medicare_id !== clinicId),
+      demographics: (demographicData || [])[0] || null,
       geo: _geo,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], geo: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, geo: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
