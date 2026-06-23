@@ -85,12 +85,26 @@ capped row-fetch `.length` or a fragile post-render `setTxt`.
   run_status='failed'** ("Reclaimed by ingestion_lock after 25.7h stale"); the Research-Pipeline
   "last ingestion" shows **May 13**. The CMS patient-counts ingestion has **not succeeded since
   late March**.
-- **Root cause:** the **CMS ingestion pipeline** (DialysisProject `run_cms_ingestion`) is failing/
-  not running — this is upstream of LCC (a Python pipeline / scheduled job, not LCC code). It
-  explains stale movers, stale inventory-change deltas, and the stale "last ingestion" date.
-- **Fix (ops, Scott):** re-run / repair the CMS ingestion pipeline (clear the stale
-  `ingestion_lock`, re-run `run_cms_ingestion`); then movers/inventory refresh. Track separately
-  from the LCC tile fixes.
+- **Root cause (refined 2026-06-23): it IS automated — a Railway cron service runs
+  `scripts/cron/cms-ingestion.sh` (→ `python -m src.run_cms_ingestion`) daily; the GH Actions
+  `cms-ingestion-daily.yml` is a manual-fallback (`workflow_dispatch`) only.** The cron is
+  **firing but the runs HANG**: last clean `success` = **2026-05-13**; the 2026-06-13 runs
+  (cms_medicare_clinics + facility_patient_counts) got **stuck in `'started'` for 9-24h and were
+  marked `abandoned`/orphaned** by the lock-reclaim. So no run has COMPLETED since May 13 — each
+  daily tick reclaims the prior orphan, starts, hangs, dies. The `ingestion_lock` reclaim works
+  (it's not blocking new runs), so **no manual lock-clear is needed** — the run itself is hanging
+  (Railway resource/timeout kill, or an upstream CMS/OpenAI call hanging mid-run).
+- **Fix (ops, Scott):**
+  1. **Immediate re-run (cleanest):** GitHub → Actions → **"CMS Daily Ingestion (manual
+     fallback)"** → Run workflow → `force_run = true`. Runs the same script on a clean 60-min
+     GH runner; if it COMPLETES there, the hang is Railway-specific (resource/timeout) → bump the
+     Railway service resources/timeout. If it ALSO hangs on GH Actions, it's a code/upstream issue
+     in the run.
+  2. **Local alt:** `python -m src.run_cms_ingestion --force-run` (needs SUPABASE_* +
+     OPENAI_API_KEY env), or `FORCE_RUN=true bash scripts/cron/cms-ingestion.sh`.
+  3. **Diagnose the hang:** check the Railway cron service logs for the 2026-06-13 runs to see
+     where it stalls (CMS fetch / OpenAI / DB write / OOM kill).
+  Once a run completes, movers + inventory deltas + freshness refresh on their own.
 
 ### 8. SJC "missing many sales" (scope clarification, not a bug)
 - The SJC Deal Book by-year/teams = the team's **Salesforce CRM brokered deals**
