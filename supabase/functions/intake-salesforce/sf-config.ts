@@ -8,6 +8,8 @@
 // managed-package API field names are 100% confirmed.
 // ============================================================================
 
+import { GOV_STATE_SIGNALS } from "../_shared/sf-deal-promotion.ts";
+
 export type Vertical = "dia" | "gov" | "ops";
 
 export interface ObjectDef {
@@ -304,14 +306,22 @@ export async function mapRecord(objectKey: string, record: Record<string, unknow
 // must land in a vertical with sf_*_staging tables (dia or gov). A record with
 // no clear signal defaults to "dia" and is flagged review on the staging row.
 const DIA_SIGNALS = ["dialysis", "davita", "fresenius", "renal", "kidney", "clinic", "nephrology"];
-const GOV_SIGNALS = ["gsa", "federal", "government", "u.s.", "department of", "veterans", "social security"];
+// Federal cues + state-government cues (Topic 3, mirrors sidebar-pipeline.js
+// GOV_TENANT_PATTERNS). GOV_STATE_SIGNALS is the single source of truth for the
+// state cues, shared with the sf-promotion-worker.
+const GOV_SIGNALS = [
+  "gsa", "federal", "government", "u.s.", "veterans", "social security",
+  ...GOV_STATE_SIGNALS,
+];
 
 export function routeVertical(row: Record<string, unknown>): { vertical: Vertical; resolved: boolean } {
   const hay = [
-    row["property_type"], row["property_subtype"], row["tenant"],
+    row["property_type"], row["property_subtype"], row["tenant"], row["tenant_names"],
     row["property_name"], row["comp_name"], row["listing_name"], row["deal_name"],
   ].filter((v) => v).join(" ").toLowerCase();
 
+  // dia (operator cue) wins first so a dialysis deal never trips a gov state
+  // cue; only then check federal/state-government cues.
   if (DIA_SIGNALS.some((s) => hay.includes(s))) return { vertical: "dia", resolved: true };
   if (GOV_SIGNALS.some((s) => hay.includes(s))) return { vertical: "gov", resolved: true };
   return { vertical: "dia", resolved: false }; // default + review flag
