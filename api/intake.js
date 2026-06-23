@@ -35,6 +35,7 @@ import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
 import { stageOmIntake } from './_shared/intake-om-pipeline.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { firstOf, joinedOf } from './_shared/intake-classify.js';
+import { isClosingAnnouncement } from './_shared/sf-closing-email-parse.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -589,6 +590,52 @@ async function handleOutlookMessage(req, res) {
         staging_started_at: new Date().toISOString(),
       },
     }).catch(err => console.error('[intake] staging claim PATCH failed:', err?.message));
+  }
+
+  // ── Deal Closing Announcement (Northmarq SF firm-closing email) ───────────
+  // A flagged "Deal Closing Announcement" is a CLOSED SALE, not a listing OM —
+  // route it into the domain's sf_deal_staging so the EXISTING
+  // <dia|gov>_promote_nm_comps records the sale (price/cap/date/buyer/seller),
+  // and SKIP the OM extractor. Idempotent + best-effort; the fresh-path gate
+  // (PA fires this flow 3-6x — replays return early above) means the promote
+  // is triggered at most once per flag event. (Part A — see
+  // docs/architecture/sf_deal_closing_email_ingest_PLAN.md.)
+  if (isClosingAnnouncement({ senderEmail: sender?.email, subject })) {
+    const bodyHtml = firstNonEmpty(payload.body_html, payload.bodyHtml, payload.body, bodyForUrlScan, '');
+    let closingResult = null;
+    try {
+      const { ingestClosingAnnouncementEmail } = await import('./_handlers/sf-deal-closing.js');
+      closingResult = await ingestClosingAnnouncementEmail({ html: bodyHtml });
+    } catch (err) {
+      console.error('[intake] deal-closing ingest failed:', err?.message || err);
+    }
+    if (item?.id) {
+      await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(item.id)}`, {
+        metadata: {
+          ...(item.metadata || {}),
+          kind: 'deal_closing_announcement',
+          deal_closing: closingResult
+            ? {
+                ok: closingResult.ok,
+                reason: closingResult.reason || null,
+                domain: closingResult.domain || null,
+                sf_deal_id: closingResult.sf_deal_id || null,
+                price_missing: closingResult.price_missing || false,
+                promote: closingResult.promote || null,
+              }
+            : { ok: false, reason: 'handler_error' },
+        },
+      }).catch(err => console.error('[intake] deal-closing inbox patch failed:', err?.message));
+    }
+    return res.status(200).json({
+      ok: true,
+      correlation_id: correlationId,
+      inbox_item_id: item?.id || null,
+      kind: 'deal_closing_announcement',
+      deal_closing: closingResult || { ok: false, reason: 'handler_error' },
+      external_id: String(messageId),
+      status: item?.status || 'new',
+    });
   }
 
   // If email has attachments (or a findable PDF URL in the body), bridge to
