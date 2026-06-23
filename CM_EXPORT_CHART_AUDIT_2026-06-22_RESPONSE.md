@@ -107,33 +107,61 @@ propagation for 2023–2026.**
 
 ---
 
-## Tasks 2, 4, 5 — recommendations (chart-config layer; not yet applied)
+## Task 2 — axis extension: investigated; grounding refuted the premise
 
-These are largely axis/labeling/template changes (the catalog +
-`cm-excel-export.js` / renderer), riskier than the view-layer Task-1/3 work and
-out of the "fix at the view layer" boundary. Grounded recommendations:
+Grounded the full data path (views → `fetchView` → data tab → native chart). The
+data is **already full-range and already charted** — there is no recoverable
+truncation at the view or export layer:
+- The long-history views span their full history: dia `volume_ttm_q` /
+  `count_ttm_q` carry non-NULL values back to **1985** (first sale 1985-08-12);
+  gov `cap_ttm_q` / `volume_ttm_q` back to 2001/earlier.
+- `fetchView` (`api/capital-markets.js`) pulls every row with no date filter; the
+  export writes ALL rows (`dataStart..dataEnd` = first..last row) and the native
+  chart references that full range. Round 47's "trim" was a one-round JS change,
+  long superseded (the round-47 `.sql` is comment-only).
+- The dia **cap-rate** line is genuinely **NULL before ~2005** — `cap_ttm_q`'s
+  first non-NULL is 2005-06-30, because dia has only 3–95 sales/yr pre-2005 and a
+  TTM weighted cap from <15 sales is noise, not signal (the round-47 audit
+  deliberately rejected showing it). Forcing the line earlier would **fabricate
+  precision** — not done. Volume/count (a count of 3 IS real) already extend to
+  1985.
 
-- **Task 2 axis** — long-history series (`cap_avg`, `volume_ttm`, `txn_count`,
-  `sold_cap_by_term`) already hold 303 monthly rows back to 2001; the charts
-  truncate via the round-47/51 axis-trim config. Extend each long-history chart's
-  x-axis start to first real data (dia sales from 1996, thin pre-2013; gov
-  robust). Flag thin early years rather than hide them.
-- **Task 2 smoothing** — the term-bucket / term-remaining / NM-vs-Market caps were
-  deliberately moved to 2-yr TTM pools in round 73 to survive thin buckets.
-  Quarterly point estimates will move more but go sparse/empty in thin gov+dia
-  buckets. Recommend a SHORTER rolling window (e.g. 4-qtr) rather than raw
-  quarterly points, and keep TTM only on the headline volume/cap-avg. Needs a
-  per-chart judgment pass.
-- **Task 4 gov Federal labeling** — non-superseded leases are Federal 11,272 /
-  State 27 / Municipal 6. The empty State/Municipal cap lines are a real data
-  gap. Relabel the cohort chart "Federal" and drop the empty State/Municipal
-  series so it doesn't read as a propagation failure.
-- **Task 4 availability start** — dia active-listing capture began 2022-07-05;
-  start the availability charts at 2022 with a note. Do not imply pre-2022 coverage.
-- **Task 5** — Y-axis min/max fit-to-range (dia chart 2, gov 11); recolor the gov
-  Rent Heat Map by State (`cm_gov_rent_heat_map`) via `cm_brand_tokens.json`;
-  resolve the gov "Cap Rate by Remaining Lease Term" vs "…Closed Sales by Lease
-  Term Remaining" duplicate (asking vs closed — confirm both intended or drop one).
+So "extend the x-axis to first data" is **already true**; the apparent gap on the
+cap charts is the honest absence of computable cap rates in the thin early years,
+already explained by the existing footer captions ("Dialysis starts 2019…",
+"Starts 2017…", "pre-2020 thins — read as indicative"). No view/export change is
+warranted; doing one would either fabricate or duplicate existing honest flags.
+
+## Task 4 — Federal relabel + 2022 note: grounding changed the verdict
+
+**Federal relabel — NOT done (the data refutes it; a relabel would destroy real
+data).** The gov `cap_by_credit` chart's State/Municipal series are **not empty**:
+State = **76** non-NULL quarters (through 2025-Q3), Municipal = **29** (through
+2023-Q1). These are *sales*-derived cap cohorts — the audit conflated them with
+the *lease* mix (which is ~99.7% Federal). The existing footer caption already
+says exactly this: "State and municipal are genuinely sparse … real data scarcity,
+not a defect." Relabeling "Federal" and dropping the series would erase real
+comparative history. **Left intact** — the honest, already-documented state.
+
+**2022 availability note — done, accurately.** Grounding shows dia
+`available_listings` carry real (non-synthetic) `listing_date` back to
+**2001-10-16**, and `available_market_size_q` starts **2015**; active-listing
+coverage builds gradually (single digits 2013–16 → ~25 by 2019 → 60 in 2024). So a
+hard "starts 2022" cutoff would *hide* 2015–21 data. Instead, refined the
+`available_market_size_combo` footer caption to flag the coverage ramp honestly
+(systematic verification began mid-2022; pre-2017 indicative; deliberately NOT
+truncated to 2022). Also refined the `lease_termination_rate` and
+`leased_inventory_by_state` captions to document the Task-1 holdover-inclusive
+(~8,000) definition + the TERMN-option-date caveat. (`api/_shared/cm-excel-export.js`,
+ships on the Railway redeploy; `node --check` clean, 12 functions.)
+
+## Task 5 — config polish (not done; recommendations stand)
+Y-axis min/max fit-to-range (dia chart 2, gov 11); recolor the gov Rent Heat Map
+by State (`cm_gov_rent_heat_map`) via `cm_brand_tokens.json`; resolve the gov "Cap
+Rate by Remaining Lease Term" (asking) vs "…Closed Sales by Lease Term Remaining"
+(closed) duplicate — both appear intentional (asking vs closed); confirm with
+Scott before removing either. These need rendered-output verification; deferred to
+avoid changing working chart config blind.
 
 ---
 
