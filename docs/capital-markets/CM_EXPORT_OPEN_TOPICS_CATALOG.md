@@ -9,17 +9,30 @@ P3 = quick/cosmetic.
 | # | Theme | Notes | Status (grounded) | Action |
 |---|---|---|---|---|
 
-### T1 — X-axis history depth (extend charts further back in time)  ·  P1  ·  ⏳ PROMPT ISSUED
-**Notes:** dia 2, 4, 5, 7, 8, 9, 13 · gov 17, 20, 26, 30, 32.
-**VERDICT (grounded 2026-06-23): DROPPED, not absent.** The data exists from **2001** (12/12 months/yr
-for Cap-Avg/Volume/Txn; 2005 for Cap-by-Term). Volume & Txn charts plot the full range (row 5), but the
-**cap-rate family truncates its series start**: Cap-TTM-Avg → row 101 (~2009), NM-vs-Market → row 233
-(~2020), Returns-Index → row 101 (~2009), Cap-by-Term → row 125 (~2015). Those truncation points = the
-exact years Scott flagged. It's a chart `dataStart` bug for cap-style charts, not a data/propagation gap.
-**Action:** `CLAUDE_CODE_PROMPT_T1_chart_history_truncation.md` — extend the truncated cap-family charts
-to their first robust data row (dia + gov); NM-vs-Market plots the market line full-range with the NM
-overlay where it exists; gap-honest where genuinely thin; **leave the genuine capture-floor availability
-charts (2014/2022 start) alone — that's T4.** Awaiting CC.
+### T1a — Dense cap-charts truncated (DROPPED data)  ·  P1  ·  ✅ FIXED (code), ⏳ rendered-gate pending
+**Notes:** dia 2, 4, 7(line), 13(line) · gov 17, 20, 32. **VERDICT: dropped, not absent** — data dense
+from 2001; the cap family clipped to rows 101/233/125 (~2009/2020/2015). **Fix (CC, verified at code
+level in `cm-native-chart-injector.js`):** the R47 `MIN_YEAR_BY_TEMPLATE` trim used
+`findFirstDenseYear(...,'transaction_count_ttm')` on views with **no such column** → silently fell back
+to a hardcoded 2009; now replaced with `firstNonNullYear()`. Extended: `cap_rate_ttm_by_quarter`,
+`cash_leveraged_returns` (returns index), `cap_rate_by_lease_term` (LINE), `nm_vs_market_cap` (market
+line full-range, NM overlay gaps to ~2014). gap-honest via `dispBlanksAs='gap'`. Volume/Txn untouched.
+**JS change → live on Railway redeploy of merged main.** GATE REMAINING: confirm against a freshly
+regenerated export that series start = ~2001/2005. (Note: dia cap-TTM shows a lone 2001 point then gaps
+2002-04 — a one-line floor to 2005 is available if it reads oddly.)
+
+### T1b — Floored "sparse/degenerate" charts (DECISION for Scott)  ·  P1  ·  ❓ OPEN — your call
+**Notes Scott's June-23 also touches:** dia 7/13/14 (the cap-by-term DOT plots), gov 26 (quartiles),
++ DOM/%ask, sentiment. **These were deliberately NOT extended** — they keep prior, *Scott-confirmed*
+floors because the early data is genuinely degenerate, not dropped:
+- `sold_cap_by_term_dot_plot` dia **2019** / gov 2015, `asking_cap_by_term_dot_plot` dia **2017** / gov
+  2015 — cohort lines cross on n<5 small samples (R76-A3, Scott 2026-06-10: "genuine sparsity").
+- `cap_rate_top_bottom_quartile` **2007** — 2005-06 has 0-3 samples → degenerate Q1=Med=Q3 (R54).
+- `dom_and_pct_of_ask` 2018/2016, `seller_sentiment` 2016, `bid_ask_spread` density floor.
+**RESOLVED (Scott, 2026-06-23): KEEP the existing floors.** Only T1a (the dense-data truncation) was
+the real bug; these charts stay floored where the data is genuinely sparse/degenerate. CC's T1 fix is
+complete and correct as shipped — no further change. (So when these charts still "start late" in the
+next export, that is intended, not a miss.)
 
 ### T2 — Y-axis fitting on the non-cap charts  ·  P1
 **Notes:** dia 3 (% of ask), 4, 10, 13 · gov (various trendlines). **Grounded:** the cap-rate auto-fit
