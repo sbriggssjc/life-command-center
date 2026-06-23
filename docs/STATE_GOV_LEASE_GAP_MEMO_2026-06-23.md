@@ -425,3 +425,17 @@ honest classification (surface `no_domain`/`State`, never guess).
   `canonical_name`, preferring active (non-merged) rows. The aborted run wrote no owners/properties
   (atomic batch failed first); only the gated building 01021 exists — the re-run is idempotent. Scott
   re-runs `python -m src.ingest_texas_tfc "<file>"`.
+- **2026-06-23** — **State engine Phase 3 BUILT** (gov repo): `state_lease_events` →
+  `prospect_leads`. `lessor_change` → **suspected-sale** leads filtered through
+  `state_norm_lessor_core` (c/o-strip + `gov_norm_owner_core`) so only GENUINE ownership transfers
+  surface — c/o manager swaps / typos / legal-form variants are churn (no lead); `new_lease /
+  relocated / expired / footprint_reduction` → leads; `renewed / removed / reappeared /
+  agency_change` → consumed, no lead. SF-ranked (TFC carries no rent). Idempotent (dedupe by
+  `(lead_source, lease_number)` + `state_lease_events.processed_at` watermark). Live first-diff =
+  **114 lessor_changes → 92 genuine / 22 churn** (all 114 property-linked), routed. New (gov repo):
+  `sql/20260623_gov_state_norm_lessor_core.sql`, `src/state_events_to_leads.py`,
+  `tests/unit/test_state_events_to_leads.py`; wired into `run_pipeline` step 44. The
+  `state_norm_lessor_core` function migration is applied + verified separately (NOT live this
+  session). Phase 3b (surface state `lessor_change` in the LCC **R53** `v_suspected_sale`
+  Decision-Center lane), rent-$-ranking, and Phase-2 dataset URLs are documented follow-ups, out of
+  scope. See gov `docs/STATE_LEASE_INVENTORY_PIPELINE_PLAN.md` §8–§10.
