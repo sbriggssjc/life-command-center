@@ -84,17 +84,30 @@ Three independent **"federal-only" assumptions** converge on this one capture. E
 
 ### Work checklist — Topic 1
 
-- [ ] Extend `GOV_TENANT_PATTERNS` with state-program vocabulary + trailing/abbrev "department"
-      + state-prefix coverage (anchored).
-- [ ] Add a regression test (mirror `test/` conventions) asserting the TX agency corpus classifies
-      `government` (target: the 21 missed agencies above all match) and that a control set of
-      private tenants still classify non-gov (no false positives).
-- [ ] Re-run the 1,179-row TFC corpus; record the new miss-rate here (target ≪ 54%).
-- [ ] Confirm `node --check` clean, `ls api/*.js | wc -l` = 12.
+- [x] Extend `GOV_TENANT_PATTERNS` with state-program vocabulary + trailing/abbrev "department"
+      + state-prefix coverage (anchored). — `api/_handlers/sidebar-pipeline.js:398` (+26 anchored
+      patterns: `human services`, `dept of`, `comm(ission) on`, `criminal/juvenile justice`,
+      `parks and wildlife`, `comptroller`, `environmental quality`, `lottery/railroad/workforce/
+      historical commission`, `land office`, `securities/examiners/state board`, …). Scoped to
+      avoid false positives (no bare `department`/`workforce`/`lottery`/`commission`).
+- [x] Add a regression test — `test/gov-classifier-state.test.mjs` (5 cases: 22 state agencies →
+      government; 6 already-covered still pass; 10 private/retail/multifamily tenants NOT gov incl.
+      "Macy's Department Store", "Workforce Housing"; trigger case; all patterns anchored). Exported
+      `classifyDomain` + `GOV_TENANT_PATTERNS` from the module for testing.
+- [x] Re-run the 1,179-row TFC corpus — **miss-rate 54% (639) → 0% (0/1179).**
+- [x] Confirm `node --check` clean, `ls api/*.js | wc -l` = 12, full suite green
+      (**1356 pass / 0 fail / 6 skipped**).
 - [ ] (Live, post-deploy) re-run the Hempstead capture → confirm it classifies `government`, not
       `no_domain`.
 
-**Status: NOT STARTED**
+**Status: CODE COMPLETE · pending live post-deploy verification (Railway redeploy of merged `main`)**
+
+> Note: gov-side mirror (`agency_enrichment_rules` State tier) shipped in the same pass to keep the
+> two classifiers in agreement — see Topic 2 checklist (gov classifier item ticked). Pre-existing
+> gov-classifier quirks surfaced while validating (NOT introduced here, NOT in scope): the base
+> Federal rule's bare `national` token tiers "First National Bank" → Federal, and the spelled-out
+> "Internal Revenue Service" relies on the `government_agencies` exact table rather than a
+> `\mirs\M` token. Logged for a future federal-precision pass.
 
 ---
 
@@ -150,8 +163,14 @@ responsibility. It is exactly the recurring inventory the federal side has and t
 ### Work checklist — Topic 2
 
 - [ ] Decide Option A vs B (recommend A) and write the schema migration (discriminator columns).
-- [ ] Strengthen the gov-side State classifier (`agency_enrichment_rules`) to match the Topic-1
-      vocabulary; verify with `sql/verify_gov_type_classifier.sql` against the TFC agency list.
+- [x] Strengthen the gov-side State classifier (`agency_enrichment_rules`) to match the Topic-1
+      vocabulary — `government-lease/sql/20260623_gov_state_agency_classifier_expansion.sql`
+      (additive, idempotent, evidence-tagged). Adds a Municipal `school district` rule (priority 31)
+      + a State program-name rule (priority 41); scoped tighter than LCC so it can't steal a federal
+      record (`comptroller`→`comptroller of public accounts|state comptroller`; wildlife drops
+      `service`). Validated (regex emulation): all 22 TX agencies → `State`; federal/municipal
+      controls tier correctly; private → NULL. **Still to do: apply live to the gov DB + confirm via
+      the `VERIFY` block in the migration / `sql/verify_gov_type_classifier.sql`.**
 - [ ] Build `ingest_texas_tfc.py` (parse the TFC Agency Report shape) → properties/leases/owners/
       contacts; idempotent (MD5 dedupe), logs to `run_log`/`ingestion_tracker` per project rules.
 - [ ] Run the 4-tier matcher over the new state leases; confirm `government_type='State'` lands and
@@ -245,3 +264,11 @@ honest classification (surface `no_domain`/`State`, never guess).
   remediation not started. Quantified Topic-1 miss-rate at 54% of the TFC corpus (639/1,179).
   Confirmed Topic-2 gap independently (gov classifier migration self-documents "NO state/municipal
   ingestion source") and Topic-3 (no `sf_deal_staging`→`sales_transactions` path).
+- **2026-06-23** — **Topic 1 code complete.** Extended LCC `GOV_TENANT_PATTERNS` (+27 anchored
+  state-agency patterns) → TFC corpus miss-rate **54% → 0%**; added
+  `test/gov-classifier-state.test.mjs` (exported `classifyDomain`/`GOV_TENANT_PATTERNS`); full suite
+  1356 pass / 0 fail. **Topic 2 (partial):** mirrored the vocabulary into the gov-side classifier
+  (`government-lease/sql/20260623_gov_state_agency_classifier_expansion.sql`, additive/idempotent;
+  Municipal `school district` + State program rule) so LCC routing and gov `government_type` agree;
+  validated all 22 TX agencies → `State` (regex emulation), live apply still pending. Surfaced two
+  pre-existing federal-classifier quirks (bare `national`; spelled-out IRS) — out of scope, logged.
