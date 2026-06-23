@@ -212,9 +212,13 @@ column map.
       Wire a state-inventory step into `run_pipeline.py`.
 - [ ] (Stretch) second state — California SPI — to prove the transform generalizes.
 
-**Status: IN PROGRESS · schema + classifier live; ingest built + validated + gated-live. Full
-725-building bulk: SCOTT runs the one-command module drain on his workstation (decided 2026-06-23) —
-`python -m src.ingest_texas_tfc "<ActiveLeaseSummaryReport.xls>"` (`--dry-run` first).**
+**Status: ✅ COMPLETE · verified live 2026-06-23.** Full drain landed **725 State properties**
+(725/725 `government_type='State'`, 725/725 linked to a landlord, 725/725 `state_lease_id`), **553
+landlord contacts** (all linked), **997 agency-tenant rows**, **997 leases**. Live-drain hardening
+took four passes (owner canonical-name dedupe; FK-safe contacts scope-replace; small per-row-trigger
+batches) — the writer is now idempotent and re-runnable. Remaining (separate, non-blocking): State=4
+investment-scoring confirm, address de-dupe vs federal book, run-logging wiring, cadence wiring,
+CA SPI.
 
 ---
 
